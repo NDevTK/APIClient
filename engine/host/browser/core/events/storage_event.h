@@ -70,7 +70,11 @@
    Event.prototype, and core/realm.h runs the per-realm installs in declaration order. */
 void storage_event_init(JSContext *ctx);
 void storage_event_install_protos(JSContext *ctx);
-void storage_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void storage_event_free(JSRuntime *rt);
 
 /* DOM §4.5 createEvent's maker: a default instance — key, oldValue and newValue null, url the empty string,
    storageArea null. Steps 6-8 then overwrite type and isTrusted and unset the initialized flag. */

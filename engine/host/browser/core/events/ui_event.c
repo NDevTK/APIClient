@@ -64,6 +64,7 @@
  * it. `{ctrlKey: true}` and `getModifierState("Control")` are then the same fact by construction. */
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/events/event.h"
 #include "core/events/input_device_capabilities.h"
 #include "core/events/ui_event.h"
@@ -72,7 +73,7 @@
 #include "core/idl_slots.h"
 #include "core/realm.h"
 
-static JSValue   g_key;         /* the private Symbol this interface's own slots hang off */
+static JSValue   g_key = JS_UNDEFINED;   /* the private Symbol this interface's own slots hang off */
 /* PER REALM, for the reason event.c states: a C member runs in the realm that DEFINED it, so one shared
    prototype answers every document out of whichever realm built it first. The class exists for that per-realm
    prototype slot; nothing wears it. */
@@ -530,6 +531,23 @@ void ui_event_init(JSContext *ctx)
     idl_optional_from(1);   /* §3.2.1: `constructor(DOMString type, optional UIEventInit init = {})` */
     idl_iface_brand(input_device_capabilities_class());   /* UIEventInit's one interface-typed member */
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — AND IT NAMES THE `event` ROW, NOT THIS FILE.
+       core/agent_state.h: a sub-component names the row whose RELEASE gives its slots back, which for every
+       Event subclass is core/platform.c's `event` row — event_init calls this init and event_free calls this
+       release. Nothing here was declared at all, so the pairing's own arm — does anybody release this? — was
+       never asked about any of these. */
+    agent_state_flag("event", &g_ready,
+                     "UI Events §3.2.1 Interface UIEvent's declaration latch");
+    agent_state_class("event", &g_ui_class,
+                      "UI Events §3.2.1 Interface UIEvent's class, held for its per-realm prototype slot");
+    agent_state_value("event", &g_key,
+                      "the private Symbol UI Events §3.2.1 Interface UIEvent's slot record hangs off");
+    agent_state_id("event", &g_ctor_stepid,
+                   "UI Events §3.2.1 Interface UIEvent's `constructor(DOMString type, optional UIEventInit "
+                   "eventInitDict = {})`");
+    agent_state_id("event", &g_init_ui_id,
+                   "UI Events §6.1.1 Initializers for interface UIEvent's `initUIEvent(typeArg, bubblesArg, "
+                   "cancelableArg, viewArg, detailArg)`");
     realm_declare_intrinsic(ui_event_install_protos);
 }
 
@@ -567,11 +585,25 @@ void ui_event_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void ui_event_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM — core/platform.h's release column, reached through event_free. What this
+   gives back is the AGENT's: a private Symbol, a class id and this interface's member declarations; every
+   prototype it built is in some realm's class-proto slot and goes with that realm. */
+void ui_event_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
+    /* NOT `if (!g_ready) return;`. core/events/event.c's event_init calls this component's init on the ONE
+       declaration pass and its event_free — which has already asserted its own latch — calls this release
+       unconditionally, so the test could never be true and what it could do was hide a release that left the
+       latch set. */
+    DCHECK(g_ready, "UI Events §3.2.1 Interface UIEvent was released in an agent that never declared it — "
+                    "event_init declares every Event subclass on the one unconditional pass");
+    JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
+    /* core/agent_state.h's one policy: a class id is given back like every other slot, because the id doubles
+       as the init latch and a carried one names a class in a runtime that is gone. Nothing WEARS this class —
+       it exists for its per-realm prototype slot, and every event in this engine is minted by
+       core/events/event.c's event_make_proto through JS_NewObjectProto — so there is no finalizer and no
+       gc_mark here to owe the JS_GetAnyOpaque the zeroing costs a component whose objects do wear one. */
+    g_ui_class = 0;
     g_ctor_stepid = g_init_ui_id = -1;
 }

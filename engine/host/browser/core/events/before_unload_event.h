@@ -11,7 +11,11 @@ void before_unload_event_init(JSContext *ctx);            /* the slot key + the 
    declares none, so `new BeforeUnloadEvent()` is a TypeError and `document.createEvent('BeforeUnloadEvent')`
    is the only way a page makes one — which is why DOM §4.5's table has a row for it. */
 void before_unload_event_install_protos(JSContext *ctx);
-void before_unload_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void before_unload_event_free(JSRuntime *rt);
 
 /* HTML §7.5.9's "fire beforeunload" step 4: `beforeunload`, CANCELABLE, at the document's relevant global
    object, using this interface. TRUSTED — the engine fired it. `returnValue` starts as the empty string, which

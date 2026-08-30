@@ -43,7 +43,11 @@
 void navigate_event_init(JSContext *ctx);
 /* §3.7: THIS REALM's prototype and interface object — declared into core/realm.h's list. */
 void navigate_event_install_protos(JSContext *ctx);
-void navigate_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void navigate_event_free(JSRuntime *rt);
 
 /* §7.2.6.10.4's "let event be the result of CREATING AN EVENT given NavigateEvent, in navigation's relevant
  * realm", with the initialisations its inner algorithm then performs — as ONE call, because §7.2.6.10.4

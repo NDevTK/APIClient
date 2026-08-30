@@ -7,7 +7,11 @@
 void hash_change_event_init(JSContext *ctx);             /* the slot key + the IDL declarations (agent init) */
 /* §3.7: THIS REALM's prototype AND interface object. Declared into realm.h's one list by the init above. */
 void hash_change_event_install_protos(JSContext *ctx);
-void hash_change_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void hash_change_event_free(JSRuntime *rt);
 
 /* DOM §2.5's CREATE AN EVENT using HashChangeEvent: every attribute at its un-initialized value, which for
    `USVString oldURL` and `USVString newURL` is the empty string. §4.5's createEvent is the caller — the table

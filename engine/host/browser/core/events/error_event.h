@@ -9,7 +9,11 @@
 void error_event_init(JSContext *ctx);              /* the slot key + the IDL declarations (agent init) */
 void error_event_install_proto(JSContext *ctx);     /* §3.7: one prototype per REALM */
 void error_event_install(JSContext *ctx, JSValueConst global);
-void error_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void error_event_free(JSRuntime *rt);
 /* `ErrorEvent.prototype` for this realm. OWNED: the caller frees. */
 JSValue error_event_proto(JSContext *ctx);
 

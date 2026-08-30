@@ -44,6 +44,7 @@
  * initialized flag on an event §4.5 produced. */
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/events/input_device_capabilities.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/ui_event.h"
@@ -51,7 +52,7 @@
 #include "core/idl_slots.h"
 #include "core/realm.h"
 
-static JSValue   g_key;         /* the private Symbol this interface's own slots hang off */
+static JSValue   g_key = JS_UNDEFINED;   /* the private Symbol this interface's own slots hang off */
 static JSClassID g_ke_class;    /* the class exists for its per-REALM prototype slot; nothing wears it */
 static int       g_ready;
 static int       g_ctor_stepid = -1;
@@ -380,6 +381,26 @@ void keyboard_event_init(JSContext *ctx)
     idl_iface_brand(input_device_capabilities_class());   /* KeyboardEventInit's one interface-typed member,
                                                              UIEventInit's `sourceCapabilities` */
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — AND IT NAMES THE `event` ROW, NOT THIS FILE.
+       core/agent_state.h: a sub-component names the row whose RELEASE gives its slots back, which for every
+       Event subclass is core/platform.c's `event` row — event_init calls this init and event_free calls this
+       release. Nothing here was declared at all, so the pairing's own arm — does anybody release this? — was
+       never asked about any of these. */
+    agent_state_flag("event", &g_ready,
+                     "UI Events §3.5.1 Interface KeyboardEvent's declaration latch");
+    agent_state_class("event", &g_ke_class,
+                      "UI Events §3.5.1 Interface KeyboardEvent's class, held for its per-realm prototype slot");
+    agent_state_value("event", &g_key,
+                      "the private Symbol UI Events §3.5.1 Interface KeyboardEvent's slot record hangs off");
+    agent_state_id("event", &g_ctor_stepid,
+                   "UI Events §3.5.1 Interface KeyboardEvent's `constructor(DOMString type, optional "
+                   "KeyboardEventInit eventInitDict = {})`");
+    agent_state_id("event", &g_modifier_state_id,
+                   "UI Events §3.5.1 Interface KeyboardEvent's `getModifierState(DOMString keyArg)` — this "
+                   "interface's OWN declaration of it, which is what makes calling MouseEvent's on a KeyboardEvent "
+                   "a TypeError");
+    agent_state_id("event", &g_init_kb_id,
+                   "UI Events §6.1.2 Initializers for interface KeyboardEvent's `initKeyboardEvent(...)`");
     realm_declare_intrinsic(keyboard_event_install_protos);
 }
 
@@ -416,11 +437,25 @@ void keyboard_event_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void keyboard_event_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM — core/platform.h's release column, reached through event_free. What this
+   gives back is the AGENT's: a private Symbol, a class id and this interface's member declarations; every
+   prototype it built is in some realm's class-proto slot and goes with that realm. */
+void keyboard_event_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
+    /* NOT `if (!g_ready) return;`. core/events/event.c's event_init calls this component's init on the ONE
+       declaration pass and its event_free — which has already asserted its own latch — calls this release
+       unconditionally, so the test could never be true and what it could do was hide a release that left the
+       latch set. */
+    DCHECK(g_ready, "UI Events §3.5.1 Interface KeyboardEvent was released in an agent that never declared it — "
+                    "event_init declares every Event subclass on the one unconditional pass");
+    JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
+    /* core/agent_state.h's one policy: a class id is given back like every other slot, because the id doubles
+       as the init latch and a carried one names a class in a runtime that is gone. Nothing WEARS this class —
+       it exists for its per-realm prototype slot, and every event in this engine is minted by
+       core/events/event.c's event_make_proto through JS_NewObjectProto — so there is no finalizer and no
+       gc_mark here to owe the JS_GetAnyOpaque the zeroing costs a component whose objects do wear one. */
+    g_ke_class = 0;
     g_ctor_stepid = g_modifier_state_id = g_init_kb_id = -1;
 }

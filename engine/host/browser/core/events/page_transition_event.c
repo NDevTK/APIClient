@@ -30,13 +30,14 @@
  * silently absent in that realm with nothing to say so. */
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/events/event.h"
 #include "core/events/page_transition_event.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
 
-static JSValue   g_key;         /* the private Symbol this interface's own slot hangs off */
+static JSValue   g_key = JS_UNDEFINED;   /* the private Symbol this interface's own slot hangs off */
 static JSClassID g_pte_class;   /* the class exists for its per-REALM prototype slot; nothing wears it */
 static int       g_ready;
 static int       g_ctor_stepid = -1;
@@ -174,6 +175,21 @@ void page_transition_event_init(JSContext *ctx)
                                        (int)(sizeof(PTE_INIT) / sizeof(PTE_INIT[0])), js_pte_ctor, 0);
     idl_optional_from(1);                       /* `optional PageTransitionEventInit eventInitDict = {}` */
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — AND IT NAMES THE `event` ROW, NOT THIS FILE.
+       core/agent_state.h: a sub-component names the row whose RELEASE gives its slots back, which for every
+       Event subclass is core/platform.c's `event` row — event_init calls this init and event_free calls this
+       release. Nothing here was declared at all, so the pairing's own arm — does anybody release this? — was
+       never asked about any of these. */
+    agent_state_flag("event", &g_ready,
+                     "HTML §7.2.7.6 The PageTransitionEvent interface's declaration latch");
+    agent_state_class("event", &g_pte_class,
+                      "HTML §7.2.7.6 The PageTransitionEvent interface's class, held for its per-realm prototype "
+                      "slot");
+    agent_state_value("event", &g_key,
+                      "the private Symbol HTML §7.2.7.6 The PageTransitionEvent interface's slot record hangs off");
+    agent_state_id("event", &g_ctor_stepid,
+                   "HTML §7.2.7.6 The PageTransitionEvent interface's `constructor(DOMString type, optional "
+                   "PageTransitionEventInit eventInitDict = {})`");
     realm_declare_intrinsic(page_transition_event_install_protos);
 }
 
@@ -204,11 +220,25 @@ void page_transition_event_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void page_transition_event_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM — core/platform.h's release column, reached through event_free. What this
+   gives back is the AGENT's: a private Symbol, a class id and this interface's member declarations; every
+   prototype it built is in some realm's class-proto slot and goes with that realm. */
+void page_transition_event_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
+    /* NOT `if (!g_ready) return;`. core/events/event.c's event_init calls this component's init on the ONE
+       declaration pass and its event_free — which has already asserted its own latch — calls this release
+       unconditionally, so the test could never be true and what it could do was hide a release that left the
+       latch set. */
+    DCHECK(g_ready, "HTML §7.2.7.6 The PageTransitionEvent interface was released in an agent that never declared "
+                    "it — event_init declares every Event subclass on the one unconditional pass");
+    JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
+    /* core/agent_state.h's one policy: a class id is given back like every other slot, because the id doubles
+       as the init latch and a carried one names a class in a runtime that is gone. Nothing WEARS this class —
+       it exists for its per-realm prototype slot, and every event in this engine is minted by
+       core/events/event.c's event_make_proto through JS_NewObjectProto — so there is no finalizer and no
+       gc_mark here to owe the JS_GetAnyOpaque the zeroing costs a component whose objects do wear one. */
+    g_pte_class = 0;
     g_ctor_stepid = -1;
 }

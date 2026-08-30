@@ -7,7 +7,11 @@
 void navigation_current_entry_change_event_init(JSContext *ctx);
 /* §3.7: THIS REALM's prototype and interface object — declared into core/realm.h's one list. */
 void navigation_current_entry_change_event_install_protos(JSContext *ctx);
-void navigation_current_entry_change_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void navigation_current_entry_change_event_free(JSRuntime *rt);
 
 /* HTML §7.2.6.4's and §7.2.6.6's "fire an event named currententrychange at navigation USING
    NavigationCurrentEntryChangeEvent, with its navigationType attribute initialized to navigationType and its

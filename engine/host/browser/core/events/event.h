@@ -10,7 +10,10 @@ void event_init(JSContext *ctx);
    the agent's first realm gets it from event_init, because every prototype derived from Event chains to that
    realm's and so it has to exist before them. */
 void event_install_proto(JSContext *ctx);
-void event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT, from core/platform.c's release column — which takes the RUNTIME, because what
+   this gives back is the AGENT's and not any realm's. It also releases the thirteen subclasses
+   event_init declares, so the whole family is one row. */
+void event_free(JSRuntime *rt);
 /* `Event` as a global: the interface object, its prototype, and §2.2's phase constants. */
 void event_install(JSContext *ctx, JSValueConst global);
 

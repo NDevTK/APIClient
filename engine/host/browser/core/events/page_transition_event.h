@@ -10,7 +10,11 @@ void page_transition_event_init(JSContext *ctx);            /* the slot key + th
    host adds the `_init` line and nothing else — a per-realm install written into each host's realm builder is
    the hand-copied list realm.h exists to delete. */
 void page_transition_event_install_protos(JSContext *ctx);
-void page_transition_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void page_transition_event_free(JSRuntime *rt);
 
 /* HTML §7.2.7.6's "FIRE A PAGE TRANSITION EVENT named eventName at a Window window with a boolean persisted" —
    the EVENT half of it: a trusted PageTransitionEvent whose `persisted` is `persisted` and whose `cancelable`

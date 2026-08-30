@@ -9,7 +9,11 @@ void pop_state_event_init(JSContext *ctx);             /* the slot key + the IDL
 /* §3.7: THIS REALM's prototype AND interface object. Declared into realm.h's one list by the init above, so a
    host adds the `_init` line and nothing else. */
 void pop_state_event_install_protos(JSContext *ctx);
-void pop_state_event_free(JSContext *ctx);
+/* Undone ONCE PER AGENT. The RUNTIME, not a realm: what it gives back is the agent's — a private
+   Symbol, a class id and this interface's member declarations — and every prototype it built is in
+   some realm's class-proto slot and goes with that realm. Reached from core/events/event.c's
+   event_free_subclasses, which is core/platform.c's `event` row. */
+void pop_state_event_free(JSRuntime *rt);
 
 /* HTML §7.4.6.2's "fire an event named popstate at document's relevant global object, USING PopStateEvent, with
    the state attribute initialized to document's history object's state and hasUAVisualTransition initialized to

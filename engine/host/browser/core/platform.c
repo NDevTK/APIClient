@@ -410,6 +410,24 @@ static void r_history(JSRuntime *rt) { (void)rt; history_free(); }
    reverse declaration order is what decides it here instead of three authors agreeing. */
 static void r_viewport(JSRuntime *rt) { (void)rt; viewport_free(); }
 static void r_visual_viewport(JSRuntime *rt) { (void)rt; visual_viewport_free(); }
+/* DOM §2.2 Interface Event AND THE THIRTEEN SUBCLASSES core/events/event.c DECLARES BESIDE IT, which was the
+   last hand-copied `event_free(ctx);` in each of the three hosts' teardowns — written, like every other line
+   on those lists, AFTER platform_agent_free had already run this whole column. The three did not agree on
+   where: main.c and test_forced.c had `realm_intrinsics_free(); report_exception_free(ctx); event_free(ctx);`
+   and wpt_runner.c had `report_exception_free(ctx); event_free(ctx); realm_intrinsics_free();`. Nothing was
+   missing and the order was still three different answers.
+   AND THE ROW IS WHAT MAKES THE FAMILY'S STATE CHECKABLE AT ALL. platform_check_agent_state fires on a row
+   with agent state and no release, so while this release lived out there NONE of the sixty-six slots those
+   fourteen components hold could be declared, and nothing anywhere reported that fourteen CLASS IDS were
+   carried past their own release. None of the fourteen latches on the id (each latches on `g_ready`), so a
+   second agent really does re-run every one of these declarations, and JS_NewClassID is a no-op on a non-zero
+   slot: JS_NewClass is then handed a number the live runtime's `js_class_id_alloc` never allocated. Both arms
+   of that are wrong and neither is loud. Where a zeroing component has already drawn the same number from the
+   restarted counter, JS_NewClass1 returns -1 — and thirteen of these fourteen ignore that return, so the
+   class is never registered while `JS_SetClassProto(ctx, id, proto)` still writes, over the OTHER class's
+   per-realm prototype slot. Where it does not collide, the class registers at a SPARSE id past
+   `js_class_id_alloc`, which the allocator will hand out again to somebody else. */
+static void r_event(JSRuntime *rt) { event_free(rt); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
@@ -763,7 +781,7 @@ static const PlatformComponent PLATFORM[] = {
        Object.prototype and its two attributes read its own slot record. */
     { "input_device_capabilities", d_input_device_capabilities, NULL,
                                                           r_input_device_capabilities },
-    { "event",               d_event,               i_event },
+    { "event",               d_event,               i_event,     r_event },
     /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
        one reason that decides every position in this list: its prototype chains to Event.prototype, which the
        row above builds, and core/realm.h runs the per-realm installs in declaration order. §5.1's own

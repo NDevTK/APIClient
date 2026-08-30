@@ -57,7 +57,6 @@
 #include "core/idl_args.h"
 #include "core/idl_async_iter.h"
 #include "core/dom/document.h"
-#include "core/events/event.h"
 #include "core/events/error_event.h"
 #include "core/events/message_event.h"
 #include "core/events/report_exception.h"
@@ -11348,7 +11347,12 @@ int main(int argc, char **argv) {
        main.c's teardown. */
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     report_exception_free(ctx);
-    event_free(ctx);
+    /* AND DOM §2.2's Event WITH THE THIRTEEN SUBCLASSES core/events/event.c DECLARES BESIDE IT, which used to
+       be the line here. It is a ROW on core/platform.h's release column now, run by the platform_agent_free
+       above. All three hosts had it and they did not put it in the same place — wpt_runner.c ran it BEFORE
+       realm_intrinsics_free where this list runs it after. Out here the family's sixty-six slots could not be
+       declared to core/agent_state.h at all, since a row with agent state and no release is exactly what
+       platform_check_agent_state fires on. See main.c's teardown and core/platform.c's entry. */
     headers_free(ctx);    /* Headers.prototype and the name it interned */
     url_free(ctx);
     usp_free(ctx);

@@ -31,6 +31,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_slots.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
@@ -54,7 +55,7 @@
 
 /* The private key the event's internal slots hang off — a Symbol, so a page enumerating the object cannot see
    it and cannot collide with it, for the reason the platform uses internal slots. */
-static JSValue g_key;
+static JSValue g_key = JS_UNDEFINED;
 static int     g_ready;
 /* §3.7 GIVES EACH REALM ITS OWN Event.prototype, and here that decides ANSWERS and not just identities: a C
    member runs in the realm that DEFINED it (js_call_c_function takes `ctx` from the function object), so one
@@ -766,7 +767,7 @@ static const JSCFunctionListEntry js_event_consts[] = {
  * ORDER: after this interface's own class and members, because each subclass declares a prototype whose chain
  * ends at Event.prototype and reads the ids declared above. */
 static void event_declare_subclasses(JSContext *ctx);
-static void event_free_subclasses(JSContext *ctx);
+static void event_free_subclasses(JSRuntime *rt);
 
 void event_init(JSContext *ctx)
 {
@@ -789,6 +790,22 @@ void event_init(JSContext *ctx)
                                       js_event_ctor, 0);
     idl_optional_from(1);   /* §2.2: `constructor(DOMString type, optional EventInit eventInitDict = {})` */
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. This row's own seven; the
+       thirteen subclasses declare THEIR slots under this same name, because a sub-component names the row
+       whose RELEASE gives its slots back and event_free is what reaches every one of them. Until this row had
+       a release column at all, none of the sixty-six could be declared: platform_check_agent_state fires on a
+       row with no release that declared agent state, which is why the two halves of this diff are ordered. */
+    agent_state_flag("event", &g_ready, "DOM §2.2 Interface Event's declaration latch");
+    agent_state_class("event", &g_event_class,
+                      "DOM §2.2 Interface Event's class, held for its per-realm prototype slot");
+    agent_state_value("event", &g_key, "the private Symbol DOM §2.2 Interface Event's slot record hangs off");
+    agent_state_id("event", &g_ctor_stepid,
+                   "DOM §2.2 Interface Event's `constructor(DOMString type, optional EventInit eventInitDict "
+                   "= {})`");
+    agent_state_id("event", &g_cancel_bubble_setid, "DOM §2.2 Interface Event's legacy `cancelBubble` setter");
+    agent_state_id("event", &g_return_value_setid, "DOM §2.2 Interface Event's legacy `returnValue` setter");
+    agent_state_id("event", &g_init_event_id,
+                   "DOM §2.2 Interface Event's `initEvent(type, optional bubbles, optional cancelable)`");
     realm_declare_intrinsic(event_install_proto);
     event_declare_subclasses(ctx);
 }
@@ -882,31 +899,57 @@ static void event_declare_subclasses(JSContext *ctx)
     focus_event_init(ctx);
 }
 
-static void event_free_subclasses(JSContext *ctx)
+/* REVERSE DECLARATION ORDER, which is the rule core/platform.c's release column runs by and is the rule here
+   for the same reason: the list above is ordered BY THE CHAIN (`FocusEvent : UIEvent : Event`), so undoing it
+   forwards would release the interface an interface extends before the interface itself. Nothing in this
+   family reads another's agent state at its release today — each gives back its own Symbol, its own class and
+   its own member declarations — so what this buys is that the day one of them does, the order is already the
+   one it needs, decided by a rule instead of by two authors happening to agree. */
+static void event_free_subclasses(JSRuntime *rt)
 {
-    message_event_free(ctx);
-    error_event_free(ctx);
-    page_transition_event_free(ctx);
-    pop_state_event_free(ctx);
-    hash_change_event_free(ctx);
-    navigation_current_entry_change_event_free(ctx);
-    navigate_event_free(ctx);
-    before_unload_event_free(ctx);
-    storage_event_free(ctx);
-    ui_event_free(ctx);
-    mouse_event_free(ctx);
-    keyboard_event_free(ctx);
-    focus_event_free(ctx);
+    focus_event_free(rt);
+    keyboard_event_free(rt);
+    mouse_event_free(rt);
+    ui_event_free(rt);
+    storage_event_free(rt);
+    before_unload_event_free(rt);
+    navigate_event_free(rt);
+    navigation_current_entry_change_event_free(rt);
+    hash_change_event_free(rt);
+    pop_state_event_free(rt);
+    page_transition_event_free(rt);
+    error_event_free(rt);
+    message_event_free(rt);
 }
 
-void event_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM — this is core/platform.h's release column, and what it gives back is the AGENT's.
+   It was a line in each of THREE hosts' hand-written teardowns instead, written after platform_agent_free had
+   already run the whole column, and the three did not agree on where: main.c and test_forced.c had
+   `realm_intrinsics_free(); report_exception_free(ctx); event_free(ctx);` while wpt_runner.c had
+   `report_exception_free(ctx); event_free(ctx); realm_intrinsics_free();`. Nothing was missing and the order
+   was still three different answers — which is the whole of why that column exists.
+   AND WHAT THE ROW BUYS BEYOND THE DRIFT: a row with an empty release column may declare no agent state
+   (platform_check_agent_state), so the sixty-six slots this component and its thirteen subclasses hold could
+   not be declared at all while the release lived out there, and every one of them — fourteen class ids among
+   them — was given back by a line this file could not see and asserted by nothing. */
+void event_free(JSRuntime *rt)
 {
-    if (!g_ready)
-        return;
-    event_free_subclasses(ctx);
-    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
+       core/platform.c's one list, whose declare pass is unconditional and whose table asserts that a release
+       row has a declare — so an early return here would silently absorb a teardown reached without an init
+       instead of naming it. */
+    DCHECK(g_ready, "DOM §2.2 Interface Event was released in an agent that never declared it — core/platform.c "
+                    "runs its declare pass unconditionally, so there is no arm that reaches here undeclared");
+    event_free_subclasses(rt);
+    JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
+    /* core/agent_state.h's one policy: a class id is given back like every other slot, because the id doubles
+       as the init latch and a carried one names a class in a runtime that is gone. Nothing WEARS this class —
+       event_make_proto mints every event in this engine through JS_NewObjectProto, so JS_GetClassID of an
+       Event is JS_CLASS_OBJECT — so there is no finalizer and no gc_mark here to owe the JS_GetAnyOpaque the
+       zeroing costs a component whose objects do wear one. */
+    g_event_class = 0;
     g_ctor_stepid = -1;
     g_cancel_bubble_setid = g_return_value_setid = g_init_event_id = -1;
 }
