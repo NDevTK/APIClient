@@ -350,6 +350,21 @@ static ProxyData *proxy_of(JSValueConst v)
     return p;
 }
 
+/* WRITE ONE OF THE FOUR, and never `JS_FreeValue(ctx, p->f); p->f = <build one>;` — see cow.h for the order and
+   the defect. Releasing this record's OLD value is the hazard from the release side and it is the one that
+   bites here: `window` names a global, so giving it back runs the page's own platform finalizers, and an
+   allocation anywhere in them IS a collection (js_trigger_gc has exactly one caller, JS_NewObjectFromShape) —
+   which reaches this record through proxy_gc_mark and decrefs whatever the slot still names. Publishing first
+   makes the slot correct throughout.
+   The record and its layout are bound HERE rather than at each call, so no site can pass a slot from one record
+   with the layout of another. Every write below goes through it; the two MINTS do not, and that is the one
+   honest exception: before JS_SetOpaque the record is unreachable by the collector and its slots hold no value
+   to release. */
+static void wp_set(JSContext *ctx, ProxyData *p, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, p, &PROXY_REC, slot, v);
+}
+
 /* §7.2.1's SAME-ORIGIN CHECK — §7.1.1's algorithm over two RECORDS, which is the whole of it: step 1 is the
  * nonce comparison and step 2 is the tuple comparison, both inside origin_same.
  *
@@ -573,7 +588,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            document outright. The NULL is that statement, not an unknown. */
         p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL, NULL,
                                    p->creator_policy, p->creator_base_url, p->creation_sandbox_flags);
-        p->window = JS_GetGlobalObject(p->realm);
+        wp_set(ctx, p, &p->window, JS_GetGlobalObject(p->realm));
     }
     return p->realm;
 }
@@ -609,10 +624,10 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
            "never a navigation target. BUILD the cross-instance navigate: a navigation of a navigable another "
            "agent holds is an operation routed to that agent (core/frame/remote_op.h), not a local write");
     /* THE OLD WINDOW'S REFERENCE IS THIS SLOT'S, and the delta already dupped its own copy when the capture
-       above ran — so releasing it here leaves the parked arm's copy intact and the live slot free to move. */
-    JS_FreeValue(ctx, p->window);
+       above ran — so releasing it here leaves the parked arm's copy intact and the live slot free to move.
+       IT IS PUBLISHED BEFORE IT IS RELEASED (wp_set): the release is what runs the OLD global's finalizers. */
     p->realm  = realm;
-    p->window = JS_GetGlobalObject(realm);
+    wp_set(ctx, p, &p->window, JS_GetGlobalObject(realm));
     p->doc    = doc;
     /* THE OLD STRINGS ARE NOT FREED. A parked flow's saved bytes still name them (see proxy_of), so freeing
        here would resume that flow onto freed memory; they are the PROXY's and are released with it. */
@@ -699,13 +714,12 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
 
-    (void)ctx;
     DCHECK(p != NULL, "a realm was handed to something that is not a WindowProxy");
     DCHECK(p->realm == NULL, "a navigable was given a second realm through the ADOPT path — it already has an "
                              "active document, and replacing one is window_proxy_navigate, which moves all "
                              "five facts of the binding at once rather than handing this one a second realm");
     p->realm  = realm;   /* BORROWED — the agent owns its realms */
-    p->window = JS_GetGlobalObject(realm);
+    wp_set(ctx, p, &p->window, JS_GetGlobalObject(realm));
 }
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
@@ -1108,8 +1122,7 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
        intact and rewinding this flow restores the binding exactly. That is the same argument
        window_proxy_navigate makes one screen up, for the same field, and it is the whole reason a destruction
        can give memory back at all without a flow losing the document it is standing in. */
-    JS_FreeValue(ctx, p->window);
-    p->window = JS_UNDEFINED;
+    wp_set(ctx, p, &p->window, JS_UNDEFINED);
     p->realm  = NULL;
     /* AND `materialized` NOW ANSWERS THE TRUTH: this navigable has no active document. proxy_realm asserts the
        other side of that pair — a NULL realm on a DESTROYED navigable means "there is none", never "not yet". */
@@ -1298,8 +1311,7 @@ void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
     ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — this write rides the flow's delta */
 
     DCHECK(p != NULL, "something that is not a WindowProxy was asked to disown its opener");
-    JS_FreeValue(ctx, p->opener);
-    p->opener = JS_NULL;
+    wp_set(ctx, p, &p->opener, JS_NULL);
 }
 
 void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst opener)
@@ -1319,8 +1331,7 @@ void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst op
     /* NULL IS NOT THIS FUNCTION'S TO SAY. §7.2.2.4's null branch DISOWNS, which is a different state change
        with a different observable (no own property is defined), and it has its own entry point above. Reaching
        this one with null would make the two spellings of "no opener" two, able to disagree. */
-    JS_FreeValue(ctx, p->opener);
-    p->opener = JS_DupValue(ctx, opener);
+    wp_set(ctx, p, &p->opener, JS_DupValue(ctx, opener));
 }
 
 bool window_proxy_materialized(JSValueConst proxy)
@@ -2630,7 +2641,7 @@ void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst
            "a navigable was given a SECOND §7.3.1.3 container — the relation is created once, and §7.3.1.6's "
            "destroy-a-child-navigable severs it by clearing the ELEMENT's content navigable rather than by "
            "moving this one, so a navigable never changes which element presents it");
-    p->container = JS_DupValue(ctx, element);
+    wp_set(ctx, p, &p->container, JS_DupValue(ctx, element));
 }
 
 /* THE SAME LINK FOR THE NAVIGABLE WHOSE CONTAINER ELEMENT IS IN ANOTHER WASM INSTANCE — see the field.
