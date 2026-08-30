@@ -118,6 +118,16 @@ static FileReaderData *fr_of(JSValueConst v)
     return d;
 }
 
+/* WRITE ONE OF THE TWO, and never `JS_FreeValue(ctx, d->f); d->f = <build one>;` — see cow.h for the order and
+   the defect. The record and its layout are bound HERE rather than at each call, so no site can pass a slot
+   from one record with the layout of another. Every write of `result` and `error` below goes through it; the
+   CONSTRUCTOR does not, and that is the one honest exception: before JS_SetOpaque the record is unreachable by
+   the collector and its calloc'd slots hold no value to release. */
+static void fr_set(JSContext *ctx, FileReaderData *d, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, d, &FR_REC, slot, v);
+}
+
 static void fr_finalizer(JSRuntime *rt, JSValue val)
 {
     FileReaderData *d = JS_GetOpaque(val, g_fr_class);
@@ -433,14 +443,12 @@ static int js_fr_task_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         if (JS_IsException(packaged)) {
             /* Step 10.5.3: "If package data threw an exception error: Set fr's error to error. Fire a progress
                event called error at fr." */
-            JS_FreeValue(ctx, d->error);
-            d->error = JS_GetException(ctx);
+            fr_set(ctx, d, &d->error, JS_GetException(ctx));
             s->transmitted = s->length = 0;
             s->ev = progress_event_new(ctx, "error", 0, 0);
         } else {
             /* Step 10.5.4: "Set fr's result to result. Fire a progress event called load at the fr." */
-            JS_FreeValue(ctx, d->result);
-            d->result = fr_source_wrap(ctx, blob, type, packaged);
+            fr_set(ctx, d, &d->result, fr_source_wrap(ctx, blob, type, packaged));
             s->transmitted = s->length = (double)len;
             s->ev = progress_event_new(ctx, "load", s->transmitted, s->length);
         }
@@ -535,10 +543,8 @@ static JSValue js_fr_read(JSContext *ctx, JSValueConst this_val, int argc, JSVal
                                     "a read is already in progress on this FileReader");
     /* Steps 2-4. */
     d->state = FR_LOADING;
-    JS_FreeValue(ctx, d->result);
-    d->result = JS_NULL;
-    JS_FreeValue(ctx, d->error);
-    d->error = JS_NULL;
+    fr_set(ctx, d, &d->result, JS_NULL);
+    fr_set(ctx, d, &d->error, JS_NULL);
     /* Steps 5-10. See the file comment for why the chunk sequence a Blob's stream produces is STATED here: it
        is one chunk carrying every byte, or none at all for an empty byte sequence.
          step 10.2  — the first fulfilment queues loadstart, whether or not it carried data;
@@ -639,15 +645,13 @@ static int js_fr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         /* Step 1: "If this's state is "empty" or if this's state is "done" set this's result to null and
            terminate this algorithm." — no event of any kind. */
         if (d->state != FR_LOADING) {
-            JS_FreeValue(ctx, d->result);
-            d->result = JS_NULL;
+            fr_set(ctx, d, &d->result, JS_NULL);
             *presult = JS_UNDEFINED;
             return 0;
         }
         /* Step 2: "If this's state is "loading" set this's state to "done" and set this's result to null." */
         d->state = FR_DONE;
-        JS_FreeValue(ctx, d->result);
-        d->result = JS_NULL;
+        fr_set(ctx, d, &d->result, JS_NULL);
         /* Step 3, and step 4's "Terminate the algorithm for the read method being processed" — which for a
            read whose whole remainder is queued tasks is the SAME operation: with the tasks off the queue there
            is no step of §6.2's step 10 left to run. */
