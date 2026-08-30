@@ -99,6 +99,24 @@ static TsCtrlData *tc_of(JSValueConst v)
 
 bool transform_stream_is(JSValueConst v) { return g_ts_class != 0 && JS_GetOpaque(v, g_ts_class) != NULL; }
 
+/* WRITE ONE OWNED SLOT OF EITHER RECORD, and never `JS_FreeValue(ctx, t->f); t->f = <build one>;` — see cow.h
+   for the order and the defect. js_trigger_gc has exactly one caller, JS_NewObjectFromShape, so an OBJECT
+   allocation is a collection: a slot left naming freed storage across the build is walked by this component's
+   own gc_mark and decrefs a JSObject already back on the allocator's free list. Releasing one is the same
+   hazard from the other side — §6.3's ClearAlgorithms drops the page's own transformer functions, and what
+   those close over is released with them.
+   Each record binds its layout ONCE, here, so no site can pass a slot from one with the layout of the other.
+   The two MINTS do not come here: each fills its block before JS_SetOpaque, where the record is unreachable by
+   the collector and its slots hold no value to release. */
+static void tsd_set(JSContext *ctx, TsData *t, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, t, &TSD_REC, slot, v);
+}
+static void tc_set(JSContext *ctx, TsCtrlData *c, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, c, &TCD_REC, slot, v);
+}
+
 static void ts_finalizer(JSRuntime *rt, JSValue val)
 {
     TsData *t = JS_GetOpaque(val, g_ts_class);
@@ -313,10 +331,9 @@ static JSValue js_ts_fini(JSContext *ctx, void *st, bool take_result)
    and so a second terminating path cannot run one of them again. */
 static void ts_clear_algorithms(JSContext *ctx, TsCtrlData *c)
 {
-    JS_FreeValue(ctx, c->transform_fn);
-    JS_FreeValue(ctx, c->flush_fn);
-    JS_FreeValue(ctx, c->cancel_fn);
-    c->transform_fn = c->flush_fn = c->cancel_fn = JS_UNDEFINED;
+    tc_set(ctx, c, &c->transform_fn, JS_UNDEFINED);
+    tc_set(ctx, c, &c->flush_fn, JS_UNDEFINED);
+    tc_set(ctx, c, &c->cancel_fn, JS_UNDEFINED);
 }
 
 /* THE STAGE IS THE HEADER'S, AND THE TWO ENTRY SHAPES INDEX IT FROM DIFFERENT BASES. §6's constructor is an
@@ -552,18 +569,16 @@ run:
                 cb_result = JS_UNDEFINED;
                 if (JS_IsException(out)) return JS_STEP_ABRUPT;
                 JS_FreeValue(ctx, out);
-                JS_FreeValue(ctx, t->bp_funcs[0]);
-                JS_FreeValue(ctx, t->bp_funcs[1]);
-                t->bp_funcs[0] = t->bp_funcs[1] = JS_UNDEFINED;
+                tsd_set(ctx, t, &t->bp_funcs[0], JS_UNDEFINED);
+                tsd_set(ctx, t, &t->bp_funcs[1], JS_UNDEFINED);
                 s->w.pull = B_FRESH;
             }
             {
                 JSValue funcs[2], p = JS_NewPromiseCapability(ctx, funcs);
                 if (JS_IsException(p)) return JS_STEP_ABRUPT;
-                JS_FreeValue(ctx, t->bp_promise);
-                t->bp_promise = p;
-                t->bp_funcs[0] = funcs[0];
-                t->bp_funcs[1] = funcs[1];
+                tsd_set(ctx, t, &t->bp_promise, p);
+                tsd_set(ctx, t, &t->bp_funcs[0], funcs[0]);
+                tsd_set(ctx, t, &t->bp_funcs[1], funcs[1]);
                 t->backpressure = s->bp_want;
             }
             s->w.pull = B_IDLE;
@@ -1123,8 +1138,17 @@ run:
                     ts_goto(s, S_DONE);
                     continue;
                 }
-                c->finish = JS_NewPromiseCapability(ctx, c->finish_funcs);
-                if (JS_IsException(c->finish)) { c->finish = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+                {
+                    /* BUILT INTO LOCALS AND THEN PUBLISHED, all three slots. Given `c->finish_funcs` directly,
+                       JS_NewPromiseCapability writes two of this record's owned slots from outside it — the one
+                       write shape the layout assert cannot see — and its failure left the exception marker in
+                       `finish`, which tc_gc_mark walks. */
+                    JSValue funcs[2], p = JS_NewPromiseCapability(ctx, funcs);
+                    if (JS_IsException(p)) return JS_STEP_ABRUPT;
+                    tc_set(ctx, c, &c->finish, p);
+                    tc_set(ctx, c, &c->finish_funcs[0], funcs[0]);
+                    tc_set(ctx, c, &c->finish_funcs[1], funcs[1]);
+                }
                 JS_FreeValue(ctx, s->promise);
                 s->promise = JS_DupValue(ctx, c->finish);
                 /* THE ALGORITHM IS TAKEN NOW AND HELD. `flush(controller)` may call `controller.terminate()`,
