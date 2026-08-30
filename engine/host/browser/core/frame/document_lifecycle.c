@@ -19,6 +19,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/user_activation.h"
 #include "core/timing/timer.h"
+#include "solver/flow.h"   /* §7.5.10 step 7's OTHER task queue: the running flow's own program sequence */
 
 /* THE THREE PER-DOCUMENT OPERATIONS, and why they are ONE fan-out with three bodies.
  *
@@ -151,6 +152,46 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
                "§7.5.10 step 7 dropped a destroyed Document's queued tasks and there were still more — the "
                "queues this walks are not all of them, and whichever one it missed will run page code in a "
                "document whose browsing context is null");
+        /* AND THE OTHER TASK QUEUE, WHICH IS THE FRONTIER'S OWN. The line above says "the queues this walks are
+           not all of them" as a hypothetical, and it is a FACT: JS_DropJobsForContext walks the runtime's job
+           queues, and a document's SCRIPTS are not there. They are rows of the running flow's one program
+           sequence (solver/flow.h's `dyn`/`dyn_doc`), queued by whichever flow created the navigable, and
+           §7.5.10 step 7's "any task queue" is every queue a task of this document can be sitting in. A row is
+           a task by the standard's own reckoning — §8.1.4.4 "Calling scripts" runs it, and §4.12.1.1
+           "Processing model" queues it ("queue an element task on the DOM manipulation task source")
+           — so a row of a destroyed Document that is still allowed to reach the compile is precisely the
+           "use-after-destroy a page can trigger by removing a frame that queued work" the paragraph above
+           refuses for the other queue.
+           IT IS THE RUNNING FLOW'S ROWS AND NOT THE FRONTIER'S, because this destruction is per timeline
+           (solver/engine.h's engine_unload_document walks the members and runs it in each): a sibling arm that
+           has not yet destroyed this document is running a document that is still there, and taking its rows
+           would destroy something in a timeline that never asked.
+           HOW ITS ABSENCE SHOWS, and it does not show HERE: the flow reaches its next row, compiles it in the
+           destroyed document's realm and runs page script against a Document whose browsing context is null —
+           or, when nothing else held that realm, the realm is torn down first and the compile asks
+           solver/engine.c's doc_realm for a realm that is gone, whose assert diagnoses a document that was
+           never MATERIALIZED. That message is true of a different document and sends the reader to build the
+           node-navigable direction for one that was destroyed on purpose.
+           WHAT THE NEXT DIFF BUILDS is the removal itself, and the three things it owes are why it is not
+           this one. (1) The eight parallel columns shrink together, exactly as engine.c's interposition
+           memmoves them apart. (2) `imm_at`/`imm_next` are ABSOLUTE slots at or above the cursor, so each
+           removed index below them decrements them, and a run whose BASE slot is itself removed has no base
+           left — without that, two programs one script prepares run in the reverse of the order §4.12.1.1
+           "Processing model"'s prepare-the-script-element gives them ("Otherwise, immediately execute the
+           script element el, even if other scripts are already executing"). (3) A DYN_SCRIPT_SRC row is a
+           script whose reply is still outstanding and whose slot the register names by ABSOLUTE index, so the
+           row cannot go
+           without the pending entry that names it — which is also §7.5.10 step 2's abort-a-document cancelling
+           this document's fetches, arriving as the same removal. */
+        DCHECK(flow_programs_unstarted_for_document(flow_running(), document_doc(cctx)) == 0,
+               "§7.5.10 step 7 left a destroyed Document's PROGRAMS queued — the runtime's job queues are "
+               "drained above, and a document's scripts are not in them: they are unstarted rows of this "
+               "flow's own program sequence, and the flow will compile the next one into a Document whose "
+               "browsing context is null. BUILD the removal on solver/flow.c beside the count that found "
+               "this: drop this flow's rows for this document, shrinking all eight columns together, "
+               "decrementing `imm_at`/`imm_next` past every removed slot below them (and clearing the run "
+               "when its own base slot goes), and dropping the pending reply of any DYN_SCRIPT_SRC row with "
+               "it — that last one is step 2's abort-a-document cancelling this document's fetches");
     }
     /* STEPS 8 AND 9 — the browsing context is null, and the navigable stops naming this Document. LAST, which
        is the standard's own order and is load-bearing here: every step above reads the active document through

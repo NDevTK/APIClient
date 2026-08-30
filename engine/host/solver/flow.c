@@ -2520,3 +2520,23 @@ int flow_programs_for_document(uint32_t doc) {
     }
     return n;
 }
+
+/* See flow.h. THE CURSOR AND `last_compiled` ARE BOTH READ, and they are not the same fact: `script_i` is the
+   row the flow is AT and `last_compiled` is the highest row it has ever STARTED, so between two programs the
+   cursor stands one past the last started row and during one it stands ON it. A row is unstarted exactly when
+   it is past BOTH — past `last_compiled` because a started row is a program this flow may be suspended inside,
+   and at or past `script_i` because the cursor is where the sequence resumes. */
+int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
+    int n = 0;
+
+    DCHECK(f != NULL, "the unstarted-program count was asked of no flow");
+    DCHECK(doc != 0, "the unstarted-program count was asked about the NONE document — a handle is this "
+                     "instance's index into its own name table and zero names nothing");
+    DCHECK(f->script_i >= f->last_compiled,
+           "a flow's cursor is BEHIND the last program it compiled — the compile site advances `last_compiled` "
+           "to `script_i` and never past it, so the two have come apart and every index derived from them "
+           "names a row other than the one it is about");
+    for (int k = 0; k < f->dyn_n; k++)
+        if (f->dyn_doc[k] == doc && k > f->last_compiled && k >= f->script_i) n++;
+    return n;
+}

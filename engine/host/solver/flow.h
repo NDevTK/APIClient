@@ -1254,4 +1254,22 @@ Flow *flow_at(int i);
  * realm-teardown hook fires there), where allocating or dup'ing would re-enter the walk that is running. */
 int   flow_programs_for_document(uint32_t doc);
 
+/* HOW MANY PROGRAMS OF ONE DOCUMENT ONE FLOW STILL HAS QUEUED AND HAS NOT STARTED — the other question the
+ * one above says it is not answering ("a caller that wants \"still to run\" would be asking a different
+ * question with a different assert behind it"), and this is that caller.
+ *
+ * IT IS PER FLOW BECAUSE THE OPERATION THAT ASKS IT IS. HTML §7.5.10 "Destroying documents"' destroy a
+ * Document is state a page OBSERVES, so it runs once per timeline over that timeline's own delta — at the
+ * instant flow A destroys a document, flow B has not destroyed it and its rows for that document are rows of a
+ * document that is still there. A sum over the frontier would call B's ordinary queue A's defect.
+ *
+ * AND IT IS UNSTARTED BECAUSE §7.5.10 STEP 7 IS. "Remove any tasks whose document is document from any task
+ * queue (without running those tasks)" is about work that has not run; a row the flow has already compiled is
+ * a program it may be SUSPENDED INSIDE, and the standard has no object at all for a continuation suspended
+ * mid-program — that one is the flow's own state and §NO BOUNDS forbids touching it. `last_compiled` is the
+ * line between them, because it is what the compile site advances and asserts against.
+ *
+ * PURE: no allocation, no JS value touched, no reference taken, so a DCHECK may ask it. */
+int   flow_programs_unstarted_for_document(const Flow *f, uint32_t doc);
+
 #endif
