@@ -31,6 +31,10 @@
 <!-- The ONE definition of the Send panel's field record; lib/discovery.js, lib/openapi-import.js
      and lib/send.js all build through it. -->
 <script src="lib/field-def.js"></script>
+<!-- The ONE definition of the endpoint record — the unit `netdiff --unused` counts. lib/merge.js (the
+     extension's only `endpoints.set`) builds through it, lib/persistence.js checks what the store returns
+     against it, and lib/send.js / lib/popup-handlers.js read the record instead of answering for it. -->
+<script src="lib/endpoint-record.js"></script>
 <script src="lib/protobuf.js"></script>
 <script src="lib/protocol-parsers.js"></script>
 <script src="lib/discovery.js"></script>

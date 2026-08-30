@@ -83,11 +83,11 @@ function _discServices(pageUrl) {
          "every GET_STATE answer, so an absent one is that projection broken and this panel would report a " +
          "document that learned a service as having learned nothing");
   for (const [k, ep] of Object.entries(tabData.endpoints)) {
-    DCHECK(typeof ep.service === "string" && typeof ep.method === "string" &&
-           typeof ep.host === "string" && typeof ep.path === "string",
-           "an endpoint record reached the discovery panel without service/method/host/path — lib/merge.js is " +
-           "the extension's only endpoints.set and writes all four on every record, so one missing them is that " +
-           "producer broken and this panel would probe an address it assembled itself");
+    /* THE WHOLE RECORD, FROM THE ONE PLACE THAT DESCRIBES IT. This was four names checked by hand, which was
+       four of the ten and the four this panel happened to read — a transcription of the producer's literal,
+       and therefore a second copy of it that could go stale silently. lib/endpoint-record.js is the copy that
+       cannot: it is what the producer BUILDS through, so the list here and the list there are one list. */
+    checkEndpointRecord(ep, "the discovery panel's GET_STATE reply, key " + JSON.stringify(k));
     if (!pageUrl || ep.pageUrl !== pageUrl) continue;   // another document learned it — not ours to probe
     let e = out.get(ep.service);
     if (!e) { e = { hostname: ep.host, endpointKeys: [] }; out.set(ep.service, e); }

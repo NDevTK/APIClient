@@ -1095,9 +1095,21 @@ async function cmdNetDiff(args) {
       // KEPT, which is the conservative direction this comment already asked for.
       const isAsset = (r) => !!r._assetReason;
       const learned = new Set(), learnedMap = new Map();
+      /* THE KEY IS THE RECORD'S OWN ADDRESS, AND THREE SUBSTITUTES USED TO STAND IN IT. This diagnostic's
+         whole subject is whether an address the solver learned matches one the page issued, so a field a
+         consumer answers for is a field that decides an endpoint's IDENTITY — the concealment defect landing
+         on the one number CLAUDE.md names (`netdiff --unused`). `e.method || "GET"` filed a verb-less record
+         under GET, where it could match a live GET and be counted as covered. `e.path || e.url` was worse
+         than a default: `path` is legitimately "" for a shape-origin address with no literal remainder
+         (lib/callsite-url.js), and that file states the invariant this line is built on — "`host + path`
+         reconstructs the address in both cases" — so falling through to `url` wrote the origin TWICE
+         (`https://{origin}` + `{origin}`) and keyed that endpoint as one nothing can ever match. The trailing
+         `|| ""` answered for a `url` that is written on every record. All three are gone and the record is
+         asserted instead, at the door where it arrives. */
       if (typeof globalStore !== "undefined") {
         for (const e of globalStore.endpoints.values()) {
-          const k = (e.method || "GET") + " " + norm((e.host ? "https://" + e.host : "") + (e.path || e.url || ""));
+          checkEndpointRecord(e, "harness netdiff reading the cumulative store");
+          const k = e.method + " " + norm((e.host ? "https://" + e.host : "") + e.path);
           learned.add(k); if (!learnedMap.has(k)) learnedMap.set(k, e);
         }
       }
@@ -1284,8 +1296,12 @@ async function cmdNetDiff(args) {
         };
         if (typeof globalStore !== "undefined") _harvestVdd(globalStore.discoveryDocs);
         if (typeof state !== "undefined" && state.docs) for (const t of state.docs.values()) if (t) _harvestVdd(t.discoveryDocs);
+        /* `e` IS AN ENDPOINT RECORD (every caller passes one out of `learnedMap`), asserted where it entered
+           the loop above. `_paramKey` re-derives a pathname from whatever address it is handed, and `path` IS
+           that pathname already — so `|| e.url || ""` was two substitutes for fields the record always
+           carries, sitting on the key that decides which learned parameters get printed beside an endpoint. */
         const _fmtParams = (e) => {
-          const pm = _fcsParams.get(_paramKey(e.method, e.path || e.url || ""));
+          const pm = _fcsParams.get(_paramKey(e.method, e.path));
           if (!pm || !pm.size) return "";
           // Body keys first (the moat), then path, then query.
           const ord = { body: 0, path: 1, query: 2 };
@@ -1300,7 +1316,11 @@ async function cmdNetDiff(args) {
         const unusedList = [];
         for (const [k, e] of learnedMap) {
           if (seen.has(k) || liveMatchesTemplate(k)) continue;
-          if (e.source && e.source !== "ast_analysis") continue;
+          /* `source` IS STATED ON EVERY RECORD (lib/endpoint-record.js asserts it is one of the two arms), so
+             the `e.source &&` that guarded this test could only ever have admitted a record that had lost the
+             field — and admitted it as a LITERAL-ORIGIN endpoint, which is the arm this list is for. A
+             shape-origin address printed as an unused endpoint is an address nobody can fetch. */
+          if (e.source !== "ast_analysis") continue;
           unusedList.push(k + _fmtParams(e));
         }
         // METRIC HONESTY: the same endpoint reached via opaque-POSITIONAL args ({arg0}) and NAMED args ({id})

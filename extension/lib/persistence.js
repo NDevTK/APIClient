@@ -141,9 +141,17 @@ function _deserializeIntoGlobalStore(s) {
       });
     }
   }
+  /* THE STORE IS THE OTHER PLACE A RECORD CAN ARRIVE SHORT OF A NAME. Everything else in the extension gets
+     an endpoint from lib/merge.js's constructor in this same session; these came out of IndexedDB, possibly
+     written by a build whose record shape differed, and from here they are indistinguishable from freshly
+     minted ones. Checked on the way IN rather than at each surface, because the alternative is every reader
+     carrying a `||` for a gap only this door can produce — which is exactly how `e.method || "GET"` came to
+     stand between the cumulative moat and `netdiff --unused`. */
   if (s.endpoints) {
-    for (const [k, v] of Object.entries(s.endpoints))
+    for (const [k, v] of Object.entries(s.endpoints)) {
+      checkEndpointRecord(v, "lib/persistence.js restoring the cumulative store, key " + JSON.stringify(k));
       globalStore.endpoints.set(k, v);
+    }
   }
   if (s.discoveryDocs) {
     for (const [k, v] of Object.entries(s.discoveryDocs)) {

@@ -63,12 +63,21 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
   // GLOBAL — endpoints/discovery/probes live in the cumulative store keyed by
   // endpointKey/service. Nothing here is per-tab/document (only the network log
   // is); the popup reviews the cumulative cross-site moat.
-  const ep = endpointKey ? globalStore.endpoints.get(endpointKey) : null;
+  /* A MISS ON THIS MAP IS A FACT AND A RECORD IN IT IS COMPLETE — two different statements, and the `?.`
+     below used to make them one. `null` here means "this panel is resolving a VIRTUAL endpoint, named by
+     service+methodId, that no call site registered"; it never means "the record is there but said nothing". */
+  const _epHit = endpointKey ? globalStore.endpoints.get(endpointKey) : undefined;
+  const ep = _epHit === undefined ? null : _epHit;
+  if (ep) checkEndpointRecord(ep, "lib/send.js resolving a Send-panel schema, key " + JSON.stringify(endpointKey));
 
   // If no endpoint but we have service+methodId (virtual), create a dummy ep object for context
   if (!ep && (!service || !methodId)) return { source: "none", endpoint: null };
 
-  const targetService = ep?.service || service;
+  /* THE ENDPOINT'S OWN SERVICE WHEN THERE IS AN ENDPOINT, the caller's argument only when there is none.
+     `ep?.service || service` collapsed those into one expression whose two arms answer different questions,
+     and its reachable effect was to answer a captured endpoint's discovery lookup with whatever service the
+     panel happened to have selected — a lookup against a doc this address was never filed under. */
+  const targetService = ep ? ep.service : service;
 
   let source = "none";
   let discoveryMethod = null;
@@ -88,7 +97,11 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
       match = findMethodById(doc, methodId);
     } else if (ep) {
       // Path matching (captured endpoint)
-      match = findDiscoveryMethod(doc, ep.path, ep.method || "POST");
+      /* THE VERB IS ON THE RECORD. `|| "POST"` matched this address against the discovery doc's POST method
+         whenever the endpoint's own verb went missing — a GET endpoint resolved to a POST method's schema,
+         which the Send panel then renders as this endpoint's parameters. lib/merge.js asserts the call site
+         carries a method before it registers one, so there is no absence here to answer for. */
+      match = findDiscoveryMethod(doc, ep.path, ep.method);
     }
 
     if (match) {

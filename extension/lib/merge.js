@@ -142,8 +142,13 @@ function mergeASTResultsIntoVDD(tab, results) {
         tab._epNorm.set(_structKey, epKey);
       }
       if (!tab.endpoints.has(epKey)) {
-        var _epMeta = tab;
-        tab.endpoints.set(epKey, {
+        /* THROUGH lib/endpoint-record.js, WHICH IS NOW THE ONLY DESCRIPTION OF THIS RECORD. This literal used
+           to BE the description, and it could only be consulted by reading it — which is why the field list
+           had been hand-copied into seven comments and one DCHECK elsewhere, and why five names no producer
+           writes had been projected onto it by readers with nothing to catch them. The constructor rejects a
+           name this record does not carry, so the next such projection crashes at the producer instead of
+           reading `undefined` for the life of the feature. */
+        tab.endpoints.set(epKey, makeEndpointRecord({
             // new URL().href percent-encodes shape holes ({} -> %7B%7D); decode so the endpoint URL keeps
             // the canonical `{}` param placeholder the dedup/UI recognize (path is already decoded).
             url: _addr.originKnown ? _decHoles(_addr.url.href) : callSite.url,
@@ -152,7 +157,12 @@ function mergeASTResultsIntoVDD(tab, results) {
             path: _addr.path,
             service: interfaceName,
             source: _addr.originKnown ? "ast_analysis" : "ast_shape_origin",
-            pageUrl: _epMeta ? _epMeta.url : null,
+            /* `null` IS THIS RECORD'S ONE SPELLING OF "no document address was known", so the translation
+               happens HERE, at the producer, rather than at each surface. What stood here tested a local
+               alias of `tab` that is unconditionally truthy at this point, so its `: null` arm was
+               unreachable and a doc view with no address wrote `undefined` — which chrome.runtime.
+               sendMessage then DROPS, delivering the popup a record whose `pageUrl` key does not exist. */
+            pageUrl: tab.url === undefined ? null : tab.url,
             /* AST-captured required headers (the SET the bundle attached at the host edge, per-header
                literal/opaque) — transport metadata the Send panel shows so the endpoint is actually usable.
                ABSENCE IS THE POSITIVE STATEMENT, and endpoint.c states it in those words: it writes the
@@ -190,7 +200,7 @@ function mergeASTResultsIntoVDD(tab, results) {
                body, and it needs a reader in lib/send.js first — that file projects only the ten fields this
                `endpoints.set` writes, deliberately.) */
             firstSeen: Date.now(),
-        });
+        }, "lib/merge.js registering an @H fetch call site"));
         newEndpoints++;
       }
       /* THE CATCH THAT STOOD HERE IS DELETED, AND IT IS WHY THIS DEFECT WAS INVISIBLE FOR A WHOLE CORPUS.

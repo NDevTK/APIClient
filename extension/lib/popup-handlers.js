@@ -118,10 +118,16 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         return;
       }
 
+      checkEndpointRecord(ep, "DISCOVER_SERVICE, key " + JSON.stringify(msg.endpointKey));
       const headers = {};
       const discoverUrl = new URL(ep.url);
       discoverUrl.searchParams.delete("key");
-      const svc = ep.service || extractInterfaceName(new URL(ep.url));
+      /* THE SERVICE IS ON THE RECORD, and re-deriving it here was the same defect as the five names the
+         comment below records: `|| extractInterfaceName(new URL(ep.url))` re-ran lib/grouping.js's classifier
+         over the address, which is the very computation lib/merge.js already ran to WRITE `service` — so the
+         two could disagree (merge.js refines the name by observed prefix afterwards) and the probe would be
+         filed under a service the moat does not use. It answered only for an absent field, and there is none. */
+      const svc = ep.service;
       /* THE KEY COMES FROM THE KEY STORE, AND ITS INJECTION POINT IS THE ONE IT WAS OBSERVED IN. `if (ep.apiKey)
          { ep.apiKeySource === "url" ? … : X-Goog-Api-Key }` stood here and NEITHER name exists on an endpoint
          record: lib/merge.js is the extension's only `endpoints.set` and writes {url, method, host, path,
