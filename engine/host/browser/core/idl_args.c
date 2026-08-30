@@ -2502,11 +2502,30 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             goto placed;
         }
 
-        /* §3.2.25's `BufferSource`: the brand test, once, so no body performs it. */
+        /* §3.2.26 Buffer source types, over §4.2's `BufferSource`: the brand test, once, so no body performs
+           it. (The number was §3.2.25 here, which is `Union types` — see the row's own comment in the header.) */
         if (t == IDL_BUFFERSOURCE) {
             if (!JS_IsArrayBuffer(a) && JS_GetTypedArrayType(a) < 0 && !JS_IsDataView(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the argument is not a BufferSource");
+                return JS_STEP_ABRUPT;
+            }
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            *slot = JS_DupValue(ctx, a);
+            goto placed;
+        }
+
+        /* §3.2.26 Buffer source types, over §4.1's `ArrayBufferView`: the SAME brand test WITHOUT the
+           ArrayBuffer arm, which is the whole of the difference between the two typedefs. §4.1 lists the
+           thirteen view types — the nine integer typed arrays, the three float ones and DataView — and every
+           one of them crosses here as itself; a member that accepts only some of them takes that refusal in
+           its own algorithm, where the standard puts it (Web Cryptography §10.1.1 step 1's TypeMismatchError),
+           and NOT here, because the two throws are different exceptions a page tells apart. */
+        if (t == IDL_ARRAYBUFFERVIEW) {
+            if (JS_GetTypedArrayType(a) < 0 && !JS_IsDataView(a)) {
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "the argument is not an ArrayBufferView");
                 return JS_STEP_ABRUPT;
             }
             JS_FreeValue(ctx, cb_result);

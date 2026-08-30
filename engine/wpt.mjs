@@ -75,6 +75,21 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    "FileAPI/BlobURL", "FileAPI/FileReader", "FileAPI/filelist-section",
                    "FileAPI/reading-data-section",
                    "encoding", "tools",
+                   /* WEB CRYPTOGRAPHY. §10's Crypto is COMPLETE — `subtle`, `getRandomValues`, `randomUUID` —
+                      and its oracle sat uncollected, which is the excluded-test failure this gate exists to
+                      catch: `getRandomValues.any.js` checks the step ORDER that a hand-review cannot (a
+                      Float32Array longer than 65536 bytes must take step 1's TypeMismatchError and NOT step 3's
+                      QuotaExceededError), the zero-length view, the subclass receiver and the same-object
+                      return, and `randomUUID.https.any.js` runs 256 draws through a collision Set — which is
+                      the one property this engine's reproducible stream has to earn rather than assert.
+                      IT CANNOT BE A WPT_OWN_LEVEL ENTRY, because nothing else puts this standard on disk and
+                      that list adds nothing to the checkout. So the SUBTREE comes too: 201 files, 125 test
+                      documents, all but the three at its own level exercising §14's SubtleCrypto, whose
+                      members are absent pending §13's CryptoKey model. NOTHING IS PREDICTED HERE ABOUT WHAT
+                      THEY SCORE — what each abort names is the work queue, read off the run. The subtree is
+                      generateKey 41, derive_bits_keys 31, import_export 30, sign_verify 25, serialization 20,
+                      encrypt_decrypt 18, digest 8, util 7, encap_decap 3, wrapKey_unwrapKey 2. */
+                   "WebCryptoAPI",
                    /* THE WHATWG DOM. Eighteen DOM/HTML step machines were converted to rest at exact spec steps
                       — createElement, setAttribute, the mutation algorithms, innerHTML/outerHTML — and the gate
                       that would have judged them did not collect a single one of their tests, because this

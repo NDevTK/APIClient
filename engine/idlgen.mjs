@@ -193,11 +193,15 @@ const INTERFACES = {
      which is a whole algorithm of §5 rather than a member. A row is what makes that count a number rather
      than a sentence in a comment somebody has to keep true. */
   /* WEB CRYPTOGRAPHY §10 and §14. Both are rows from the day their components land, and the gap each one
-     reports is the plan rather than the neglect: Crypto ships `subtle` and NOT `getRandomValues` or
-     `randomUUID`, which need an answer to what randomness means for a solver whose flows resume
-     byte-identically across sessions; SubtleCrypto ships `digest` and none of the other eleven, every one of
-     which needs §13's CryptoKey model first. Without rows the audit would report both interfaces as nothing
-     at all rather than as thirteen members with a reason. */
+     reports is the plan rather than the neglect. §10 IS COMPLETE — `subtle`, §10.1.1's `getRandomValues` and
+     §10.1.2's `randomUUID` — and the two that used to be listed here as pending an answer to "what does
+     randomness mean for a solver whose flows resume byte-identically" have that answer now; it is argued in
+     core/crypto/crypto.h rather than restated here, because a reason a reader can check belongs beside the
+     code it decided and not in the auditor's map. SubtleCrypto ships `digest` and none of the rest, every one
+     of which needs §13's CryptoKey model first. Without rows the audit would report both interfaces as
+     nothing at all rather than as a member list with a reason — and the list's LENGTH is deliberately not
+     written here: it is what the row prints, it changed under this comment once already when the modern-algos
+     IDL added the encapsulation members, and a count in prose is the one thing a row makes redundant. */
   Crypto:               "core/crypto/crypto.c",
   SubtleCrypto:         "core/crypto/subtle_crypto.c",
   IDBKeyRange:          "core/indexeddb/idb_key_range.c",

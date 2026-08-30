@@ -363,11 +363,34 @@ typedef enum {
        a sequence driven from the body runs after every later argument's conversion, which is observable the
        moment a later argument is a dictionary with a getter on it. */
     IDL_SEQUENCE_BLOBPART,
-    /* `BufferSource` — `(ArrayBuffer or ArrayBufferView)`, §3.2.25. An ArrayBuffer, a typed array or a DataView
-       crosses as itself and anything else is a TypeError, which is a check the body must not make: written by
-       hand it was right twice and wrong the third time, where a plain object reached JS_GetArrayBufferView and
-       tripped the engine's own "this is a typed array" assertion. */
+    /* `BufferSource` — §4.2's `typedef (ArrayBufferView or ArrayBuffer) BufferSource`, converted by §3.2.26
+       Buffer source types. An ArrayBuffer, a typed array or a DataView crosses as itself and anything else is a
+       TypeError, which is a check the body must not make: written by hand it was right twice and wrong the
+       third time, where a plain object reached JS_GetArrayBufferView and tripped the engine's own "this is a
+       typed array" assertion.
+       THE SECTION NUMBER WAS §3.2.25 HERE AND IN THE CONVERSION, AND §3.2.25 IS `Union types`. BufferSource is
+       a union, so the wrong number read as plausible for as long as nobody opened it — the failure mode
+       CLAUDE.md §Browser half names, where a citation sends the reader to a section that does not say what the
+       code claims. The conversion this row performs is §3.2.26's. */
     IDL_BUFFERSOURCE,
+    /* `ArrayBufferView` — §4.1's typedef, converted by §3.2.26 Buffer source types. It is the OTHER ARM of the
+       union above rather than a narrowing of it, and Web Cryptography §10.1.1 The getRandomValues method is
+       what needs it: `ArrayBufferView getRandomValues(ArrayBufferView array)`.
+       THE DIFFERENCE IS OBSERVABLE ON THE FIRST LINE A PAGE WRITES. `crypto.getRandomValues(new ArrayBuffer(8))`
+       is a TypeError from the CONVERSION; `crypto.getRandomValues(new Float64Array(8))` reaches the algorithm
+       and takes §10.1.1 step 1's TypeMismatchError — because §4.1's typedef LISTS Float16Array, Float32Array,
+       Float64Array and DataView among the thirteen view types, so the conversion admits exactly what the
+       algorithm then refuses. Declaring the member IDL_BUFFERSOURCE would collapse those two into one answer,
+       and a feature detection distinguishes them.
+       WHAT THIS ROW DOES NOT YET PERFORM IS §3.2.26's LAST CONVERSION STEP — "If the conversion is not to an
+       IDL type associated with the [AllowResizable] extended attribute, and IsFixedLengthArrayBuffer(V
+       .[[ViewedArrayBuffer]]) is false, then throw a TypeError." Neither this row nor IDL_BUFFERSOURCE asks it,
+       because quickjs exposes no IsFixedLengthArrayBuffer; array_buffer_is_resizable is static in quickjs.c.
+       It is not cosmetic: that step is what makes a LENGTH-TRACKING view unreachable past the conversion, and
+       JS_GetArrayBufferView answers such a view with JSTypedArray.length — which quickjs does not update when
+       the buffer is resized (only p->u.array.count is). So the missing step is why the fill site in
+       core/crypto/crypto.c has to assert its window against the buffer's current size. */
+    IDL_ARRAYBUFFERVIEW,
     /* AN INTERFACE TYPE — §3.2.15. `Node root`, `Range sourceRange`, `Node currentNode`: a platform object
        implementing the interface crosses as itself and ANYTHING else is a TypeError, thrown before the
        algorithm's step 1. It is a declared type rather than a body's `if` for the reason every other brand test
