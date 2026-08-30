@@ -390,13 +390,9 @@ char *result_swap_json(void) {
    `resumedOrphans` IS NOT A ROW: `orphanClaims` IS that number, and two spellings of one number in one
    document is the drift the record-field contract exists to catch — the same sentence the paragraph below
    makes about `_orphansDriven`.
-   A NAMED RESIDUAL, BECAUSE `COLD_FIELDS` DOES NOT YET NAME THESE FIVE. engine/build.mjs's list is the guard
-   that a row this composer stops emitting or renames fails the build instead of being compared as `undefined`,
-   and all five are numbers at every census, so all five belong in it. WHAT IS NOT COVERED: this composer could
-   drop any of the five and that file would not fail — the verdict would go back to being unreadable with the
-   build green. WHAT THE NEXT DIFF BUILDS: the five names appended to `COLD_FIELDS`, landed together with the
-   build that first emits them, since that list throws against any artifact predating a name it holds. HOW ITS
-   ABSENCE SHOWS: a @COLD census that has quietly stopped saying whether the session resumed, with nothing red.
+   ALL FIVE ARE IN engine/build.mjs's `COLD_FIELDS`, which is the guard that a row this composer stops emitting
+   or renames fails there instead of being compared as `undefined` — and both of that list's readers throw on a
+   non-numeric row, so dropping one of these five is caught rather than reported as a verdict nobody can read.
 
    NO `orphans` ROW: the count of drives this session STARTED is `_orphansDriven` on the document already, and
    two spellings of one number in one document is the drift the record-field contract exists to catch.
