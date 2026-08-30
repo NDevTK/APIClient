@@ -61,6 +61,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/world.h"   /* a document crosses BY NAME, and "this agent holds it" is that registry's answer */
+#include "core/agent_state.h"
 #include "core/frame/remote_location.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -76,6 +77,11 @@ const char *const LOCATION_CROSS_ORIGIN[LOCATION_XO_N] = { "href", "replace" };
    something else. They are answered as real property descriptors of undefined rather than by falling off a
    chain, because §7.2.1.3.7 lists them among the own keys. */
 #define RL_FALLBACK_N 4
+
+/* THIS COMPONENT'S NAME, spelled once — core/platform.c's row and every slot it declares to
+   core/agent_state.h. Neither spelling is checked by the compiler, and a mismatch is not a weaker check but a
+   check that is never RUN, sitting behind a message about a different repair entirely. */
+#define RL_COMPONENT "remote_location"
 
 static JSClassID g_rl_class;
 static JSRuntime *g_rl_rt;
@@ -470,8 +476,13 @@ void remote_location_init(JSContext *ctx)
     JSValue global, sym_ctor;
     int i;
 
-    DCHECK(g_rl_rt == NULL || g_rl_rt == rt, "the cross-origin Location was installed into a second runtime");
-    if (g_rl_rt == rt) return;
+    /* ONE INSTANCE IS ONE AGENT, so this runs ONCE and a second call is a defect rather than a no-op. The
+       `if (g_rl_rt == rt) return;` that used to stand under the assert made a re-declaration silent, which is
+       the shape core/agent_state.h's latch argument is about: a component that reports itself built is exactly
+       what a stale handle produces. */
+    DCHECK(g_rl_rt == NULL,
+           "remote_location_init ran twice — one instance is one agent, and a second declaration would re-mint "
+           "the class id every live cross-origin Location is already branded with");
     g_rl_rt = rt;
     JS_NewClassID(rt, &g_rl_class);
     CHECK(JS_NewClass(rt, g_rl_class, &d) == 0,
@@ -518,16 +529,51 @@ void remote_location_init(JSContext *ctx)
        minted inside the per-realm install works for the first realm and aborts on the second. */
     g_rl_href_setter = idl_setter_id(ctx, IDL_USVSTRING, false, rl_href_set, LOCATION_XO_HREF);
     g_rl_replace = idl_method_id(ctx, URL_ARG, 1, rl_replace, LOCATION_XO_REPLACE);
+
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The CLASS is the slot the
+       release used to keep: a class is registered in a RUNTIME, so a carried id names a class that is gone and
+       every JS_GetOpaque against it in the next agent answers about whichever class that runtime hands the
+       number to. The two pool entries were already given back and are declared for the same reason — a
+       declaration is a registration in the same runtime, and an index into a pool the next agent has not built
+       is what remote_location_install_realm would install §7.2.4's two members out of. */
+    agent_state_ptr(RL_COMPONENT, &g_rl_rt, "the runtime §7.2.4's cross-origin class and members were "
+                                            "declared in");
+    agent_state_class(RL_COMPONENT, &g_rl_class,
+                      "§7.2.4 The Location interface's cross-origin per-realm prototype slot and brand");
+    agent_state_id(RL_COMPONENT, &g_rl_href_setter, "§7.2.4's cross-origin `href` setter declaration");
+    agent_state_id(RL_COMPONENT, &g_rl_replace, "§7.2.4's cross-origin `replace` declaration");
+    for (i = 0; i < LOCATION_XO_N; i++)
+        agent_state_atom(RL_COMPONENT, &g_member_atom[i],
+                         "one of §7.2.1.3.1 CrossOriginProperties ( O )'s Location names, interned");
+    for (i = 0; i < RL_FALLBACK_N; i++)
+        agent_state_atom(RL_COMPONENT, &g_fallback_atom[i],
+                         "one of §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s names, interned");
+    agent_state_ptr(RL_COMPONENT, &g_rows, "the one cross-origin Location per PEER document of this agent");
     realm_declare_intrinsic(remote_location_install_realm);
 }
 
-void remote_location_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, and it takes the RUNTIME because that is what an
+   agent is. It took a JSContext until this diff, and that signature is the whole of what kept this component
+   off the column and left it a hand-written line in three hosts. JS_FreeAtomRT reaches the same atoms
+   JS_FreeAtom did — JS_FreeAtom IS JS_FreeAtomRT(ctx->rt, a). */
+void remote_location_free(JSRuntime *rt)
 {
     int i;
 
-    if (!g_rl_rt) return;
-    for (i = 0; i < LOCATION_XO_N; i++) { JS_FreeAtom(ctx, g_member_atom[i]); g_member_atom[i] = JS_ATOM_NULL; }
-    for (i = 0; i < RL_FALLBACK_N; i++) { JS_FreeAtom(ctx, g_fallback_atom[i]); g_fallback_atom[i] = JS_ATOM_NULL; }
+    /* NOT `if (!g_rl_rt) return;`. This runs from a release column that runs only where platform_agent_init
+       ran, and this component's declaration is unconditional on that list — so a null runtime here is a host
+       that tore down a browser it never built, and the silent return made that indistinguishable from a
+       release that worked (core/agent_state.h). */
+    DCHECK(g_rl_rt != NULL,
+           "§7.2.4's cross-origin surface was released in an agent that never declared it — "
+           "remote_location_init is a row on core/platform.c's declare column, so reaching here without it is "
+           "a teardown of a browser that was never brought up");
+    DCHECK(g_rl_rt == rt,
+           "§7.2.4's cross-origin surface was released against a RUNTIME other than the one it was declared "
+           "in — its class and its two pool entries are registrations in that runtime, and giving them back "
+           "against another frees atoms of a heap this component never interned into");
+    for (i = 0; i < LOCATION_XO_N; i++) { JS_FreeAtomRT(rt, g_member_atom[i]); g_member_atom[i] = JS_ATOM_NULL; }
+    for (i = 0; i < RL_FALLBACK_N; i++) { JS_FreeAtomRT(rt, g_fallback_atom[i]); g_fallback_atom[i] = JS_ATOM_NULL; }
     /* THE ROWS BORROW, so this frees the TABLE and nothing in it. Emptying it here is what keeps a finalizer
        running later in the teardown from scanning freed storage: the loop then reads n == 0 and touches
        nothing. */
@@ -535,6 +581,11 @@ void remote_location_free(JSContext *ctx)
     g_rows = NULL;
     g_rows_n = g_rows_cap = 0;
     g_rl_href_setter = g_rl_replace = -1;
+    /* AND THE CLASS ID, for the reason core/agent_state.h states: a class is registered in a runtime, so a
+       carried id names a class that is gone and brands every object the next agent's component mints with a
+       number that runtime never gave out. rl_finalizer already reads its record through JS_GetAnyOpaque (see
+       rl_opaque), which is what makes this line safe rather than what it costs. */
+    g_rl_class = 0;
     /* the surfaces are the REALMS' — released with their contexts */
     g_rl_rt = NULL;
 }

@@ -7,7 +7,11 @@
 #include "quickjs.h"
 
 void remote_object_init(JSContext *ctx);
-void remote_object_free(JSContext *ctx);
+/* THE AGENT'S HALF UNDONE — a ROW on core/platform.h's third column, which is why it takes the RUNTIME: the
+   two target classes, this session's export table, the imported-reference table, the well-known symbols
+   captured from this agent's own %Symbol% and the four trap machines are all registrations in a JSRuntime,
+   and not one of them is anything a realm owns. */
+void remote_object_free(JSRuntime *rt);
 
 /* The object a name names, BORROWED. JS_UNDEFINED for an id this agent never exported, which is a peer naming
    something that was never lent — a protocol error, not a missing property. Lending is not a separate door: an

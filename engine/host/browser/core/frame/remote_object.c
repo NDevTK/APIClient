@@ -81,6 +81,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/frame/remote_object.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
@@ -90,6 +91,11 @@
 #include "solver/world.h"
 
 /* ---- THIS AGENT AS AN EXPORTER --------------------------------------------------------------------------- */
+
+/* THIS COMPONENT'S NAME, spelled once — core/platform.c's row and every slot it declares to
+   core/agent_state.h. Neither spelling is checked by the compiler, and a mismatch is not a weaker check but a
+   check that is never RUN, sitting behind a message about a different repair entirely. */
+#define RO_COMPONENT "remote_object"
 
 typedef struct { JSValue v; } Export;
 static Export  *g_exports;
@@ -175,6 +181,16 @@ static const char *const REF_VERB[REF_OP_N] = { "get", "set", "delete", "apply" 
    receiver), 10.5.10's (target, key) and 10.5.12's (target, thisArg, argArray). Declared beside the verb
    because the machine reads operands BY POSITION and a count stated anywhere else is a count that can drift. */
 static const int REF_ARGC[REF_OP_N] = { 3, 4, 2, 3 };
+/* WHAT EACH POOL ENTRY IS, for core/agent_state.h's assert — declared HERE, beside the verb and the operand
+   count, because it is the third thing that is per-op and a fourth list somewhere else is a fourth list that
+   can drift. The reader of the `@WHY` is standing at a teardown that already ran, so the entry is named by the
+   internal method it performs rather than by the index of the array it sits in. */
+static const char *const REF_STEP_WHAT[REF_OP_N] = {
+    "the machine performing ECMA-262 10.5.8 [[Get]] ( propertyKey, receiver ) across an agent boundary",
+    "the machine performing ECMA-262 10.5.9 [[Set]] ( propertyKey, value, receiver ) across an agent boundary",
+    "the machine performing ECMA-262 10.5.10 [[Delete]] ( propertyKey ) across an agent boundary",
+    "the machine performing ECMA-262 10.5.12 [[Call]] ( thisArg, argList ) across an agent boundary",
+};
 static int g_ref_stepid[REF_OP_N] = { -1, -1, -1, -1 };
 
 static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t id,
@@ -1150,6 +1166,7 @@ void remote_object_init(JSContext *ctx)
     JSClassDef d  = { "CrossAgentReference", .finalizer = ref_finalizer };
     JSClassDef df = { "CrossAgentFunctionReference", .finalizer = ref_finalizer, .call = ref_target_call };
     JSRuntime *rt = JS_GetRuntime(ctx);
+    int k;
     /* THE TRAP'S ARGUMENTS, declared so the machine PASSES them: a declaration of none converts none and hands
        the body none, and the property name is the second — the trap would then read a name it was never given.
        They are `any` because a trap's arguments are whatever the operator site had. */
@@ -1174,12 +1191,38 @@ void remote_object_init(JSContext *ctx)
        moment and the same reason the peer captures %Reflect.set%. A page that replaces the `Symbol` binding
        cannot make a cross-agent `remote[Symbol.iterator]` name a different slot. */
     wk_capture(ctx);
+
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The release below already gave
+       every one of these back; declaring them is what makes that CHECKABLE, and the row pairing in
+       core/platform.c reads the declaration as the other half of the release column. The two counts beside
+       g_exports and g_wk are not declared: a count left set beside a null table is a NULL dereference at the
+       first read, which is loud, while a handle left set is the silence that header is about. */
+    agent_state_class(RO_COMPONENT, &g_ref_class,
+                      "the CrossAgentReference target class, and the declaration latch");
+    agent_state_class(RO_COMPONENT, &g_ref_fn_class, "the CrossAgentFunctionReference target class");
+    agent_state_value(RO_COMPONENT, &g_refs, "the (doc, session, id) -> reference table this agent imported");
+    agent_state_ptr(RO_COMPONENT, &g_exports, "this session's export table — the objects this agent has lent");
+    agent_state_ptr(RO_COMPONENT, &g_wk, "ECMA-262 6.1.5 Table 1's well-known symbols, captured from this "
+                                         "agent's own %Symbol% before any page script ran");
+    for (k = 0; k < REF_OP_N; k++)
+        agent_state_id(RO_COMPONENT, &g_ref_stepid[k], REF_STEP_WHAT[k]);
 }
 
-void remote_object_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, and it takes the RUNTIME because that is what an
+   agent is. It took a JSContext until this diff, and that signature is the whole of what kept this component
+   off the column: all three hosts wrote `remote_object_free; window_proxy_free; remote_location_free;` by
+   hand, which releases the BASE whose §7.2.3 prototype every reference minted here chains to BEFORE the two
+   components built over it. JS_FreeValueRT reaches the same values JS_FreeValue did — JS_FreeValue IS
+   JS_FreeValueRT(ctx->rt, v). */
+void remote_object_free(JSRuntime *rt)
 {
     uint32_t i;
     int k;
+
+    DCHECK(g_ref_class != 0,
+           "the cross-agent reference surface was released in an agent that never declared it — "
+           "remote_object_init is a row on core/platform.c's declare column, so reaching here without it is a "
+           "teardown of a browser that was never brought up");
     /* AN EXPORT ID IS AN IDENTITY IN THIS SESSION'S TABLE, AND A PARKED INSTANCE COMES BACK AS A NEW ONE — so
        the name carries the SESSION and this call has nothing left to refuse. It used to abort a park taken
        while any export was live, which was the right crash for as long as `o<doc>:<id>` was all a peer had:
@@ -1190,17 +1233,17 @@ void remote_object_free(JSContext *ctx)
        the instance reading from it stays — and because what it was guarding is now impossible: a name from an
        ended session is REFUSED at the point it is used (remote_object_by_id), which is where the reader
        actually is and what names the capability still to build. */
-    for (i = 0; i < g_exports_n; i++) JS_FreeValue(ctx, g_exports[i].v);
+    for (i = 0; i < g_exports_n; i++) JS_FreeValueRT(rt, g_exports[i].v);
     free(g_exports);
     g_exports = NULL;
     g_exports_n = g_exports_cap = 0;
     /* THE WELL-KNOWN TABLE HOLDS A REFERENCE PER SYMBOL and a string per description — both are this file's,
        and the runtime's own leak walk counts the symbol if this does not. */
-    for (k = 0; k < g_wk_n; k++) { JS_FreeValue(ctx, g_wk[k].sym); free(g_wk[k].desc); }
+    for (k = 0; k < g_wk_n; k++) { JS_FreeValueRT(rt, g_wk[k].sym); free(g_wk[k].desc); }
     free(g_wk);
     g_wk = NULL;
     g_wk_n = 0;
-    JS_FreeValue(ctx, g_refs);
+    JS_FreeValueRT(rt, g_refs);
     g_refs = JS_UNDEFINED;
     /* THE TWO CLASS IDS COME BACK, and ref_finalizer therefore reads neither: the collection that finalizes a
        reference target runs AFTER this call, so a class id is the one thing that cannot identify one by then.

@@ -3413,9 +3413,11 @@ int main(int argc, char **argv)
        document_agent_free — is a row on that column, and the two are not ordered against each other. See
        main.c's teardown. */
     window_free(ctx);
-    remote_object_free(ctx);
-    window_proxy_free(ctx);
-    remote_location_free(ctx);   /* §7.2.4's cross-origin Location: its interned names and its live table */
+    /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
+       Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
+       on core/platform.h's release column now, run by the platform_agent_free above; every host wrote them
+       DEPENDENT-FIRST and reverse declaration order is what decides the sequence instead. See main.c's
+       teardown. */
     report_exception_free(ctx);
     event_free(ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */

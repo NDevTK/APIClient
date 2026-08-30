@@ -434,11 +434,31 @@ static void r_idb_record(JSRuntime *rt) { (void)rt; idb_record_free(); }
 static void r_indexed_db(JSRuntime *rt) { (void)rt; indexed_db_free(); }
 static void r_domparser(JSRuntime *rt) { (void)rt; domparser_free(); }
 static void r_module_loader(JSRuntime *rt) { module_loader_free(rt); }
-/* AND THE SIXTH, WHOSE RELEASE COLUMN WAS EMPTY FOR A DIFFERENT REASON: its file already had a `remote_op_free`
-   and that name is a PER-OPERATION free of one parsed record, not an agent release. A collision is not a
-   release, and nothing here could tell the two apart — the row declared no agent state and released none,
-   which is the pair of silences this list reads as agreement. The agent half is `remote_op_agent_free`, named
-   as `document`'s two halves are. */
+/* THE CROSS-AGENT SEAM, AS A GROUP OF FOUR, and the group is what makes it one entry rather than three. All
+   three hosts wrote `remote_object_free; window_proxy_free; remote_location_free;` by hand — and that is the
+   DEPENDENT-FIRST order twice over: §7.2.3's WindowProxy is the base whose per-realm prototype every reference
+   minted by `remote_object` chains to and whose `location` member is what answers with a `remote_location`
+   object, so it was being released before both components built over it. Reverse declaration order gives
+   remote_location, remote_op, remote_object, window_proxy, which is that sequence inverted, and no author has
+   to agree with any other about it.
+   WHAT BLOCKED THREE OF THE FOUR WAS A SIGNATURE AND NOTHING ELSE: each `_free` took a JSContext, so it could
+   not be a row. They take a JSRuntime now and reach the same values through JS_FreeValueRT/JS_FreeAtomRT —
+   the same operation, since JS_FreeValue is JS_FreeValueRT(ctx->rt, v) and JS_FreeAtom is
+   JS_FreeAtomRT(ctx->rt, a).
+   AND TWO OF THEM WERE CARRYING THEIR CLASS IDS, which core/agent_state.h settles: an id names a class in a
+   runtime that is gone. window_proxy additionally kept all FIVE of §7.2.3's pool entries, so a second agent in
+   one process would have installed that whole member surface out of indices into a pool it had not built —
+   a live-looking number with a wrong answer behind it, which neither of JS_FreeRuntime's censuses can report.
+   Both now give the ids back, and window_proxy's finalizer and gc_mark reach their record through
+   JS_GetAnyOpaque because of it (remote_location's already did). */
+static void r_window_proxy(JSRuntime *rt) { window_proxy_free(rt); }
+static void r_remote_object(JSRuntime *rt) { remote_object_free(rt); }
+static void r_remote_location(JSRuntime *rt) { remote_location_free(rt); }
+/* AND THE FOURTH OF THAT GROUP, WHOSE RELEASE COLUMN WAS EMPTY FOR A DIFFERENT REASON: its file already had a
+   `remote_op_free` and that name is a PER-OPERATION free of one parsed record, not an agent release. A
+   collision is not a release, and nothing here could tell the two apart — the row declared no agent state and
+   released none, which is the pair of silences this list reads as agreement. The agent half is
+   `remote_op_agent_free`, named as `document`'s two halves are. */
 static void r_remote_op(JSRuntime *rt) { (void)rt; remote_op_agent_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
@@ -687,15 +707,15 @@ static const PlatformComponent PLATFORM[] = {
        they are per-flow heap state, so the record has to exist before any flow can write one. */
     { "event_loop",          d_event_loop,          NULL },
     { "timer",               d_timer,               i_timer,     r_timer },
-    { "window_proxy",        d_window_proxy,        NULL },
-    { "remote_object",       d_remote_object,       NULL },
+    { "window_proxy",        d_window_proxy,        NULL,        r_window_proxy },
+    { "remote_object",       d_remote_object,       NULL,        r_remote_object },
     /* The PEER's half of the same seam: what this agent does when it is ASKED to perform one. Its per-realm
        install captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could
        run page code — which is none of them, and is why it sits beside the asking half rather than at the end. */
     { "remote_op",           d_remote_op,           NULL,        r_remote_op },
     /* HTML §7.2.4's CROSS-ORIGIN Location, AFTER window_proxy: §7.2.2's `location` member is what answers
        with one, and this row builds the per-realm surface that member hands across an origin boundary. */
-    { "remote_location",     d_remote_location,     NULL },
+    { "remote_location",     d_remote_location,     NULL,        r_remote_location },
     /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
     { "window_message",      d_window_message,      i_window_message, r_window_message },
     { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel, r_broadcast_channel },

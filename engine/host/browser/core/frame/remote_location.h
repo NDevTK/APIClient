@@ -39,11 +39,13 @@ extern const char *const LOCATION_CROSS_ORIGIN[LOCATION_XO_N];
    CrossOriginPropertyFallback ( P )'s names, and the per-realm surface this REGISTERS (core/realm.h's
    intrinsic list). */
 void remote_location_init(JSContext *ctx);
-/* The AGENT's half undone — the interned names and the table of live objects. It is called by each host's
-   teardown beside window_proxy_free, and NOT from core/platform.c's third column, for the reason
-   core/agent_state.h gives: this component's finalizer reaches its record through JS_GetAnyOpaque and the
-   table is emptied here, so a collection running after the release scans nothing. */
-void remote_location_free(JSContext *ctx);
+/* The AGENT's half undone — a ROW on core/platform.h's third column, which is why it takes the RUNTIME: the
+   brand class, §7.2.1.3.1's and §7.2.1.3.2's interned names, the two pool entries §7.2.4's cross-origin
+   members are, and the table of live objects are all registrations in a JSRuntime, and none of them is
+   anything a realm owns. What makes the position safe is core/agent_state.h's own rule, met here rather than
+   claimed: this component's finalizer reaches its record through JS_GetAnyOpaque and the table is emptied at
+   the release, so the collection that runs afterwards frees every live object and scans nothing. */
+void remote_location_free(JSRuntime *rt);
 
 /* THE ONE Location FOR A PEER'S DOCUMENT — minted on the first ask and answered from a table on every ask
    after it, exactly as core/frame/window_proxy.c answers a peer's navigable with one WindowProxy.

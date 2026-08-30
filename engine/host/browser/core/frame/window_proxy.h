@@ -16,7 +16,11 @@
    place that holds it (origin_agent) rather than passed in: an instance is an origin-keyed agent cluster, so a
    caller-supplied one could only ever agree or be wrong. */
 void window_proxy_init(JSContext *ctx);
-void window_proxy_free(JSContext *ctx);
+/* THE AGENT'S HALF UNDONE — a ROW on core/platform.h's third column, which is why it takes the RUNTIME: what
+   this gives back is §7.2.3's class, its five pool entries, §7.2.1.3.1's and §7.2.1.3.2's interned names, the
+   strings every proxy of this agent recorded and the table of remote navigables, and every one of those is a
+   registration in a JSRuntime rather than anything a realm owns. */
+void window_proxy_free(JSRuntime *rt);
 
 /* A proxy over a navigable whose active Window is `window` and whose active document's origin is `origin`.
    Both are the binding at this moment; a navigation replaces them, PER FLOW. `doc` names WHICH document that

@@ -37,6 +37,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/frame/window_proxy.h"
 #include "solver/cow.h"
 #include "solver/concolic.h"
@@ -298,6 +299,12 @@ typedef struct {
 static bool wp_bc_null(const ProxyData *p) { return p->destroyed != 0 || p->bc_discarded != 0; }
 static bool wp_closed(const ProxyData *p) { return p->closing != 0 || wp_bc_null(p); }
 
+/* THIS COMPONENT'S NAME, spelled once — core/platform.c's row and every slot it declares to
+   core/agent_state.h. The registry's row pairing is keyed by it and neither spelling is checked by the
+   compiler, so a literal typed out once per declaration is exactly the misspelling that file's first walk
+   exists to catch, and one of them going wrong is a check that is never RUN rather than one that got weaker. */
+#define WP_COMPONENT "window_proxy"
+
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
 /* §7.2.3's member surface. It answers from the navigable's own state where that is what the member is, and
@@ -435,20 +442,37 @@ typedef struct { uint32_t doc; JSValueConst proxy; } RemoteNav;
 static RemoteNav *g_remote_navs;
 static int        g_remote_navs_n, g_remote_navs_cap;
 
+/* THE RECORD AS A COLLECTOR ENTRY SEES IT. JS_GetAnyOpaque AND NOT JS_GetOpaque(val, g_proxy_class):
+   core/agent_state.h states the rule and the reason — window_proxy_free gives the class id back, and the
+   collection that finalizes this agent's object graph runs AFTER the release column, so a lookup against that
+   id would answer NULL for every proxy a page still held and this component would silently free none of them.
+   The collector dispatched THROUGH the class, so the id is a fact it already has and must not look up. */
+static ProxyData *proxy_collector_record(JSValueConst val)
+{
+    JSClassID cid = 0;
+
+    return JS_GetAnyOpaque(val, &cid);
+}
+
 static void proxy_finalizer(JSRuntime *rt, JSValue val)
 {
-    ProxyData *p = JS_GetOpaque(val, g_proxy_class);
+    ProxyData *p = proxy_collector_record(val);
     int i;
     (void)rt;
     /* THE ROW GOES FIRST, and unconditionally: it names this object by POINTER, so a row left behind would
-       hand the next ask for that document a freed proxy. Above the `p` test because the table's claim is about
-       the OBJECT, not about whether its record survived to be freed here. */
+       hand the next ask for that document a freed proxy. Above the `p` assert because the table's claim is
+       about the OBJECT, not about the record hanging off it. */
     for (i = 0; i < g_remote_navs_n; i++)
         if (JS_VALUE_GET_PTR(g_remote_navs[i].proxy) == JS_VALUE_GET_PTR(val)) {
             g_remote_navs[i] = g_remote_navs[--g_remote_navs_n];
             break;
         }
-    if (!p) return;
+    /* Both mints attach the record with nothing between JS_NewObjectClass and JS_SetOpaque that allocates on
+       the JS heap or returns — proxy_strdup is malloc and JS_DupValue is a refcount — so a WindowProxy with no
+       record has never existed, and the `if (!p) return;` that used to stand here was reading a zeroed class
+       id rather than an absent record. */
+    DCHECK(p != NULL, "a WindowProxy was finalized with no §7.2.3 record — both mints attach one before the "
+                      "object can reach a collection");
     JS_FreeValueRT(rt, p->window);
     JS_FreeValueRT(rt, p->parent);
     JS_FreeValueRT(rt, p->opener);
@@ -458,8 +482,12 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
 
 static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ProxyData *p = JS_GetOpaque(val, g_proxy_class);
-    if (!p) return;
+    ProxyData *p = proxy_collector_record(val);
+    /* AN UNMARKED CHILD IS WORSE THAN A LEAKED PARENT — it keeps the internal reference gc_decref subtracts,
+       so gc_scan reads it as rooted from outside the heap and it is never collected at all. That is what a
+       record read through a released class id costs here, and it is silent (core/agent_state.h). */
+    DCHECK(p != NULL, "a WindowProxy was marked with no §7.2.3 record — both mints attach one before the "
+                      "object can reach a collection");
     /* The Window holds the proxy (as `window`) and the proxy holds the Window: a cycle, and one the collector
        has to see or every navigable leaks its global. `parent` and `opener` close cycles of their own — a child
        names its creator's Window, which reaches the child through the element wrapper that holds it. */
@@ -3176,9 +3204,14 @@ void window_proxy_init(JSContext *ctx)
     JSClassDef d = { "WindowProxy", .finalizer = proxy_finalizer, .gc_mark = proxy_gc_mark,
                      .exotic = &PROXY_EXOTIC };
     JSRuntime *rt = JS_GetRuntime(ctx);
+    int i;
 
-    DCHECK(g_wp_rt == NULL || g_wp_rt == rt, "WindowProxy was installed into a second runtime");
-    if (g_wp_rt == rt) return;
+    /* ONE INSTANCE IS ONE AGENT, so this runs ONCE and a second call is a defect rather than a no-op. The
+       `if (g_wp_rt == rt) return;` that used to stand under the assert made a re-declaration silent, which is
+       the one shape core/agent_state.h's latch argument is about: a component that reports itself built is
+       exactly what a stale handle produces, so the state must be unreachable rather than tolerated. */
+    DCHECK(g_wp_rt == NULL, "window_proxy_init ran twice — one instance is one agent, and a second declaration "
+                            "would re-mint the class id every live proxy is already branded with");
     g_wp_rt = rt;
     /* THE ACCESSOR SIDE OF THE CHECK IS READ, NOT KEPT — origin_agent() is the one record for this agent, and
        asserting it exists HERE says so at the declaration rather than at the first read that decides. */
@@ -3195,6 +3228,34 @@ void window_proxy_init(JSContext *ctx)
        opener-setter.window.js's seven values (a symbol among them) is stored as it stands. */
     g_wp_opener_setter_id = idl_setter_id(ctx, IDL_ANY, false, proxy_opener_set, WP_OPENER);
     g_wp_close_id       = idl_method_id(ctx, NULL, 0, proxy_close, 0);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The FIVE POOL ENTRIES are why
+       the declaration is worth making rather than merely tidy: the release gave back the atoms, the string
+       list and the remote-navigable table and left all five ids exactly as this function set them, so a second
+       agent in one process would have installed §7.2.3's whole member surface out of a pool that no longer has
+       those entries — a wrong answer with a live-looking number behind it, which is the one failure neither of
+       JS_FreeRuntime's censuses can report. The class id is given back for the reason that header states, and
+       the two collector entries above read the record through JS_GetAnyOpaque because of it. */
+    agent_state_ptr(WP_COMPONENT, &g_wp_rt, "the runtime §7.2.3's class and pool entries were declared in");
+    agent_state_class(WP_COMPONENT, &g_proxy_class,
+                      "§7.2.3 The WindowProxy exotic object's per-realm prototype slot and brand");
+    agent_state_id(WP_COMPONENT, &g_wp_len_getter_id,
+                   "§7.2.2.2 Indexed access on the Window object's `length` getter declaration");
+    agent_state_id(WP_COMPONENT, &g_wp_closed_getter_id,
+                   "§7.2.2.1 Opening and closing windows' `closed` getter declaration");
+    agent_state_id(WP_COMPONENT, &g_wp_name_setter_id,
+                   "§7.2.2.1 Opening and closing windows' `name` setter declaration");
+    agent_state_id(WP_COMPONENT, &g_wp_opener_setter_id,
+                   "§7.2.2.4 Accessing related windows' `opener` setter declaration");
+    agent_state_id(WP_COMPONENT, &g_wp_close_id,
+                   "§7.2.2.1 Opening and closing windows' `close` declaration");
+    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
+        agent_state_atom(WP_COMPONENT, &g_xo_atom[i],
+                         "one of §7.2.1.3.1 CrossOriginProperties ( O )'s names, interned");
+    for (i = 0; i < XO_FALLBACK_N; i++)
+        agent_state_atom(WP_COMPONENT, &g_xo_fallback[i],
+                         "one of §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s names, interned");
+    agent_state_ptr(WP_COMPONENT, &g_strings, "every origin and name string a proxy of this agent recorded");
+    agent_state_ptr(WP_COMPONENT, &g_remote_navs, "the one WindowProxy per REMOTE document of this agent");
     realm_declare_intrinsic(window_proxy_install_proto);
 }
 
@@ -3206,22 +3267,54 @@ JSValue window_proxy_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-void window_proxy_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, and it takes the RUNTIME because that is what an
+   agent is. It took a JSContext until this diff, which is the whole of what kept it off that column and made
+   it a hand-written line in three hosts instead: every one of them wrote `remote_object_free;
+   window_proxy_free; remote_location_free;`, which releases the BASE whose §7.2.3 prototype every cross-agent
+   reference chains to BEFORE the component built over it. Reverse declaration order is what decides the
+   sequence now, and nobody has to agree with anybody about it. JS_FreeAtomRT reaches the same atoms
+   JS_FreeAtom did — JS_FreeAtom is JS_FreeAtomRT(ctx->rt, a). */
+void window_proxy_free(JSRuntime *rt)
 {
     OwnedStr *e = g_strings;
     int i;
-    if (!g_wp_rt) return;
+
+    /* NOT `if (!g_wp_rt) return;`. This runs from a release column that runs only where platform_agent_init
+       ran, and this component's declaration is unconditional on that list — so a null runtime here is a host
+       that tore down a browser it never built, and the silent return made that indistinguishable from a
+       release that worked (core/agent_state.h). */
+    DCHECK(g_wp_rt != NULL,
+           "§7.2.3's surface was released in an agent that never declared it — window_proxy_init is a row on "
+           "core/platform.c's declare column, so reaching here without it is a teardown of a browser that was "
+           "never brought up");
+    DCHECK(g_wp_rt == rt,
+           "§7.2.3's surface was released against a RUNTIME other than the one it was declared in — its class "
+           "and its five pool entries are registrations in that runtime, and giving them back against another "
+           "frees atoms of a heap this component never interned into");
     while (e) { OwnedStr *n = e->next; free(e->s); free(e); e = n; }
     g_strings = NULL;
-    /* §7.2.1.3.1's and §7.2.1.3.2's names, released with the agent that interned them. */
-    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) { JS_FreeAtom(ctx, g_xo_atom[i]); g_xo_atom[i] = JS_ATOM_NULL; }
-    for (i = 0; i < XO_FALLBACK_N; i++) { JS_FreeAtom(ctx, g_xo_fallback[i]); g_xo_fallback[i] = JS_ATOM_NULL; }
+    /* §7.2.1.3.1 CrossOriginProperties ( O )'s and §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s names,
+       released with the agent that interned them. */
+    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) { JS_FreeAtomRT(rt, g_xo_atom[i]); g_xo_atom[i] = JS_ATOM_NULL; }
+    for (i = 0; i < XO_FALLBACK_N; i++) { JS_FreeAtomRT(rt, g_xo_fallback[i]); g_xo_fallback[i] = JS_ATOM_NULL; }
     /* THE REMOTE-NAVIGABLE ROWS BORROW, so this frees the TABLE and nothing in it. Emptying it here is what
        keeps a finalizer running later in the teardown from scanning freed storage: the loop then reads n == 0
        and touches nothing. */
     free(g_remote_navs);
     g_remote_navs = NULL;
     g_remote_navs_n = g_remote_navs_cap = 0;
+    /* THE FIVE POOL ENTRIES COME BACK, and they are the slots this release used to keep. A declaration is a
+       registration in a RUNTIME that is going away, so a carried id is an index into a pool the next agent has
+       not built — read by window_proxy_install_proto at the first realm that agent creates, which installs
+       §7.2.3's member surface out of whatever now sits at those indices. */
+    g_wp_len_getter_id = g_wp_closed_getter_id = -1;
+    g_wp_name_setter_id = g_wp_opener_setter_id = g_wp_close_id = -1;
+    /* AND THE CLASS ID, for the reason core/agent_state.h states: a class is registered in a runtime, the id
+       doubles as no latch here but names a class that is gone, and every JS_GetOpaque against it would answer
+       about whichever class the next agent's runtime hands that number to. proxy_finalizer and proxy_gc_mark
+       read the record through JS_GetAnyOpaque precisely because this line runs before the collection that
+       reaches them. */
+    g_proxy_class = 0;
     /* the prototypes are the REALMS' — released with their contexts, and the ORIGINS are the AGENT's, released
        by origin_release with everything else that outlives a realm */
     g_wp_rt = NULL;

@@ -11124,9 +11124,11 @@ int main(int argc, char **argv) {
     navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(ctx);
     window_free(ctx);
-    remote_object_free(ctx);
-    window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
-    remote_location_free(ctx);   /* §7.2.4's cross-origin Location: its interned names and its live table */
+    /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
+       Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
+       on core/platform.h's release column now, run by the platform_agent_free above; every host wrote them
+       DEPENDENT-FIRST, and this host's comment on the middle line named §7.2.5.1 for a prototype §7.2.3 owns,
+       which is what a hand-copied list does to a citation as well as to an order. See main.c's teardown. */
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(ctx);

@@ -1246,9 +1246,13 @@ QJS_EXPORT void qjs_teardown(void)
     navigation_free(g_ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(g_ctx);
     window_free(g_ctx);
-    remote_object_free(g_ctx);
-    window_proxy_free(g_ctx);   /* the shared §7.2.3 prototype every proxy is chained to */
-    remote_location_free(g_ctx);   /* §7.2.4's cross-origin Location: its names and its live table */
+    /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
+       Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
+       on core/platform.h's release column now, run by the platform_agent_free above, and this group is what a
+       hand-written list costs when every host has every line: all three wrote `remote_object_free;
+       window_proxy_free; remote_location_free;`, which releases the BASE whose §7.2.3 prototype every
+       reference chains to and whose `location` member answers with the third object BEFORE both components
+       built over it. Reverse declaration order inverts that and no author has to agree with any other. */
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(g_ctx);
