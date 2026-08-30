@@ -251,6 +251,17 @@ typedef struct {
     const char    *str;
 } IdlArgDefault;
 
+/* §3.2.26 Buffer source types STEP 1's `T` AT ONE POSITION, and the two §3.3 extended attributes steps 3 and 4
+   turn on — see idl_typed_array. A struct rather than three parallel arrays for the reason IdlArgDefault is
+   one: a position cannot be described half in one array and half in another. `kind` is a JSTypedArrayEnum, or
+   -1 for a position that declared none — which is every position of every member that declares no
+   IDL_TYPED_ARRAY, and is what idl_args_seal reads to catch a position that declared the type and not the T. */
+typedef struct {
+    int16_t kind;
+    bool    allow_shared;
+    bool    allow_resizable;
+} IdlTypedArrayDecl;
+
 typedef struct {
     IdlSetter  setter;      /* set instead of `body` for an attribute setter */
     bool       null_to_empty;
@@ -284,6 +295,10 @@ typedef struct {
        and freed with the pool exactly as `types` is. A position whose entry is IDL_DEFAULT_NONE has no default,
        which is what §3.6's absent rule is for. */
     IdlArgDefault *arg_dflts;
+    /* §3.2.26's `T` AND ITS §3.3 ATTRIBUTES, one entry per position the IDL lists — see idl_typed_array. NULL
+       for a member that declares no IDL_TYPED_ARRAY position, which is nearly all of them; allocated by the
+       first declaration that names one and freed with the pool exactly as `arg_dflts` is. */
+    IdlTypedArrayDecl *arg_views;
     int        magic;
     /* An IDL_DICT argument's members, and their names INTERNED at registration. The atom must be live at both
        the request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it
@@ -478,8 +493,16 @@ static int            g_sealed_at; /* how many members existed then: a member mi
 /* Defined beside the split helpers below, and called from the seal because the seal is the ONE moment the whole
    platform's declarations exist and none of them can change again — see idl_overload_split_optional_from. */
 static void idl_seal_check_splits(void);
+/* The same one-moment check for idl_typed_array's other half — defined beside the conversion's own helpers. */
+static void idl_seal_check_typed_arrays(void);
 
-void idl_args_seal(void) { idl_seal_check_splits(); g_sealed = true; g_sealed_at = g_n; }
+void idl_args_seal(void)
+{
+    idl_seal_check_splits();
+    idl_seal_check_typed_arrays();
+    g_sealed = true;
+    g_sealed_at = g_n;
+}
 
 /* WAS THIS MEMBER DECLARED BEFORE THE PLATFORM WAS SEALED? Asked at INSTALL, because the install is where the
    member's NAME is — and a name is the whole difference between an assert you can act on and one that only
@@ -917,6 +940,57 @@ static void idl_seal_check_splits(void)
                    "a member's length-differing §3.6 split was not recorded at the position its type list "
                    "declares it — the position is READ from the types at declaration, so the two disagreeing "
                    "means a second split was declared and one of them decides every arity");
+    }
+}
+
+/* THE TWELVE NAMES §3.2.26's typed-array algorithm ranges over — "Int8Array, Int16Array, Int32Array, Uint8Array,
+   Uint16Array, Uint32Array, Uint8ClampedArray, BigInt64Array, BigUint64Array, Float16Array, Float32Array, or
+   Float64Array" — in JSTypedArrayEnum's OWN order, which is not the order the standard lists them in. The
+   enumerator is what a declaration passes, so the table is indexed by it and the two cannot drift; a name here
+   is T's NAME in step 2's sense, so it is also the word a refusal has to say. */
+static const char *const IDL_TYPED_ARRAY_NAMES[] = {
+    "Uint8ClampedArray", "Int8Array", "Uint8Array", "Int16Array", "Uint16Array", "Int32Array",
+    "Uint32Array", "BigInt64Array", "BigUint64Array", "Float16Array", "Float32Array", "Float64Array",
+};
+/* The enum's own last member sizes it, so a typed array added upstream fails to COMPILE here rather than
+   reading past the table at whichever conversion first names it. */
+typedef char idl_typed_array_names_cover_the_enum[
+    (sizeof IDL_TYPED_ARRAY_NAMES / sizeof *IDL_TYPED_ARRAY_NAMES) == JS_TYPED_ARRAY_FLOAT64 + 1 ? 1 : -1];
+
+static const char *idl_typed_array_name(int kind)
+{
+    DCHECK(kind >= 0 && kind <= JS_TYPED_ARRAY_FLOAT64,
+           "a typed array kind outside JSTypedArrayEnum reached §3.2.26 Buffer source types' conversion — the "
+           "declaration is what carries it and it asserts the same range");
+    return IDL_TYPED_ARRAY_NAMES[kind];
+}
+
+/* THE TWO-SIDED HALF OF idl_typed_array's DECLARATION, run once when the platform is sealed — the same shape
+   as the split check above and for the same reason. §3.2.26 step 1 is "let T be the IDL type V is being
+   converted to", so a position declared IDL_TYPED_ARRAY that never said WHICH is a conversion with no brand
+   test at all, and it is caught HERE — with every declaration in hand and before any page can call one —
+   rather than at whichever call happens to reach that position first. The reverse is asserted too: a T
+   declared at a position whose type is something else describes a member that is not this one, which is
+   exactly how a setter stated from an INSTALL lands on whichever component declared last (IDL_LAST_DECL_ONLY). */
+static void idl_seal_check_typed_arrays(void)
+{
+    int i, k;
+
+    for (i = 0; i < g_n; i++) {
+        const IdlMember *m = idl_member(i);
+
+        for (k = 0; k < m->nargs; k++) {
+            bool stated = m->arg_views != NULL && m->arg_views[k].kind >= 0;
+
+            DCHECK(m->types[k] != IDL_TYPED_ARRAY || stated,
+                   "a member declared an IDL_TYPED_ARRAY position and never said WHICH typed array it is — "
+                   "§3.2.26 Buffer source types step 2 tests [[TypedArrayName]] against T's own name, so "
+                   "without T the conversion has no brand test to run. State it with idl_typed_array");
+            DCHECK(m->types[k] == IDL_TYPED_ARRAY || !stated,
+                   "a member stated §3.2.26 step 1's T at a position whose declared type is not "
+                   "IDL_TYPED_ARRAY — no other conversion reads it, so the declaration describes a position "
+                   "that never asks for it");
+        }
     }
 }
 
@@ -1531,11 +1605,16 @@ static int idl_bytestring_check(JSContext *ctx, JSValueConst str)
  *     and IsSharedArrayBuffer(V.[[ViewedArrayBuffer]]) is true, then throw a TypeError."
  *   - RESIZABLE: "If the conversion is not to an IDL type associated with the [AllowResizable] extended
  *     attribute, and IsFixedLengthArrayBuffer(V.[[ViewedArrayBuffer]]) is false, then throw a TypeError."
- * NEITHER CONDITION IS CONDITIONAL HERE. § 4.1 ArrayBufferView carries no extended attribute, and § 4.2
- * BufferSource says in its own note that [AllowShared] "cannot be used with BufferSource as ArrayBuffer does
- * not support it" — § 4.3 AllowSharedBufferSource is the typedef for that, and this engine declares no member
- * with it. § 3.3.1 [AllowResizable] appears on neither. So both throws are unconditional at both positions,
- * and a member that one day wants a resizable buffer declares a DIFFERENT type rather than relaxing this.
+ * EACH CONDITION IS THE POSITION'S TO STATE, WHICH IS WHAT § 3.2.26 WRITES — "if the conversion is not to an
+ * IDL type associated with the […] extended attribute" — so the two flags come from the DECLARATION and never
+ * from this function's opinion. § 4.1 ArrayBufferView carries no extended attribute and § 4.2 BufferSource
+ * says in its own note that [AllowShared] "cannot be used with BufferSource as ArrayBuffer does not support
+ * it" (§ 4.3 AllowSharedBufferSource is the typedef for that), so both of those rows pass false and false and
+ * both refusals are unconditional at them. A SPECIFIC typed array position states its own pair: Encoding
+ * § 7.4 Interface TextEncoder declares `[AllowShared] Uint8Array destination`, which switches the SHARED
+ * refusal off at that one position and leaves the resizable one standing. Hard-coding either answer here was
+ * right only while no member in the platform wrote an attribute, and a rule that is true by the accident of
+ * what has been built is the one that goes wrong silently the day something is.
  * THE REFUSAL IS NOT PEDANTRY, IT IS THE MEMORY-SAFETY BOUNDARY THIS CONVERSION EXISTS TO DRAW. A
  * length-tracking view over a resizable buffer reports a byte length that is recomputed at every read, so a
  * component that took its window and then let page code run — a `toString`, a getter, a promise resolution —
@@ -1545,9 +1624,10 @@ static int idl_bytestring_check(JSContext *ctx, JSValueConst str)
  * fires is a defect that already reached the algorithm.
  * Returns -1 with a TypeError live, or 0. The value has already passed its position's brand test, which is the
  * order § 3.2.26 states and is what lets the predicates below require a buffer source. */
-static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *type_name)
+static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *type_name,
+                                    bool allow_shared, bool allow_resizable)
 {
-    if (JS_IsSharedBufferSource(v)) {
+    if (!allow_shared && JS_IsSharedBufferSource(v)) {
         JS_ThrowTypeError(ctx,
                           "§ 3.2.26 Buffer source types refuses a SharedArrayBuffer to a `%s`: the position "
                           "carries no [AllowShared] extended attribute, and § 4.2 BufferSource cannot carry "
@@ -1555,7 +1635,7 @@ static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *
                           type_name);
         return -1;
     }
-    if (!JS_IsFixedLengthBufferSource(v)) {
+    if (!allow_resizable && !JS_IsFixedLengthBufferSource(v)) {
         JS_ThrowTypeError(ctx,
                           "§ 3.2.26 Buffer source types refuses a resizable buffer to a `%s`: the position "
                           "carries no § 3.3.1 [AllowResizable] extended attribute, so IsFixedLengthArrayBuffer "
@@ -1709,8 +1789,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            catch-all with a real victim: addEventListener declares one DOMString, so the repeat converted its
            CALLBACK to a string and every listener registered was the string "function () {…}". A variadic
            member's tail is `any...` in every case here, which is exactly what not-listed already means. */
-        IdlArgType t = (s->i < m->nargs) ? m->types[s->i]
-                     : (m->variadic ? m->types[m->nargs - 1] : IDL_ANY);
+        /* THE DECLARED POSITION THIS ARGUMENT TAKES ITS TYPE FROM, and then the type — derived ONCE, because
+           everything the declaration states PER POSITION is indexed by it and a second derivation is a second
+           answer. A variadic tail REPEATS the member's last declared type, so what the declaration says about
+           that position (its type, and for an IDL_TYPED_ARRAY the §3.2.26 step 1 `T` stated beside it) it says
+           for every argument past the tail as well. -1 is a position past a NON-variadic member's declared
+           arity: not part of the member at all, so nothing is converted and nothing is stated about it. */
+        int ti = (s->i < m->nargs) ? s->i : (m->variadic ? m->nargs - 1 : -1);
+        IdlArgType t = ti >= 0 ? m->types[ti] : IDL_ANY;
         /* §3.6 STEPS 3-4, WHICH RUN BEFORE ANY VALUE IS LOOKED AT: argcount is min(maxarg, args) and every
            entry of the effective overload set whose type list is not that long is REMOVED. The shape of that
            this platform declares is a position where one of two overloads ENDS (idl_type_is_length_split) — so
@@ -2469,7 +2555,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (t == IDL_SEQUENCE_BLOBPART &&
                         (JS_IsArrayBuffer(s->seq.value) || JS_GetTypedArrayType(s->seq.value) >= 0 ||
                          JS_IsDataView(s->seq.value))) {
-                        if (idl_buffer_source_refuse(ctx, s->seq.value, "BlobPart"))
+                        if (idl_buffer_source_refuse(ctx, s->seq.value, "BlobPart",
+                                                     /* §4.2 BufferSource carries neither §3.3 attribute */
+                                                     false, false))
                             return JS_STEP_ABRUPT;
                         JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_DupValue(ctx, s->seq.value));
                         continue;
@@ -2566,7 +2654,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 JS_ThrowTypeError(ctx, "the argument is not a BufferSource");
                 return JS_STEP_ABRUPT;
             }
-            if (idl_buffer_source_refuse(ctx, a, "BufferSource")) {
+            if (idl_buffer_source_refuse(ctx, a, "BufferSource", false, false)) {
                 JS_FreeValue(ctx, cb_result);
                 return JS_STEP_ABRUPT;
             }
@@ -2588,7 +2676,42 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 JS_ThrowTypeError(ctx, "the argument is not an ArrayBufferView");
                 return JS_STEP_ABRUPT;
             }
-            if (idl_buffer_source_refuse(ctx, a, "ArrayBufferView")) {
+            if (idl_buffer_source_refuse(ctx, a, "ArrayBufferView", false, false)) {
+                JS_FreeValue(ctx, cb_result);
+                return JS_STEP_ABRUPT;
+            }
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            *slot = JS_DupValue(ctx, a);
+            goto placed;
+        }
+
+        /* §3.2.26 Buffer source types over ONE of its twelve typed arrays — the arm the two above cannot
+           express, because its step 2 tests [[TypedArrayName]] "with a value equal to T's name" and T is what
+           the POSITION declares. Every step is here in the standard's own order: step 2's brand, then steps 3
+           and 4 through the same refusal the two rows above use, each conditioned on the §3.3 attribute this
+           position states rather than on this file's opinion of what the platform contains. */
+        if (t == IDL_TYPED_ARRAY) {
+            const IdlTypedArrayDecl *d;
+
+            DCHECK(m->arg_views != NULL && ti >= 0 && m->arg_views[ti].kind >= 0,
+                   "an IDL_TYPED_ARRAY position reached its conversion with no typed array declared — §3.2.26 "
+                   "step 1 is \"let T be the IDL type V is being converted to\", and idl_args_seal asserts "
+                   "every such position states its T with idl_typed_array, so this member was declared after "
+                   "the platform was sealed");
+            d = &m->arg_views[ti];
+            /* STEP 2, AND IT IS THE WHOLE BRAND TEST. A DataView has no [[TypedArrayName]] at all and every
+               other typed array's is a different name, so one comparison answers for all thirteen view types
+               §4.1 lists and for the two buffers §4.2 adds — `enc.encodeInto("x", new Float64Array(1))` is a
+               TypeError from the TYPE, where "is it a typed array" admitted it and let the algorithm write
+               bytes into a view whose elements are eight of them. */
+            if (JS_GetTypedArrayType(a) != d->kind) {
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "the argument is not a %s", idl_typed_array_name(d->kind));
+                return JS_STEP_ABRUPT;
+            }
+            if (idl_buffer_source_refuse(ctx, a, idl_typed_array_name(d->kind),
+                                         d->allow_shared, d->allow_resizable)) {
                 JS_FreeValue(ctx, cb_result);
                 return JS_STEP_ABRUPT;
             }
@@ -2616,7 +2739,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                references, so they cross untouched. A question some entries of a conversion ask and others do
                not is one missing capability wearing several names, and this is the third entry of this one. */
             if (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a)) {
-                if (idl_buffer_source_refuse(ctx, a, "BodyInit")) {
+                if (idl_buffer_source_refuse(ctx, a, "BodyInit", false, false)) {
                     JS_FreeValue(ctx, cb_result);
                     return JS_STEP_ABRUPT;
                 }
@@ -3000,6 +3123,10 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     /* NO DECLARED DEFAULTS, which is what §3.6's absent rule is the answer for. The array is allocated by the
        first idl_arg_default this member makes, so a member with none costs nothing. */
     idl_member(idx)->arg_dflts = NULL;
+    /* NO DECLARED TYPED ARRAYS, on the same terms: the array is allocated by the first idl_typed_array this
+       member states, so a member with no IDL_TYPED_ARRAY position costs nothing and idl_args_seal reads the
+       NULL as "none stated" — which is a defect only where the member's own types name one. */
+    idl_member(idx)->arg_views = NULL;
     /* HOW MANY THE CALLER MUST PASS. §3.6 throws a TypeError before ANY conversion when a call has fewer
        arguments than the member has required ones — `new File()` throws rather than building a File with no
        bits. It is the same number `first_optional` already states, capped at what the IDL declares, so a member
@@ -3224,6 +3351,50 @@ void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str)
     }
     m->arg_dflts[index].kind = dflt;
     m->arg_dflts[index].str  = dflt_str;
+}
+
+/* §3.2.26 Buffer source types STEP 1's `T` AT ONE POSITION, plus the two §3.3 extended attributes its steps 3
+   and 4 turn on — see idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it is
+   PER POSITION rather than per member because a member's IDL may write several: Web Audio API §1.13.3
+   Methods declares `getFrequencyResponse(Float32Array frequencyHz, Float32Array magResponse, Float32Array
+   phaseResponse)` on the BiquadFilterNode interface, which is three on one line. */
+void idl_typed_array(int index, JSTypedArrayEnum kind, bool allow_shared, bool allow_resizable)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "a typed array was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(index >= 0 && index < m->nargs,
+           "a typed array named a position the member's IDL does not list — the index is into that member's "
+           "own type list, which is what its declaration passed");
+    /* THE POSITION'S TYPE IS WHAT ASKS FOR A T, so stating one anywhere else is a declaration about a
+       different position — and, if the member was declared elsewhere, about a different member entirely. The
+       seal asserts the same pair from the other side, over every declaration at once. */
+    DCHECK(m->types[index] == IDL_TYPED_ARRAY,
+           "§3.2.26 step 1's T was stated at a position whose declared type is not IDL_TYPED_ARRAY — no other "
+           "conversion reads it, so this describes a position that never asks for one");
+    DCHECK(kind >= 0 && kind <= JS_TYPED_ARRAY_FLOAT64,
+           "a typed array kind outside JSTypedArrayEnum was declared — §3.2.26's algorithm ranges over exactly "
+           "the twelve the enumeration names");
+    if (m->arg_views == NULL) {
+        int k;
+        m->arg_views = calloc((size_t)m->nargs, sizeof *m->arg_views);
+        CHECK(m->arg_views != NULL,
+              "idl: OOM recording a member's declared typed arrays — a member that cannot be declared is an "
+              "API the page cannot call");
+        /* Zero is a VALID enumerator (JS_TYPED_ARRAY_UINT8C), so "none stated" has to be a value outside the
+           enumeration and the calloc cannot be the statement. Both readers — the conversion and the seal —
+           test `kind >= 0`, so the two ask the same question. */
+        for (k = 0; k < m->nargs; k++) m->arg_views[k].kind = -1;
+    }
+    /* Twice is two answers to one question, and only one of them decides every call. §3.3.2's own example
+       writes BOTH attributes on one position, so `allow_shared && allow_resizable` is not the thing to
+       refuse — restating the position is. */
+    DCHECK(m->arg_views[index].kind < 0, "a position stated §3.2.26 step 1's T twice");
+    m->arg_views[index].kind = (int16_t)kind;
+    m->arg_views[index].allow_shared = allow_shared;
+    m->arg_views[index].allow_resizable = allow_resizable;
 }
 
 /* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it must be stated BEFORE
@@ -4214,6 +4385,10 @@ void idl_args_pool_free(void)
            the array naming them is this pool's, allocated by the first default a member declared. */
         free(idl_member(i)->arg_dflts);
         idl_member(i)->arg_dflts = NULL;
+        /* §3.2.26 step 1's declared T's — the array is this pool's, allocated by the first position a member
+           stated one at, and it holds nothing but the enumerator and two flags. */
+        free(idl_member(i)->arg_views);
+        idl_member(i)->arg_views = NULL;
         /* The joined stage labels — the strings themselves are statics belonging to the member and to this
            file; the array that names them is this pool's, and it is part of the BORROWED definition. */
         free((void *)idl_member(i)->steps);

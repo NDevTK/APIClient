@@ -387,6 +387,32 @@ typedef enum {
        length-tracking view is answered: the conversion keeps one out of every position that did not ask for
        one, rather than each fill site asserting after the fact that the window it was handed still fits. */
     IDL_ARRAYBUFFERVIEW,
+    /* ONE OF §3.2.26 Buffer source types' TWELVE TYPED ARRAYS — the arm whose brand test is not "is this a
+       view" but "is this THAT view", and the first declared type whose conversion needs a fact no row can
+       carry. §3.2.26's typed-array algorithm reads, in this order:
+         1. "Let T be the IDL type V is being converted to."
+         2. "If V is not an Object, or V does not have a [[TypedArrayName]] internal slot with a value equal to
+            T's name, then throw a TypeError."
+         3. the [AllowShared] refusal, then 4. the [AllowResizable] one — the same two idl_buffer_source_refuse
+            already performs for the two rows above, asked AFTER the brand and never before it.
+       SO `T` IS A PARAMETER OF THE CONVERSION AND NOT A ROW OF THIS LIST: twelve rows would state one rule
+       twelve times and differ only in a constant, which is the per-member line this file exists to remove.
+       The type is declared beside the POSITION instead (idl_typed_array), exactly as
+       an interface type's class is (idl_iface_brand) and an enumeration's value list is (idl_enum_values): one
+       row stating the RULE, one declaration stating what this position's rule is about.
+       AND THE TWO §3.3 EXTENDED ATTRIBUTES ARE DECLARED WITH IT, because §3.2.26 reads them as CONDITIONS on
+       steps 3 and 4 rather than as a different algorithm. §3.3.1 [AllowResizable] and §3.3.2 [AllowShared] are
+       independent — §3.3.2's own example writes all four combinations of them on one interface — so they are
+       two flags on the position and not a fifth row here, which would have to enumerate the product.
+       Encoding §7.4 Interface TextEncoder is the first, and it is why this row exists rather than a test in a
+       body: `TextEncoderEncodeIntoResult encodeInto(USVString source, [AllowShared] Uint8Array destination)`.
+       A body's own `JS_GetTypedArrayType(argv[1]) != JS_TYPED_ARRAY_UINT8` got step 2 right and asked steps 3
+       and 4 NOTHING, so a length-tracking Uint8Array over a resizable buffer reached a write bounded by a byte
+       length its buffer no longer had. That is the hazard §4.1's and §4.2's rows already keep out of every
+       position that did not ask for one, and it belongs to the TYPE for the same reason: a fill site can only
+       assert after the fact that the window it was handed still fits, and such an assert firing is a defect
+       that already reached the algorithm. */
+    IDL_TYPED_ARRAY,
     /* AN INTERFACE TYPE — §3.2.15. `Node root`, `Range sourceRange`, `Node currentNode`: a platform object
        implementing the interface crosses as itself and ANYTHING else is a TypeError, thrown before the
        algorithm's step 1. It is a declared type rather than a body's `if` for the reason every other brand test
@@ -792,6 +818,26 @@ void idl_iface_narrow(bool (*is)(JSValueConst v));
    setter's body. Set after the declaration, naming the member the LAST one made, as idl_iface_brand and
    idl_optional_from do; `values` must outlive the declaration, so every caller passes a static. */
 void idl_enum_values(const char *const *values);
+
+/* DECLARE WHICH OF §3.2.26 Buffer source types' TWELVE TYPED ARRAYS AN IDL_TYPED_ARRAY POSITION IS, and which
+   of §3.3's two buffer extended attributes the IDL writes on it.
+   §3.2.26 step 1 is "let T be the IDL type V is being converted to" and step 2 tests [[TypedArrayName]]
+   "with a value equal to T's name", so the conversion cannot START without T — which is also why this is
+   stated per POSITION and not per member: a member may declare several, and Web Audio API §1.13.3 Methods'
+   `getFrequencyResponse(Float32Array frequencyHz, Float32Array magResponse, Float32Array phaseResponse)` on
+   the BiquadFilterNode interface is three of them on one line. The index is into the member's own type list,
+   exactly as idl_arg_default's is.
+   `allow_shared` is §3.3.2 [AllowShared] and `allow_resizable` is §3.3.1 [AllowResizable], read straight off
+   the IDL, because they are the CONDITIONS §3.2.26 steps 3 and 4 turn on: a position carrying neither refuses
+   a SharedArrayBuffer-backed view AND a resizable-buffer-backed one, and Encoding §7.4's `[AllowShared]
+   Uint8Array destination` refuses only the second. They are two independent flags because §3.3.1 and §3.3.2
+   are two independent attributes — §3.3.2's own example writes all four combinations — so collapsing them into
+   one "kind of buffer position" loses two of the four.
+   Set after the declaration, naming the member the LAST one made, exactly as idl_arg_default, idl_iface_brand
+   and idl_enum_values do. idl_args_seal asserts BOTH directions: a position declared IDL_TYPED_ARRAY that
+   states no T is a conversion that cannot start, and a T stated at a position of any other type is a
+   declaration describing a member that is not this one. */
+void idl_typed_array(int index, JSTypedArrayEnum kind, bool allow_shared, bool allow_resizable);
 
 /* DECLARE THAT THIS MEMBER'S TAIL IS VARIADIC — `T... name`, so the LAST declared type applies to every
    argument from that position on and the member takes as many as the page passed.

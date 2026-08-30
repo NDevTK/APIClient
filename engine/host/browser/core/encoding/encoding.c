@@ -1154,11 +1154,36 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     (void)magic;
     if (JS_GetOpaque(this_val, g_enc_class) == NULL && !JS_IsObject(this_val))
         return JS_ThrowTypeError(ctx, "not a TextEncoder");
-    /* §7.4 declares the destination as `Uint8Array`, not as a BufferSource — an Int8Array or a Float32Array is
-       a TypeError, because `written` counts BYTES and a view with a wider element would report a length in
-       units the caller cannot use. "Is it a typed array" accepted all of them. */
-    if (argc < 2 || JS_GetTypedArrayType(argv[1]) != JS_TYPED_ARRAY_UINT8)
-        return JS_ThrowTypeError(ctx, "the destination is not a Uint8Array");
+    /* AN UNKNOWN DESTINATION IS THE SAME MISSING CAPABILITY AS AN UNKNOWN SOURCE, ONE ARGUMENT ACROSS — and it
+       reaches this body rather than being refused because §3.2.26 is a BRAND TEST: idl_args.h's
+       IDL_CONCOLIC_CROSSES is why unknown external input crosses a declared type as itself, since answering
+       "that is not a Uint8Array" about a value nothing is known about is a control-flow decision over unknown
+       input. There is nowhere in a Uint8Array to put an unknown byte and no identified buffer here to write
+       into, so the pair returned below would report a write into a destination this engine never resolved.
+       BUILD: concolic bytes in a typed array's backing store — the same capability the source arm names — and
+       an unknown that carries a REAL view as its example, so the write lands in the example's buffer and the
+       COW capture below records it. Its absence would show as a page reading real zeroes back out of a buffer
+       it believes holds the encoding of attacker-controlled input. */
+    DCHECK(!concolic_is(argv[1]),
+           "§7.4 encodeInto(source, destination) was given an unknown DESTINATION — §3.2.26 Buffer source "
+           "types brands a concrete view and unknown external input crosses a declared type as itself, so "
+           "there is no buffer here to write into. Build concolic bytes in a typed array's backing store");
+    /* §7.4 DECLARES `[AllowShared] Uint8Array destination`, AND THE DECLARATION IS WHAT CONVERTS IT — Web IDL
+       §3.2.26 Buffer source types step 2's brand against Uint8Array's own [[TypedArrayName]], then step 4's
+       refusal of a buffer that is not fixed-length ([AllowShared] is what switches step 3's off). A body's own
+       `JS_GetTypedArrayType(argv[1]) != JS_TYPED_ARRAY_UINT8` stood here and got step 2 right while asking
+       steps 3 and 4 nothing, which is exactly how a length-tracking view over a resized buffer reached the
+       write below. So this is the two-sided half and not a second test: it states what the conversion
+       guarantees at the one position that WRITES, where an assert firing anywhere further in would already be
+       a defect that reached the algorithm. */
+    DCHECK(argc == 2,
+           "§7.4's encodeInto declares two REQUIRED arguments, so Web IDL §3.6's argument-count check throws "
+           "before this body runs and there is no absent destination to answer for");
+    DCHECK(JS_GetTypedArrayType(argv[1]) == JS_TYPED_ARRAY_UINT8 && JS_IsFixedLengthBufferSource(argv[1]),
+           "§7.4 encodeInto's destination reached the body without §3.2.26 Buffer source types' conversion — "
+           "the position is declared IDL_TYPED_ARRAY with idl_typed_array(1, JS_TYPED_ARRAY_UINT8, …), which "
+           "brands it and refuses a resizable buffer, so a value that is neither means this member was "
+           "installed from a mint that never ran the declaration");
     /* AN UNKNOWN SOURCE IS A DIFFERENT QUESTION FROM encode()'s, AND THIS ENGINE CANNOT ANSWER IT YET. encode()
        hands the page a NEW Uint8Array, so its unknown result is one derived value; §7.4's encodeInto WRITES
        INTO THE PAGE'S OWN BUFFER, and a Uint8Array element is a number — there is nowhere in one to put an
@@ -1183,8 +1208,11 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
        slot, which typed_array_init writes once, so `enc.encodeInto("A".repeat(64), v)` after `rab.resize(8)`
        wrote 64 bytes into an 8-byte allocation and reported `written: 64`. Both exports now derive the length
        per ECMAScript §10.4.5.12 TypedArrayByteLength, so this asserts the agreement rather than creating it —
-       which is what makes it a DCHECK. It is NOT reached through §3.2.26's refusal: this destination is
-       declared IDL_ANY, so no buffer-source conversion runs on it at all. */
+       which is what makes it a DCHECK. AND IT IS NOW THE SECOND LINE OF DEFENCE RATHER THAN THE ONLY ONE: the
+       destination is declared IDL_TYPED_ARRAY, so §3.2.26 Buffer source types step 4 has already refused a
+       resizable buffer at the conversion and this position can no longer be SHOWN the view whose two numbers
+       disagreed. That is what the refusal belonging to the TYPE buys — this assert states an invariant about
+       two engine exports instead of standing between a page and an eight-byte allocation. */
     DCHECK(off <= whole && dlen <= whole - off,
            "§7.4 encodeInto's destination window is outside its own buffer — JS_GetArrayBufferView and "
            "JS_GetArrayBuffer disagree about one allocation, and the write below is bounded by the first");
@@ -1305,7 +1333,7 @@ void encoding_init(JSContext *ctx)
     static const IdlArgType DEC_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
     static const IdlArgType DECODE_ARGS[2] = { IDL_BUFFERSOURCE, IDL_DICT };
     static const IdlArgType ENCODE_ARGS[1] = { IDL_USVSTRING };
-    static const IdlArgType ENCODE_INTO_ARGS[2] = { IDL_USVSTRING, IDL_ANY };
+    static const IdlArgType ENCODE_INTO_ARGS[2] = { IDL_USVSTRING, IDL_TYPED_ARRAY };
 
     DCHECK(g_enc_rt == NULL || g_enc_rt == rt,
            "the Encoding components were installed into a second runtime — their class ids and step ids belong "
@@ -1330,6 +1358,14 @@ void encoding_init(JSContext *ctx)
     g_id_encode = idl_method_id(ctx, ENCODE_ARGS, 1, js_encoder_encode, 0);
     idl_optional_from(0);   /* §7.4: `encode(optional USVString input = "")` */
     g_id_encode_into = idl_method_id(ctx, ENCODE_INTO_ARGS, 2, js_encoder_encode_into, 0);
+    /* §7.4: `encodeInto(USVString source, [AllowShared] Uint8Array destination)` — Web IDL §3.2.26 Buffer
+       source types step 1's T, and the ONE §3.3 attribute that IDL writes. [AllowShared] switches step 3's
+       refusal off at this position and leaves step 4's standing, which is what keeps a length-tracking view
+       over a resizable buffer out of the write below: that view reports a byte length recomputed at every
+       read, and the body bounds its memcpy by the one it was handed. Both arguments are REQUIRED — the IDL
+       writes no `optional` — so no idl_optional_from follows and §3.6's count check throws for a call with
+       fewer than two. */
+    idl_typed_array(1, JS_TYPED_ARRAY_UINT8, /*allow_shared*/ true, /*allow_resizable*/ false);
 
     g_dec_ctor_stepid = idl_method_id_step(ctx, DEC_CTOR_ARGS, 2, DECODER_OPTIONS,
                                            (int)(sizeof DECODER_OPTIONS / sizeof DECODER_OPTIONS[0]),
