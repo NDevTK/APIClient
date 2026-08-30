@@ -1518,9 +1518,9 @@ static void idb_transaction_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "durability", js_tx_get_durability, 0, -1);
     idl_install_accessor(ctx, proto, "error", js_tx_get_error, 0, -1);
     idl_install_accessor(ctx, proto, "db", js_tx_get_db, 0, -1);
-    idl_install_method(ctx, proto, "objectStore", 1, g_id_object_store);
-    idl_install_method(ctx, proto, "commit", 0, g_id_commit);
-    idl_install_method(ctx, proto, "abort", 0, g_id_abort);
+    idl_install_method(ctx, proto, "objectStore", g_id_object_store);
+    idl_install_method(ctx, proto, "commit", g_id_commit);
+    idl_install_method(ctx, proto, "abort", g_id_abort);
     JS_SetClassProto(ctx, g_tx_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBTransaction", proto);

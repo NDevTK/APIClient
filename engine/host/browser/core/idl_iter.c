@@ -517,9 +517,9 @@ void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle)
     JSValue entries;
 
     DCHECK(handle >= 0 && handle < g_pair_n, "an iterable<> was installed with a handle nothing declared");
-    idl_install_method(ctx, proto, "keys", 0, g_pair[handle].id_keys);
-    idl_install_method(ctx, proto, "values", 0, g_pair[handle].id_values);
-    idl_install_method(ctx, proto, "entries", 0, g_pair[handle].id_entries);
+    idl_install_method(ctx, proto, "keys", g_pair[handle].id_keys);
+    idl_install_method(ctx, proto, "values", g_pair[handle].id_values);
+    idl_install_method(ctx, proto, "entries", g_pair[handle].id_entries);
     /* ONE forEach def serves every interface; `arg` is which one, read off the header by the step. */
     idl_install_step_method(ctx, proto, "forEach", 1, g_pair[handle].foreach_stepid);
     /* §3.7.10: @@iterator on the interface IS `entries` for an `iterable<K, V>` and `values` for a

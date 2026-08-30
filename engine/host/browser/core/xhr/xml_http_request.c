@@ -2614,20 +2614,20 @@ void xhr_install_protos(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, xhr_p, XHR_CONSTANTS,
                                (int)(sizeof(XHR_CONSTANTS) / sizeof(XHR_CONSTANTS[0])));
     idl_install_accessor(ctx, xhr_p, "readyState", js_xhr_get_ready_state, 0, -1);
-    idl_install_method(ctx, xhr_p, "open", 2, g_open_stepid);
-    idl_install_method(ctx, xhr_p, "setRequestHeader", 2, g_id_set_request_header);
+    idl_install_method(ctx, xhr_p, "open", g_open_stepid);
+    idl_install_method(ctx, xhr_p, "setRequestHeader", g_id_set_request_header);
     idl_install_accessor(ctx, xhr_p, "timeout", js_xhr_get_timeout, 0, g_set_timeout_id);
     idl_install_accessor(ctx, xhr_p, "withCredentials", js_xhr_get_with_credentials, 0,
                          g_set_with_credentials_id);
     idl_install_accessor(ctx, xhr_p, "upload", js_xhr_get_upload, 0, -1);
-    idl_install_method(ctx, xhr_p, "send", 0, g_send_stepid);
-    idl_install_method(ctx, xhr_p, "abort", 0, g_abort_stepid);
+    idl_install_method(ctx, xhr_p, "send", g_send_stepid);
+    idl_install_method(ctx, xhr_p, "abort", g_abort_stepid);
     idl_install_accessor(ctx, xhr_p, "responseURL", js_xhr_get_response_url, 0, -1);
     idl_install_accessor(ctx, xhr_p, "status", js_xhr_get_status, 0, -1);
     idl_install_accessor(ctx, xhr_p, "statusText", js_xhr_get_status_text, 0, -1);
-    idl_install_method(ctx, xhr_p, "getResponseHeader", 1, g_id_get_response_header);
-    idl_install_method(ctx, xhr_p, "getAllResponseHeaders", 0, g_id_get_all);
-    idl_install_method(ctx, xhr_p, "overrideMimeType", 1, g_id_override_mime);
+    idl_install_method(ctx, xhr_p, "getResponseHeader", g_id_get_response_header);
+    idl_install_method(ctx, xhr_p, "getAllResponseHeaders", g_id_get_all);
+    idl_install_method(ctx, xhr_p, "overrideMimeType", g_id_override_mime);
     idl_install_accessor(ctx, xhr_p, "responseType", js_xhr_get_response_type, 0, g_set_response_type_id);
     idl_install_accessor_step(ctx, xhr_p, "response", g_response_getter_id, -1);
     idl_install_accessor(ctx, xhr_p, "responseText", js_xhr_get_response_text, 0, -1);
@@ -2655,7 +2655,7 @@ void xhr_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 
     proto = JS_GetClassProto(ctx, g_xhr_class);
-    ctor = idl_step_constructor(ctx, "XMLHttpRequest", 0, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "XMLHttpRequest", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the XMLHttpRequest interface object could not be allocated");
     JS_SetPropertyFunctionList(ctx, ctor, XHR_CONSTANTS,
                                (int)(sizeof(XHR_CONSTANTS) / sizeof(XHR_CONSTANTS[0])));

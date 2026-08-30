@@ -2625,11 +2625,11 @@ void element_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "Element");
     JS_SetPropertyFunctionList(ctx, proto, js_element_readonly,
                                (int)(sizeof(js_element_readonly) / sizeof(js_element_readonly[0])));
-    idl_install_method(ctx, proto, "getAttribute", 1, g_id_get_attr);
-    idl_install_method(ctx, proto, "setAttribute", 2, g_id_set_attr);
-    idl_install_method(ctx, proto, "matches", 1, g_id_matches);
-    idl_install_method(ctx, proto, "webkitMatchesSelector", 1, g_id_matches);
-    idl_install_method(ctx, proto, "closest", 1, g_id_closest);
+    idl_install_method(ctx, proto, "getAttribute", g_id_get_attr);
+    idl_install_method(ctx, proto, "setAttribute", g_id_set_attr);
+    idl_install_method(ctx, proto, "matches", g_id_matches);
+    idl_install_method(ctx, proto, "webkitMatchesSelector", g_id_matches);
+    idl_install_method(ctx, proto, "closest", g_id_closest);
     dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
     node_install_child_mixin(ctx, proto);    /* remove / before / after / replaceWith */
     node_install_parent_mixin(ctx, proto);   /* append / prepend / replaceChildren */
@@ -2639,34 +2639,34 @@ void element_install_proto(JSContext *ctx)
     idl_install_accessor_step(ctx, proto, "outerHTML", g_id_outer_get, g_id_outer_set);
     /* §8.5's three partial-interface markup members. `setHTML` is the SAFE one — "set and filter HTML given
        target, html, options, and TRUE" — which is §8.7 Timers's sanitizer, and it is here now that §8.7 Timers is. */
-    idl_install_method(ctx, proto, "setHTML", 1, g_id_set_html);
-    idl_install_method(ctx, proto, "setHTMLUnsafe", 1, g_id_set_html_unsafe);
+    idl_install_method(ctx, proto, "setHTML", g_id_set_html);
+    idl_install_method(ctx, proto, "setHTMLUnsafe", g_id_set_html_unsafe);
     fragment_serializer_install_get_html(ctx, proto);
-    idl_install_method(ctx, proto, "insertAdjacentHTML", 2, g_id_adj_html);
-    idl_install_method(ctx, proto, "insertAdjacentElement", 2, g_id_adj_el);
-    idl_install_method(ctx, proto, "insertAdjacentText", 2, g_id_adj_text);
+    idl_install_method(ctx, proto, "insertAdjacentHTML", g_id_adj_html);
+    idl_install_method(ctx, proto, "insertAdjacentElement", g_id_adj_el);
+    idl_install_method(ctx, proto, "insertAdjacentText", g_id_adj_text);
     /* The rest of the attribute family. removeAttribute had no implementation at all, which is also why a
        boolean reflection could not unset itself. */
     idl_install_accessor(ctx, proto, "attributes", js_el_attributes, 0, -1);
-    idl_install_method(ctx, proto, "getAttributeNames", 0, g_id_attr_names);
-    idl_install_method(ctx, proto, "getAttributeNode", 1, g_id_get_attr_node);
-    idl_install_method(ctx, proto, "removeAttribute", 1, g_id_remove_attr);
-    idl_install_method(ctx, proto, "hasAttribute", 1, g_id_has_attr);
-    idl_install_method(ctx, proto, "toggleAttribute", 1, g_id_toggle_attr);
-    idl_install_method(ctx, proto, "hasAttributes", 0, g_id_has_attrs);
+    idl_install_method(ctx, proto, "getAttributeNames", g_id_attr_names);
+    idl_install_method(ctx, proto, "getAttributeNode", g_id_get_attr_node);
+    idl_install_method(ctx, proto, "removeAttribute", g_id_remove_attr);
+    idl_install_method(ctx, proto, "hasAttribute", g_id_has_attr);
+    idl_install_method(ctx, proto, "toggleAttribute", g_id_toggle_attr);
+    idl_install_method(ctx, proto, "hasAttributes", g_id_has_attrs);
     /* §4.9's (namespace, local name) family. Their absence was not a missing convenience: an SVG or MathML
        subtree in an HTML page carries its `xlink:href` in a namespace the by-name members cannot reach, so a
        page reading one got null and a page writing one created a second, null-namespace attribute beside it. */
-    idl_install_method(ctx, proto, "getAttributeNS", 2, g_id_get_attr_ns);
-    idl_install_method(ctx, proto, "setAttributeNS", 3, g_id_set_attr_ns);
-    idl_install_method(ctx, proto, "removeAttributeNS", 2, g_id_remove_attr_ns);
-    idl_install_method(ctx, proto, "hasAttributeNS", 2, g_id_has_attr_ns);
-    idl_install_method(ctx, proto, "getAttributeNodeNS", 2, g_id_get_attr_node_ns);
+    idl_install_method(ctx, proto, "getAttributeNS", g_id_get_attr_ns);
+    idl_install_method(ctx, proto, "setAttributeNS", g_id_set_attr_ns);
+    idl_install_method(ctx, proto, "removeAttributeNS", g_id_remove_attr_ns);
+    idl_install_method(ctx, proto, "hasAttributeNS", g_id_has_attr_ns);
+    idl_install_method(ctx, proto, "getAttributeNodeNS", g_id_get_attr_node_ns);
     /* §4.9.9: `setAttributeNode` and `setAttributeNodeNS` are the SAME algorithm, verbatim, in one sentence —
        the NS suffix carries no behavioural difference at all, so it is one machine installed twice. */
-    idl_install_method(ctx, proto, "setAttributeNode", 1, g_id_set_attr_node);
-    idl_install_method(ctx, proto, "setAttributeNodeNS", 1, g_id_set_attr_node);
-    idl_install_method(ctx, proto, "removeAttributeNode", 1, g_id_remove_attr_node);
+    idl_install_method(ctx, proto, "setAttributeNode", g_id_set_attr_node);
+    idl_install_method(ctx, proto, "setAttributeNodeNS", g_id_set_attr_node);
+    idl_install_method(ctx, proto, "removeAttributeNode", g_id_remove_attr_node);
     JS_SetPropertyFunctionList(ctx, proto, js_element_name_parts,
                                (int)(sizeof(js_element_name_parts) / sizeof(js_element_name_parts[0])));
     /* §4.9's OWN reflections, and only those: `id`, `class` and `slot`. `src`, `name` and `content` used to be

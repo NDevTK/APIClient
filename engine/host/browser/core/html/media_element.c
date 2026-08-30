@@ -2057,8 +2057,8 @@ void media_element_install_proto(JSContext *ctx, JSValueConst html_proto)
     CHECK(!JS_IsException(proto), "TimeRanges.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "TimeRanges");
     idl_install_accessor(ctx, proto, "length", js_ranges_length, 0, -1);
-    idl_install_method(ctx, proto, "start", 1, g_id_range_start);
-    idl_install_method(ctx, proto, "end", 1, g_id_range_end);
+    idl_install_method(ctx, proto, "start", g_id_range_start);
+    idl_install_method(ctx, proto, "end", g_id_range_end);
     JS_SetClassProto(ctx, g_ranges_class, proto);
 
     /* §4.8.11's `interface HTMLMediaElement : HTMLElement`. */
@@ -2088,12 +2088,12 @@ void media_element_install_proto(JSContext *ctx, JSValueConst html_proto)
     idl_install_accessor(ctx, proto, "volume", js_media_get, MG_VOLUME, g_set_volume);
     idl_install_accessor(ctx, proto, "muted", js_media_get, MG_MUTED, g_set_muted);
     idl_install_accessor(ctx, proto, "loading", js_media_get_loading, 0, g_set_loading);
-    idl_install_method(ctx, proto, "load", 0, g_id_load);
-    idl_install_method(ctx, proto, "canPlayType", 1, g_id_can_play);
-    idl_install_method(ctx, proto, "fastSeek", 1, g_id_fast_seek);
-    idl_install_method(ctx, proto, "getStartDate", 0, g_id_start_date);
-    idl_install_method(ctx, proto, "play", 0, g_id_play);
-    idl_install_method(ctx, proto, "pause", 0, g_id_pause);
+    idl_install_method(ctx, proto, "load", g_id_load);
+    idl_install_method(ctx, proto, "canPlayType", g_id_can_play);
+    idl_install_method(ctx, proto, "fastSeek", g_id_fast_seek);
+    idl_install_method(ctx, proto, "getStartDate", g_id_start_date);
+    idl_install_method(ctx, proto, "play", g_id_play);
+    idl_install_method(ctx, proto, "pause", g_id_pause);
     idl_members_excluded(ctx, proto, "HTMLMediaElement", MEDIA_ABSENT,
                          (int)(sizeof(MEDIA_ABSENT) / sizeof(MEDIA_ABSENT[0])),
                          "§4.8.11.10's AudioTrackList and VideoTrackList and §4.8.11.11's TextTrackList are "

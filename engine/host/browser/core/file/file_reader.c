@@ -842,11 +842,11 @@ void file_reader_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "readyState", js_fr_get, FR_GET_READY_STATE, -1);
     idl_install_accessor(ctx, proto, "result", js_fr_get, FR_GET_RESULT, -1);
     idl_install_accessor(ctx, proto, "error", js_fr_get, FR_GET_ERROR, -1);
-    idl_install_method(ctx, proto, "readAsArrayBuffer", 1, g_id_read[FILE_READ_ARRAY_BUFFER]);
-    idl_install_method(ctx, proto, "readAsBinaryString", 1, g_id_read[FILE_READ_BINARY_STRING]);
-    idl_install_method(ctx, proto, "readAsText", 1, g_id_read[FILE_READ_TEXT]);
-    idl_install_method(ctx, proto, "readAsDataURL", 1, g_id_read[FILE_READ_DATA_URL]);
-    idl_install_method(ctx, proto, "abort", 0, g_abort_stepid);
+    idl_install_method(ctx, proto, "readAsArrayBuffer", g_id_read[FILE_READ_ARRAY_BUFFER]);
+    idl_install_method(ctx, proto, "readAsBinaryString", g_id_read[FILE_READ_BINARY_STRING]);
+    idl_install_method(ctx, proto, "readAsText", g_id_read[FILE_READ_TEXT]);
+    idl_install_method(ctx, proto, "readAsDataURL", g_id_read[FILE_READ_DATA_URL]);
+    idl_install_method(ctx, proto, "abort", g_abort_stepid);
     JS_SetClassProto(ctx, g_fr_class, proto);
 }
 

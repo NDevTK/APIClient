@@ -1443,15 +1443,15 @@ void encoding_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, dec_p, "encoding", js_decoder_get, DEC_ENCODING, -1);
     idl_install_accessor(ctx, dec_p, "fatal", js_decoder_get, DEC_FATAL, -1);
     idl_install_accessor(ctx, dec_p, "ignoreBOM", js_decoder_get, DEC_IGNORE_BOM, -1);
-    idl_install_method(ctx, dec_p, "decode", 0, g_id_decode);
+    idl_install_method(ctx, dec_p, "decode", g_id_decode);
     JS_SetClassProto(ctx, g_dec_class, dec_p);
 
     enc_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(enc_p), "TextEncoder.prototype could not be allocated");
     idl_interface_tag(ctx, enc_p, "TextEncoder");
     idl_install_accessor(ctx, enc_p, "encoding", js_encoder_get, 0, -1);
-    idl_install_method(ctx, enc_p, "encode", 0, g_id_encode);
-    idl_install_method(ctx, enc_p, "encodeInto", 2, g_id_encode_into);
+    idl_install_method(ctx, enc_p, "encode", g_id_encode);
+    idl_install_method(ctx, enc_p, "encodeInto", g_id_encode_into);
     JS_SetClassProto(ctx, g_enc_class, enc_p);
 }
 
@@ -1459,7 +1459,7 @@ void encoding_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_dec_ctor_stepid >= 0, "the Encoding globals were installed before encoding_init declared them");
-    ctor = idl_step_constructor(ctx, "TextDecoder", 0, g_dec_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "TextDecoder", g_dec_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextDecoder interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_dec_class);
@@ -1469,7 +1469,7 @@ void encoding_install(JSContext *ctx, JSValueConst global)
     }
     JS_SetPropertyStr(ctx, (JSValue)global, "TextDecoder", ctor);
 
-    ctor = idl_step_constructor(ctx, "TextEncoder", 0, g_enc_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "TextEncoder", g_enc_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextEncoder interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_enc_class);

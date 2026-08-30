@@ -531,8 +531,8 @@ void attr_install_document_members(JSContext *ctx, JSValueConst doc_proto)
 {
     DCHECK(g_create_attr_id >= 0 && g_create_attr_ns_id >= 0,
            "Document's attribute factories were installed before they were declared");
-    idl_install_method(ctx, (JSValue)doc_proto, "createAttribute", 1, g_create_attr_id);
-    idl_install_method(ctx, (JSValue)doc_proto, "createAttributeNS", 2, g_create_attr_ns_id);
+    idl_install_method(ctx, (JSValue)doc_proto, "createAttribute", g_create_attr_id);
+    idl_install_method(ctx, (JSValue)doc_proto, "createAttributeNS", g_create_attr_ns_id);
 }
 
 JSValue attr_named_node_map_new(JSContext *ctx, JSValueConst owner)
@@ -612,15 +612,15 @@ void attr_install_protos(JSContext *ctx)
     CHECK(!JS_IsException(nnm_p), "NamedNodeMap.prototype could not be allocated");
     idl_interface_tag(ctx, nnm_p, "NamedNodeMap");
     idl_install_accessor_no_user_code(ctx, nnm_p, "length", js_nnm_length, 0, -1);
-    idl_install_method(ctx, nnm_p, "item", 1, g_item_id);
-    idl_install_method(ctx, nnm_p, "getNamedItem", 1, g_get_named_id);
-    idl_install_method(ctx, nnm_p, "removeNamedItem", 1, g_remove_named_id);
-    idl_install_method(ctx, nnm_p, "getNamedItemNS", 2, g_get_named_ns_id);
-    idl_install_method(ctx, nnm_p, "removeNamedItemNS", 2, g_remove_named_ns_id);
+    idl_install_method(ctx, nnm_p, "item", g_item_id);
+    idl_install_method(ctx, nnm_p, "getNamedItem", g_get_named_id);
+    idl_install_method(ctx, nnm_p, "removeNamedItem", g_remove_named_id);
+    idl_install_method(ctx, nnm_p, "getNamedItemNS", g_get_named_ns_id);
+    idl_install_method(ctx, nnm_p, "removeNamedItemNS", g_remove_named_ns_id);
     /* §4.9.1: `setNamedItem` and `setNamedItemNS` are the SAME algorithm in one sentence each — one machine,
        installed twice, because the IDL declares two members and a page may call either. */
-    idl_install_method(ctx, nnm_p, "setNamedItem", 1, g_set_named_id);
-    idl_install_method(ctx, nnm_p, "setNamedItemNS", 1, g_set_named_id);
+    idl_install_method(ctx, nnm_p, "setNamedItem", g_set_named_id);
+    idl_install_method(ctx, nnm_p, "setNamedItemNS", g_set_named_id);
     /* §3.7.10: an interface with an indexed getter gets %Array.prototype.values% as its @@iterator, which is
        what makes `for (const a of el.attributes)` — the loop this gap was really about — ordinary code. */
     idl_indexed_install_iterable(ctx, nnm_p);   /* §4.9.1 declares no iterable<>, so no value iterator */

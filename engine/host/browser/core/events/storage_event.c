@@ -361,13 +361,13 @@ void storage_event_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, proto, "StorageEvent");
     JS_SetPropertyFunctionList(ctx, proto, js_se_proto, (int)(sizeof(js_se_proto) / sizeof(js_se_proto[0])));
     /* Web IDL §3.7.4.1's length is the number of REQUIRED arguments — one, `type`. */
-    idl_install_method(ctx, proto, "initStorageEvent", 1, g_id_init);
+    idl_install_method(ctx, proto, "initStorageEvent", g_id_init);
     JS_SetClassProto(ctx, g_se_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object, on THIS realm's global. It is also what core/events/create_event.c's row asks
        about: §4.5 step 4 refuses an interface the realm does not EXPOSE, so the row and this line are two halves
        of one fact and the factory asserts they agree. */
-    ctor = idl_step_constructor(ctx, "StorageEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "StorageEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the StorageEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

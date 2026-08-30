@@ -252,7 +252,7 @@ void navigation_current_entry_change_event_install_protos(JSContext *ctx)
     /* §3.7.1's interface object, on THIS realm's global — one per realm, whose `prototype` is the prototype
        this same install just built. Its LENGTH is 2: Web IDL §3.7.4.1's length is the number of REQUIRED
        arguments, and this constructor's dictionary is not optional. */
-    ctor = idl_step_constructor(ctx, "NavigationCurrentEntryChangeEvent", 2, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "NavigationCurrentEntryChangeEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the NavigationCurrentEntryChangeEvent interface object could not be "
                                  "allocated");
     JS_SetConstructor(ctx, ctor, proto);

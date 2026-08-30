@@ -3301,7 +3301,7 @@ void window_proxy_install_proto(JSContext *ctx)
         else
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, -1);
     }
-    idl_install_method(ctx, proto, "close", 0, g_wp_close_id);
+    idl_install_method(ctx, proto, "close", g_wp_close_id);
     /* §7.2.1.3.1's LAST TWO NAMES, and the ones this surface did not have. `focus` and `blur` are on the
        thirteen-name cross-origin list and were installed on the Window GLOBAL only, so §7.2.3.5's cross-origin
        branch answered `0` for them, the walk reached this object, found nothing, and `otherW.focus` was

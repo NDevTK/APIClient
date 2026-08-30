@@ -1090,9 +1090,9 @@ void mutation_observer_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "MutationObserver.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "MutationObserver");
-    idl_install_method(ctx, proto, "observe", 1, g_id_observe);
-    idl_install_method(ctx, proto, "disconnect", 0, g_id_disconnect);
-    idl_install_method(ctx, proto, "takeRecords", 0, g_id_take);
+    idl_install_method(ctx, proto, "observe", g_id_observe);
+    idl_install_method(ctx, proto, "disconnect", g_id_disconnect);
+    idl_install_method(ctx, proto, "takeRecords", g_id_take);
     JS_SetClassProto(ctx, g_mo_class, proto);
 }
 
@@ -1102,7 +1102,7 @@ void mutation_observer_install(JSContext *ctx, JSValueConst global)
 
     mutation_record_install(ctx, global);
     DCHECK(g_id_ctor >= 0, "MutationObserver was installed before mutation_observer_init declared it");
-    ctor = idl_step_constructor(ctx, "MutationObserver", 1, g_id_ctor);
+    ctor = idl_step_constructor(ctx, "MutationObserver", g_id_ctor);
     CHECK(!JS_IsException(ctor), "the MutationObserver interface object could not be allocated");
     proto = JS_GetClassProto(ctx, g_mo_class);
     DCHECK(!JS_IsNull(proto), "MutationObserver was installed in a realm that never ran its prototype install");

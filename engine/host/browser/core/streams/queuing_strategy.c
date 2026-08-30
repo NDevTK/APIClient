@@ -244,7 +244,7 @@ void queuing_strategy_install(JSContext *ctx, JSValueConst global)
     for (i = 0; i < QS_N; i++) {
         JSValue ctor;
         DCHECK(g_qs_ctor_stepid[i] >= 0, "a queuing strategy was installed before it was declared");
-        ctor = idl_step_constructor(ctx, NAMES[i], 1, g_qs_ctor_stepid[i]);
+        ctor = idl_step_constructor(ctx, NAMES[i], g_qs_ctor_stepid[i]);
         CHECK(!JS_IsException(ctor), "a queuing strategy interface object could not be allocated");
         {
             JSValue proto = realm_value_get(ctx, g_qs_proto_slot[i]);

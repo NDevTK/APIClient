@@ -1086,11 +1086,11 @@ static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t
 
     handler = JS_NewObject(ctx);
     CHECK(!JS_IsException(handler), "a cross-agent reference's handler could not be allocated");
-    JS_SetPropertyStr(ctx, handler, "get", idl_step_function(ctx, "get", 3, g_ref_stepid[REF_OP_GET]));
-    JS_SetPropertyStr(ctx, handler, "set", idl_step_function(ctx, "set", 4, g_ref_stepid[REF_OP_SET]));
+    JS_SetPropertyStr(ctx, handler, "get", idl_step_function(ctx, "get", g_ref_stepid[REF_OP_GET]));
+    JS_SetPropertyStr(ctx, handler, "set", idl_step_function(ctx, "set", g_ref_stepid[REF_OP_SET]));
     JS_SetPropertyStr(ctx, handler, "deleteProperty",
-                      idl_step_function(ctx, "deleteProperty", 2, g_ref_stepid[REF_OP_DELETE]));
-    JS_SetPropertyStr(ctx, handler, "apply", idl_step_function(ctx, "apply", 3, g_ref_stepid[REF_OP_APPLY]));
+                      idl_step_function(ctx, "deleteProperty", g_ref_stepid[REF_OP_DELETE]));
+    JS_SetPropertyStr(ctx, handler, "apply", idl_step_function(ctx, "apply", g_ref_stepid[REF_OP_APPLY]));
     for (i = 0; i < REF_UNBUILT_N; i++)
         JS_SetPropertyStr(ctx, handler, REF_UNBUILT[i].trap,
                           JS_NewCFunction2(ctx, (JSCFunction *)ref_unbuilt, REF_UNBUILT[i].trap, 2,

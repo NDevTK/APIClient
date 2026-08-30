@@ -244,11 +244,11 @@ static void crypto_install_realm(JSContext *ctx)
     idl_install_accessor_exposed(ctx, proto, "subtle", crypto_get_subtle, 0, -1, IDL_SECURE_CONTEXT);
     /* `ArrayBufferView getRandomValues(ArrayBufferView array)` — §10's one member carrying no exposure
        condition at all, so it is there over plain http exactly as it is in a real browser. */
-    idl_install_method(ctx, proto, "getRandomValues", 1, g_id_get_random_values);
+    idl_install_method(ctx, proto, "getRandomValues", g_id_get_random_values);
     /* `[SecureContext] DOMString randomUUID()` — Web IDL §3.3.13 REMOVES the member in a non-secure realm
        rather than making it throw, so a bundle's `crypto.randomUUID ? crypto.randomUUID() : fallback()` takes
        the fallback there, which is the branch it is written to take. */
-    idl_install_method_exposed(ctx, proto, "randomUUID", 0, g_id_random_uuid, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "randomUUID", g_id_random_uuid, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_crypto_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);

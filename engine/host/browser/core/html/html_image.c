@@ -1162,7 +1162,7 @@ void html_image_install_global(JSContext *ctx, JSValueConst global, JSValueConst
     /* Web IDL §3.7.2: "Let F be CreateBuiltinFunction(steps, length, id, « », realm)", with length 0 and id
        `Image`. It is a step-declared constructor so the two `unsigned long` arguments are converted by the
        declaration before the body runs, and so a call without `new` arrives with an undefined receiver. */
-    factory = idl_step_constructor(ctx, "Image", 0, g_id_factory);
+    factory = idl_step_constructor(ctx, "Image", g_id_factory);
     CHECK(!JS_IsException(factory), "§4.8.3: the `Image` legacy factory function could not be allocated");
     /* "Perform ! DefinePropertyOrThrow(F, "prototype", PropertyDescriptor{[[Value]]: proto, [[Writable]]:
        false, [[Enumerable]]: false, [[Configurable]]: false})." NOT JS_SetConstructor, which would also write

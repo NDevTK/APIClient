@@ -424,7 +424,7 @@ void message_event_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "MessageEvent");
     JS_SetPropertyFunctionList(ctx, proto, js_me_proto,
                                (int)(sizeof(js_me_proto) / sizeof(js_me_proto[0])));
-    idl_install_method(ctx, proto, "initMessageEvent", 1, g_init_me_id);
+    idl_install_method(ctx, proto, "initMessageEvent", g_init_me_id);
     JS_SetClassProto(ctx, g_me_class, proto);
 }
 
@@ -433,7 +433,7 @@ void message_event_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "MessageEvent was installed before message_event_init built its prototype");
-    ctor = idl_step_constructor(ctx, "MessageEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "MessageEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the MessageEvent interface object could not be allocated");
     {
         JSValue proto = message_event_proto(ctx);

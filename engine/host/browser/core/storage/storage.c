@@ -791,11 +791,11 @@ static void storage_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(proto), "Storage.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "Storage");
     idl_install_accessor(ctx, proto, "length", js_st_length, 0, -1);
-    idl_install_method(ctx, proto, "key", 1, g_id_key);
-    idl_install_method(ctx, proto, "getItem", 1, g_id_get_item);
-    idl_install_method(ctx, proto, "setItem", 2, g_id_set_item);
-    idl_install_method(ctx, proto, "removeItem", 1, g_id_remove_item);
-    idl_install_method(ctx, proto, "clear", 0, g_id_clear);
+    idl_install_method(ctx, proto, "key", g_id_key);
+    idl_install_method(ctx, proto, "getItem", g_id_get_item);
+    idl_install_method(ctx, proto, "setItem", g_id_set_item);
+    idl_install_method(ctx, proto, "removeItem", g_id_remove_item);
+    idl_install_method(ctx, proto, "clear", g_id_clear);
     JS_SetClassProto(ctx, g_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's INTERFACE OBJECT on THIS realm's global. Storage declares no constructor, so `new Storage()` is

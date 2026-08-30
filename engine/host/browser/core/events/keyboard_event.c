@@ -421,12 +421,12 @@ void keyboard_event_install_protos(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, proto, js_ke_proto, (int)(sizeof(js_ke_proto) / sizeof(js_ke_proto[0])));
     JS_SetPropertyFunctionList(ctx, proto, js_ke_consts,
                                (int)(sizeof(js_ke_consts) / sizeof(js_ke_consts[0])));
-    idl_install_method(ctx, proto, "getModifierState", 1, g_modifier_state_id);
-    idl_install_method(ctx, proto, "initKeyboardEvent", 1, g_init_kb_id);
+    idl_install_method(ctx, proto, "getModifierState", g_modifier_state_id);
+    idl_install_method(ctx, proto, "initKeyboardEvent", g_init_kb_id);
     JS_SetClassProto(ctx, g_ke_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object on THIS realm's global — see ui_event.c. */
-    ctor = idl_step_constructor(ctx, "KeyboardEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "KeyboardEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the KeyboardEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

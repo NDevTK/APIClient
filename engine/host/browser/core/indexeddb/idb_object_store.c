@@ -1702,21 +1702,21 @@ static void idb_object_store_install_realm(JSContext *ctx)
     /* IN §4.5'S OWN ORDER, minus the members whose algorithms do not exist. The `length` of each is Web IDL
        §3.7.7 Operations' — "the length of the shortest argument list in the entries in S", which for a member
        with no overloads is the number of REQUIRED arguments — so `count`'s is 0 and `delete`'s is 1. */
-    idl_install_method(ctx, proto, "put", 1, g_id_put);
-    idl_install_method(ctx, proto, "add", 1, g_id_add);
-    idl_install_method(ctx, proto, "delete", 1, g_id_delete);
-    idl_install_method(ctx, proto, "clear", 0, g_id_clear);
-    idl_install_method(ctx, proto, "get", 1, g_id_get);
-    idl_install_method(ctx, proto, "getKey", 1, g_id_get_key);
-    idl_install_method(ctx, proto, "getAll", 0, g_id_get_all);
-    idl_install_method(ctx, proto, "getAllKeys", 0, g_id_get_all_keys);
-    idl_install_method(ctx, proto, "getAllRecords", 0, g_id_get_all_records);
-    idl_install_method(ctx, proto, "count", 0, g_id_count);
-    idl_install_method(ctx, proto, "openCursor", 0, g_id_open_cursor);
-    idl_install_method(ctx, proto, "openKeyCursor", 0, g_id_open_key_cursor);
-    idl_install_method(ctx, proto, "index", 1, g_id_index);
-    idl_install_method(ctx, proto, "createIndex", 2, g_id_create_index);
-    idl_install_method(ctx, proto, "deleteIndex", 1, g_id_delete_index);
+    idl_install_method(ctx, proto, "put", g_id_put);
+    idl_install_method(ctx, proto, "add", g_id_add);
+    idl_install_method(ctx, proto, "delete", g_id_delete);
+    idl_install_method(ctx, proto, "clear", g_id_clear);
+    idl_install_method(ctx, proto, "get", g_id_get);
+    idl_install_method(ctx, proto, "getKey", g_id_get_key);
+    idl_install_method(ctx, proto, "getAll", g_id_get_all);
+    idl_install_method(ctx, proto, "getAllKeys", g_id_get_all_keys);
+    idl_install_method(ctx, proto, "getAllRecords", g_id_get_all_records);
+    idl_install_method(ctx, proto, "count", g_id_count);
+    idl_install_method(ctx, proto, "openCursor", g_id_open_cursor);
+    idl_install_method(ctx, proto, "openKeyCursor", g_id_open_key_cursor);
+    idl_install_method(ctx, proto, "index", g_id_index);
+    idl_install_method(ctx, proto, "createIndex", g_id_create_index);
+    idl_install_method(ctx, proto, "deleteIndex", g_id_delete_index);
     JS_SetClassProto(ctx, g_os_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBObjectStore", proto);

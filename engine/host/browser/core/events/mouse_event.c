@@ -595,12 +595,12 @@ void mouse_event_install_protos(JSContext *ctx)
     CHECK(!JS_IsException(proto), "MouseEvent.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "MouseEvent");
     JS_SetPropertyFunctionList(ctx, proto, js_md_proto, (int)(sizeof(js_md_proto) / sizeof(js_md_proto[0])));
-    idl_install_method(ctx, proto, "getModifierState", 1, g_modifier_state_id);
-    idl_install_method(ctx, proto, "initMouseEvent", 1, g_init_mouse_id);
+    idl_install_method(ctx, proto, "getModifierState", g_modifier_state_id);
+    idl_install_method(ctx, proto, "initMouseEvent", g_init_mouse_id);
     JS_SetClassProto(ctx, g_me_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object on THIS realm's global — see ui_event.c. */
-    ctor = idl_step_constructor(ctx, "MouseEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "MouseEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the MouseEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

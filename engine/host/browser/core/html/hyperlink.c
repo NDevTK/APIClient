@@ -427,5 +427,5 @@ void hyperlink_install(JSContext *ctx, JSValueConst proto)
     DCHECK(g_hl_tostring >= 0, "HTMLHyperlinkElementUtils was installed before it was declared");
     for (i = 0; i < HL_N; i++)
         idl_install_accessor(ctx, proto, HL_M[i].name, js_link_get, HL_M[i].member, g_hl_set[i]);
-    idl_install_method(ctx, proto, "toString", 0, g_hl_tostring);
+    idl_install_method(ctx, proto, "toString", g_hl_tostring);
 }

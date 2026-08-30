@@ -879,8 +879,8 @@ void blob_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, blob_p, "Blob");
     idl_install_accessor(ctx, blob_p, "size", js_blob_get, BLOB_SIZE, -1);
     idl_install_accessor(ctx, blob_p, "type", js_blob_get, BLOB_TYPE, -1);
-    idl_install_method(ctx, blob_p, "stream", 0, g_blob_id_stream);
-    idl_install_method(ctx, blob_p, "slice", 0, g_blob_id_slice);
+    idl_install_method(ctx, blob_p, "stream", g_blob_id_stream);
+    idl_install_method(ctx, blob_p, "slice", g_blob_id_slice);
     byte_reader_install(ctx, blob_p, g_blob_reader_handle);
     JS_SetClassProto(ctx, g_blob_class, blob_p);
 
@@ -899,7 +899,7 @@ void blob_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_blob_ctor_stepid >= 0, "Blob was installed before blob_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "Blob", 0, g_blob_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "Blob", g_blob_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Blob interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_blob_class);
@@ -909,7 +909,7 @@ void blob_install(JSContext *ctx, JSValueConst global)
     }
     JS_SetPropertyStr(ctx, (JSValue)global, "Blob", ctor);
 
-    ctor = idl_step_constructor(ctx, "File", 2, g_file_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "File", g_file_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the File interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_file_class);

@@ -228,7 +228,7 @@ void input_device_capabilities_install_protos(JSContext *ctx)
 
     /* §3.7.1's interface object, on THIS realm's global — declared into core/realm.h's ONE list rather than a
        host's hand-written list of globals, so a host cannot be missing it. */
-    ctor = idl_step_constructor(ctx, "InputDeviceCapabilities", 0, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "InputDeviceCapabilities", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the InputDeviceCapabilities interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

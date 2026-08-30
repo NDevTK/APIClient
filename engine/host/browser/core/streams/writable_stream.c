@@ -1919,7 +1919,7 @@ void writable_stream_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, ws_p, "locked", js_ws_locked, 0, -1);
     idl_install_step_method(ctx, ws_p, "abort", 0, g_op_stepid[OP_WS_ABORT]);
     idl_install_step_method(ctx, ws_p, "close", 0, g_op_stepid[OP_WS_CLOSE]);
-    idl_install_method(ctx, ws_p, "getWriter", 0, g_getwriter_stepid);
+    idl_install_method(ctx, ws_p, "getWriter", g_getwriter_stepid);
     JS_SetClassProto(ctx, g_ws_class, ws_p);
 
     wr_p = JS_NewObject(ctx);
@@ -1959,7 +1959,7 @@ void writable_stream_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_ws_ctor_stepid >= 0, "WritableStream was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "WritableStream", 0, g_ws_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "WritableStream", g_ws_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the WritableStream interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_ws_class);
@@ -1969,7 +1969,7 @@ void writable_stream_install(JSContext *ctx, JSValueConst global)
     }
     JS_SetPropertyStr(ctx, (JSValue)global, "WritableStream", ctor);
 
-    ctor = idl_step_constructor(ctx, "WritableStreamDefaultWriter", 1, g_wr_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "WritableStreamDefaultWriter", g_wr_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the writer interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_wr_class);

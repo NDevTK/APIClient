@@ -698,16 +698,16 @@ void dom_token_list_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "DOMTokenList");
     idl_install_accessor_no_user_code(ctx, proto, "length", js_tl_length, 0, -1);
     idl_install_accessor(ctx, proto, "value", js_tl_value, 0, g_set_value_id);
-    idl_install_method(ctx, proto, "item", 1, g_item_id);
-    idl_install_method(ctx, proto, "contains", 1, g_contains_id);
+    idl_install_method(ctx, proto, "item", g_item_id);
+    idl_install_method(ctx, proto, "contains", g_contains_id);
     /* 0, not 1 — §3.7.7 "Operations" takes the SHORTEST argument list in the effective overload set at
        argument count 0, and a final variadic argument puts the empty tuple in that set. */
-    idl_install_method(ctx, proto, "add", 0, g_add_id);
-    idl_install_method(ctx, proto, "remove", 0, g_remove_id);
-    idl_install_method(ctx, proto, "toggle", 1, g_toggle_id);
-    idl_install_method(ctx, proto, "replace", 2, g_replace_id);
-    idl_install_method(ctx, proto, "supports", 1, g_supports_id);
-    idl_install_method(ctx, proto, "toString", 0, g_to_string_id);
+    idl_install_method(ctx, proto, "add", g_add_id);
+    idl_install_method(ctx, proto, "remove", g_remove_id);
+    idl_install_method(ctx, proto, "toggle", g_toggle_id);
+    idl_install_method(ctx, proto, "replace", g_replace_id);
+    idl_install_method(ctx, proto, "supports", g_supports_id);
+    idl_install_method(ctx, proto, "toString", g_to_string_id);
     /* §3.7.10: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
        `for (const c of el.classList)` is ordinary code — and had nothing. */
     idl_indexed_install_iterable(ctx, proto);

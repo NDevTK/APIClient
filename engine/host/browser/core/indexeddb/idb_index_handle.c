@@ -723,14 +723,14 @@ static void idb_index_handle_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "unique", js_ix_get_flag, 0, -1);
     /* IN §4.6'S OWN ORDER — all of it now. A member's `length` is Web IDL §3.7.7's, the number of REQUIRED
        arguments, which is 0 for every one whose sole argument is optional. */
-    idl_install_method(ctx, proto, "get", 1, g_id_get);
-    idl_install_method(ctx, proto, "getKey", 1, g_id_get_key);
-    idl_install_method(ctx, proto, "getAll", 0, g_id_get_all);
-    idl_install_method(ctx, proto, "getAllKeys", 0, g_id_get_all_keys);
-    idl_install_method(ctx, proto, "getAllRecords", 0, g_id_get_all_records);
-    idl_install_method(ctx, proto, "count", 0, g_id_count);
-    idl_install_method(ctx, proto, "openCursor", 0, g_id_open_cursor);
-    idl_install_method(ctx, proto, "openKeyCursor", 0, g_id_open_key_cursor);
+    idl_install_method(ctx, proto, "get", g_id_get);
+    idl_install_method(ctx, proto, "getKey", g_id_get_key);
+    idl_install_method(ctx, proto, "getAll", g_id_get_all);
+    idl_install_method(ctx, proto, "getAllKeys", g_id_get_all_keys);
+    idl_install_method(ctx, proto, "getAllRecords", g_id_get_all_records);
+    idl_install_method(ctx, proto, "count", g_id_count);
+    idl_install_method(ctx, proto, "openCursor", g_id_open_cursor);
+    idl_install_method(ctx, proto, "openKeyCursor", g_id_open_key_cursor);
     JS_SetClassProto(ctx, g_ix_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBIndex", proto);

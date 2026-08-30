@@ -242,7 +242,7 @@ void page_reveal_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_rt != NULL, "PageRevealEvent was installed before it was declared");
-    ctor = idl_step_constructor(ctx, "PageRevealEvent", 1, g_id_ctor);
+    ctor = idl_step_constructor(ctx, "PageRevealEvent", g_id_ctor);
     CHECK(!JS_IsException(ctor), "the PageRevealEvent interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_class);

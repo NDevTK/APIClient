@@ -391,13 +391,13 @@ void document_write_install(JSContext *ctx, JSValueConst proto)
            "HTML §8.4's members were installed before they were declared — the declaration is the AGENT's and "
            "the install is the REALM's");
     /* Web IDL §3.7.7: an operation whose only argument is variadic has `length` 0. */
-    idl_install_method(ctx, proto, "write", 0, g_id_write);
-    idl_install_method(ctx, proto, "writeln", 0, g_id_writeln);
-    idl_install_method(ctx, proto, "close", 0, g_id_close);
+    idl_install_method(ctx, proto, "write", g_id_write);
+    idl_install_method(ctx, proto, "writeln", g_id_writeln);
+    idl_install_method(ctx, proto, "close", g_id_close);
     /* §3.7.7 again: `length` is the number of REQUIRED arguments of the shortest overload, and §8.4.1's first
        entry declares both of its own optional — so `document.open.length` is 0 even though the second entry
        has three required arguments. */
-    idl_install_method(ctx, proto, "open", 0, g_id_open);
+    idl_install_method(ctx, proto, "open", g_id_open);
 }
 
 void document_write_free(JSRuntime *rt)

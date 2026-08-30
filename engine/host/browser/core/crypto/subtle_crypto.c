@@ -531,7 +531,7 @@ static void subtle_crypto_install_realm(JSContext *ctx)
     /* §14's interface is `[SecureContext]` as a whole, and Web IDL §3.3.13 REMOVES a member in a non-secure
        realm rather than making it throw — `'digest' in crypto.subtle` is what a bundle feature-detects with,
        and absent, throwing and undefined are three different branches. */
-    idl_install_method_exposed(ctx, proto, "digest", 2, g_id_digest, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "digest", g_id_digest, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_subtle_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);

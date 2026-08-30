@@ -1283,12 +1283,12 @@ void headers_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "Headers.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "Headers");
-    idl_install_method(ctx, proto, "append", 2, g_id[HDR_APPEND]);
-    idl_install_method(ctx, proto, "set", 2, g_id[HDR_SET]);
-    idl_install_method(ctx, proto, "delete", 1, g_id[HDR_DELETE]);
-    idl_install_method(ctx, proto, "get", 1, g_id[HDR_GET]);
-    idl_install_method(ctx, proto, "has", 1, g_id[HDR_HAS]);
-    idl_install_method(ctx, proto, "getSetCookie", 0, g_id[HDR_GETSETCOOKIE]);
+    idl_install_method(ctx, proto, "append", g_id[HDR_APPEND]);
+    idl_install_method(ctx, proto, "set", g_id[HDR_SET]);
+    idl_install_method(ctx, proto, "delete", g_id[HDR_DELETE]);
+    idl_install_method(ctx, proto, "get", g_id[HDR_GET]);
+    idl_install_method(ctx, proto, "has", g_id[HDR_HAS]);
+    idl_install_method(ctx, proto, "getSetCookie", g_id[HDR_GETSETCOOKIE]);
     idl_pair_iter_install(ctx, proto, g_pair_handle);
     JS_SetClassProto(ctx, g_headers_class, proto);
 }
@@ -1310,7 +1310,7 @@ void headers_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ctor_stepid >= 0, "Headers was installed before headers_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "Headers", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "Headers", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Headers interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_headers_class);

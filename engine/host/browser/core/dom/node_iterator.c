@@ -417,9 +417,9 @@ void node_iterator_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "pointerBeforeReferenceNode", js_iter_get, 2, -1);
     idl_install_accessor(ctx, proto, "whatToShow", js_iter_get, 3, -1);
     idl_install_accessor(ctx, proto, "filter", js_iter_get, 4, -1);
-    idl_install_method(ctx, proto, "nextNode", 0, g_id_next);
-    idl_install_method(ctx, proto, "previousNode", 0, g_id_prev);
-    idl_install_method(ctx, proto, "detach", 0, g_id_detach);
+    idl_install_method(ctx, proto, "nextNode", g_id_next);
+    idl_install_method(ctx, proto, "previousNode", g_id_prev);
+    idl_install_method(ctx, proto, "detach", g_id_detach);
     JS_SetClassProto(ctx, g_iter_class, proto);
 }
 

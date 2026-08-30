@@ -185,7 +185,7 @@ void form_data_event_install(JSContext *ctx, JSValueConst global)
     JSValue ctor, proto;
 
     DCHECK(g_ready, "FormDataEvent was installed before form_data_event_init declared it");
-    ctor = idl_step_constructor(ctx, "FormDataEvent", 2, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "FormDataEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the FormDataEvent interface object could not be allocated");
     proto = fde_proto(ctx);
     JS_SetConstructor(ctx, ctor, proto);

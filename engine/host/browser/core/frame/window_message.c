@@ -771,7 +771,7 @@ void window_message_install_proto(JSContext *ctx)
        names the member the LAST DECLARATION made, which by install time is whichever component happened to
        declare last. So it did not restate this member's rule twice; it wrote it onto a stranger, once per
        realm. The declaration is the only place that knows which member is being described. */
-    idl_install_method(ctx, proto, "postMessage", 1, g_id_post);
+    idl_install_method(ctx, proto, "postMessage", g_id_post);
     JS_FreeValue(ctx, proto);
 }
 
@@ -855,7 +855,7 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
        (`otherWindow.postMessage`). Declaring it twice would give the two spellings two members that can drift,
        and `window.postMessage === self.postMessage` would stop holding. The WindowProxy prototype is the
        AGENT's, so it takes the member once; the global is per realm. */
-    idl_install_method(ctx, global, "postMessage", 1, g_id_post);
+    idl_install_method(ctx, global, "postMessage", g_id_post);
 }
 
 

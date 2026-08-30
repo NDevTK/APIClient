@@ -717,10 +717,10 @@ static void idb_connection_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "name", js_conn_get_name, 0, -1);
     idl_install_accessor(ctx, proto, "version", js_conn_get_version, 0, -1);
     idl_install_accessor(ctx, proto, "objectStoreNames", js_conn_get_store_names, 0, -1);
-    idl_install_method(ctx, proto, "transaction", 1, g_id_transaction);
-    idl_install_method(ctx, proto, "close", 0, g_id_close);
-    idl_install_method(ctx, proto, "createObjectStore", 1, g_id_create_store);
-    idl_install_method(ctx, proto, "deleteObjectStore", 1, g_id_delete_store);
+    idl_install_method(ctx, proto, "transaction", g_id_transaction);
+    idl_install_method(ctx, proto, "close", g_id_close);
+    idl_install_method(ctx, proto, "createObjectStore", g_id_create_store);
+    idl_install_method(ctx, proto, "deleteObjectStore", g_id_delete_store);
     JS_SetClassProto(ctx, g_conn_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBDatabase", proto);

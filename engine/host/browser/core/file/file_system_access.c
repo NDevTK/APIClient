@@ -406,8 +406,8 @@ static void fs_access_install_realm(JSContext *ctx)
     }
     DCHECK(g_id_query >= 0 && g_id_request >= 0,
            "§2.3's members were installed on a realm's prototype before file_system_access_init declared them");
-    idl_install_method_exposed(ctx, proto, "queryPermission", 0, g_id_query, IDL_SECURE_CONTEXT);
-    idl_install_method_exposed(ctx, proto, "requestPermission", 0, g_id_request, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "queryPermission", g_id_query, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "requestPermission", g_id_request, IDL_SECURE_CONTEXT);
     JS_FreeValue(ctx, proto);
 }
 

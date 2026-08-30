@@ -168,9 +168,20 @@ void intersection_observer_entry_init(JSContext *ctx)
     g_atom = JS_ValueToAtom(ctx, g_key);
     CHECK(g_atom != JS_ATOM_NULL, "the IntersectionObserverEntry state slot key could not be interned");
 
-    /* No declared argument type — see js_ioe_ctor_step for the capability that decides that and for the crash
-       that names it. The position crosses unconverted and the body never reads it. */
-    g_id_ctor = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_ioe_ctor_decl, 0);
+    /* ONE DECLARED POSITION, TYPED `any` — see js_ioe_ctor_step for the capability that keeps it from being
+       IDL_DICT and for the crash that names it. The position crosses unconverted and the body never reads it,
+       which is exactly what IDL_ANY is; what the declaration adds is that the position EXISTS.
+       IT WAS `nargs 0`, AND TWO SEPARATE FACTS CAME OUT WRONG BECAUSE OF IT. §2.3's
+       `constructor(IntersectionObserverEntryInit intersectionObserverEntryInit)` declares that argument
+       REQUIRED, so Web IDL §3.6's step 5 arity check owes `new IntersectionObserverEntry()` a TypeError before
+       any of the constructor's own steps run, and with no position declared there was nothing to require. And
+       Web IDL §3.7.1 Interface object's `length` — "the length of the shortest argument list of the entries in
+       S", over the effective overload set at argument count 0 — is 1, which the install used to state by hand
+       and now derives from this line. */
+    {
+        static const IdlArgType IOE_CTOR_ARGS[1] = { IDL_ANY };
+        g_id_ctor = idl_method_id_step(ctx, IOE_CTOR_ARGS, 1, NULL, 0, &js_ioe_ctor_decl, 0);
+    }
 
     realm_declare_intrinsic(intersection_observer_entry_install_proto);
     g_ready = 1;
@@ -211,7 +222,7 @@ void intersection_observer_entry_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(g_id_ctor >= 0,
            "IntersectionObserverEntry was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "IntersectionObserverEntry", 1, g_id_ctor);
+    ctor = idl_step_constructor(ctx, "IntersectionObserverEntry", g_id_ctor);
     CHECK(!JS_IsException(ctor), "the IntersectionObserverEntry interface object could not be allocated");
     proto = JS_GetClassProto(ctx, g_class);
     DCHECK(!JS_IsNull(proto),

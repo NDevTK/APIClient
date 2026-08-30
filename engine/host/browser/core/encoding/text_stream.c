@@ -656,7 +656,7 @@ void text_stream_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(g_tds_ctor_stepid >= 0,
            "the Encoding stream globals were installed before text_stream_init declared them");
-    ctor = idl_step_constructor(ctx, "TextDecoderStream", 0, g_tds_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "TextDecoderStream", g_tds_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextDecoderStream interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_tds_class);
@@ -666,7 +666,7 @@ void text_stream_install(JSContext *ctx, JSValueConst global)
     }
     JS_SetPropertyStr(ctx, (JSValue)global, "TextDecoderStream", ctor);
 
-    ctor = idl_step_constructor(ctx, "TextEncoderStream", 0, g_tes_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "TextEncoderStream", g_tes_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TextEncoderStream interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_tes_class);

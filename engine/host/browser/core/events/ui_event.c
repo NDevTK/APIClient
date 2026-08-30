@@ -569,14 +569,14 @@ void ui_event_install_protos(JSContext *ctx)
     CHECK(!JS_IsException(proto), "UIEvent.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "UIEvent");
     JS_SetPropertyFunctionList(ctx, proto, js_ue_proto, (int)(sizeof(js_ue_proto) / sizeof(js_ue_proto[0])));
-    idl_install_method(ctx, proto, "initUIEvent", 1, g_init_ui_id);
+    idl_install_method(ctx, proto, "initUIEvent", g_init_ui_id);
     JS_SetClassProto(ctx, g_ui_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object, on THIS realm's global — one `UIEvent` per realm, whose `prototype` is the
        prototype this same install just built. Declared into realm.h's ONE list rather than installed from a
        host's hand-written list of globals: a component missing from one host's copy is silently absent in that
        realm with nothing to say so. */
-    ctor = idl_step_constructor(ctx, "UIEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "UIEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the UIEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

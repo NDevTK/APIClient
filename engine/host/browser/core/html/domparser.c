@@ -441,7 +441,7 @@ void domparser_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "DOMParser.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "DOMParser");
-    idl_install_method(ctx, proto, "parseFromString", 2, g_id_parse);
+    idl_install_method(ctx, proto, "parseFromString", g_id_parse);
     JS_SetClassProto(ctx, g_class, proto);
 }
 
@@ -451,7 +451,7 @@ void domparser_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(g_ready, "DOMParser was installed before domparser_init declared it");
     DCHECK(!JS_IsNull(proto), "DOMParser was installed in a realm that never ran its prototype install");
-    ctor = idl_step_constructor(ctx, "DOMParser", 0, g_id_ctor);
+    ctor = idl_step_constructor(ctx, "DOMParser", g_id_ctor);
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "DOMParser", ctor);

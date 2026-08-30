@@ -4124,8 +4124,8 @@ void css_rule_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(grouping), "CSSGroupingRule.prototype could not be allocated");
     idl_interface_tag(ctx, grouping, "CSSGroupingRule");
     idl_install_accessor(ctx, grouping, "cssRules", js_rule_get, CR_CSS_RULES, -1);
-    idl_install_method(ctx, grouping, "insertRule", 1, g_id_insert_rule);
-    idl_install_method(ctx, grouping, "deleteRule", 1, g_id_delete_rule);
+    idl_install_method(ctx, grouping, "insertRule", g_id_insert_rule);
+    idl_install_method(ctx, grouping, "deleteRule", g_id_delete_rule);
 
     style = JS_NewObjectProto(ctx, grouping);
     CHECK(!JS_IsException(style), "CSSStyleRule.prototype could not be allocated");
@@ -4251,9 +4251,9 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, keyframes, "name", js_rule_get, CR_KEYFRAMES_NAME, g_id_set_keyframes_name);
     idl_install_accessor(ctx, keyframes, "cssRules", js_rule_get, CR_KEYFRAMES_CSS_RULES, -1);
     idl_install_accessor(ctx, keyframes, "length", js_rule_get, CR_KEYFRAMES_LENGTH, -1);
-    idl_install_method(ctx, keyframes, "appendRule", 1, g_id_append_rule);
-    idl_install_method(ctx, keyframes, "deleteRule", 1, g_id_kf_delete_rule);
-    idl_install_method(ctx, keyframes, "findRule", 1, g_id_find_rule);
+    idl_install_method(ctx, keyframes, "appendRule", g_id_append_rule);
+    idl_install_method(ctx, keyframes, "deleteRule", g_id_kf_delete_rule);
+    idl_install_method(ctx, keyframes, "findRule", g_id_find_rule);
     idl_indexed_install_iterable(ctx, keyframes);
 
     /* CSS Animations §6.2's CSSKeyframeRule.prototype — from CSSRule directly, because a `<keyframe-block>`'s

@@ -496,10 +496,10 @@ static void indexed_db_install_realm(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "IDBFactory.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "IDBFactory");
-    idl_install_method(ctx, proto, "open", 1, g_id_open);
-    idl_install_method(ctx, proto, "deleteDatabase", 1, g_id_delete);
-    idl_install_method(ctx, proto, "databases", 0, g_id_databases);
-    idl_install_method(ctx, proto, "cmp", 2, g_id_cmp);
+    idl_install_method(ctx, proto, "open", g_id_open);
+    idl_install_method(ctx, proto, "deleteDatabase", g_id_delete);
+    idl_install_method(ctx, proto, "databases", g_id_databases);
+    idl_install_method(ctx, proto, "cmp", g_id_cmp);
     JS_SetClassProto(ctx, g_factory_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object — §4.3 declares no constructor, so it throws a TypeError when called or

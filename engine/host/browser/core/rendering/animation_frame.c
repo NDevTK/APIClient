@@ -247,8 +247,8 @@ void animation_frame_install_map(JSContext *ctx)
 void animation_frame_install(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_ready, "§8.12 Animation frames's members were installed before they were declared");
-    idl_install_method(ctx, (JSValue)global, "requestAnimationFrame", 1, g_id_request);
-    idl_install_method(ctx, (JSValue)global, "cancelAnimationFrame", 1, g_id_cancel);
+    idl_install_method(ctx, (JSValue)global, "requestAnimationFrame", g_id_request);
+    idl_install_method(ctx, (JSValue)global, "cancelAnimationFrame", g_id_cancel);
 }
 
 /* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.

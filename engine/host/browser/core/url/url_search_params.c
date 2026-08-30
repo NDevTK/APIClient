@@ -683,14 +683,14 @@ void usp_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "URLSearchParams.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "URLSearchParams");
-    idl_install_method(ctx, proto, "append", 2, g_usp_id[USP_APPEND]);
-    idl_install_method(ctx, proto, "delete", 1, g_usp_id[USP_DELETE]);
-    idl_install_method(ctx, proto, "get", 1, g_usp_id[USP_GET]);
-    idl_install_method(ctx, proto, "getAll", 1, g_usp_id[USP_GETALL]);
-    idl_install_method(ctx, proto, "has", 1, g_usp_id[USP_HAS]);
-    idl_install_method(ctx, proto, "set", 2, g_usp_id[USP_SET]);
-    idl_install_method(ctx, proto, "sort", 0, g_usp_id[USP_SORT]);
-    idl_install_method(ctx, proto, "toString", 0, g_usp_id[USP_TOSTRING]);
+    idl_install_method(ctx, proto, "append", g_usp_id[USP_APPEND]);
+    idl_install_method(ctx, proto, "delete", g_usp_id[USP_DELETE]);
+    idl_install_method(ctx, proto, "get", g_usp_id[USP_GET]);
+    idl_install_method(ctx, proto, "getAll", g_usp_id[USP_GETALL]);
+    idl_install_method(ctx, proto, "has", g_usp_id[USP_HAS]);
+    idl_install_method(ctx, proto, "set", g_usp_id[USP_SET]);
+    idl_install_method(ctx, proto, "sort", g_usp_id[USP_SORT]);
+    idl_install_method(ctx, proto, "toString", g_usp_id[USP_TOSTRING]);
     idl_install_accessor(ctx, proto, "size", js_usp_get_size, 0, -1);
     idl_pair_iter_install(ctx, proto, g_usp_pair_handle);
     JS_SetClassProto(ctx, g_usp_class, proto);
@@ -700,7 +700,7 @@ void usp_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_usp_ctor_stepid >= 0, "URLSearchParams was installed before usp_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "URLSearchParams", 0, g_usp_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "URLSearchParams", g_usp_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the URLSearchParams interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_usp_class);

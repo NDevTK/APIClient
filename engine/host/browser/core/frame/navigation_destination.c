@@ -269,7 +269,7 @@ void navigation_destination_install_protos(JSContext *ctx)
        there is no chain call here. It is NOT an EventTarget: nothing is ever fired at a destination. */
     for (i = 0; i < DEST_M_N; i++)
         idl_install_accessor(ctx, proto, DEST_NAME[i], js_dest_get, i, -1);
-    idl_install_method(ctx, proto, "getState", 0, g_id_get_state);
+    idl_install_method(ctx, proto, "getState", g_id_get_state);
     JS_SetClassProto(ctx, g_dest_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's INTERFACE OBJECT. NavigationDestination declares no constructor, so `new NavigationDestination()`

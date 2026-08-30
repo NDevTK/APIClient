@@ -313,7 +313,7 @@ void navigator_beacon_install(JSContext *ctx, JSValueConst proto)
     /* `boolean sendBeacon(USVString url, optional BodyInit? data = null)`: ONE required argument, so the
        function's `length` is 1. The IDL has no [SecureContext] and Chrome exposes it over http, so it is
        installed unconditionally rather than through the exposure-stating form. */
-    idl_install_method(ctx, proto, "sendBeacon", 1, g_id_send_beacon);
+    idl_install_method(ctx, proto, "sendBeacon", g_id_send_beacon);
 }
 
 void navigator_beacon_init(JSContext *ctx)

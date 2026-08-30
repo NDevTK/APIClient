@@ -494,8 +494,8 @@ void css_style_sheet_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "CSSStyleSheet");
     idl_install_accessor(ctx, proto, "ownerRule", js_sheet_get, SS_OWNER_RULE, -1);
     idl_install_accessor(ctx, proto, "cssRules", js_sheet_css_rules, 0, -1);
-    idl_install_method(ctx, proto, "insertRule", 1, g_id_insert_rule);
-    idl_install_method(ctx, proto, "deleteRule", 1, g_id_delete_rule);
+    idl_install_method(ctx, proto, "insertRule", g_id_insert_rule);
+    idl_install_method(ctx, proto, "deleteRule", g_id_delete_rule);
     JS_SetClassProto(ctx, g_sheet_class, proto);
     realm_value_set(ctx, g_stylesheet_proto_slot, base);
 }

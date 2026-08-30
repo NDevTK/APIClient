@@ -4635,14 +4635,14 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
        site is the only thing a plain C body cannot do. */
-    idl_install_method(ctx, g, "hostRead", 1, g_id_host_read);
+    idl_install_method(ctx, g, "hostRead", g_id_host_read);
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
     /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
        steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
        never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
        element. The engine asserts on exactly this now, which is what caught it. */
-    idl_install_method(ctx, g, "appendChild", 1, g_id_append_child);
+    idl_install_method(ctx, g, "appendChild", g_id_append_child);
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     /* AN UNKNOWN CARRYING A NUMERIC EXAMPLE, which is what §13.15.3 step 1.c's arm turns on. Its display form

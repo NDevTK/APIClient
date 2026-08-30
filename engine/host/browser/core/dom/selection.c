@@ -916,26 +916,26 @@ void selection_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "rangeCount",   js_sel_get, SG_RANGE_COUNT, -1);
     idl_install_accessor(ctx, proto, "type",         js_sel_get, SG_TYPE, -1);
     idl_install_accessor(ctx, proto, "direction",    js_sel_get, SG_DIRECTION, -1);
-    idl_install_method(ctx, proto, "getRangeAt", 1, g_id[SM_GET_RANGE_AT]);
-    idl_install_method(ctx, proto, "addRange", 1, g_id[SM_ADD_RANGE]);
-    idl_install_method(ctx, proto, "removeRange", 1, g_id[SM_REMOVE_RANGE]);
-    idl_install_method(ctx, proto, "removeAllRanges", 0, g_id[SM_REMOVE_ALL]);
+    idl_install_method(ctx, proto, "getRangeAt", g_id[SM_GET_RANGE_AT]);
+    idl_install_method(ctx, proto, "addRange", g_id[SM_ADD_RANGE]);
+    idl_install_method(ctx, proto, "removeRange", g_id[SM_REMOVE_RANGE]);
+    idl_install_method(ctx, proto, "removeAllRanges", g_id[SM_REMOVE_ALL]);
     /* §3: "empty() … must be an alias, and behave identically, to removeAllRanges()", and the same sentence
        for setPosition/collapse. An alias is the SAME declaration under a second name — a second body would be
        a second place for the algorithm to drift. */
-    idl_install_method(ctx, proto, "empty", 0, g_id[SM_REMOVE_ALL]);
-    idl_install_method(ctx, proto, "getComposedRanges", 0, g_id[SM_COMPOSED_RANGES]);
-    idl_install_method(ctx, proto, "collapse", 1, g_id[SM_COLLAPSE]);
-    idl_install_method(ctx, proto, "setPosition", 1, g_id[SM_COLLAPSE]);
-    idl_install_method(ctx, proto, "collapseToStart", 0, g_id[SM_COLLAPSE_TO_START]);
-    idl_install_method(ctx, proto, "collapseToEnd", 0, g_id[SM_COLLAPSE_TO_END]);
-    idl_install_method(ctx, proto, "extend", 1, g_id[SM_EXTEND]);
-    idl_install_method(ctx, proto, "setBaseAndExtent", 4, g_id[SM_SET_BASE_AND_EXTENT]);
-    idl_install_method(ctx, proto, "selectAllChildren", 1, g_id[SM_SELECT_ALL_CHILDREN]);
-    idl_install_method(ctx, proto, "deleteFromDocument", 0, g_id_delete);
-    idl_install_method(ctx, proto, "containsNode", 1, g_id[SM_CONTAINS_NODE]);
+    idl_install_method(ctx, proto, "empty", g_id[SM_REMOVE_ALL]);
+    idl_install_method(ctx, proto, "getComposedRanges", g_id[SM_COMPOSED_RANGES]);
+    idl_install_method(ctx, proto, "collapse", g_id[SM_COLLAPSE]);
+    idl_install_method(ctx, proto, "setPosition", g_id[SM_COLLAPSE]);
+    idl_install_method(ctx, proto, "collapseToStart", g_id[SM_COLLAPSE_TO_START]);
+    idl_install_method(ctx, proto, "collapseToEnd", g_id[SM_COLLAPSE_TO_END]);
+    idl_install_method(ctx, proto, "extend", g_id[SM_EXTEND]);
+    idl_install_method(ctx, proto, "setBaseAndExtent", g_id[SM_SET_BASE_AND_EXTENT]);
+    idl_install_method(ctx, proto, "selectAllChildren", g_id[SM_SELECT_ALL_CHILDREN]);
+    idl_install_method(ctx, proto, "deleteFromDocument", g_id_delete);
+    idl_install_method(ctx, proto, "containsNode", g_id[SM_CONTAINS_NODE]);
     /* §3's `stringifier;` — Web IDL §3.7.7 names the operation `toString`. */
-    idl_install_method(ctx, proto, "toString", 0, g_id_stringifier);
+    idl_install_method(ctx, proto, "toString", g_id_stringifier);
     /* §3's `modify()`. Its steps 1-9 are string comparisons this file could run; steps 10 and 11 are not — they
        set the focus (and the anchor) to "the location as if the user had requested to extend [move] selection
        by granularity", where granularity is one of character, word, sentence, line, paragraph and their
@@ -968,13 +968,13 @@ void selection_install(JSContext *ctx, JSValueConst global)
 void selection_install_document_members(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_id_doc_get >= 0, "§4.1's getSelection was installed before selection_init ran");
-    idl_install_method(ctx, proto, "getSelection", 0, g_id_doc_get);
+    idl_install_method(ctx, proto, "getSelection", g_id_doc_get);
 }
 
 void selection_install_window_members(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_id_win_get >= 0, "§4.2's getSelection was installed before selection_init ran");
-    idl_install_method(ctx, global, "getSelection", 0, g_id_win_get);
+    idl_install_method(ctx, global, "getSelection", g_id_win_get);
 }
 
 /* The PROTOTYPES are the realms' — each is in its own class-proto slot and released with its context. What

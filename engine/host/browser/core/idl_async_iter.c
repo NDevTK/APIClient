@@ -920,7 +920,7 @@ void idl_async_iter_install(JSContext *ctx, JSValueConst proto, int handle)
     DCHECK(!f->ops->pair,
            "a PAIR async_iterable<> was installed through §3.7.10's VALUE entry point — its declaration has "
            "two type parameters, so the interface has `entries` and `keys` and this path installs neither");
-    idl_install_method(ctx, proto, "values", 0, f->id_values);
+    idl_install_method(ctx, proto, "values", f->id_values);
     async_iter_symbol(ctx, proto, "values");
 }
 
@@ -933,10 +933,10 @@ void idl_async_iter_install_pair(JSContext *ctx, JSValueConst proto, int handle)
     DCHECK(f->ops->pair,
            "a VALUE async_iterable<> was installed through §3.7.10's PAIR entry point — its declaration has "
            "one type parameter, so the interface has no `entries` and no `keys` to define");
-    idl_install_method(ctx, proto, "entries", 0, f->id_entries);
+    idl_install_method(ctx, proto, "entries", f->id_entries);
     async_iter_symbol(ctx, proto, "entries");
-    idl_install_method(ctx, proto, "keys", 0, f->id_keys);
-    idl_install_method(ctx, proto, "values", 0, f->id_values);
+    idl_install_method(ctx, proto, "keys", f->id_keys);
+    idl_install_method(ctx, proto, "values", f->id_values);
 }
 
 /* See core/idl_async_iter.h. The joined arrays are this file's; the STRINGS in them are statics belonging to

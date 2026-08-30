@@ -754,8 +754,8 @@ void shadow_root_install_proto(JSContext *ctx)
     /* HTML §8.5's partial interface. `serializable` above is no longer a flag with no reader: `getHTML`'s
        serializableShadowRoots argument is what reads it, and §13.3 step 4.2 is where. */
     idl_install_accessor_step(ctx, proto, "innerHTML", g_id_inner_get, g_id_inner_set);
-    idl_install_method(ctx, proto, "setHTML", 1, g_id_set_html);
-    idl_install_method(ctx, proto, "setHTMLUnsafe", 1, g_id_set_html_unsafe);
+    idl_install_method(ctx, proto, "setHTML", g_id_set_html);
+    idl_install_method(ctx, proto, "setHTMLUnsafe", g_id_set_html_unsafe);
     fragment_serializer_install_get_html(ctx, proto);
     /* HTML §6.6.6's `DocumentOrShadowRoot` addition. It is the same one member Document carries, over the same
        focused area, and it is the RECEIVER that decides the answer: §4.8's retargeting against `this` is what
@@ -775,7 +775,7 @@ void shadow_root_install_proto(JSContext *ctx)
 void shadow_root_install_element_members(JSContext *ctx, JSValueConst element_proto)
 {
     DCHECK(g_ready, "§4.9's shadow members were installed before shadow_root_init ran");
-    idl_install_method(ctx, element_proto, "attachShadow", 1, g_id_attach);
+    idl_install_method(ctx, element_proto, "attachShadow", g_id_attach);
     idl_install_accessor(ctx, element_proto, "shadowRoot", js_el_shadow_root, 0, -1);
 }
 

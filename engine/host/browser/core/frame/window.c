@@ -931,7 +931,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     /* `closed` is a GETTER over the NAVIGABLE's per-flow state, because close() changes it. */
     idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
     idl_install_replaceable(ctx, g, "length", js_win_length, 0);   /* [Replaceable] readonly */
-    idl_install_method(ctx, g, "close", 0, g_id_close);
+    idl_install_method(ctx, g, "close", g_id_close);
     /* §6.6.6's `Window.focus()` AND `Window.blur()` — installed by the component that owns §6.6.4's steps, as
        ONE list, because §7.2.1.3.1 CrossOriginProperties puts both names on §7.2.3's WindowProxy surface too
        and a two-member list installed from two files drifts with nothing to say so. */
@@ -940,7 +940,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        reason. §4.2 defines it as §4.1's member invoked on `this's Window.document`, so it is not a second
        algorithm and the two cannot answer differently. */
     selection_install_window_members(ctx, g);
-    idl_install_method(ctx, g, "stop",  0, g_id_stop);
+    idl_install_method(ctx, g, "stop", g_id_stop);
 
     /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
        compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison.

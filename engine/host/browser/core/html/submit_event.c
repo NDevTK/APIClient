@@ -197,6 +197,13 @@ void submit_event_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_se_class, &d);
     g_ctor_stepid = idl_method_id_dict(ctx, SE_CTOR_ARGS, 2, SE_INIT,
                                        (int)(sizeof(SE_INIT) / sizeof(SE_INIT[0])), js_se_ctor, 0);
+    /* HTML §4.10.22.10 The SubmitEvent interface writes
+       `constructor(DOMString type, optional SubmitEventInit eventInitDict = {})`, and the word `optional` was
+       in no code: with position 1 required, Web IDL §3.6's step 5 arity check threw a TypeError for
+       `new SubmitEvent("submit")` — the ordinary one-argument construction, which is what a page writes when
+       it re-dispatches a form submission. It ALSO made §3.7.1 Interface object's length 2 where the IDL
+       computes 1, which is the half a `length` audit can see; the throw is the half it cannot. */
+    idl_optional_from(1);
     g_ready = 1;
     realm_declare_intrinsic(submit_event_install_realm);
 }
@@ -219,7 +226,7 @@ static void submit_event_install_realm(JSContext *ctx)
 
     /* §3.7.1's interface object, on THIS realm's global — one `SubmitEvent` per realm, whose `prototype` is the
        prototype this same install just built. */
-    ctor = idl_step_constructor(ctx, "SubmitEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "SubmitEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the SubmitEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

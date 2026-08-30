@@ -211,7 +211,7 @@ void page_transition_event_install_protos(JSContext *ctx)
 
     /* §3.7.1's interface object, on THIS realm's global — one `PageTransitionEvent` per realm, whose
        `prototype` is the prototype this same install just built. */
-    ctor = idl_step_constructor(ctx, "PageTransitionEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "PageTransitionEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the PageTransitionEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

@@ -890,7 +890,7 @@ void response_install_proto(JSContext *ctx)
     /* §5.3's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */
     body_install(ctx, proto, g_body_handle);
     /* §5.5's clone(), a STEP because cloning a body tees its stream — see js_response_clone_step. */
-    idl_install_method(ctx, proto, "clone", 0, g_clone_stepid);
+    idl_install_method(ctx, proto, "clone", g_clone_stepid);
     JS_SetClassProto(ctx, g_response_class, proto);
 
     /* §5.5's serializer, read off THIS realm's builtin before any of its scripts run. */
@@ -911,7 +911,7 @@ void response_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ctor_stepid >= 0, "Response was installed before response_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "Response", 0, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "Response", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Response interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_response_class);
@@ -923,8 +923,8 @@ void response_install(JSContext *ctx, JSValueConst global)
                                (int)(sizeof(js_response_static_funcs) / sizeof(js_response_static_funcs[0])));
     /* The two statics whose arguments the args machine converts, installed on the INTERFACE OBJECT — which is
        what `static` means in the IDL and is the only difference from a prototype member. */
-    idl_install_method(ctx, ctor, "json", 1, g_json_stepid);
-    idl_install_method(ctx, ctor, "redirect", 1, g_redirect_stepid);
+    idl_install_method(ctx, ctor, "json", g_json_stepid);
+    idl_install_method(ctx, ctor, "redirect", g_redirect_stepid);
     JS_SetPropertyStr(ctx, (JSValue)global, "Response", ctor);
 }
 

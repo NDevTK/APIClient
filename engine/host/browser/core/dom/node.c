@@ -2814,9 +2814,16 @@ static const IdlArgType MIXIN_NODES[1] = { IDL_STRING_UNLESS_IFACE };
    Operations `length` is one number, and a per-row copy of it is a fact seven rows were each asked to
    remember. They did not agree: `remove` and `replaceChildren` said 0 while `before`, `after`, `replaceWith`,
    `append` and `prepend` said 1, for the same arity. See mixin_install for the derivation. */
-typedef struct { const char *name; int magic; } NodeMixinMember;
+/* AND `remove` IS NOT ONE OF THE VARIADIC ONES — DOM §4.2.8 Mixin ChildNode writes `undefined remove();`, with
+   no argument at all, where its three siblings write `((Node or DOMString)... nodes)`. That was a comment here
+   and a shared declaration below, so `remove` was declared with the tail as well, and Web IDL converts every
+   argument a declaration LISTS: `el.remove({toString(){ … }})` ran the page's `toString` where a browser reads
+   nothing and runs nothing. Its §3.7.7 Operations `length` came out 0 either way (a variadic tail is optional),
+   which is exactly why the wrong declaration survived a length audit — the arity and the length are two facts
+   and only one of them was visible from outside. `takes_nodes` is that fact, per row, in the IDL's own terms. */
+typedef struct { const char *name; int magic; bool takes_nodes; } NodeMixinMember;
 static const NodeMixinMember CHILD_NODE_MIXIN[] = {
-    { "remove", 0 }, { "before", 1 }, { "after", 2 }, { "replaceWith", 3 },
+    { "remove", 0, false }, { "before", 1, true }, { "after", 2, true }, { "replaceWith", 3, true },
 };
 
 /* DOM §4.2.6 Mixin ParentNode, its insertion half — `Document includes ParentNode`, `DocumentFragment
@@ -2824,7 +2831,7 @@ static const NodeMixinMember CHILD_NODE_MIXIN[] = {
    already live on the interfaces that declare them. (The number read "§4.2.8", which is Mixin ChildNode:
    this file cited two different sections for ParentNode and neither reader could tell which was the typo.) */
 static const NodeMixinMember PARENT_NODE_MIXIN[] = {
-    { "append", 4 }, { "prepend", 5 }, { "replaceChildren", 6 },
+    { "append", 4, true }, { "prepend", 5, true }, { "replaceChildren", 6, true },
 };
 
 /* §4.2.6 THE ParentNode MIXIN'S READS AND LOOKUPS, over the node the mixin is ON.
@@ -3058,7 +3065,7 @@ static int g_id_by_id = -1;
 void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_id_by_id >= 0, "the NonElementParentNode mixin was installed before it was declared");
-    idl_install_method(ctx, proto, "getElementById", 1, g_id_by_id);
+    idl_install_method(ctx, proto, "getElementById", g_id_by_id);
 }
 
 /* The members that WALK, installed through the declaration because they are machines. */
@@ -3094,14 +3101,14 @@ static void node_declare_walkers(JSContext *ctx)
 /* The members that WALK, installed through the declaration because they are machines. */
 static void node_install_walkers(JSContext *ctx, JSValueConst proto)
 {
-    idl_install_method(ctx, proto, "isEqualNode", 1, g_w_equal);
-    idl_install_method(ctx, proto, "compareDocumentPosition", 1, g_w_pos);
-    idl_install_method(ctx, proto, "appendChild", 1, g_w_append);
-    idl_install_method(ctx, proto, "removeChild", 1, g_w_remove);
-    idl_install_method(ctx, proto, "insertBefore", 2, g_w_insert);
-    idl_install_method(ctx, proto, "replaceChild", 2, g_w_replace);
-    idl_install_method(ctx, proto, "normalize", 0, g_w_normalize);
-    idl_install_method(ctx, proto, "cloneNode", 0, g_w_clone);
+    idl_install_method(ctx, proto, "isEqualNode", g_w_equal);
+    idl_install_method(ctx, proto, "compareDocumentPosition", g_w_pos);
+    idl_install_method(ctx, proto, "appendChild", g_w_append);
+    idl_install_method(ctx, proto, "removeChild", g_w_remove);
+    idl_install_method(ctx, proto, "insertBefore", g_w_insert);
+    idl_install_method(ctx, proto, "replaceChild", g_w_replace);
+    idl_install_method(ctx, proto, "normalize", g_w_normalize);
+    idl_install_method(ctx, proto, "cloneNode", g_w_clone);
 }
 
 /* ONE DECLARATION PER MIXIN MEMBER, minted at agent init and keyed by the member's own MAGIC — which is what
@@ -3119,8 +3126,13 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
                "a node mixin member's magic is outside the declaration table — the table is indexed BY magic so "
                "that one member is one declaration however many mixins include it");
         if (g_mixin_id[tab[k].magic] < 0)
-            g_mixin_id[tab[k].magic] = idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
-                                                         js_node_mixin, tab[k].magic);
+            /* TWO DECLARATIONS BECAUSE THE IDL WRITES TWO SIGNATURES — see NodeMixinMember. A member that
+               declares no arguments converts none, so `remove`'s body is reached with the page's value
+               untouched and unread, which is what §4.2.8's `remove()` means. */
+            g_mixin_id[tab[k].magic] = tab[k].takes_nodes
+                ? idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
+                                    js_node_mixin, tab[k].magic)
+                : idl_method_id(ctx, NULL, 0, js_node_mixin, tab[k].magic);
     }
     g_mixin_declared = 1;
 }
@@ -3140,23 +3152,14 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
    SO `el.append()` IS A LEGAL CALL AND `Element.prototype.append.length` IS 0, and the 1 that stood here made
    the second a lie a bundle can branch on: feature detection and polyfill shims read `.length` off these
    members precisely because the mixin post-dates the interfaces it is included by.
-   RESIDUAL — THE NUMBER IS STILL WRITTEN BY HAND AT THIS CALL, one file over from where it can be computed.
-   NOT COVERED: idl_install_method takes `length` as a parameter, so every install in the platform re-states a
-   fact its own declaration already fixed, and nothing compares the two. WHAT THE NEXT DIFF BUILDS: idl_args.c
-   already computes exactly this number at §3.6 step 5's arity check — `min(idl_first_optional(m, 0),
-   idl_declared_positions(m))`, whose two halves are the declaration's `first_optional` and `variadic ? nargs-1
-   : nargs`, and whose `argc` of 0 is §3.7.7's own argument count, so the shorter entry of a length-differing
-   split wins there exactly as §3.7.7 requires — so it exposes that as a per-stepid accessor, drops `length`
-   from idl_install_method and its three siblings, and DFAILs for a stepid that was registered with a raw
-   JS_RegisterStepDef rather than declared through the pool (which has no arity to derive from). HOW ITS
-   ABSENCE WOULD SHOW: a member whose declaration and install disagree, silently, exactly as five of these
-   seven rows did — visible only by reading a `length` off the prototype and comparing it with the IDL. */
+   THE NUMBER IS NO LONGER WRITTEN HERE AT ALL — idl_install_method derives it (idl_member_length_of), so the
+   paragraph above is a statement of what the pool computes rather than of what this call passes. */
 static void mixin_install(JSContext *ctx, JSValueConst proto, const NodeMixinMember *tab, unsigned n)
 {
     unsigned k;
     DCHECK(g_mixin_declared, "a node mixin was installed before its members were declared");
     for (k = 0; k < n; k++)
-        idl_install_method(ctx, proto, tab[k].name, 0, g_mixin_id[tab[k].magic]);
+        idl_install_method(ctx, proto, tab[k].name, g_mixin_id[tab[k].magic]);
 }
 
 void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
@@ -3182,16 +3185,16 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
                   (unsigned)(sizeof(PARENT_NODE_MIXIN) / sizeof(PARENT_NODE_MIXIN[0])));
     JS_SetPropertyFunctionList(ctx, proto, js_parent_node_reads,
                                (int)(sizeof(js_parent_node_reads) / sizeof(js_parent_node_reads[0])));
-    idl_install_method(ctx, proto, "querySelector", 1, g_id_qs);
-    idl_install_method(ctx, proto, "querySelectorAll", 1, g_id_qsa);
-    idl_install_method(ctx, proto, "moveBefore", 2, g_id_move_before);
+    idl_install_method(ctx, proto, "querySelector", g_id_qs);
+    idl_install_method(ctx, proto, "querySelectorAll", g_id_qsa);
+    idl_install_method(ctx, proto, "moveBefore", g_id_move_before);
     /* Not part of ParentNode in the IDL — §4.5 puts these on Document and §4.9 on Element, which between them
        is every interface that includes ParentNode except DocumentFragment. Installed here because that is one
        place rather than two, and a fragment answering them is a superset nothing can observe as wrong: its
        subtree is exactly what the walk would search. */
-    idl_install_method(ctx, proto, "getElementsByTagName", 1, g_id_by_tag);
-    idl_install_method(ctx, proto, "getElementsByClassName", 1, g_id_by_class);
-    idl_install_method(ctx, proto, "getElementsByTagNameNS", 2, g_id_by_tag_ns);
+    idl_install_method(ctx, proto, "getElementsByTagName", g_id_by_tag);
+    idl_install_method(ctx, proto, "getElementsByClassName", g_id_by_class);
+    idl_install_method(ctx, proto, "getElementsByTagNameNS", g_id_by_tag_ns);
 }
 
 /* Every mixin's declarations, once per agent — see node_declare_walkers for why this is split at all. */
@@ -3774,10 +3777,10 @@ void node_install_protos(JSContext *ctx)
                                (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
     idl_install_accessor(ctx, node_p, "nodeValue", js_cd_get_data, 1, g_id_nodevalue);
     idl_install_accessor_step(ctx, node_p, "textContent", g_id_textcontent_get, g_id_textcontent);
-    idl_install_method(ctx, node_p, "lookupPrefix", 1, g_id_lookup_prefix);
-    idl_install_method(ctx, node_p, "lookupNamespaceURI", 1, g_id_lookup_ns);
-    idl_install_method(ctx, node_p, "isDefaultNamespace", 1, g_id_default_ns);
-    idl_install_method(ctx, node_p, "getRootNode", 0, g_id_root);
+    idl_install_method(ctx, node_p, "lookupPrefix", g_id_lookup_prefix);
+    idl_install_method(ctx, node_p, "lookupNamespaceURI", g_id_lookup_ns);
+    idl_install_method(ctx, node_p, "isDefaultNamespace", g_id_default_ns);
+    idl_install_method(ctx, node_p, "getRootNode", g_id_root);
     JS_SetClassProto(ctx, g_node_class, JS_DupValue(ctx, node_p));
 
     /* CharacterData.prototype — §4.10, `interface CharacterData : Node`, so it INHERITS from Node.prototype
@@ -3789,12 +3792,16 @@ void node_install_protos(JSContext *ctx)
                                (int)(sizeof(js_chardata_base) / sizeof(js_chardata_base[0])));
     idl_install_accessor(ctx, cd, "data", js_cd_get_data, 0, g_id_data);
     {
+        /* THE `length` COLUMN IS GONE FROM THIS TABLE because Web IDL §3.7.7 Operations computes it — it read
+           `{ 2, 1, 2, 2, 3 }`, which is each member's DECLARED ARITY and is what §3.7.7 explicitly is not:
+           §4.10's `replaceData(unsigned long offset, unsigned long count, DOMString data)` has three REQUIRED
+           arguments so the two numbers happen to agree here, and they stop agreeing the moment one of these
+           members gains an optional argument. See idl_member_length_of. */
         static const char *const CD_NAMES[5] = { "substringData", "appendData", "insertData",
                                                  "deleteData", "replaceData" };
-        static const int CD_ARGC[5] = { 2, 1, 2, 2, 3 };
         int k;
         for (k = 0; k < 5; k++)
-            idl_install_method(ctx, cd, CD_NAMES[k], CD_ARGC[k], g_id_cd[k]);
+            idl_install_method(ctx, cd, CD_NAMES[k], g_id_cd[k]);
     }
     /* DOM §4.2.8 Mixin ChildNode: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page
        that tears down text with it had nothing. ParentNode is NOT included: character data has no children.
@@ -3814,7 +3821,7 @@ void node_install_protos(JSContext *ctx)
         /* §4.11's OWN two members. `Text : CharacterData` adds exactly these, and a Text prototype with
            nothing on it is what made `splitText` absent while `nodeType === 3` answered — the shape this
            engine treats as worst, because nothing throws until the page's own call does. */
-        idl_install_method(ctx, text_proto, "splitText", 1, g_id_split_text);
+        idl_install_method(ctx, text_proto, "splitText", g_id_split_text);
         idl_install_accessor(ctx, text_proto, "wholeText", js_text_whole, 0, -1);
         /* §4.2.9: `Text includes Slottable`, and the mixin is one member — `assignedSlot`. A Text node is a
            slottable exactly like an element, which is what makes an unnamed `<slot>` collect a host's text. */

@@ -396,7 +396,7 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "PromiseRejectionEvent was installed before its prototype was built");
-    ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", 2, g_id_pre_ctor);
+    ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", g_id_pre_ctor);
     CHECK(!JS_IsException(ctor), "the PromiseRejectionEvent interface object could not be allocated");
     {
         JSValue proto = unhandled_rejection_proto(ctx);

@@ -256,7 +256,7 @@ void hash_change_event_install_protos(JSContext *ctx)
        the prototype this same install just built. It is also what core/events/create_event.c's row asks about:
        §4.5 step 4 refuses an interface the realm does not EXPOSE, so the row and this line are two halves of one
        fact and the factory asserts they agree. */
-    ctor = idl_step_constructor(ctx, "HashChangeEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "HashChangeEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the HashChangeEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

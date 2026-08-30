@@ -512,7 +512,7 @@ static JSValue flush_door_new(JSContext *ctx)
     JSValue fn;
 
     DCHECK(g_id_flush >= 0, "the rendering algorithm reached §6.6.7's flush before autofocus_init declared it");
-    fn = idl_step_function(ctx, "flushAutofocusCandidates", 0, g_id_flush);
+    fn = idl_step_function(ctx, "flushAutofocusCandidates", g_id_flush);
     CHECK(!JS_IsException(fn), "autofocus: §6.6.7's flush door could not be allocated");
     return fn;
 }

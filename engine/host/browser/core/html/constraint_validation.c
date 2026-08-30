@@ -1006,8 +1006,8 @@ void constraint_validation_install(JSContext *ctx, JSValueConst input_proto, JSV
     DCHECK(g_id_set_custom >= 0, "§4.10.21.3's members were installed before they were declared");
     idl_install_accessor(ctx, input_proto, "willValidate", js_cv_get, CV_WILL_VALIDATE, -1);
     idl_install_accessor(ctx, textarea_proto, "willValidate", js_cv_get, CV_WILL_VALIDATE, -1);
-    idl_install_method(ctx, input_proto, "setCustomValidity", 1, g_id_set_custom);
-    idl_install_method(ctx, textarea_proto, "setCustomValidity", 1, g_id_set_custom);
+    idl_install_method(ctx, input_proto, "setCustomValidity", g_id_set_custom);
+    idl_install_method(ctx, textarea_proto, "setCustomValidity", g_id_set_custom);
 }
 
 void constraint_validation_free(JSRuntime *rt)

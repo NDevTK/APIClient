@@ -1356,11 +1356,11 @@ static void idb_cursor_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "key", js_cu_get_key, 0, -1);
     idl_install_accessor(ctx, proto, "primaryKey", js_cu_get_key, 1, -1);
     idl_install_accessor(ctx, proto, "request", js_cu_get_request, 0, -1);
-    idl_install_method(ctx, proto, "advance", 1, g_id_advance);
-    idl_install_method(ctx, proto, "continue", 0, g_id_continue);
-    idl_install_method(ctx, proto, "continuePrimaryKey", 2, g_id_continue_pk);
-    idl_install_method(ctx, proto, "update", 1, g_id_update);
-    idl_install_method(ctx, proto, "delete", 0, g_id_delete);
+    idl_install_method(ctx, proto, "advance", g_id_advance);
+    idl_install_method(ctx, proto, "continue", g_id_continue);
+    idl_install_method(ctx, proto, "continuePrimaryKey", g_id_continue_pk);
+    idl_install_method(ctx, proto, "update", g_id_update);
+    idl_install_method(ctx, proto, "delete", g_id_delete);
     JS_SetClassProto(ctx, g_cursor_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBCursor", proto);

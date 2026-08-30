@@ -273,7 +273,7 @@ void error_event_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ready, "ErrorEvent was installed before error_event_init declared it");
-    ctor = idl_step_constructor(ctx, "ErrorEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "ErrorEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the ErrorEvent interface object could not be allocated");
     {
         JSValue proto = error_event_proto(ctx);

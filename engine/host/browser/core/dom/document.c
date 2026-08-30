@@ -2849,12 +2849,12 @@ static void document_declare_members(JSContext *ctx)
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
 {
-    idl_install_method(ctx, proto, "createElement", 1, g_id_create_element);
-    idl_install_method(ctx, proto, "createTextNode", 1, g_id_create_text);
-    idl_install_method(ctx, proto, "createComment", 1, g_id_create_comment);
-    idl_install_method(ctx, proto, "createCDATASection", 1, g_id_create_cdata);
-    idl_install_method(ctx, proto, "createProcessingInstruction", 2, g_id_create_pi);
-    idl_install_method(ctx, proto, "createDocumentFragment", 0, g_id_create_fragment);
+    idl_install_method(ctx, proto, "createElement", g_id_create_element);
+    idl_install_method(ctx, proto, "createTextNode", g_id_create_text);
+    idl_install_method(ctx, proto, "createComment", g_id_create_comment);
+    idl_install_method(ctx, proto, "createCDATASection", g_id_create_cdata);
+    idl_install_method(ctx, proto, "createProcessingInstruction", g_id_create_pi);
+    idl_install_method(ctx, proto, "createDocumentFragment", g_id_create_fragment);
     {
         /* §3.1.5's five element shortcuts, each a LIVE HTMLCollection over the document. */
         static const char *const NAMES[] = { "forms", "images", "scripts", "embeds", "links" };
@@ -2862,19 +2862,19 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
         for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
-    idl_install_method(ctx, proto, "createElementNS", 2, g_id_create_element_ns);
+    idl_install_method(ctx, proto, "createElementNS", g_id_create_element_ns);
     /* §4.5's adoptNode. `importNode` is NOT beside it and is honestly ABSENT: it is stated over "clone a node"
        with `document` set to the receiver and a `fallbackRegistry`, and node.c's clone machine
        (node_clone_start) takes neither — so a page's own TypeError names the gap rather than a member that
        clones into the wrong document. */
-    idl_install_method(ctx, proto, "adoptNode", 1, g_id_adopt_node);
+    idl_install_method(ctx, proto, "adoptNode", g_id_adopt_node);
     /* §4.5's two ATTRIBUTE factories, declared beside the interface they build (attr.c) — "create an attribute"
        is §4.9.2's algorithm and belongs to the attribute component, not to a second copy of it here. */
     attr_install_document_members(ctx, proto);
-    idl_install_method(ctx, proto, "createNodeIterator", 1, g_id_create_iterator);
-    idl_install_method(ctx, proto, "createTreeWalker", 1, g_id_create_walker);
-    idl_install_method(ctx, proto, "createRange", 0, g_id_create_range);
-    idl_install_method(ctx, proto, "createEvent", 1, g_id_create_event);
+    idl_install_method(ctx, proto, "createNodeIterator", g_id_create_iterator);
+    idl_install_method(ctx, proto, "createTreeWalker", g_id_create_walker);
+    idl_install_method(ctx, proto, "createRange", g_id_create_range);
+    idl_install_method(ctx, proto, "createEvent", g_id_create_event);
     /* §3.1.1 The Document object's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
        location`, with the FORWARDING half — Web IDL §3.7.6's, the same declaration §7.2.2's `location` carries,
        so `document.location = url` and `window.location = url` are the one algorithm ending in the `href`
@@ -4432,7 +4432,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            shared "Illegal constructor" throw. */
         JSValue dp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT);
         node_install_interface_ctor(ctx, global, "Document", dp,
-                                    idl_step_constructor(ctx, "Document", 0, g_id_doc_ctor));
+                                    idl_step_constructor(ctx, "Document", g_id_doc_ctor));
         JS_FreeValue(ctx, dp);
     }
     /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an

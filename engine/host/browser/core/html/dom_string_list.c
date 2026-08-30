@@ -210,8 +210,8 @@ void dom_string_list_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(proto), "DOMStringList.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "DOMStringList");
     idl_install_accessor_no_user_code(ctx, proto, "length", js_dsl_length, 0, -1);
-    idl_install_method(ctx, proto, "item", 1, g_id_item);
-    idl_install_method(ctx, proto, "contains", 1, g_id_contains);
+    idl_install_method(ctx, proto, "item", g_id_item);
+    idl_install_method(ctx, proto, "contains", g_id_contains);
     /* Web IDL §3.7.10: an interface with an indexed property getter and an integer-typed `length` is given
        %Array.prototype.values% as its @@iterator, which is what makes `[...db.objectStoreNames]` work. §2.6.5
        declares no `iterable<>`, so it gets that and NOT `entries`/`keys`/`forEach` — two different clauses. */

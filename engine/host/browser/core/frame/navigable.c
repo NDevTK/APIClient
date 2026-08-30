@@ -3757,7 +3757,7 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin)
        a realm still reachable when the agent's own state goes is torn down after it, and its Document must go
        with it or it is a leak the gc_obj_list walk reports with nothing to explain it. */
     JS_SetContextTeardownHook(JS_GetRuntime(ctx), navigable_realm_teardown);
-    idl_install_method(ctx, global, "open", 0, g_id_open);
+    idl_install_method(ctx, global, "open", g_id_open);
 }
 
 void navigable_free(JSContext *ctx)

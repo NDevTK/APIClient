@@ -855,23 +855,23 @@ static void fs_handle_install_realm(JSContext *ctx)
     idl_interface_tag(ctx, base, "FileSystemHandle");
     idl_install_accessor(ctx, base, "kind", fsh_get_kind, 0, -1);
     idl_install_accessor(ctx, base, "name", fsh_get_name, 0, -1);
-    idl_install_method(ctx, base, "isSameEntry", 1, g_id_is_same_entry);
+    idl_install_method(ctx, base, "isSameEntry", g_id_is_same_entry);
     JS_SetClassProto(ctx, g_handle_class, JS_DupValue(ctx, base));
 
     file_p = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(file_p), "FileSystemFileHandle.prototype could not be allocated");
     idl_interface_tag(ctx, file_p, "FileSystemFileHandle");
-    idl_install_method(ctx, file_p, "getFile", 0, g_id_get_file);
-    idl_install_method(ctx, file_p, "createWritable", 0, g_id_create_writable);
+    idl_install_method(ctx, file_p, "getFile", g_id_get_file);
+    idl_install_method(ctx, file_p, "createWritable", g_id_create_writable);
     JS_SetClassProto(ctx, g_file_handle_class, JS_DupValue(ctx, file_p));
 
     dir_p = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(dir_p), "FileSystemDirectoryHandle.prototype could not be allocated");
     idl_interface_tag(ctx, dir_p, "FileSystemDirectoryHandle");
-    idl_install_method(ctx, dir_p, "getFileHandle", 1, g_id_get_file_handle);
-    idl_install_method(ctx, dir_p, "getDirectoryHandle", 1, g_id_get_directory_handle);
-    idl_install_method(ctx, dir_p, "removeEntry", 1, g_id_remove_entry);
-    idl_install_method(ctx, dir_p, "resolve", 1, g_id_resolve);
+    idl_install_method(ctx, dir_p, "getFileHandle", g_id_get_file_handle);
+    idl_install_method(ctx, dir_p, "getDirectoryHandle", g_id_get_directory_handle);
+    idl_install_method(ctx, dir_p, "removeEntry", g_id_remove_entry);
+    idl_install_method(ctx, dir_p, "resolve", g_id_resolve);
     /* §2.4.1's `async_iterable<USVString, FileSystemHandle>` — a PAIR declaration, so Web IDL §3.7.10's steps
        3-5 (`entries`, %Symbol.asyncIterator%, `keys`, `values`) and §3.7.10.2's asynchronous iterator prototype
        object, both built for THIS realm. It is installed here, inside the [SecureContext] gate above, because

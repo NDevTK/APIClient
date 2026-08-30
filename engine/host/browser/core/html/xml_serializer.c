@@ -191,7 +191,7 @@ void xml_serializer_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "XMLSerializer.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "XMLSerializer");
-    idl_install_method(ctx, proto, "serializeToString", 1, g_id_serialize);
+    idl_install_method(ctx, proto, "serializeToString", g_id_serialize);
     JS_SetClassProto(ctx, g_class, proto);
 }
 
@@ -201,7 +201,7 @@ void xml_serializer_install(JSContext *ctx, JSValueConst global)
 
     DCHECK(g_ready, "XMLSerializer was installed before xml_serializer_init declared it");
     DCHECK(!JS_IsNull(proto), "XMLSerializer was installed in a realm that never ran its prototype install");
-    ctor = idl_step_constructor(ctx, "XMLSerializer", 0, g_id_ctor);
+    ctor = idl_step_constructor(ctx, "XMLSerializer", g_id_ctor);
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "XMLSerializer", ctor);

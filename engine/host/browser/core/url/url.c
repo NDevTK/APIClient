@@ -2238,7 +2238,7 @@ void url_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_url_ctor_stepid >= 0, "URL was installed before url_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "URL", 1, g_url_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "URL", g_url_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the URL interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_url_class);

@@ -867,7 +867,7 @@ void event_install_proto(JSContext *ctx)
        S and stops at the required `type` — the shortest is 1, which is the same number the declaration above
        already states as `idl_optional_from(1)`. The 3 that stood here was the DECLARED arity, which is what
        §3.7.7 explicitly is not. */
-    idl_install_method(ctx, proto, "initEvent", 1, g_init_event_id);
+    idl_install_method(ctx, proto, "initEvent", g_init_event_id);
     JS_SetClassProto(ctx, g_event_class, proto);   /* the realm owns it from here */
 }
 
@@ -887,7 +887,7 @@ void event_install(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "Event was installed before event_init built its prototype");
     /* A step machine that is also a CONSTRUCTOR: `new Event(type, init)` converts two page-reachable arguments
        before the body runs, and JS_CFUNC_step_ctor is what makes the declaration usable with `new`. */
-    ctor = idl_step_constructor(ctx, "Event", 2, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "Event", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Event interface object could not be allocated");
     {
         JSValue proto = event_proto(ctx);

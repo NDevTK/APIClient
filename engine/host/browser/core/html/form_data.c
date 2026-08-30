@@ -867,12 +867,12 @@ void form_data_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "FormData.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "FormData");
-    idl_install_method(ctx, proto, "append", 2, g_fd_id[FD_APPEND]);
-    idl_install_method(ctx, proto, "delete", 1, g_fd_id[FD_DELETE]);
-    idl_install_method(ctx, proto, "get", 1, g_fd_id[FD_GET]);
-    idl_install_method(ctx, proto, "getAll", 1, g_fd_id[FD_GETALL]);
-    idl_install_method(ctx, proto, "has", 1, g_fd_id[FD_HAS]);
-    idl_install_method(ctx, proto, "set", 2, g_fd_id[FD_SET]);
+    idl_install_method(ctx, proto, "append", g_fd_id[FD_APPEND]);
+    idl_install_method(ctx, proto, "delete", g_fd_id[FD_DELETE]);
+    idl_install_method(ctx, proto, "get", g_fd_id[FD_GET]);
+    idl_install_method(ctx, proto, "getAll", g_fd_id[FD_GETALL]);
+    idl_install_method(ctx, proto, "has", g_fd_id[FD_HAS]);
+    idl_install_method(ctx, proto, "set", g_fd_id[FD_SET]);
     idl_pair_iter_install(ctx, proto, g_fd_pair_handle);
     JS_SetClassProto(ctx, g_fd_class, proto);
 }
@@ -881,7 +881,7 @@ void form_data_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_fd_ctor_stepid >= 0, "FormData was installed before form_data_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "FormData", 0, g_fd_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "FormData", g_fd_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the FormData interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_fd_class);

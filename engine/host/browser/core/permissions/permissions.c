@@ -420,7 +420,7 @@ static void permissions_install_realm(JSContext *ctx)
     idl_interface_tag(ctx, proto, "Permissions");
     DCHECK(g_id_query >= 0, "§6.2's query was installed on a realm's prototype before permissions_init "
                             "declared it");
-    idl_install_method(ctx, proto, "query", 1, g_id_query);
+    idl_install_method(ctx, proto, "query", g_id_query);
     JS_SetClassProto(ctx, g_permissions_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's INTERFACE OBJECT on THIS realm's global. §6.2 declares no constructor. */

@@ -818,9 +818,9 @@ static void fs_writable_install_realm(JSContext *ctx)
     JS_FreeValue(ctx, base);
     CHECK(!JS_IsException(proto), "FileSystemWritableFileStream.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "FileSystemWritableFileStream");
-    idl_install_method(ctx, proto, "write", 1, g_id_write);
-    idl_install_method(ctx, proto, "seek", 1, g_id_seek);
-    idl_install_method(ctx, proto, "truncate", 1, g_id_truncate);
+    idl_install_method(ctx, proto, "write", g_id_write);
+    idl_install_method(ctx, proto, "seek", g_id_seek);
+    idl_install_method(ctx, proto, "truncate", g_id_truncate);
     JS_SetClassProto(ctx, g_fw_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);

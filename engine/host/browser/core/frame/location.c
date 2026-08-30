@@ -1282,9 +1282,9 @@ static void location_install_realm(JSContext *ctx)
     idl_install_accessor_unforgeable(ctx, loc, "ancestorOrigins", js_loc_ancestor_origins, 0, -1);
     /* §3.7.7's UNFORGEABLE OPERATIONS: on the INSTANCE, non-writable and non-configurable, which is what
        [LegacyUnforgeable] means for an operation exactly as it does for an attribute. */
-    idl_install_method_unforgeable(ctx, loc, "assign", 1, g_loc_assign);
-    idl_install_method_unforgeable(ctx, loc, "replace", 1, g_loc_replace);
-    idl_install_method_unforgeable(ctx, loc, "reload", 0, g_loc_reload);
+    idl_install_method_unforgeable(ctx, loc, "assign", g_loc_assign);
+    idl_install_method_unforgeable(ctx, loc, "replace", g_loc_replace);
+    idl_install_method_unforgeable(ctx, loc, "reload", g_loc_reload);
     /* §3.7.8: the stringifier is unforgeable, so its property is on the object with
        {[[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: false}. */
     JS_DefinePropertyValueStr(ctx, loc, "toString",

@@ -327,10 +327,10 @@ void dom_implementation_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "DOMImplementation.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "DOMImplementation");
-    idl_install_method(ctx, proto, "createDocumentType", 3, g_id_doctype);
-    idl_install_method(ctx, proto, "createDocument", 2, g_id_document);
-    idl_install_method(ctx, proto, "createHTMLDocument", 0, g_id_html_document);
-    idl_install_method(ctx, proto, "hasFeature", 0, g_id_has_feature);
+    idl_install_method(ctx, proto, "createDocumentType", g_id_doctype);
+    idl_install_method(ctx, proto, "createDocument", g_id_document);
+    idl_install_method(ctx, proto, "createHTMLDocument", g_id_html_document);
+    idl_install_method(ctx, proto, "hasFeature", g_id_has_feature);
     JS_SetClassProto(ctx, g_impl_class, proto);
 }
 

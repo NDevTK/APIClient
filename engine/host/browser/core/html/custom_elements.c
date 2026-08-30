@@ -1785,7 +1785,7 @@ JSValue custom_elements_html_constructor(JSContext *ctx)
     JSValue ctor;
 
     DCHECK(g_ready, "HTMLElement's interface object was minted before custom_elements_init declared §3.2.3");
-    ctor = idl_step_constructor(ctx, "HTMLElement", 0, g_id_html_ctor);
+    ctor = idl_step_constructor(ctx, "HTMLElement", g_id_html_ctor);
     CHECK(!JS_IsException(ctor), "the HTMLElement interface object could not be allocated");
     /* §3.2.3 step 7.1's IDENTITY, recorded for THIS realm as the object is made. Asking the global for
        `HTMLElement` instead would read a property the page can reassign, and `window.HTMLElement = X` must not
@@ -3165,12 +3165,12 @@ void custom_elements_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "CustomElementRegistry.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "CustomElementRegistry");
-    idl_install_method(ctx, proto, "define", 2, g_id_define);
-    idl_install_method(ctx, proto, "get", 1, g_id_get);
-    idl_install_method(ctx, proto, "getName", 1, g_id_get_name);
-    idl_install_method(ctx, proto, "whenDefined", 1, g_id_when_defined);
-    idl_install_method(ctx, proto, "upgrade", 1, g_id_upgrade);
-    idl_install_method(ctx, proto, "initialize", 1, g_id_initialize);
+    idl_install_method(ctx, proto, "define", g_id_define);
+    idl_install_method(ctx, proto, "get", g_id_get);
+    idl_install_method(ctx, proto, "getName", g_id_get_name);
+    idl_install_method(ctx, proto, "whenDefined", g_id_when_defined);
+    idl_install_method(ctx, proto, "upgrade", g_id_upgrade);
+    idl_install_method(ctx, proto, "initialize", g_id_initialize);
     JS_SetClassProto(ctx, g_registry_class, proto);
 }
 

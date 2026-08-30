@@ -1419,20 +1419,20 @@ void element_view_install(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "clientLeft",   js_ev_get, EV_CLIENT_LEFT,   -1);
     idl_install_accessor(ctx, proto, "clientWidth",  js_ev_get, EV_CLIENT_WIDTH,  -1);
     idl_install_accessor(ctx, proto, "clientHeight", js_ev_get, EV_CLIENT_HEIGHT, -1);
-    idl_install_method(ctx, proto, "getClientRects", 0, g_id_client_rects);
-    idl_install_method(ctx, proto, "getBoundingClientRect", 0, g_id_bounding_rect);
+    idl_install_method(ctx, proto, "getClientRects", g_id_client_rects);
+    idl_install_method(ctx, proto, "getBoundingClientRect", g_id_bounding_rect);
     /* §3.7.7's `length` is §3.6's OWN NUMBER for an overloaded operation: the smallest argument-list length
        over the effective overload set's entries, which for these three is ZERO — `scroll(optional
        ScrollToOptions options = {})` can be called with nothing. `Element.prototype.scrollTo.length` is 0 in a
        browser for exactly that reason, and a feature detector reading it is reading the overload set.
        `scrollTo` IS `scroll` — one declaration under two names, per §6 — so there is no second body to keep in
        step and no second place for the two to disagree. */
-    idl_install_method(ctx, proto, "scroll",   0, g_id_scroll);
-    idl_install_method(ctx, proto, "scrollTo", 0, g_id_scroll);
-    idl_install_method(ctx, proto, "scrollBy", 0, g_id_scroll_by);
+    idl_install_method(ctx, proto, "scroll", g_id_scroll);
+    idl_install_method(ctx, proto, "scrollTo", g_id_scroll);
+    idl_install_method(ctx, proto, "scrollBy", g_id_scroll_by);
     /* §3.7.7's `length` is 0 — the one argument is `optional`, so `Element.prototype.scrollIntoView.length` is
        0 in a browser and a feature detector reading it is reading the declaration. */
-    idl_install_method(ctx, proto, "scrollIntoView", 0, g_id_scroll_into_view);
+    idl_install_method(ctx, proto, "scrollIntoView", g_id_scroll_into_view);
 }
 
 void element_view_free(void)

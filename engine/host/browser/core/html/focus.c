@@ -1449,14 +1449,14 @@ static const IdlStepDecl AUTOFOCUS_STEP = {
  * declared member, which is what keeps the pool's name for it — a hand-written JS_NewCFunction2 leaves the
  * member anonymous in every diagnostic.
  * OWNED by the caller. */
-static JSValue focus_door_new(JSContext *ctx, const char *name, int length, int stepid)
+static JSValue focus_door_new(JSContext *ctx, const char *name, int stepid)
 {
     JSValue fn;
 
     DCHECK(stepid >= 0,
            "a C caller reached §6.6.4's focusing steps before focus_init declared them — an internal door is "
            "the only way one reaches them, and there is one focus machine");
-    fn = idl_step_function(ctx, name, length, stepid);
+    fn = idl_step_function(ctx, name, stepid);
     CHECK(!JS_IsException(fn), "focus: an internal door into §6.6.4's focusing steps could not be allocated");
     return fn;
 }
@@ -1499,7 +1499,7 @@ int focus_viewport_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, 
            "§8.1.7.3 step 17's focusing-steps request was handed a buffer narrower than step_call_run's "
            "[this, func] shape");
     if (*phase == 0) {
-        JSValue fn = focus_door_new(ctx, "focusingStepsForViewport", 0, g_id_viewport);
+        JSValue fn = focus_door_new(ctx, "focusingStepsForViewport", g_id_viewport);
 
         /* step_call_run DUPS the callee into the request buffer, which is what holds it across the suspension —
            so this realm's door is released here and the parked call still owns one. */
@@ -1577,7 +1577,7 @@ int focus_element_run(JSContext *ctx, JSValueConst el, uint8_t *phase, JSValue *
            "§6.6.7 step 5.11.3's focusing-steps request was handed a buffer narrower than step_call_run's "
            "[this, func, target] shape");
     if (*phase == 0) {
-        JSValue fn = focus_door_new(ctx, "focusingStepsForTarget", 1, g_id_autofocus);
+        JSValue fn = focus_door_new(ctx, "focusingStepsForTarget", g_id_autofocus);
         JSValueConst argv[1];
 
         DCHECK(node_of(el) != NULL, "§6.6.7 step 5.11.3 was handed a focus target that is not a node");
@@ -1816,7 +1816,7 @@ void focus_install_document_members(JSContext *ctx, JSValueConst proto)
     realm_value_set(ctx, g_focus_slot, rec);
 
     idl_install_accessor(ctx, proto, "activeElement", js_active_element, 0, -1);
-    idl_install_method(ctx, proto, "hasFocus", 0, g_id_has_focus);
+    idl_install_method(ctx, proto, "hasFocus", g_id_has_focus);
 }
 
 void focus_install_shadow_root_members(JSContext *ctx, JSValueConst proto)
@@ -1828,8 +1828,8 @@ void focus_install_shadow_root_members(JSContext *ctx, JSValueConst proto)
 void focus_install_html_members(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_ready, "§6.6's HTMLElement members were installed before focus_init ran");
-    idl_install_method(ctx, proto, "focus", 0, g_id_el_focus);
-    idl_install_method(ctx, proto, "blur", 0, g_id_el_blur);
+    idl_install_method(ctx, proto, "focus", g_id_el_focus);
+    idl_install_method(ctx, proto, "blur", g_id_el_blur);
     /* The same mixin's `tabIndex`, on THIS realm's prototype like every other member. */
     idl_install_accessor(ctx, proto, "tabIndex", js_tab_index_get, 0, g_id_set_tab_index);
 }
@@ -1857,8 +1857,8 @@ void focus_install_html_members(JSContext *ctx, JSValueConst proto)
 void focus_install_window_members(JSContext *ctx, JSValueConst target)
 {
     DCHECK(g_ready, "§6.6's Window members were installed before focus_init ran");
-    idl_install_method(ctx, target, "focus", 0, g_id_win_focus);
-    idl_install_method(ctx, target, "blur", 0, g_id_win_blur);
+    idl_install_method(ctx, target, "focus", g_id_win_focus);
+    idl_install_method(ctx, target, "blur", g_id_win_blur);
 }
 
 /* RELEASED BY ITS DECLARER — §6.6's focused area is declared from document_init, so document_agent_free gives

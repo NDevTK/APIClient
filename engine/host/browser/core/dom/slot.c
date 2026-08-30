@@ -761,9 +761,9 @@ void slot_init(JSContext *ctx)
 void slot_install_slot_members(JSContext *ctx, JSValueConst slot_proto)
 {
     DCHECK(g_ready, "HTML §4.12.4's members were installed before slot_init ran");
-    idl_install_method(ctx, slot_proto, "assignedNodes", 0, g_id_assigned_nodes);
-    idl_install_method(ctx, slot_proto, "assignedElements", 0, g_id_assigned_elements);
-    idl_install_method(ctx, slot_proto, "assign", 0, g_id_assign);
+    idl_install_method(ctx, slot_proto, "assignedNodes", g_id_assigned_nodes);
+    idl_install_method(ctx, slot_proto, "assignedElements", g_id_assigned_elements);
+    idl_install_method(ctx, slot_proto, "assign", g_id_assign);
 }
 
 void slot_install_slottable_mixin(JSContext *ctx, JSValueConst proto)

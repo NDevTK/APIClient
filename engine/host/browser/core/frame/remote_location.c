@@ -464,7 +464,7 @@ static void remote_location_install_realm(JSContext *ctx)
     idl_interface_tag(ctx, proto, "Location");
     idl_install_accessor(ctx, proto, LOCATION_CROSS_ORIGIN[LOCATION_XO_HREF], rl_href_get, LOCATION_XO_HREF,
                          g_rl_href_setter);
-    idl_install_method(ctx, proto, LOCATION_CROSS_ORIGIN[LOCATION_XO_REPLACE], 1, g_rl_replace);
+    idl_install_method(ctx, proto, LOCATION_CROSS_ORIGIN[LOCATION_XO_REPLACE], g_rl_replace);
     JS_SetClassProto(ctx, g_rl_class, proto);
 }
 

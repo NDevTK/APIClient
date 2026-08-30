@@ -1548,7 +1548,7 @@ void transform_stream_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ctor_stepid >= 0, "TransformStream was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "TransformStream", 0, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "TransformStream", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the TransformStream interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_ts_class);

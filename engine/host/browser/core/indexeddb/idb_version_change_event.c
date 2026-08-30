@@ -278,7 +278,7 @@ static void idb_version_change_event_install_realm(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, proto, js_vce_proto, (int)(sizeof js_vce_proto / sizeof js_vce_proto[0]));
     JS_SetClassProto(ctx, g_vce_class, JS_DupValue(ctx, proto));
 
-    ctor = idl_step_constructor(ctx, "IDBVersionChangeEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "IDBVersionChangeEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the IDBVersionChangeEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

@@ -197,7 +197,7 @@ static void storage_manager_install_realm(JSContext *ctx)
     /* §3's partial is `[SecureContext]`, and Web IDL §3.3.13 REMOVES a member in a non-secure realm rather than
        making it throw — `'getDirectory' in navigator.storage` is what a bundle feature-detects with, and the
        three answers (absent, throwing, undefined) are three different branches. */
-    idl_install_method_exposed(ctx, proto, "getDirectory", 0, g_id_get_directory, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "getDirectory", g_id_get_directory, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_sm_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);

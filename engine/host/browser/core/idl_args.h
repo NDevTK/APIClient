@@ -1236,8 +1236,15 @@ JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst prot
    interface the constants installed on the returned object belong to. */
 JSValue idl_callback_interface_object(JSContext *ctx, const char *name);
 
-JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid);
-JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int stepid);
+/* MINT a declared member's function object without installing it — for an internal door a C caller holds and
+   calls, rather than a property a page reads. There is no `length` to pass here either: the object carries
+   Web IDL §3.7.7 Operations' number, derived from the declaration (see idl_member_length_of). */
+JSValue idl_step_function(JSContext *ctx, const char *name, int stepid);
+/* The interface object for a declared CONSTRUCTOR — Web IDL §3.7.1 Interface object, whose `length` is the
+   same sentence §3.7.7 states over the effective overload set for constructors, so it is derived here too and
+   there is nothing for a caller to state. `new Event()` shipped with the declared arity 2 where §3.7.1
+   computes 1, which is a number a page reads. */
+JSValue idl_step_constructor(JSContext *ctx, const char *name, int stepid);
 
 void idl_slowest_reset(void);
 int64_t idl_slowest_step(const char **name);
@@ -1420,17 +1427,24 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
                                int getter_stepid, int setter_stepid);
 
 /* Install a declared member on `target`. The coercion is a request, so a page's `toString` — loop, await and
-   all — suspends and resumes at the exact argument it was on. */
-void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid);
+   all — suspends and resumes at the exact argument it was on.
+   THERE IS NO `length` TO PASS, AND THAT IS THE POINT. Web IDL §3.7.7 Operations' length is "the length of the
+   shortest argument list in the entries in S" over the effective overload set at argument count 0, which is a
+   function of the DECLARATION alone — min(first optional, declared positions) — so this pool computes it and
+   an install has nothing to remember. It used to be a parameter, and the seven installs of DOM §4.2.6 Mixin
+   ParentNode's and §4.2.8 Mixin ChildNode's members, all reaching ONE declaration, DISAGREED WITH EACH OTHER
+   about it: five said 1 and two said 0 for the identical arity, so `Element.prototype.append.length` was a
+   number no reading of the IDL produces. `new Event()`'s interface object had the same defect one section over,
+   carrying the declared arity 2 where §3.7.1 Interface object computes 1. See idl_member_length_of. */
+void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int stepid);
 /* §3.4.10's [LegacyUnforgeable] FOR AN OPERATION — the twin of idl_install_accessor_unforgeable, and it goes
    through §3.7.7's own descriptor: on the INSTANCE the caller passes rather than on a prototype, and
    {[[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: false}. Two installers because §3.7.7 states
    two, not because a caller may pick. */
-void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const char *name, int length,
-                                    int stepid);
+void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const char *name, int stepid);
 /* THE SAME INSTALL FOR A METHOD THAT STATES ITS IDL'S EXPOSURE — §3.3.13's [SecureContext] REMOVES the member,
    for an operation exactly as for an attribute, and this is that one rule asked in the one place. */
-void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid,
+void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int stepid,
                                 IdlExposure exposure);
 /* The installer for a method whose algorithm is a step machine of its OWN (its own JSTrampStepDef) rather than
    a member of the args machine — `click` and `dispatchEvent` today. Separate from idl_install_method because

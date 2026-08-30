@@ -746,7 +746,7 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                 DCHECK(g_id_rearm >= 0,
                        "§8.7 Timers's substep 9.11 was reached before timer_init declared the re-performance "
                        "door — it is declared once per agent beside the two page-facing setters");
-                door = idl_step_function(ctx, "timerInitializationSteps", 3, g_id_rearm);
+                door = idl_step_function(ctx, "timerInitializationSteps", g_id_rearm);
                 CHECK(!JS_IsException(door),
                       "timer: §8.7 Timers's substep 9.11 door could not be allocated — a dropped re-arm is an "
                       "interval that silently stops, which is invisible from outside");
@@ -1960,10 +1960,10 @@ void timer_install(JSContext *ctx, JSValueConst global)
        setters and `idl_optional_from(0)` for the two clearers — which is the whole of the defect: the fact was
        written twice and only one copy was §3.7.7's. The `any...` tail is not yet declared (see timer_init),
        and that does not move either number: the tail is optional under step 5.9.1 either way. */
-    idl_install_method(ctx, g, "setTimeout", 1, g_id_set_timeout);
-    idl_install_method(ctx, g, "setInterval", 1, g_id_set_interval);
-    idl_install_method(ctx, g, "clearTimeout", 0, g_id_clear_timeout);
-    idl_install_method(ctx, g, "clearInterval", 0, g_id_clear_interval);
+    idl_install_method(ctx, g, "setTimeout", g_id_set_timeout);
+    idl_install_method(ctx, g, "setInterval", g_id_set_interval);
+    idl_install_method(ctx, g, "clearTimeout", g_id_clear_timeout);
+    idl_install_method(ctx, g, "clearInterval", g_id_clear_interval);
     JS_SetPropertyStr(ctx, g, "queueMicrotask",
                       JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));
 }

@@ -1618,10 +1618,10 @@ void intersection_observer_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "thresholds", js_io_get, IO_THRESHOLDS, -1);
     idl_install_accessor(ctx, proto, "delay", js_io_get, IO_DELAY, -1);
     idl_install_accessor(ctx, proto, "trackVisibility", js_io_get, IO_TRACK_VISIBILITY, -1);
-    idl_install_method(ctx, proto, "observe", 1, g_id_observe);
-    idl_install_method(ctx, proto, "unobserve", 1, g_id_unobserve);
-    idl_install_method(ctx, proto, "disconnect", 0, g_id_disconnect);
-    idl_install_method(ctx, proto, "takeRecords", 0, g_id_take);
+    idl_install_method(ctx, proto, "observe", g_id_observe);
+    idl_install_method(ctx, proto, "unobserve", g_id_unobserve);
+    idl_install_method(ctx, proto, "disconnect", g_id_disconnect);
+    idl_install_method(ctx, proto, "takeRecords", g_id_take);
     JS_SetClassProto(ctx, g_class, proto);
 }
 
@@ -1631,7 +1631,7 @@ void intersection_observer_install(JSContext *ctx, JSValueConst global)
 
     intersection_observer_entry_install(ctx, global);
     DCHECK(g_id_ctor >= 0, "IntersectionObserver was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "IntersectionObserver", 1, g_id_ctor);
+    ctor = idl_step_constructor(ctx, "IntersectionObserver", g_id_ctor);
     CHECK(!JS_IsException(ctor), "the IntersectionObserver interface object could not be allocated");
     proto = JS_GetClassProto(ctx, g_class);
     DCHECK(!JS_IsNull(proto),

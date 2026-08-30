@@ -586,5 +586,5 @@ void structured_clone_free(JSRuntime *rt)
 void structured_clone_install(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_id_clone >= 0, "structuredClone was installed before structured_clone_init declared it");
-    idl_install_method(ctx, global, "structuredClone", 1, g_id_clone);
+    idl_install_method(ctx, global, "structuredClone", g_id_clone);
 }

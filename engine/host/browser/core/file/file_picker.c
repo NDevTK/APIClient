@@ -924,9 +924,9 @@ static void file_picker_install_realm(JSContext *ctx)
        with, and the three answers (absent, throwing, undefined) are three different branches. It is also what
        keeps this consistent with the handles themselves, which core/file/file_system_handle.c does not build
        in such a realm at all. */
-    idl_install_method_exposed(ctx, global, "showOpenFilePicker", 0, g_id_open, IDL_SECURE_CONTEXT);
-    idl_install_method_exposed(ctx, global, "showSaveFilePicker", 0, g_id_save, IDL_SECURE_CONTEXT);
-    idl_install_method_exposed(ctx, global, "showDirectoryPicker", 0, g_id_directory, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, global, "showOpenFilePicker", g_id_open, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, global, "showSaveFilePicker", g_id_save, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, global, "showDirectoryPicker", g_id_directory, IDL_SECURE_CONTEXT);
     JS_FreeValue(ctx, global);
 }
 

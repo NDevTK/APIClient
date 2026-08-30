@@ -451,7 +451,7 @@ void dom_rect_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, rop, "DOMRectReadOnly");
     for (i = 0; i < DR_MEMBER_COUNT; i++)
         idl_install_accessor(ctx, rop, DR_MEMBER_NAMES[i], js_dr_get, i, -1);
-    idl_install_method(ctx, rop, "toJSON", 0, g_id_tojson);
+    idl_install_method(ctx, rop, "toJSON", g_id_tojson);
     JS_SetClassProto(ctx, g_ro_class, rop);
 
     /* `interface DOMRect : DOMRectReadOnly` — the prototype chain IS the inheritance. */
@@ -473,16 +473,16 @@ void dom_rect_install(JSContext *ctx, JSValueConst global)
 
     proto = JS_GetClassProto(ctx, g_ro_class);
     DCHECK(!JS_IsNull(proto), "DOMRectReadOnly was installed in a realm that never ran its prototype install");
-    ro_ctor = idl_step_constructor(ctx, "DOMRectReadOnly", 0, g_id_ctor_ro);
+    ro_ctor = idl_step_constructor(ctx, "DOMRectReadOnly", g_id_ctor_ro);
     JS_SetConstructor(ctx, ro_ctor, proto);
-    idl_install_method(ctx, ro_ctor, "fromRect", 0, g_id_from_ro);
+    idl_install_method(ctx, ro_ctor, "fromRect", g_id_from_ro);
     JS_FreeValue(ctx, proto);
 
     proto = JS_GetClassProto(ctx, g_rect_class);
     DCHECK(!JS_IsNull(proto), "DOMRect was installed in a realm that never ran its prototype install");
-    ctor = idl_step_constructor(ctx, "DOMRect", 0, g_id_ctor_rect);
+    ctor = idl_step_constructor(ctx, "DOMRect", g_id_ctor_rect);
     JS_SetConstructor(ctx, ctor, proto);
-    idl_install_method(ctx, ctor, "fromRect", 0, g_id_from_rect);
+    idl_install_method(ctx, ctor, "fromRect", g_id_from_rect);
     /* §3.7.1: the interface object of an interface that inherits has the inherited interface object as its
        [[Prototype]], which is what makes `DOMRect.fromRect` its own and `Object.getPrototypeOf(DOMRect)` the
        other constructor. */

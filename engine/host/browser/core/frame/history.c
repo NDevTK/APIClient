@@ -637,11 +637,11 @@ static void history_install_realm(JSContext *ctx)
                              i == HIST_SCROLL_RESTORATION ? g_id_scroll_setter : -1);
     /* §7.2.5's IDL order: go, back, forward, pushState, replaceState. `go`'s LENGTH is 0 — Web IDL §3.7.4.1's
        length is the number of REQUIRED arguments, and `optional long delta = 0` is not one. */
-    idl_install_method(ctx, proto, "go", 0, g_id_go);
-    idl_install_method(ctx, proto, "back", 0, g_id_back);
-    idl_install_method(ctx, proto, "forward", 0, g_id_forward);
-    idl_install_method(ctx, proto, "pushState", 2, g_id_push);
-    idl_install_method(ctx, proto, "replaceState", 2, g_id_replace);
+    idl_install_method(ctx, proto, "go", g_id_go);
+    idl_install_method(ctx, proto, "back", g_id_back);
+    idl_install_method(ctx, proto, "forward", g_id_forward);
+    idl_install_method(ctx, proto, "pushState", g_id_push);
+    idl_install_method(ctx, proto, "replaceState", g_id_replace);
     JS_SetClassProto(ctx, g_history_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);

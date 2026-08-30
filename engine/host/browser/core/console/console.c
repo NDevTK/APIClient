@@ -865,7 +865,7 @@ static void console_install_realm(JSContext *ctx)
        idl_install_method's define is. The `length` of each is §3.7.7's count of REQUIRED arguments, and every
        operation here declares only optional ones and variadic tails, so all twenty are 0. */
     for (i = 0; i < M_N; i++)
-        idl_install_method(ctx, ns, CONSOLE_MEMBER[i], 0, g_id[i]);
+        idl_install_method(ctx, ns, CONSOLE_MEMBER[i], g_id[i]);
 
     /* THE RECORD, BUILT BEFORE THE NAMESPACE OBJECT IS REACHABLE. Its fields are §1.2's count map, §1.3's group
        stack, §1.4's timer table and §2.2's three intrinsics. */

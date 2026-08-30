@@ -295,7 +295,7 @@ void input_picker_install(JSContext *ctx, JSValueConst input_proto)
 {
     DCHECK(g_id_show_picker >= 0, "§4.10.5.4's showPicker was installed before input_picker_declare declared it");
     DCHECK(JS_IsObject(input_proto), "showPicker was installed with no HTMLInputElement.prototype");
-    idl_install_method(ctx, input_proto, "showPicker", 0, g_id_show_picker);
+    idl_install_method(ctx, input_proto, "showPicker", g_id_show_picker);
 }
 
 void input_picker_free(void)

@@ -394,8 +394,8 @@ void broadcast_channel_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "BroadcastChannel");
     event_target_install_handlers(ctx, proto, EH_PORT);
     idl_install_accessor(ctx, proto, "name", js_chan_name, 0, -1);
-    idl_install_method(ctx, proto, "postMessage", 1, g_id_post);
-    idl_install_method(ctx, proto, "close", 0, g_id_close);
+    idl_install_method(ctx, proto, "postMessage", g_id_post);
+    idl_install_method(ctx, proto, "close", g_id_close);
     JS_SetClassProto(ctx, g_chan_class, proto);
 }
 
@@ -404,7 +404,7 @@ void broadcast_channel_install(JSContext *ctx, JSValueConst global)
     JSValue ctor;
 
     DCHECK(g_ctor_stepid >= 0, "BroadcastChannel was installed before broadcast_channel_init declared it");
-    ctor = idl_step_constructor(ctx, "BroadcastChannel", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "BroadcastChannel", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the BroadcastChannel interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_chan_class);

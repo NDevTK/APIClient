@@ -468,8 +468,8 @@ void media_query_list_install_proto(JSContext *ctx)
     event_target_install_handlers(ctx, proto, EH_MEDIA_QUERY_LIST);
     idl_install_accessor(ctx, proto, "media", js_mql_media, 0, -1);
     idl_install_accessor(ctx, proto, "matches", js_mql_matches, 0, -1);
-    idl_install_method(ctx, proto, "addListener", 1, g_id_add);
-    idl_install_method(ctx, proto, "removeListener", 1, g_id_remove);
+    idl_install_method(ctx, proto, "addListener", g_id_add);
+    idl_install_method(ctx, proto, "removeListener", g_id_remove);
     JS_SetClassProto(ctx, g_mql_class, proto);
 
     base = event_proto(ctx);
@@ -494,7 +494,7 @@ void media_query_list_install(JSContext *ctx, JSValueConst global)
     JSValue ctor, proto;
 
     DCHECK(g_rt != NULL, "CSSOM VIEW §4.2 was installed before it was declared");
-    idl_install_method(ctx, (JSValue)global, "matchMedia", 1, g_id_match);
+    idl_install_method(ctx, (JSValue)global, "matchMedia", g_id_match);
 
     /* §3.7.1: an interface with NO constructor still has an interface object, and calling it is a TypeError. */
     proto = JS_GetClassProto(ctx, g_mql_class);
@@ -504,7 +504,7 @@ void media_query_list_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "MediaQueryList", ctor);
 
-    ctor = idl_step_constructor(ctx, "MediaQueryListEvent", 1, g_id_ev_ctor);
+    ctor = idl_step_constructor(ctx, "MediaQueryListEvent", g_id_ev_ctor);
     CHECK(!JS_IsException(ctor), "the MediaQueryListEvent interface object could not be allocated");
     proto = JS_GetClassProto(ctx, g_ev_class);
     DCHECK(!JS_IsNull(proto), "MediaQueryListEvent was installed in a realm with no prototype for it");

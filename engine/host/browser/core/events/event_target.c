@@ -2681,8 +2681,8 @@ static void event_target_install(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "EventTarget.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "EventTarget");
-    idl_install_method(ctx, proto, "addEventListener", 2, g_add_stepid);
-    idl_install_method(ctx, proto, "removeEventListener", 2, g_remove_stepid);
+    idl_install_method(ctx, proto, "addEventListener", g_add_stepid);
+    idl_install_method(ctx, proto, "removeEventListener", g_remove_stepid);
     idl_install_step_method(ctx, proto, "dispatchEvent", 1, g_dispatch_stepid);
     JS_SetClassProto(ctx, g_et_class, proto);   /* the realm owns it from here */
 }

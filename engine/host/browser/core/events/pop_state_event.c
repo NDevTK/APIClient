@@ -242,7 +242,7 @@ void pop_state_event_install_protos(JSContext *ctx)
 
     /* §3.7.1's interface object, on THIS realm's global — one `PopStateEvent` per realm, whose `prototype` is
        the prototype this same install just built. */
-    ctor = idl_step_constructor(ctx, "PopStateEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "PopStateEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the PopStateEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

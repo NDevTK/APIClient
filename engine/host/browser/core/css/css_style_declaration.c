@@ -3015,11 +3015,11 @@ void cssom_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, base, "parentRule", js_cssd_parent_rule, 0, -1);
     idl_install_accessor(ctx, base, "length", js_cssd_length, 0, -1);
     idl_install_accessor(ctx, base, "cssText", js_cssd_css_text, 0, g_set_css_text_id);
-    idl_install_method(ctx, base, "getPropertyValue", 1, g_get_prop_id);
-    idl_install_method(ctx, base, "removeProperty", 1, g_remove_prop_id);
-    idl_install_method(ctx, base, "getPropertyPriority", 1, g_get_priority_id);
-    idl_install_method(ctx, base, "setProperty", 2, g_set_prop_id);
-    idl_install_method(ctx, base, "item", 1, g_item_id);
+    idl_install_method(ctx, base, "getPropertyValue", g_get_prop_id);
+    idl_install_method(ctx, base, "removeProperty", g_remove_prop_id);
+    idl_install_method(ctx, base, "getPropertyPriority", g_get_priority_id);
+    idl_install_method(ctx, base, "setProperty", g_set_prop_id);
+    idl_install_method(ctx, base, "item", g_item_id);
 
     proto = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(proto), "CSSStyleProperties.prototype could not be allocated");
@@ -3125,7 +3125,7 @@ void cssom_install(JSContext *ctx, JSValueConst global)
     }
     JS_FreeValue(ctx, base);
     JS_FreeValue(ctx, proto);
-    idl_install_method(ctx, global, "getComputedStyle", 1, g_id_gcs);
+    idl_install_method(ctx, global, "getComputedStyle", g_id_gcs);
 }
 
 void cssom_free(JSRuntime *rt)

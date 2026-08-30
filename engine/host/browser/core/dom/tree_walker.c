@@ -619,13 +619,13 @@ void tree_walker_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "whatToShow", js_walker_get, 1, -1);
     idl_install_accessor(ctx, proto, "filter", js_walker_get, 2, -1);
     idl_install_accessor(ctx, proto, "currentNode", js_walker_get, 3, g_id_set_current);
-    idl_install_method(ctx, proto, "parentNode", 0, g_id_parent);
-    idl_install_method(ctx, proto, "firstChild", 0, g_id_first);
-    idl_install_method(ctx, proto, "lastChild", 0, g_id_last);
-    idl_install_method(ctx, proto, "previousSibling", 0, g_id_prev_sib);
-    idl_install_method(ctx, proto, "nextSibling", 0, g_id_next_sib);
-    idl_install_method(ctx, proto, "previousNode", 0, g_id_prev);
-    idl_install_method(ctx, proto, "nextNode", 0, g_id_next);
+    idl_install_method(ctx, proto, "parentNode", g_id_parent);
+    idl_install_method(ctx, proto, "firstChild", g_id_first);
+    idl_install_method(ctx, proto, "lastChild", g_id_last);
+    idl_install_method(ctx, proto, "previousSibling", g_id_prev_sib);
+    idl_install_method(ctx, proto, "nextSibling", g_id_next_sib);
+    idl_install_method(ctx, proto, "previousNode", g_id_prev);
+    idl_install_method(ctx, proto, "nextNode", g_id_next);
     JS_SetClassProto(ctx, g_walker_class, proto);
 }
 

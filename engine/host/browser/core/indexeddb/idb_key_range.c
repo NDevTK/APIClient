@@ -560,7 +560,7 @@ static void idb_key_range_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "upper",     js_range_bound_get, IDB_SIDE_UPPER, -1);
     idl_install_accessor(ctx, proto, "lowerOpen", js_range_open_get,  IDB_SIDE_LOWER, -1);
     idl_install_accessor(ctx, proto, "upperOpen", js_range_open_get,  IDB_SIDE_UPPER, -1);
-    idl_install_method(ctx, proto, "includes", 1, g_id_includes);
+    idl_install_method(ctx, proto, "includes", g_id_includes);
     JS_SetClassProto(ctx, g_range_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's INTERFACE OBJECT — §4.7 declares no constructor, so `new IDBKeyRange()` is a TypeError, which
@@ -569,10 +569,10 @@ static void idb_key_range_install_realm(JSContext *ctx)
     ctor = idl_interface_object(ctx, "IDBKeyRange", proto);
     CHECK(!JS_IsException(ctor), "the IDBKeyRange interface object could not be allocated");
     JS_FreeValue(ctx, proto);
-    idl_install_method(ctx, ctor, "only",       1, g_id_only);
-    idl_install_method(ctx, ctor, "lowerBound", 1, g_id_lower_bound);
-    idl_install_method(ctx, ctor, "upperBound", 1, g_id_upper_bound);
-    idl_install_method(ctx, ctor, "bound",      2, g_id_bound);
+    idl_install_method(ctx, ctor, "only", g_id_only);
+    idl_install_method(ctx, ctor, "lowerBound", g_id_lower_bound);
+    idl_install_method(ctx, ctor, "upperBound", g_id_upper_bound);
+    idl_install_method(ctx, ctor, "bound", g_id_bound);
     global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "IDBKeyRange", ctor);
     JS_FreeValue(ctx, global);

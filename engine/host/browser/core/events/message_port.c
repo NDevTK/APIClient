@@ -1023,9 +1023,9 @@ void message_port_install_protos(JSContext *ctx)
     /* §9.4.4's own `onclose` is EH_MESSAGE_PORT and not EH_PORT: EH_PORT is the MessageEventTarget mixin's
        two names, which BroadcastChannel includes as well, and §9.5 declares no `onclose` on one. */
     event_target_install_handlers(ctx, port_p, EH_PORT | EH_MESSAGE_PORT);
-    idl_install_method(ctx, port_p, "postMessage", 1, g_id_post);
-    idl_install_method(ctx, port_p, "start", 0, g_id_start);
-    idl_install_method(ctx, port_p, "close", 0, g_id_close);
+    idl_install_method(ctx, port_p, "postMessage", g_id_post);
+    idl_install_method(ctx, port_p, "start", g_id_start);
+    idl_install_method(ctx, port_p, "close", g_id_close);
     JS_SetClassProto(ctx, g_port_class, port_p);
 
     chan_p = JS_NewObject(ctx);
@@ -1050,7 +1050,7 @@ void message_port_install(JSContext *ctx, JSValueConst global)
     ctor = idl_interface_object(ctx, "MessagePort", port_p);
     JS_SetPropertyStr(ctx, (JSValue)global, "MessagePort", ctor);
 
-    ctor = idl_step_constructor(ctx, "MessageChannel", 0, g_chan_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "MessageChannel", g_chan_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the MessageChannel interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, chan_p);
     JS_SetPropertyStr(ctx, (JSValue)global, "MessageChannel", ctor);

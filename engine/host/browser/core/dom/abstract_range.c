@@ -360,7 +360,7 @@ void abstract_range_install(JSContext *ctx, JSValueConst global)
 
     proto = JS_GetClassProto(ctx, g_static_class);
     DCHECK(!JS_IsNull(proto), "StaticRange was installed in a realm that never ran its prototype install");
-    sctor = idl_step_constructor(ctx, "StaticRange", 1, g_id_static_ctor);
+    sctor = idl_step_constructor(ctx, "StaticRange", g_id_static_ctor);
     JS_SetConstructor(ctx, sctor, proto);
     JS_FreeValue(ctx, proto);
     JS_SetPropertyStr(ctx, (JSValue)global, "StaticRange", sctor);

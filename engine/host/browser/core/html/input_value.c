@@ -1358,8 +1358,8 @@ void input_value_install(JSContext *ctx, JSValueConst input_proto)
     idl_install_accessor(ctx, input_proto, "valueAsNumber", js_input_get_value_as_number, 0,
                          g_id_value_as_number);
     idl_install_accessor(ctx, input_proto, "valueAsDate", js_input_get_value_as_date, 0, g_id_value_as_date);
-    idl_install_method(ctx, input_proto, "stepUp", 0, g_id_step_up);
-    idl_install_method(ctx, input_proto, "stepDown", 0, g_id_step_down);
+    idl_install_method(ctx, input_proto, "stepUp", g_id_step_up);
+    idl_install_method(ctx, input_proto, "stepDown", g_id_step_down);
 }
 
 void input_value_free(void)

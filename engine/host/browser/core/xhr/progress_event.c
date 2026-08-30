@@ -209,7 +209,7 @@ void progress_event_install(JSContext *ctx, JSValueConst global)
     JSValue ctor, proto;
 
     DCHECK(g_ready, "ProgressEvent was installed before progress_event_init declared it");
-    ctor = idl_step_constructor(ctx, "ProgressEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "ProgressEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the ProgressEvent interface object could not be allocated");
     proto = progress_event_proto(ctx);
     JS_SetConstructor(ctx, ctor, proto);

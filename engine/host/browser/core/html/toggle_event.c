@@ -217,6 +217,13 @@ void toggle_event_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_te_class, &d);
     g_ctor_stepid = idl_method_id_dict(ctx, TE_CTOR_ARGS, 2, TE_INIT,
                                        (int)(sizeof(TE_INIT) / sizeof(TE_INIT[0])), js_te_ctor, 0);
+    /* HTML §6.5.1 The ToggleEvent interface writes
+       `constructor(DOMString type, optional ToggleEventInit eventInitDict = {})`, and the word `optional` was
+       in no code: with position 1 required, Web IDL §3.6's step 5 arity check threw a TypeError for
+       `new ToggleEvent("toggle")` — the ordinary one-argument construction. It ALSO made §3.7.1 Interface
+       object's length 2 where the IDL computes 1, which is the half a `length` audit can see; the throw is
+       the half it cannot. */
+    idl_optional_from(1);
     g_ready = 1;
     realm_declare_intrinsic(toggle_event_install_realm);
 }
@@ -239,7 +246,7 @@ static void toggle_event_install_realm(JSContext *ctx)
 
     /* §3.7.1's interface object, on THIS realm's global — one `ToggleEvent` per realm, whose `prototype` is the
        prototype this same install just built. */
-    ctor = idl_step_constructor(ctx, "ToggleEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "ToggleEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the ToggleEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

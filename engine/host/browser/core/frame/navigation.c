@@ -733,9 +733,9 @@ void navigation_install_realm(JSContext *ctx)
        `navigation.addEventListener('currententrychange', f)` is §2.7's registration. */
     proto = event_target_derived_proto(ctx);
     idl_interface_tag(ctx, proto, "Navigation");
-    idl_install_method(ctx, proto, "entries", 0, g_id_entries);
+    idl_install_method(ctx, proto, "entries", g_id_entries);
     idl_install_accessor(ctx, proto, NAV_GETTER_NAME[NAV_CURRENT_ENTRY], js_nav_get, NAV_CURRENT_ENTRY, -1);
-    idl_install_method(ctx, proto, "updateCurrentEntry", 1, g_id_update_current_entry);
+    idl_install_method(ctx, proto, "updateCurrentEntry", g_id_update_current_entry);
     idl_install_accessor(ctx, proto, NAV_GETTER_NAME[NAV_CAN_GO_BACK], js_nav_get, NAV_CAN_GO_BACK, -1);
     idl_install_accessor(ctx, proto, NAV_GETTER_NAME[NAV_CAN_GO_FORWARD], js_nav_get, NAV_CAN_GO_FORWARD, -1);
     /* §7.2.6.2's event handler IDL attributes, declared ON this interface. THREE of the four are installed:

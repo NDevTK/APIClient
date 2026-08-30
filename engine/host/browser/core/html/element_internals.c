@@ -1086,8 +1086,8 @@ static void element_internals_install_protos(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "ElementInternals.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "ElementInternals");
-    idl_install_method(ctx, proto, "setFormValue", 1, g_id_set_form_value);
-    idl_install_method(ctx, proto, "setValidity", 0, g_id_set_validity);
+    idl_install_method(ctx, proto, "setFormValue", g_id_set_form_value);
+    idl_install_method(ctx, proto, "setValidity", g_id_set_validity);
     idl_install_step_method(ctx, proto, "checkValidity", 0, g_id_check_validity);
     idl_install_step_method(ctx, proto, "reportValidity", 0, g_id_report_validity);
     idl_install_accessor(ctx, proto, "form", js_internals_get, EI_FORM, -1);
@@ -1106,10 +1106,10 @@ static void element_internals_install_protos(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "CustomStateSet.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "CustomStateSet");
-    idl_install_method(ctx, proto, "has", 1, g_id_set_has);
-    idl_install_method(ctx, proto, "add", 1, g_id_set_add);
-    idl_install_method(ctx, proto, "delete", 1, g_id_set_delete);
-    idl_install_method(ctx, proto, "clear", 0, g_id_set_clear);
+    idl_install_method(ctx, proto, "has", g_id_set_has);
+    idl_install_method(ctx, proto, "add", g_id_set_add);
+    idl_install_method(ctx, proto, "delete", g_id_set_delete);
+    idl_install_method(ctx, proto, "clear", g_id_set_clear);
     idl_install_accessor(ctx, proto, "size", js_states_size, 0, -1);
     idl_pair_iter_install(ctx, proto, g_set_pair_handle);
     JS_SetClassProto(ctx, g_states_class, proto);
@@ -1126,7 +1126,7 @@ static void element_internals_install_protos(JSContext *ctx)
 void element_internals_install_html_members(JSContext *ctx, JSValueConst html_proto)
 {
     DCHECK(g_id_attach >= 0, "attachInternals was installed before element_internals_declare ran");
-    idl_install_method(ctx, html_proto, "attachInternals", 0, g_id_attach);
+    idl_install_method(ctx, html_proto, "attachInternals", g_id_attach);
 }
 
 void element_internals_install(JSContext *ctx, JSValueConst global)

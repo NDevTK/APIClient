@@ -798,7 +798,7 @@ void request_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_request_ctor_stepid >= 0, "Request was installed before request_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "Request", 1, g_request_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "Request", g_request_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Request interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_request_class);

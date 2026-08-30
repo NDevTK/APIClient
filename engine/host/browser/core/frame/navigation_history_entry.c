@@ -343,7 +343,7 @@ void navigation_history_entry_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, proto, "NavigationHistoryEntry");
     for (i = 0; i < NHE_N; i++)
         idl_install_accessor(ctx, proto, NHE_NAME[i], js_nhe_get, i, -1);
-    idl_install_method(ctx, proto, "getState", 0, g_id_get_state);
+    idl_install_method(ctx, proto, "getState", g_id_get_state);
     /* §7.2.6.5's ONE event handler IDL attribute, declared ON this interface — the mixin bit is what says so. */
     event_target_install_handlers(ctx, proto, EH_NAVIGATION_HISTORY_ENTRY);
     JS_SetClassProto(ctx, g_nhe_class, JS_DupValue(ctx, proto));

@@ -4088,9 +4088,9 @@ void readable_stream_install_protos(JSContext *ctx)
     CHECK(!JS_IsException(stream_p), "ReadableStream.prototype could not be allocated");
     idl_interface_tag(ctx, stream_p, "ReadableStream");
     idl_install_accessor(ctx, stream_p, "locked", js_stream_locked, 0, -1);
-    idl_install_method(ctx, stream_p, "getReader", 0, g_getreader_id);
+    idl_install_method(ctx, stream_p, "getReader", g_getreader_id);
     idl_install_step_method(ctx, stream_p, "cancel", 0, g_cancel_stepids[CANCEL_ON_STREAM]);
-    idl_install_method(ctx, stream_p, "tee", 0, g_tee_id);
+    idl_install_method(ctx, stream_p, "tee", g_tee_id);
     /* §4.2.1's `async_iterable<any>` — §3.7.10's `values` and %Symbol.asyncIterator% (the SAME function
        object), §3.7.10.1's iterator and §3.7.10.2's prototype under this realm's %AsyncIteratorPrototype%. All
        of it Web IDL's, installed here because the two halves are installed together or not at all. */
@@ -4139,7 +4139,7 @@ void readable_stream_install_protos(JSContext *ctx)
     realm_value_set(ctx, g_rs_fn_slot[RSF_CANCEL],     JS_GetPropertyStr(ctx, reader_p, "cancel"));
     realm_value_set(ctx, g_rs_fn_slot[RSF_GET_READER], JS_GetPropertyStr(ctx, stream_p, "getReader"));
     realm_value_set(ctx, g_rs_fn_slot[RSF_TEE],        JS_GetPropertyStr(ctx, stream_p, "tee"));
-    realm_value_set(ctx, g_rs_fn_slot[RSF_TEE_CLONE],  idl_step_function(ctx, "tee", 0, g_tee_clone_id));
+    realm_value_set(ctx, g_rs_fn_slot[RSF_TEE_CLONE],  idl_step_function(ctx, "tee", g_tee_clone_id));
     for (i = 0; i < RSF_N; i++) {
         JSValue fn = rs_fn(ctx, i);
         CHECK(JS_IsFunction(ctx, fn), "streams: an operation §4 performs was not installed before capture");
@@ -4157,7 +4157,7 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
     DCHECK(g_ctor_stepid >= 0, "ReadableStream was installed before its constructor was declared");
-    ctor = idl_step_constructor(ctx, "ReadableStream", 0, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "ReadableStream", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the ReadableStream interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_stream_class);
@@ -4166,10 +4166,10 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
         JS_FreeValue(ctx, proto);
     }
     /* §4.2's `from` is STATIC, so it lives on the interface object rather than the prototype. */
-    idl_install_method(ctx, ctor, "from", 1, g_from_ctor_stepid);
+    idl_install_method(ctx, ctor, "from", g_from_ctor_stepid);
     JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStream", ctor);
 
-    ctor = idl_step_constructor(ctx, "ReadableStreamDefaultReader", 1, g_reader_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "ReadableStreamDefaultReader", g_reader_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the reader interface object could not be allocated");
     {
         JSValue proto = JS_GetClassProto(ctx, g_reader_class);
@@ -4179,7 +4179,7 @@ void readable_stream_install(JSContext *ctx, JSValueConst global)
     }
     JS_SetPropertyStr(ctx, (JSValue)global, "ReadableStreamDefaultReader", ctor);
 
-    ctor = idl_step_constructor(ctx, "ReadableStreamBYOBReader", 1, g_byob_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "ReadableStreamBYOBReader", g_byob_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the BYOB reader interface object could not be allocated");
     {
         JSValue proto = readable_byob_reader_proto(ctx);

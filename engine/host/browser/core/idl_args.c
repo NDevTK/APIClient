@@ -928,6 +928,28 @@ static void idl_seal_check_splits(void)
                "a member with no length-differing §3.6 overload split declared where its LONGER entry's "
                "optional arguments begin — there is no such entry, so the declaration describes a member that "
                "is not this one");
+        /* THE TWO FACTS §3.7.7 Operations' LENGTH DERIVATION RESTS ON — see idl_member_length_of. That number
+           is min(first_optional, declared positions) read at argument count 0, and for a split member it must
+           be the minimum over BOTH entries' tuples in Web IDL §2.5.8 Overloading's effective overload set, not
+           just the shorter one's. It is, because of exactly these two:
+             - `first_optional` belongs to the SHORTER entry, whose type list ends at `split_at`, so its "there
+               are none" value is split_at + 1 and it can never name a position past its own end. Declared
+               larger — which is what a split member that simply forgot idl_optional_from would leave, since
+               the default is `nargs` — the derivation would read the LONGER entry's arity and hand a page a
+               length its own shorter overload contradicts.
+             - a split member is NOT variadic, so `declared positions` is `nargs`, which is at least split_at+1.
+               With split_longer_optional > split_at asserted above, the longer entry's own shortest tuple is
+               then at least the shorter entry's, and the minimum over S is the one this derivation reads. */
+        DCHECK(m->split_at < 0 || m->first_optional <= m->split_at + 1,
+               "a §3.6 length-differing overload split's SHORTER entry declared its first optional argument "
+               "past its own type list, which ends at the split — so §3.7.7 Operations' length would be "
+               "measured against the LONGER entry's arity. State the shorter entry's own optional index with "
+               "idl_optional_from");
+        DCHECK(m->split_at < 0 || !m->variadic,
+               "a member declared BOTH a §3.6 length-differing overload split and a variadic tail — §2.5.8 "
+               "Overloading expands a variadic entry and steps 3-4 remove a shorter one, and this pool models "
+               "only one of the two at a time, so its §3.7.7 length and its arity check would both be read off "
+               "an entry set that was never computed");
         for (k = 0; k < m->nargs; k++)
             DCHECK(!idl_type_is_length_split(m->types[k]) || m->split_at == k,
                    "a member's length-differing §3.6 split was not recorded at the position its type list "
@@ -1021,6 +1043,49 @@ static int idl_declared_positions(const IdlMember *m)
            "a variadic member declared no types at all — the tail's type is what `T...` means, so there is "
            "always at least one");
     return m->variadic ? m->nargs - 1 : m->nargs;
+}
+
+/* WEB IDL §3.7.7 Operations' `length`, DERIVED FROM THE DECLARATION AND NEVER PASSED IN.
+ *
+ * §3.7.7's create-an-operation-function ends verbatim: "Compute the effective overload set for regular
+ * operations … with identifier id on target and with argument count 0, and let S be the result. Let length be
+ * the length of the shortest argument list in the entries in S. Let F be CreateBuiltinFunction(steps, length,
+ * id, « », realm)." §3.7.1 Interface object and §3.7.2 Legacy factory functions say the SAME sentence for a
+ * constructor and for a legacy factory function, over their own effective overload sets, so one derivation
+ * serves all three shapes this pool mints.
+ *
+ * IT IS THE NUMBER §3.6 STEP 5's ARITY CHECK ALREADY COMPUTES, and that is not a coincidence — both are "how
+ * many arguments does the entry that survived require", asked at argument count 0. Web IDL §2.5.8 Overloading's
+ * compute-the-effective-overload-set is what makes them the same: with N = 0, step 5.4's `max` is the member's
+ * own maxarg, so step 5.7's variadic expansion (i runs n to max − 1) appends NOTHING and only step 5.9's
+ * trailing loop can shorten a tuple. That loop breaks when "arguments[i] is not optional (i.e., it is not
+ * marked as optional and is not a final, variadic argument)", so it walks back over exactly the positions this
+ * declaration calls optional PLUS a variadic tail — which is `idl_first_optional` and `idl_declared_positions`
+ * respectively, and the shortest tuple in S is therefore the smaller of the two.
+ *
+ * THE SPLIT MEMBERS ARE THE CASE WORTH CHECKING, AND THEY COME OUT RIGHT BY THE ALGORITHM RATHER THAN BY LUCK.
+ * `idl_split_longer_survived` is `argc > split_at + 1`, which is FALSE at argc 0 — so the SHORTER entry's
+ * optionality list is the one read here, and §3.7.7's "shortest argument list in the entries in S" wants
+ * exactly that: S holds both entries' tuples, the shorter entry's type list ends at `split_at`, and
+ * idl_seal_check_splits asserts `first_optional <= split_at + 1` and that a split member is not variadic — so
+ * the shorter entry's own shortest tuple is at most `split_at + 1`, the longer entry's is at least that (its
+ * own first optional is declared PAST the split), and the minimum over S is the shorter entry's. `postMessage`
+ * is 1 and `scroll` is 0, which is what a browser answers.
+ *
+ * A PER-CALL-SITE `length` PARAMETER IS WHAT THIS REPLACES. Seven mixin installs reaching ONE declaration
+ * disagreed with each other about it — five said 1 and two said 0 for the identical arity — and `new Event()`'s
+ * interface object carried the DECLARED ARITY 2 where §3.7.1 computes 1. Neither could be caught from the
+ * outside: a `length` is a number a page reads and a feature detection branches on, and nothing compared it
+ * with the declaration standing one file away. */
+static int idl_member_length_of(const IdlMember *m)
+{
+    int declared  = idl_declared_positions(m);
+    int first_opt = idl_first_optional(m, 0);
+
+    DCHECK(first_opt >= 0 && declared >= 0,
+           "a member's declaration reached §3.7.7 Operations' length with a negative position count — both "
+           "halves are indices into its own type list, and idl_method_id_ext sets them at declaration");
+    return first_opt < declared ? first_opt : declared;
 }
 
 /* WHAT ONE NESTED-CONVERSION FRAME OWNS, declared ONCE. The state's own visit walks every declared frame
@@ -4256,6 +4321,10 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr)
     return JS_PreventExtensions(ctx, arr) < 0 ? -1 : 0;
 }
 
+/* The ONE mint and its §3.7.6 Attributes form, defined beside idl_step_function below because that is where
+   every other minting form lives; declared here because the accessor installs reach them first. */
+static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, int expect);
+
 void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
                                int getter_stepid, int setter_stepid)
 {
@@ -4267,9 +4336,9 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
                                "through idl_install_accessor, which is the form that takes no getter at all");
     /* Through the ONE mint, like every other member — an accessor's getter and setter are pool members too, and
        minting them by hand here is what left an attribute reporting itself as "(none)" in a diagnostic. */
-    g = idl_step_function(ctx, name, 0, getter_stepid);
+    g = idl_mint_accessor(ctx, name, getter_stepid, 0);
     if (setter_stepid >= 0)
-        st = idl_step_function(ctx, name, 1, setter_stepid);
+        st = idl_mint_accessor(ctx, name, setter_stepid, 1);
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, a);
@@ -4342,7 +4411,7 @@ static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char 
        runs none of the page's code), but the SETTER is a step member exactly like any other, so it is minted
        the same way and named the same way. It was the fourth hand-written mint. */
     if (setter_stepid >= 0)
-        st = idl_step_function(ctx, name, 1, setter_stepid);
+        st = idl_mint_accessor(ctx, name, setter_stepid, 1);
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st, flags);
     JS_FreeAtom(ctx, a);
 }
@@ -4652,7 +4721,9 @@ JSValue idl_callback_interface_object(JSContext *ctx, const char *name)
     return f;
 }
 
-JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid)
+/* THE ONE MINT, and the one place §3.7.7 Operations' `length` is stated — see idl_member_length_of. A caller
+   names the member and the pool answers how long it is; there is no argument for a caller to get wrong. */
+static JSValue idl_mint_step(JSContext *ctx, const char *name, int stepid, JSCFunctionEnum cproto)
 {
     int idx = idl_member_of_step(stepid);
     /* NAMING THE OFFENDER IS THE POINT. "some member was never declared" sends whoever hits it grepping every
@@ -4662,21 +4733,50 @@ JSValue idl_step_function(JSContext *ctx, const char *name, int length, int step
                "not an args-machine member installs through idl_install_step_method", name ? name : "?");
     DCHECK(name != NULL && *name, "a step function was minted with no name — the pool has nothing to call it");
     idl_member(idx)->name = name;
-    return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid);
+    return JS_NewCFunction2(ctx, NULL, name, idl_member_length_of(idl_member(idx)), cproto, stepid);
 }
 
-/* The same mint for a member reached with `new`. JS_CFUNC_step_ctor differs only in how the receiver slot
-   carries new.target; the pool entry and its name are the same thing. */
-JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int stepid)
+/* AN ATTRIBUTE'S ACCESSOR, whose length is WEB IDL §3.7.6 Attributes' OWN number and not §3.7.7 Operations':
+   create-an-attribute-getter ends "Let F be CreateBuiltinFunction(steps, 0, name, « », realm)" and
+   create-an-attribute-setter ends with the same line carrying 1. Those are constants of the SECTION — every
+   attribute getter is 0 and every setter is 1, whatever it is an attribute of — so this states them, and the
+   derivation is asserted to agree rather than being trusted to: a getter is declared with no argument position
+   and a setter with exactly one, so the two numbers coincide today, and the day a declaration stops agreeing
+   is the day one of the two is wrong. Which one is then visible instead of silent. */
+static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, int expect)
 {
     int idx = idl_member_of_step(stepid);
-    DCHECK(idx >= 0, "a step constructor was minted for a member this pool never declared");
-    DCHECK(name != NULL && *name, "a step constructor was minted with no name");
-    idl_member(idx)->name = name;
-    return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step_ctor, stepid);
+
+    DCHECKF(idx < 0 || idl_member_length_of(idl_member(idx)) == expect,
+            "the Web IDL §3.7.6 Attributes %s for '%s' derives length %d from its declaration where §3.7.6 "
+            "mints it with %d — an attribute getter declares no argument position and a setter declares "
+            "exactly one, so a declaration that says otherwise is describing an operation and not an attribute",
+            expect ? "setter" : "getter", name ? name : "?",
+            idl_member_length_of(idl_member(idx)), expect);
+    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step);
 }
 
-void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid,
+/* MINT WITHOUT INSTALLING — for an internal door a C caller holds and calls rather than a property a page
+   reads (core/html/focus.c's two, core/frame/remote_object.c's four proxy traps, core/timing/timer.c's §8.7
+   Timers re-arm door). It carries the same derived §3.7.7 Operations length as an installed member, because it
+   is the same member: a page that reaches one of these objects reads the same `length` off it. */
+JSValue idl_step_function(JSContext *ctx, const char *name, int stepid)
+{
+    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step);
+}
+
+/* The same mint for a member reached with `new` — Web IDL §3.7.1 Interface object's `length`, which is the
+   same sentence §3.7.7 states over the effective overload set for CONSTRUCTORS. JS_CFUNC_step_ctor differs
+   only in how the receiver slot carries new.target; the pool entry and its name are the same thing. */
+JSValue idl_step_constructor(JSContext *ctx, const char *name, int stepid)
+{
+    DCHECK(idl_member_of_step(stepid) >= 0, "a step constructor was minted for a member this pool never "
+                                            "declared");
+    DCHECK(name != NULL && *name, "a step constructor was minted with no name");
+    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step_ctor);
+}
+
+void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int stepid,
                                 IdlExposure exposure)
 {
     /* §3.3.13: the member is simply NOT THERE — the same rule an attribute's install already states, asked at
@@ -4684,14 +4784,14 @@ void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char 
        arrived (File System §3's `getDirectory`), and `'getDirectory' in navigator.storage` is exactly the
        feature detection the removal exists to answer honestly. */
     if (!idl_exposed(ctx, exposure)) return;
-    idl_install_method(ctx, target, name, length, stepid);
+    idl_install_method(ctx, target, name, stepid);
 }
 
-void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid)
+void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int stepid)
 {
     DCHECK(idl_declared_before_seal(stepid), name);
     DCHECK(stepid >= 0, "an IDL member was installed before it was declared");
-    JS_SetPropertyStr(ctx, (JSValue)target, name, idl_step_function(ctx, name, length, stepid));
+    JS_SetPropertyStr(ctx, (JSValue)target, name, idl_mint_step(ctx, name, stepid, JS_CFUNC_step));
 }
 
 /* §3.7.7 "Operations"'s UNFORGEABLE HALF, which is the operation twin of idl_install_accessor_unforgeable and
@@ -4707,12 +4807,11 @@ void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, i
    installer available was idl_install_method — a JS_SetPropertyStr, so configurable AND writable, which is
    precisely the forgery `[LegacyUnforgeable]` on a Location exists to prevent. A component reaching for the
    wrong installer would not fail; it would ship a Location whose `replace` a page can overwrite. */
-void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const char *name, int length,
-                                    int stepid)
+void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const char *name, int stepid)
 {
     DCHECK(idl_declared_before_seal(stepid), name);
     DCHECK(stepid >= 0, "an unforgeable IDL operation was installed before it was declared");
-    JS_DefinePropertyValueStr(ctx, (JSValue)target, name, idl_step_function(ctx, name, length, stepid),
+    JS_DefinePropertyValueStr(ctx, (JSValue)target, name, idl_mint_step(ctx, name, stepid, JS_CFUNC_step),
                               JS_PROP_ENUMERABLE);
 }
 
@@ -4722,7 +4821,21 @@ void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const c
    collapsing them into idl_install_method is what made a five-second member report itself as "(none)".
    Two installers because there are two kinds; each asserts it was handed its own kind, so neither can be used
    for the other by mistake. The IDL-shaped future for these is to declare their arguments through the args
-   machine like every other member — at which point they move to idl_install_method and this loses a caller. */
+   machine like every other member — at which point they move to idl_install_method and this loses a caller.
+   RESIDUAL — THIS INSTALLER STILL TAKES `length` AND CANNOT DERIVE IT.
+   NOT COVERED: fifty installs across fourteen files (core/dom/observable.c and observable_ops.c, the five
+   core/streams files, core/events/event_target.c, core/html/html_form.c and element_internals.c,
+   core/idl_async_iter.c, core/idl_iter.c) register their algorithm with a raw JS_RegisterStepDef and have NO
+   pool entry, so there is no declared arity for Web IDL §3.7.7 Operations' length to be computed from and the
+   number at the call site is the ONLY statement of it. That is why this is a residual and not a DFAIL: the
+   code is correct for what it does, and the assert below is what keeps it from being reached by a member that
+   COULD derive — a declared member cannot arrive here, and a raw one cannot reach idl_install_method.
+   WHAT THE NEXT DIFF BUILDS: those members' arguments declared through this machine (idl_method_id_step and
+   its siblings), one component at a time, at which point each moves to idl_install_method, loses its number,
+   and this installer loses a caller — reaching zero, at which point it deletes.
+   HOW ITS ABSENCE WOULD SHOW: a `length` a page reads off one of those fifty members disagreeing with its
+   IDL — `subscription.addTeardown.length`, `writer.write.length` — with nothing in this engine able to say so,
+   which is exactly how seven mixin installs came to disagree with each other. */
 void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid)
 {
     DCHECK(stepid >= 0, "a step method was installed before its definition was registered");

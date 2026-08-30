@@ -285,7 +285,7 @@ void focus_event_install_protos(JSContext *ctx)
     JS_SetClassProto(ctx, g_fe_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object on THIS realm's global — see ui_event.c. */
-    ctor = idl_step_constructor(ctx, "FocusEvent", 1, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "FocusEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the FocusEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

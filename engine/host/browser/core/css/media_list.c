@@ -406,10 +406,10 @@ void media_list_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "MediaList");
     idl_install_accessor(ctx, proto, "mediaText", js_ml_media_text, 0, g_id_set_media_text);
     idl_install_accessor_no_user_code(ctx, proto, "length", js_ml_length, 0, -1);
-    idl_install_method(ctx, proto, "item", 1, g_id_item);
-    idl_install_method(ctx, proto, "appendMedium", 1, g_id_append);
-    idl_install_method(ctx, proto, "deleteMedium", 1, g_id_delete);
-    idl_install_method(ctx, proto, "toString", 0, g_id_to_string);
+    idl_install_method(ctx, proto, "item", g_id_item);
+    idl_install_method(ctx, proto, "appendMedium", g_id_append);
+    idl_install_method(ctx, proto, "deleteMedium", g_id_delete);
+    idl_install_method(ctx, proto, "toString", g_id_to_string);
     /* Web IDL §3.7.10: an indexed property getter plus an integer `length` gets %Array.prototype.values% as
        @@iterator. §4.4 declares no `iterable<>`, so it gets that and NOT `entries`/`keys`/`forEach`. */
     idl_indexed_install_iterable(ctx, proto);

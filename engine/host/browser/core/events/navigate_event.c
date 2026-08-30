@@ -426,7 +426,7 @@ void navigate_event_install_protos(JSContext *ctx)
 
     /* §3.7.1's interface object, on THIS realm's global. Its LENGTH is 2: Web IDL §3.7.4.1's length is the
        number of REQUIRED arguments, and this constructor's dictionary is not optional. */
-    ctor = idl_step_constructor(ctx, "NavigateEvent", 2, g_ctor_stepid);
+    ctor = idl_step_constructor(ctx, "NavigateEvent", g_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the NavigateEvent interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);

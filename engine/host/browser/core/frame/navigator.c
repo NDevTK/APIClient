@@ -405,7 +405,7 @@ static void navigator_install_realm(JSContext *ctx)
         idl_install_accessor_exposed(ctx, proto, NAV_NAME[i], js_nav_get, i, -1, NAV_EXPOSURE[i]);
     idl_install_accessor(ctx, proto, "userActivation", js_nav_user_activation, 0, -1);
     idl_install_accessor(ctx, proto, "permissions", js_nav_permissions, 0, -1);
-    idl_install_method(ctx, proto, "javaEnabled", 0, g_id_java_enabled);
+    idl_install_method(ctx, proto, "javaEnabled", g_id_java_enabled);
     /* BEACON §2.1's `partial interface Navigator` — the OBJECT is HTML's and the MEMBER is that standard's, so
        its component installs it on the prototype this realm just built. It takes the prototype rather than
        reading the realm's Navigator back, because §2.1 declares an OPERATION on the interface: a method put on

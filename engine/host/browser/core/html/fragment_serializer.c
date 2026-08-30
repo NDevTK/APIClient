@@ -654,7 +654,7 @@ void fragment_serializer_init(JSContext *ctx)
 void fragment_serializer_install_get_html(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_ready, "§8.5.3's getHTML was installed before fragment_serializer_init ran");
-    idl_install_method(ctx, proto, "getHTML", 0, g_id_get_html);
+    idl_install_method(ctx, proto, "getHTML", g_id_get_html);
 }
 
 void fragment_serializer_free(void)
