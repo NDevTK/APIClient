@@ -831,6 +831,28 @@ async function frontierResidency() {
    absence of the field IS the positive statement "not shed", and the assert is what keeps it one. */
 function frontierRecord(e, when) {
   frontierPlace(e, when);
+  /* THE TWO NUMBERS THE LEVEL-1 ORDER IS MADE OF, ASSERTED AT THE DOOR THEY ARE WRITTEN THROUGH — which is
+     the half this grammar had no sentence for. Every other field of an entry is checked here in both
+     directions, and the ranking pair was checked only at the READ (`frontierWeight`), where a non-negative
+     number passes whatever it means: an `emit` counting the wrong surface, an `emit` accumulating a quantity
+     its consumer divides, or a `visits` restarted at 1 on an entry that has been admitted fifty times are
+     each a perfectly well-formed pair and each of them silently decides which document this profile spends
+     its next fetch on. A field whose only assertion stands at its reader cannot distinguish a producer that
+     stopped writing it from one that never meant what the reader reads.
+     `visits` IS AT LEAST ONE ON A STORED ENTRY, and that is the row that separates the two populations
+     `frontierWeight` serves. An entry exists only because a run FINISHED and persisted its residue, so a
+     stored `visits` of 0 is a record written by something that never ran — while `visits: 0` handed to the
+     weight is the legitimate statement a WAITING work item makes about itself (`FRONTIER_UNSERVED`), which
+     is not a stored row and never reaches this door. Read at the weight alone the two are one number. */
+  DCHECK(typeof e.emit === "number" && e.emit >= 0 && Number.isFinite(e.emit),
+         "a cold-tier entry " + when + " with no emitted-value count (`" + String(e.emit) + "`) — it is the " +
+         "reward half of the ONE WFQ order at Level-1, so an entry without it is ranked by its optimism bonus " +
+         "alone and a productive parked frontier is admitted as one that has never found anything");
+  DCHECK(typeof e.visits === "number" && Number.isInteger(e.visits) && e.visits >= 1,
+         "a cold-tier entry " + when + " with no admission count (`" + String(e.visits) + "`) — a stored " +
+         "entry exists because a run finished, so its visits are at least one, and this is the divisor that " +
+         "amortises the demonstrated surface over the fetches spent on it; without it a document that has " +
+         "been re-fetched fifty times ranks exactly like one nobody has ever opened");
   DCHECK((e.html !== undefined) !== (e.shed === true),
          "a cold-tier entry " + when + " claiming `shed=" + String(e.shed) + "` while its document half is " +
          (e.html === undefined ? "absent" : "present") + " — the two are complements, and a record that " +
@@ -933,7 +955,17 @@ async function frontierAll() {
    is a comparison rather than a coincidence of scales.
    A ZERO-VISIT ROW IS A POSITIVE STATEMENT, NOT A DEFAULT: it says this item has never been SERVED at this
    level, which is what a waiting document is, and its weight is then the full optimism bonus and nothing
-   else. The duplicate JS scheduler lib/priority.js was DELETED. */
+   else. The duplicate JS scheduler lib/priority.js was DELETED.
+   AND `emit` IS ONE RUN'S DEMONSTRATED SURFACE, WHICH IS WHAT MAKES THE DIVISION A RATE AT ALL. The sentence
+   above — "expected FUTURE productivity is estimated by emit-per-VISIT" — was written while the writer ADDED
+   each run's whole finding count to the last, so the quotient was the mean of a sequence of totals, which for
+   a document whose surface does not change is that total: a reward that does not fall however many fetches
+   are spent re-learning the same endpoints. The consumer's arithmetic was right and the producer's quantity
+   was not, which is the shape that has no symptom — every number is real, non-negative and plausible, and the
+   only thing it decides is which address this profile spends its next fetch on, for ever. With the writer
+   stating the LAST run's surface, `emit / visits` is the running mean of the NEW findings per admission
+   whenever the surface is monotone, and §scheduler's "an unproductive document sinks rather than being
+   re-fetched at rank for ever" is a property of this expression rather than a sentence about it. */
 const FRONTIER_UNSERVED = { emit: 0, visits: 0 };
 function frontierWeight(row) {
   DCHECK(row && typeof row.emit === "number" && row.emit >= 0 && row.emit === row.emit,
@@ -3833,6 +3865,17 @@ const _hostOps = {
              "recipes and its endpoint count are what this origin's cross-session entry is MADE of, and a " +
              "missing one would erase a previous session's parked residue rather than extend it");
       const prior = result._prior;
+      /* AND THE PRIOR ENTRY'S OWN RANKING PAIR, ASSERTED WHERE IT IS TAKEN OFF THE ANALYSIS. This copy came
+         from `frontierGet` at the root, which is the ONE read of this store that does not go through
+         `frontierIndex` and therefore the one entry the record grammar never saw. Its `visits` is the number
+         the next admission of this address is amortised against, so an entry written by an older build — or
+         by a write that landed half a shed — would restart the count here with nothing to say so, and the
+         only symptom would be a document that keeps winning the Level-1 pick. */
+      DCHECK(prior === null || prior === undefined ||
+             (typeof prior.visits === "number" && Number.isInteger(prior.visits) && prior.visits >= 1),
+             "the parked entry this run resumed carries no admission count (`" + String(prior && prior.visits) +
+             "`) — it is the divisor the next Level-1 rank of this address is computed from, and a count that " +
+             "restarts here is a document that has been re-fetched many times ranking as one nobody has opened");
       await frontierPut(result._fkey, {
         /* THE TOP-LEVEL CREATION URL IS PART OF THE RECIPE, because a resumed flow must resume into the same
            ENVIRONMENT it parked in: §8.1.3.5 decides secure-context from it, so a rehydration that lost it
@@ -3854,7 +3897,50 @@ const _hostOps = {
            failure it would hide is "the recipes joined to the empty string", which reads to the next session
            as an origin that finished rather than one whose parked flows were dropped. */
         credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
-        emit: ((prior && prior.emit) || 0) + result.fetchCallSites.length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
+        /* `emit` IS THE SURFACE THIS RUN DEMONSTRATED, AND IT USED TO ACCUMULATE ONE TERM OF IT PER VISIT.
+           Its consumer divides: `frontierWeight` computes `emit / visits` and names it "expected emit per
+           admission — future productivity". Added up over admissions, the quotient is the arithmetic MEAN OF
+           A SEQUENCE OF TOTALS, and for a document whose surface does not change that mean IS the total — a
+           number that does not fall however many fetches are spent re-learning the same endpoints. §scheduler
+           requires the opposite of a document ("an unproductive document sinks rather than being re-fetched
+           at rank for ever"), and the only term left that could deliver it is the optimism bonus, whose
+           ENTIRE RANGE IS 1.0 — which is also exactly what a never-seen address enters at. So a document that
+           demonstrated ten endpoints once outranked every address this profile has never opened, permanently,
+           and was re-fetched at rank for ever. That is the loop, and it needs no cycle in the seeding to
+           arrive: it is what the Level-1 order does to any endpoint-rich page on its own.
+           WHAT THE QUOTIENT MEANS NOW IS DERIVED, NOT PICKED. This states the surface the LAST completed run
+           demonstrated, so `emit / visits` amortises that surface over the admissions spent reaching it — and
+           whenever the demonstrated surface is monotone that is EXACTLY the running mean of the NEW findings
+           per visit: a second admission that demonstrates the same ten demonstrated zero new, and 10/2 = 5 is
+           the mean of {10, 0}. A document that keeps growing keeps its rate; one that re-learns what it
+           already knew decays toward zero and passes below the never-seen addresses at 1.0. No constant, no
+           decay rate and no threshold enters — the arithmetic is the definition of the quantity, and the
+           crossing it produces is an identity rather than a tuning: a document demonstrating F findings and
+           learning nothing new is worth exactly F+1 admissions before it ranks below an address nobody has
+           opened, because `F/n + 1/(n+1)` first falls under 1 at `n = F+1` (at `n = F` it is `1 + 1/(F+1)`,
+           and at `n = F+1` it is `1 − 1/(F+1) + 1/(F+2)`). A document is worth as many fetches as it has
+           shown findings, which is the exchange §scheduler asks for and nobody had to pick.
+           IT IS NOT A BOUND AND NOTHING STOPS A SECOND FETCH. The entry keeps its recipes, its address, its
+           principal and its MEMBERSHIP of the one frontier at every value of this number; what changes is
+           only where it stands, and when nothing outranks it, it is admitted and re-fetched exactly as
+           §OOM/paging's re-derivable tier requires. Sinking is starvation, which is permitted; the cap this
+           design forbids would be refusing to admit it at all.
+           AND IT COUNTS BOTH HALVES OF WHAT A RUN EMITS. §scheduler's value is "new @H+@S"; this counted
+           `fetchCallSites` alone, so a document whose entire output is fire-verified @S PoCs and no endpoints
+           wrote `emit: 0` and was ranked, for the rest of the profile's life, as one that had found nothing.
+           The incremental merge one screen up already refuses that same reading of these same two arrays
+           ("Merge on EITHER surface: an XSS-only page carries verified @S PoCs with no endpoints"); the
+           persisted reward was the copy that had not been corrected. Both arrays are guaranteed on the arm
+           this gate selects, by the same `analysisHasDocument` premise the recipes rest on. */
+        emit: result.fetchCallSites.length + result.securitySinks.length,
+        /* `visits` COUNTS ADMISSIONS AND THE TWO STATES ARE STATED RATHER THAN DEFAULTED. An absent `prior` is
+           the positive fact "this address's residue has never been persisted under this key", which is one
+           admission; a `|| 0` reads a prior whose count stopped being written as that same first admission,
+           and with `emit` no longer accumulating that restarts the amortisation — handing a document that has
+           been re-fetched fifty times the rank of one nobody has opened, which is precisely the ratchet this
+           write exists to close. `prior` came off the store through the ONE read that does not pass the record
+           grammar, which is why its count is asserted above, before this line reads it. */
+        visits: prior ? prior.visits + 1 : 1, ts: Date.now(),
       });
     }
     if (eng._cold) {
