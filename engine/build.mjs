@@ -955,10 +955,10 @@ function pageErrorText(out) {
   /* THE STAGED COUNT IS CARRIED EVEN WHEN NOTHING IS WRONG, because its DISAPPEARANCE is the other direction
      this line can report: a run in which the document staged two errors and produced one is a run whose
      fixture stopped exercising something, and a reader shown only the rogue population would see silence. */
-  const stagedText = `${known.length} staged of ${staged.size} declared`;
-  if (!rogue.length) return ` — page errors: ${stagedText}, none unstaged`;
+  const stagedText = `${known.length} from the ${staged.size} address(es) it declares`;
+  if (!rogue.length) return ` — ${errs.length} page error(s), all staged: ${stagedText}`;
   const q = (e) => `${JSON.stringify(e.msg.slice(0, 160))} at ${e.at === "-" ? "no throw site (§8.1.4.6's own answer for a value with no backtrace)" : e.at}`;
-  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (${stagedText}), first: ${q(rogue[0])}` +
+  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (plus ${stagedText}), first: ${q(rogue[0])}` +
          (rogue.length > 1 ? ` (+${rogue.length - 1} more, deduped by solver/result.c on (message, throw site))` : "");
 }
 
