@@ -347,7 +347,12 @@ JSValue     concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSV
    read through here: it lives in the value's identity, composed from the operator and both operands, which is
    what decide.c keys the constraint by. */
 int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);
-int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);
+/* JSConcolicHooks.cmp — `op` names WHICH equality the program wrote (quickjs.h's JSConcolicEqOp), because
+   §7.2.13 IsLooselyEqual and §7.2.14 IsStrictlyEqual disagree and this hook does two things that need the
+   answer: it composes the operator into the predicate's IDENTITY (so `x == '1'` and `x === '1'` are two
+   constraint entries rather than one deciding the other), and it RUNS the comparison on the operands' concrete
+   examples to give the result its own. */
+int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op);
 /* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp, and it composes its operator and BOTH operands
    into the result's identity exactly as the equality hook does. It composed neither, which made every ordering
    over one source ONE predicate: `parseInt(gCS(a).width) < 700` decided `parseInt(gCS(b).width) < 300`. */

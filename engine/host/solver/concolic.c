@@ -1289,6 +1289,19 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     return r;
 }
 
+/* THE FOUR OPERATORS, SPELLED ONCE — the identity's operator field, and the ONE place the four equality
+   spellings a program can write are turned into the four ids a constraint key is composed from. It is a
+   function rather than four literals at the mint because concolic_new_cmp composes the same field for a
+   component whose IDL member IS a comparison, and the two must agree exactly or a page writing the comparison
+   the component declares would fork a second time over the same predicate. */
+static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
+    if (op == JS_CONCOLIC_EQ_STRICT) return is_neq ? "!==" : "===";
+    DCHECK(op == JS_CONCOLIC_EQ_LOOSE,
+           "an equality was spelled for an algorithm quickjs.h does not declare — the identity would name a "
+           "predicate no operator produces, and two real ones would compose under it");
+    return is_neq ? "!=" : "==";
+}
+
 /* MINT A COMPARISON RESULT — the boolean `if (x === 'admin')` and `if (x < 700)` branch on.
  *
  * ITS IDENTITY IS THE OPERATOR AND BOTH OPERANDS, which is the whole of the predicate, so a comparison result
@@ -1368,11 +1381,18 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *to
            "an ordering is minted by the relational hook, which composes the engine's own operator id");
     sf[0] = src;
     kf[0] = "s"; kf[1] = tok;   /* the token is a string literal by construction here */
+    /* AND IT IS THE **STRICT** SPELLING, WHICH IS WHAT MAKES THIS ONE ENTRY WITH THE PAGE'S OWN TEST. The
+       specs that define these members define them as strict equalities of strings — HTML §6.2 "the `hidden`
+       attribute" is `visibilityState` being `"hidden"` — so a page that writes the comparison out writes
+       `===`, reaches concolic_cmp_hook with JS_CONCOLIC_EQ_STRICT, and composes `===` there. Spelling `==`
+       here would make the component's own member and the page's own test two predicates over one source, each
+       forking the other's settled gate. A component whose IDL member is a LOOSE comparison does not exist and
+       would have to say so at this entry rather than be assumed by it. */
     /* THE COMPONENT'S OWN MEMBER IS A SOURCE READ, so it is its own root exactly as concolic_new's is. */
     /* THE COMPONENT'S SOURCE IS ITS OWN HOLE. A declared source's shape is its provenance in braces
        (concolic_source_wrap asserts exactly that), so stripping them gives `src` back — stated here rather
        than by calling the stripper on a shape this function was never handed. */
-    return pred_new(ctx, op == OPCMP_NE ? "!=" : "==", src, src,
+    return pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
                     concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2), op, tok, src);
 }
 /* …AND THE TWIN FOR A RELATION OVER TWO LIVE VALUES, for a browser component whose own algorithm compares two
@@ -1440,7 +1460,76 @@ const char *concolic_cmp_subject(JSValueConst v) {
    defect this file just removed from the ordering hook, in the one place the host cannot see the distinction:
    it needs quickjs to say which of the two called, the way JS_CARITH_* already spares the solver the opcode
    numbers. */
-int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
+/* IS THIS EXAMPLE ONE THE COMPARISON MAY BE RUN ON — asked of both sides before §7.2.13 or §7.2.14 is run on
+   them, and the answer for an OBJECT or a SYMBOL is no, for one reason that covers both algorithms.
+   §7.2.13 IsLooselyEqual step 12 converts an object with ToPrimitive, which runs the PAGE's own valueOf or
+   toString, and naming that call's result here would be inventing it — the same refusal literal_tok already
+   makes for the same operand. §7.2.14 IsStrictlyEqual runs no code for an object (SameType holds and
+   SameValueNonNumber compares identity), so it would be SAFE and is still refused, because the question it
+   would answer is the wrong one: an example object is a value THIS ENGINE minted to stand for an unknown, never
+   the page's own object, so comparing its identity against anything reports a fact about an allocation the
+   program never made. One rule for both, and the absence is a positive statement rather than a gap. */
+static int example_comparable(JSValueConst v) {
+    return !JS_IsObject(v) && !JS_IsSymbol(v);
+}
+
+/* THE COMPARISON'S OWN EXAMPLE — §Solver-half's "every op propagates the example" applied to the operator this
+ * hook is for, and it propagates for the reason that section gives in its next sentence: "the example
+ * propagates because the engine RUNS THE REAL OP on the concrete". So this runs the engine's own equality —
+ * `JS_IsStrictEqual` is §7.2.14 and `JS_IsEqual` is §7.2.13 — over values the run already holds, and never a
+ * re-implementation of either. A hand-rolled comparison here would be the second evaluator §Re-execution
+ * forbids, and it would be wrong within a week: the two algorithms disagree at step 1 and only the engine's
+ * own code knows every way they do.
+ *
+ * WHICH ALGORITHM IS THE CALLER'S TO STATE and arrives as `op` (quickjs.h's JSConcolicEqOp). The hook used to
+ * be told only `is_neq`, which is why this could not exist: `"1" == 1` is true and `"1" === 1` is false, so
+ * with the algorithm unnamed there is no answer to run.
+ *
+ * AN OPERAND WITH NO EXAMPLE YIELDS A RESULT WITH NO EXAMPLE — attacker input and server-injected absent state
+ * are example-free by design, and a comparison over one determines nothing about which arm a real session
+ * takes. Collapsing that to `false` would invent it, which is the §@H fabrication this whole triple exists to
+ * refuse; decide.c reads the absence as REAL_ARM_UNOBSERVED and keeps both arms unmarked.
+ *
+ * A CONCRETE OPERAND ALWAYS HAS A VALUE, INCLUDING `undefined`, and that distinction is the whole of `hava`
+ * and `havb`. JS_UNDEFINED is concolic.h's spelling of "this value carries no example"; it is ALSO an ordinary
+ * ECMAScript value that a page compares against constantly (`if (cfg.admin === undefined)`). Reading the
+ * second as the first would drop the example of every such gate — the commonest shape after a string literal
+ * — so absence is asked of the CONCOLIC side only, where it is what the encoding means. */
+static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int ca, int cb,
+                           int is_neq, JSConcolicEqOp op) {
+    JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
+    JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
+    int hava = ca ? !JS_IsUndefined(exa) : 1;
+    int havb = cb ? !JS_IsUndefined(exb) : 1;
+    JSValue out = JS_UNDEFINED;
+
+    if (hava && havb && example_comparable(exa) && example_comparable(exb)) {
+        int eq;
+        DCHECK(!concolic_is(exa) && !concolic_is(exb),
+               "an example that is itself a concolic value reached the real comparison — `JS_IsEqual` would "
+               "re-enter this very hook, and a value whose example is another unknown is a producer having "
+               "attached a symbol where a concrete stands");
+        if (op == JS_CONCOLIC_EQ_STRICT) {
+            eq = JS_IsStrictEqual(ctx, exa, exb) ? 1 : 0;
+        } else {
+            DCHECK(op == JS_CONCOLIC_EQ_LOOSE,
+                   "an equality reached the concolic derivation naming an algorithm quickjs.h does not "
+                   "declare — 7.2.13 and 7.2.14 disagree, so an unnamed caller has no answer here");
+            eq = JS_IsEqual(ctx, exa, exb);
+            /* §7.2.13's only failure is an abrupt ToPrimitive, which the operand test above has already made
+               unreachable: neither side is an object. A -1 here is that test and this call disagreeing about
+               what the operands are, and the throw it left standing would surface in the page's next
+               statement as a TypeError it never wrote. */
+            CHECK(eq >= 0, "concolic ==: 7.2.13 IsLooselyEqual refused two operands that carry no object");
+        }
+        out = JS_NewBool(ctx, eq ^ (is_neq ? 1 : 0));
+    }
+    JS_FreeValue(ctx, exa);
+    JS_FreeValue(ctx, exb);
+    return out;
+}
+
+int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
     JSValueConst opq, other;
@@ -1483,8 +1572,20 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
        every derived value is the braced shape itself and would be looked up under a name the emission never
        spells. Minted only where there is a token, because the subject and the token are one observation. */
     subj = tok ? concolic_hole_key(concolic_shape_c(opq)) : NULL;
-    res = pred_new(ctx, is_neq ? "!=" : "==", src, root, iu, io,
+    /* THE OPERATOR IN THE IDENTITY IS THE ONE THE PAGE WROTE, ALL FOUR OF THEM, and this spelled two. It was
+       `is_neq ? "!=" : "=="` for BOTH algorithms, so `x == '1'` and `x === '1'` composed to ONE constraint key
+       — two different predicates over one operand, and §7.2.13 and §7.2.14 answer differently for exactly the
+       pairs a minified bundle writes `==` for. A flow that decided either then DECIDED the other through
+       decide.c's feasible refinement, pruning an arm nothing had contradicted, which is the soundness bug this
+       file already fixed once for the relational operators ("`x < 700` and `x > 700` were one fact too"). The
+       algorithm is now stated by the caller, so the identity can say which. */
+    res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, iu, io,
                    tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok, subj);
+    /* …AND THE RESULT'S OWN EXAMPLE, run rather than derived. It is attached AFTER the mint for the reason
+       page_visibility.c attaches one: pred_new's parameters are the PREDICATE (its operator, operands, pin and
+       subject), and the example is not part of the predicate — it is what this run computed the predicate to
+       be, which is a different fact about the same value. */
+    concolic_set_example(ctx, res, cmp_example(ctx, a, b, ca, cb, is_neq, op));
     free(subj);
     free(tok);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
@@ -2623,8 +2724,17 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
 
     JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
     JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
+    /* A CONCRETE OPERAND ALWAYS HAS A VALUE, INCLUDING `undefined` — the same distinction cmp_example draws
+       and the same defect this line carried. JS_UNDEFINED is concolic.h's spelling of "carries no example";
+       it is ALSO an ordinary ECMAScript value, and `x + undefined` is a real §13.15.3 whose result this
+       engine can compute exactly (`"a" + undefined` is `"aundefined"`, `1 + undefined` is NaN). Reading the
+       second as the first dropped the example of every such sum, which by this file's own note above turns a
+       computed value into a shape with nothing saying a concatenation was lost. Absence is asked of the
+       CONCOLIC side only, where it is what the encoding means. */
+    int hava = ca ? !JS_IsUndefined(exa) : 1;
+    int havb = cb ? !JS_IsUndefined(exb) : 1;
     JSValue example = JS_UNDEFINED;
-    if (!JS_IsUndefined(exa) && !JS_IsUndefined(exb)) {
+    if (hava && havb) {
         /* STEP 1.c TESTS PRIMITIVES, and both of the ways a non-primitive can arrive here are named because
            they are different bugs with different fixes. This one operand is either a CONCOLIC's example or a
            CONCRETE operand handed straight over by the operator, and each has its own producer. */
