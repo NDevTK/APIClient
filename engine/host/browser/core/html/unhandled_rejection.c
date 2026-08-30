@@ -332,7 +332,7 @@ void unhandled_rejection_init(JSContext *ctx)
     g_id_pre_ctor = idl_method_id_dict(ctx, PRE_CTOR_ARGS, 2, PRE_INIT,
                                        (int)(sizeof(PRE_INIT) / sizeof(PRE_INIT[0])), js_pre_ctor, 0);
     agent_state_flag("unhandled_rejection", &g_ready, "the declaration latch");
-    agent_state_value("unhandled_rejection", &g_list, "§8.1.7.5's list of about-to-be-notified rejections");
+    agent_state_value("unhandled_rejection", &g_list, "§8.1.3.3's about-to-be-notified rejected promises list");
     agent_state_value("unhandled_rejection", &g_pre_key, "PromiseRejectionEvent's internal-slot key");
     agent_state_id("unhandled_rejection", &g_notify_slot, "§8.1.4.7's notifyRejected realm slot");
     agent_state_id("unhandled_rejection", &g_notify_stepid, "§8.1.4.7's notification driver machine");
@@ -389,7 +389,8 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
 }
 
 /* THE RUNTIME, NOT A REALM, and it is the platform's release column that calls it — see core/platform.h. What
-   this holds is AGENT state (§8.1.7.5's list of about-to-be-notified rejections and the slot key beside it), so
+   this holds is AGENT state (§8.1.3.3's about-to-be-notified rejected promises list and the slot key beside
+   it), so
    the thing it is released against is the agent, which is a JSRuntime; taking a JSContext is what made it a
    line each host had to remember, and the WPT runner did not. That cost every file in that gate its result: the
    list is a live Array held by a C static, so JS_FreeRuntime's gc_obj_list walk found it and aborted the run
@@ -399,7 +400,7 @@ void unhandled_rejection_free(JSRuntime *rt)
     /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of the
        same list, so a release without a declaration is not a state to tolerate — it is a host that reached
        teardown without having built this browser, which core/platform.c asserts from its end too. */
-    DCHECK(g_ready, "§8.1.7.5's rejection list was released in an agent that never declared it — the release "
+    DCHECK(g_ready, "§8.1.3.3's rejected-promise list was released in an agent that never declared it — the release "
                     "column is the inverse of the declare column, so reaching here without an init means this "
                     "component was torn down by something that is not the platform's one list");
     /* The tracker goes FIRST: teardown frees promises, and a rejected one still on the runtime's list would

@@ -234,7 +234,7 @@ static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
-/* §8.1.7.5's list of about-to-be-notified rejections is a live Array a C static holds for the agent, so it is
+/* §8.1.3.3's about-to-be-notified rejected promises list is a live Array a C static holds for the agent, so it is
    agent state and belongs on this column. It was a line in each host's own teardown instead, the WPT runner's
    copy did not have it, and the consequence was not a subtle one: EVERY file that gate ran ended on
    JS_FreeRuntime's gc_obj_list walk with a leaked Array, so a test that had already passed was reported as an

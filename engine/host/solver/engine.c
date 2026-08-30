@@ -2,10 +2,14 @@
 #include "core/fetch/fetch.h"
 #include "solver/engine.h"
 #include "quickjs-step.h"   /* a host answer is TAKEN by a step machine, and a throw ends it JS_STEP_ABRUPT */
-#include "core/html/unhandled_rejection.h"
+#include "core/html/unhandled_rejection.h"   /* HTML §8.1.4.7 Unhandled promise rejections: what the browser
+                                                half owes this checkpoint — "notify about rejected promises"
+                                                runs at every microtask checkpoint. (This comment sat on the
+                                                idl_args.h line below, and read §8.1.7.5, which is "Dealing
+                                                with the event loop from other specifications".) */
 #include "core/events/report_exception.h"   /* HTML §8.1.4.4 step 8: what a classic script's abrupt completion
                                                owes the page, as the frame the scheduler runs it as */
-#include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
+#include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/flow.h"
@@ -4905,7 +4909,9 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
        reaction, a queueMicrotask callback and a delivered message all run here — so an uncaught throw inside
        any of them vanished: no report, no result entry, nothing to say the page's own code had failed. It also
        made every observable this engine has blind to jobs, which is why "does the microtask run at all" could
-       not be answered from outside. §8.1.7.5's report hook is the same one a script uses. */
+       not be answered from outside. §8.1.4.6 Runtime script errors' "report an exception" is the same hook a
+       script uses — see core/events/report_exception.h, which cites it too. (§8.1.7.5 stood here and is
+       "Dealing with the event loop from other specifications".) */
     if (JS_IsException(r)) {
         JSValue e = JS_GetException(ctx);
         result_page_error_value(ctx, e);
@@ -5120,8 +5126,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
            uncaught throw out of one was dropped twice over: never recorded as this page's error, and never
            taken out of `rt->current_exception`, which is per-RUNTIME. This engine interleaves flows, so what
            found it next was the first evaluation of whichever flow the scheduler chose — another flow's
-           timeline receiving a completion §6.2.4 says belongs to this one. §8.1.7.5's report hook is the same
-           one a script and a job already use, because it is the same event. */
+           timeline receiving a completion §6.2.4 says belongs to this one. §8.1.4.6 Runtime script errors'
+           "report an exception" is the same hook a script and a job already use, because it is the same
+           event. (§8.1.7.5 stood here and is "Dealing with the event loop from other specifications".) */
         {
             JSValue pcv = JS_UNDEFINED;
             if (JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv)) {
@@ -7664,6 +7671,14 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                           family's silence. It decides nothing — it is here so the next change to flow_weight
                           starts from a number instead of from this paragraph. */
                        "\"svcFamMax\":%lld,\"svcFamMin\":%lld,"
+                       /* …AND HOW MANY FAMILIES THOSE TWO ARE THE ENDS OF, which is what turns the pair into
+                          a reading (solver/flow.h). `svcFamMin == svcFamMax` is produced by a ONE-family
+                          frontier, where it is an identity of the structure and the family half can never
+                          order anything, and by a several-family frontier whose services happen to agree at
+                          this instant, where it is a term that orders and is momentarily level. Emitted
+                          because a row this census computes and nobody prints is the exact defect the
+                          `svcMin` line above records. */
+                       "\"families\":%ld,"
                        /* …AND THE OPTIMISM TERM'S OWN COORDINATE, WHICH IS THE ROW THIS LINE HAD NO ANALOGUE OF
                           AND NEEDED MOST. Everything else here is thread time; `visMax` is COMPLETED UNITS OF
                           WORK, and `visMax == 0` on a frontier of thousands says that no member has reached the
@@ -7685,7 +7700,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        w.members, w.val_min, w.val_max, w.val_top,
                        w.val_zero, w.self_emit, w.unrun, (long long)w.svc_max,
                        (long long)w.svc_min,
-                       (long long)w.svc_fam_max, (long long)w.svc_fam_min,
+                       (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
                        (long long)w.vis_min, (long long)w.vis_max,
                        w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max,
                        w.dist_max,
