@@ -1227,8 +1227,23 @@ async function cmdNetDiff(args) {
       if (unused) {
         // LEARNED-NOT-LIVE = the unused API surface forced exec found (THE VALUE,
         // the inverse of gaps): AST-learned endpoints the page never fired, with
-        // their example values. source !== ast_analysis means it was learned FROM
-        // live traffic (so it DID fire) — exclude those.
+        // their example values.
+        /* AND "THE PAGE NEVER FIRED IT" IS THE `seen` TEST ALONE — the sentence that stood here said
+           `source !== ast_analysis` means "learned FROM live traffic (so it DID fire)", and that is FALSE
+           of this store in a way that makes CLAUDE.md's own question about this command unanswerable by
+           reading it. §PASSIVE-AND-FORCED-DISCOVERY-COMBINE-AS-A-COMPARISON turns on whether anything pools
+           the two, and this comment asserts the pooling as an established fact. It is not pooled:
+           lib/merge.js has the ONE producer of an endpoint record and it is `learnFromAstCallSite`, off the
+           engine's @H `fetchCallSites`; the wire producer (`learnFromRequest`) writes the VDD's per-method
+           `_stats` and the global request log and never mints one. So `globalStore.endpoints` is the
+           SOLVER's surface entire, `globalRequestLog` is the passive one entire, and the diagnostic below
+           is the comparison rather than a union of itself.
+           WHAT `source` ACTUALLY SAYS is which of lib/callsite-url.js's TWO arms built the ADDRESS —
+           lib/endpoint-record.js asserts the field is one of `ast_analysis` (the document's origin was
+           known, so the address is literal) or `ast_shape_origin` (it was not, so the address carries a
+           shape where its origin goes). BOTH are the solver's. The filter further down keeps the first for
+           the reason stated at it — a shape-origin address is one nobody can fetch — and not because the
+           second ever fired. */
         // A learned TEMPLATE whose hole matched a concrete live URL DID fire —
         // exclude it from "unused" too (same template-match as the gap side).
         const liveMatchesTemplate = (k) => { const re = tmplRe(k); if (!re) return false; for (const lk of seen) if (re.test(lk)) return true; return false; };
