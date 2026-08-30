@@ -856,6 +856,30 @@ typedef struct {
        one state the maxima cannot be distinguished from: a genuine multi-family frontier in which one chain is
        monopolising presents the SAME `svc_fam_max` and a floor far below it. */
     int64_t svc_fam_min;
+    /* HOW MANY FAMILIES THERE ARE, WHICH IS THE HALF THE PAIR ABOVE CANNOT SUPPLY AND WAS BEING READ AS IF IT
+       COULD. The paragraph above says `svc_fam_max == svc_fam_min` is "that term contributing a COMMON OFFSET
+       and ordering nothing" — and equality is produced by TWO states that take opposite actions, with nothing
+       in a pair of extrema to separate them. On a frontier that is ONE family the equality is an IDENTITY OF
+       THE STRUCTURE: every member reads one node's `fam_us` through one pointer (flow_fork_inherit joins the
+       parent's account rather than founding a family), so it holds whatever the run does, and the family half
+       can never order that document's frontier at all. On a frontier of SEVERAL families the same equality is
+       a contingent observation about one instant, which the next charge moves — a term that IS ordering and
+       happens to be level. "This term is structurally an offset" and "this term is momentarily level" are
+       different findings and the first of them is the one that says stop looking, so reading one number for
+       both is how a real ordering defect gets closed as a known constant.
+       IT READS EQUAL AT A GENUINE SPLIT TOO, which is why the ambiguity is the ordinary case rather than a
+       corner: a from-baseline flow founds its own family and ARRIVES at the running family's service
+       (flow.c's flow_arrive_at_virtual_time assigns `fam_us` among the four tags), so two families are born
+       EQUAL and diverge only once one of them is charged — flow_age_running bills the running flow's family
+       alone, flow_credit_emit zeroes its own alone. A census taken between the split and the first charge is
+       a multi-family frontier reading as a single-family one, exactly.
+       COUNTED BY IDENTITY, NEVER BY VALUE: two families standing at one service are two families, so the count
+       is of distinct family ROOTS reached through the members (flow.c marks each root as the one scan passes
+       it). Read beside the pair, the three numbers say which of the two states a run is in: `families: 1` is
+       the identity and the term is structurally an offset; `families > 1` with the extrema equal is the term
+       level for now; `families > 1` with a floor far below the max is the term ordering, which is the state
+       the family charge was added for. */
+    long families;
 
     /* THE @S CANDIDATE SESSIONS, ASKED DIRECTLY, because the first reading of this census had to INFER them
      * and the inference was three fields long: `val_zero` counts members that inherited nothing, `unrun`

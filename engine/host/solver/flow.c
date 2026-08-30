@@ -69,6 +69,16 @@ typedef struct FlowAcct {
        monopolizer, and this file already said which one: "a fork chain is one monopolizer wearing N names, so
        it enters at one place and it is charged as one thing." It entered at one place and was charged as N. */
     int64_t fam_us;
+    /* THE CENSUS'S MARK, AND IT IS HERE BECAUSE A FAMILY HAS NO MEMBER OF ITS OWN TO BE COUNTED THROUGH. The
+       census reaches families only via their arms, so counting DISTINCT ones out of one walk of the frontier
+       is a set problem, and the set's identity is this NODE'S ADDRESS rather than any value it holds — two
+       families standing at the same `fam_us` are two families, which is exactly the state a pair of extrema
+       cannot see. Marking the root as the walk passes it makes the count O(members) with one word per node and
+       no ancestry walk, which is the shape a renderer counts distinct objects in one traversal by.
+       ZERO IS THE UNMARKED STATE and `reclaim_calloc` supplies it, so a node minted between two censuses is
+       counted by the next one instead of inheriting a stale mark; the generation is bumped past zero on wrap
+       for the same reason. It is written only by the census, which decides nothing. */
+    unsigned census_gen;
 } FlowAcct;
 
 /* THE CENSUS, counted at the two points a node's lifetime begins and ends so the pair cannot drift from what it
@@ -2085,6 +2095,11 @@ static double wfq_accounted_spread(const WfqCensus *c) {
  *
  * `val_top` IS flow_best's OWN reward, so the top of the census and the top of the order are the same flow by
  * construction rather than by two scans agreeing. */
+/* THE MARK THE CENSUS COUNTS FAMILIES WITH — see FlowAcct's `census_gen`. A generation rather than a clear
+   pass, for the reason the host-owed marks above are one: resetting a per-node flag over a frontier that has
+   reached tens of thousands of members is a walk, and a single increment is not. */
+static unsigned g_wfq_census_gen;
+
 void flow_wfq_census(WfqCensus *out) {
     Flow *top;
     int i;
@@ -2094,6 +2109,10 @@ void flow_wfq_census(WfqCensus *out) {
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
+    out->families = 0;
+    /* A FRESH MARK FOR THIS SCAN, PAST ZERO, so a node minted since the last census (calloc'd to 0) reads as
+       unmarked rather than as already counted. */
+    if (++g_wfq_census_gen == 0) g_wfq_census_gen = 1;
     out->vis_min = out->vis_max = 0;
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
     out->cand_svc_max = 0;
@@ -2138,6 +2157,27 @@ void flow_wfq_census(WfqCensus *out) {
            family exactly as often as it has arms standing. */
         {
             int64_t fam = flow_family_notch(f);
+            /* AND WHICH FAMILY THIS IS, WHICH IS THE FACT THE TWO EXTREMA BELOW CANNOT SUPPLY. `svc_fam_min ==
+               svc_fam_max` is produced by two states that take OPPOSITE actions: on a frontier that is ONE
+               family it is an identity of the structure — every member reads the same `fam_us` through the
+               same pointer (flow_fork_inherit joins the parent's), so the equality holds whatever the run does
+               and the family half can NEVER order this document's frontier; on a frontier of several families
+               it is the contingent observation that one instant's service happened to agree, and the next
+               charge moves it. Nothing in a pair of extrema separates "structurally an offset" from
+               "currently an offset", and the second of those is a term that IS ordering and is momentarily
+               level. It reads equal at a genuine split too: a from-baseline flow founds its own family but
+               ARRIVES at the running family's service (flow_arrive_at_virtual_time), so two families are born
+               EQUAL and diverge only once one of them is charged (flow_age_running bills the running flow's
+               family alone) or credited (flow_credit_emit zeroes its own alone).
+               COUNTED BY IDENTITY AND NOT BY VALUE, because two families at one service are two families. */
+            DCHECK(f->family != NULL,
+                   "a live member of the frontier belongs to no fork family — the aging term reads its "
+                   "family's service, so this flow is charged zero for every microsecond its chain burns and "
+                   "rides above every member that pays");
+            if (f->family && f->family->census_gen != g_wfq_census_gen) {
+                f->family->census_gen = g_wfq_census_gen;
+                out->families++;
+            }
             if (fam > out->svc_fam_max) out->svc_fam_max = fam;
             /* …AND ITS FLOOR, WHICH IS WHAT SAYS THE TERM IS ORDERING RATHER THAN OFFSETTING — see flow.h.
                A maximum states how LARGE the family half is; only the pair states how much of it any
@@ -2168,6 +2208,21 @@ void flow_wfq_census(WfqCensus *out) {
     }
     top = flow_best();
     if (top) { out->val_top = top->val; out->w_top = flow_weight(top); }
+
+    /* THE FAMILY COUNT IS BRACKETED BY THE POPULATION IT PARTITIONS, asserted because both ends name a real
+       break rather than a rounding. Zero families with members standing is the mark not being taken at all —
+       the row would then read "one family, structurally an offset" for every frontier there has ever been,
+       which is the answer that stops anybody looking. More families than members is a family counted twice,
+       which means a stale generation aliased a fresh node and the count is of censuses rather than of
+       families. */
+    DCHECK((out->members == 0) == (out->families == 0),
+           "the WFQ census counted families and members inconsistently — a frontier with members belongs to at "
+           "least one family and an empty one to none, so this is the family mark not being taken, and the row "
+           "that says whether the aging term's family half can order anything reads the same for every run");
+    DCHECK(out->families <= out->members,
+           "the WFQ census counted more fork families than there are flows to belong to them — a family is "
+           "counted through its arms, so this is one node counted twice and the number is a property of the "
+           "scan rather than of the frontier");
 
     /* THE CENSUS ACCOUNTS FOR THE ORDER IT REPORTS — the one assertion that makes this a measurement of
      * flow_weight rather than a hand-kept list of fields that used to be one.
