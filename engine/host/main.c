@@ -1150,7 +1150,8 @@ QJS_EXPORT void qjs_teardown(void)
     doc_scripts_free(&g_scripts);
     /* THE ORDER AND THE MEMBERSHIP OF THIS LIST ARE THE OTHER ENTRY'S, VERIFIED, and this one had drifted from
        it — which nothing could see, because the gate that walks gc_obj_list runs the OTHER entry's main().
-       Four frees were missing here (§8.1.7.5's rejected-promise list and its slot key, the solver's solve and
+       Four frees were missing here (§8.1.3.3's about-to-be-notified rejected promises list and its slot key,
+       the solver's solve and
        endpoint tables, the flow registry) and so was the collection, so the shipped engine aborted at teardown
        on `list_empty(&rt->gc_obj_list)` and every finding it had produced was discarded as a crashed
        instance's. MEASURED on the live harness: a page analysed to "No findings" for that reason alone. */
@@ -1171,7 +1172,8 @@ QJS_EXPORT void qjs_teardown(void)
     media_query_list_free(g_ctx);
     animation_frame_free(g_ctx);
     event_loop_free(g_ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
-    /* §8.1.7.5's rejection list is NOT freed here any more — it is a row on core/platform.h's release column,
+    /* §8.1.3.3's about-to-be-notified rejected promises list is NOT freed here any more — it is a row on
+       core/platform.h's release column,
        run by the platform_agent_free above. It was a line in this list and in nobody else's, and the host that
        did not have it aborted every file it ran on the runtime's leak walk. Every other line below is still a
        hand-copied teardown, which is the same defect waiting: they belong on that column too. */
