@@ -2,7 +2,15 @@
 
 The analyzer runs **untrusted web bundles** to learn API surface. So the design assumes the
 page, its content script, and the JS engine running the bundle are all hostile, and confines
-them. This file is the threat model; per-function contracts are inline (`grep @security-contract`).
+them. This file is the threat model.
+
+**A CLAIM HERE NAMES A MECHANISM AND THE FILE THAT CARRIES IT, NEVER A LINE NUMBER.** A `file.js:NNN`
+citation is unverifiable the moment anyone edits above it, and it fails SILENTLY — it still resolves, to
+whatever now sits on that line, so it reads as checked. This file carried 26 of them and 20 had drifted; the
+drift was then measured a SECOND time within one session, as concurrent work moved `_browserFacts`,
+`_senderOrigin`, `_recordProbeHit` and the router again while this paragraph was being written. Every
+citation below is therefore a SYMBOL — `grep` it and the answer is either the mechanism or its absence, and
+an absence is a finding rather than a stale pointer.
 
 ## Trust zones
 
@@ -10,26 +18,44 @@ them. This file is the threat model; per-function contracts are inline (`grep @s
 |------|-------|-----|
 | Website + its JS bundle | **UNTRUSTED** | arbitrary attacker code |
 | `content.js` / `intercept.js` (web renderer) | **UNTRUSTED** | a compromised renderer controls them; runs in every page (`<all_urls>`) |
-| QuickJS/WASM engine (runs the bundle) | **UNTRUSTED** | it *executes* the attacker bundle. Confined to the WASM sandbox + a fixed set of host edges |
-| Analysis worker (`ast-thread.js`) | trusted code, **hostile inputs** | hosts the WASM; treats every value the engine produces (URLs, source-map pragmas) as attacker-shaped |
-| **Offscreen document** | **TRUSTED** | the only fully-trusted zone — owns state and the network chokepoint |
+| QuickJS/WASM engine (runs the bundle) | **UNTRUSTED** | it *executes* the attacker bundle. Confined by an opaque origin, Site Isolation and the WASM sandbox; it reaches the trusted zone only through the declared `content.mojom.Renderer` methods, which `mojo.js` validates in both directions |
+| **`renderer.html`** — the document that HOSTS the engine | **UNTRUSTED** | an `<iframe sandbox="allow-scripts">` with no `allow-same-origin`, so its origin is UNIQUE and OPAQUE — cross-origin to the extension origin, which is what lets Site Isolation give it its own renderer process. `manifest.json` `sandbox.pages` lists it |
+| **Offscreen document** (`ast-worker.html`) | **TRUSTED** | the only fully-trusted zone — owns state, the network chokepoint, the renderer registry, and the routing between instances |
 | Service worker (`background.js`) | **STATELESS** | extension-page-only; never relays page data |
+
+**THERE IS NO "ANALYSIS WORKER", AND THE ROW THAT SAID SO NAMED A FILE THAT DOES NOT EXIST.** This table
+carried a row for `ast-thread.js` — "hosts the WASM", trusted code with hostile inputs — and `git grep
+ast-thread` returns no such file. A threat model that names the wrong host is worse than none, because every
+rule below inherits the wrong boundary: that row asserted the WASM's host was TRUSTED, which is the exact
+claim `renderer-host.js` and `bridge.js` were rewritten to stop being true. `bridge.js` says so in its own
+first paragraph — **"NO ENGINE LIVES IN THIS REALM"**. The offscreen used to `import("./lib/qjs/qjs.mjs")`
+and build every instance with `createQJS()` in its own realm, which made "confined to the WASM sandbox" a
+CONVENTION rather than a boundary: the trusted zone held the `Module` handle, `M.HEAPU8` was an exported view
+of an untrusted instance's whole linear memory, and two instances in one realm were a NAMESPACE. That path is
+DELETED, not kept beside the new one. `renderer-host.js` (Chromium's `RenderFrameHost`) materializes each
+instance as a sandboxed frame and is the only thing that speaks to it; `render-process-host.js` (Chromium's
+`RenderProcessHost`) decides that a renderer may exist at all and refuses a SECOND one for a cluster that
+already has one, with a **`CHECK`** — fatal in dev AND release, because a violation means two heaps behind
+one principal. **The boundary around the engine is now the browser's, not an import list somebody remembered
+not to write.**
 
 ### What the one trusted zone actually holds — and why that is a named cost
 
 The offscreen is not "the network chokepoint plus some state" any more. It is the ONLY zone in the extension
 that is trusted at all, and everything that needs trust has accumulated in it: the sole
-`chrome.runtime.onMessage` router (`offscreen-brain.js:1360` — the only one in the document; `ast-worker.html`
-loads 28 scripts and no other registers a listener), the browser-fact mint that every principal in the system
-is read out of (`_browserFacts`), the privileged-`chrome.*` RPC **client** (`swRpc` — the SW performs
-`tabs.*` / `webNavigation.*` / `scripting.*` on its word alone), the network chokepoint (`lib/safe-fetch.js`),
-the page-context relay's trusted end (`lib/schema.js`), IndexedDB persistence, the engine pool and its
-level-1 WFQ (`bridge.js`), the whole popup command surface (25 commands, `lib/popup-handlers.js`), the
-exploit-probe sessions, and live-traffic moat aggregation.
+`chrome.runtime.onMessage` router (in `offscreen-brain.js` — the only one in THIS document; the extension's
+other three belong to the SW, the content script and the popup, each a different document, which
+`git grep -n onMessage.addListener extension/` settles in one command), the browser-fact mint that every
+principal in the system is read out of (`_browserFacts`), the privileged-`chrome.*` RPC **client** (`swRpc` —
+the SW performs `tabs.*` / `webNavigation.*` / `scripting.*` on its word alone), the network chokepoint
+(`lib/safe-fetch.js`), the page-context relay's trusted end (`lib/schema.js`), IndexedDB persistence, the
+engine pool and its level-1 WFQ (`bridge.js`), **the renderer registry and its one-per-cluster refusal
+(`render-process-host.js`) plus the frames it materializes (`renderer-host.js`)**, the whole popup command
+surface (`lib/popup-handlers.js`), the exploit-probe sessions, and live-traffic moat aggregation.
 
 **This is stated, not defended.** Concentration is the correct SHAPE — a second trusted zone means two
-places to get the principal right and a channel between them to get wrong — but it means the router at
-`offscreen-brain.js:1360` is the single gate behind which all of it sits, and every rule below is a property
+places to get the principal right and a channel between them to get wrong — but it means that one router is
+the single gate behind which all of it sits, and every rule below is a property
 of that one function or of what it hands a message to. The invariants that make it survivable are structural
 and each is testable in isolation: the router branches on browser-set `sender` fields only; every principal
 comes from ONE mint; the SW independently re-checks the caller of its privileged RPC rather than trusting
@@ -51,12 +77,14 @@ A message's authority comes from **`sender.tab.url`** (set by the browser proces
   the tab; using it as the origin-relative SSRF principal makes a frame inherit its embedder's
   classification, so a sub-frame in a tab whose top is `http://localhost/` was allowed to reach the user's
   intranet on the top page's behalf. The private-network principal and the engine's `window.location` are
-  both `facts.url` = the browser's `sender.url` for THAT document (`offscreen-brain.js:219`, `:709`,
-  reaching `safeFetch` as `opts.pageUrl` at `bridge.js:853/917/966`). A sub-frame analyses as ITSELF, never
-  as its embedder.
+  both `facts.url` = the browser's `sender.url` for THAT document (`_browserFacts` sets `url: sender.url`; it
+  travels on the `AST_ANALYZE` message as `sourceUrl` and reaches `safeFetch` as `opts.pageUrl` —
+  `git grep -n pageUrl extension/bridge.js` is every call site). A sub-frame analyses as ITSELF, never as its
+  embedder.
 - **`sender.tab.url` is still carried, for a different question**: it is HTML §8.1.3.1's TOP-LEVEL CREATION
   URL, which §8.1.3.5 decides secure-context from, and it travels as `facts.topLevelUrl`
-  (`offscreen-brain.js:220`). Authorization keys on it — a message's authority is the tab it came from — but
+  (the field beside `url` in `_browserFacts`). Authorization keys on it — a message's authority is the tab it
+  came from — but
   it is not a fetch principal. Two facts, two names, never one field doing both.
 - A content-script-supplied URL (`msg.url`) is *never* the principal — that was an actual hole (a
   `scripts[0].url` fallback) and was removed.
@@ -66,13 +94,13 @@ A message's authority comes from **`sender.tab.url`** (set by the browser proces
 Two mechanisms, and they are the reason "never URL-derived" is structural rather than a convention anyone
 has to remember:
 
-- **ONE MINT.** `_browserFacts(sender)` (`offscreen-brain.js:198`) takes a `MessageSender` **and nothing
+- **ONE MINT.** `_browserFacts(sender)` (`offscreen-brain.js`) takes a `MessageSender` **and nothing
   else** and is the only producer of `{documentId, origin, url, topLevelUrl, tabId, frameId}`. A caller
   cannot state one of these without holding the object the browser filled in, so the failure this exists to
   prevent — deriving a principal from an address — has no argument to travel in. Every field is DCHECKed at
-  the mint; the record is frozen and branded `stated:"MessageSender"`, and every consumer reads it back
-  through `_statedFacts` (`:238`), which is a **`CHECK`** — fatal in release too, because continuing with a
-  principal this zone did not mint is worse than aborting. `_senderOrigin` (`:156`) is the origin half: a
+  the mint; the record is frozen and branded `stated: _BROWSER_STATED` (`"MessageSender"`), and every consumer
+  reads it back through `_statedFacts`, which is a **`CHECK`** — fatal in release too, because continuing with
+  a principal this zone did not mint is worse than aborting. `_senderOrigin` is the origin half: a
   valid tuple origin as-is, an opaque one as a per-`documentId` `null:<uuid>` token so two opaque documents
   never compare same-origin, and no `documentId` → an unstorable fresh token → fails closed.
 - **NO PRINCIPAL-SHAPED FIELD ON THE WIRE.** An untrusted zone does not get to state an origin or an
@@ -104,15 +132,16 @@ has to remember:
   (offscreen→SW in background.js, offscreen→popup) use `sender.origin === chrome-extension://<id>`
   (browser-set, and `"null"` for a sandboxed extension page → rejected).
 - **TWO PREDICATES, BECAUSE THOSE ARE TWO RULES — and the offscreen router keeps them separate**
-  (`offscreen-brain.js:1375`). `fromExtUrl` (url prefix) authenticates only the SW's `__evt` hop;
+  (`fromExtUrl` / `fromExtDocument`, declared together at the head of the router in `offscreen-brain.js`).
+  `fromExtUrl` (url prefix) authenticates only the SW's `__evt` hop;
   `fromExtDocument` (`sender.origin === EXTENSION_ORIGIN`) is what gates the trusted popup command surface.
   Collapsing them into one url-prefix test deletes the document→document rule: a **sandboxed** extension
   page's `sender.url` is still `chrome-extension://<id>/…` while its origin is the opaque `"null"`, so a
   prefix hands an opaque-origin document `GET_STATE` / `SEND_REQUEST` / `CLEAR_TAB`. `poc-sandbox.html` and
-  `renderer.html` are both sandboxed (`manifest.json`), so this is a page that exists. Content types are
-  dropped on the BROADER predicate (`:1397`) — dropping more can only ever refuse — and the popup gates the
-  reverse direction on `sender.origin` too (`popup.js:762`), because a boundary checked on one side only is
-  not a boundary.
+  `renderer.html` are both sandboxed (`manifest.json` `sandbox.pages` names exactly those two), so this is a
+  page that exists. Content types are dropped on the BROADER predicate — dropping more can only ever refuse —
+  and the popup gates the reverse direction on `sender.origin` too (`isExtensionPage` in `popup.js`), because
+  a boundary checked on one side only is not a boundary.
 
 ## State / storage
 
@@ -120,23 +149,33 @@ has to remember:
   IndexedDB** (`uasr_store`, origin `chrome-extension://<id>`) — unreachable from content scripts.
 - **`chrome.storage.local` is banned, and the ban is ENFORCED BY THE MANIFEST**: a compromised renderer with
   the `storage` permission could read every key (cross-site leakage). IndexedDB in the extension origin has
-  no content-script read path. The `storage` permission is not requested at all (`manifest.json`
-  `permissions` = `offscreen`, `webNavigation`, `scripting`, `tabs`), so `chrome.storage` is not merely
-  unused — it is **undefined in every context**, and a call would throw rather than leak. There are zero
-  `chrome.storage.*` call sites in the extension; the four textual matches are the comments recording the
-  ban and the removal of the old `chrome.storage.session` mirror (`lib/persistence.js:4/194`,
-  `background.js:171`, `offscreen-brain.js:547`). The `session` mirror existed only because the brain used
-  to live in the evictable SW; the offscreen document's stable lifetime replaced it.
+  no content-script read path. **The `storage` permission is not requested at all** — `manifest.json`
+  `permissions` is `offscreen`, `webNavigation`, `scripting`, `tabs`, `unlimitedStorage` — so `chrome.storage`
+  is not merely unused, it is **undefined in every context**, and a call would throw rather than leak.
+  `unlimitedStorage` is NOT that permission and grants no read API: it lifts the origin's quota only, which is
+  what makes the cross-session frontier's growth a preference rather than a wall (CLAUDE.md §OOM / paging).
+  An enumeration of four permissions stood here while the manifest listed five.
+  **There are zero `chrome.storage.*` CALL SITES** — that is the security claim, and it is the one to check:
+  `git grep -n 'chrome\.storage' extension/` returns only comments recording the ban and the removal of the
+  old `chrome.storage.session` mirror. (A count of those COMMENTS stood here too and was wrong within a few
+  commits; a census of what grep answers belongs in the grep.) The `session` mirror existed only because the
+  brain used to live in the evictable SW; the offscreen document's stable lifetime replaced it.
 - The service worker holds no learned state, and relays no page data: content scripts message the offscreen
   DIRECTLY (a `chrome.runtime.sendMessage` broadcast reaches every extension context), so the SW cannot
   launder a web renderer's message into a trusted extension-origin one. It forwards exactly one browser
-  event the offscreen cannot observe (`__evt TAB_REMOVED`, `background.js:75`).
+  event the offscreen cannot observe (`__evt TAB_REMOVED`, the `chrome.tabs.onRemoved` listener in
+  `background.js`).
 
 ## Network — one chokepoint
 
 Every analyzer-driven request goes through **`safeFetch`** (`lib/safe-fetch.js`); credentialed /
 page-context requests go through **`pageContextFetch`** (as the actual page, browser-CORS/PNA-gated).
-There is no raw `fetch` on any analyzer path. `safeFetch` guarantees, in one auditable place:
+**There is no raw `fetch` on any ANALYZER path** — no path whose URL the analysed bundle influenced. The
+qualifier is load-bearing, because the grep is not empty: `renderer-host.js` raw-`fetch`es a FIXED five-name
+list (`check.js`, `mojo.js`, `mojom.js`, `lib/qjs/qjs.mjs`, `lib/qjs/qjs.wasm`) off our own extension origin
+to assemble a renderer's program, since an opaque-origin frame cannot load them by URL itself; and
+`content.js` raw-`fetch`es inside the untrusted renderer, which is the page-context relay's far end and is
+covered below. Neither takes an address from a bundle. `safeFetch` guarantees, in one auditable place:
 
 - **cookies omitted by default** (`credentials:"omit"`) — no credentialed exfiltration. In
   **credentialed mode** (`opts.credentialed` — replay a learned GET to read the real *authenticated*
@@ -149,14 +188,15 @@ There is no raw `fetch` on any analyzer path. `safeFetch` guarantees, in one aud
   policy does **not** apply to a host-permission fetch (it can read any origin), so safeFetch
   re-implements the credentialed-CORS rule on the bytes before returning them.
   **CREDENTIALED MODE IS DORMANT AND FAILS CLOSED — the rule above describes a capability nothing turns
-  on.** No caller sets `opts.credentialed` (`bridge.js:854` reads `!!msg.credentialed` and nothing ever sets
-  `msg.credentialed`), and no `pageOrigin` reaches the chokepoint from the engine host at all, so
-  `_isRealOrigin("")` is false, no `ACAO` can ever match, and every credentialed read returns
-  `blocked-cors-credentialed`. `bridge.js:840` carries a standing `@security-finding` naming the value to
-  pass when it IS enabled — `msg.origin`, the browser's `MessageSender.origin` plumbed by
-  `_dispatchDocument` — and naming the obvious wrong fix (`originOf(msg.sourceUrl)`), which is the exact
-  URL-derivation this principal exists to forbid. **The credentialed reads that actually happen today go
-  through the page-context relay instead** (see below), where the browser enforces SOP/CORS rather than us.
+  on.** No caller sets `opts.credentialed`: `bridge.js` READS `!!msg.credentialed` and nothing anywhere WRITES
+  `msg.credentialed` (`git grep -n credentialed extension/` is every mention, and each is a read, a comment,
+  or a field copied off a stored record). No `pageOrigin` reaches the chokepoint from the engine host at all,
+  so `_isRealOrigin("")` is false, no `ACAO` can ever match, and every credentialed read returns
+  `blocked-cors-credentialed`. `bridge.js` carries a standing `@security-finding` naming the value to pass
+  when it IS enabled — `msg.origin`, the browser's `MessageSender.origin` — and naming the obvious wrong fix
+  (`originOf(msg.sourceUrl)`), which is the exact URL-derivation this principal exists to forbid.
+  **The credentialed reads that actually happen today go through the page-context relay instead** (see
+  below), where the browser enforces SOP/CORS rather than us.
 - **GET only, enforced by ABSENCE** — `safe-fetch.js` hardcodes `method:"GET"` and never reads `opts.method`
   or `opts.body` (grep: no occurrence). Forced execution explores many paths; it never replays a
   state-changing method. A well-designed server does not mutate on GET, so even a credentialed GET replay is
@@ -185,20 +225,25 @@ There is no raw `fetch` on any analyzer path. `safeFetch` guarantees, in one aud
   RFC1918) is blocked **unless the page principal is itself private** — a public page cannot use the
   extension's host permissions to reach the user's localhost/intranet; a localhost page *may* reach
   localhost. Checked on the **initial URL and the post-redirect final URL**.
-- **CORB by load type (`opts.as`):** `"script"` (a chunk/import that becomes executable code) must be
-  JS-typed when cross-origin — never read a cross-origin HTML/JSON body as code; `"sourcemap"`/data
-  are exempt (not executed). Centralised here so a new code-loader can't forget it.
+- **CORB by load type (`opts.as`):** the enforcement is an EQUALITY on one value — `opts.as === "script"`
+  (a chunk/import that becomes executable code) must be JS-typed when cross-origin, so a cross-origin
+  HTML/JSON body is never read as code. Everything else is exempt because it is not executed, and that
+  exemption is the DEFAULT rather than an enumerated list: `"script"` is the only token `safe-fetch.js` tests
+  for and the only one any caller passes (`git grep -n 'as: *"' extension/`). This bullet used to name
+  `"sourcemap"` as a second exempt token, which no code has ever passed or tested — a vocabulary that existed
+  only here. Centralised so a new code-loader can't forget it.
 - **per-call principal** (`opts.pageUrl` = the requesting DOCUMENT's own `sender.url`, never the tab's) —
-  **not a shared global**: two grinds run concurrently in one worker, so a global principal would let one
-  page's origin contaminate another's fetch. Unknown principal → treated as public → private targets blocked.
+  **not a shared global**: the trusted zone drives many renderers concurrently and interleaves their rounds,
+  so a global principal would let one page's origin contaminate another's fetch. Unknown principal → treated
+  as public → private targets blocked.
 
-A cross-origin script/source-map uses the **page's** origin, never the asset's own host (gstatic.com
+A cross-origin script uses the **page's** origin, never the asset's own host (gstatic.com
 JS in google.com acts as google.com) — exactly what the principal encodes.
 
 ### The page-context relay — the trusted zone borrows a privilege it does not have
 
-`pageContextFetch` (`lib/schema.js:412`) issues the request AS THE PAGE: the offscreen sends `PAGE_FETCH`
-over `swRpc("tabs.sendMessage", …, {documentId})` and `content.js handlePageFetch` (`content.js:319`) runs
+`pageContextFetch` (`lib/schema.js`) issues the request AS THE PAGE: the offscreen sends `PAGE_FETCH`
+over `swRpc("tabs.sendMessage", …, {documentId})` and `content.js`'s `handlePageFetch` runs
 `fetch(url, {credentials:"same-origin", …})` in the renderer. This is the only credentialed read that
 actually happens, and it is the one edge where the trusted zone instructs an UNTRUSTED one. Both directions
 have to be stated, because they fail differently and only one of them is a privilege question.
@@ -233,9 +278,12 @@ have to be stated, because they fail differently and only one of them is a privi
 
 The bundle runs inside QuickJS (WASM linear memory), reaching the host only through fixed edges.
 
-- It **cannot** read or set the principal (it lives in worker JS, outside the WASM, set per page) and
-  **cannot** do raw network — its own `fetch()` calls are *recorded*, not issued; its `import()`
-  targets become **untrusted URLs** that `safeFetch` gates (origin-relative SSRF + CORB).
+- It **cannot** read or set the principal — the principal lives in the TRUSTED OFFSCREEN, which is a
+  different DOCUMENT from the one the engine runs in rather than merely a different scope, and `bridge.js`
+  passes it to `safeFetch` as `opts.pageUrl` per call — and it **cannot** do raw network: its own `fetch()`
+  calls are *recorded*, not issued, and its `import()` targets become **untrusted URLs** that `safeFetch`
+  gates (origin-relative SSRF + CORB). It cannot reach `chrome.*` either, and that is the browser's answer
+  rather than ours: an opaque origin is not the extension origin, so `chrome.runtime` is not exposed to it.
 - **One WASM instance per ORIGIN-KEYED AGENT CLUSTER** — `(browsing-context group, origin)`, isolated memory
   — never per tab and never per page, because a tab holds documents
   that may be cross-origin to each other and an iframe or a popup gets its own instance the moment its
@@ -245,8 +293,10 @@ The bundle runs inside QuickJS (WASM linear memory), reaching the host only thro
   an instance across ORIGINS would put two principals behind one `pageOrigin`; splitting one across
   same-origin documents would instead break HTML's own single-heap agent, which same-origin DOM
   adoption and cross-frame closures rely on.
-  **BOTH HALVES OF THE KEY ARE BROWSER-STATED** (`clusterKeyOf` in `bridge.js`, over what `analyze.js`
-  carries off the browser's `MessageSender`), because the untrusted engine may state neither: the ORIGIN
+  **BOTH HALVES OF THE KEY ARE BROWSER-STATED** (`clusterKeyOf` in `bridge.js`, over the fields the
+  `AST_ANALYZE` message carries off `_browserFacts`' reading of the browser's `MessageSender` — an
+  `analyze.js` named here previously has never been a file in this tree), because the untrusted engine may
+  state neither: the ORIGIN
   half is `_senderOrigin`'s — the browser's `MessageSender.origin`, opaque-unique per document, so two
   sandboxed iframes of one page are two clusters and two instances — and the GROUP half is
   `sender.tab.id`, a tab being exactly one top-level traversable with every nested navigable under it in
@@ -270,60 +320,98 @@ The bundle runs inside QuickJS (WASM linear memory), reaching the host only thro
   exploits that are not real and miss ones that are — so the engine never supplies one.
 - **A cross-document delivery carries serialized bytes, never a live value**, for the same reason a
   parked flow's snapshot does: a live value crosses neither an instance, nor a session, nor a park.
-- **Source maps stay outside QuickJS**: fetched/parsed in worker/offscreen JS (`as:"sourcemap"`),
-  used only to label findings shown in the UI — never fed back into the engine.
+- **THERE IS NO SOURCE-MAP PIPELINE, so it is not a boundary this file has anything to say about.** This
+  section used to state that source maps were "fetched/parsed in worker/offscreen JS (`as:"sourcemap"`), used
+  only to label findings shown in the UI"; the trust table called the engine's source-map pragmas an
+  attacker-shaped input; §Known residuals named a `_smGetParsed` worker-zone fallback; and §Finding quality
+  described a "beautified (source-mapped)" taint-path view. **Four sites, one subsystem, and it is gone** —
+  `git grep -n 'sourceMappingURL\|_smGetParsed\|as: *"sourcemap"' extension/` finds nothing that fetches,
+  parses or renders a map, and `bridge.js`, `lib/popup-form.js`, `lib/popup-send.js` and `lib/send.js` each
+  record in their own comments that the `_sourceMapName` / `sourceMapsByUrl` fields were readers with no
+  producer and were deleted. Nothing is asserted in its place: a threat model does not keep a boundary warm
+  for a component that no longer exists, because the residual then reads as a live hazard and sends the next
+  reader hunting code to harden.
 
 ## The live PoC verify is ONE-SIDED — a hit is a page's CLAIM, not a browser's answer
 
-`intercept.js` runs in the **MAIN world** (`manifest.json`), i.e. inside the page, i.e. fully
-attacker-controlled. It installs `window.apiclientsink(id)` (`intercept.js:509`) and relays each call to
-`content.js` (CustomEvent + a `data-uasr-hits` attribute mirror), which forwards it as `PROBE_HIT`
-(`content.js:73`); the offscreen correlates it to a probe session by the id (`offscreen-brain.js:949`) and
-the popup reports **"REAL EXPLOIT — apiclientsink fired in real Chrome"** (`lib/popup-security.js:480`).
+`intercept.js` runs in the **MAIN world** (`manifest.json` `content_scripts`), i.e. inside the page, i.e.
+fully attacker-controlled. It installs `window.apiclientsink(id)` and relays each call to `content.js`
+(CustomEvent + a `data-uasr-hits` attribute mirror), which forwards it as `PROBE_HIT`; the offscreen
+correlates it to a probe session by the id and ATTRIBUTES it (`_recordProbeHit` in `offscreen-brain.js`), and
+the popup reports **REAL EXPLOIT** / **NOT REPRODUCED** (`lib/popup-security.js`).
 Everything on that path before the offscreen is the page. So:
 
-- **The marker is not a secret from the target.** It is a fresh `crypto.randomUUID`
-  (`offscreen-brain.js:1155`), correctly kept out of the URL as a *token*, but it rides INSIDE the delivered
+- **The marker is not a secret from the target.** It is a fresh `crypto.randomUUID` minted by
+  `startExploitProbe`, correctly kept out of the URL as a *token*, but it rides INSIDE the delivered
   payload as `apiclientsink('<uuid>')` — and the payload is delivered TO the page, in its own fragment or
-  query string (`:1101`). Any script on the page can read `location.hash`, lift the uuid and call the hook
-  without any sink having fired.
-- **Therefore a POSITIVE verdict is FABRICABLE and a NEGATIVE is SUPPRESSIBLE.** The false positive is the
-  one that matters: a hostile page can make the tool assert a real, Chrome-confirmed exploit against itself.
-  Suppression is unavoidable in any design (the page owns the renderer) and is already reported honestly —
-  "NOT REPRODUCED … Not a statement that the sink is safe" (`lib/popup-security.js:505`).
+  query string (`out.targetUrl = base.href + deliveryPrefix + payload`). Any script in that document can read
+  `location.hash`, lift the uuid and call the hook without any sink having fired.
+- **Therefore a SAME-DOCUMENT positive verdict is FABRICABLE and a NEGATIVE is SUPPRESSIBLE.** The false
+  positive is the one that matters: a hostile page can make the tool assert a real, Chrome-confirmed exploit
+  against itself. Suppression is unavoidable in any design (the page owns the renderer) and is already
+  reported honestly — "NOT REPRODUCED … Not a statement that the sink is safe" (the verdict strings at the
+  end of `lib/popup-security.js`).
 - **This does not weaken the rule; it bounds the claim.** A hit means *the payload's code ran in the page* —
   which is what a fired sink produces and is why the signal is worth having. It does not mean the SINK
   produced it. "Engine agreement" is agreement with a witness the page can coach.
-- **MISSING CHECK, and it is buildable now:** `PROBE_HIT` is accepted from ANY document in ANY tab that
-  knows the marker — the offscreen stamps `tabId`/`frameId` onto the record (`offscreen-brain.js:957`) but
-  never *compares* them, and never compares the reporting document's `MessageSender.origin` against
-  `origin(session.pageUrl)`. The probe is delivered to a known page, so a hit from anywhere else is not a
-  weaker hit, it is a different document's claim about someone else's exploit and must be REFUSED. That
-  binding closes cross-document fabrication and leaves only the irreducible same-page case, which is then
-  the honest residual rather than an unmeasured one.
+- **THE ORIGIN BINDING IS BUILT — this file ASKED for it, got it, and then kept asking.** A previous version
+  of this section carried a "MISSING CHECK, and it is buildable now" bullet, a matching entry in §Known
+  residuals, and a matching `Residual, unmitigated` row in the table below. The check was built; none of the
+  three sites were updated. A threat model that keeps requesting a check it already has is the stale-`DFAIL`
+  failure mode — it reads as authoritative and sends the next reader to build what is already there.
+  `_recordProbeHit` (`offscreen-brain.js`) REFUSES a hit whose reporting document is not the delivered one,
+  on three comparisons in order: the browser's `MessageSender.origin` against the origin of the address THIS
+  zone built and handed to `window.open` (`ses.expect.origin`); `frameId` against the top-level `0`; and a
+  latched `deliveredDocumentId`, so a SECOND document of the target origin cannot fire a marker the first
+  already fired. **THE DIRECTION IS THE RULE:** a browser-stated FACT is compared against OUR expectation,
+  and an expectation is never promoted to a fact. A session that delivered nothing attributes nothing, and an
+  opaque target can never attribute a hit, because an opaque origin is same-origin with nothing.
+  A mismatch is RECORDED, never dropped (§@S: absence of a PoC is never a "safe" verdict) — it lands on the
+  same `hits` array carrying `attributed: false` and its reason, and `lib/popup-security.js` DCHECKs that
+  every hit reaching the panel states an `attributed` boolean, rendering the refused ones separately. The
+  record also splits `browserStated` from `pageClaimed`, so the untrusted half is never spliced onto the
+  trusted one under unmarked names.
+  **WHAT REMAINS IS IRREDUCIBLE BY THIS MECHANISM:** `window.apiclientsink` is installed in the delivered
+  page's own main world, so any script in THAT document can still call it, and every fact the hook could
+  report about its own caller is reported by that same world. Cross-document fabrication is CLOSED;
+  same-document fabrication is the honest residual, and it is now a measured one.
 
-## Per-boundary contracts
+## Per-boundary contracts — there is ONE, and the scheme described here was never built
 
-Each loader / trust boundary carries an inline `@security-contract` block stating *what crosses*
-(javascript / sourcemap / data) × *whether it reaches QuickJS* (`quickjs-control`) × the
-`enforced-by` check that backs the claim, plus honest `RESIDUAL` notes. The `enforced-by` pointer is
-the honesty mechanism — a label that can't cite a real check is marked as a residual, not asserted.
+**`@security-contract` is on exactly one site in the tree, and `enforced-by` is on none.** This section
+opened "Each loader / trust boundary carries an inline `@security-contract` block", and the file's own first
+paragraph told the reader to `grep @security-contract` for the per-function contracts. Two commands settle
+it: `git grep -n '@security-contract'` returns `extension/lib/safe-fetch.js` and this file, and
+`git grep -n 'enforced-by'` returns this file ALONE. The `enforced-by` pointer was described here as "the
+honesty mechanism — a label that can't cite a real check is marked as a residual, not asserted"; a vocabulary
+asserted only by the document describing it is that very failure, performed on itself.
+
+**WHAT IS REAL is the one enforcement point and the four standing findings.** `lib/safe-fetch.js` carries
+`@security-contract  ENFORCEMENT POINT (the single network chokepoint)`. The live per-site security prose is
+spelled `@security-finding` — four of them, and each names a HAZARD rather than certifying a boundary:
+`background.js` (nothing calls `scripting.exec`), `bridge.js` twice (no `pageOrigin` reaches the chokepoint;
+`headers` comes from the untrusted bundle), and `offscreen-brain.js` (against the URL-derived-principal
+"fix"). `git grep -n '@security-finding' extension/` is the whole list. **A boundary is documented by the
+DCHECK/CHECK standing at it and by this file, not by a tag vocabulary with one member.** Reviving a
+per-boundary tag scheme means tagging every boundary in the same diff; a scheme with one instance and a
+paragraph claiming universality is worse than none, because it invites the reader to trust an audit that was
+never run.
 
 ## Known residuals (not yet airtight)
 
-- **Worker-zone source-map fallback:** the primary map fetch is in the trusted offscreen
-  (`pageContextFetch`), but a fallback (`_smGetParsed`) runs in the QuickJS-*hosting* worker (outside
-  the WASM, but not the offscreen). Defense-in-depth would move it to the offscreen (needs offscreen
-  chunk-map pre-fetch). Sound under the assumption that the WASM sandbox confines the bundle.
 - **Redirect-to-private:** `safeFetch` re-validates the final URL after redirects (so internal data is
   never *ingested*), but preventing the redirected request from *reaching* a private host relies on the
   browser's Private Network Access for extension fetches.
-- **Fabricable PoC-fire hit** — the section above. A page that reads the marker out of the payload
-  delivered to it can assert a REAL EXPLOIT verdict. The origin binding on `PROBE_HIT` is not yet built.
+- **Fabricable PoC-fire hit, NARROWED to the delivered document** — the section above. The origin binding on
+  `PROBE_HIT` **is built** (`_recordProbeHit`), so a hit from another origin, another frame, or a second
+  document of the target origin is refused and recorded as `attributed: false`. What survives is that
+  `window.apiclientsink` lives in the delivered page's own main world: a script in THAT document can still
+  assert a REAL EXPLOIT verdict for a sink that never fired. Irreducible by this mechanism.
 - **Relayed-reply attribution** — a `PAGE_FETCH` reply is attributed to the URL the offscreen asked for and
   is vouched for by nothing but the renderer that returned it.
 - **Page-claimed origins in the request log** — `sourceOrigin` / `targetOrigin` on a `PM_RECV` / `MC_OPEN`
-  record (`content.js:159`, `:189`) are read off a real `MessageEvent` in the isolated world, so they are
+  record (the two sites in `content.js` that build them) are read off a real `MessageEvent` in the isolated
+  world, so they are
   browser-stated *in a renderer we do not trust*. They do NOT reach the engine (no `sourceOrigin` consumer in
   `bridge.js`), so the "the engine never gets a forgeable `event.origin`" rule is intact. The UI half is
   CLOSED: both renderers print them as `page-claimed: A → B` with the reason on the element
@@ -333,13 +421,17 @@ the honesty mechanism — a label that can't cite a real check is marked as a re
   of being sent with `targetOrigin: "*"`, which would have delivered an operator-typed payload to whatever
   document held that window. What remains is that the store still files these records under a claimed origin
   — a research artifact, like every relayed reply.
-- **`scripting` + MAIN-world injection is an unused privilege held open.** `_PROBE_INJECTORS` and the
-  `scripting.exec` RPC arm (`background.js:102`, `:184`) grant arbitrary MAIN-world execution in any tab
-  (`world:"MAIN"`, `target.allFrames`) — full same-origin control of every site the user has open — and
-  **nothing calls it** (`background.js:88` carries the standing finding; `tabs.create` / `tabs.remove` /
-  `tabs.get` likewise have no caller). The gate is sound and is an *equality*, not a prefix
-  (`sender.url === chrome.runtime.getURL("ast-worker.html")`, `background.js:219/23`), so it is unreachable
-  today. It is the blast radius of any future hole in that one gate, and the `scripting` permission exists
+- **`scripting` + MAIN-world injection is an unused privilege held open — FOUR RPC arms with ZERO callers.**
+  `_PROBE_INJECTORS` and the `scripting.exec` arm of `_swRpc` (`background.js`) grant arbitrary MAIN-world
+  execution in any tab (`world:"MAIN"`, `target.allFrames`) — full same-origin control of every site the user
+  has open. The count is measured rather than estimated: of the six arms `_swRpc` serves, `tabs.sendMessage`
+  and `tabs.query` have callers, and **`scripting.exec`, `tabs.create`, `tabs.remove` and `tabs.get` have
+  none** — `git grep -n '"scripting.exec"\|"tabs.create"\|"tabs.remove"\|"tabs.get"' extension/` hits
+  `background.js` and nothing else. (`tabs.remove` briefly acquired one caller and lost it again when the
+  tab-ownership component was reverted; the arm is unused once more.) `background.js` carries the standing
+  `@security-finding` beside them. The gate is sound and is an *equality*, not a prefix — `sender.url ===
+  OFFSCREEN_HREF`, where `OFFSCREEN_HREF` is `chrome.runtime.getURL("ast-worker.html")` — so it is
+  unreachable today. It is the blast radius of any future hole in that one gate, and the `scripting` permission exists
   only for it. Either the probe orchestration lands and uses it, or the arm, the injectors, the three unused
   `tabs.*` arms and the permission are DELETED together.
 
@@ -347,9 +439,20 @@ the honesty mechanism — a label that can't cite a real check is marked as a re
 
 "External input reaches a sink" is NOT a finding by itself — the value is opaque for control-flow
 *because* it is attacker-influenced, so the question is what the path CONSTRAINTS allow and how
-sensitive the sink is. That constraint set is the same data Z3 already computes for path
-satisfiability: the sanitizer ops surfaced in the finding UI (`encodeURIComponent()`,
-`replace(/[<>]/g,'')`) **are** those constraints, not a separate analysis.
+sensitive the sink is. That constraint set is what the flow's own RE-EXECUTION narrowed the value to: the
+sanitizer ops surfaced in the finding UI (`encodeURIComponent()`, `replace(/[<>]/g,'')`) **are** those
+constraints, not a separate analysis.
+
+**THERE IS NO Z3, AND THIS SECTION CITED CLAUDE.md FOR IT WHILE CLAUDE.md FORBIDS IT.** Two sentences here
+attributed the constraint set and the PoC construction to "Z3's solve", one of them in a parenthesis reading
+"(CLAUDE.md: BUILT from the solve, never templated)". CLAUDE.md §Solver half says the opposite in bold —
+"**Re-execution discharges the constraints — NO external Z3, NO taint tracker, NO recorded
+transform-expression, NO chain-inversion**" — and README.md says it again. The tree agrees:
+`git grep -in '\bz3\b' engine/host engine/qjs` finds nothing but a punycode string in a public-suffix table.
+A citation to an authority that says the reverse is worse than no citation, because a reader who checks the
+authority concludes the document is right and the code is behind. **The mechanism is re-execution:** the
+engine runs the real filter on real operands and observes which bytes survive, which is what lets it see a
+config-loaded allowlist that no transform-expression or SMT encoding can.
 
 - **Taint → `fetch`/request param:** report only when the constraints let the input change a
   SECURITY-SENSITIVE parameter. `location.search` deciding the allow-list for a `DELETE /account`
@@ -359,10 +462,13 @@ satisfiability: the sanitizer ops surfaced in the finding UI (`encodeURIComponen
   credential / access token — and a navigation is reachable via `w = open(); w.location = …` anyway,
   so the redirect primitive alone is weak. Flag it only bundled with a token/secret exfil.
 - **XSS verification = build + RUN the PoC for real**, never asserted from the taint path alone. The
-  PoC is constructed from Z3's solve over the real traced flow (CLAUDE.md: BUILT from the solve, never
-  templated) and executed; the verifiable OUTCOME (sink fired with the attacker value) is the triage
-  signal — it proves exploitability even though it does not localize the bug. The UI's beautified
-  (source-mapped) taint-path + constraint view is the human-readable explanation of that same run.
+  PoC is DERIVED from the run — the sink's real parse context, the per-flow byte provenance through the real
+  filter, and the path's value domain, solved jointly by re-executing candidates (CLAUDE.md §@S: CONSTRUCTED
+  from the running code, never templated) — and then executed; the verifiable OUTCOME (sink fired with the
+  attacker value) is the triage signal, and it proves exploitability even though it does not localize the
+  bug. The UI's taint-path + constraint view is the human-readable explanation of that same run. It is not
+  source-mapped: there is no source-map pipeline (§The QuickJS/WASM sandbox), and the "beautified
+  (source-mapped)" view named here previously describes a component that no longer exists.
 
 ## Attack scenarios
 
@@ -371,16 +477,18 @@ satisfiability: the sanitizer ops surfaced in the finding UI (`encodeURIComponen
 | Compromised renderer reads stored cross-site data | **Mitigated** — state is IndexedDB in the extension origin, not `chrome.storage.local`; no content-script read path |
 | Renderer sends a data-returning message type (`GET_STATE`, …) | **Mitigated** — `sender.url` gate routes content scripts to the data-input-only handler; data types dropped |
 | Renderer forges `sender.id` | **Not a threat** — already has it; `sender.url` is the real gate |
-| Renderer forges `sender.url`/principal as a localhost origin to defeat SSRF | **Mitigated** — principal is `sender.tab.url` (browser-set), never `msg.*` |
+| Renderer forges `sender.url`/principal as a localhost origin to defeat SSRF | **Mitigated** — the principal is the browser-set `MessageSender`, never `msg.*`. (This row used to say the principal is `sender.tab.url`, which contradicts the corrected rule two sections above and restates the very bug that rule records: the SSRF principal is the frame's OWN `sender.url`.) |
 | Bundle `import()`s `http://127.0.0.1/…` or an intranet host (public page) | **Mitigated** — `safeFetch` origin-relative SSRF blocks public→private (initial + post-redirect) |
 | Bundle imports a cross-origin HTML/JSON endpoint as a "chunk" | **Mitigated** — `safeFetch as:"script"` CORB ingests JS-typed only |
-| Concurrent localhost-page grind lends its origin to a public page's fetch | **Mitigated** — principal is per-call, not a shared worker global |
+| Concurrent localhost-page grind lends its origin to a public page's fetch | **Mitigated** — principal is per-call, not a global shared across the concurrently-driven renderers |
 | A sub-frame in a tab whose TOP is `http://localhost/` reaches the user's intranet | **Mitigated** — the SSRF principal is the frame's own `sender.url`, never `sender.tab.url` (this was a real bug; `sender.tab.url` survives only as `topLevelUrl` for secure-context) |
 | Content script states its own `origin` / `pageUrl` and a future consumer reads one as the principal | **Mitigated** — no principal-shaped field is on the wire at all; every fact comes from `_browserFacts(sender)` and is re-asserted by `_statedFacts` (a release-fatal `CHECK`) |
 | Compromised renderer asks the relay for a fetch the offscreen never authorised | **Not a threat** — the relay confers no privilege the renderer lacks; it is a downgrade from `<all_urls>`, and the trusted call site is the only place a verb is chosen |
 | Compromised renderer LIES about a relayed reply | **Residual** — the reply is attributed to the requested URL and vouched for by nobody; cross-origin cookies are withheld (`credentials:"same-origin"`) and CORS still applies, but the body is a claim |
-| Page fakes an exploit by calling `apiclientsink` with the marker it read out of the payload | **Residual, unmitigated** — a REAL EXPLOIT verdict is fabricable; the origin binding on `PROBE_HIT` is unbuilt |
+| A DIFFERENT document (other origin, other frame, second document of the target origin) calls `apiclientsink` with a marker it read | **Mitigated** — `_recordProbeHit` compares the browser's `MessageSender.origin`, the `frameId` and a latched `deliveredDocumentId` against what this zone actually delivered, and records the hit `attributed: false` with its reason rather than dropping it |
+| The DELIVERED page itself calls `apiclientsink` with the marker out of its own payload | **Residual, irreducible by this mechanism** — the hook is installed in that page's own main world, so a REAL EXPLOIT verdict is fabricable by the document under test |
 | Compromised renderer reaches `chrome.tabs.*` / MAIN-world `scripting` through the SW RPC | **Mitigated** — the SW serves `sender.origin === chrome-extension://<id>` only, and pins `__rpc` to `sender.url === getURL("ast-worker.html")` by equality (a prefix would hand every future page whose name merely begins with it the largest privilege the extension has) |
 | A page sandboxes its own iframe (opaque origin) to read the embedder's credentialed API via the shared analysis | **Mitigated** — credentialed-read principal is the *requesting frame's* `MessageSender.origin` (opaque-unique, documentId-keyed), never the top frame or URL-parsed; an opaque origin is same-origin with nothing; a mixed-origin buffer fails closed |
 | Sandboxed *extension* page (origin `"null"`) impersonates a trusted extension document | **Mitigated** — document→document hops require `sender.origin === chrome-extension://<id>`; `"null"` ≠ that |
-| Bundle escapes the WASM sandbox into the worker | **Out of model** — assumes the WASM boundary holds; a true escape has raw network regardless, so the defense is the browser sandbox + CSP `connect-src` |
+| Bundle escapes the WASM sandbox into its host realm | **Out of model, but the blast radius is bounded by the browser** — the host realm is `renderer.html`, a sandboxed frame at a UNIQUE OPAQUE origin, so an escape lands in a document that is cross-origin to the extension, holds no `chrome.*`, holds no principal, and can be given its own renderer process by Site Isolation; it reaches the trusted zone only through the declared `content.mojom.Renderer` methods, validated in both directions by `mojo.js`. This row named "the worker" while the engine still ran in the trusted offscreen realm, where an escape would have held the `Module` handle for every other instance |
+| A second WASM instance is provisioned for an agent cluster that already has one (two principals, one heap) | **Mitigated** — `render-process-host.js` refuses it with a `CHECK`, fatal in dev AND release; the refusal was a dev-only `DCHECK` whose release path fell through to overwriting the map entry |
