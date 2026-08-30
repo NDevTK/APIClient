@@ -39,28 +39,29 @@ enum { IDB_GET_ALL_VALUE = 0, IDB_GET_ALL_KEY, IDB_GET_ALL_RECORD };
  * §5.12's own note ("if count is specified and there are more than count records in range, only the first
  * count will be retrieved") is stated about a member that may be absent. IDL_DEFAULT_NONE is how §3.2.17 says
  * a member does not exist, which is a different state from existing and being 0.
- * It is declared IDL_UNRESTRICTED_DOUBLE and not IDL_UNSIGNED_LONG because `[EnforceRange]` REPLACES the
- * MODULO with a refusal: §3.2.4.6 "unsigned long" is ConvertToInt(V, 32, "unsigned"), and §3.2.4.9 "Abstract
- * operations"' ConvertToInt is where BOTH arms live — with `[EnforceRange]` an out-of-range value is a
- * TypeError, without it x is set to "x modulo 2^bitLength". It is the same composition
- * core/indexeddb/indexed_db.c states for `open`'s version and
- * core/streams/readable_stream.c for `autoAllocateChunkSize`: the DECLARATION performs ToNumber (the page's
- * `valueOf`, which has to be a request) and the CONSUMER performs the range test, through
- * idb_get_all_count_enforce_range below so there is one copy of it. */
+ * IT IS DECLARED IDL_UNSIGNED_LONG_ENFORCE, WHICH IS §3.2.4.10 `[EnforceRange]`'s WHOLE CONVERSION and not a
+ * ToNumber with a test after it: ToNumber, then "let x be sign(x)·floor(abs(x))", then a TypeError for a
+ * non-finite value or one outside 0..2**32−1 — never the "x modulo 2^bitLength" §3.2.4.9 "Abstract operations"'
+ * ConvertToInt performs for a §3.2.4.6 "unsigned long" WITHOUT the attribute, which is what would make
+ * `getAll(q, -1)` a request for 4294967295 records.
+ *
+ * THE REFUSAL BELONGS TO THE TYPE AND NOT TO A CONSUMER, and that is a statement about WHEN it runs rather than
+ * about where the code sits. Web IDL performs it inside §3.2.17 Dictionary types (ES-to-IDL list) step 4.1.4.1's
+ * "converting jsMemberValue to an IDL value whose type is the type member is declared to be of" — so it lands
+ * BEFORE the members §2.7 orders after `count` are read at all. It was a consumer's, split as "the DECLARATION
+ * performs the ToNumber and the CONSUMER performs the range", and the split cost exactly what §3.2.17's read
+ * order exists to make observable: `getAllRecords({count: -1, direction: {toString(){ … }}})` READ `direction`
+ * and RAN the page's `toString` — and would report ITS throw — where a browser throws the TypeError `count`
+ * already owed and never reaches `direction`. An extra conversion is an extra place for the page's code to run
+ * inside an operation the standard has already ended.
+ *
+ * SO NOTHING HERE PERFORMS A RANGE TEST. A member reads the converted value with idl_number_of, which is the
+ * one door a body has to the number a §3.2 conversion produced, and which answers for unknown external input
+ * from that value's own example rather than owing C a number it does not have.
+ * `open`'s `[EnforceRange] unsigned long long version` (core/indexeddb/indexed_db.c) and
+ * `autoAllocateChunkSize` (core/streams/readable_stream.c) still compose, and it is the WIDTH that keeps them
+ * there: core/idl_args.h has a row for the attribute over `unsigned long` and none over `unsigned long long`. */
 extern const IdlDictMember IDB_GET_ALL_OPTIONS[3];
-
-/* WEB IDL §3.2.4.6 "unsigned long"'s `[EnforceRange]` RANGE, which is the TypeError arm of §3.2.4.9 "Abstract
- * operations"' ConvertToInt(V, 32, "unsigned"), over the double a declaration's ToNumber already produced.
- * A fractional, negative, non-finite or too-large value is a TypeError, never a clamp and never a
- * modulo — `store.getAll(query, -1)` throws where an unsigned-long conversion would ask for 4294967295 records.
- *
- * BOTH PLACES `count` ARRIVES SHARE IT: §4.5's positional `optional [EnforceRange] unsigned long count`, and
- * `IDBGetAllOptions`'s member of the same type. Returns 0 with *pcount set, or -1 with the TypeError live.
- *
- * THE POSITIONAL ONE IS TESTED BEFORE THE MEMBER'S OWN STEPS, which is Web IDL's order and observable: an
- * argument is converted before the operation runs, so `deletedStore.getAll(q, -1)` is that TypeError and not
- * §5.12 step 2's "InvalidStateError". The member calls this ahead of its refusals for that reason. */
-int idb_get_all_count_enforce_range(JSContext *ctx, JSValueConst v, uint32_t *pcount);
 
 /* §5.12 AS A DELEGATABLE ALGORITHM — the shape core/indexeddb/idb_key_range.h is, and for its reason: step 8's
  * and step 9's "converting a value to a key range" is §7.4 underneath, whose ARRAY ARM runs the page's own

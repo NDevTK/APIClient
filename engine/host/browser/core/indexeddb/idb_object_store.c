@@ -1076,10 +1076,27 @@ static int js_os_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
         JS_FreeValue(ctx, cb_result);
         if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
-        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so [EnforceRange]'s refusal precedes
-           §5.12 step 2's: `deletedStore.getAll(q, -1)` is a TypeError and not an "InvalidStateError". */
-        if (has_count && idb_get_all_count_enforce_range(ctx, argv[1], &count) < 0)
-            return JS_STEP_ABRUPT;
+        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.2.4.10's refusal precedes
+           §5.12 step 2's: `deletedStore.getAll(q, -1)` is a TypeError and not an "InvalidStateError". That is
+           the DECLARATION's doing now (IDL_UNSIGNED_LONG_ENFORCE) rather than a call this body has to make in
+           the right place, so what is left here is reading the number the conversion produced. */
+        if (has_count) {
+            double c = 0;
+
+            if (idl_number_of(ctx, IDL_UNSIGNED_LONG_ENFORCE, argv[1], &c)) {
+                DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
+                       "§4.5's `getAll`/`getAllKeys` positional `count` reached js_os_get_all outside an "
+                       "unsigned long's range — GET_ALL_ARGS declares IDL_UNSIGNED_LONG_ENFORCE, which is "
+                       "§3.2.4.10's whole conversion and refuses such a value before any body runs, so a "
+                       "value here it would have refused means this position lost its declared type");
+                count = (uint32_t)c;
+            } else {
+                /* §3.2 CROSSED UNKNOWN EXTERNAL INPUT AS ITSELF and it carries no example yet, so there is no
+                   number to be §6.2 step 1's "count if given". Its "not given" arm — count = infinity, every
+                   record in range — is the honest answer and the SUPERSET a later example can only narrow. */
+                has_count = false;
+            }
+        }
         if (os_check(ctx, hdr->this_val, /*writes*/ false, &store, &tx) < 0)          /* §5.12 STEPS 1-5 */
             return JS_STEP_ABRUPT;
         /* `optional IDBGetAllOptions options = {}` is declared ONLY by `getAllRecords`, so it is the one
@@ -1745,13 +1762,14 @@ void idb_object_store_init(JSContext *ctx)
     static const IdlArgType CURSOR_ARGS[2] = { IDL_ANY, IDL_ENUM };
     /* `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned long count)`. The first position
        is `any`, which is what makes §5.12's own branch the member's step rather than a conversion. The second
-       is IDL_UNRESTRICTED_DOUBLE and NOT IDL_UNSIGNED_LONG: `[EnforceRange]` REPLACES the modulo §3.2.4.9
-       "Abstract operations"' ConvertToInt performs for §3.2.4.6 "unsigned long" with a refusal, so the
-       declaration performs §3.2.7's ToNumber (the page's `valueOf`, which has to be a request)
-       and the body performs the RANGE — the composition core/indexeddb/indexed_db.c states for `open`'s
-       version. Declared as a plain unsigned long, `getAll(q, -1)` would ask for 4294967295 records where
-       every browser throws. */
-    static const IdlArgType GET_ALL_ARGS[2] = { IDL_ANY, IDL_UNRESTRICTED_DOUBLE };
+       is IDL_UNSIGNED_LONG_ENFORCE, which is §3.2.4.10 `[EnforceRange]`'s WHOLE conversion: ToNumber, then
+       sign(x)·floor(abs(x)), then a TypeError for a value outside 0..2**32−1 rather than the "x modulo
+       2^bitLength" §3.2.4.9 "Abstract operations"' ConvertToInt performs for a §3.2.4.6 "unsigned long"
+       without the attribute — so `getAll(q, -1)` throws where a plain unsigned long asks for 4294967295
+       records. IT WAS SPLIT (IDL_UNRESTRICTED_DOUBLE here, the range in the body) and the ORDER is what that
+       cost: Web IDL converts an argument BEFORE the operation's steps, so the refusal preceding §5.12 step 2's
+       "InvalidStateError" was a comment two bodies had to keep true, and now it is what the machine does. */
+    static const IdlArgType GET_ALL_ARGS[2] = { IDL_ANY, IDL_UNSIGNED_LONG_ENFORCE };
     /* `getAllRecords(optional IDBGetAllOptions options = {})` — ONE position, and it is the DICTIONARY, which
        is what makes this the one member of the three whose §5.12 step 9 reads a value Web IDL already
        converted. The member list is core/indexeddb/idb_get_all.h's, declared once because §4.6 takes the

@@ -102,7 +102,9 @@
 const IdlDictMember IDB_GET_ALL_OPTIONS[3] = {
     /* §3.2.17 step 4.1 reads a dictionary's own members LEXICOGRAPHICALLY, which idl_args.c asserts:
        "count" < "direction" < "query". Declared in any other order this aborts at every runtime init. */
-    { "count", IDL_UNRESTRICTED_DOUBLE },
+    /* §3.2.4.10 `[EnforceRange]` over §3.2.4.6 `unsigned long` — the refusal is the TYPE's, so it runs inside
+       §3.2.17 (ES-to-IDL list) step 4.1.4.1 and therefore before "direction" and "query" are read. */
+    { "count", IDL_UNSIGNED_LONG_ENFORCE },
     { "direction", IDL_ENUM, false, IDB_CURSOR_DIRECTIONS, 0, NULL, IDL_DEFAULT_STRING, "next" },
     { "query", IDL_ANY, false, NULL, 0, NULL, IDL_DEFAULT_NULL },
 };
@@ -118,27 +120,6 @@ static const IdlDictDecl IDB_GET_ALL_OPTIONS_DECL = {
 /* Its member names, interned ONCE at this component's init: a member read is two halves with a suspension
    between them, so the atom has to outlive the park and cannot be made per read. */
 static const JSAtom *g_get_all_options_atoms;
-
-int idb_get_all_count_enforce_range(JSContext *ctx, JSValueConst v, uint32_t *pcount)
-{
-    double x = 0;
-    int r = JS_ToFloat64(ctx, &x, v);
-
-    DCHECK(r >= 0, "§5.12's `count` reached its range check as something its own declaration did not convert "
-                   "to a number — the declaration is what performs §3.2.7's ToNumber, because that is the "
-                   "page's `valueOf` and has to be a request");
-    (void)r;
-    /* [EnforceRange] REPLACES THE MODULO WITH A REFUSAL: §3.2.4.6 "unsigned long" is ConvertToInt(V, 32,
-       "unsigned"), and §3.2.4.9 "Abstract operations"' ConvertToInt throws a TypeError when the attribute is
-       present and sets x to "x modulo 2^bitLength" when it is not. `getAll(q, -1)` is that TypeError, where
-       the plain `unsigned long` conversion would ask for 4294967295 records. */
-    if (!isfinite(x) || x != trunc(x) || x < 0 || x > 4294967295.0) {
-        JS_ThrowTypeError(ctx, "the count is outside the range of an unsigned long");
-        return -1;
-    }
-    *pcount = (uint32_t)x;
-    return 0;
-}
 
 /* ---- §6.2's and §6.3's RETRIEVE MULTIPLE ITEMS, as §5.12 step 10's operation ------------------------------- */
 
@@ -323,11 +304,16 @@ static int js_idb_get_all_operation(JSContext *ctx, void *st, JSValue cb_result,
         if (!JS_IsUndefined(cv)) {
             double c = 0;
 
+            /* THE ENGINE'S OWN NUMBER AND NEVER THE PAGE'S: OP_GA_COUNT is the JS_NewUint32 idb_get_all.c
+               placed out of IdbGetAllWalk::count, so JS_ToFloat64 here owes nothing to a page value and this
+               is not the JS_ToFloat64-on-an-argument idl_number_of exists to replace. */
             JS_ToFloat64(ctx, &c, cv);
-            DCHECK(c >= 0 && c == trunc(c) && isfinite(c),
-                   "§5.12 handed its operation a `count` that is not an unsigned long — "
-                   "idb_get_all_count_enforce_range is what refuses one, and it runs before the member's own "
-                   "steps because Web IDL converts an argument before the operation it belongs to");
+            DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
+                   "§5.12 handed its operation a `count` that is not an unsigned long. §3.2.4.10 "
+                   "[EnforceRange] is the DECLARED TYPE of both places one arrives — §4.5's positional "
+                   "argument and IDBGetAllOptions' member — so the refusal already ran at the conversion; a "
+                   "value here it would have refused means this closure was minted from something other than "
+                   "IdbGetAllWalk::count");
             if (c != 0) s->count = c;
         }
         s->n = ga_source_count(ctx, source, is_index);   /* STEP 2's list, as it stands */
@@ -507,24 +493,18 @@ static bool ga_potentially_valid_key_range(JSContext *ctx, JSValueConst v)
  * get differently in two places.
  *
  * THE ORDER IS count, direction, query WHERE THE STANDARD WRITES 9.1 query, 9.2 count, 9.3 direction, and the
- * swap is what keeps the observable order right rather than what breaks it. The reads themselves run none of
- * the page's code — all three are reads of a §3.2.17 idlDict the engine built — so among the three the order
- * is unobservable. What IS observable is the one REFUSAL in here: `[EnforceRange]`, which Web IDL performs
- * inside §3.2.17 (ES-to-IDL list) step 4.1.4.1's "converting jsMemberValue to an IDL value" and therefore
- * BEFORE step 9 begins at all. This engine defers it to the consumer because the member is declared
- * IDL_UNRESTRICTED_DOUBLE so that the DECLARATION performs the ToNumber (the page's `valueOf`, which has to be
- * a request) and the range test stays one copy (idb_get_all_count_enforce_range). Performed ahead of step
- * 9.1's key range conversion it lands where a browser's lands; performed after, `getAll({count: -1, query: a})`
- * would run §7.4's Array arm over `a` — the PAGE'S code — before a TypeError that was already owed.
+ * swap is UNOBSERVABLE rather than compensating for anything. All three are reads of a §3.2.17 idlDict the
+ * engine built, so none of them runs the page's code, and there is no longer a refusal in here for the order to
+ * matter to: `[EnforceRange]` is the `count` member's declared TYPE (IDL_UNSIGNED_LONG_ENFORCE), so Web IDL
+ * performs it where Web IDL says — inside §3.2.17 (ES-to-IDL list) step 4.1.4.1's "converting jsMemberValue to
+ * an IDL value", before step 9 begins and before `direction` and `query` are read at all.
  *
- * NAMED RESIDUAL: the deferral still moves that TypeError from the `count` MEMBER's own step 4.1.4.1 to the end
- * of the whole dictionary conversion, so `getAll({get count(){ return -1 }, get direction(){ log(); return
- * "prev" }})` throws the TypeError a browser throws having run one getter a browser never reaches. The next
- * diff declares `[EnforceRange] unsigned long` as a member TYPE in core/idl_args.h — a range composed INTO the
- * declaration's ToNumber instead of following it — and every DICTIONARY-member call of
- * idb_get_all_count_enforce_range goes with it; the POSITIONAL argument's call stays, because there §3.6
- * converts at the position and the consumer is the position. HOW ITS ABSENCE SHOWS: a side-effecting member
- * declared lexicographically after an out-of-range `count` runs when it should not have.
+ * IT USED TO BE DEFERRED HERE, and the two things that deferral cost are what the type now buys. It read
+ * `direction` after an out-of-range `count`, so `getAllRecords({count: -1, direction: {toString(){ … }}})` ran
+ * a page `toString` a browser never reaches and could report ITS throw instead of the owed TypeError. And it
+ * reached that range test through JS_ToFloat64 on the member's value, which is the one thing a body may not do
+ * to a declared argument (see idl_number_of): unknown external input CROSSES a §3.2 conversion as itself, so a
+ * `count` computed from an opaque source aborted the flow at a should-never-happen instead of being explored.
  *
  * `options` is BORROWED. Returns the step code the caller must return. */
 static int ga_step9_reads(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w, JSValueConst options,
@@ -544,12 +524,23 @@ static int ga_step9_reads(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w, JSVa
        `store.getAll({count: 10}, 17)` a request for ten. */
     w->has_count = 0;
     if (!JS_IsUndefined(cv)) {
-        if (idb_get_all_count_enforce_range(ctx, cv, &w->count) < 0) {
-            JS_FreeValue(ctx, cv);
-            JS_FreeValue(ctx, dv);
-            return JS_STEP_ABRUPT;
+        double c = 0;
+
+        if (idl_number_of(ctx, IDL_UNSIGNED_LONG_ENFORCE, cv, &c)) {
+            DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
+                   "§4.5's IDBGetAllOptions `count` reached step 9.2 outside an unsigned long's range. "
+                   "IDL_UNSIGNED_LONG_ENFORCE IS §3.2.4.10's whole conversion and refuses such a value at "
+                   "§3.2.17 (ES-to-IDL list) step 4.1.4.1, so a value here it would have refused means this "
+                   "dictionary reached step 9 without being converted — check that both entries hand "
+                   "ga_step9_reads an idlDict IDB_GET_ALL_OPTIONS declared, never the page's own object");
+            w->count = (uint32_t)c;
+            w->has_count = 1;
         }
-        w->has_count = 1;
+        /* ELSE THE CONVERSION CROSSED UNKNOWN EXTERNAL INPUT AS ITSELF and it carries no example yet, so this
+           run has no number to be §6.2 step 1's "count if given". Its "not given" arm is the honest answer and
+           not a hole defaulted: that arm is `count` = infinity, which retrieves every record in range — the
+           SUPERSET a later example can only narrow, where a 0 invented here is the one value §6.2 step 1 also
+           spells as infinity and every other value would truncate what this flow learns. */
     }
     /* STEP 9.3: "Set direction to queryOrOptions["direction"]". */
     w->direction = (uint8_t)idb_cursor_direction_of(ctx, dv);

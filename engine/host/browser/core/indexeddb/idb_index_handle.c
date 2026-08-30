@@ -374,10 +374,27 @@ static int js_ix_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
         JS_FreeValue(ctx, cb_result);
         if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
-        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so [EnforceRange]'s refusal precedes
-           §5.12 step 2's: `deletedIndex.getAll(q, -1)` is a TypeError and not an "InvalidStateError". */
-        if (has_count && idb_get_all_count_enforce_range(ctx, argv[1], &count) < 0)
-            return JS_STEP_ABRUPT;
+        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.2.4.10's refusal precedes
+           §5.12 step 2's: `deletedIndex.getAll(q, -1)` is a TypeError and not an "InvalidStateError". That is
+           the DECLARATION's doing now (IDL_UNSIGNED_LONG_ENFORCE) rather than a call this body has to make in
+           the right place, so what is left here is reading the number the conversion produced. */
+        if (has_count) {
+            double c = 0;
+
+            if (idl_number_of(ctx, IDL_UNSIGNED_LONG_ENFORCE, argv[1], &c)) {
+                DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
+                       "§4.6's `getAll`/`getAllKeys` positional `count` reached js_ix_get_all outside an "
+                       "unsigned long's range — GET_ALL_ARGS declares IDL_UNSIGNED_LONG_ENFORCE, which is "
+                       "§3.2.4.10's whole conversion and refuses such a value before any body runs, so a "
+                       "value here it would have refused means this position lost its declared type");
+                count = (uint32_t)c;
+            } else {
+                /* §3.2 CROSSED UNKNOWN EXTERNAL INPUT AS ITSELF and it carries no example yet, so there is no
+                   number to be §6.2 step 1's "count if given". Its "not given" arm — count = infinity, every
+                   record in range — is the honest answer and the SUPERSET a later example can only narrow. */
+                has_count = false;
+            }
+        }
         if (ix_check(ctx, hdr->this_val, &index, &tx) < 0)                            /* §5.12 STEPS 1-5 */
             return JS_STEP_ABRUPT;
         r = idb_get_all_walk_start(ctx, hdr, w, index, tx, /*is_index*/ true, idl_step_magic(hdr),
@@ -754,10 +771,10 @@ void idb_index_handle_init(JSContext *ctx)
     /* `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned long count)` and
        `getAllRecords(optional IDBGetAllOptions options = {})` — §4.5's declarations exactly, for the same
        reasons: the first position is `any` so §5.12's own branch is the member's step, and the count is
-       IDL_UNRESTRICTED_DOUBLE so the declaration runs §3.2.7's ToNumber and the body runs [EnforceRange]'s
-       range. The dictionary's member list is core/indexeddb/idb_get_all.h's, declared once for both
-       interfaces. */
-    static const IdlArgType GET_ALL_ARGS[2] = { IDL_ANY, IDL_UNRESTRICTED_DOUBLE };
+       IDL_UNSIGNED_LONG_ENFORCE so §3.2.4.10 `[EnforceRange]`'s whole conversion — ToNumber, truncate toward
+       zero, refuse anything outside 0..2**32−1 — is the TYPE's and runs before this body is entered at all.
+       The dictionary's member list is core/indexeddb/idb_get_all.h's, declared once for both interfaces. */
+    static const IdlArgType GET_ALL_ARGS[2] = { IDL_ANY, IDL_UNSIGNED_LONG_ENFORCE };
     static const IdlArgType GET_ALL_RECORDS_ARGS[1] = { IDL_DICT };
 
     DCHECK(!g_ready, "idb_index_handle_init ran twice — one instance is one document is one agent");
