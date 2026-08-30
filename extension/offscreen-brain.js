@@ -1085,19 +1085,48 @@ async function _dispatchDocument(docKey) {
    discoveryDoc, with per-field literal/opaque provenance preserved.
    No separate content-script DOM walk. */
 
+/* THE SUBMISSION IS CHECKED ONCE AND REFUSED, NEVER ASSERTED — the sender is content.js, in the page's own
+   renderer, which SECURITY.md classes untrusted. What it promises is exactly what its capture writes: a form
+   with a resolved action, an uppercased method, an enctype (the HTML default when the form names none), and a
+   non-empty field list — it returns before sending when there are no fields at all. The `|| "GET"` and the
+   two `|| "application/x-www-form-urlencoded"` copies that read this record were substituting the two values
+   that decide WHAT REQUEST THIS WAS: a POST form silently recorded as a GET is a state-changing submission
+   filed as a read, which is the one distinction §Attacker-sources draws before deciding whether a learned
+   request may ever be fired. */
+function _formSubmitUnserved(msg) {
+  if (typeof msg.url !== "string" || msg.url === "") return "url";
+  if (typeof msg.method !== "string" || msg.method === "") return "method";
+  if (typeof msg.enctype !== "string" || msg.enctype === "") return "enctype";
+  if (!Array.isArray(msg.fields) || msg.fields.length === 0) return "fields";
+  for (var _i = 0; _i < msg.fields.length; _i++)
+    if (typeof msg.fields[_i].name !== "string" || typeof msg.fields[_i].value !== "string")
+      return "fields[" + _i + "]";
+  return null;
+}
+
 function _handleFormSubmit(documentId, msg, tabId, frameId) {
-  if (!msg.url || !msg.fields) return;
+  var unserved = _formSubmitUnserved(msg);
+  if (unserved !== null) {
+    console.warn("[brain] CONTENT_FORM_SUBMIT dropped — `" + unserved +
+                 "` is not what the form capture promises:", String(msg.url));
+    return;
+  }
   var tab = _docForLearning(documentId);
-  var method = msg.method || "GET";
+  var method = msg.method;
 
   var url;
-  try { url = new URL(msg.url); } catch (_) { return; }
+  try { url = new URL(msg.url); } catch (e) {
+    // A form action that does not parse is a real page, not a broken contract — but an invariant abort
+    // inside this try would otherwise be swallowed into that same silent return.
+    RETHROW_FATAL(e);
+    return;
+  }
 
   var service = extractInterfaceName(url);
 
   // Build body for POST forms
   var reqBody = null;
-  if (method !== "GET" && msg.fields.length > 0) {
+  if (method !== "GET") {
     reqBody = msg.fields.map(function (f) {
       return encodeURIComponent(f.name) + "=" + encodeURIComponent(f.value);
     }).join("&");
@@ -1112,8 +1141,10 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
     timestamp: Date.now(),
     status: 0,
     completedAt: Date.now(),
-    requestHeaders: method !== "GET" ? { "content-type": msg.enctype || "application/x-www-form-urlencoded" } : {},
-    contentType: msg.enctype || "",
+    /* THE FORM'S OWN ENCTYPE, which content.js already resolved to the HTML default where the form named
+       none — so this is what the browser would send, not a guess standing in for it. */
+    requestHeaders: method !== "GET" ? { "content-type": msg.enctype } : {},
+    contentType: msg.enctype,
     rawBodyB64: reqBody ? btoa(reqBody) : null,
     /* THE RESPONSE HALF IS EMPTY BECAUSE THE SUBMISSION WAS OBSERVED AND ITS ANSWER WAS NOT. This record is
        built at the moment the page submits; the navigation that answers it lands in a document this log never
