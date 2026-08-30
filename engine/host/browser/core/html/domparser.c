@@ -258,7 +258,10 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
  *  - The `<script>` stamps do not run because §8.5.1 names the reason itself: this parser has XML SCRIPTING
  *    SUPPORT DISABLED, so HTML §14.2's steps — the parser document, the force-async clear, the prepare at the
  *    end tag — are not owed for THIS entry. §7.5.3's loader is the entry that IS owed them, and
- *    core/loader/xml_document.c is where that crashes by name.
+ *    core/loader/xml_document.c is where it asks core/xml/xml_parse.h for the end-tag boundary and reaches
+ *    core/html/html_script.h's ONE preparation with it. That component parses through the same
+ *    `xml_parse_document` this arm does, and never asks — which is what makes the scripting mode a fact about
+ *    the CONSUMER rather than a flag inside the walk.
  *  - `<style>`, media and image are HTML §4.2.6, §4.8.11.2 and §4.8.4.3.2 element-parsed seams, whose triggers
  *    are stated over an HTML parser's stack of open elements. An `svg` or arbitrary-namespace element that
  *    happens to be spelled `style` in an XML document is not that element.

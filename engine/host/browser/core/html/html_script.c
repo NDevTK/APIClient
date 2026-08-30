@@ -561,7 +561,8 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     }
 }
 
-/* THE REALM §13.2.6's TWO ENTRIES BELOW RUN IN — see html_script.h for why it is derived and not passed.
+/* THE REALM THE TWO PARSER ENTRIES BELOW RUN IN — §13.2.6's for both, and §14.2's for the second of them; see
+   html_script.h for why it is derived and not passed.
    TWO QUESTIONS, TWO CALLS, AND THEY ARE DIFFERENT QUESTIONS rather than one answered twice.
    `document_realm_of` is the realm the DOM's own steps run in, and is what the `already started` slot is
    WRITTEN through: the slot is an own property of the element's wrapper, so it needs A realm and any realm
@@ -592,11 +593,16 @@ void html_script_parser_inserted(lxb_dom_node_t *script)
 {
     JSContext *ctx;
 
-    DCHECK(script != NULL, "§13.2.6.4.8's `script` end tag was reached with no current node");
+    DCHECK(script != NULL, "a parser reached a `script` element's end tag with no element — HTML §13.2.6.4.8 "
+                           "'The \"text\" insertion mode' takes the CURRENT NODE and HTML §14.2 \"Parsing XML "
+                           "documents\" takes the element whose end tag was just parsed, and neither of those "
+                           "can be absent at the moment the step runs");
     DCHECK(html_script_is(script),
-           "§13.2.6.4.8's `script` end tag was handed a node that is not a `script` element — the section says "
-           "\"let script be the current node (which will be a script element)\", so a node that is not one "
-           "means the caller took the current node at a moment other than before the pop");
+           "a parser's `script` end-tag step was handed a node that is not a `script` element — §13.2.6.4.8 "
+           "says \"let script be the current node (which will be a script element)\", so an HTML caller that "
+           "misses means it took the current node at a moment other than before the pop; an XML caller that "
+           "misses asked §14.2's question about the wrong end tag, since core/xml/xml_tree.h reports EVERY "
+           "element's close and the `script` test is the caller's filter");
     /* §4.12.1 step 18 — "If scripting is disabled for el, then return", which §8.1.3.4 "Enabling and disabling
        scripting" defines over the node document's browsing context. Asked as the ACTIVE-document realm because
        that IS the browsing context here, and answered NULL for every complete parse this engine performs before
@@ -607,7 +613,9 @@ void html_script_parser_inserted(lxb_dom_node_t *script)
     /* "PREPARE THE SCRIPT ELEMENT SCRIPT", and it is PARSER-INSERTED — §13.2.6.4.4 'The "in head" insertion
        mode' set this element's parser document when it created it, which is the fact steps 4 and 14 turn on and
        which decides whether a `<script src>` with no `async` attribute is a parser-blocking script or a member
-       of the in-order ASAP list. */
+       of the in-order ASAP list. HTML §14.2 "Parsing XML documents" states the same of ITS parser in the same
+       breath as the end tag — "it must have its parser document set and its force async set to false" — so the
+       XML caller passes true here for the standard's own reason and not by analogy with this one. */
     html_script_prepare(ctx, lxb_dom_interface_element(script), /*parser_inserted*/true);
 }
 

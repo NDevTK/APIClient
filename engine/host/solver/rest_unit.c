@@ -51,14 +51,6 @@
    chose that subtree. */
 #define REST_UNIT_SUBTREE_REMOVALS_N   1u
 
-/* HTML §14.2 "Parsing XML documents"' script question, asked of each node of a finished tree: 1024 NODES.
-   This is the one XML unit whose item is FIXED work — a node-type test, a namespace and local-name extraction
-   into fixed-size buffers, and two comparisons against short literals — so a multiplier multiplies a constant
-   and bound (1) is untouched. It is the per-byte defect in miniature otherwise: a pure inspection walk over a
-   response-sized tree, one scheduler round trip per predicate. 1024 predicates is a few microseconds, three
-   orders of magnitude under the slice. */
-#define REST_UNIT_NODE_VISITS_N   1024u
-
 size_t rest_unit_items(RestUnitKind kind)
 {
     size_t n = 0;
@@ -67,7 +59,6 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_INPUT_BYTES:      n = REST_UNIT_INPUT_BYTES_N;      break;
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
-    case REST_UNIT_NODE_VISITS:      n = REST_UNIT_NODE_VISITS_N;      break;
     }
     /* NOT A `default:` ARM — the switch is exhaustive over RestUnitKind, so a kind added to the header with no
        number here does not compile rather than silently reaching the crash below. What lands here is a value

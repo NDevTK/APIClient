@@ -42,10 +42,16 @@
  * one construct per call since it was written, for the reason it states — an XML document is attacker-length,
  * so the loop over its constructs is unbounded and must be able to stop between iterations — and the only
  * thing standing between that and a suspension was a driver that looped to the end. It loops HERE now, one
- * construct per `step`, and so do the two other unbounded walks this loader owns: discarding the partial tree
- * a failed parse left behind, and HTML §14.2 "Parsing XML documents"' refusal over the elements the parse
- * built. Three loops over response-controlled quantities, three phases, one O(1) step each — closing the first
- * and leaving the other two would have moved the drive-to-completion rather than removed it.
+ * construct per `step`, and so does the other unbounded walk this loader owns: discarding the partial tree a
+ * failed parse left behind. Two loops over response-controlled quantities, one O(1) step each — closing the
+ * first and leaving the second would have moved the drive-to-completion rather than removed it.
+ *
+ * AND HTML §14.2 "Parsing XML documents"' SCRIPT STEP RIDES THE FIRST OF THOSE LOOPS RATHER THAN FOLLOWING
+ * THEM. §14.2 prepares a `script` element "when the element's end tag is subsequently parsed", which is a
+ * position INSIDE [1] `document` and not a pass over the tree afterwards — so it is a step the parse phase
+ * owes at an end tag, and the parse resumes behind it. A walk over the finished tree would get the document
+ * ORDER right and the parse-then-execute ORDER wrong, which CLAUDE.md §ORDER-and-NARROW names as the spec
+ * rather than a detail; see xml_document.c for what §14.2 states and which half of it is written elsewhere.
  *
  * `xml` IS BORROWED ONLY ACROSS `begin`: core/xml/xml_tree.h's build takes its own copy of the entity, so a
  * load outliving the caller's buffer is still reading its own bytes. `finish` has no failure status of its

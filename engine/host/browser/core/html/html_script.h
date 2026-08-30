@@ -100,10 +100,19 @@ void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert);
    `<script src>` being filed in a list it does not belong to. */
 void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inserted);
 
-/* HTML §13.2.6.4.8 'The "text" insertion mode' — "An end tag whose tag name is `script`": let script be the
+/* A PARSER REACHED A `script` ELEMENT'S END TAG — the one action TWO sections state, which is why this is one
+ * body with two callers rather than two bodies that must not disagree.
+ *   HTML §13.2.6.4.8 'The "text" insertion mode' — "An end tag whose tag name is `script`": let script be the
  * current node, pop it, restore the insertion mode and the insertion point, and "prepare the script element
  * script". `script` is that node, taken by core/html/html_parse.c's token-done wrapper BEFORE tree construction
  * consumes the token, because the pop is what the section performs first.
+ *   HTML §14.2 "Parsing XML documents" — "When the element's end tag is subsequently parsed, the user agent
+ * must perform a microtask checkpoint, and then prepare the script element", for a parser invoked with XML
+ * scripting support enabled. core/loader/xml_document.c is that caller and owns the checkpoint, the scripting
+ * mode and the end-tag boundary; what it must NOT own is a second preparation, because §4.12.1's type steps,
+ * its `already started` and its five destinations would then be right in one file and drifting in the other.
+ * The XML side is not a copy of the HTML side in ANY other respect — there is no raw-text tokenizer state in
+ * XML, so a `script` body is ordinary XML §3.1's [43] `content` — and this is the one thing the two share.
  *
  * WHY THIS EXISTS AT ALL, GIVEN THAT §8.4.3 EXPLICITLY PERMITS THE OPPOSITE. "User agents are explicitly
  * allowed to avoid executing script elements inserted via this method" is a real permission in §8.4.3

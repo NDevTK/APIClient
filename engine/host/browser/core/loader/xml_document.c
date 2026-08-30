@@ -1,99 +1,98 @@
 /* HTML §7.5.3 "Loading XML documents", and nothing else. See core/loader/xml_document.h.
  *
- * WHY THE SCRIPT WALK IS HERE AND NOT IN THE PARSER. HTML §14.2 "Parsing XML documents" is the section that
- * says what an XML parser does about a `script` element, and it says it does something only when XML SCRIPTING
- * SUPPORT is enabled: it sets the element's parser document, unsets its "force async", and — at the element's
- * END TAG, after a microtask checkpoint — prepares it. Of the three entries that parse XML in this engine, two
- * run with that support DISABLED and say so in their own standards (§8.5.1 `parseFromString` names it
- * outright; XHR §3.6.6's response document runs no script), so the capability is only ever owed HERE. Putting
- * the crash in core/xml/xml_tree.c would make it fire for the two consumers the standard exempts, and putting
- * a scripting FLAG in that component would give a grammar walk an opinion about a document's scripting state
- * that it has no way to be right about. So the parse is one question and this is another, asked by the one
- * caller that has to ask it.
+ * WHY §14.2's SCRIPT STEP IS ASKED HERE AND NOT IN THE PARSER. HTML §14.2 "Parsing XML documents" is the
+ * section that says what an XML parser does about a `script` element, and it says it does something only for a
+ * parser invoked with XML SCRIPTING SUPPORT ENABLED. Of the three entries that parse XML in this engine, two
+ * run with that support DISABLED and say so in their own standards (HTML §8.5.1 "DOMParser" creates its parser
+ * "with XML scripting support disabled"; XMLHttpRequest §3.6.6 "set a document response" runs no script), so
+ * the step is only ever owed HERE. A scripting FLAG in core/xml/ would give a grammar walk an opinion about a
+ * document's scripting state that it has no way to be right about, and a `script` test there would make that
+ * walk decide which elements matter. What core/xml/xml_tree.h reports instead is the bare boundary — the
+ * element whose end tag the last step parsed — which is a fact about XML §3's [39] `element` and about nothing
+ * else. So the parse is one question and this is another, asked by the one caller that has to ask it.
  *
- * AND IT CRASHES RATHER THAN LEAVING THE ELEMENT INERT. A `script` in an XHTML document that this build parses
- * into a real tree and never prepares is a page whose behaviour is silently wrong — the document loads, the
- * DOM is right, and the code the page shipped does not run, with nothing anywhere to say so. That is the
- * §Offensive-programming case exactly: a capability that does not exist is honestly ABSENT and the crash is
- * what names it. */
+ * WHAT §14.2 SAYS, IN ITS OWN WORDS, AND WHICH HALF LANDS WHERE. "When an XML parser with XML scripting
+ * support enabled creates a script element, it must have its parser document set and its force async set to
+ * false. If the parser was created as part of the XML fragment parsing algorithm, then the element's already
+ * started must be set to true. When the element's end tag is subsequently parsed, the user agent must perform
+ * a microtask checkpoint, and then prepare the script element."
+ *   `force async` IS ALREADY WRITTEN AND NOT BY THIS FILE — HTML §4.12.1.1 "Processing model" states that flag
+ * of BOTH parsers in one sentence ("It is set to false by the HTML parser and the XML parser on script
+ * elements they insert"), and core/html/html_script.h's `html_script_parsed` is the one walk that applies it,
+ * run from `document_install` over the finished tree of every document this engine installs, XML included and
+ * with a realm in hand. A second writer here would be one fact answered from two places.
+ *   `parser document` IS EXPRESSED AND NOT STORED, which core/html/html_script.h argues at length: the flag has
+ * exactly two readers and each of them IS one of the two ways an element can arrive, so it is a PARAMETER at
+ * the preparation rather than a slot. This route states it TRUE, because this route is a parser.
+ *   THE FRAGMENT ARM HAS NO PARSER TO STAMP: §14.4 "Parsing XML fragments" is not built in this engine, and
+ * §7.5.3 is a DOCUMENT parse, so the arm is not narrowed here — it is absent one component over.
+ *   THE END TAG IS THIS FILE'S, and it is the substantive difference from HTML §13.2's parser. There is no
+ * raw-text tokenizer state in XML, so a `script` body is ordinary XML §3.1's [43] `content` and a `<![CDATA[`
+ * inside one is §2.7's [18] `CDSect` and NOT program text — core/xml/ already reads it that way, and the
+ * element's script text is the character data of its children.
+ *
+ * AND THE PREPARATION IS THE ONE THAT ALREADY EXISTS. HTML §13.2.6.4.8 'The "text" insertion mode' and §14.2
+ * state the SAME action for the SAME reason — a parser reached a `script` element's end tag, so prepare it,
+ * parser-inserted — so `html_script_parser_inserted` serves both and there is no second script-running path
+ * beside it. Two sections, one body: an XML document's script joins the flow's program sequence through the
+ * identical door an HTML document's does, which is what keeps §4.12.1's type steps, its `already started` and
+ * its five destinations from having to be right twice.
+ *
+ * WHAT REPLACED THE CRASH THAT STOOD HERE, AND WHAT THAT CRASH GOT WRONG. It named two things to build and one
+ * of them was already built: it instructed the next reader to unset `force async` at the parse, which
+ * `document_install` has been doing for XML trees along with HTML ones. That is CLAUDE.md §DFAIL's own failure
+ * mode — text that stays accurate about the SPEC and goes wrong about THIS TREE — and it is why the rule is to
+ * grep the entry a crash names before writing the code it asks for. */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "core/dom/element.h"
-#include "core/dom/node.h"
+#include "core/html/html_script.h"   /* §4.12.1's `script` test and the ONE preparation both parsers reach */
 #include "core/loader/document_load_type.h"
 #include "core/loader/xml_document.h"
 #include "core/mime/mime_type.h"
 #include "core/xml/xml_parse.h"
-#include "solver/rest_unit.h"   /* how many items each of this loader's four phases rests after */
+#include "solver/rest_unit.h"   /* how many items each of this loader's phases rests after */
 #include "check.h"
 
-/* DOM §1.4 "Namespaces"' HTML namespace, written out for core/xml/xml_ns.h's reason: lexbor's interning is
-   case-folding and a table lookup would make this comparison depend on how the document happened to spell it. */
-#define XML_LOADER_HTML_NAMESPACE "http://www.w3.org/1999/xhtml"
-
-/* HTML §14.2 "Parsing XML documents"' script handling, as the crash that names it — for ONE node of the tree
-   the parse just built. It is one node and not a walk because the walk is the DRIVER's: a document is
-   attacker-length, so a loop over its nodes is exactly as unbounded as the loop over its constructs was, and
-   the loader would have closed the parse's drive-to-completion only to open a second one behind it. HOW MANY
-   of these one rest point covers is solver/rest_unit.h's REST_UNIT_NODE_VISITS and not this function's: what
-   it costs is fixed per node (a type test, a name extraction into fixed buffers, two comparisons against short
-   literals), which is precisely what makes a multiplier safe here and not on either of the two phases below
-   whose item is a quantity the document chooses. */
-static void xml_document_refuse_script(lxb_dom_node_t *n)
-{
-    const char *ns, *local;
-    char nsbuf[128], lobuf[64];
-
-    DCHECK(n != NULL, "the §14.2 script refusal was asked about no node");
-    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return;
-    element_ns_and_local(lxb_dom_interface_element(n), &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
-    if (local == NULL || strcmp(local, "script") != 0) return;
-    if (ns == NULL || strcmp(ns, XML_LOADER_HTML_NAMESPACE) != 0) return;
-    DFAIL("HTML §14.2 \"Parsing XML documents\": this document holds a `script` element in the HTML "
-              "namespace and §7.5.3 \"Loading XML documents\" runs its XML parser with XML SCRIPTING SUPPORT "
-              "ENABLED — so §14.2's steps are owed and this build does not have them. BUILD THEM AT THE "
-              "PARSE: when the XML parser creates a `script` element it must set the element's parser document "
-              "and unset its \"force async\", and when it reaches that element's END TAG it must, after a "
-              "microtask checkpoint, PREPARE the script (HTML §4.12.1 \"The script element\"'s \"prepare the "
-              "script element\"). NOTE WHAT IS NOT OWED and must not be copied from the HTML parser: there is "
-              "no raw-text tokenizer state in XML, so a `script` body is ordinary XML §3.1's [43] `content` "
-              "and a `<![CDATA[` inside one is §2.7's [18] `CDSect` and NOT program text — core/xml/ already "
-              "reads it that way, and the element's script text is the character data of its children. The "
-              "two other entries that parse XML here are exempt by their own standards and must stay exempt: "
-              "HTML §8.5.1 `parseFromString` creates its parser \"with XML scripting support disabled\", and "
-              "XMLHttpRequest §3.6.6 \"set a document response\" runs no script. Leaving the element inert "
-              "instead is a page that loads with the code it shipped silently not running");
-}
-
-/* THE FOUR THINGS A §7.5.3 LOAD CAN BE DOING, in the order it can reach them. Three of them are a LOOP over
+/* THE THREE THINGS A §7.5.3 LOAD CAN BE DOING, in the order it can reach them. Two of them are a LOOP over
    something the response controls, which is why each is a phase with a bounded step rather than a stretch of a
-   completing function: the constructs of [1] `document`, the top-level children a failed parse left behind,
-   and the elements §14.2 has an opinion about. A phase list is what makes the loader's own state a thing a
-   driver can stand in the middle of.
-   EACH PHASE'S REST UNIT IS solver/rest_unit.h's AND NOT A `1` HELD HERE, and the three answers are not the
-   same number for a reason worth reading there: two of these phases are counted in items whose SIZE the
-   document picks — a [14] `CharData` run, a subtree — so a multiplier on them would multiply an unbounded
-   quantity, which is a bound wearing a granularity's name. The third is counted in a fixed amount of work per
-   node and is multiplied. Nothing about that reasoning is decidable from inside this file, which is why the
-   numbers are not in it. */
-enum { XML_LOAD_PARSE = 0,   /* REST_UNIT_XML_CONSTRUCTS items of core/xml/xml_parse.h's walk */
+   completing function: the constructs of [1] `document`, and the top-level children a failed parse left
+   behind. A phase list is what makes the loader's own state a thing a driver can stand in the middle of.
+   EACH PHASE'S REST UNIT IS solver/rest_unit.h's AND NOT A `1` HELD HERE, and it is 1 for both loops for a
+   reason worth reading there: both are counted in items whose SIZE the document picks — a [14] `CharData`
+   run, a subtree — so a multiplier on either would multiply an unbounded quantity, which is a bound wearing a
+   granularity's name. Nothing about that reasoning is decidable from inside this file, which is why the
+   numbers are not in it.
+   §14.2's SCRIPT STEP IS NOT A PHASE OF ITS OWN AND MUST NOT BECOME ONE. It happens AT AN END TAG, in the
+   middle of [1] `document`, which is precisely what distinguishes it from HTML §13.2's `script` handling and
+   is the whole reason a post-parse walk over the finished tree was the wrong shape: a walk gets the document
+   ORDER right and the parse-then-execute ORDER wrong, and CLAUDE.md §ORDER-and-NARROW names parse-then-execute
+   script order as the spec rather than a detail. So it lives inside XML_LOAD_PARSE, as a step the parse phase
+   owes before it reads its next construct. */
+enum { XML_LOAD_PARSE = 0,   /* REST_UNIT_XML_CONSTRUCTS items of core/xml/xml_parse.h's walk, and §14.2's
+                                end-tag step for each `script` element that closes among them */
        XML_LOAD_DISCARD,     /* REST_UNIT_SUBTREE_REMOVALS children of the partial tree a failed parse left */
        XML_LOAD_ERRDOC,      /* §7.5.3's inline report, which is one element and one text node — no unit */
-       XML_LOAD_SCRIPTS,     /* REST_UNIT_NODE_VISITS nodes of the §14.2 refusal walk */
        XML_LOAD_DONE };
 
 /* WHAT A §7.5.3 LOAD IS BETWEEN TWO ITEMS. `parse` is live exactly while the phase is XML_LOAD_PARSE and is
-   destroyed by the finish that assembles `report`; `scan` is the §14.2 walk's cursor, which is a NODE and not
-   an index because the tree it walks is the one this same load built and nothing else can reach yet. */
+   destroyed by the finish that assembles `report`.
+   `script_pending` IS §14.2's OWN STATE AND NOTHING ELSE'S: the section puts TWO actions at a `script`
+   element's end tag — "the user agent must perform a microtask checkpoint, and then prepare the script
+   element" — with the checkpoint FIRST, so between them the load is standing at a position that has to be
+   expressible. It holds the element whose end tag the parse has just read and whose preparation is still owed.
+   IT IS A BORROWED NODE OF THE TREE THIS LOAD IS BUILDING, which is sound for exactly one step: the step that
+   sets it RETURNS immediately and the next step consumes it before anything else runs, so no phase that
+   removes nodes (XML_LOAD_DISCARD) can be reached while it is non-NULL — asserted at both transitions rather
+   than argued here. */
 struct XmlDocumentLoad {
     lxb_html_document_t *document;
     lxb_dom_node_t      *root;
     DomParseRootKind     root_kind;
     HtmlScriptingMode    scripting;
     XmlParse            *parse;
-    lxb_dom_node_t      *scan;
+    lxb_dom_node_t      *script_pending;
     XmlParseReport       report;
     uint8_t              phase;
 };
@@ -124,7 +123,7 @@ XmlDocumentLoad *xml_document_load_begin(lxb_html_document_t *document, DomParse
     l->root      = lxb_dom_interface_node(document);
     l->root_kind = root_kind;
     l->scripting = scripting;
-    l->scan      = NULL;
+    l->script_pending = NULL;
     l->phase     = XML_LOAD_PARSE;
     memset(&l->report, 0, sizeof(l->report));
     l->parse = xml_parse_begin(lxb_dom_interface_document(document), l->root, root_kind,
@@ -149,25 +148,82 @@ void xml_document_load_step(XmlDocumentLoad *load)
 
     switch (load->phase) {
     case XML_LOAD_PARSE:
+        /* §14.2's END-TAG STEP, SECOND ACTION: "the user agent must perform a microtask checkpoint, and THEN
+           prepare the script element." The checkpoint is the FIRST action and it has already happened — it is
+           the RETURN that ended the previous step and handed the thread back to the one WFQ, which is what a
+           microtask checkpoint IS in this engine: CLAUDE.md §Every-runtime-job makes every queued reaction a
+           first-class flow and states outright that there is no `while(JS_ExecutePendingJob)` loop, so a drain
+           written here would be the second scheduler §THERE-IS-NO-GRIND forbids. That is why the two actions
+           are two steps and not one: expressing "checkpoint, then prepare" needs a position between them.
+           NAMED RESIDUAL — the checkpoint OFFERS the queued reaction flows a turn and does not GUARANTEE they
+           take one before this load resumes, because ordering between flows is the WFQ's and this load holds
+           no priority over it. WHAT IS NOT COVERED: a reaction queued by an earlier `script` of this same
+           parse, which the standard has settled before the next `script` is prepared. WHAT THE NEXT DIFF
+           BUILDS: a run-these-before-that ordering the scheduler owns (never a drain here). HOW ITS ABSENCE
+           SHOWS: two `script` elements in one XML document where the second observes a promise the first
+           settled — the second reads it unsettled, and only there. It is unreachable while the preparation
+           below returns at §4.12.1 step 18 (see it), because then no script of this parse runs to queue one:
+           the two become live together, which is why they are one residual and not two. */
+        if (load->script_pending != NULL) {
+            lxb_dom_node_t *script = load->script_pending;
+
+            load->script_pending = NULL;
+            /* HTML §13.2.6.4.8 'The "text" insertion mode' AND §14.2 REACH THE SAME BODY, because they state
+               the same action: a parser is at a `script` element's end tag, so §4.12.1 "The script element"'s
+               "prepare the script element" runs with `parser document` non-null. One capability, one
+               implementation — core/html/html_script.h owns which of §4.12.1's five destinations the element
+               takes, and an XML document's script must not answer that question in a second place.
+               IT RETURNS AT §4.12.1 STEP 18 FOR EVERY LOAD THIS ENGINE PERFORMS TODAY, and that is the
+               standard's own step rather than a gap: "if scripting is disabled for el, then return", which
+               §8.1.3.4 "Enabling and disabling scripting" defines over the node document's browsing context —
+               and §7.5.1 "Shared document creation infrastructure" creates the Document and parses into it,
+               while this engine parses and THEN builds the realm, so during a load there is no browsing
+               context to be enabled. The scripts of a finished tree are inventoried by
+               core/loader/document_scripts.h instead, which is exactly what §13.2.6.4.8's route does for an
+               HTML document — so the two parsers agree, and they will still agree the day that order is
+               corrected, with nothing here to change. */
+            html_script_parser_inserted(script);
+            return;
+        }
         if (!xml_parse_ended(load->parse)) {
             /* THE UNIT IS ASKED FOR EVEN WHERE THE ANSWER IS ONE. Writing the `1` here instead would put a
                granularity decision back inside the component that rests, which is where nobody can see it
-               beside the other three — and the day core/xml/'s walk gains a pull of its own for [14]
-               `CharData` (whose unbounded length is the reason this answer is 1) the number to move is in one
-               file rather than in this loop. */
+               beside the others — and the day core/xml/'s walk gains a pull of its own for [14] `CharData`
+               (whose unbounded length is the reason this answer is 1) the number to move is in one file rather
+               than in this loop. */
             n = rest_unit_items(REST_UNIT_XML_CONSTRUCTS);
             rest_unit_begin(REST_UNIT_XML_CONSTRUCTS);
-            while (n-- > 0 && !xml_parse_ended(load->parse))
+            while (n-- > 0 && !xml_parse_ended(load->parse)) {
+                lxb_dom_node_t *closed;
+
                 xml_parse_step(load->parse);
+                /* §14.2 ASKED IN ITS OWN ORDER: the scripting mode is the parser's ("when an XML parser with
+                   XML scripting support enabled…"), the element's kind is §4.12.1's, and the boundary is the
+                   grammar's. This is the only place the first of those three is known — see the head comment
+                   on why core/xml/ is not told it. */
+                if (load->scripting != HTML_SCRIPTING_ENABLED) continue;
+                closed = xml_parse_closed_element(load->parse);
+                if (closed == NULL || !html_script_is(closed)) continue;
+                /* THE BATCH ENDS HERE, which is the microtask checkpoint being taken rather than a rest point
+                   being offered. §14.2 puts the checkpoint BEFORE the preparation, so the parse may not read
+                   another construct first — that is an ordering the standard states, not a granularity this
+                   file may tune, which is why it breaks the loop instead of asking solver/rest_unit.h. */
+                load->script_pending = closed;
+                break;
+            }
             rest_unit_end();
             return;
         }
+        DCHECK(load->script_pending == NULL,
+               "an XML parse reached the end of [1] `document` with §14.2's preparation still owed for a "
+               "`script` element — the step that records one RETURNS immediately and the next step consumes "
+               "it, so the two can never be outstanding at once unless a driver stepped the parse from "
+               "somewhere other than the branch above");
         if (xml_parse_finish(load->parse, &load->report)) {
             load->parse = NULL;
-            /* A WELL-FORMED PARSE, so the tree stands and §14.2 is the only question left — and only where
-               §7.5.3 enables XML scripting support, which is what this loader alone does. */
-            load->phase = (load->scripting == HTML_SCRIPTING_ENABLED) ? XML_LOAD_SCRIPTS : XML_LOAD_DONE;
-            load->scan  = node_next_in(load->root, load->root);
+            /* A WELL-FORMED PARSE, so the tree stands and §14.2's steps have already run at the end tags they
+               belong to — there is nothing left for this load to do. */
+            load->phase = XML_LOAD_DONE;
             return;
         }
         load->parse = NULL;
@@ -199,20 +255,6 @@ void xml_document_load_step(XmlDocumentLoad *load)
                                  &load->report);
         load->phase = XML_LOAD_DONE;
         return;
-
-    case XML_LOAD_SCRIPTS:
-        if (load->scan == NULL) {
-            load->phase = XML_LOAD_DONE;
-            return;
-        }
-        n = rest_unit_items(REST_UNIT_NODE_VISITS);
-        rest_unit_begin(REST_UNIT_NODE_VISITS);
-        while (n-- > 0 && load->scan != NULL) {
-            xml_document_refuse_script(load->scan);
-            load->scan = node_next_in(load->scan, load->root);
-        }
-        rest_unit_end();
-        return;
     }
     /* NOT A `default:` ARM — the switch is exhaustive over the phases above, so a phase added without a body
        does not compile rather than falling into a generic crash. XML_LOAD_DONE is refused by the DCHECK at the
@@ -226,11 +268,15 @@ lxb_status_t xml_document_load_finish(XmlDocumentLoad *load)
     DCHECK(load != NULL, "xml_document_load_finish was asked of no load");
     DCHECK(load->phase == XML_LOAD_DONE,
            "an HTML §7.5.3 load was finished with work left — the parse, the discard of a failed parse's "
-           "partial tree, §7.5.3's inline error report and §14.2's refusal are each a phase, and finishing "
-           "inside one leaves a Document the caller will read as complete");
+           "partial tree and §7.5.3's inline error report are each a phase, and finishing inside one leaves a "
+           "Document the caller will read as complete");
     DCHECK(load->parse == NULL,
            "an HTML §7.5.3 load reached its end still holding an open XML parse — xml_parse_finish is what "
            "destroys the build, so a live one here is a tree build leaked with the load");
+    DCHECK(load->script_pending == NULL,
+           "an HTML §7.5.3 load was finished with HTML §14.2 \"Parsing XML documents\"' preparation still owed "
+           "for a `script` element — the element's end tag was parsed and the code the document shipped was "
+           "never prepared, which is a page that loads with its own script silently not running");
     free(load);
     /* §7.5.3 HAS NO FAILURE STATUS. An ill-formed document is not a load that failed — it is a load whose
        Document is the inline report the standard permits, which the phases above have already built. */
@@ -240,9 +286,11 @@ lxb_status_t xml_document_load_finish(XmlDocumentLoad *load)
 void xml_document_load_abort(XmlDocumentLoad *load)
 {
     DCHECK(load != NULL, "xml_document_load_abort was asked of no load");
-    /* THE PHASES AFTER THE PARSE HAVE NOTHING TO ABANDON — the discard, §7.5.3's inline report and §14.2's
-       refusal each act on the TREE, which this does not touch, so the only thing an abandoned §7.5.3 load
-       still holds is an open tree build. */
+    /* THE PHASES AFTER THE PARSE HAVE NOTHING TO ABANDON — the discard and §7.5.3's inline report each act on
+       the TREE, which this does not touch, so the only thing an abandoned §7.5.3 load still holds is an open
+       tree build. §14.2's owed preparation is DROPPED WITH THE LOAD AND THAT IS THE CORRECT END: the flow that
+       was driving this parse is gone, so there is no world for that script to be a program of — running it
+       here would run a page's code on behalf of a flow that no longer exists. */
     if (load->parse) {
         xml_parse_abort(load->parse);
         load->parse = NULL;

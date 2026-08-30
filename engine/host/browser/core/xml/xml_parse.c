@@ -145,6 +145,12 @@ void xml_parse_step(XmlParse *p)
     p->report.tree = xml_tree_build_step(p->b, &p->report.detail);
 }
 
+lxb_dom_node_t *xml_parse_closed_element(const XmlParse *p)
+{
+    DCHECK(p != NULL, "xml_parse_closed_element was asked of no parse");
+    return xml_tree_build_closed_element(p->b);
+}
+
 bool xml_parse_finish(XmlParse *p, XmlParseReport *report)
 {
     bool ok;

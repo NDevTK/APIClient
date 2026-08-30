@@ -100,6 +100,16 @@ bool xml_parse_ended(const XmlParse *p);
    already answers the only question the loop has. */
 void xml_parse_step(XmlParse *p);
 
+/* THE ELEMENT WHOSE END TAG THE LAST `xml_parse_step` PARSED, or NULL — core/xml/xml_tree.h's answer carried
+   through unchanged, including its reason for being a bare grammar boundary with no opinion attached. It is
+   read by the ONE consumer whose parser HTML §14.2 "Parsing XML documents" says has XML scripting support
+   enabled: core/loader/xml_document.h's §7.5.3 load, which owes a `script` element's preparation exactly
+   there. The other two consumers parse with that support disabled by their own standards and never ask.
+   VALID BETWEEN TWO STEPS AND NOT AFTER `finish`, which destroys the build the answer names — a consumer that
+   wants the boundary asks for it while the parse is still open, which is the only moment §14.2's step is at
+   the position the standard puts it. */
+lxb_dom_node_t *xml_parse_closed_element(const XmlParse *p);
+
 /* CLOSE THE PARSE and write `report`, which is written on every path and may not be NULL — a consumer that
    does not want the record still gets one, because "the parse failed" and "nobody looked" are the same false
    otherwise. Returns `report->ok`. The handle is destroyed; asking for a finish before `xml_parse_ended` is a

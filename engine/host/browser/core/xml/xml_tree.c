@@ -20,6 +20,7 @@ struct XmlTreeBuild {
     lxb_dom_document_t *doc;
     lxb_dom_node_t     *root_parent;   /* where [1] `document`'s own children go */
     lxb_dom_node_t     *current;       /* the innermost open element, or `root_parent` at depth 0 */
+    lxb_dom_node_t     *closed;        /* the element the LAST step's end tag closed, or NULL — see the header */
     DomParseRootKind    kind;
     XmlCharReader       r;
     XmlDocumentWalk    *walk;
@@ -210,6 +211,16 @@ XmlCharError xml_tree_build_character_error(const XmlTreeBuild *b)
     return b->r.fatal;
 }
 
+lxb_dom_node_t *xml_tree_build_closed_element(const XmlTreeBuild *b)
+{
+    DCHECK(b != NULL, "xml_tree_build_closed_element was asked of no build");
+    DCHECK(b->closed == NULL || b->closed->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "an XML end-tag item named a closed node that is not an element — this is taken from the insertion "
+           "point, which only a start-tag item can move onto a node, so a non-element here means some other "
+           "construct wrote the open element and §3's [39] `element` boundary is not what this reports");
+    return b->closed;
+}
+
 /* ONE EXPANDED NAME, held only long enough to decide §6.3 over a single tag's attribute list. The slices are
    borrowed from the entity and from the scope stack, both of which outlive the step that reads them. */
 typedef struct { const char *ns; size_t ns_len; const char *local; size_t local_len; } XmlTreeExpanded;
@@ -334,6 +345,10 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
                                          "tests, and asking past it is a caller that did not");
 
     memset(detail, 0, sizeof(*detail));
+    /* THE END-TAG REPORT IS ABOUT *THIS* STEP AND IS CLEARED BEFORE IT RUNS, which is what makes reading it a
+       statement rather than a latch: a consumer that asks after a [14] `CharData` item must be told that no
+       element closed, not told again about the one that closed two constructs ago. */
+    b->closed = NULL;
     derr = xml_document_next(b->walk, &b->r, &item, &detail->within);
     detail->document = derr;
     if (derr != XML_DOCUMENT_OK) {
@@ -381,6 +396,10 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
                "element stack are core/xml/xml_element.h's, and it reports the two boundaries of [39] in "
                "pairs, so an unmatched end reaching here is that walk's contract broken and not a document's "
                "mistake");
+        /* THE CLOSED ELEMENT, TAKEN BEFORE THE INSERTION POINT MOVES OFF IT — the open element IS the tree
+           here (see the header), so once `current` climbs to the parent the element §3's [39] just finished is
+           no longer named by anything this build holds. */
+        b->closed = b->current;
         xml_ns_pop(b->scope);
         b->current = b->current->parent;
         DCHECK(b->current != NULL,

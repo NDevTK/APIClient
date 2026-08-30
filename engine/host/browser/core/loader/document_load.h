@@ -60,8 +60,10 @@
  * EVERY STEP IS ONE REST UNIT, AND WHAT A REST UNIT IS, IS THE SCHEDULER'S TO SAY. The items are the
  * substrate's — bytes into the parser's input byte stream for §7.5.2 and §7.5.4, constructs of XML §2.1
  * "Well-Formed XML Documents"' [1] `document` for §7.5.3, and for §7.5.3 also the children of the partial tree
- * a failed parse left and the nodes of HTML §14.2 "Parsing XML documents"' script refusal walk — but HOW MANY
- * of them one step performs is solver/rest_unit.h's answer and not any loader's.
+ * a failed parse left — but HOW MANY of them one step performs is solver/rest_unit.h's answer and not any
+ * loader's. HTML §14.2 "Parsing XML documents"' preparation of a `script` element at its end tag is NOT such
+ * an item: the standard puts a microtask checkpoint in front of it, so the step it takes is one the ORDER
+ * demands rather than one a granularity may batch.
  *
  * THE FIRST VERSION OF THIS PULL RESTED AFTER ONE ITEM EVERYWHERE, and said here that a byte is the finest
  * unit lexbor offers and so needs no chosen quantum to invent and defend. That is a constant of 1 that nobody

@@ -139,6 +139,30 @@ size_t xml_tree_build_column(const XmlTreeBuild *b);
    than at a component it cannot reach; XML_CHAR_OK is the positive statement that no layer latched one. */
 XmlCharError xml_tree_build_character_error(const XmlTreeBuild *b);
 
+/* THE ELEMENT WHOSE END TAG THE LAST `xml_tree_build_step` PARSED, or NULL when that step parsed some other
+ * construct. It reports BOTH spellings of one boundary — §3.1 "Start-Tags, End-Tags, and Empty-Element Tags"'
+ * [42] `ETag`, and [44] `EmptyElemTag`, whose own close is the second half of a single item — because §3's
+ * [39] `element ::= EmptyElemTag | STag content ETag` makes them the two ways an element ends, and a consumer
+ * shown only the first would miss `<script src="x"/>` entirely.
+ *
+ * IT IS A GRAMMAR FACT AND CARRIES NO OPINION, WHICH IS THE WHOLE REASON IT IS SHAPED THIS WAY. HTML §14.2
+ * "Parsing XML documents" puts a step at this boundary — a `script` element is prepared "when the element's
+ * end tag is subsequently parsed" — but only "when an XML parser with XML scripting support enabled" is
+ * running, and WHICH parser that is, is a fact about the CONSUMER: HTML §7.5.3 "Loading XML documents" enables
+ * it, while HTML §8.5.1 "DOMParser" creates its parser "with XML scripting support disabled" and
+ * XMLHttpRequest §3.6.6 "set a document response" runs no script. A scripting flag in this walk would hand a
+ * grammar rule an opinion about a document's scripting state it has no way to be right about, and a `script`
+ * test here would be this file deciding which elements matter. §14.2 states the general form itself — "Between
+ * the time an element's start tag is parsed and the time either the element's end tag is parsed or the parser
+ * detects a well-formedness error, the user agent must act as if the element was in a stack of open elements.
+ * This is used by various elements to only start certain processes once they are popped off of the stack of
+ * open elements" — so the BOUNDARY is what a parser owes and WHICH elements care is asked above it.
+ *
+ * IT IS A STATEMENT ABOUT THE LAST STEP ONLY, cleared by every step, so a consumer that asks after two steps
+ * is told about the second and never about a stale one. Before the first step it is NULL, which is the same
+ * positive statement rather than an absent answer: no end tag has been parsed. */
+lxb_dom_node_t *xml_tree_build_closed_element(const XmlTreeBuild *b);
+
 /* BUILD THE NEXT CONSTRUCT INTO THE TREE. One item of core/xml/xml_document.h's walk per call — which is the
    whole of this component's suspension story, since every byte of the build's state is here and none of it is
    on the C stack.

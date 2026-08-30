@@ -80,7 +80,7 @@
 
 /* THE ITEM A REST UNIT IS COUNTED IN. Each name says what ONE item is, because the cost bound differs per
    kind and a shared name would hide that: two of these are counted in items whose size the DOCUMENT chooses,
-   and the multiplier a policy may safely apply is a different question for those than for the two whose item
+   and the multiplier a policy may safely apply is a different question for those than for the one whose item
    is a fixed amount of work. Adding a kind means adding its default and its cost sentence in rest_unit.c,
    which does not compile until both exist. */
 typedef enum {
@@ -102,12 +102,7 @@ typedef enum {
     /* ONE TOP-LEVEL CHILD REMOVED from the partial tree a failed XML parse left standing, which §7.5.3 permits
        a user agent to replace with an inline report. COST: one subtree, whose size the document chooses —
        the same shape as the construct above and for the same reason. */
-    REST_UNIT_SUBTREE_REMOVALS,
-    /* ONE NODE VISITED by a walk that only INSPECTS — HTML §14.2 "Parsing XML documents"' script question,
-       asked of each element of a finished tree. COST: a type test, a namespace/local-name extraction into
-       fixed buffers and two comparisons against short literals; fixed work per node, so a multiplier here
-       multiplies a constant and is the one XML unit that may exceed one item. */
-    REST_UNIT_NODE_VISITS
+    REST_UNIT_SUBTREE_REMOVALS
 } RestUnitKind;
 
 /* HOW MANY ITEMS OF `kind` ONE REST POINT COVERS. Always >= 1 (asserted): the offer to rest survives every
