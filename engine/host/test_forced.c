@@ -11242,7 +11242,10 @@ int main(int argc, char **argv) {
        §7.4.1's record and reads it in every member, so the view goes first. */
     navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(ctx);
-    window_free(ctx);
+    /* HTML §7.2.2's Window, with §7.2.2.5's BarProp under it, is a ROW on core/platform.h's release column now,
+       run by the platform_agent_free above. All three hosts had this line and none of them had it in the same
+       place — this host and main.c here, the WPT runner past solver_agent_free and past document_free. See
+       main.c's teardown and core/platform.c's entry. */
     /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
        Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
        on core/platform.h's release column now, run by the platform_agent_free above; every host wrote them

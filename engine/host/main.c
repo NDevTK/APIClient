@@ -1245,7 +1245,14 @@ QJS_EXPORT void qjs_teardown(void)
        is what reverse declaration order gives. */
     navigation_free(g_ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(g_ctx);
-    window_free(g_ctx);
+    /* HTML §7.2.2's Window, with §7.2.2.5's BarProp under it, is a ROW on core/platform.h's release column now,
+       run by the platform_agent_free above — and it is the group that shows what a hand-written list costs when
+       every host HAS the line: all three had it and put it in three different places, this one and
+       test_forced.c here, the WPT runner a whole teardown later, past solver_agent_free and past document_free.
+       The row's release column was empty while both files declared no agent state, which is the pair of
+       silences that list reads as agreement: `g_bar_class` was reset by nothing at all, and §7.2.2's six pool
+       entries carried no initialiser, so their pre-init value was 0 — the first member the platform declares.
+       See core/platform.c's entry. */
     /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
        Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
        on core/platform.h's release column now, run by the platform_agent_free above, and this group is what a

@@ -38,6 +38,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/frame/window.h"
 #include "core/frame/agent_cluster.h"
 #include "core/frame/secure_context.h"
@@ -449,15 +450,30 @@ static JSValue js_win_set_status(JSContext *ctx, JSValueConst this_val, JSValueC
  * find_own_property found nothing), so a global variable read pays for this only when it was going to fail
  * anyway — and the index test is the engine's own, not a re-parse of the atom's text. */
 static JSClassID g_window_class;
+/* THE RUNTIME THE TWO CLASSES AND THE SIX POOL ENTRIES BELOW WERE DECLARED IN. It is what makes "this
+   component is declared" a fact separate from any one of the values it declares — see window_is. */
+static JSRuntime *g_window_rt;
 
 /* "IS A Window OBJECT" — the brand, off the class the global carries. DOM §2.9 step 6.9.5 asks it of every
    parent the event path walk reaches, because a Window is the one path entry that is NOT a node and so is the
    one the shadow-including ancestor test cannot answer for. Asking it as "is it not a node" would be an
    inference about who else can appear in a path rather than a fact about this object, and the class is what
-   makes it a fact: HTML's global IS the Window, and window_install gives the global exactly this class. */
+   makes it a fact: HTML's global IS the Window, and window_install gives the global exactly this class.
+   IT OPENED `g_window_class != 0 &&`, WHICH IS TWO QUESTIONS SHARING ONE ANSWER — "this component is not
+   declared" and "this object is not a Window" both came back `false`. That was harmless only while the id was
+   carried past the release; now that window_free gives it back (core/agent_state.h), the folded predicate
+   would report EVERY LIVE Window as something else at every branch site the moment the release column ran.
+   The two are separated: the declaration is asserted, the brand is answered. Every call site is a page-visible
+   algorithm — DOM §2.9's path walk through event_target.c's tree hook, §3.7.6's implements test in
+   idl_args.c, window_proxy_this_navigable's receiver arm and remote_object.c's encoder — and not one of them
+   is reachable from any release, which is what makes the assert an assert rather than a new failure mode. */
 bool window_is(JSValueConst v)
 {
-    return g_window_class != 0 && JS_GetClassID(v) == g_window_class;
+    DCHECK(g_window_rt != NULL,
+           "§7.2.2's Window brand was asked before window_init registered the class or after window_free gave "
+           "it back — with no class there is no answer, and the `g_window_class != 0 &&` that used to stand "
+           "here returned `not a Window` for an undeclared browser and for a live global alike");
+    return JS_GetClassID(v) == g_window_class;
 }
 
 /* The child navigable this index names, or false. Owned on true. */
@@ -691,15 +707,24 @@ static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ont
    A class id is a registration in the JSRuntime and there is one runtime per agent; a PROTOTYPE is an object,
    and §3.7 gives every realm its own, which is why `frames[0].Window.prototype !== Window.prototype` in a
    browser. So this registers, and window_install builds. */
-static int g_id_close, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
-static int g_id_opener_set;   /* §7.2.2.4's `opener` setter, declared with them for the same reason */
-static int g_id_name_set;     /* §7.2.2.1's `name` setter — its DOMString conversion is the page's code */
-static int g_id_status_set;   /* §7.2.2.5's `status` setter — likewise */
+/* EACH IS `-1` BEFORE ANYTHING RUNS, and the initialiser is the whole of what says so. A pool entry is an
+   INDEX — idl_method_id_all hands out `g_n++`, so ZERO IS A VALID ENTRY, the first one the platform declares —
+   and these six carried no initialiser at all, which made their pre-init value 0 and therefore
+   indistinguishable from a real declaration. That is core/agent_state.h's fetch defect exactly (JS_ATOM_NULL is
+   a valid atom; entry 0 is a valid member): a second agent's window_install would have installed `close`,
+   `blur`, `stop` and the three setters out of whatever the new pool put at those indices, with a live-looking
+   number behind every one and nothing in either of JS_FreeRuntime's censuses to report it. `-1` is what
+   idl_install_accessor already reads as "no setter", so it is this file's own sentinel and not a new one. */
+static int g_id_close = -1, g_id_blur = -1, g_id_stop = -1;   /* declared once per agent — see window_init */
+static int g_id_opener_set = -1;   /* §7.2.2.4's `opener` setter, declared with them for the same reason */
+static int g_id_name_set = -1;     /* §7.2.2.1's `name` setter — its DOMString conversion is the page's code */
+static int g_id_status_set = -1;   /* §7.2.2.5's `status` setter — likewise */
 
 void window_init(JSContext *ctx)
 {
     DCHECK(g_window_class == 0, "window_init ran twice — a class is registered once per agent, and a second "
                                 "registration would give one interface two ids that compare unequal");
+    g_window_rt = JS_GetRuntime(ctx);
     JS_NewClassID(JS_GetRuntime(ctx), &g_window_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_window_class, &WINDOW_CLASS) == 0,
           "the Window class could not be registered");
@@ -722,6 +747,34 @@ void window_init(JSContext *ctx)
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
     g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 1);
     g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 2);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING, and its row
+       had an EMPTY RELEASE COLUMN, which is the pair of silences that list reads as agreement: a component
+       holding everything and giving none of it back is character-for-character the report a component holding
+       nothing produces. §7.2.2.5's BarProp declares under this same name, because a sub-component names the row
+       whose release reaches it and window_free is what reaches bar_prop_free. */
+    agent_state_ptr("window", &g_window_rt,
+                    "the runtime §7.2.2's two classes and six member declarations were registered in");
+    agent_state_class("window", &g_window_class,
+                      "HTML §7.2.2 The Window object's per-realm prototype slot and the brand the global "
+                      "carries");
+    agent_state_class("window", &g_window_props_class,
+                      "HTML §7.2.2.3 Named access on the Window object's WindowProperties per-realm prototype "
+                      "slot and brand");
+    agent_state_id("window", &g_status_slot,
+                   "the per-realm slot HTML §7.2.2.5 Historical browser interface element APIs' `status` "
+                   "record lives in");
+    agent_state_id("window", &g_id_opener_set,
+                   "HTML §7.2.2.4 Accessing related windows' `opener` setter declaration");
+    agent_state_id("window", &g_id_name_set,
+                   "HTML §7.2.2.1 Opening and closing windows' `name` setter declaration");
+    agent_state_id("window", &g_id_status_set,
+                   "HTML §7.2.2.5 Historical browser interface element APIs' `status` setter declaration");
+    agent_state_id("window", &g_id_close,
+                   "HTML §7.2.2.1 Opening and closing windows' `close` declaration");
+    agent_state_id("window", &g_id_blur,
+                   "HTML §6.6.6 Focus management APIs' `blur` declaration");
+    agent_state_id("window", &g_id_stop,
+                   "HTML §7.2.2.1 Opening and closing windows' `stop` declaration");
 }
 
 void window_install(JSContext *ctx, JSValueConst global, const char *url)
@@ -881,9 +934,26 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     JS_FreeValue(ctx, gp);   /* the realm's class-proto slot and the chain hold it now */
 }
 
-void window_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, and it takes the RUNTIME because that is what an
+ * agent is. It took a JSContext until this diff, which is the whole of what kept it off that column and made it
+ * a hand-written line in three hosts instead — and the three had it in three DIFFERENT PLACES, which is what a
+ * hand-copied list does even when no host is missing the line: main.c and test_forced.c ran it between
+ * §7.2.6.5's NavigationHistoryEntry and the cross-agent seam, while wpt_runner.c ran it a whole teardown later,
+ * after solver_agent_free and after document_free. Reverse declaration order decides it now and no author has
+ * to agree with any other. Nothing here ever needed a JSContext: what this gives back is two class ids, a
+ * realm-value slot id and six pool entries, every one of which is a registration in the RUNTIME. */
+void window_free(JSRuntime *rt)
 {
-    (void)ctx;
+    /* NOT a null check. This runs from a release column that runs only where platform_agent_init ran, and this
+       component's declaration is unconditional on that list (core/agent_state.h). */
+    DCHECK(g_window_rt != NULL,
+           "§7.2.2's Window was released in an agent that never declared it — window_init is a row on "
+           "core/platform.c's declare column, so reaching here without it is a teardown of a browser that was "
+           "never brought up");
+    DCHECK(g_window_rt == rt,
+           "§7.2.2's Window was released against a RUNTIME other than the one it was declared in — its two "
+           "classes, its realm-value slot and its six pool entries are registrations in that runtime, and "
+           "zeroing them against another leaves every one of them standing in the runtime that issued them");
     g_window_class = 0;
     g_window_props_class = 0;
     /* THE SLOT IS THE AGENT'S AND ITS VALUES WENT WITH THE REALMS — a slot id is a class id in a runtime that
@@ -891,5 +961,13 @@ void window_free(JSContext *ctx)
        asserts it is back at -1, which is the half that makes a forgotten reset crash rather than hand a second
        agent a slot in a runtime that no longer exists. */
     g_status_slot = -1;
-    bar_prop_free(ctx);
+    /* AND THE SIX POOL ENTRIES, which this release kept — the same slots window_proxy_free was keeping one file
+       over, and the same consequence: a declaration is a registration in a runtime, so a carried index names an
+       entry in a pool the next agent has not built, read by the first window_install that agent runs. Their
+       pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
+    g_id_opener_set = g_id_name_set = g_id_status_set = -1;
+    g_id_close = g_id_blur = g_id_stop = -1;
+    /* §7.2.2.5's BarProp, which has no row of its own because this release is what reaches it. */
+    bar_prop_free(rt);
+    g_window_rt = NULL;
 }

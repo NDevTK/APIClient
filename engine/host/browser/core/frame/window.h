@@ -21,8 +21,12 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url);
    the AGENT's registration and not a realm's — a child navigable's Window answers this in its parent's realm. */
 bool window_is(JSValueConst v);
 
-/* Release what this component HOLDS across the document's lifecycle — the object the per-flow `closed` byte is
-   keyed by, and the BarProp prototype. */
-void window_free(JSContext *ctx);
+/* THE AGENT'S HALF, UNDONE — a row on core/platform.h's third column. What it gives back is what a C static of
+   this component holds for the whole AGENT: the two class ids, §7.2.2.5's realm-value slot id, the six member
+   declarations, and §7.2.2.5's BarProp, which has no row of its own because this release is what reaches it.
+   The sentence that stood here named "the object the per-flow `closed` byte is keyed by, and the BarProp
+   prototype" — one of those has been the NAVIGABLE's for as long as `closed` has read through the WindowProxy,
+   and the other has been the REALM's since BarProp moved to a per-context class-proto slot. */
+void window_free(JSRuntime *rt);
 
 #endif

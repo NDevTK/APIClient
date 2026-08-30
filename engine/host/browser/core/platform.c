@@ -460,6 +460,24 @@ static void r_remote_location(JSRuntime *rt) { remote_location_free(rt); }
    released none, which is the pair of silences this list reads as agreement. The agent half is
    `remote_op_agent_free`, named as `document`'s two halves are. */
 static void r_remote_op(JSRuntime *rt) { (void)rt; remote_op_agent_free(); }
+/* HTML §7.2.2's Window WITH §7.2.2.5's BarProp UNDER IT, and this pair is the worst of the groups moved onto
+   this column so far — not because a host was missing the line, but because all three had it and NOWHERE NEAR
+   each other: main.c and test_forced.c ran `window_free` between §7.2.6.5's NavigationHistoryEntry and the
+   cross-agent seam, wpt_runner.c ran it a whole teardown later, after solver_agent_free and after
+   document_free. Three positions, three hosts, one component.
+   WHAT BLOCKED IT WAS THE SIGNATURE AND NOTHING ELSE — `window_free` took a JSContext and used it for nothing
+   but handing it on. It takes a JSRuntime now, which is what it always held: two class ids, a realm-value slot
+   id and six pool entries, every one a registration in the runtime.
+   AND THE ROW'S RELEASE COLUMN WAS EMPTY WHILE BOTH FILES DECLARED NOTHING, which is the arm the pairing below
+   passes in silence: a component that holds everything and gives none of it back produces the same report as
+   one that holds nothing. Both held. bar_prop.c's `g_bar_class` was reset by NOTHING — its release said in its
+   own words that there was "nothing to release here any more" — and window.c's SIX POOL ENTRIES were declared
+   with no initialiser at all, so their pre-init value was 0, which idl_method_id_all hands out as the FIRST
+   member the platform declares. A second agent would have installed §7.2.2's `close`, `blur`, `stop` and three
+   setters out of six indices into a pool it had not built, and minted every BarProp under a class id the live
+   runtime never issued. Both are declared to core/agent_state.h now, under the ONE name `window`, because a
+   sub-component names the row whose release reaches it. */
+static void r_window(JSRuntime *rt) { window_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -552,7 +570,7 @@ static const PlatformComponent PLATFORM[] = {
        destination` brands against — so it is declared before `event`, which is where every Event subclass
        including NavigateEvent is declared. It inherits nothing, so its own prototype needs no earlier row. */
     { "navigation_destination", d_nav_destination,   NULL,     r_nav_destination },
-    { "window",              d_window,              i_window },
+    { "window",              d_window,              i_window,    r_window },
     /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
        (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
        of the list left four standards uncollected by the gate that reports on them. */

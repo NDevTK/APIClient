@@ -22,6 +22,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/frame/bar_prop.h"
 #include "core/idl_args.h"
 #include "core/frame/window_proxy.h"
@@ -39,9 +40,18 @@ static JSRuntime *g_bar_rt;
    the state lives where the fact does and the instance exists to be a distinct object with a class to check. */
 typedef struct { uint8_t unused; } BarProp;
 
+/* THE RECORD AS A COLLECTOR ENTRY SEES IT — JS_GetAnyOpaque, and NEVER JS_GetOpaque(val, g_bar_class).
+   core/agent_state.h states the rule and the reason, and this file is one of the cases it was written for:
+   bar_prop_free gives the class id back, and the collection that finalizes this agent's object graph runs
+   AFTER core/platform.h's release column, so a lookup against that id would answer NULL for all six of every
+   realm's bars and each would leak its record — a malloc'd block, which appears in NEITHER of JS_FreeRuntime's
+   censuses and so is silent in dev and in release alike. The collector dispatched to this function THROUGH the
+   class, so the id is a fact it already has and must not look up. */
 static void bar_finalizer(JSRuntime *rt, JSValue val)
 {
-    BarProp *b = JS_GetOpaque(val, g_bar_class);
+    JSClassID cid = 0;
+    BarProp *b = JS_GetAnyOpaque(val, &cid);
+
     (void)rt;
     free(b);
 }
@@ -84,6 +94,18 @@ void bar_prop_init(JSContext *ctx)
     g_bar_rt = rt;
     JS_NewClassID(rt, &g_bar_class);
     JS_NewClass(rt, g_bar_class, &d);
+    /* WHAT THIS SUB-COMPONENT HOLDS FOR THE AGENT, DECLARED UNDER THE ROW THAT RELEASES IT — `window`, and
+       never this file's own name: core/platform.c's list is not a list of FILES, and §7.2.2.5's class is given
+       back by window_free, which reaches bar_prop_free (core/agent_state.h). Declaring nothing was not the
+       harmless half of that: a row with an empty release column and a component that declared nothing AGREE,
+       so the pairing read this file's silence and window.c's as one another's confirmation while the class id
+       was carried into every successor agent this process could have had. */
+    agent_state_ptr("window", &g_bar_rt,
+                    "HTML §7.2.2.5 Historical browser interface element APIs: the runtime BarProp was "
+                    "registered in");
+    agent_state_class("window", &g_bar_class,
+                      "HTML §7.2.2.5 Historical browser interface element APIs: BarProp's per-realm prototype "
+                      "slot and brand");
 }
 
 /* THE PROTOTYPE IS THE REALM'S — §3.7 gives every realm its own, and here that is load-bearing rather than
@@ -137,10 +159,33 @@ void bar_prop_install(JSContext *ctx, JSValueConst global)
     }
 }
 
-void bar_prop_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE. It takes the RUNTIME because that is what an agent is, and because window_free —
+ * which is what reaches it — is a row on core/platform.h's release column and that column's signature is a
+ * JSRuntime. Nothing here needs a JSContext: a class id is a registration in the runtime, and the prototypes
+ * are the REALMS', released with their contexts. */
+void bar_prop_free(JSRuntime *rt)
 {
-    if (!g_bar_rt) return;
-    /* NOTHING TO RELEASE HERE ANY MORE: each realm's prototype is held by that realm's class-proto slot and
-       goes with the realm. */
+    /* NOT `if (!g_bar_rt) return;`. This is reached from window_free, whose row on core/platform.c's list has
+       an unconditional declare beside it, and that list runs only where platform_agent_init ran — so a null
+       runtime here is a host tearing down a browser it never built, and the silent return made that
+       indistinguishable from a release that worked (core/agent_state.h). */
+    DCHECK(g_bar_rt != NULL,
+           "§7.2.2.5's BarProp was released in an agent that never declared it — bar_prop_init is reached from "
+           "window_init, which is a row on core/platform.c's declare column, so getting here without it is a "
+           "teardown of a browser that was never brought up");
+    DCHECK(g_bar_rt == rt,
+           "§7.2.2.5's BarProp was released against a RUNTIME other than the one its class was registered in — "
+           "a class id names a class in ONE runtime, and giving it back against another leaves the registering "
+           "runtime's id standing while zeroing nothing that runtime issued");
+    /* THE CLASS ID COMES BACK, and this is the line the comment that stood here denied existed: it said
+       "nothing to release here any more" because each realm's prototype goes with its realm — true, and not
+       the whole of what this file holds. core/agent_state.h settles the rest: a class is registered in a
+       RUNTIME, so a carried id names a class in a runtime that is gone. JS_NewClassID hands back a NON-ZERO
+       slot unchanged rather than allocating, so a second agent's bar_prop_init would have called JS_NewClass on
+       the first agent's number — a number the new runtime's own `js_class_id_alloc` never issued and will
+       issue to whichever component asks next, which is the collision that header describes arriving from the
+       side that kept its id rather than from the side that gave one back. bar_finalizer reads its record
+       through JS_GetAnyOpaque precisely because this line runs before the collection that reaches it. */
+    g_bar_class = 0;
     g_bar_rt = NULL;
 }

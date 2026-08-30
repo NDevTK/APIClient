@@ -3439,7 +3439,12 @@ int main(int argc, char **argv)
        stays: document_free releases a REALM's record, not the agent's. The component's other half —
        document_agent_free — is a row on that column, and the two are not ordered against each other. See
        main.c's teardown. */
-    window_free(ctx);
+    /* HTML §7.2.2's Window, with §7.2.2.5's BarProp under it, is a ROW on core/platform.h's release column now,
+       run by the platform_agent_free above — and THIS host is the one that shows why the column and not the
+       line: all three had `window_free`, and this one ran it HERE, after solver_agent_free and after
+       document_free, while the other two ran it a whole teardown earlier beside §7.2.6.5's
+       NavigationHistoryEntry. Nothing was missing and the order was still three different answers. See main.c's
+       teardown and core/platform.c's entry. */
     /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
        Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
        on core/platform.h's release column now, run by the platform_agent_free above; every host wrote them
