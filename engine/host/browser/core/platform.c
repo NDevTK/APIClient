@@ -478,6 +478,32 @@ static void r_remote_op(JSRuntime *rt) { (void)rt; remote_op_agent_free(); }
    runtime never issued. Both are declared to core/agent_state.h now, under the ONE name `window`, because a
    sub-component names the row whose release reaches it. */
 static void r_window(JSRuntime *rt) { window_free(rt); }
+/* HTML §7.2.6 The navigation API AND §7.2.6.5 The NavigationHistoryEntry interface, as a PAIR, and this group
+   is the one where the hand-written lists were RIGHT: all three hosts wrote `navigation_free(ctx);
+   navigation_history_entry_free(ctx);` adjacently and in that order, which is exactly what reverse declaration
+   order gives — `navigation_history_entry` is the row after `event_target` (its prototype chains to §2.7's and
+   its CLASS is what §7.2.7.1's `required NavigationHistoryEntry from` brands against), `navigation` is the row
+   after `history`, so the component that MINTS the wrappers and walks the list is released before the
+   interface it mints them of. Three authors agreeing is still three answers; this is one.
+   WHAT BLOCKED BOTH WAS THE SIGNATURE AND NOTHING ELSE — each took a JSContext and used it for nothing but
+   JS_FreeValue, which is JS_FreeValueRT(ctx->rt, v). They take a JSRuntime now, which is what they always
+   held: two class ids, a realm-value slot id and three pool entries.
+   AND BOTH ROWS' RELEASE COLUMNS WERE EMPTY WHILE BOTH FILES DECLARED NOTHING, which is the arm the pairing
+   below passes in silence. Both held, and both CARRIED THEIR CLASS ID — the defect core/agent_state.h settles,
+   arriving here without any of the extra shapes the earlier groups had: the pool entries were already `-1`
+   (both files gave them an initialiser, so entry 0 was never a pre-init value here) and neither class has a
+   finalizer or a gc_mark, so nothing had to move to JS_GetAnyOpaque. What each DID have was a BRAND folded
+   together with its own declaration — `g_nav_class != 0 &&`-shaped in navigation.c and, in
+   navigation_history_entry.c, FIVE comparison sites of which four asked no declaration question at all.
+   JS_GetClassID answers JS_INVALID_CLASS_ID, which quickjs.h defines as 0, for everything that is not an
+   object, so the instant the release zeroes the id those sites report every PRIMITIVE as an instance: the four
+   bare DCHECKs that assert "this IS one" go vacuously true, and because navigation.c's arm is spelled `!=` its
+   brand does not reject a live Navigation but ADMITS `undefined` and then reads a realm-value slot that is
+   back at −1. Each file answers the brand plainly now
+   and asserts the declaration off a recorded runtime, which is also what replaced navigation_history_entry.c's
+   `g_ready` — a flag that answered the same question with less in it. */
+static void r_navigation(JSRuntime *rt) { navigation_free(rt); }
+static void r_nav_history_entry(JSRuntime *rt) { navigation_history_entry_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -565,7 +591,7 @@ static const PlatformComponent PLATFORM[] = {
     /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
        §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
        which is where every Event subclass including that one is declared. */
-    { "navigation_history_entry", d_nav_history_entry, NULL },
+    { "navigation_history_entry", d_nav_history_entry, NULL, r_nav_history_entry },
     /* HTML §7.2.6.10.3's NavigationDestination, whose CLASS is what §7.2.6.10.1's `required NavigationDestination
        destination` brands against — so it is declared before `event`, which is where every Event subclass
        including NavigateEvent is declared. It inherits nothing, so its own prototype needs no earlier row. */
@@ -712,7 +738,7 @@ static const PlatformComponent PLATFORM[] = {
     { "session_history",     d_session_history,     NULL,        r_session_history },
     { "history",             d_history,             NULL,        r_history },
     /* HTML §7.2.6's navigation API, AFTER §7.4.1's state machine whose entries it is a view over. */
-    { "navigation",          d_navigation,          NULL },
+    { "navigation",          d_navigation,          NULL,        r_navigation },
     /* HTML §7.2.6.10.4, which FIRES the navigate event at the Navigation the row above builds — its
        declaration is the step definition of the commit handler job, which the runtime must know before
        any navigation enqueues one. It installs no member of its own: the interfaces it builds objects of

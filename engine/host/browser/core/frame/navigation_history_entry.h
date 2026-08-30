@@ -9,7 +9,10 @@
 void navigation_history_entry_init(JSContext *ctx);          /* the slot key + the IDL declarations (agent) */
 /* §3.7: THIS REALM's prototype and interface object — declared into core/realm.h's one list. */
 void navigation_history_entry_install_protos(JSContext *ctx);
-void navigation_history_entry_free(JSContext *ctx);
+/* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, so it takes the RUNTIME: §7.2.6.5's
+   class id and its `getState()` declaration are registrations there, and the Symbol is freed with
+   JS_FreeValueRT. */
+void navigation_history_entry_free(JSRuntime *rt);
 
 /* §7.2.6.5: "Each NavigationHistoryEntry has an associated SESSION HISTORY ENTRY, which is a session history
    entry." Every member of the interface is a question about that entry, so the whole of the object's state is

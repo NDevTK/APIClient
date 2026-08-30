@@ -34,6 +34,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/events/event_target.h"
 #include "core/frame/navigation.h"
@@ -45,15 +46,44 @@
 
 static JSValue   g_key;         /* the private Symbol this interface's own slot hangs off */
 static JSClassID g_nhe_class;
-static int       g_ready;
+/* THE RUNTIME THIS INTERFACE WAS DECLARED IN, AND THE ONLY SLOT THAT SAYS "DECLARED". It replaces the `g_ready`
+   flag that used to stand here, and the replacement is not a rename: a flag answers "did init run", while this
+   answers "did init run, AND in which runtime" — which is strictly more, is what the release asserts it is
+   undoing, and is what nhe_is asks so that no BRAND has to answer a declaration question. Keeping both would be
+   one fact with two spellings free to disagree, which is the shape core/agent_state.h opens by describing. */
+static JSRuntime *g_nhe_rt;
 static int       g_id_get_state = -1;
 
 #define NHE_SHE "sessionHistoryEntry"
 
+/* WEB IDL §3.7.5's BRAND AS A FACT ABOUT THE OBJECT, WITH THE DECLARATION ASKED SEPARATELY — and this file is
+ * one predicate rather than five because it had FIVE `JS_GetClassID(x) == g_nhe_class` sites: nhe_brand's
+ * `if`, which asked the declaration question first as `DCHECK(g_ready, …)`, and FOUR DCHECKs which asked it
+ * not at all.
+ * THE COMPARISON INVERTS THE MOMENT THE RELEASE GIVES THE ID BACK, and it inverts in the direction that makes
+ * the asserts VACUOUS rather than noisy: quickjs.h defines JS_INVALID_CLASS_ID as 0 and JS_GetClassID returns
+ * it for everything that is not an object, so with `g_nhe_class` back at 0 the comparison is TRUE of
+ * `undefined`, of a number and of a string alike. The four DCHECKs that assert "this IS a
+ * NavigationHistoryEntry" would pass for every primitive there is, and nhe_brand would ADMIT one. None of the
+ * five is reachable from any release (see navigation_history_entry_free), which is what makes the declaration
+ * an assert rather than a new failure mode — but the predicate must not be the thing that decides that. */
+static bool nhe_is(JSValueConst v)
+{
+    DCHECK(g_nhe_rt != NULL,
+           "§7.2.6.5's NavigationHistoryEntry brand was asked before navigation_history_entry_init registered "
+           "the class or after navigation_history_entry_free gave it back — with no class there is no answer, "
+           "and comparing against the id anyway reports every PRIMITIVE as an entry, because "
+           "JS_INVALID_CLASS_ID is 0 and so is a released class id");
+    return JS_GetClassID(v) == g_nhe_class;
+}
+
 JSClassID navigation_history_entry_class(void)
 {
-    DCHECK(g_nhe_class != 0, "NavigationHistoryEntry's class was asked for before "
-                             "navigation_history_entry_init declared it");
+    DCHECK(g_nhe_rt != NULL, "NavigationHistoryEntry's class was asked for before "
+                             "navigation_history_entry_init declared it, or after "
+                             "navigation_history_entry_free gave it back — and the `g_nhe_class != 0` that "
+                             "used to stand here asked the question by reading the value it was about to hand "
+                             "out, which cannot tell those two apart from a class id that is simply 0");
     return g_nhe_class;
 }
 
@@ -70,8 +100,7 @@ static JSValue nhe_proto(JSContext *ctx)
    something else is the TypeError a browser answers with rather than a read of a slot that is not there. */
 static bool nhe_brand(JSContext *ctx, JSValueConst this_val)
 {
-    DCHECK(g_ready, "a NavigationHistoryEntry member ran before navigation_history_entry_init");
-    if (JS_GetClassID(this_val) == g_nhe_class) return true;
+    if (nhe_is(this_val)) return true;
     JS_ThrowTypeError(ctx, "a NavigationHistoryEntry member was reached on something that is not one");
     return false;
 }
@@ -81,7 +110,7 @@ JSValue navigation_history_entry_she(JSContext *ctx, JSValueConst nhe)
     JSAtom k;
     JSValue slots, she;
 
-    DCHECK(JS_GetClassID(nhe) == g_nhe_class,
+    DCHECK(nhe_is(nhe),
            "the session history entry of something that is not a NavigationHistoryEntry was asked for — this "
            "entry point is reached from §7.2.6.3's and §7.2.6.4's list walks, whose lists this component is "
            "the only builder of");
@@ -134,7 +163,7 @@ JSValue navigation_history_entry_key(JSContext *ctx, JSValueConst nhe)
 {
     JSValue she, v;
 
-    DCHECK(JS_GetClassID(nhe) == g_nhe_class,
+    DCHECK(nhe_is(nhe),
            "§7.2.6.5's `key` steps ran on something that is not a NavigationHistoryEntry");
     if (!document_fully_active(ctx)) return JS_NewStringLen(ctx, "", 0);
     she = navigation_history_entry_she(ctx, nhe);
@@ -147,7 +176,7 @@ JSValue navigation_history_entry_id(JSContext *ctx, JSValueConst nhe)
 {
     JSValue she, v;
 
-    DCHECK(JS_GetClassID(nhe) == g_nhe_class,
+    DCHECK(nhe_is(nhe),
            "§7.2.6.5's `id` steps ran on something that is not a NavigationHistoryEntry");
     if (!document_fully_active(ctx)) return JS_NewStringLen(ctx, "", 0);
     she = navigation_history_entry_she(ctx, nhe);
@@ -161,7 +190,7 @@ int64_t navigation_history_entry_index(JSContext *ctx, JSValueConst nhe)
     JSValue she;
     int64_t i;
 
-    DCHECK(JS_GetClassID(nhe) == g_nhe_class,
+    DCHECK(nhe_is(nhe),
            "§7.2.6.5's `index` steps ran on something that is not a NavigationHistoryEntry");
     if (!document_fully_active(ctx)) return -1;
     /* "Return the result of getting the navigation API entry index of this's session history entry within
@@ -265,14 +294,35 @@ void navigation_history_entry_init(JSContext *ctx)
 {
     JSClassDef d = { "NavigationHistoryEntry" };
 
-    DCHECK(!g_ready, "navigation_history_entry_init ran twice — the interface is declared once per AGENT");
+    /* THE LATCH, AND IT COMPILES OUT IN RELEASE — which is why the class id may not be carried past the
+       release. Where a component latches on the CLASS ID itself, a second agent's `_init` returns before
+       re-registering; here there is no early return at all, so in a release build a second agent runs this
+       whole body, and JS_NewClassID hands a NON-ZERO slot back unchanged rather than allocating. The
+       CHECK below is what that turns into: JS_NewClass1 refuses an id already taken, and against a fresh
+       runtime it takes one the new `js_class_id_alloc` never issued and will issue to whoever asks next. */
+    DCHECK(g_nhe_rt == NULL,
+           "navigation_history_entry_init ran twice — the interface is declared once per AGENT");
+    g_nhe_rt = JS_GetRuntime(ctx);
     g_key = JS_NewSymbol(ctx, "navigationHistoryEntrySlots", false);
     CHECK(!JS_IsException(g_key), "the NavigationHistoryEntry slot key allocation failed");
     JS_NewClassID(JS_GetRuntime(ctx), &g_nhe_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_nhe_class, &d) == 0,
           "NavigationHistoryEntry: the per-realm prototype slot could not be declared");
     g_id_get_state = idl_method_id(ctx, NULL, 0, js_nhe_get_state, 0);
-    g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING while its
+       row's release column was EMPTY, which is the pair of silences core/platform.c's list reads as agreement:
+       a component holding everything and giving none of it back produces character-for-character the report a
+       component holding nothing produces. It held four slots, and the class id was given back by nothing. */
+    agent_state_ptr("navigation_history_entry", &g_nhe_rt,
+                    "the runtime HTML §7.2.6.5 The NavigationHistoryEntry interface's class and its member "
+                    "declaration were registered in");
+    agent_state_class("navigation_history_entry", &g_nhe_class,
+                      "HTML §7.2.6.5 The NavigationHistoryEntry interface's per-realm prototype slot, and the "
+                      "brand §7.2.7.1's `required NavigationHistoryEntry from` is declared against");
+    agent_state_value("navigation_history_entry", &g_key,
+                      "§7.2.6.5's internal-slot key, the Symbol this component minted for the agent");
+    agent_state_id("navigation_history_entry", &g_id_get_state,
+                   "HTML §7.2.6.5 The NavigationHistoryEntry interface's `getState()` declaration");
     realm_declare_intrinsic(navigation_history_entry_install_protos);
 }
 
@@ -281,7 +331,7 @@ void navigation_history_entry_install_protos(JSContext *ctx)
     JSValue proto, prev, global;
     int i;
 
-    DCHECK(g_ready, "a realm asked for NavigationHistoryEntry before navigation_history_entry_init");
+    DCHECK(g_nhe_rt != NULL, "a realm asked for NavigationHistoryEntry before navigation_history_entry_init");
     prev = JS_GetClassProto(ctx, g_nhe_class);
     DCHECK(JS_IsNull(prev), "navigation_history_entry_install_protos ran twice in one realm — everything "
                             "already holding the first prototype would answer out of a discarded object");
@@ -310,12 +360,45 @@ void navigation_history_entry_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, proto);
 }
 
-void navigation_history_entry_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, and it takes the RUNTIME because that is what an
+ * agent is. It took a JSContext until this diff and used it for nothing but JS_FreeValue, which is
+ * JS_FreeValueRT(ctx->rt, v); that signature is the whole of what kept this component off the column and made
+ * it a hand-written line in three hosts instead.
+ *
+ * NOTHING READS THIS COMPONENT AFTER IT RUNS, and that is a claim about a list rather than a hope. The five
+ * brand sites nhe_is now answers are all page-visible algorithms — §7.2.6.5's own members and the entry-list
+ * walks in navigation.c — and the two OUTSIDE readers of navigation_history_entry_class() are
+ * core/frame/navigation_destination.c's two member DCHECKs and
+ * core/events/navigation_current_entry_change_event.c's idl_iface_brand, which captures the id at its own
+ * INIT. Every row that releases after this one on that column gives back ids or frees its own values; not one
+ * names a static of this file. And there is no collector entry to worry about: `JSClassDef d = {
+ * "NavigationHistoryEntry" }` leaves finalizer and gc_mark null, so core/agent_state.h's closing obligation —
+ * a finalizer running after the release column must reach its record through JS_GetAnyOpaque — has nothing to
+ * apply to here. */
+void navigation_history_entry_free(JSRuntime *rt)
 {
+    /* NOT a null check. This is a row on core/platform.c's list, whose declare pass is unconditional and which
+       runs only where platform_agent_init ran, so a null runtime here is a host tearing down a browser it
+       never built — and a silent return would make that indistinguishable from a release that worked. */
+    DCHECK(g_nhe_rt != NULL,
+           "§7.2.6.5's NavigationHistoryEntry was released in an agent that never declared it — "
+           "navigation_history_entry_init is a row on core/platform.c's declare column, so reaching here "
+           "without it is a teardown of a browser that was never brought up");
+    DCHECK(g_nhe_rt == rt,
+           "§7.2.6.5's NavigationHistoryEntry was released against a RUNTIME other than the one it was "
+           "declared in — its class and its member declaration are registrations in that runtime, and zeroing "
+           "them against another leaves both standing in the runtime that issued them");
     /* The prototypes and the interface objects are the REALMS' — each is released with its context. What the
        agent holds is the Symbol it minted, which is a runtime-lifetime value this component owns. */
-    JS_FreeValue(ctx, g_key);
+    JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
     g_id_get_state = -1;
-    g_ready = 0;
+    /* AND THE CLASS ID, which this release kept. core/agent_state.h settles it: a class is registered in a
+       RUNTIME, so a carried id names a class in a runtime that is gone — and because JS_NewClassID returns a
+       non-zero slot UNCHANGED rather than allocating, a second agent's init would hand JS_NewClass a number
+       the new runtime's own allocator never issued and will issue to whichever component asks next. nhe_is is
+       what makes zeroing it safe to state: the fold it replaced would have reported every primitive as an
+       entry from this line onward. */
+    g_nhe_class = 0;
+    g_nhe_rt = NULL;
 }

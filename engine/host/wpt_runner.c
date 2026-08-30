@@ -115,8 +115,6 @@
 #include "core/dom/document.h"
 #include "core/loader/document_scripts.h"
 #include "core/frame/history.h"
-#include "core/frame/navigation.h"
-#include "core/frame/navigation_history_entry.h"
 #include "core/frame/session_history.h"
 #include "core/frame/location.h"
 #include "core/encoding/encoding.h"
@@ -3408,8 +3406,12 @@ int main(int argc, char **argv)
        line: this host released them HERE and the other two released them a whole teardown later, past the
        realm intrinsics and the streams group. Within the pair all three had it backwards — §7.2.5 is a VIEW
        over §7.4.1's record and reads it in every member, so the view goes first. */
-    navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
-    navigation_history_entry_free(ctx);
+    /* AND HTML §7.2.6 The navigation API WITH §7.2.6.5 The NavigationHistoryEntry interface under it, which
+       used to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above. All three hosts had this pair adjacent and in the right order — the walker
+       before the interface it walks — so what it cost was not an order: both rows' release columns were empty
+       while both files declared no agent state, and both carried their CLASS ID past the release. See
+       core/platform.c's entry. */
     animation_frame_free(ctx);
     event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     headers_free(ctx);

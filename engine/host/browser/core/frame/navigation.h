@@ -62,7 +62,10 @@
 void navigation_init(JSContext *ctx);
 /* §3.7: THIS REALM's Navigation, its prototype and its interface object — declared into core/realm.h's list. */
 void navigation_install_realm(JSContext *ctx);
-void navigation_free(JSContext *ctx);
+/* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, so it takes the RUNTIME: §7.2.6.2's
+   class id, its realm-value slot and its two member declarations are registrations there, and the Symbol is
+   freed with JS_FreeValueRT. */
+void navigation_free(JSRuntime *rt);
 
 /* §7.2.6.2: "Each Window has an associated NAVIGATION API, which is a Navigation object." OWNED. */
 JSValue navigation_object(JSContext *ctx);

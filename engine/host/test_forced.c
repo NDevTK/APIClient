@@ -56,8 +56,6 @@
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
 #include "core/frame/history.h"
-#include "core/frame/navigation.h"
-#include "core/frame/navigation_history_entry.h"
 #include "core/frame/session_history.h"
 #include "core/frame/location.h"
 #include "core/idl_args.h"
@@ -11240,8 +11238,11 @@ int main(int argc, char **argv) {
        line: this host and main.c released them HERE while the WPT runner released them a whole teardown
        earlier, up beside the viewport pair. Within the pair all three had it backwards — §7.2.5 is a VIEW over
        §7.4.1's record and reads it in every member, so the view goes first. */
-    navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
-    navigation_history_entry_free(ctx);
+    /* AND HTML §7.2.6 The navigation API WITH §7.2.6.5 The NavigationHistoryEntry interface under it, which
+       used to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above. All three hosts had this pair adjacent and in the right order, which is why
+       what it cost was not an order at all: both rows' release columns were empty while both files declared
+       no agent state, and both carried their CLASS ID past the release. See core/platform.c's entry. */
     /* HTML §7.2.2's Window, with §7.2.2.5's BarProp under it, is a ROW on core/platform.h's release column now,
        run by the platform_agent_free above. All three hosts had this line and none of them had it in the same
        place — this host and main.c here, the WPT runner past solver_agent_free and past document_free. See

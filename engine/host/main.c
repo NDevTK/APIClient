@@ -76,8 +76,6 @@
 #include "browser/core/platform.h"
 #include "browser/core/realm.h"
 #include "browser/core/frame/history.h"
-#include "browser/core/frame/navigation.h"
-#include "browser/core/frame/navigation_history_entry.h"
 #include "browser/core/frame/session_history.h"
 #include "browser/core/frame/location.h"
 #include "browser/core/frame/navigator.h"
@@ -1243,8 +1241,12 @@ QJS_EXPORT void qjs_teardown(void)
        while these two ran them here, a whole teardown later. Within the pair every host had it backwards —
        §7.2.5 is a VIEW over §7.4.1's record and reads it in every member, so the view is released first, which
        is what reverse declaration order gives. */
-    navigation_free(g_ctx);              /* HTML §7.2.6 the navigation API */
-    navigation_history_entry_free(g_ctx);
+    /* AND HTML §7.2.6 The navigation API WITH §7.2.6.5 The NavigationHistoryEntry interface under it, which
+       used to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above. This is the group all three hosts had RIGHT — adjacent, and the walker
+       before the interface it walks — which is what makes it the group that shows the order was never the
+       only thing at stake: both rows' release columns were empty while both files declared no agent state,
+       and both were carrying their CLASS ID past the release. See core/platform.c's entry. */
     /* HTML §7.2.2's Window, with §7.2.2.5's BarProp under it, is a ROW on core/platform.h's release column now,
        run by the platform_agent_free above — and it is the group that shows what a hand-written list costs when
        every host HAS the line: all three had it and put it in three different places, this one and

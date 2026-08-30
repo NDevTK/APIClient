@@ -7,6 +7,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -24,8 +25,30 @@
 
 static JSValue   g_key;         /* the private Symbol the Navigation's own slots hang off */
 static JSClassID g_nav_class;
+/* THE RUNTIME THIS COMPONENT WAS DECLARED IN, and the slot that answers "declared" without reading any of the
+   values that declaration produced. navigation_init used to latch on `g_obj_slot < 0`, which is a REALM-VALUE
+   SLOT and not a statement about this component at all; the latch is this now and the slot is only a slot. */
+static JSRuntime *g_nav_rt;
 static int       g_obj_slot = -1;
 static int       g_id_entries = -1, g_id_update_current_entry = -1;
+
+/* WEB IDL §3.7.5's BRAND AS A FACT ABOUT THE OBJECT, WITH THE DECLARATION ASKED SEPARATELY. Both call sites
+ * used to fold the two together — one as `DCHECK(g_nav_class != 0)` beside the comparison, one with nothing at
+ * all — and the fold INVERTS the moment navigation_free gives the id back: quickjs.h defines
+ * JS_INVALID_CLASS_ID as 0 and JS_GetClassID answers it for everything that is not an object, so `== 0` is
+ * true of `undefined`, of a number and of a string alike. nav_brand's arm is spelled `!=`, so what it would do
+ * with a released id is not report a live Navigation as something else but ADMIT A PRIMITIVE — and then read
+ * `realm_value_get(ctx, g_obj_slot)` with the slot back at −1. Neither site is reachable from any release (see
+ * navigation_free), which is what makes this an assert rather than a new failure mode. */
+static bool nav_is(JSValueConst v)
+{
+    DCHECK(g_nav_rt != NULL,
+           "§7.2.6.2's Navigation brand was asked before navigation_init registered the class or after "
+           "navigation_free gave it back — with no class there is no answer, and comparing against the id "
+           "anyway admits every PRIMITIVE as a Navigation, because JS_INVALID_CLASS_ID is 0 and so is a "
+           "released class id");
+    return JS_GetClassID(v) == g_nav_class;
+}
 
 /* §7.2.6.3's TWO PIECES OF STATE, and TWO of §7.2.6.8's.
  *
@@ -59,7 +82,7 @@ JSValue navigation_object(JSContext *ctx)
 
     DCHECK(g_obj_slot >= 0, "a Navigation was asked for before navigation_init declared the slot");
     nav = realm_value_get(ctx, g_obj_slot);
-    DCHECK(JS_GetClassID(nav) == g_nav_class,
+    DCHECK(nav_is(nav),
            "a realm answered for its §7.2.6.2 navigation API with something that is not a Navigation — the "
            "object is built with the realm by navigation_install_realm, before any page script runs");
     return nav;
@@ -498,8 +521,7 @@ static bool nav_brand(JSContext *ctx, JSValueConst this_val)
     JSValue own;
     bool same;
 
-    DCHECK(g_nav_class != 0, "a Navigation member ran before navigation_init declared the class");
-    if (JS_GetClassID(this_val) != g_nav_class) {
+    if (!nav_is(this_val)) {
         JS_ThrowTypeError(ctx, "a Navigation member was reached on something that is not a Navigation");
         return false;
     }
@@ -762,8 +784,15 @@ void navigation_init(JSContext *ctx)
 {
     JSClassDef d = { "Navigation" };
 
-    DCHECK(g_obj_slot < 0, "navigation_init ran twice — the class, the slot and the member declarations are "
-                           "made once per AGENT");
+    /* THE LATCH, AND IT COMPILES OUT IN RELEASE — which is why the class id may not be carried past the
+       release. There is no early return here, so in a release build a second agent runs this whole body, and
+       JS_NewClassID hands a NON-ZERO slot back unchanged rather than allocating: the CHECK below would then
+       ask JS_NewClass1 for an id the new runtime's own allocator never issued and is about to issue to
+       whichever component asks next. It used to read `g_obj_slot < 0`, which answers about a REALM-VALUE SLOT
+       rather than about this component. */
+    DCHECK(g_nav_rt == NULL, "navigation_init ran twice — the class, the slot and the member declarations are "
+                             "made once per AGENT");
+    g_nav_rt = JS_GetRuntime(ctx);
     g_key = JS_NewSymbol(ctx, "navigationSlots", false);
     CHECK(!JS_IsException(g_key), "the Navigation slot key allocation failed");
     JS_NewClassID(JS_GetRuntime(ctx), &g_nav_class);
@@ -782,17 +811,69 @@ void navigation_init(JSContext *ctx)
                                                        (int)(sizeof(OPTIONS) / sizeof(OPTIONS[0])),
                                                        &UCE_DECL, 0);
     }
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING while its
+       row's release column was EMPTY, which is the pair of silences core/platform.c's list reads as agreement:
+       a component that holds everything and gives none of it back produces character-for-character the report
+       a component that holds nothing produces. It held five slots and gave four of them back. */
+    agent_state_ptr("navigation", &g_nav_rt,
+                    "the runtime HTML §7.2.6.2 The Navigation interface's class, realm-value slot and two "
+                    "member declarations were registered in");
+    agent_state_class("navigation", &g_nav_class,
+                      "HTML §7.2.6.2 The Navigation interface's per-realm prototype slot and the brand its "
+                      "members check");
+    agent_state_value("navigation", &g_key,
+                      "§7.2.6.3's internal-slot key, the Symbol the entry list and the current entry index "
+                      "hang off");
+    agent_state_id("navigation", &g_obj_slot,
+                   "the per-realm slot HTML §7.2.6.2 The Navigation interface's Window-associated navigation "
+                   "API lives in");
+    agent_state_id("navigation", &g_id_entries,
+                   "HTML §7.2.6.6 The history entry list's `entries()` declaration");
+    agent_state_id("navigation", &g_id_update_current_entry,
+                   "HTML §7.2.6.6 The history entry list's `updateCurrentEntry(options)` declaration");
     realm_declare_intrinsic(navigation_install_realm);
 }
 
-void navigation_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, and it takes the RUNTIME because that is what an
+ * agent is. It took a JSContext until this diff and used it for nothing but JS_FreeValue, which is
+ * JS_FreeValueRT(ctx->rt, v); that signature is the whole of what kept this component off the column and made
+ * it a hand-written line in three hosts instead. Everything it gives back — a class id, a realm-value slot id
+ * and two pool entries — is a registration in the runtime.
+ *
+ * NOTHING READS THIS COMPONENT AFTER IT RUNS. `navigation` is declared after §7.4.1's session history and
+ * §7.2.5's History, so on reverse declaration order its release is EARLY and a long tail follows it — but the
+ * cross-file readers of this file are all page-visible algorithms (core/frame/session_history.c's entry-list
+ * updates, core/frame/navigate_event_fire.c's and core/frame/navigation_abort.c's ongoing-event field,
+ * core/html/focus.c's and core/rendering/rendering.c's focus-changed writes), and every one of those
+ * components' own releases was read: each resets ids or frees its own values and not one names a static of
+ * this file. There is no collector entry either — `JSClassDef d = { "Navigation" }` leaves finalizer and
+ * gc_mark null — so core/agent_state.h's closing obligation has nothing here to apply to. The day the DFAIL in
+ * nav_brand is built and the instance carries its realm as a class opaque, it will: that finalizer must reach
+ * its record through JS_GetAnyOpaque, because this line has already run by then. */
+void navigation_free(JSRuntime *rt)
 {
+    /* NOT a null check. This is a row on core/platform.c's list, whose declare pass is unconditional and which
+       runs only where platform_agent_init ran. */
+    DCHECK(g_nav_rt != NULL,
+           "§7.2.6.2's Navigation was released in an agent that never declared it — navigation_init is a row "
+           "on core/platform.c's declare column, so reaching here without it is a teardown of a browser that "
+           "was never brought up");
+    DCHECK(g_nav_rt == rt,
+           "§7.2.6.2's Navigation was released against a RUNTIME other than the one it was declared in — its "
+           "class, its realm-value slot and its two member declarations are registrations in that runtime, and "
+           "zeroing them against another leaves every one of them standing in the runtime that issued them");
     /* The prototypes, the interface objects and the Navigation objects are the REALMS' — each is released with
        its context. The Symbol is the AGENT's and is a runtime-lifetime value this component minted, so it is
        released here: a component that mints one and does not free it leaks it from every instance, which is
        what JS_FreeRuntime's gc_obj_list walk reports and what core/events/event_target.c was caught by. */
-    JS_FreeValue(ctx, g_key);
+    JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
     g_obj_slot = -1;
     g_id_entries = g_id_update_current_entry = -1;
+    /* AND THE CLASS ID, which this release kept. core/agent_state.h settles it: a class is registered in a
+       RUNTIME, so a carried id names a class in a runtime that is gone — and JS_NewClassID returns a non-zero
+       slot UNCHANGED rather than allocating, so a second agent's navigation_init would hand JS_NewClass a
+       number this runtime never issued. nav_is is what makes zeroing it safe to state. */
+    g_nav_class = 0;
+    g_nav_rt = NULL;
 }
