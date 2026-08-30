@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/css/css_background_shorthand.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_font_shorthand.h"
@@ -470,7 +471,8 @@ static char *border_four_side_component(const char *value, int side, CssBorderPa
        the same reason `overflow`'s expansion maps through its grammar. A `<length>` is copied verbatim, the
        way `margin`'s is: core/css/css_length.h owns the unit's case-folding and every other question about it.
        A `<color>` is copied verbatim too, and for the same reason one property along: this is the SPECIFIED
-       value, and which of `red` / `#f00` / `rgb(255 0 0)` was written is what §6.7.1 serializes back. */
+       value, and which of `red` / `#f00` / `rgb(255 0 0)` was written is what §6.7.2 "Serializing CSS Values"
+       serializes back. */
     kw = (part == CSS_BORDER_PART_WIDTH)
              ? css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w[comp], wl[comp])
              : (part == CSS_BORDER_PART_STYLE)
@@ -496,6 +498,12 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        The whole grammar — including CSS Cascade §7.3's keywords, which for this shorthand reach the RESET-ONLY
        group as well and so cannot be answered here — belongs to the component that owns §2.7. */
     if (strcmp(shorthand, "font") == 0) return css_font_shorthand_component(value, longhand);
+
+    /* ---- css-backgrounds-3 §2.10's `background` ------------------------------------------------------------
+       The one shorthand whose value is a comma-separated LIST OF LAYERS, so one declaration answers each
+       longhand with a list of its own; core/css/css_background_shorthand.h owns §2.10 and this table owns the
+       row, exactly as CSS_SH_FONT is the seam for §2.7. */
+    if (strcmp(shorthand, "background") == 0) return css_background_shorthand_component(value, longhand);
 
     /* ---- css-inline-3 §4.2's `vertical-align` -------------------------------------------------------------- */
     if (strcmp(shorthand, "vertical-align") == 0) {
@@ -636,6 +644,11 @@ bool css_shorthand_validates_longhand(const char *longhand)
     int side, part;
 
     DCHECK(longhand != NULL, "the longhand-grammar question was asked about a NULL property name");
+    /* SEVEN OF css-backgrounds-3 §2.10's EIGHT, for the same reason and with the same split: lexbor's registry
+       carries `background-color` and none of the other seven, so §2.10's component owns their grammars and
+       lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
+       and the grammar behind it are one statement in one file. */
+    if (css_background_shorthand_validates_longhand(longhand)) return true;
     part = border_part_index(longhand, &side);
     (void)side;
     /* The four widths and the four styles. The four `border-*-color` longhands ARE in lexbor's registry — it
@@ -653,6 +666,8 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
 
     (void)side;
     DCHECK(value != NULL, "a longhand declaration was validated with no value");
+    if (css_background_shorthand_validates_longhand(longhand))
+        return css_background_shorthand_longhand_value(longhand, value);
     DCHECK(css_shorthand_validates_longhand(longhand),
            "a longhand this component does not own the grammar of was routed through it — the predicate and "
            "this function are one list and have come apart, and the failure is silent in the direction that "
@@ -706,13 +721,17 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
  * canvas go through — so it is ASKED, the row expands like every other, and the flag is deleted.
  *
  * WHAT IS DELIBERATELY NOT IN THE TABLE AT ALL: every CSS shorthand this engine has no grammar for — `flex`,
- * `flex-flow`, `text-decoration`, `background`. css_shorthand_is_shorthand answers FALSE for each, and the
- * block serialization then emits their longhands separately, which is what it does today.
+ * `flex-flow`, `text-decoration`. css_shorthand_is_shorthand answers FALSE for each, and the block
+ * serialization then emits their longhands separately.
  *
- * AND ONE ROW'S GRAMMAR IS NOT HERE. css-fonts-4 §2.7's `font` is a positional SEQUENCE with an unordered
+ * AND TWO ROWS' GRAMMARS ARE NOT HERE. css-fonts-4 §2.7's `font` is a positional SEQUENCE with an unordered
  * optional prefix, an infix `/` and a trailing comma-list, over six component grammars nothing else in this
- * engine has — a different shape from the four kinds above, which are each arithmetic over ONE component
- * grammar. core/css/css_font_shorthand.h owns §2.7 and this table owns the row; CSS_SH_FONT is the seam. */
+ * engine has; css-backgrounds-3 §2.10's `background` is a comma-separated LIST OF LAYERS whose final layer has
+ * one more term than the others, with an infix inside one term and two terms over one keyword set that ORDER
+ * tells apart. Both are a different shape from the four kinds above, which are each arithmetic over ONE
+ * component grammar applied to ONE value. core/css/css_font_shorthand.h owns §2.7 and
+ * core/css/css_background_shorthand.h owns §2.10; this table owns the rows, and CSS_SH_FONT and
+ * CSS_SH_BACKGROUND are the seams. */
 
 /* HOW A SHORTHAND'S VALUE IS PUT BACK TOGETHER — CSSOM §6.7.2's "serialize a CSS value ... with a list", which
    is "serialize a CSS value from a hypothetical declaration of the property shorthand with its value
@@ -725,7 +744,9 @@ typedef enum {
     CSS_SH_TRIPLE,      /* a three-term `||`, each term omitted when it is that longhand's initial */
     CSS_SH_BORDER,      /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
     CSS_SH_FONT,        /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
-    CSS_SH_TEXT_ALIGN   /* css-text-4 §7.1's one keyword redistributed over two longhands, plus its two pairs */
+    CSS_SH_TEXT_ALIGN,  /* css-text-4 §7.1's one keyword redistributed over two longhands, plus its two pairs */
+    CSS_SH_BACKGROUND   /* css-backgrounds-3 §2.10's `background`, whose grammar is a LIST OF LAYERS and lives
+                           in core/css/css_background_shorthand.h */
 } CssShKind;
 
 typedef struct {
@@ -787,6 +808,16 @@ static const char *const LH_BORDER[] = {
    lexicographic, and a table that is already sorted is what makes that step a scan instead of a comparison
    nobody would notice going wrong. */
 static const CssShorthandRow SHORTHANDS[] = {
+    /* css-backgrounds-3 §2.10. The fixture names EVERY term of one `<final-bg-layer>`, each away from its own
+       initial and in the grammar's canonical order, so the round trip exercises the whole partition at once —
+       an `<image>`, a two-component `<bg-position>`, the `/` infix and its `<bg-size>`, a `<repeat-style>`, an
+       `<attachment>`, the ONE-value `<visual-box>` form (§2.10: "if one <visual-box> value is present then it
+       sets both background-origin and background-clip to that value") and the colour only the final layer may
+       carry. `10em auto` and the one-value box are the two places the two directions could disagree and not be
+       noticed: the first is §2.9.1's always-two-values serialization, and the second is the rule that a single
+       box is not the same fact as two equal ones. */
+    { "background",    CSS_BACKGROUND_SHORTHAND_LONGHANDS, CSS_BACKGROUND_SHORTHAND_N, CSS_SH_BACKGROUND,
+      "url(chess.png) 40% 50% / 10em auto round fixed border-box gray", NULL, NULL },
     { "border",        LH_BORDER,        17, CSS_SH_BORDER,    "1px solid red", NULL, NULL },
     { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
     { "border-color",  LH_BORDER_COLOR,   4, CSS_SH_FOUR_SIDE, "red green", NULL, NULL },
@@ -1142,6 +1173,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     case CSS_SH_TRIPLE:    return css_sh_triple_value(values, row->initial, row->whole_initial);
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
     case CSS_SH_TEXT_ALIGN: return css_sh_text_align_value(values);
+    case CSS_SH_BACKGROUND: return css_background_shorthand_value(values);
     default:
         DCHECK(row->kind == CSS_SH_BORDER,
                "a shorthand row carries a value-serialization kind this switch does not implement");
@@ -1296,10 +1328,27 @@ bool css_shorthand_complete_for(const char *longhand)
          width, height, min-width, max-width, min-height, max-height — NO shorthand sets any of them. CSS 2.1
            has none, and css-sizing adds none: `flex` sets `flex-basis`, not `width`, and `aspect-ratio` is a
            longhand of its own;
-         color — NO shorthand sets it. It is the one property in CSSOM §9's unconditional used-value list that
-           is in this state: `background-color` is set by `background`, `outline-color` by `outline`, and
-           `caret-color` by css-ui-4's `caret`, and none of those three shorthands is in the table above, so
-           none of the three can be recorded until it is;
+         color — NO shorthand sets it;
+         THE EIGHT css-backgrounds-3 §2.10 NAMES — `background` is the ONLY shorthand in CSS that sets any of
+           them, and it is in the table above. §2.10 states the whole of the relation in its own words ("given
+           a valid declaration, for each layer the shorthand first sets the corresponding value of each of
+           background-image, background-position, background-size, background-repeat, background-origin,
+           background-clip and background-attachment to that property's initial value … finally
+           background-color is set to the specified color"), and each of the eight is declared as a standalone
+           longhand by its own section (§2.2 through §2.9). No module states a second container over them:
+           §5.7 "Border Image Shorthand: the border-image property" sets the five `border-image-*` longhands
+           and none of these, and CSS Logical states no flow-relative group over any of the eight, so there is
+           no `background-*-block`/`-inline` pair to be a second spelling of one.
+           `background-color` IS THE ONE THIS ROW WAS BUILT FOR, and it is the quietest shape the missing-row
+           defect has: it is in CSSOM §9's unconditional used-value list, so `getComputedStyle(el)
+           .backgroundColor` is a USED value and every used-value consumer asserts this predicate first — which
+           means a `background: red` two lines above the read was not merely unexpanded, it was UNREACHABLE,
+           and the answer would have been `transparent` with a real colour to show for it;
+         outline-color and caret-color are NOT here, and each names one missing shorthand: `outline-color`
+           needs css-ui-4 §3.1 "Outlines Shorthand: the outline property" and `caret-color` needs its §5.2.4
+           "Insertion caret shorthand: caret". Neither is in the table above, and neither longhand is in
+           lexbor's property registry either, so a row alone would not finish them — the cascade has no value
+           to read for a property nothing types, which is the one way this pair differs from §2.10's eight;
          the twelve border side longhands — THREE shorthands set each and all three are in the table above:
            `border-width` (or `border-style`, or `border-color`), `border-<side>` and `border`, which is
            css-backgrounds-3 §3.3, §3.2, §3.1 and §3.4. `border-image` sets no width, style or color longhand
@@ -1368,6 +1417,8 @@ bool css_shorthand_complete_for(const char *longhand)
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
         "direction", "writing-mode", "transform",
+        "background-image", "background-position", "background-size", "background-repeat",
+        "background-attachment", "background-origin", "background-clip", "background-color",
         "baseline-source", "alignment-baseline", "baseline-shift",
         "text-align-all", "text-align-last",
         "font-size", "line-height", "font-family", "font-style", "font-weight", "font-stretch",

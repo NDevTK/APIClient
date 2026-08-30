@@ -474,7 +474,8 @@ static bool font_parse(const char *value, char **out)
                               "and font_prefix_slot answers only for an UNFILLED slot, so the two have come "
                               "apart");
         filled[slot] = true;
-        /* A KEYWORD is canonicalized to its lower-case spelling, which is what CSSOM §6.7.1 serializes back;
+        /* A KEYWORD is canonicalized to its lower-case spelling, which is what CSSOM §6.7.2 "Serializing CSS
+           Values" serializes back — §6.7.1 is "Parsing CSS Values" and is the step BEFORE this one;
            a `<number>` weight and an `oblique <angle>` are copied verbatim, the way every other numeric
            component value in this engine's shorthands is. */
         canon[slot] = (slot == FONT_SLOT_STRETCH)

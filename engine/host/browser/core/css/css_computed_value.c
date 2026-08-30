@@ -1577,12 +1577,17 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
         DCHECK(css_shorthand_complete_for(name),
                "a used COLOR was derived for a property whose SHORTHANDS are not all expanded by "
                "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it "
-               "— a `background: red` two lines above a `backgroundColor` read is invisible, and the answer "
-               "would be the property's initial value with nothing to say so. THREE of §9's colors are in this "
-               "state and each names one missing shorthand: `background-color` needs `background`, "
-               "`outline-color` needs `outline`, and `caret-color` needs css-ui-4's `caret`. BUILD the "
-               "shorthand's row in css_shorthand.c's table and record the longhand in "
-               "css_shorthand_complete_for");
+               "— an `outline: 1px solid red` two lines above an `outlineColor` read is invisible, and the "
+               "answer would be the property's initial value with nothing to say so. TWO of §9's colors are in "
+               "this state and each names one missing shorthand: `outline-color` needs css-ui-4 §3.1 "
+               "\"Outlines Shorthand: the outline property\", and `caret-color` needs its §5.2.4 \"Insertion "
+               "caret shorthand: caret\". NEITHER LONGHAND IS IN LEXBOR'S PROPERTY REGISTRY EITHER, so a row "
+               "alone does not finish them the way §2.10's row finished `background-color`: `css_cv_used_"
+               "color_value` below has no cascaded value to read for a property nothing types, and the "
+               "logical-spelling DFAIL two statements down is the crash that says so. BUILD the shorthand's "
+               "row in css_shorthand.c's table, record the longhand in css_shorthand_complete_for, and give "
+               "the longhand an initial value in css_style_declaration.c's CSSD_INITIAL_UNREGISTERED — the "
+               "three steps the four `border-*-width` longhands already went through");
         spec = css_cv_used_color_value(el, name);
         if (spec == NULL) {
             DFAIL("CSSOM §9's used-value list carries the LOGICAL colour spellings beside the physical ones — "
