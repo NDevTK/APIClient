@@ -176,14 +176,33 @@ static const CowRecord XHR_REC = { sizeof(XhrData), XHR_VALS, (int)(sizeof(XHR_V
  * the scheduler's C state rather than by anything in the heap graph, so nothing subtracts those references and
  * the object below them is rooted for the whole window.
  *
- * THE ENGINE'S RULE IS BROADER THAN §3.2'S, DELIBERATELY. The machine holds the object whether or not one of
- * the seven listeners is registered, because the machine exists to run the request and not to answer §3.2.
- * §3.2 FORBIDS collecting and never requires it, so a broader retention conforms; what it costs is that an
- * in-flight XMLHttpRequest nobody listens to is held until its machine finishes, which the request it is
- * waiting on bounds. The narrower reading needs a per-TYPE listener query over DOM §2.7 Interface EventTarget's
- * event listener list, and event_target.h offers only event_target_has_any_listener — build
- * `event_target_has_listener_of_any(ctx, target, types, n)` on the day this retention stops being the
- * machine's, and not before, because until then the exact set would have no reader.
+ * THE ENGINE'S RULE IS BROADER THAN §3.2'S, DELIBERATELY, AND THAT IS THE ANSWER RATHER THAN A STAGE ON THE
+ * WAY TO ONE. The machine holds the object whether or not one of the seven listeners is registered, because
+ * the machine exists to run the request and not to answer §3.2. §3.2 FORBIDS collecting and never requires it,
+ * so a broader retention conforms; what it costs is that an in-flight XMLHttpRequest nobody listens to is held
+ * until its machine finishes, which the request it is waiting on bounds.
+ *
+ * SO IT IS NOT NARROWED TO THE CONJUNCTION, BECAUSE THE CONJUNCTION GOING FALSE LICENSES NOTHING. This block
+ * used to ask for a per-TYPE query over DOM §2.7 Interface EventTarget's event listener list —
+ * `event_target_has_listener_of_any(ctx, target, types, n)`, beside the event_target_has_any_listener that
+ * §3.5.6 The send() method's step 5 upload test already uses — "on the day this retention stops being the
+ * machine's". That reads as a schedule and is an instruction to build a defect, so it is deleted rather than
+ * re-dated. A one-sided constraint has no complement to act on: the SECOND paragraph below terminates the
+ * fetch controller when the object IS COLLECTED, never when the conjunction goes false, and an object the page
+ * still holds is not collectable however few listeners it has. The synchronous send is the whole argument in
+ * one line — `x.open(m, u, false); x.send(); return x.responseText;` registers not one of the seven, so the
+ * conjunction is false for the entire §3.2 window, and a retention that ended with it would abandon the
+ * request THAT VERY STATEMENT is waiting on. Ordinary reachability is what keeps that object alive, which is
+ * exactly what §3.2 leaves to the collector.
+ *
+ * AND THE EXACT SET WOULD HAVE NO READER, WHICH IS A PROPERTY OF THE CLAUSE AND NOT OF THIS FILE. Every "must
+ * not be garbage collected if …" clause this engine hosts is discharged the same way, by a working structure
+ * whose lifetime strictly contains the clause's window: HTML §9.5 Broadcasting to other browsing contexts'
+ * channel is held by the open-channel registry its delivery ORDER needs, and Permissions §6.3.5 Garbage
+ * collection's status by the §6.3.4 chain that re-queues itself to ask whether the state changed again. A
+ * query would therefore be a computed writer with no reader in any of the three. What would earn it is an
+ * object whose ONLY root is its own clause — then the clause decides a reference rather than restating one
+ * that already exists — and an engine that grows one will find this the place that says so.
  *
  * WHAT IS LEFT IS THE STANDARD'S SECOND PARAGRAPH, AND IT IS THE MACHINE'S TEARDOWN — see js_xhr_run_fini. */
 static bool xhr_gc_window(const XhrData *d)
