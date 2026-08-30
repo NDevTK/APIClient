@@ -142,7 +142,7 @@ static JSValue js_pte_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_ThrowTypeError(ctx, "constructor PageTransitionEvent requires 'new'");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "PageTransitionEvent constructor requires a type");
-    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted. */
+    /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = event_new_derived(ctx, pte_proto(ctx), argv[0],
                            idl_dict_bool(ctx, init, "bubbles"),
                            idl_dict_bool(ctx, init, "cancelable"),

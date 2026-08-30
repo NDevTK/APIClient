@@ -22,7 +22,7 @@ JSValue ui_event_proto(JSContext *ctx);
    the caller, and there is no second way to make one without a dictionary. */
 JSValue ui_event_new(JSContext *ctx);
 
-/* §3.2.1's constructor steps with a DERIVED interface's prototype — the Event half and the UIEvent half of
+/* DOM §2.5 "Constructing events" with a DERIVED interface's prototype — the Event half and the UIEvent half of
    every interface that inherits this one, so a subclass's constructor adds only its OWN slots. `init` is the
    CONVERTED init dictionary (JS_UNDEFINED for an un-initialized event: Web IDL §3.2.17 makes every member of an absent
    dictionary absent, which is exactly the un-initialized value of each attribute). `proto` is CONSUMED,

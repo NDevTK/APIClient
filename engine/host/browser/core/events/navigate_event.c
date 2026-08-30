@@ -258,7 +258,7 @@ JSValue navigate_event_new_to_fire(JSContext *ctx, const char *navigation_type, 
     members[NE_HAS_UA_VISUAL_TRANSITION] = JS_FALSE;
     members[NE_SOURCE_ELEMENT] = JS_DupValue(ctx, source_element);
 
-    /* "Initialize event's type to 'navigate'". §2.2's constructor steps with THIS interface's prototype; the
+    /* "Initialize event's type to 'navigate'". DOM §2.5 "Constructing events" with THIS interface's prototype; the
        event does not BUBBLE (§7.2.6.10 declares no bubbling and it is fired at the Navigation, which has no
        tree) and is not COMPOSED. TRUSTED, because the user agent fired it. */
     tv = JS_NewString(ctx, "navigate");
@@ -341,7 +341,8 @@ static JSValue js_ne_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         for (i = 0; i < NE_N; i++) JS_FreeValue(ctx, members[i]);
         return JS_ThrowTypeError(ctx, "NavigateEventInit member `sourceElement` is not an Element");
     }
-    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted, and
+    /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted,
+       and
        §7.2.6.10.1's shared checks read exactly that off `isTrusted` when `intercept()` lands.
        Its CLASSIC HISTORY API STATE is null: NavigateEventInit declares no member for it, because it is an
        internal slot §7.2.6.10.4 sets and not something a page may hand over. */

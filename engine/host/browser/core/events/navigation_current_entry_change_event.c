@@ -176,7 +176,7 @@ static JSValue js_nce_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     DCHECK(JS_GetClassID(from) == navigation_history_entry_class(),
            "the declared `required NavigationHistoryEntry from` reached this body as something else — the "
            "brand is the TYPE's (idl_iface_brand), so a wrong value is a TypeError before the body is entered");
-    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted. */
+    /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = event_new_derived(ctx, nce_proto(ctx), argv[0],
                            idl_dict_bool(ctx, init, "bubbles"),
                            idl_dict_bool(ctx, init, "cancelable"),

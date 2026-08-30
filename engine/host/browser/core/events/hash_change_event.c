@@ -185,7 +185,7 @@ static JSValue js_hce_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_ThrowTypeError(ctx, "HashChangeEvent constructor requires a type");
     old_url = idl_dict_get(ctx, init, "oldURL");
     new_url = idl_dict_get(ctx, init, "newURL");
-    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted. */
+    /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = event_new_derived(ctx, hce_proto(ctx), argv[0],
                            idl_dict_bool(ctx, init, "bubbles"),
                            idl_dict_bool(ctx, init, "cancelable"),

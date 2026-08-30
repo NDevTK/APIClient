@@ -183,7 +183,7 @@ static JSValue js_te_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     }
     old_state = idl_dict_get(ctx, init, "oldState");
     new_state = idl_dict_get(ctx, init, "newState");
-    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted. */
+    /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = event_new_derived(ctx, te_proto(ctx), argv[0],
                            idl_dict_bool(ctx, init, "bubbles"),
                            idl_dict_bool(ctx, init, "cancelable"),

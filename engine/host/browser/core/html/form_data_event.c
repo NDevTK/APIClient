@@ -122,7 +122,7 @@ static JSValue js_fde_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_ThrowTypeError(ctx, "constructor FormDataEvent requires 'new'");
     if (argc < 2)
         return JS_ThrowTypeError(ctx, "FormDataEvent constructor requires a type and an init dictionary");
-    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted. */
+    /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = event_new_derived(ctx, fde_proto(ctx), argv[0],
                            idl_dict_bool(ctx, init, "bubbles"),
                            idl_dict_bool(ctx, init, "cancelable"),

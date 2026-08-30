@@ -48,18 +48,36 @@
  * a citation landing there is confirmed rather than reported. Prominence is the gate — one passing mention is
  * not a subject — and the two facts stay separate in the index, so a finding can say which one it is missing.
  *
- * THAT USE SCAN IS INTRA-STANDARD ONLY, AND THE NEXT DIFF IS THE CROSS-STANDARD HALF OF IT. `scanUses` maps an
- * href's fragment through the SAME document's dfn ids, so a link OUT — HTML §4.8.5 linking DOM's `insertion
- * steps`, DOM §2.2 linking Web IDL's `constructor steps` — is invisible, and those are exactly the sections a
- * comment cites when it names another standard's concept. What it costs is visible in this file's own output:
- * a phrase only Web IDL defines resolves a citation to Web IDL and is then judged against Web IDL's numbering,
- * so thirteen event files each read `§2.2's constructor steps` — DOM §2.2 Interface Event, correct — and each
- * came back a finding. The build is: store per index an `ids` map (dfn id -> term) and an `xuses` map
- * ("<base>#<id>" -> {section: count}) filled by the same href walk; at load, translate every index's `xuses`
- * through the union of all `ids` and let `probe` return a hit for a standard that prominently USES a phrase as
- * well as one that defines it. It is not built yet because a confirmation is the direction in which a mistake
- * SILENCES a finding, and USE_FLOOR was tuned against same-document links; its absence shows as this exact
- * population — a term-resolved citation whose number belongs to the standard the file is actually about.
+ * THAT USE SCAN IS INTRA-STANDARD ONLY, AND THE CROSS-STANDARD HALF OF IT IS REFUSED RATHER THAN DEFERRED. The
+ * proposal that stood here was to store per index an `ids` map (dfn id -> term) and an `xuses` map filled by the
+ * same href walk, then let `probe` return a hit for a standard that prominently USES a phrase as well as one
+ * that defines it — so that a comment naming another standard's concept while citing its own section would be
+ * confirmed instead of reported. Its worked example was thirteen event files reading `§2.2's constructor steps`,
+ * called correct-as-written and owed an apology. THAT EXAMPLE WAS MEASURED AND BOTH HALVES OF IT WERE FALSE.
+ *   — THE CITATIONS WERE WRONG. DOM §2.2 "Interface Event" carries the interface's IDL block and its attribute
+ *     definitions and no steps at all; the algorithm those comments run is DOM §2.5 "Constructing events" —
+ *     "When a constructor of the Event interface, or of an interface that inherits from the Event interface, is
+ *     invoked, these steps must be run" — which is also where `create an event` and the `event constructing
+ *     steps` hook are defined. The confirmation would have SILENCED SIXTEEN REAL MISATTRIBUTIONS: precisely the
+ *     direction the proposal itself named as the one where a mistake costs a finding, arriving through its own
+ *     motivating case, which is why a confirmation channel is argued from a READ population and never from a
+ *     plausible one.
+ *   — AND IT WOULD NOT HAVE FIRED ANYWAY. DOM writes `constructor steps` as PLAIN TEXT nine times and LINKS Web
+ *     IDL's definition of it ZERO times, so an href walk records nothing for that phrase in any DOM section. A
+ *     confirmation channel that cannot see its own motivating case is not a narrower version of the right
+ *     mechanism, it is a different one — and its silences would have landed where nobody had looked.
+ * WHAT IS REAL IS AN ASYMMETRY IN THE RESOLVER RATHER THAN A GAP IN THE INDEX, and it is where any later attempt
+ * has to earn its bar. `!owned` — the filter below that refuses to accuse a standard the phrase's definers do
+ * not include — is UNREACHABLE for a citation resolved BY ITS TERM, because that resolution picked the standard
+ * precisely BECAUSE it defines the phrase, so `owned` is true by construction. An ANCHORED citation therefore
+ * gets a soundness check that a TERM-RESOLVED one — which carries strictly less evidence about which standard it
+ * is — does not, and term resolution is where the findings live: 472 of 534 at the revision this was measured.
+ * The bar a cross-standard channel must clear is NOT "does some standard prominently use this phrase at this
+ * number", because a number collision across fifteen standards is cheap; it is whether the tool can NAME the
+ * section it believes is right. Here it could not have: DOM does not define `constructor steps` anywhere. The
+ * PHRASE belongs to Web IDL and only the ALGORITHM belongs to DOM, and an index keyed by phrases cannot state
+ * that. Its absence shows as a finding whose diagnosis names the phrase's owner while the number's owner — the
+ * standard the comment is actually about — goes unnamed, which is a true report a reader must finish by hand.
  *
  * WHAT IS CHECKABLE OFFLINE. Every index is COMMITTED and the audit never touches the network, for idlgen.mjs's
  * reason: a build must work with no network, and fetching a hundred spec pages per run is a gate measuring the

@@ -264,7 +264,7 @@ static JSValue js_se_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     DCHECK(JS_IsNull(area) || storage_is(area),
            "StorageEventInit's `storageArea` reached the constructor as neither a Storage nor null — the "
            "member is `Storage? storageArea = null` and §3.2.15's brand is the declaration's");
-    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted. */
+    /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = se_new(ctx, argv[0], idl_dict_bool(ctx, init, "bubbles"), idl_dict_bool(ctx, init, "cancelable"),
                 idl_dict_bool(ctx, init, "composed"), /*trusted*/ false,
                 key, old_value, new_value, url, area);

@@ -326,7 +326,7 @@ static JSValue js_me_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         if (JS_IsException(frozen)) {
             ev = JS_EXCEPTION;
         } else {
-            /* §2.2's constructor steps, with THIS interface's prototype — the base half of the subclass. An
+            /* DOM §2.5 "Constructing events", with THIS interface's prototype — the base half of the subclass. An
                event the PAGE constructs is untrusted, which is the whole point of the flag. */
             ev = event_new_derived(ctx, message_event_proto(ctx), argv[0],
                                    idl_dict_bool(ctx, init, "bubbles"),

@@ -299,7 +299,7 @@ static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
 
 JSValue ui_event_new_derived(JSContext *ctx, JSValue proto, JSValueConst type, JSValueConst init, bool trusted)
 {
-    /* §2.2's constructor steps first, with the DERIVED interface's prototype — the three EventInit members are
+    /* DOM §2.5 "Constructing events" first, with the DERIVED interface's prototype — the three EventInit members are
        read off the same dictionary, because a derived init dictionary inherits them. */
     JSValue ev = event_new_derived(ctx, proto, type,
                                    idl_dict_bool(ctx, init, "bubbles"),
