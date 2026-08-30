@@ -134,25 +134,47 @@ static JSValue idb_concrete(JSContext *ctx, JSValueConst v)
    bytes." A view contributes its OWN WINDOW of the buffer and not the whole of it, which is why the offset is
    read rather than assumed, and the bytes are COPIED because §2.4 makes the key's value a byte sequence: a
    later write through the page's view must not change a key already filed under it.
-   DETACHMENT IS REPORTED BY THE ENGINE AS A THROW, and §7.4 answers it with "invalid value" instead — so the
-   throw is taken and discarded here, at the one place the algorithm defines a different answer for it. That is
-   not a swallowed error: it is this step's stated result replacing the engine's way of reporting the state. */
+   THIS ARM ASKS THE DETACH QUESTION ITSELF, AND ITS ANSWER IS NOT WEB IDL'S. §3.2.26 Buffer source types' `get
+   a copy of the bytes held by the buffer source` answers a detached buffer at its STEP 7 with the EMPTY byte
+   sequence, and §7.4 Convert a value to a key does not reach that step for one: its own line runs FIRST and
+   returns "invalid value", so `store.get(detachedView)` is a DataError and not a lookup under the empty binary
+   key. A caller performing §3.2.26 and a caller that refuses before it are two different algorithms, and this
+   is the second — which is why the predicate is read here rather than the byte copy being widened.
+   IT IS READ RATHER THAN INFERRED FROM A THROW. The state used to be recognised by JS_GetArrayBufferView
+   refusing an out-of-bounds view, which is TRUE of every detached one and true of others besides, so one
+   answer stood for two questions and the code could not say which it had been asked. */
 static IdbKeyResult idb_key_from_buffer_source(JSContext *ctx, JSValueConst input, JSValue *pkey)
 {
     size_t off = 0, len = 0, whole = 0;
     JSValue buf;
     uint8_t *base;
 
+    /* §7.4's OWN FIRST LINE: "If input is detached then return 'invalid value'." */
+    if (JS_IsDetachedBufferSource(input))
+        return IDB_KEY_INVALID_VALUE;
     if (JS_IsArrayBuffer(input)) {
         buf = JS_DupValue(ctx, input);
     } else {
         buf = JS_GetArrayBufferView(ctx, input, &off, &len);
         if (JS_IsException(buf)) {
+            /* RESIDUAL — NOT COVERED: a view that is out of bounds WITHOUT being detached, which is a fixed
+               offset+length view over a resizable buffer somebody shrank. §7.4's detach line is answered
+               above, so §3.2.26 would run for it and its step 5 reads a [[ByteLength]] the standard states as
+               a plain slot read, which ECMAScript §10.4.5 TypedArray exotic objects lets be `auto` for a
+               length-tracking view — the two texts do not compose, and guessing between an empty binary key
+               and this refusal would be inventing the answer. NEXT DIFF: settle it against the ECMAScript
+               text for TypedArrayByteLength on an out-of-bounds record and answer it here by name.
+               ABSENCE SHOWS AS: `store.get(new Uint8Array(rab, 0, 8))` after `rab.resize(0)` raising a
+               DataError where a browser files or finds an empty binary key. */
             JS_FreeValue(ctx, JS_GetException(ctx));
             return IDB_KEY_INVALID_VALUE;
         }
     }
     base = JS_GetArrayBuffer(ctx, &whole, buf);
+    DCHECK(base != NULL,
+           "§7.4 Convert a value to a key reached a buffer that is neither detached nor a buffer — the detach "
+           "is answered at the top and the caller brand-tests the three arms, so JS_GetArrayBuffer's only two "
+           "refusals are both excluded before this line");
     if (!base) {
         JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, buf);

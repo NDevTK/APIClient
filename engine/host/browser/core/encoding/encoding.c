@@ -720,13 +720,32 @@ static int enc_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp,
     uint8_t *base;
 
     *pbuf = JS_UNDEFINED;
+    DCHECK(JS_IsArrayBuffer(v) || JS_GetTypedArrayType(v) >= 0 || JS_IsDataView(v),
+           "a BufferSource argument reached its body as neither an ArrayBuffer nor a view — the declaration "
+           "brand-tests the union, so nothing else can arrive here");
+    /* WEB IDL §3.2.26 Buffer source types' `get a copy of the bytes held by the buffer source` STEP 7: "If
+       IsDetachedBuffer(jsArrayBuffer) is true, then return the empty byte sequence." §7.2 Interface
+       TextDecoder's decode(input, options) reaches this algorithm BY LINK — "If input is given, then push a
+       copy of input to this's I/O queue", where "copy of" is the anchor for it — and §7.5's `decode and enqueue
+       a chunk` pushes the same copy for the stream interface, so BOTH of this function's callers want the
+       empty byte sequence and neither wants a throw. wpt encoding/textdecoder-arguments.any.js detaches the
+       input's buffer inside the `stream` getter and requires decode() to answer "".
+       IT IS ASKED ABOVE BOTH ARMS BECAUSE NEITHER CAN READ THE WINDOW FOR ONE: steps 5-6 read internal slots
+       step 7 discards, and this engine's two routes to them both refuse a detached buffer — JS_GetArrayBuffer
+       throws, and JS_GetArrayBufferView refuses an out-of-bounds view, which every view over a detached buffer
+       is. So decode(detachedBuffer) returned -1 with a TypeError live and decode(viewOntoDetached) aborted on
+       the brand DCHECK, which was a true sentence about a value that had passed that very test. The predicate
+       answers for both arms at once: §3.2.26's underlying buffer is V for an ArrayBuffer and
+       V.[[ViewedArrayBuffer]] for a view. */
+    if (JS_IsDetachedBufferSource(v)) {
+        *pp = (const uint8_t *)"";
+        *plen = 0;
+        return 0;
+    }
     if (JS_IsArrayBuffer(v)) {
         *pp = JS_GetArrayBuffer(ctx, plen, (JSValue)v);
         return *pp ? 0 : -1;
     }
-    DCHECK(JS_GetTypedArrayType(v) >= 0 || JS_IsDataView(v),
-           "a BufferSource argument reached its body as neither an ArrayBuffer nor a view — the declaration "
-           "brand-tests the union, so nothing else can arrive here");
     *pbuf = JS_GetArrayBufferView(ctx, v, &off, plen);
     if (JS_IsException(*pbuf)) return -1;
     base = JS_GetArrayBuffer(ctx, &whole, *pbuf);
@@ -1197,7 +1216,29 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
            "Uint8Array, whose elements are numbers, so this engine has nowhere to write the unknown bytes and "
            "would report `read`/`written` over a buffer it never touched. Build concolic bytes in a typed "
            "array's backing store");
+    /* A DETACHED DESTINATION IS NOT THIS ALGORITHM'S ERROR — IT IS A WINDOW OF ZERO BYTES, AND §7.4 STATES
+       THAT WITHOUT A DETACH TEST OF ITS OWN. encodeInto is not one of §3.2.26's byte-COPY callers: it reads
+       "destination's byte length − written" and then "write the bytes in result into destination", which are
+       §3.2.26's OTHER two operations. `The byte length of a buffer source type instance` returns
+       jsBufferSource.[[ByteLength]] for a view, and ECMAScript §10.4.5.12 TypedArrayByteLength answers 0 for a
+       view whose buffer is detached — so the loop's very first "byte length − written ≥ result's bytes" test
+       is false, it breaks, and the method returns «[ "read" → 0, "written" → 0 ]». wpt
+       encoding/encodeInto.any.js's "encodeInto() and a detached output buffer" requires exactly that pair, for
+       both an empty and a non-empty source.
+       SO THE ANSWER IS THE SAME SHAPE AS §3.2.26 STEP 7'S AND ARRIVES BY A DIFFERENT ROUTE, and the route is
+       why the test has to be HERE rather than left to the read below: JS_GetArrayBufferView refuses an
+       out-of-bounds view and a detached buffer makes every view over it out of bounds, so this returned a
+       TypeError where the spec returns a pair. The DECLARATION cannot answer it either — §3.2.26's four
+       conversions refuse a shared and a resizable buffer and say nothing whatever about a detached one.
+       Nothing below runs on this path: the source coercion is over an already-converted USVString, and a
+       zero-length window is a write of no bytes, so there is no COW capture to make either. */
+    if (JS_IsDetachedBufferSource(argv[1]))
+        goto report;
     view = JS_GetArrayBufferView(ctx, argv[1], &off, &dlen);
+    DCHECK(!JS_IsException(view),
+           "§7.4's destination is out of bounds with a buffer that is not detached — the detach is answered "
+           "above and IDL_TYPED_ARRAY refused a resizable buffer at the conversion, so an out-of-bounds view "
+           "has grown a third cause");
     if (JS_IsException(view)) return JS_EXCEPTION;
     dst = JS_GetArrayBuffer(ctx, &whole, view);
     if (!dst) { JS_FreeValue(ctx, view); return JS_EXCEPTION; }
@@ -1245,6 +1286,10 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     }
     JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, view);
+report:
+    /* ONE report for both routes — the pair is §7.4's last step and a detached destination reaches it with the
+       counters it was initialised with, which IS the pair the loop would have produced over a zero-byte
+       window. A second construction here would be a second place for the two names to drift. */
     r = JS_NewObject(ctx);
     if (JS_IsException(r)) return r;
     JS_SetPropertyStr(ctx, r, "read", JS_NewInt64(ctx, (int64_t)read));

@@ -3304,18 +3304,44 @@ static void drain_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     JS_MarkValue(rt, dr->funcs[1], mark_func);
 }
 
-/* Append a chunk's bytes. §2.2.4 says a chunk that is not a Uint8Array is a TypeError, and the union of things
-   that ARE a byte view is what JS_GetArrayBufferView answers for. Returns -1 with a throw live. */
+/* APPEND A CHUNK'S BYTES — Streams §9.1.2 Reading's `read-loop`, whose chunk steps are exactly two lines: "If
+   chunk is not a Uint8Array object, call failureSteps with a TypeError and abort these steps" and "Append the
+   bytes represented by chunk to bytes". Returns -1 with a throw live.
+ *
+ * THE TWO LINES ARE INDEPENDENT AND THIS FUNCTION USED TO ANSWER BOTH WITH ONE READ, which got each of them
+ * wrong in the opposite direction. The refusal was JS_GetArrayBufferView's, so it admitted every byte VIEW —
+ * a DataView or an Int32Array a page enqueued was accepted where §9.1.2 names %Uint8Array% outright. And that
+ * same read is how the appended bytes were reached, so a DETACHED Uint8Array — which IS a Uint8Array, and
+ * whose §3.2.26 window is simply empty — was refused BY THE TYPE TEST and reported as "not a byte view": a
+ * diagnosis that is false about the value and sends the reader to the page's chunk type.
+ * ONE READ CANNOT ANSWER BOTH BECAUSE THEY ASK ABOUT DIFFERENT THINGS: the first is a BRAND question about the
+ * object, the second is a question about the buffer under it. So the brand is asked as §9.1.2 states it, and
+ * the detach is asked with the predicate Web IDL §3.2.26 Buffer source types' step 7 is stated over — every
+ * question this site needs answered it asks itself, for the reason the DCHECK below gives. */
 static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
 {
     size_t off = 0, n = 0, whole = 0;
     JSValue buf;
     uint8_t *base;
 
+    if (JS_GetTypedArrayType(chunk) != JS_TYPED_ARRAY_UINT8) {
+        JS_ThrowTypeError(ctx, "a body stream answered with a chunk that is not a Uint8Array");
+        return -1;
+    }
+    /* §3.2.26 STEP 7: "If IsDetachedBuffer(jsArrayBuffer) is true, then return the empty byte sequence." The
+       chunk is still a Uint8Array, so §9.1.2's TypeError is not this value's answer; its window is empty, so
+       "append the bytes represented by chunk" appends none and the read-loop goes on to the next chunk. */
+    if (JS_IsDetachedBufferSource(chunk))
+        return 0;
     buf = JS_GetArrayBufferView(ctx, chunk, &off, &n);
+    DCHECK(!JS_IsException(buf),
+           "a body stream's Uint8Array chunk is out of bounds with a buffer that is not detached — the brand "
+           "and the detach are both answered above, so an out-of-bounds view has grown a cause this site does "
+           "not know about (a length-tracking view over a shrunk resizable buffer is not one: §10.4.5.12 "
+           "TypedArrayByteLength tracks it)");
     if (JS_IsException(buf)) {
         JS_FreeValue(ctx, JS_GetException(ctx));
-        JS_ThrowTypeError(ctx, "a body stream answered with a chunk that is not a byte view");
+        JS_ThrowTypeError(ctx, "a body stream answered with a chunk whose window is outside its own buffer");
         return -1;
     }
     base = JS_GetArrayBuffer(ctx, &whole, buf);

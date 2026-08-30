@@ -683,18 +683,43 @@ static int js_blob_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             }
         } else if (blob_is(part)) {
             bytes = (const uint8_t *)blob_bytes_of(part, &plen, NULL);
+        } else if (JS_IsDetachedBufferSource(part)) {
+            /* WEB IDL §3.2.26 Buffer source types' `get a copy of the bytes held by the buffer source` STEP 7:
+               "If IsDetachedBuffer(jsArrayBuffer) is true, then return the empty byte sequence." File API
+               §3.1.1 Constructor Parameters' `process blob parts` reaches this algorithm by name — "If element
+               is a BufferSource, get a copy of the bytes held by the buffer source, and append those bytes to
+               bytes" — so a detached part contributes NOTHING and the constructor still succeeds.
+               IT IS ASKED HERE, ABOVE BOTH ARMS, BECAUSE NEITHER ARM CAN READ THE WINDOW FOR ONE. Steps 5-6
+               read internal slots whose values step 7 discards, so asking step 7 first is not a reordering of
+               anything observable; asking it second is unreachable, because an embedder's only routes to those
+               slots are JS_GetArrayBuffer, which THROWS for a detached buffer, and JS_GetArrayBufferView, which
+               refuses an out-of-bounds view — and a detached buffer makes every view over it out of bounds. So
+               `new Blob([detachedBuffer])` threw a TypeError and `new Blob([viewOntoDetached])` aborted on the
+               brand DCHECK below, which was a true sentence about a value that had passed that very test.
+               The predicate answers for BOTH arms — §3.2.26's "underlying buffer" is V for an ArrayBuffer and
+               V.[[ViewedArrayBuffer]] for a view — which is why one branch replaces two.
+               THE BRAND HOLDS BEFORE IT IS ASKED: idl_args.c's `BlobPart` rule is a brand test that sends
+               everything which is neither a BufferSource nor a Blob down the USVString arm, and the string and
+               Blob arms are taken above, so the predicate's own always-fatal brand CHECK is this file's
+               two-sided statement of that and replaces the DCHECK that used to stand below. */
+            bytes = (const uint8_t *)"";
+            plen = 0;
         } else if (JS_IsArrayBuffer(part)) {
             bytes = JS_GetArrayBuffer(ctx, &plen, part);
+            DCHECK(bytes != NULL,
+                   "§3.2.26's step 6 refused a buffer that is neither detached nor a non-buffer — the detach is "
+                   "answered above and the brand test is the predicate's own, so JS_GetArrayBuffer has grown a "
+                   "third refusal this arm does not know about");
             if (!bytes) { JS_FreeValue(ctx, part); goto fail; }
         } else {
-            /* An ArrayBufferView. A DETACHED one contributes NOTHING rather than throwing, which is what §3.1
-               says and what wpt's detached-buffer file checks — its buffer is gone, so its byte range is empty. */
+            /* An ArrayBufferView, whose buffer is live: §3.2.26 step 7 is answered above. */
             size_t whole = 0;
             uint8_t *base;
             view_buf = JS_GetArrayBufferView(ctx, part, &off, &plen);
             DCHECK(!JS_IsException(view_buf),
-                   "a Blob part reached assembly as none of the union's three arms — the sequence conversion "
-                   "produces exactly a string, a Blob or a BufferSource, so nothing else can be in the list");
+                   "§3.2.26's step 5 refused a view whose buffer is not detached — step 7 is asked above and "
+                   "the BlobPart conversion refuses a shared or resizable buffer, so the only remaining cause "
+                   "of an out-of-bounds view has grown a fourth case");
             base = JS_GetArrayBuffer(ctx, &whole, view_buf);
             if (!base) { JS_FreeValue(ctx, view_buf); JS_FreeValue(ctx, part); goto fail; }
             /* THE `memcpy` BELOW READS `plen` BYTES FROM `base + off`, and those two numbers come from two

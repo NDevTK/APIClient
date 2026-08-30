@@ -217,6 +217,24 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
         *out_mime = strdup("application/x-www-form-urlencoded;charset=UTF-8");
         return r;
     }
+    /* §5.2's BufferSource ARM SAYS "Set source to a copy of the bytes held by object", and "copy of the bytes"
+       is a LINK: Web IDL §3.2.26 Buffer source types' `get a copy of the bytes held by the buffer source`,
+       whose STEP 7 is "If IsDetachedBuffer(jsArrayBuffer) is true, then return the empty byte sequence." So
+       `new Request(u, {body: detached})` carries an EMPTY body and does not throw.
+       ASKED ONCE, ABOVE BOTH SHAPES, BECAUSE THE WINDOW IS WHAT CANNOT BE READ FOR A DETACHED ONE — steps 5-6
+       read internal slots step 7 discards, and this engine's two routes to them both refuse: JS_GetArrayBuffer
+       throws for a detached buffer, JS_GetArrayBufferView refuses an out-of-bounds view and a detached buffer
+       makes every view over it out of bounds. The arm below returned -1 with that TypeError live, and the view
+       arm further down aborted on a DCHECK about the UNION, which is a true sentence about a value that had
+       already satisfied it.
+       THE BRAND TEST IS THIS CALLER'S, not the predicate's, because this function's last arm deliberately
+       accepts a plain object: `fetch(u, {body: {...}})` reads init["body"] with a raw property get and has no
+       declaration to convert it (see the DCHECK there). Asking a buffer-source predicate about such a value
+       would be an ALWAYS-FATAL brand CHECK in release for a page that merely wrote a wrong body. */
+    if (JS_IsArrayBuffer(init) || JS_GetTypedArrayType(init) >= 0 || JS_IsDataView(init)) {
+        if (JS_IsDetachedBufferSource(init))
+            return body_state_set(ctx, b, NULL, 0);              /* §5.2: a BufferSource has no type */
+    }
     if (JS_IsArrayBuffer(init)) {
         size_t n = 0;
         const uint8_t *base = JS_GetArrayBuffer(ctx, &n, (JSValue)init);
