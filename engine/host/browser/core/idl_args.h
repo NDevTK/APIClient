@@ -905,10 +905,26 @@ bool    idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name);
    only say "more remains" had nowhere to put that, which is why it stood at a DFAIL naming this signature.
    JS_STEP_YIELD = more remains, JS_STEP_FORK = the caller returns it and the walk is RE-ENTERED at the same
    node (its own phase is what stops the effects it already performed from running twice), 0 = the walk is
-   done and the buffer has been released. */
+   done and the buffer has been released.
+   AND IT MAY RUN THE PAGE'S CODE, WHICH IS A PROPERTY OF DOM §4.2.3 "Mutation algorithms"'s TWO PHASES AND NOT
+   OF THIS TRANSPORT. The two are opposite and the standard states both in its own words. §4.2.3 defines the
+   INSERTION STEPS with "These steps must not modify the node tree that insertedNode participates in, fire
+   events, or otherwise execute JavaScript", so a request that parked on the page's code between two of them
+   would be a timeline the standard forbids. Its POST-CONNECTION steps are the opposite by construction —
+   insert step 10 collects staticNodeList up front precisely "because the post-connection steps can modify the
+   tree's structure, making live traversal unsafe" — and HTML §4.12.1.1 "Processing model"'s own worked example
+   REQUIRES the page's code to run between two of staticNodeList's entries: `body.append(script1, script2)`
+   where script1's body removes script2 prints nothing, which is only decidable if script1 RAN before step 12
+   re-read script2's connectedness. So a step may make a REQUEST (JS_STEP_CALL and its kin), and WHICH PHASE
+   may make one is the DOM layer's invariant, asserted at the walk that knows the phase — never here, which
+   knows only that something was recorded.
+   `in` IS THE COMPLETION OF THE REQUEST THE WALK LAST MADE, owned by the walk exactly as a step machine owns
+   its `cb_result`, and JS_UNDEFINED on every ordinary re-entry. A walk that has made no request and is handed
+   something else is being delivered an answer to a question it never asked, which it asserts on. */
 typedef struct {
     void *(*take)(JSContext *ctx);                 /* everything recorded so far, or NULL; leaves none behind */
-    int   (*step)(JSContext *ctx, void *buf, JSStepHdr *h);   /* ONE node; a step code */
+    /* ONE node; a step code. `in`/`out_cb`/`out_argc` are the step-machine request contract, unchanged. */
+    int   (*step)(JSContext *ctx, void *buf, JSStepHdr *h, JSValue in, JSValue **out_cb, int *out_argc);
     void  (*release)(JSContext *ctx, void *buf);
     bool  (*recorded)(void);                       /* is anything waiting to be taken */
     /* THE BUFFER ACROSS A FORK. A fork inside the walk snapshots the driving machine, which byte-copies its

@@ -1388,18 +1388,35 @@ static void idl_tree_take(JSContext *ctx, JSIdlArgsState *s)
    work, and JS_STEP_FORK the same way, because a per-node effect can ask a question whose answer is unknown
    external state (HTML §6.6.7's insertion steps run §6.6.6's allow focus steps, whose second clause is §6.4.1's
    transient activation). Both codes mean the same thing to this machine: return it, and the re-entry above
-   comes straight back here. 0 is the walk finished, and the buffer is released on that edge and nowhere else. */
-static int idl_tree_drain(JSContext *ctx, JSIdlArgsState *s)
+   comes straight back here. 0 is the walk finished, and the buffer is released on that edge and nowhere else.
+   AND A REQUEST THAT PARKS ON THE PAGE'S CODE IS FORWARDED TOO, which is a correction and not a widening: the
+   reason that stood here for refusing one — "that code would run between two nodes' insertion steps, which is
+   not the order §4.2.3 states" — is TRUE of DOM §4.2.3 "Mutation algorithms"'s insertion steps and FALSE of
+   its POST-CONNECTION steps, whose whole purpose is the JavaScript the insertion steps may not run (insert
+   step 10's own note: "the post-connection steps can modify the tree's structure, making live traversal
+   unsafe"). Stated as one blanket refusal it was the standing instruction that HTML §4.12.1.1 "Processing
+   model" step 36's "immediately execute the script element el" could not be performed on this walk at all,
+   which is why it never was. WHICH PHASE MAY MAKE A REQUEST IS THE DOM LAYER'S INVARIANT and is asserted at
+   the walk that knows the phase; this file must not know what a Node is, so it forwards and asserts only that
+   the code is one the step contract defines. */
+static int idl_tree_drain(JSContext *ctx, JSIdlArgsState *s, JSValue in, JSValue **out_cb, int *out_argc)
 {
     int r;
 
-    if (!s->tree) return 0;
-    r = g_tree->step(ctx, s->tree, &s->hdr);
+    if (!s->tree) { JS_FreeValue(ctx, in); return 0; }
+    r = g_tree->step(ctx, s->tree, &s->hdr, in, out_cb, out_argc);
     if (r) {
-        DCHECK(r == JS_STEP_YIELD || r == JS_STEP_FORK,
+        /* THREE CODES AND NOT THE WHOLE CONTRACT, because a set is a claim about what the walk is licensed to
+           do and admitting a code nothing produces is a licence granted in advance. JS_STEP_CALL is the one
+           addition and it is exactly what §4.2.3 insert step 12 requires; a throw is NOT among them, because
+           HTML §8.1.4.4 "Calling scripts"'s run a classic script REPORTS its exception rather than propagating
+           it, so a post-connection step that runs the page's code owns that completion and never hands it
+           back through here to abort the member that caused the mutation. */
+        DCHECK(r == JS_STEP_YIELD || r == JS_STEP_FORK || r == JS_STEP_CALL,
                "§4.2.3's tree-steps walk answered with a step code this drain cannot forward — it may rest "
-               "(JS_STEP_YIELD) or fork (JS_STEP_FORK), and a request that parks on the PAGE's code would run "
-               "that code between two nodes' insertion steps, which is not the order §4.2.3 states");
+               "(JS_STEP_YIELD), fork (JS_STEP_FORK) or park on the page's own code (JS_STEP_CALL, which "
+               "§4.2.3's POST-CONNECTION steps license and its insertion steps do not), and any other code is "
+               "one this walk has no licence for rather than one this file declines to carry");
         return r;
     }
     g_tree->release(ctx, s->tree);
@@ -1679,10 +1696,15 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     if (JS_IsException(cb_result) && !(m->step && m->step->catches_abrupt)) return JS_STEP_ABRUPT;
 
     /* THE DRAIN COMES FIRST ON EVERY RE-ENTRY, before the conversion loop or the body, because the steps the
-       previous step recorded must finish before anything else this member does. */
+       previous step recorded must finish before anything else this member does.
+       AND THE COMPLETION GOES TO IT RATHER THAN INTO THE BIN. It was freed here, which was correct only while
+       the walk could ask nothing: a re-entry then carried an answer to a question this member had asked and
+       the walk had not, so there was nothing to deliver. Now that a post-connection step may park on the
+       page's own code (§4.2.3 insert step 12), the value arriving on a re-entry the WALK caused is that
+       program's completion, and freeing it would deliver JS_UNDEFINED to a machine standing on a request. The
+       drain owns `in` from here, on both arms. */
     if (s->tree) {
-        JS_FreeValue(ctx, cb_result);
-        r = idl_tree_drain(ctx, s);
+        r = idl_tree_drain(ctx, s, cb_result, out_cb, out_argc);
         if (r) return r;
         if (s->tree_after_body) return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
@@ -2932,7 +2954,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         }
         idl_tree_take(ctx, s);
         s->tree_after_body = (r == 0);
-        if (s->tree) { int d = idl_tree_drain(ctx, s); if (d) return d; }
+        /* JS_UNDEFINED IS THE WHOLE OF WHAT A FIRST ENTRY HAS TO SAY: the walk has just been handed its buffer
+           and has made no request, so there is no completion owed to it. The re-entry above is the only site
+           that ever carries one. */
+        if (s->tree) { int d = idl_tree_drain(ctx, s, JS_UNDEFINED, out_cb, out_argc); if (d) return d; }
         if (r) return r;
         return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
     }
@@ -2950,7 +2975,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     }
     idl_tree_take(ctx, s);
     s->tree_after_body = 1;
-    if (s->tree) { int d = idl_tree_drain(ctx, s); if (d) return d; }
+    /* JS_UNDEFINED for the reason the step-body entry above states: a walk that has just been handed its
+       buffer is owed no completion. */
+    if (s->tree) { int d = idl_tree_drain(ctx, s, JS_UNDEFINED, out_cb, out_argc); if (d) return d; }
     return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
 }
 

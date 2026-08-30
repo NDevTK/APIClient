@@ -1883,13 +1883,36 @@ static int tree_steps_post_connection(TreeStepBuf *b)
    JS_STEP_FORK when a per-node effect's answer depends on unknown external state, and 0 only when the SECOND
    phase is over too. `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm
    is delivered back to the same call site inside the same node's phase. */
-static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
+static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSValue in,
+                                   JSValue **out_cb, int *out_argc)
 {
     TreeStepBuf *b = vb;
     TreeStepEntry *e;
     lxb_dom_node_t *n;
 
     DCHECK(b != NULL, "the tree-steps drain was stepped with no buffer");
+    /* WHICH PHASE MAY PARK ON THE PAGE'S CODE IS THIS WALK'S INVARIANT, and it is stated here because this is
+       the one place that knows the phase — idl_args.c must not know what a Node is, so it forwards a request
+       and asserts only that the code is one the step contract defines.
+       §4.2.3 defines the INSERTION STEPS as steps that "must not modify the node tree that insertedNode
+       participates in, fire events, or otherwise execute JavaScript", so a request made from TS_PHASE_INSERTION
+       would run the page's code between two nodes' insertion steps — a timeline no browser produces and the
+       thing the old blanket refusal in the drain was reaching for. The POST-CONNECTION steps are the opposite
+       and the standard says so twice: insert step 10 collects staticNodeList up front "because the
+       post-connection steps can modify the tree's structure, making live traversal unsafe", and HTML §4.12.1.1
+       "Processing model" step 36 — "Otherwise, immediately execute the script element el, even if other scripts
+       are already executing" — is reached from those steps and IS the page's code.
+       ASSERTED ON THE INCOMING HALF, which is the half that exists today: this walk makes no request yet, so a
+       completion arriving here is an answer to a question it never asked, and it would be silently dropped by
+       the free below. When step 36's run is built, the outgoing half is asserted beside the request it makes;
+       both halves are the assertion, because a check that only ever sees JS_UNDEFINED proves nothing about a
+       walk that has started asking. */
+    DCHECK(JS_IsUndefined(in),
+           "§4.2.3's tree-steps walk was re-entered carrying a completion it never asked for — this walk makes "
+           "no request, so the only value it can be handed is JS_UNDEFINED, and anything else means the "
+           "driving machine's own request was routed into the drain instead of into the member's stage");
+    JS_FreeValue(ctx, in);
+    (void)out_cb; (void)out_argc;
     if (b->phase == TS_PHASE_POST_CONNECTION) return tree_steps_post_connection(b);
     DCHECK(b->phase == TS_PHASE_INSERTION, "the tree-steps drain is standing in a phase §4.2.3 does not have");
     DCHECK(b->i < b->n, "the tree-steps drain was stepped past its end");
