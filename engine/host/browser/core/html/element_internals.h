@@ -10,7 +10,8 @@
    html_form_declare runs, because `attachInternals` is an HTMLElement member and that is where HTMLElement's
    members are declared. Declares this component's per-realm prototypes into core/realm.h's list. */
 void element_internals_declare(JSContext *ctx);
-/* §4.13.2's `ElementInternals attachInternals()` onto HTMLElement.prototype, for ONE realm. */
+/* §4.13.7 "Element internals"'s `ElementInternals attachInternals()` onto HTMLElement.prototype, for ONE
+   realm. */
 void element_internals_install_html_members(JSContext *ctx, JSValueConst html_proto);
 /* The interface OBJECTS — `ElementInternals`, `CustomStateSet`, `ValidityState`. */
 void element_internals_install(JSContext *ctx, JSValueConst global);

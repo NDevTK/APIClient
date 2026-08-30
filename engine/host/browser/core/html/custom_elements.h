@@ -91,7 +91,8 @@ int  custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSV
 void custom_elements_init(JSContext *ctx);
 void custom_elements_free(JSRuntime *rt);
 
-/* HTML §4.13.2's `[HTMLConstructor]` AS THIS REALM'S HTMLElement INTERFACE OBJECT. It is minted here and not
+/* HTML §3.2.3 "HTML element constructors"'s `[HTMLConstructor]` AS THIS REALM'S HTMLElement INTERFACE
+   OBJECT. It is minted here and not
    where the other interface objects are because the algorithm is this component's — it walks the definition
    set and the construction stack — while WHICH interface carries it is html_element.c's. OWNED (consumed by
    the install). */

@@ -369,8 +369,9 @@ lxb_dom_node_t *document_root_node(JSContext *ctx);
 
 /* DOM §4.9 "CREATE AN ELEMENT INTERNAL" — the half of element creation that runs NO page code: a node
    implementing the interface for `local`, in THIS REALM'S associated Document, in the HTML namespace,
-   DETACHED, with an empty attribute list. HTML §4.13.2 step 7 is its second caller — a custom element
-   constructor reached with an EMPTY construction stack makes the element itself, and step 7.2 names the
+   DETACHED, with an empty attribute list. HTML §3.2.3 "HTML element constructors" step 9 is its second caller
+   — a custom element constructor reached with an EMPTY construction stack makes the element itself, and
+   step 9.2 names the
    current global's document rather than any receiver's, which is why this is the realm's and `createElement`'s
    own creation is the receiver's. Returns the wrapper, OWNED. */
 JSValue document_create_element_internal(JSContext *ctx, const char *local, size_t len);

@@ -84,7 +84,7 @@ static int g_ready;
    property of the engine's invention sitting where `Object.keys` reports it. */
 static JSValue g_target_key = JS_UNDEFINED;      /* ElementInternals -> its target element */
 static JSAtom  g_atom_target = JS_ATOM_NULL;
-static JSValue g_attached_key = JS_UNDEFINED;    /* element -> its attached internals (§4.13.2 step 5) */
+static JSValue g_attached_key = JS_UNDEFINED;    /* element -> its attached internals (§4.13.7 step 5) */
 static JSAtom  g_atom_attached = JS_ATOM_NULL;
 static JSValue g_face_key = JS_UNDEFINED;        /* element -> its form-associated record */
 static JSAtom  g_atom_face = JS_ATOM_NULL;
@@ -850,7 +850,7 @@ static const AriaTargetOps EI_ARIA_OPS = {
     ei_aria_element, ei_aria_attr_get, ei_aria_attr_set, ei_aria_attr_del
 };
 
-/* ---- §4.13.2 attachInternals() ------------------------------------------------------------------------------ */
+/* ---- §4.13.7 "Element internals" — attachInternals() ------------------------------------------------------- */
 
 static JSValue js_html_attach_internals(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                         int magic)

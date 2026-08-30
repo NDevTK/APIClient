@@ -3599,31 +3599,37 @@ designed behaviour; a run that grows quadratically in RAM was a data-structure b
 
 ---
 
-## 14. HTML §4.13.2 / §4.13.5 / §4.13.6 — the HTMLElement constructor, the UPGRADE, and the reaction drain
+## 14. HTML §3.2.3 / §4.13.5 / §4.13.6 — the HTMLElement constructor, the UPGRADE, and the reaction drain
 
 **Why this section exists.** A custom element's constructor body is code nothing else in the program
 calls, and until this section's diff it never ran. The engine had §4.13.4's `define`, §4.13.6's
-element queues and §4.13.2's `[HTMLConstructor]` — everything except the one algorithm that joins
+element queues and §3.2.3's `[HTMLConstructor]` — everything except the one algorithm that joins
 them. `upgrade an element` was a PROTOTYPE SWAP: the wrapper was re-pointed at the class's
 `prototype` and a `connectedCallback` reaction enqueued, so `el instanceof X` and `el.method()` were
 true while `constructor(){ super(); this.routes = … }` had never executed. The construction stack
 existed (`ce_define_commit` allocated one per definition, `js_ce_html_ctor` read it) and **nothing
-ever pushed onto it**, so §4.13.2's steps 10-15 — the half that returns the node the page already
+ever pushed onto it**, so §3.2.3's steps 12-16 — the half that returns the node the page already
 holds — were unreachable by construction.
 
 **Network was available.** Everything below was read from the live standards on **2026-08-11**:
 
 | Standard | Source | Version read |
 | --- | --- | --- |
-| WHATWG HTML | `https://html.spec.whatwg.org/` | Living Standard, §4.13.2, §4.13.5, §4.13.6 |
+| WHATWG HTML | `https://html.spec.whatwg.org/` | Living Standard, §3.2.3, §4.13.5, §4.13.6 |
 | WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, "create an element", "insert a node" |
 
-Step numbers are the standard's own list numbering as of that date.
+Step numbers are the standard's own list numbering as of that date — EXCEPT §3.2.3's, which were not: they
+were the pre-scoped-registry edition's (7.1-7.9, 8, 9, 10-14), and the section was cited throughout as
+§4.13.2, which is "Requirements for custom element constructors and reactions" — a bulleted list of authoring
+requirements carrying no numbered steps at all, and never the home of `[HTMLConstructor]` in any edition.
+Both were corrected against the live text on **2026-08-30**. §4.13.4/§4.13.5/§4.13.6's step numbers below are
+STILL the 2026-08-11 reading, and §4.13.5's have since moved (its `previousRegistry` save/set are now steps
+8-9, the construct is step 10, and the form-associated pair is step 11).
 
 ### 14.0 Four things the live text says that a reasonable person would remember differently
 
-1. **The already-constructed marker throws a `TypeError`, not an `InvalidStateError`.** §4.13.2 step
-   11 says `TypeError` in as many words, and both shapes that reach it are ordinary page bugs — a
+1. **The already-constructed marker throws a `TypeError`, not an `InvalidStateError`.** §3.2.3 step
+   13 says `TypeError` in as many words, and both shapes that reach it are ordinary page bugs — a
    constructor that `new`s its own class before `super()`, and one that calls `super()` twice. This
    engine threw an `InvalidStateError`, which is a `DOMException`: a page's
    `catch (e) { e instanceof TypeError }` answers false for it, and so does the corpus.
@@ -3735,16 +3741,16 @@ The element's OWN reaction queue still receives those reactions, and step 1.3's 
 reactions is empty* is what runs them in the same drain; the backup queue's later microtask finds
 the element's queue already empty. That is the spec's own arrangement, not a shortcut.
 
-### 14.4 §4.13.2 `[HTMLConstructor]` — what the construction stack makes true
+### 14.4 §3.2.3 `[HTMLConstructor]` — what the construction stack makes true
 
-With step 6 of §4.13.5 pushing, §4.13.2's two arms are finally both reachable:
+With step 6 of §4.13.5 pushing, §3.2.3's two arms are finally both reachable:
 
 - **empty stack** (`new Router()`, and DOM "create an element" step 5.1.4.1's Construct inside
-  `createElement`): steps 7.1-7.9 MAKE the element, and 7.7-7.8 set its state to "custom" and its
+  `createElement`): steps 9.1-9.10 MAKE the element, and 9.7-9.8 set its state to "custom" and its
   definition. Both, in that order — the state is what DOM's step 5.1.4 assert reads back.
-- **non-empty stack** (an upgrade): step 10 takes the last entry, step 11 throws a `TypeError` if it
-  is the already-constructed marker, step 12 performs `element.[[SetPrototypeOf]](prototype)` and
-  step 13 REPLACES the entry with the marker. This is how `super()` inside an author constructor
+- **non-empty stack** (an upgrade): step 12 takes the last entry, step 13 throws a `TypeError` if it
+  is the already-constructed marker, step 14 performs `element.[[SetPrototypeOf]](prototype)` and
+  step 15 REPLACES the entry with the marker. This is how `super()` inside an author constructor
   assigns the node the page already holds to `this`, and it is why the prototype swap the old
   upgrade did by hand is deleted rather than kept beside it.
 
@@ -3761,7 +3767,7 @@ entry either way.
 - **customized built-ins** (`extends`) — §4.13.4 refuses them with a `NotSupportedError` rather than
   registering them as autonomous. That refusal is load-bearing twice over: it is what lets
   `ce_upgradable_name` answer the insertion-steps branch off the Lexbor local name alone (so
-  inserting a `<div>` mints no wrapper), and it is what lets §4.13.2's autonomous/customized split be
+  inserting a `<div>` mints no wrapper), and it is what lets §3.2.3's autonomous/customized split be
   a `DCHECK` instead of a branch. Building customized built-ins widens all three together.
 - **scoped registries** (`CustomElementRegistry` as a constructible interface, the active custom
   element constructor map, `Element.customElementRegistry`) — the map's save/restore in §4.13.5
@@ -3782,7 +3788,7 @@ these is an ABSENT capability naming itself, not a defect in §4.13:
 - **HTML "create an element for the token" with `synchronousCustomElements` true** — the PARSER must
   CONSTRUCT a custom element it parses, not create-then-upgrade it. This engine upgrades, so a
   constructor that `new`s its own class before `super()` finds the upgrade's construction-stack entry
-  and §4.13.2 step 11 throws (`parser-uses-constructed-element.html`), and one that never calls
+  and §3.2.3 step 13 throws (`parser-uses-constructed-element.html`), and one that never calls
   `super()` reaches `this` uninitialised (`parser-fallsback-to-unknown-element.html`). Both are
   correct behaviour for the algorithm the parser is actually running; the fix is in the parser.
 - **`MutationObserver`** — `microtasks-and-constructors.html` uses it to observe the constructor's

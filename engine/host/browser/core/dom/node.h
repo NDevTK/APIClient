@@ -48,7 +48,8 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global);
 void node_install_interface(JSContext *ctx, JSValueConst global, const char *name, JSValueConst proto);
 /* THE SAME INSTALL FOR AN INTERFACE THAT HAS A REAL CONSTRUCTOR. Every interface object above shares one
    "Illegal constructor" throw because none of those interfaces declares one — but HTMLElement's IDL carries
-   `[HTMLConstructor]`, which is HTML §4.13.2, a fifteen-step algorithm that reads `Get(NewTarget, "prototype")`
+   `[HTMLConstructor]`, which is HTML §3.2.3 "HTML element constructors", a sixteen-step algorithm that reads
+   `Get(NewTarget, "prototype")`
    off the page's class. So the caller mints the machine and this hangs it where the shared throw would go,
    with the same prototype pairing and the same Node-interface inheritance. `ctor` is CONSUMED. */
 void node_install_interface_ctor(JSContext *ctx, JSValueConst global, const char *name, JSValueConst proto,

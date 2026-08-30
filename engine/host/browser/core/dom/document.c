@@ -960,7 +960,7 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         s->def = custom_elements_definition_lookup_for_element(ctx, s->el);   /* §4.9 STEP 3 */
         /* §4.9 STEPS 5.1.2-5.1.3, WHICH DO NOT EXIST YET AND ARE NOW REACHABLE. They set the surrounding
            agent's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP[C] to `registry` for the duration of the construct,
-           and that map is the only thing that tells §4.13.2's `[HTMLConstructor]` which registry the element
+           and that map is the only thing that tells §3.2.3's `[HTMLConstructor]` which registry the element
            it mints belongs to — with it absent the constructor derives the DOCUMENT's, so an element created
            through a scoped registry would answer for a registry the page never named. Until this creation
            option existed no scoped registry could reach a construct at all; now one can, so the case that
@@ -969,9 +969,9 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
                    !custom_elements_registry_is_scoped(ctx, registry),
                "DOM §4.9 steps 5.1.2-5.1.3 are unbuilt: a custom element was created through a SCOPED "
                "CustomElementRegistry, and the agent's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP is what carries "
-               "that registry into HTML §4.13.2's constructor. core/html/custom_elements.c owns it — the map "
+               "that registry into HTML §3.2.3's constructor. core/html/custom_elements.c owns it — the map "
                "is per AGENT, keyed by the definition's constructor, set around the Construct and restored "
-               "after it (steps 5.1.5-5.1.6) — and §4.13.2 step 7 must read it instead of deriving the "
+               "after it (steps 5.1.5-5.1.6) — and §3.2.3 step 3 must read it instead of deriving the "
                "current global's document's registry");
         JS_FreeValue(ctx, registry);
         if (!JS_IsObject(s->def)) {                  /* §4.9 step 6: not a custom element */
@@ -1071,14 +1071,14 @@ static const IdlStepDecl DOC_CREATE_EL_STEP = {
 
 /* DOM §4.9 "create an element internal" for THIS REALM'S document — see document.h. Separate from the member
    above because the two name different documents on purpose: `createElement` creates in its RECEIVER's
-   document (§4.5 step 5's "given this"), and HTML §4.13.2 step 7.2 creates in the CURRENT GLOBAL's. */
+   document (§4.5 step 5's "given this"), and HTML §3.2.3 step 9.2 creates in the CURRENT GLOBAL's. */
 JSValue document_create_element_internal(JSContext *ctx, const char *local, size_t len)
 {
     lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(doc_here(ctx)->dom),
                                                             (const lxb_char_t *)local, len, NULL);
 
     dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
-    DCHECK(el != NULL, "HTML §4.13.2 step 7 produced no element for a definition's local name — the definition "
+    DCHECK(el != NULL, "HTML §3.2.3 step 9 produced no element for a definition's local name — the definition "
                        "was made from a name §4.13.3 \"Core concepts\" already accepted, so Lexbor refusing it "
                        "is a disagreement about what a name is");
     return element_wrap(ctx, el);

@@ -11,9 +11,10 @@ void html_element_init(JSContext *ctx);
 /* §3.2.2 and §4's prototypes for ONE realm — declared into core/realm.h's list. */
 void html_element_install_protos(JSContext *ctx);
 void html_element_free(JSRuntime *rt);
-/* §3.2.2's HTMLElement.prototype FOR THIS REALM. OWNED: the caller frees. HTML §4.13.2 step 9 needs it — a
-   custom element constructor whose NewTarget carries a non-object `prototype` gets the interface prototype
-   object of that constructor's realm, so the answer is a realm's and never a static. */
+/* §3.2.2's HTMLElement.prototype FOR THIS REALM. OWNED: the caller frees. HTML §3.2.3 "HTML element
+   constructors" step 11 needs it — a custom element constructor whose NewTarget carries a non-object
+   `prototype` gets the interface prototype object of that constructor's realm, so the answer is a realm's
+   and never a static. */
 JSValue html_element_proto(JSContext *ctx);
 /* IS THIS VALUE AN HTMLElement — an ELEMENT node in the HTML namespace. Every node wrapper shares one class,
    so a class-id brand cannot tell a `Node` from an `HTMLElement`, and the platform's IDL says both: it is

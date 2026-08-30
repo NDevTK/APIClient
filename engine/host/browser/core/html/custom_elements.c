@@ -41,8 +41,8 @@
  * associated with a Document, a ShadowRoot or an Element, and "look up a custom element definition" takes that
  * registry as its first argument — so two `<x-a>` elements in one document, one of them inside a scoped tree,
  * upgrade with two different classes. Everything here that used to ask "the" registry now asks the NODE:
- * `try to upgrade`, `define`'s three set questions, `whenDefined`, `upgrade`, and §4.13.2's own step 3 through
- * the agent's active custom element constructor map.
+ * `try to upgrade`, `define`'s three set questions, `whenDefined`, `upgrade`, and §3.2.3 "HTML element
+ * constructors" step 3, through the agent's active custom element constructor map.
  *
  * WHAT IS HONESTLY ABSENT: customized built-ins (`extends`), which §4.13.4 rejects here rather than
  * registering as autonomous — a silently-wrong registration is worse than a named refusal. ALL THREE DOM sites
@@ -101,14 +101,15 @@ static JSAtom  g_atom_reg = JS_ATOM_NULL;
 /* The record's fields. It is engine-built and null-prototyped, so these are ordinary atoms — nothing of the
    page's is on it and a read of one runs no accessor and no Proxy. */
 static JSAtom g_atom_defs = JS_ATOM_NULL;      /* §4.13.4's custom element definition set, keyed by NAME */
-static JSAtom g_atom_order = JS_ATOM_NULL;     /* the SAME set in definition order — §4.13.2 step 4's walk */
+static JSAtom g_atom_order = JS_ATOM_NULL;     /* the SAME set in definition order — §3.2.3 step 5's walk */
 static JSAtom g_atom_whendef = JS_ATOM_NULL;   /* §4.13.4's when-defined promise map */
 static JSAtom g_atom_scoped = JS_ATOM_NULL;    /* §4.13.4's `is scoped`, set by the constructor */
 static JSAtom g_atom_docs = JS_ATOM_NULL;      /* §4.13.4's scoped document set */
 static JSAtom g_atom_defining = JS_ATOM_NULL;  /* §4.13.4's `element definition is running` */
 
-/* §4.13.2's ACTIVE FUNCTION OBJECT, for the one interface that carries `[HTMLConstructor]` today. Step 5 is
-   "the active function object must be HTMLElement" for an autonomous custom element, and that is an IDENTITY
+/* §3.2.3 "HTML element constructors"'s ACTIVE FUNCTION OBJECT, for the one interface that carries
+   `[HTMLConstructor]` today. Step 7.1 is "the active function object must be HTMLElement" for an autonomous
+   custom element, and that is an IDENTITY
    question about a PER-REALM object — a module static holding one realm's HTMLElement would answer it wrong
    for every other document, which is the defect class §3.7 names. Set by the mint below, which is what
    html_element.c calls to build the interface object. */
@@ -190,7 +191,7 @@ static JSValue ce_registry_new(JSContext *ctx, bool scoped)
     rec = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(rec), "a CustomElementRegistry's record could not be allocated");
     {
-        /* The definition set keyed by name, and THE SAME SET IN DEFINITION ORDER — because §4.13.2 step 4 looks
+        /* The definition set keyed by name, and THE SAME SET IN DEFINITION ORDER — because §3.2.3 step 5 looks
            a definition up BY ITS CONSTRUCTOR and a JS object cannot be keyed by one (it is the page's function
            object, and hanging an engine-minted symbol on it would put a slot on a page value that
            `Object.getOwnPropertySymbols` reports). Both are written by the one commit and hold the same
@@ -278,7 +279,7 @@ static JSValue ce_registry_of_document(JSContext *ctx, const lxb_dom_document_t 
  * (core/dom/document.c, core/dom/shadow_root.c). Deriving is not a stand-in for them: for every registry that
  * is NOT scoped the derived answer IS the stored one, because all four sites write the node document's
  * registry. Only a SCOPED registry is a value no derivation can produce, and that is why it must be STAMPED —
- * by `initialize`, by §4.13.2's constructor, by `adopt` (whose derivation from the PARENT is what makes an
+ * by `initialize`, by §3.2.3's constructor, by `adopt` (whose derivation from the PARENT is what makes an
  * element adopted under a scoped tree answer null rather than the new document's), and by the two sites above
  * once they can pass one. OWNED. */
 static JSValue ce_registry_of_node(JSContext *ctx, JSValueConst wrap)
@@ -393,8 +394,8 @@ static JSAtom g_atom_observed_src = JS_ATOM_NULL;  /* the class's `observedAttri
 static JSAtom g_atom_callbacks = JS_ATOM_NULL;     /* the definition's own key for step 14.4's map */
 /* §4.13.4 step 15's definition is a RECORD, and three of its fields were missing because nothing yet read
    them. `name` and `local name` are two fields and not one — they are equal for an AUTONOMOUS custom element
-   and differ for a customized built-in, and §4.13.2 step 5 tells the two apart by comparing exactly them. The
-   CONSTRUCTION STACK is what makes §4.13.5's upgrade and §4.13.2's constructor one algorithm rather than two:
+   and differ for a customized built-in, and §3.2.3 step 7 tells the two apart by comparing exactly them. The
+   CONSTRUCTION STACK is what makes §4.13.5's upgrade and §3.2.3's constructor one algorithm rather than two:
    the constructor answers with a FRESH element when the stack is empty and with the stack's last entry when an
    upgrade put one there, and that is the whole of how `super()` inside an upgrade returns the node the page
    already holds. An Array, so it forks per flow and parks with the flow that is inside the constructor. */
@@ -677,9 +678,10 @@ static void ce_array_set_len(JSContext *ctx, JSValueConst arr, uint32_t n)
 /* ---- §4.13.4's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP -------------------------------------------------------
  * "Each similar-origin window agent has an associated active custom element constructor map, which is a map of
  * constructors to CustomElementRegistry objects." It exists for ONE question, asked in exactly one place:
- * §4.13.2 step 3, where the HTML element constructor must know WHICH registry the definition it is building
- * for came from. Without it a `super()` inside a class registered in a scoped registry would look itself up in
- * the document's set and throw a TypeError — the constructor would be unreachable, which is the whole feature.
+ * §3.2.3 "HTML element constructors" step 3, where that constructor must know WHICH registry the definition
+ * it is building for came from. Without it a `super()` inside a class registered in a scoped registry would
+ * look itself up in the document's set and throw a TypeError — the constructor would be unreachable, which
+ * is the whole feature.
  *
  * IT IS A STACK, AND THAT IS THE MAP. The spec's two writers are paired — §4.13.5 steps 7.5-7.6 save
  * `previousRegistry` and set the entry, and the cleanup puts the previous value back or removes the entry —
@@ -692,8 +694,8 @@ static void ce_array_set_len(JSContext *ctx, JSValueConst arr, uint32_t n)
  * constructor carries the map state it was constructed under. */
 static JSValue g_active_ctor_map = JS_UNDEFINED;
 
-/* §4.13.2 step 3: "if map[NewTarget] exists, set registry to it". OWNED; JS_UNDEFINED when there is no entry,
-   which is the step's "otherwise". */
+/* §3.2.3 step 3: "if map[NewTarget] exists, set registry to it". OWNED; JS_UNDEFINED when there is no entry,
+   which is step 4's "otherwise". */
 static JSValue ce_active_registry(JSContext *ctx, JSValueConst ctor)
 {
     uint32_t n, i;
@@ -889,7 +891,7 @@ static bool ce_observes(JSContext *ctx, JSValueConst def, const char *local);
  * CONSTRUCTS the definition's constructor over the element already in the tree — so `class Router extends
  * HTMLElement { constructor(){ super(); this.routes = … } }` has its body executed on the node the parser
  * built, and `super()` hands back that same node because step 6 put it on the construction stack for
- * §4.13.2's steps 10-15 to find.
+ * §3.2.3's steps 12-16 to find.
  *
  * IT IS A SUB-ALGORITHM OF THE DRAIN, NOT A MACHINE OF ITS OWN. §4.13.6 invokes it from inside the reaction
  * loop and CATCHES what it throws, so a separate step machine would need its own definition, its own stage
@@ -947,14 +949,14 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         }
         if (node_is_connected(node))                                                      /* step 5 */
             ce_enqueue_args(ctx, el, def, CE_CB_CONNECTED, 0, NULL);
-        /* step 6: the element goes on the construction stack, which is how §4.13.2's `super()` returns THIS
+        /* step 6: the element goes on the construction stack, which is how §3.2.3's `super()` returns THIS
            node instead of making a second one. */
         stack = JS_GetProperty(ctx, def, g_atom_stack);
-        DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.2 construction stack");
+        DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.3 construction stack");
         ce_array_push(ctx, stack, JS_DupValue(ctx, el));
         JS_FreeValue(ctx, stack);
         /* steps 7.5-7.6: the agent's active custom element constructor map takes THIS ELEMENT'S registry for
-           the duration of the construct, because that is the only way §4.13.2 step 3 can find a definition that
+           the duration of the construct, because that is the only way §3.2.3 step 3 can find a definition that
            lives in a SCOPED registry. The push is paired with the pop below, which runs whether or not the
            construction threw — the spec's "then, perform the following steps, regardless". */
         {
@@ -1352,7 +1354,7 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
                   (st != CE_STATE_CUSTOM && st != CE_STATE_PRECUSTOMIZED && !JS_IsObject(has));
         JS_FreeValue(ctx, has);
         DCHECK(ok, "DOM §4.9 step 5.1.4.2's assert failed — an element's custom element state and its custom "
-                   "element definition disagree, which only §4.13.2 and §4.13.5 write, so one of them left a "
+                   "element definition disagree, which only §3.2.3 and §4.13.5 write, so one of them left a "
                    "state it does not have a definition for");
     }
     el = lxb_dom_interface_element(n);
@@ -1409,7 +1411,7 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
     return 0;
 }
 
-/* ---- HTML §4.13.2 the [HTMLConstructor] extended attribute ------------------------------------------------
+/* ---- HTML §3.2.3 "HTML element constructors" — the [HTMLConstructor] extended attribute ------------------
  *
  * WHY THIS IS THE PIECE EVERYTHING ELSE WAITED FOR. A page defines a component by writing
  * `class Router extends HTMLElement { constructor() { super(); … } }`, and every DOM interface object in this
@@ -1418,31 +1420,32 @@ int custom_elements_created_check(JSContext *ctx, JSValueConst result,
  * either. The whole of §4.13's lifecycle hangs off a constructor that could not run: the reactions corpus
  * opens every one of its ~290 subtests with assert_array_equals(log.types(), ['constructed']) and got [].
  *
- * IT IS A STEP MACHINE BECAUSE OF ONE READ. Step 8 is `Get(NewTarget, "prototype")` — off the page's class,
+ * IT IS A STEP MACHINE BECAUSE OF ONE READ. Step 10 is `Get(NewTarget, "prototype")` — off the page's class,
  * which may be a Proxy or carry an accessor, so it is the page's code running in the middle of a constructor.
- * Web IDL §3.7.10's "internally create a new object implementing the interface", which step 7.1 delegates to,
- * makes the SAME read. One stage rests there and the algorithm's two arms continue from it.
+ * Web IDL §3.8 "Platform objects implementing interfaces"'s "internally create a new object implementing the
+ * interface", which step 9.1 delegates to, makes the SAME read. One stage rests there and the algorithm's
+ * two arms continue from it.
  *
  * THE CONSTRUCTION STACK IS THE WHOLE MECHANISM, and it is what makes the two ways a custom element comes into
  * existence ONE algorithm. Reached with an EMPTY stack (`new Router()`, and DOM §4.9 step 5.1.4.1's Construct
  * inside createElement) the constructor MAKES the element. Reached with a NON-EMPTY one (§4.13.5's upgrade
  * pushed the already-parsed node before constructing) it hands back the node the page already holds, so
  * identity survives the upgrade — and it REPLACES that entry with an already-constructed marker, which is how
- * a constructor that calls itself a second time gets an InvalidStateError instead of a second element. */
+ * a constructor that calls itself a second time gets a TypeError instead of a second element. */
 #define HC_STAGES(X) \
-    X(HC_LOOKUP,    "HTML §4.13.2 steps 1-6 (the registry; NewTarget is not the active function object; the " \
+    X(HC_LOOKUP,    "HTML §3.2.3 steps 1-8 (the registry; NewTarget is not the active function object; the " \
                     "definition whose constructor is NewTarget; autonomous vs customized built-in)") \
-    X(HC_PROTOTYPE, "HTML §4.13.2 step 8, and Web IDL §3.7.10's same read inside step 7.1 " \
+    X(HC_PROTOTYPE, "HTML §3.2.3 step 10, and Web IDL §3.8's same read inside step 9.1 " \
                     "(Get(NewTarget, \"prototype\"))") \
-    X(HC_FINISH,    "HTML §4.13.2 steps 7.2-7.9 (a fresh element, for an empty construction stack) or steps " \
-                    "9-15 (the stack's last entry, its prototype, and the already-constructed marker)")
+    X(HC_FINISH,    "HTML §3.2.3 steps 9.2-9.10 (a fresh element, for an empty construction stack) or steps " \
+                    "11-16 (the stack's last entry, its prototype, and the already-constructed marker)")
 enum { IDL_STEP_STAGE_BASE(HC_STAGES) HC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const HC_STEPS[] = { HC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    JSValue registry; /* steps 2-3's registry (owned) — step 7.6 writes it onto the element it builds */
-    JSValue def;      /* step 4's definition (owned) */
-    JSValue proto;    /* step 8's answer (owned) */
+    JSValue registry; /* steps 2-4's registry (owned) — step 9.6 writes it onto the element it builds */
+    JSValue def;      /* step 5's definition (owned) */
+    JSValue proto;    /* step 10's answer (owned) */
 } CeHtmlCtorState;
 
 static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1453,9 +1456,9 @@ static void ce_html_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->proto);
 }
 
-/* §4.13.2 step 4: the entry in REGISTRY's definition set whose CONSTRUCTOR is `ctor`. A walk of the ordered
+/* §3.2.3 step 5: the item in REGISTRY's definition set whose CONSTRUCTOR is `ctor`. A walk of the ordered
    set, which is what the spec's own wording is; the name-keyed index cannot answer this question at all.
-   UNDEFINED when there is none, which is step 4's TypeError. OWNED. */
+   UNDEFINED when there is none, which is step 5's TypeError. OWNED. */
 static JSValue ce_definition_by_ctor(JSContext *ctx, JSValueConst registry, JSValueConst ctor)
 {
     JSValue list, found = JS_UNDEFINED;
@@ -1476,10 +1479,10 @@ static JSValue ce_definition_by_ctor(JSContext *ctx, JSValueConst registry, JSVa
     return found;
 }
 
-/* §4.13.2 step 13's ALREADY CONSTRUCTED MARKER. It is a distinct value from an element, and `true` is the one
-   thing the stack can hold that no element ever is — the stack's entries are element wrappers, which are
-   objects. Step 11 tests for it and throws InvalidStateError, which is what a constructor calling its own
-   class a second time inside itself must see. */
+/* §4.13.3 "Core concepts"'s ALREADY CONSTRUCTED MARKER, which §3.2.3 step 15 writes. It is a distinct value
+   from an element, and `true` is the one thing the stack can hold that no element ever is — the stack's
+   entries are element wrappers, which are objects. Step 13 tests for it and throws a TypeError, which is what
+   a constructor calling its own class a second time inside itself must see. */
 static bool ce_is_already_constructed(JSValueConst v) { return JS_IsBool(v); }
 
 static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1497,17 +1500,17 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         cb_result = JS_UNDEFINED;
         s->registry = s->def = s->proto = JS_UNDEFINED;
         /* Web IDL: an interface object is not callable. `HTMLElement()` with no `new` is a TypeError before
-           §4.13.2 step 1, which JS_CFUNC_step_ctor states by delivering an UNDEFINED receiver. */
+           §3.2.3 step 1, which JS_CFUNC_step_ctor states by delivering an UNDEFINED receiver. */
         if (JS_IsUndefined(ntgt)) {
             JS_ThrowTypeError(ctx, "constructor HTMLElement requires 'new'");
             return -1;
         }
-        /* step 2: NewTarget must not be the active function object. `new HTMLElement()` builds nothing — the
+        /* step 1: NewTarget must not be the active function object. `new HTMLElement()` builds nothing — the
            element a custom element constructor produces is the DEFINITION's, and there is no definition whose
            constructor is HTMLElement itself. */
         active = realm_value_get(ctx, g_html_ctor_slot);
-        DCHECK(JS_IsObject(active), "HTML §4.13.2 ran in a realm whose HTMLElement interface object was never "
-                                    "recorded — step 5's \"the active function object is HTMLElement\" is an "
+        DCHECK(JS_IsObject(active), "HTML §3.2.3 ran in a realm whose HTMLElement interface object was never "
+                                    "recorded — step 7.1's \"the active function object is HTMLElement\" is an "
                                     "identity question and there is nothing to compare against");
         if (JS_VALUE_GET_PTR(ntgt) == JS_VALUE_GET_PTR(active)) {
             JS_FreeValue(ctx, active);
@@ -1515,31 +1518,31 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             return -1;
         }
         DCHECK(JS_VALUE_GET_PTR(hdr->func_obj) == JS_VALUE_GET_PTR(active),
-               "HTML §4.13.2 ran with an active function object that is not HTMLElement — the customized "
-               "built-in half of steps 5-6 needs the interface's valid local names, and §4.13.4 refuses "
+               "HTML §3.2.3 ran with an active function object that is not HTMLElement — the customized "
+               "built-in half of steps 7-8 needs the interface's valid local names, and §4.13.4 refuses "
                "`extends` until it exists, so no other interface may carry this machine yet");
         JS_FreeValue(ctx, active);
-        /* STEPS 2-4: THE REGISTRY FIRST, AND THE DEFINITION OUT OF IT. Step 2 is the agent's active custom
-           element constructor map — set by §4.13.5 step 7.6 while an upgrade is constructing, and by DOM §4.9
-           step 5.1.3 while `create an element` is — and step 3 falls back to "the current global object's
+        /* STEPS 2-5: THE REGISTRY FIRST, AND THE DEFINITION OUT OF IT. Step 3 is the agent's active custom
+           element constructor map — set by §4.13.5 step 9 while an upgrade is constructing, and by DOM §4.9
+           step 5.1.3 while `create an element` is — and step 4 falls back to "the current global object's
            associated Document's custom element registry" for a bare `new Router()`. Reading the document's set
            unconditionally, which is what this did, made every class registered in a SCOPED registry throw a
            TypeError from its own `super()`: the definition is real, it is just not in the set that was asked. */
         {
-            JSValue reg = ce_active_registry(ctx, ntgt);                          /* step 2 */
+            JSValue reg = ce_active_registry(ctx, ntgt);                          /* step 3 */
 
             if (!JS_IsObject(reg)) {
                 JS_FreeValue(ctx, reg);
-                reg = ce_document_registry(ctx);                                  /* step 3 */
+                reg = ce_document_registry(ctx);                                  /* step 4 */
             }
             s->registry = reg;
         }
-        s->def = ce_definition_by_ctor(ctx, s->registry, ntgt);                   /* step 4 */
+        s->def = ce_definition_by_ctor(ctx, s->registry, ntgt);                   /* step 5 */
         if (!JS_IsObject(s->def)) {
             JS_ThrowTypeError(ctx, "this constructor is not a defined custom element constructor");
             return -1;
         }
-        /* steps 5-6: autonomous (name == local name) requires the active function object to be HTMLElement,
+        /* steps 7-8: autonomous (name == local name) requires the active function object to be HTMLElement,
            which the assert above already established. A definition whose two names DIFFER is a customized
            built-in, and §4.13.4 refuses to make one, so reaching here with one is a definition this component
            did not commit. */
@@ -1549,22 +1552,22 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             bool autonomous = JS_VALUE_GET_PTR(nm) == JS_VALUE_GET_PTR(lo) || JS_IsUndefined(lo);
             JS_FreeValue(ctx, nm);
             JS_FreeValue(ctx, lo);
-            DCHECK(autonomous, "HTML §4.13.2 reached a definition whose name and local name differ — a "
+            DCHECK(autonomous, "HTML §3.2.3 reached a definition whose name and local name differ — a "
                                "customized built-in, which §4.13.4 does not register");
         }
         hdr->stage = HC_PROTOTYPE;
     }
     if (hdr->stage == HC_PROTOTYPE) {
-        /* step 8 / Web IDL §3.7.10: the page's class may be a Proxy, so this is a request and not a read. */
+        /* step 10 / Web IDL §3.8: the page's class may be a Proxy, so this is a request and not a read. */
         r = step_getprop_run(ctx, hdr, ntgt, g_atom_prototype, cb_result, &s->proto, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;
         if (r < 0) return -1;
         hdr->stage = HC_FINISH;
     }
-    DCHECK(hdr->stage == HC_FINISH, "HTML §4.13.2 resumed into a stage it does not have");
+    DCHECK(hdr->stage == HC_FINISH, "HTML §3.2.3 resumed into a stage it does not have");
     JS_FreeValue(ctx, cb_result);
-    /* step 9: a prototype that is not an Object is the interface prototype object of NewTarget's function
+    /* step 11: a prototype that is not an Object is the interface prototype object of NewTarget's function
        realm. HTMLElement's own is this realm's, which is what a cross-realm NewTarget makes wrong and what
        makes that a `[S]`-free but realm-sensitive read — the same question §3.7 answers everywhere else. */
     if (!JS_IsObject(s->proto)) {
@@ -1576,10 +1579,10 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         uint32_t n = ce_array_len(ctx, stack);
         JSValue el;
 
-        DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.2 construction stack");
+        DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.3 construction stack");
         if (n == 0) {
-            /* steps 7.1-7.9: the constructor MAKES the element. Its local name is the definition's, its
-               document is the CURRENT GLOBAL's (step 7.2, not any receiver's), its state is "custom" and its
+            /* steps 9.1-9.10: the constructor MAKES the element. Its local name is the definition's, its
+               document is the CURRENT GLOBAL's (step 9.2, not any receiver's), its state is "custom" and its
                definition is this one — which is what the definition slot on the wrapper means. */
             JSValue lo = JS_GetProperty(ctx, s->def, g_atom_local);
             size_t len = 0;
@@ -1592,31 +1595,31 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_FreeCString(ctx, local);
             if (JS_IsException(el)) return -1;
             JS_SetPrototype(ctx, el, s->proto);
-            /* step 7.6: "set element's custom element registry to registry" — the one steps 2-3 resolved, so an
+            /* step 9.6: "set element's custom element registry to registry" — the one steps 2-4 resolved, so an
                element built by `new Router()` where Router lives in a scoped registry carries THAT registry and
                keeps answering out of it for every later lookup. */
             ce_node_set_registry(ctx, el, s->registry);
-            /* steps 7.7-7.8: custom element state "custom" and the definition. Both, and in that order — the
+            /* steps 9.7-9.8: custom element state "custom" and the definition. Both, and in that order — the
                state is what DOM §4.9 step 5.1.4's assert reads back and what a later insertion branches on. */
             ce_set_state(ctx, el, CE_STATE_CUSTOM);
             JS_DefinePropertyValue(ctx, el, g_atom_def, JS_DupValue(ctx, s->def), CE_SLOT_FLAGS);
             *presult = el;
             return 0;
         }
-        /* steps 10-15: the element §4.13.5 pushed. */
+        /* steps 12-16: the element §4.13.5 pushed. */
         el = JS_GetPropertyUint32(ctx, stack, n - 1);
-        if (ce_is_already_constructed(el)) {          /* step 11 */
+        if (ce_is_already_constructed(el)) {          /* step 13 */
             JS_FreeValue(ctx, el);
             JS_FreeValue(ctx, stack);
-            /* A TypeError, which is what §4.13.2 step 11 says and what the corpus asserts — it was an
+            /* A TypeError, which is what §3.2.3 step 13 says and what the corpus asserts — it was an
                InvalidStateError, a DOMException a page's `catch (e) { e instanceof TypeError }` answers false
                for. The two shapes that reach it are a constructor that news its own class before `super()` and
                one that calls `super()` twice. */
             JS_ThrowTypeError(ctx, "this custom element constructor already ran for the element being upgraded");
             return -1;
         }
-        JS_SetPrototype(ctx, el, s->proto);                            /* step 12 */
-        JS_SetPropertyUint32(ctx, stack, n - 1, JS_TRUE);              /* step 13: the marker */
+        JS_SetPrototype(ctx, el, s->proto);                            /* step 14 */
+        JS_SetPropertyUint32(ctx, stack, n - 1, JS_TRUE);              /* step 15: the marker */
         JS_FreeValue(ctx, stack);
         *presult = el;
         return 0;
@@ -1625,7 +1628,7 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
 static const IdlStepDecl CE_HTML_CTOR_STEP = {
     js_ce_html_ctor, sizeof(CeHtmlCtorState), ce_html_ctor_visit, NULL,
-    "HTML §4.13.2 the HTMLElement constructor", HC_STEPS
+    "HTML §3.2.3 the HTMLElement constructor", HC_STEPS
 };
 static int g_id_html_ctor = -1;
 
@@ -1633,10 +1636,10 @@ JSValue custom_elements_html_constructor(JSContext *ctx)
 {
     JSValue ctor;
 
-    DCHECK(g_ready, "HTMLElement's interface object was minted before custom_elements_init declared §4.13.2");
+    DCHECK(g_ready, "HTMLElement's interface object was minted before custom_elements_init declared §3.2.3");
     ctor = idl_step_constructor(ctx, "HTMLElement", 0, g_id_html_ctor);
     CHECK(!JS_IsException(ctor), "the HTMLElement interface object could not be allocated");
-    /* §4.13.2 step 5's IDENTITY, recorded for THIS realm as the object is made. Asking the global for
+    /* §3.2.3 step 7.1's IDENTITY, recorded for THIS realm as the object is made. Asking the global for
        `HTMLElement` instead would read a property the page can reassign, and `window.HTMLElement = X` must not
        change which constructor is legal to extend. */
     realm_value_set(ctx, g_html_ctor_slot, JS_DupValue(ctx, ctor));
@@ -2445,17 +2448,17 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueCo
                                     "class whose lifecycle code never runs");
         JS_SetProperty(ctx, def, g_atom_ctor, JS_DupValue(ctx, argv[1]));
         /* §4.13.4 step 15's NAME and LOCAL NAME. Two fields, equal for an autonomous custom element and
-           different for a customized built-in — §4.13.2 step 5 tells them apart by comparing exactly these,
+           different for a customized built-in — §3.2.3 step 7 tells them apart by comparing exactly these,
            so folding them into one would make every definition look autonomous the moment `extends` lands.
            The SAME string value in both, so the identity comparison there is the answer and not a strcmp. */
         JS_SetProperty(ctx, def, g_atom_name, JS_DupValue(ctx, argv[0]));
         JS_SetProperty(ctx, def, g_atom_local, JS_DupValue(ctx, argv[0]));
-        /* §4.13.2's CONSTRUCTION STACK, empty. It is per definition and it is an Array, so it forks with the
+        /* §4.13.3's CONSTRUCTION STACK, empty. It is per definition and it is an Array, so it forks with the
            flow that is inside a constructor and parks with it — a C list would revert its head POINTER on a
            context switch and leave the element being upgraded reachable from nothing. */
         {
             JSValue stack = JS_NewArray(ctx);
-            CHECK(!JS_IsException(stack), "a §4.13.2 construction stack could not be allocated");
+            CHECK(!JS_IsException(stack), "a §4.13.3 construction stack could not be allocated");
             JS_SetProperty(ctx, def, g_atom_stack, stack);
         }
         /* The class's `prototype` is what the upgrade installs. Read ONCE, at step 14.1, so a page that
@@ -2473,7 +2476,7 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueCo
         {
             JSValue defs = ce_reg_field(ctx, registry, g_atom_defs);
             JSValue list = ce_reg_field(ctx, registry, g_atom_order);
-            /* ONE SET, TWO READINGS: the name index the lookups use, and the definition ORDER §4.13.2 step 4
+            /* ONE SET, TWO READINGS: the name index the lookups use, and the definition ORDER §3.2.3 step 5
                walks to answer "which definition has this constructor". Written together, here, because a
                definition in one and not the other is a definition half the platform can see. */
             JS_SetProperty(ctx, defs, a, JS_DupValue(ctx, def));
@@ -2890,7 +2893,7 @@ void custom_elements_init(JSContext *ctx)
           g_atom_docs != JS_ATOM_NULL && g_atom_defining != JS_ATOM_NULL,
           "a §4.13.4 CustomElementRegistry field name could not be interned");
     g_registry_slot = realm_value_declare(ctx, "§4.13.4 the Document's CustomElementRegistry");
-    g_html_ctor_slot = realm_value_declare(ctx, "§4.13.2's active function object (HTMLElement)");
+    g_html_ctor_slot = realm_value_declare(ctx, "§3.2.3's active function object (HTMLElement)");
     /* §4.13.4's active custom element constructor map is the AGENT's, not a realm's — a class defined in one
        realm's scoped registry and constructed from another must find the same entry. */
     g_active_ctor_map = JS_NewArray(ctx);
@@ -2940,7 +2943,7 @@ void custom_elements_init(JSContext *ctx)
         idl_iface_brand(node_class_id());
     }
     realm_declare_intrinsic(custom_elements_install_proto);
-    /* §4.13.2, DECLARED ONCE PER AGENT and minted per realm: HTMLElement is a per-realm interface object, so a
+    /* §3.2.3, DECLARED ONCE PER AGENT and minted per realm: HTMLElement is a per-realm interface object, so a
        declaration made where it is installed would mint the member again for every document. */
     g_id_html_ctor = idl_method_id_step(ctx, NULL, 0, NULL, 0, &CE_HTML_CTOR_STEP, 0);
     g_ready = 1;

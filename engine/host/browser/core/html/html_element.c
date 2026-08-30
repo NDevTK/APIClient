@@ -634,8 +634,8 @@ void html_element_install_protos(JSContext *ctx)
     /* The six §3.2.6/§6.8 global attributes whose IDL attribute COMPUTES a value from the tree rather than
        mirroring one attribute — installed onto THIS realm's prototype like every other member. */
     global_attributes_install(ctx, html_p);
-    /* §4.13.2 `ElementInternals attachInternals()` — an HTMLElement member, installed on THIS realm's
-       prototype like every other. */
+    /* §4.13.7 "Element internals"'s `ElementInternals attachInternals()` — an HTMLElement member, installed
+       on THIS realm's prototype like every other. */
     element_internals_install_html_members(ctx, html_p);
     /* §6.6.6's `HTMLOrSVGOrMathMLElement` members — `focus(options)` and `blur()`, the two entry points of
        §6.6.4's processing model, and §6.6.3's `tabIndex`. They were one body returning undefined; they are now
@@ -798,9 +798,10 @@ void html_element_install(JSContext *ctx, JSValueConst global)
     hp = JS_GetClassProto(ctx, g_html_class);
     up = JS_GetClassProto(ctx, g_unknown_class);
     DCHECK(!JS_IsNull(hp), "the HTML interface objects were installed in a realm with no HTMLElement.prototype");
-    /* §4.13.2: HTMLElement's IDL carries `[HTMLConstructor]`, which is a real fifteen-step algorithm and not
-       the shared "Illegal constructor" throw — a page's `class X extends HTMLElement { constructor(){super()} }`
-       reaches it through super(), and every custom element in the platform is built by it. The machine belongs
+    /* §3.2.3 "HTML element constructors": HTMLElement's IDL carries `[HTMLConstructor]`, a real sixteen-step
+       algorithm and not the shared "Illegal constructor" throw — a page's
+       `class X extends HTMLElement { constructor(){super()} }` reaches it through super(), and every custom
+       element in the platform is built by it. The machine belongs
        to the custom-elements component because it reads that component's definition set and construction
        stack; what belongs here is WHICH interface carries it. */
     node_install_interface_ctor(ctx, global, "HTMLElement", hp, custom_elements_html_constructor(ctx));
