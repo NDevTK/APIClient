@@ -1304,6 +1304,36 @@ function renderEngineRuns() {
       : `frontier order over ${esc(String(m.wfq.members))} flows: `
         + Object.keys(m.wfq).filter((k) => k !== "members")
                 .map((k) => esc(k) + " " + esc(String(m.wfq[k]))).join(" · ");
+    /* AND WHAT THAT ORDER WAS DENOMINATED IN — solver/quantum.h's `_quantum`, relayed whole by bridge.js and
+       rendered HERE, immediately under the order, because it is the fact that decides whether the order above
+       may be compared with another run's at all. A person reading this panel is doing exactly one thing with
+       two rows of it: comparing them. On the host this extension runs — the engine's realm is an opaque origin
+       and so is never crossOriginIsolated, which is what denies it the watchdog thread a CPU-clocked slice
+       would need — solver/engine.c's `flow_age_running` charge is billed in WALL TIME, and that charge is a
+       comparison BETWEEN flows, so a descheduling the OS chose lands on whichever flow was running and moves
+       its rank alone. Two runs of ONE build over ONE page then take different frontier orders. Without this
+       sentence the only available reading of that is "the engine changed", which is the one thing it is not.
+       IT IS NOT A CENSUS ROW AND IS NOT RENDERED AS ONE. The three below are readings of an instant and are
+       rendered generically from whatever rows they carry; this is three NAMED facts about the host, one of
+       which is a string and one a boolean, so it is read by name — and it is written as a SENTENCE rather than
+       `isCpu false`, because the consequence is what a reader needs and the field name is not it.
+       ONLY THE CAVEAT IS LOUD. `isCpu` true is the positive statement that none of this applies, said in one
+       clause; a warning printed on every run is a warning nobody reads, which is the same reason
+       engine/build.mjs marks its verdict `WALL-SLICED` only where it is false. */
+    DCHECK(m.quantum && typeof m.quantum === "object" && typeof m.quantum.isCpu === "boolean"
+           && typeof m.quantum.measure === "string" && typeof m.quantum.sliceMs === "number",
+           "an engine run record reached the popup with no `quantum` denomination — solver/quantum.c composes " +
+           "it into every document result.c builds and bridge.js asserts its three fields before relaying it " +
+           "whole, so a record that has an @RESULT document and no `quantum` is that relay broken, and every " +
+           "frontier order on this panel becomes a number nobody can tell from another run's");
+    const denom = `<span class="deep-label">`
+      + `scheduler slice ${esc(String(m.quantum.sliceMs))} ms, billed in ${esc(m.quantum.measure)}`
+      + (m.quantum.isCpu
+          ? ` — real thread CPU, so this run's order is invariant to what else the machine was doing`
+          : ` — NOT CPU: the aging charge that produced the order above bills wall time to whichever flow the `
+            + `OS left running, so two runs of THIS SAME build over this same page take different orders. `
+            + `Compare two runs of one build before reading a difference between two builds.`)
+      + `</span>`;
     /* AND THE THREE SUBSYSTEMS UNDER THE ORDER — solver/result.c's `_cold`, `_heap`, `_swap` and decide.c's
        `_forkAt`, relayed whole by bridge.js. Same defect as `_wfq` and four times the size: each was printed
        ONLY by the smoke driver's loop, which the extension's ABI never enters, so what the pager is holding,
@@ -1340,7 +1370,7 @@ function renderEngineRuns() {
       ? `<strong>still running</strong> — snapshot, not a total; ${esc(String(m.resumed))} resumed · so far: `
       : `run complete · ${esc(String(m.resumed))} resumed · `;
     return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
-         + `</span><span class="deep-label">${order}</span>` + censusRows.join("") + `</div>`;
+         + `</span><span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");
   const live = engineRuns.filter((m) => m.run === "partial").length;
   return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked `

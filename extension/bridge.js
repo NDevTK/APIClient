@@ -212,6 +212,49 @@ function assertResultDocument(r) {
            "the engine's WFQ census carries a non-finite `" + k + "` — every row of it is a count, a service " +
            "notch or a weight, and a NaN reaching a reader makes every comparison against it false, which is " +
            "the same silent failure §engineRecordFacts asserts one level up for the Level-1 weight");
+  /* AND WHAT THAT ORDER WAS DENOMINATED IN — solver/quantum.h's `_quantum`, and it is asserted HERE, between
+     the order and the four censuses, because that is what it qualifies rather than a place in a list.
+     IT IS NOT A CENSUS AND MUST NOT JOIN THEIR LOOP, WHICH IS THE WHOLE REASON IT IS THREE NAMED ASSERTS. Every
+     row of `_wfq`, `_cold`, `_heap`, `_swap` and `_forkAt` is a READING OF AN INSTANT and is checked by one
+     generic "is a finite number" pass, which is right for them and would be the defect here: `_quantum` is a
+     constant property of the HOST and the BUILD, its `measure` is a STRING and its `isCpu` is a BOOLEAN, and a
+     loop that only knows how to say "number" would either reject the object or force the producer to spell a
+     yes/no as 0/1 — at which point it silently becomes a sixth census and the one fact it carries is gone.
+     WHY THIS ZONE NEEDS IT AT ALL, WHICH IS NOT DIAGNOSTIC POLISH. On a host with no CPU clock — and the
+     engine's own realm is exactly that host, an opaque origin that is never crossOriginIsolated, so it cannot
+     hand a watchdog thread the shared memory it would need — the cooperative slice AND solver/engine.c's
+     `flow_age_running` charge are billed in WALL TIME. That charge is a comparison BETWEEN flows, so a
+     descheduling the OS chose lands on whichever flow was running, moves its rank alone and re-picks: two runs
+     of ONE build over ONE page take different frontier orders, and every census under that order differs with
+     nothing about the tree differing. A person comparing two runs in the popup would read that as a change in
+     the engine. §NO BOUNDS and §scheduler's razor forbid both cures (drop the quantum and it drives to
+     completion; bound the slice in steps and it is a cap), so the variance stays and the document NAMES it.
+     THREE FIELDS AND ALL THREE ASSERTED, because each answers a question the other two cannot: `isCpu` is
+     whether the caveat applies at all, `measure` is what it was billed in instead, and `sliceMs` is how coarse
+     the slicing was. Never defaulted — `quantum_json` reads nothing but compile-time constants of its own
+     branch, so there is no instant and no host at which it is legitimately absent, and a missing one has the
+     same two causes in the same order as a missing counter above. */
+  DCHECK(r._quantum && typeof r._quantum === "object" && !Array.isArray(r._quantum),
+         "the engine's result document carries no _quantum — solver/quantum.c's quantum_json composes it into " +
+         "every document result.c builds, partials included, and it is what says whether the `_wfq` ordering " +
+         "above may be compared with another run's at all. Its absence has the same two causes as a missing " +
+         "counter and in the same order: check first whether the loaded wasm predates this reader " +
+         "(extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed " +
+         "under this seam. NEVER SOFTEN IT INTO A DEFAULT — the default a reader would reach for is `isCpu` " +
+         "true, which is the one answer that is false on the host this extension actually runs");
+  DCHECK(typeof r._quantum.measure === "string" && r._quantum.measure !== "",
+         "the engine's _quantum carries no `measure` string — it is what the scheduler's slice and the WFQ's " +
+         "aging charge are billed in, stated by the component that owns the fact so that no message anywhere " +
+         "restates it and goes stale. An empty one is that composer emitting a field it cannot answer");
+  DCHECK(typeof r._quantum.isCpu === "boolean",
+         "the engine's _quantum carries no boolean `isCpu` — it is a yes/no about the HOST and the producer " +
+         "always knows it, so an absent one is a broken contract and never a false. It is deliberately not a " +
+         "0/1: a number here would pass the generic census check below, and the whole point of this field is " +
+         "that it is not a census reading and must be read by name");
+  DCHECK(typeof r._quantum.sliceMs === "number" && Number.isFinite(r._quantum.sliceMs) && r._quantum.sliceMs > 0,
+         "the engine's _quantum carries no positive `sliceMs` — it is solver/engine.h's ENGINE_QUANTUM_MS, a " +
+         "compile-time constant of the artifact, so a zero or a NaN is the composer having lost it rather " +
+         "than a host that shares its thread infinitely finely");
   /* THE THREE SUBSYSTEM CENSUSES AND THE FRONTIER'S PROVENANCE — solver/result.h's `_cold`, `_heap`, `_swap`
      and solver/decide.h's `_forkAt`. They arrive for the reason `_wfq` did and it is the same defect at four
      times the size: every one of them was printed ONLY by `run_scheduler`, the smoke driver's loop, which
@@ -416,6 +459,16 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            never across: a byte figure beside a switch count beside a realm count is three different questions
            and folding them invites exactly the comparison none of them supports. */
         cold: result._cold, heap: result._heap, swap: result._swap, forkAt: result._forkAt,
+        /* AND WHAT THE ORDER ABOVE WAS DENOMINATED IN — solver/quantum.h's `_quantum`, relayed whole beside
+           the readings it qualifies. It is the ONE field on this record that is neither a total over the run
+           nor a reading of an instant: it is a property of the HOST, constant for the session, and it is here
+           because without it the `wfq` order and every census under it are two numbers a reader cannot
+           compare. On the host this extension actually runs — an opaque origin that is never
+           crossOriginIsolated, so the engine can never be handed a watchdog thread — the WFQ's aging charge is
+           billed in WALL TIME, and that charge is a comparison BETWEEN flows, so the OS's descheduling decides
+           part of the frontier's order. Two runs of one build over one page then differ with nothing about the
+           tree differing, and the popup renders this beside the order so nobody reads that as a change. */
+        quantum: result._quantum,
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.

@@ -8,6 +8,7 @@
 #include "quickjs.h"           /* JS_RequestFlowYield — the one call the edge makes */
 
 #include <stdio.h>             /* the one line this component says out loud — see quantum_announce */
+#include <stdlib.h>            /* the composer's buffer — see quantum_json */
 #include <time.h>
 #include <string.h>
 
@@ -43,29 +44,92 @@
  * construction, and a host that declines this edge (wpt_runner.c drives flows under its own preempt policy)
  * announces nothing and prints no census either — an absence that is the same positive statement on both.
  *
- * RESIDUAL — NARROWER THAN THE RULE IT SERVES, AND NAMED RATHER THAN CRASHED ON BECAUSE THIS IS CORRECT FOR
- * WHAT IT COVERS. NOT COVERED: the SHIPPED path. `run_scheduler`'s census lines are a smoke-only stream, and
- * §Testing's "measure what the shipped path writes" is why `result.h` moved the four censuses onto the RESULT
- * DOCUMENT — where `_cold`, `_swap`, `_heap` and `_wfq` cross the ABI and the trusted zone asserts them field
- * for field. This line crosses too (renderer.html drains the engine's stdout into every reply) and bridge.js
- * IGNORES it, so on the extension the denomination is written and unread. NEXT DIFF: `_quantum`
- * (`{measure, isCpu, sliceMs}`) on `result_json` beside the other censuses, with `extension/check.js`
- * asserting its presence and shape exactly as it asserts theirs, and this printf then reads the same composer
- * the way `run_scheduler` reads the census composers. ABSENCE SHOWS AS: two `_wfq` orderings compared across
- * runs of one revision on a real page, with nothing in either document saying the aging charge that produced
- * them was billed in wall time — the same unreadable difference this diff just fixed for the smoke, one
- * surface over, and the surface where a person actually looks at a frontier. */
+ * AND A LINE WAS ONLY EVER HALF OF IT, WHICH THE RESIDUAL THAT STOOD HERE NAMED AND THIS NOW BUILDS. A line is
+ * the output of a host whose output IS lines; the SHIPPED path's output is a DOCUMENT. `result.h` moved the
+ * four censuses onto it for that reason, and the denomination belongs there for the same one and with a
+ * stronger claim than any of them: it is not a reading of the run at all, it is the property that decides how
+ * every census BELOW it may be compared. So quantum_json() is the fact, this printf is one emission of it, and
+ * solver/result.c's `_quantum` is the other — one composer, two emission sites, the same bytes, which is the
+ * idiom result.h already states for `result_cold_json` and its two neighbours.
+ *
+ * THE TWO EMISSIONS ARE NOT INTERCHANGEABLE AND EACH SAYS SOMETHING THE OTHER CANNOT. The LINE reports what a
+ * STAGE DID: a host that opened no slice prints none, which is why engine/build.mjs can treat `@COLD` with no
+ * `@QUANTUM` as a broken contract. The FIELD reports what this HOST IS, so it is on every document a host
+ * composes whether or not a slice was ever opened — quantum_json() reads nothing but compile-time constants of
+ * this branch. A reader that confused the two would take the absence of a line as the absence of a
+ * denomination, which is the one thing that is never true.
+ *
+ * WHAT REMAINS UNCOVERED IS NAMED WHERE IT IS DECIDED, NOT HERE. The one thing this component can be wrong
+ * about is now the STRING, and the DCHECK in quantum_json says so at the composer. */
 static int g_announced;
 static void quantum_announce(void)
 {
+    char *j;
+
     if (g_announced) return;
     g_announced = 1;
-    /* ONE MARKER, ONE LINE — build.mjs matches `^@QUANTUM ` exactly as it matches the censuses. The two fields
-       a reader PARSES come first and the free-form measure string is LAST, so an edit to the prose inside
-       quantum_measure() cannot move a parsed field. */
-    printf("@QUANTUM cpu=%d slice=%dms measure=%s\n",
-           quantum_measure_is_cpu(), (int)ENGINE_QUANTUM_MS, quantum_measure());
+    /* ONE MARKER, ONE LINE, AND THE PAYLOAD IS THE COMPOSER'S — build.mjs matches `^@QUANTUM \{.*\}$` and
+       JSON.parses it exactly as `lastTwo` does for `@COLD`, `@HEAP` and `@SWAP`, so there is one grammar on
+       this seam instead of a bespoke `cpu=… slice=…ms measure=…` that only this marker spoke. That spelling
+       also put the free-form measure string LAST so an edit to its prose could not move a parsed field; a JSON
+       object has no positions to protect, which is the better answer to the same worry.
+       AN OOM HERE IS FATAL RATHER THAN SILENT, and the CHECK is the right macro in both builds: this line is
+       what a consumer's contract is checked against, so a run that swallowed the allocation and printed
+       nothing would present as the writer having been removed. */
+    j = quantum_json();
+    CHECK(j != NULL, "quantum: the denomination document could not be allocated at the first slice — the "
+                     "announce is what engine/build.mjs checks the frontier census against, so a run that "
+                     "silently skipped it would read as this writer having been compiled out");
+    printf("@QUANTUM %s\n", j);
     fflush(stdout);
+    free(j);
+}
+
+/* THE THREE FACTS AS ONE DOCUMENT — quantum.h says why it lives in this file and why it is not a census.
+   THE ARITHMETIC, DONE FROM THE FORMAT STRING RATHER THAN ESTIMATED, which is result.c's rule for every
+   composer and holds here for the same reason: a truncation does not lose a digit, it loses the closing brace,
+   and the document that embeds this one then will not parse. The format's fixed bytes are 34 without its
+   conversion specifiers; the widest forms of the two it renders itself are 5 (`false`) and 11 (an int's full
+   decimal with sign). 34 + 5 + 11 + 1 = 51, plus the measure string, whose length is ADDED rather than bounded
+   — the two literals differ per host branch by hundreds of bytes and a fixed buffer would be a constant chosen
+   for whichever branch was edited last.
+   `isCpu` IS A JSON BOOLEAN AND NOT A 0/1, WHICH IS A CONTRACT AND NOT A SPELLING. Every row of every census
+   on this seam is a number, and the consumers assert exactly that of them in one generic loop; a numeric
+   `isCpu` would pass that loop and quietly become a fifth census, when what it states is a yes/no about the
+   host. Typed as a boolean it CANNOT be folded in, so extension/bridge.js has to assert it by name — which is
+   what a reader of the frontier order actually needs to have been told.
+   AND THE ONE THING THAT COULD BE WRONG IS ASSERTED AT ITS ORIGIN. `measure` is interpolated into a JSON
+   string, and the two values it can take are string literals in THIS file — so an edit that put a quote, a
+   backslash or a control character in one would emit a document that does not parse, and the failure would
+   surface as a lost finding set in the trusted zone with nothing pointing back here. Bytes >= 0x80 are not
+   checked because they need no escape: JSON is UTF-8 and both literals carry em dashes today. */
+char *quantum_json(void)
+{
+    const char *measure = quantum_measure();
+    size_t n = strlen(measure) + 51;
+    char *out;
+    int m;
+
+#if APICLIENT_DEV
+    {
+        const unsigned char *p;
+        for (p = (const unsigned char *)measure; *p; p++)
+            DCHECK(*p != '"' && *p != '\\' && *p >= 0x20,
+                   "quantum_measure() returned a string that is not a bare JSON string body — this composer "
+                   "interpolates it without escaping because both of its values are literals in this file, so "
+                   "a quote, a backslash or a control character added to one emits a result document the "
+                   "trusted zone cannot parse and every finding for that page is discarded");
+    }
+#endif
+    out = malloc(n);
+    if (!out) return NULL;
+    m = snprintf(out, n, "{\"measure\":\"%s\",\"isCpu\":%s,\"sliceMs\":%d}",
+                 measure, quantum_measure_is_cpu() ? "true" : "false", (int)ENGINE_QUANTUM_MS);
+    DCHECK(m > 0 && (size_t)m < n,
+           "the quantum denomination did not fit its buffer — a truncation here does not lose a digit, it "
+           "loses the closing brace, so both the `@QUANTUM` line and the result document that embeds this "
+           "will not parse. Re-do the byte count above from the format string rather than widening it by eye");
+    return out;
 }
 
 /* ── EMSCRIPTEN: no CPU clock, no asynchronous edge ────────────────────────────────────────────────────────

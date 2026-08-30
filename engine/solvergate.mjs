@@ -700,6 +700,26 @@ const SURFACES = new Map([
   ["securitySinks",  { shape: "array", accumulates: true }],
   ["pageErrors",     { shape: "array", accumulates: true }],
   ["_wfq",           { shape: "map",   accumulates: false }],
+  /* `_quantum` IS COMPARED, AND IT IS THE ONE FIELD ON THIS DOCUMENT FOR WHICH THAT IS FREE BY CONSTRUCTION
+     RATHER THAN BY ARGUMENT. The four censuses are dropped because each is a READING OF AN INSTANT whose value
+     the schedule chooses — hold any row of them invariant and every schedule fails against the reference on
+     healthy code. `_wfq` escapes that by an argument about WHICH instant (the terminal one, reached by
+     draining or parking, so `{members:0}` under every schedule). This one needs neither argument: it is not a
+     reading at all. solver/quantum.c's `quantum_json` renders `ENGINE_QUANTUM_MS` and two string literals of
+     its own branch, all three compile-time constants of the artifact — so no instant, no allocation, no fork
+     order and no reply policy can move it, and there is no schedule under which the reference and the subject
+     could legitimately differ.
+     AND A MISMATCH WOULD BE A REAL FINDING, WHICH IS WHY DROPPING IT WOULD COST SOMETHING. This gate's whole
+     claim is that the SCHEDULE decides nothing; every schedule here is the same wasm driven through the same
+     ABI in the same process, so two of them disagreeing about the denomination is not a solver difference at
+     all — it is two different programs or two different hosts being compared while the report says one
+     revision was measured. That is precisely the confident false comparison the field was added to prevent,
+     arriving in the instrument built to prevent it. engine/build.mjs already throws when two `@QUANTUM` lines
+     in ONE run disagree, for the identical reason; this is that check on the surface the shipped path writes.
+     `accumulates: false` for `_wfq`'s reason and one better: it is not emitted output that a session boundary
+     could split, and the `park` schedule's two sessions are one binary on one host, so both answer the same
+     three constants and there is nothing for the fold to reconcile. */
+  ["_quantum",       { shape: "map",   accumulates: false }],
 ]);
 const shapeOk = (v, d) => d.shape === "array" ? Array.isArray(v)
                                               : (!!v && typeof v === "object" && !Array.isArray(v));

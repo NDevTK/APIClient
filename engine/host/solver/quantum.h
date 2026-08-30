@@ -67,8 +67,8 @@
  *         this host's slice is bounded by the wall clock read at whichever of those the flow next reaches.
  *     quantum_measure() answers with that, in one string, so no message anywhere restates it and goes stale.
  *
- * AND THE ANSWER IS SAID OUT LOUD, ONCE PER INSTANCE, AT THE FIRST SLICE — the `@QUANTUM cpu=… slice=…ms
- * measure=…` line quantum.c writes. Both readers of quantum_measure() were inside SEAM-ASSERTION MESSAGES, so
+ * AND THE ANSWER IS SAID OUT LOUD, ONCE PER INSTANCE, AT THE FIRST SLICE — the `@QUANTUM {…}` line quantum.c
+ * writes. Both readers of quantum_measure() were inside SEAM-ASSERTION MESSAGES, so
  * this fact reached a person only on the runs that aborted and never on the runs a person compares; and what
  * it changes is not the slice but the ORDER, because engine.c bills the WFQ's aging charge in this same
  * currency and that charge is a comparison BETWEEN flows, so a descheduling the OS chose moves one flow's rank
@@ -79,6 +79,18 @@
  * than dev-only because a consumer's contract is checked against it: engine/build.mjs THROWS when a run
  * printed the frontier census and not this line, and a writer compiled out from under its reader is
  * §Architecture's field contract broken from the producing side.
+ *
+ * AND THE LINE IS ONE OF TWO EMISSIONS OF ONE COMPOSER, NEVER THE ONLY ONE — quantum_json() below is the fact,
+ * and the printf is a host whose output happens to be a stream of lines. A LINE IS NOT A SURFACE THE SHIPPED
+ * PATH HAS: the extension's renderer drains this engine's stdout into every reply and its trusted zone reads a
+ * DOCUMENT, so a denomination that existed only as a line was written on the one host and unread on the other,
+ * which is §Testing's "measure what the shipped path writes" with the producer in the right and the surface in
+ * the wrong. It rides solver/result.c's result_json as `_quantum` for exactly the reason `_cold`, `_heap`,
+ * `_swap` and `_wfq` do, and it is NOT a fifth census: those are readings of an INSTANT whose value a schedule
+ * chooses, and this is a constant property of the HOST and the build that no schedule and no instant can move.
+ * That difference is why extension/bridge.js asserts it as three NAMED, TYPED fields rather than folding it
+ * into the "every row is a finite number" loop the four censuses share, and why engine/solvergate.mjs COMPARES
+ * it across schedules instead of dropping it.
  *
  * The slice is a FLOOR ON SHARING, never a cap: nothing is dropped, starved, skipped, reordered or forgotten
  * across it. The flow parks as a COW snapshot and the SAME flow resumes on the byte-identical frontier unless
@@ -124,5 +136,29 @@ const char *quantum_measure(void);
    whether quantum_thread_us() is real CPU. §Testing forbids a verdict a loaded machine can falsify, so a check
    that aborts on consumed time may only run where consumed time is what is being read. Asked, never assumed. */
 int quantum_measure_is_cpu(void);
+/* THE THREE OF THEM AS ONE DOCUMENT — `{"measure":…,"isCpu":…,"sliceMs":…}`, malloc'd, caller frees; NULL only
+   on allocation failure, which is the shape solver/result.c's other composers answer in and which result_json
+   already folds into its one abort arm.
+
+   ONE COMPOSER, TWO EMISSION SITES, AND THE BYTES ARE THE SAME BYTES — solver/result.h states that idiom for
+   the three subsystem censuses and the argument is identical here, one level smaller. A host whose output IS a
+   stream of lines has to print this when it is taken or it is not in the output at all (quantum.c's announce);
+   the shipped path reads a DOCUMENT and gets it as result_json's `_quantum`. What the idiom forbids is the
+   second HAND-SERIALIZATION — a `printf("cpu=%d slice=%dms measure=%s")` in this file beside a snprintf of the
+   same three facts in result.c is two lists kept by hand, which is precisely how `svc_min` came to be computed
+   on every census and printed by nobody. There is one format string and both readers parse it.
+
+   IT LIVES HERE AND NOT IN result.c, WHICH IS THE ONLY PLACE IT COULD LIVE. result.c already includes this
+   header; a composer in result.c would make the EDGE depend on the findings document to say what it measures,
+   and this file's first paragraph is that it holds nothing but the edge — no policy, no ranking, no knowledge
+   of a flow, and certainly no knowledge of what a finding is.
+
+   ASKABLE AT ANY TIME, INSIDE A SLICE OR OUT, which quantum_expired() deliberately is not. Every field is a
+   compile-time constant of this translation unit's branch — the two literals below and engine.h's
+   ENGINE_QUANTUM_MS — so there is no slice state to read and nothing to assert about the caller. That is also
+   what makes `_quantum` present on EVERY result document including one composed by a host that never opened a
+   slice, where the `@QUANTUM` line is legitimately absent: the line reports what a stage DID, the field
+   reports what this host IS. */
+char *quantum_json(void);
 
 #endif

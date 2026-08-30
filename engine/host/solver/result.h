@@ -89,6 +89,26 @@ char *result_cold_json(void);
 char *result_heap_json(JSContext *ctx);
 char *result_swap_json(void);
 
+/* ---- AND THE ONE FIELD THAT IS NOT A CENSUS, WHICH IS WHY IT IS COMPOSED ELSEWHERE ------------------------
+ *
+ * `_quantum` (solver/quantum.h's `quantum_json`) rides this document beside the four above and is a DIFFERENT
+ * KIND OF FACT, so nothing here composes it and nothing treats it as a fifth census. Every row of the four is
+ * a READING OF AN INSTANT — the frontier's live size, the runtime's live heap, the allocator's arena, the fork
+ * table — taken at whatever moment a document was composed at. `_quantum` is a constant property of the HOST
+ * and the BUILD: what the cooperative slice and, more importantly, engine.c's `flow_age_running` charge are
+ * DENOMINATED in, plus how long a slice is.
+ *
+ * IT IS ON THIS DOCUMENT BECAUSE IT IS WHAT MAKES THE FOUR ABOVE COMPARABLE. On a host with no CPU clock both
+ * are billed in wall time, and the aging charge is a comparison BETWEEN flows — so a descheduling the OS chose
+ * lands on whichever flow was running, moves its rank alone, and re-picks. Two runs of ONE artifact over ONE
+ * page then take different frontier orders, and every census below that order differs with nothing about the
+ * tree differing. A reader handed `_wfq` and no denomination cannot tell that from a change in the engine.
+ * quantum.c already said this out loud as a LINE; a line is the output of a host whose output is lines, and
+ * the shipped path reads a document — the same "measure what the shipped path writes" that moved the four.
+ *
+ * SO IT IS NOT DEFAULTED AND NOT OPTIONAL: quantum_json reads nothing but compile-time constants, so there is
+ * no instant at which a host cannot answer it and no shape in which it is legitimately absent. */
+
 /* AN UNCAUGHT ERROR FROM ONE OF THE PAGE'S OWN SCRIPTS. A page's throw ending its script is intentional — it is
    the forcing function that names an unbuilt capability — but the name was invisible: the flow simply stopped
    and the document reported the surface it had reached, with nothing to say a script had died. Recording it

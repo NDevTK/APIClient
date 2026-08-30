@@ -13,6 +13,9 @@
 #include "solver/cold.h"    /* …and what it PARKED, if the host asked this engine to page out */
 #include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
 #include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
+/* …and what the ORDER above them was denominated in, which is the fact that decides whether two of these
+   documents may be compared at all. Composed by the component that owns it — see result.h and quantum.h. */
+#include "solver/quantum.h"
 /* THE REALM COUNT IS THE ONE ROW OF THE HEAP CENSUS THAT quickjs CANNOT ANSWER, and it is a BROWSER fact: a
    child realm is built per flow that creates a navigable with an address, so the component that holds the list
    is the one that answers. §A-CAPABILITY-MATERIALIZED-PER-FLOW makes it a ceiling, and navigable.c's own OOM
@@ -484,6 +487,12 @@ char *result_json(JSContext *ctx) {
     char *heap = result_heap_json(ctx);
     char *swap = result_swap_json();
     char *forkAt = decide_fork_json();
+    /* AND WHAT THE ORDER THOSE FIVE SIT UNDER WAS DENOMINATED IN — solver/quantum.h's composer, not a sixth
+       one of ours. It is the only field on this document that is neither a total over the run nor a reading of
+       an instant: it is a property of the HOST, and it is here because without it two `_wfq` orderings taken
+       from one revision on one page are not comparable and nothing on either document says so. result.h states
+       the argument in full. */
+    char *quantum = quantum_json();
     /* NO `probeResults` SURFACE. It carried the schemas an API's own REJECTION described, and a rejection is
        the answer to a DELIBERATELY MALFORMED REQUEST — one this engine cannot make, since its only network
        edge is the pending register and the host performs a GET through safeFetch. The reader on this side was
@@ -493,15 +502,15 @@ char *result_json(JSContext *ctx) {
     size_t n;
     char *out;
 
-    if (!eps || !sinks || !errs || !wfq || !cold || !heap || !swap || !forkAt) {
+    if (!eps || !sinks || !errs || !wfq || !cold || !heap || !swap || !forkAt || !quantum) {
         free(eps); free(sinks); free(errs); free(wfq);
-        free(cold); free(heap); free(swap); free(forkAt);
+        free(cold); free(heap); free(swap); free(forkAt); free(quantum);
         return NULL;
     }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 564 with its conversion specifiers
-       and 488 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
-       longs at 20), so the worst case is 864 against this 928. The NINE `%s` contribute nothing to that
+       and stated so the count can be re-done: the format's fixed bytes are 578 with its conversion specifiers
+       and 500 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
+       longs at 20), so the worst case is 876 against this 928. The TEN `%s` contribute nothing to that
        figure and everything to the sum above it — each is a composed surface whose real length is added by
        `strlen`, which is why a census joining the document costs a term in `n` and 11 bytes of literal here. It was 192 for a shape whose widest form was
        already 197 — inside only because the real numbers are small — then 384 against a worst case the arrival
@@ -521,7 +530,7 @@ char *result_json(JSContext *ctx) {
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
     n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(wfq) + strlen(cold_park_json()) +
-        strlen(cold) + strlen(heap) + strlen(swap) + strlen(forkAt) + 928;
+        strlen(cold) + strlen(heap) + strlen(swap) + strlen(forkAt) + strlen(quantum) + 928;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -596,16 +605,22 @@ char *result_json(JSContext *ctx) {
                                 put a cumulative switch count beside a momentary byte figure and call both "so
                                 far". Three objects and not one, because a reader compares WITHIN a census and
                                 never across — see result.h. */
-                             "\"_cold\":%s,\"_heap\":%s,\"_swap\":%s,\"_forkAt\":%s,\"_park\":%s}",
+                             "\"_cold\":%s,\"_heap\":%s,\"_swap\":%s,\"_forkAt\":%s,"
+                             /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
+                                is neither a total nor a reading of an instant, but a property of the HOST that
+                                decides whether two of these documents may be compared at all. result.h and
+                                solver/quantum.h state the argument; nothing in this file composes it. */
+                             "\"_quantum\":%s,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
-                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, cold_park_json());
+                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, quantum,
+                     cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED, AND IT IS THE ONLY THING THAT WAS STILL RIGHT. It was
-           192 bytes for three counters and now carries twenty-one, whose widest form is 375 digits beside 450
+           192 bytes for three counters and now carries twenty-one, whose widest form is 375 digits beside 500
            bytes of literal — and the previous 768 did not cover that, which nothing noticed because the prose
            stating the count had been adjusted instead of re-derived (see the arithmetic above). A truncation
            here does not lose a digit, it loses the closing brace: the host gets a document that will not parse
@@ -622,5 +637,6 @@ char *result_json(JSContext *ctx) {
     free(heap);
     free(swap);
     free(forkAt);
+    free(quantum);
     return out;
 }

@@ -780,10 +780,34 @@ function censusReading(out) {
    the same way and for the same reason a renamed `COLD_FIELDS` row does. The converse is not a contract: a
    stage that opens slices and drives no scheduler (the two-instance ABI drive) prints this line and no census,
    and a stage that declines the edge entirely prints neither. ABSENCE IS REPORTED AS ABSENCE — never as a
-   default, and never as the positive claim that a run was CPU-denominated. */
+   default, and never as the positive claim that a run was CPU-denominated.
+   AND THE PAYLOAD IS THE SAME BYTES THE SHIPPED PATH READS, WHICH IS WHY THE GRAMMAR IS JSON AND NOT A BESPOKE
+   `cpu=… slice=…ms measure=…`. Those three facts now ride solver/result.c's result document as `_quantum`,
+   where extension/bridge.js asserts them and the popup renders them beside the frontier order — the surface a
+   person actually compares two runs on. One composer (solver/quantum.c's `quantum_json`) emits to both, so
+   this reader and that one parse ONE format string; the previous spelling was a second hand-serialization of
+   the same three facts, which is exactly how `svc_min` came to be computed on every census and printed by
+   nobody. `^@QUANTUM \{…\}` is also the grammar `lastTwo` already reads for @COLD/@HEAP/@SWAP, so there is one
+   line shape on this seam rather than a marker only this function speaks.
+   THE FIELDS ARE ASKED FOR BY NAME AND TYPE RATHER THAN DESTRUCTURED, for the reason every list in this file
+   is checked against the thing it describes: a renamed or retyped field must fail HERE, not become an
+   `undefined` that reads as a run with no denomination — which is the one reading this whole function exists
+   to make impossible. */
 function quantumDenomination(out) {
-  const rows = [...out.matchAll(/^@QUANTUM cpu=([01]) slice=(\d+)ms measure=(.+)$/gm)]
-    .map((m) => ({ cpu: m[1] === "1", sliceMs: Number(m[2]), measure: m[3].trim() }));
+  const rows = [...out.matchAll(/^@QUANTUM (\{.*\})$/gm)].map((m) => {
+    let j;
+    try { j = JSON.parse(m[1]); } catch (e) {
+      throw new Error(`[build] an @QUANTUM line is not JSON (${e.message}): ${m[1]}. solver/quantum.c's ` +
+                      `quantum_json composes it and asserts its own buffer, so a malformed one is that ` +
+                      `composer truncated or its measure string carrying a character it does not escape.`);
+    }
+    if (typeof j.isCpu !== "boolean" || typeof j.sliceMs !== "number" || typeof j.measure !== "string")
+      throw new Error(`[build] an @QUANTUM line is missing a field of {measure:string, isCpu:boolean, ` +
+                      `sliceMs:number}: ${m[1]}. That object is solver/quantum.c's quantum_json in full and ` +
+                      `is the SAME shape extension/bridge.js asserts on the result document's \`_quantum\`, ` +
+                      `so a rename here is a rename there — fix the composer or both readers, never one.`);
+    return { cpu: j.isCpu, sliceMs: j.sliceMs, measure: j.measure.trim() };
+  });
   if (!rows.length) {
     if (/^@COLD \{/m.test(out))
       throw new Error("[build] this run printed the @COLD frontier census and no @QUANTUM line. Every " +
