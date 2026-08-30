@@ -1520,9 +1520,12 @@ static const JSCFunctionListEntry js_element_readonly[] = {
  * machine every declared member converges on drains the record before the member returns. No page code runs in
  * between, so the ordering the spec states is the ordering that happens — the only thing that changed is that
  * the walk can now yield to another flow, which cannot observe it because a flow's DOM is its own.
- * THE CONNECTEDNESS TEST STAYS HERE, at record time, and that is load-bearing: a REMOVAL fires the hook BEFORE
- * the detach, because "was it connected" has no answer afterwards. The record carries the decision the spec
- * made at mutation time, and the drain never re-derives it.
+ * THE RECORD'S CONNECTEDNESS TEST ANSWERS INSERT STEP 7.7 AND NOTHING ELSE, and the "and nothing else" is the
+ * half that is easy to lose. It has to be taken here: a REMOVAL fires the hook BEFORE the detach, because "was
+ * it connected" has no answer afterwards, so the record carries the decision the spec made at mutation time.
+ * INSERT STEP 12 ASKS ITS OWN QUESTION, and asks it per entry at that entry's turn — see TS_PHASE_* below and
+ * tree_steps_post_connection. Reusing this answer there is exactly the defect HTML §4.12.1.1 "Processing
+ * model"'s script1-removes-script2 example is written to expose.
  * NO PER-NODE EFFECT REACHES BACK INTO THE CHOKEPOINT — a script is queued as a flow, an endpoint recorded, a
  * custom-element reaction enqueued, a child navigable minted locally — so no entry can appear while the walk
  * that would consume it is running. But one of them ASKS: HTML §6.6.7's insertion steps run §6.6.6's allow
@@ -1537,30 +1540,81 @@ typedef struct {
 
 /* WHERE THE WALK IS INSIDE THE NODE IT IS STANDING ON — the resume point a fork needs, one level finer than the
    cursor. Everything a node has already had done to it must be BEHIND the phase, because a re-entry without one
-   re-runs it: the <iframe> gets a SECOND child navigable, the inserted <script> is prepared and its program
-   queued twice, and the custom element is enqueued for upgrade twice. Each of those is a real effect on a real
-   document with nothing to say it happened twice, which is exactly the shape §7.4's double load had. */
+   re-runs it: the inserted <script> is prepared and its program queued twice, and the custom element is
+   enqueued for upgrade twice. Each of those is a real effect on a real document with nothing to say it
+   happened twice, which is exactly the shape §7.4's double load had. */
 enum {
-    /* §4.8.5's create-a-child-navigable, HTML §4.12.1's prepare-a-script and §4.13.3's upgrade — and the
+    /* §4.13.3's upgrade, §4.2.6's style-block update and the rest of the per-node insertion steps — and the
        removing steps' pair of them. None can ask anything, so they all run in one step and the phase is past
        them before the step that can is reached. */
     TS_NODE_EFFECTS = 0,
     TS_NODE_AUTOFOCUS         /* HTML §6.6.7's insertion steps, whose step 5 can FORK */
 };
 
+/* DOM §4.2.3 "Mutation algorithms" — INSERT HAS TWO PHASES OVER THE SAME NODES AND THEY ARE NOT ONE PASS.
+ *
+ * Insert step 7.7.1 runs the INSERTION STEPS for every shadow-including inclusive descendant of every node of
+ * `nodes`. Step 10 then declares staticNodeList, step 11 fills it with those same descendants in the same tree
+ * order, and step 12 is "for each node of staticNodeList: if node is connected, then run the post-connection
+ * steps with node". So EVERY node's insertion steps run before ANY node's post-connection steps, and step 12's
+ * connectedness test is a LIVE READ taken at that entry's own turn.
+ *
+ * BOTH HALVES ARE BEHAVIOUR AND THE STANDARD SAYS SO IN ITS OWN WORDS. §4.2.3 defines the insertion steps as
+ * steps that "must not modify the node tree that insertedNode participates in, create browsing contexts, fire
+ * events, or otherwise execute JavaScript", and the post-connection steps as the opportunity "to perform any
+ * connection-related operations that modify the node tree that connectedNode participates in, create browsing
+ * contexts, or otherwise execute JavaScript … so a batch of nodes [is] inserted atomically with respect to
+ * script". Its worked example is a <script> and a <style> appended in one fragment: the style's INSERTION
+ * steps apply its rules, and the script's POST-CONNECTION steps then run a program that reads them back with
+ * getComputedStyle. One pass answers that example in the wrong order.
+ * HTML §4.12.1.1 "Processing model" states the other half about this exact element: `body.append(script1,
+ * script2)` where script1 removes script2 prints nothing, "Because the second script is no longer connected,
+ * its HTML element post-connection steps do not run, and it does not get prepared." A walk that reuses the
+ * connectedness it recorded at the write prepares it anyway.
+ *
+ * WHICH SIDE A CALLBACK BELONGS TO IS READ OFF ITS OWN STANDARD, never off where it used to sit. HTML §4.8.5
+ * "The iframe element" and §4.12.1.1 "Processing model" each say "HTML element post-connection steps" in the
+ * text that defines them; HTML §4.8.2 "The source element" and §4.8.3 "The img element" say "HTML element
+ * insertion steps"; §4.2.6 "The style element" and §4.6.8.23 "Link type \"stylesheet\"" trigger on the element
+ * BECOMING connected, which is the insertion side; and DOM §4.2.3's own insert step 7.7.3.2 enqueues
+ * connectedCallback inside step 7.7's loop, so a custom element's connection is an insertion-phase fact even
+ * though HTML §4.13.6 "Custom element reactions" runs the reaction later, in the [CEReactions]
+ * epilogue every member ends through.
+ *
+ * THE LIST IS MATERIALIZED, NOT RE-WALKED, and step 10's own note is the reason: "We collect all nodes before
+ * calling the post-connection steps on any one of them, instead of calling the post-connection steps while
+ * we're traversing the node tree. This is because the post-connection steps can modify the tree's structure,
+ * making live traversal unsafe, possibly leading to the post-connection steps being called multiple times on
+ * the same node." A second live traversal in phase two would be exactly what that sentence forbids. */
+enum {
+    TS_PHASE_INSERTION = 0,       /* insert step 7.7 — and the removing steps, which have no second phase */
+    TS_PHASE_POST_CONNECTION      /* insert step 12, over staticNodeList */
+};
+
 /* The buffer a machine takes ownership of. Per-machine and not global, because the drain YIELDS: a global list
    would be appended to by whichever flow ran during the suspension, and the resuming one would then run another
    flow's insertion steps over another flow's nodes.
-   ONE ALLOCATION, ENTRIES INCLUDED, because a fork mid-walk CLONES it: a header pointing at a separate array
-   would need two visits in OPPOSITE orders for the clone and the teardown, which is the mistake JSStepVisit's
-   `array` operation exists to make impossible. One block is one v->buf and cannot be got wrong. */
+   TWO ALLOCATIONS AND THE SECOND ONE IS VISITED THROUGH THE FIRST. The entries are fixed at the take, so the
+   block holding them is one js_malloc; staticNodeList is filled DURING the walk and its size is not known
+   until the walk ends, so it cannot live in that block. A header pointing at a separate array needs its two
+   visits in OPPOSITE orders — the clone must copy the outer block before re-pointing the clone's inner
+   pointer, the teardown must free the inner before the outer — which is precisely the ordering JSStepVisit's
+   `array` operation performs and `buf` cannot express. So the OUTER block is visited as a one-element array
+   whose element visit reaches the inner one; see element_tree_steps_visit. */
 typedef struct {
-    int      n, i;
+    int      n, i;       /* the entry cursor — insert step 7.7's walk */
+    int      k;          /* the staticNodeList cursor — insert step 12's walk, its OWN index and not a reuse of
+                            `i`, so that "step 7.7 is finished" stays a fact this file can assert */
+    uint8_t  phase;      /* TS_PHASE_* */
     uint8_t  nphase;     /* TS_NODE_* — where the walk is inside e[i].cursor */
     /* §6.4.1's two CHAINED questions (sticky, then "and recently"), each of which forks: the byte says which
        one an answer is owed to, so it belongs to the walk and not to a C local that a park would forget. */
     uint8_t  ua_phase;
-    TreeStepEntry e[];
+    /* §4.2.3 insert step 10's staticNodeList. Bare Lexbor pointers and no connectedness bit: step 12 has to
+       ASK, and a remembered answer is the one defect this list exists to make unrepresentable. */
+    lxb_dom_node_t **list;
+    int              list_n, list_cap;
+    TreeStepEntry    e[];
 } TreeStepBuf;
 
 static TreeStepEntry *g_ts;
@@ -1672,7 +1726,26 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
    body can return through, so nothing recorded outlives the member that caused it.
    The entries are COPIED into the member's own block rather than the global's storage being handed over: the
    block is the thing a fork clones, so it is js-allocated like every other piece of a step machine's state,
-   while the global stays the plain scratch list the chokepoint refills (element_free releases it). */
+   while the global stays the plain scratch list the chokepoint refills (element_free releases it).
+   THE BLOCK IS ONE BATCH AND ONE BATCH IS ONE §4.2.3 `insert` FOR EVERY MEMBER THAT PERFORMS ONE INSERT, which
+   is what makes the two phases below the standard's two phases. `insert` reaches Lexbor one child at a time,
+   so `body.append(script1, script2)` is TWO chokepoint records and ONE `insert` whose `nodes` is « script1,
+   script2 » — and grouping them is therefore not an approximation, it is the batch the standard names, which
+   is exactly what HTML §4.12.1.1 "Processing model"'s example needs (script1's post-connection steps must run
+   AFTER script2's insertion steps, or script2 is not yet in the tree for script1 to find).
+   NAMED RESIDUAL — A MEMBER THAT PERFORMS TWO INSERTS GETS ONE BATCH, WHICH IS NARROWER THAN §4.2.3. DOM §5.5
+   Interface Range's `surroundContents` is the shape, and its steps say so: "Insert newParent into this. Append
+   fragment to newParent." §4.2.3 gives those two inserts a staticNodeList each and this block gives them one.
+   WHAT IS NOT COVERED, exactly: the first insert's post-connection steps run after the SECOND insert's
+   insertion steps rather than before them, and — because the entry walk below is live from `root` — a node the
+   second insert put inside the first insert's subtree is reached by BOTH walks, so its steps run twice, which
+   is the repeat insert step 10's own note ("possibly leading to the post-connection steps being called
+   multiple times on the same node") exists to prevent.
+   WHAT THE NEXT DIFF BUILDS: a batch boundary in the record. The DOM mutation chokepoint knows which `insert`
+   it is performing, so it marks the first record of each one and `take` hands back one block per batch, drained
+   in order. HOW ITS ABSENCE WOULD SHOW: `range.surroundContents(document.createElement("div"))` over a range
+   holding a custom element enqueues that element's upgrade TWICE — the `<div>` record's walk reaches, at drain
+   time, the fragment child that the append recorded on its own. */
 static void *element_tree_steps_take(JSContext *ctx)
 {
     TreeStepBuf *b;
@@ -1682,31 +1755,150 @@ static void *element_tree_steps_take(JSContext *ctx)
     CHECK(b != NULL, "the tree-steps buffer could not be allocated — dropping it means an inserted <script> "
                      "never runs and a custom element never upgrades, silently");
     b->n = g_ts_n;
-    b->i = 0;
+    b->i = b->k = 0;
+    b->phase = TS_PHASE_INSERTION;
     b->nphase = TS_NODE_EFFECTS;
     b->ua_phase = 0;
+    /* §4.2.3 insert step 10 — "let staticNodeList be a list of nodes, initially « »". It is EMPTY here and
+       filled by step 11 from step 7.7's own walk, which is why it is not sized with the block. */
+    b->list = NULL;
+    b->list_n = b->list_cap = 0;
     memcpy(b->e, g_ts, sizeof *b->e * (size_t)g_ts_n);
     g_ts_n = 0;
     return b;
 }
 
-/* ONE NODE. JS_STEP_YIELD while there is more to do — which is what makes the caller's drain a yield per node —
-   JS_STEP_FORK when a per-node effect's answer depends on unknown external state, and 0 when the walk is over.
-   `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm is delivered back to
-   the same call site inside the same node's phase. */
+static bool element_tree_steps_recorded(void) { return g_ts_n != 0; }
+
+/* §4.2.3 insert step 11 — "for each shadow-including inclusive descendant inclusiveDescendant of node, in
+   shadow-including tree order: append inclusiveDescendant to staticNodeList".
+   IT IS FILLED FROM STEP 7.7'S OWN WALK, and that is not a shortcut: steps 7.7 and 11 traverse the identical
+   node set in the identical order, and §4.2.3 forbids the insertion steps to "modify the node tree that
+   insertedNode participates in", so a second traversal would visit exactly these nodes again. The DCHECK below
+   is what turns that forbidding into something this engine notices rather than assumes. */
+static void tree_steps_list_append(JSContext *ctx, TreeStepBuf *b, lxb_dom_node_t *n)
+{
+    DCHECK(!element_tree_steps_recorded(),
+           "§4.2.3's insertion steps mutated the node tree — the standard's own definition is that they "
+           "\"must not modify the node tree that insertedNode participates in, create browsing contexts, fire "
+           "events, or otherwise execute JavaScript\", and insert step 11 collects staticNodeList from this "
+           "same walk, so a mutation here leaves the list disagreeing with the tree it was taken from. Work "
+           "that modifies the tree is a POST-CONNECTION step (insert step 12) and belongs in the second phase");
+    DCHECK(node_is_connected(n),
+           "§4.2.3 insert step 11 reached a node that is not connected — element_tree_changed records only "
+           "connected roots and step 7.7's walk stays inside one, so a disconnected node here means the tree "
+           "moved under the walk");
+    if (b->list_n == b->list_cap) {
+        int want = b->list_cap ? b->list_cap * 2 : 8;
+        lxb_dom_node_t **a = js_realloc(ctx, b->list, sizeof *a * (size_t)want);
+        CHECK(a != NULL, "§4.2.3 insert step 10's staticNodeList could not grow — dropping an entry means an "
+                         "inserted <script> is never prepared and an <iframe> never gets its child navigable, "
+                         "silently");
+        b->list = a; b->list_cap = want;
+    }
+    b->list[b->list_n++] = n;
+}
+
+/* §4.2.3 INSERT STEP 12 — "for each node of staticNodeList: if node is CONNECTED, then run the post-connection
+   steps with node". ONE ENTRY per call, so the second phase yields exactly as the first does.
+   IT TAKES NO REALM. Every step here runs in the NODE'S document's realm and the mutating member's is never
+   the answer, so the parameter that could carry the wrong one is not on the signature to be used by mistake. */
+static int tree_steps_post_connection(TreeStepBuf *b)
+{
+    lxb_dom_node_t *n;
+
+    DCHECK(b->k < b->list_n, "§4.2.3 insert step 12 was stepped past staticNodeList's end");
+    DCHECK(b->list != NULL,
+           "§4.2.3 insert step 12 has entries to run and no staticNodeList to read them from — the only way "
+           "here is a fork whose clone could not allocate the list, which JSStepVisit's dup leaves as a NULL "
+           "slot; this arm would run no post-connection steps at all rather than say so");
+    /* THE ORDER IS THE INVARIANT AND THIS IS THE LINE THAT ASSERTS IT. Insert runs EVERY node's insertion
+       steps before ANY node's post-connection steps — that is what step 10's up-front collection is FOR — so
+       reaching here with step 7.7's entry cursor short of the end is the one-pass walk this split replaced.
+       `k` is its own index rather than a reuse of `i` precisely so this stays askable. */
+    DCHECK(b->i == b->n,
+           "§4.2.3 insert step 12 ran a post-connection step while step 7.7's walk still had entries — insert "
+           "runs every node's insertion steps before any node's post-connection steps, which is why step 10 "
+           "collects staticNodeList up front");
+    DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
+           "§4.2.3 insert step 12 was entered carrying a per-node phase from step 7.7 — the post-connection "
+           "steps built here ask nothing, so there is no rest point inside one of them for a phase to belong "
+           "to, and a phase that survived means step 7.7's walk returned mid-node");
+    n = b->list[b->k++];
+    /* CONNECTEDNESS IS RE-READ HERE AND NEVER REMEMBERED, and the list carries no bit for it to be remembered
+       IN. The list is STATIC — step 10's note: "the post-connection steps can modify the tree's structure,
+       making live traversal unsafe" — but the TEST is per entry at that entry's own turn, because an EARLIER
+       entry's post-connection steps may have removed this one. HTML §4.12.1.1 "Processing model" is the worked
+       example: `body.append(script1, script2)` where script1 removes script2 prints nothing, "Because the
+       second script is no longer connected, its HTML element post-connection steps do not run, and it does not
+       get prepared." element_tree_changed's test at the write is the answer for step 7.7 and is the WRONG
+       answer here — it was taken before any of these steps ran. */
+    if (node_is_connected(n) && n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(n);
+        /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM, not the mutating member's. Two same-origin
+           documents are ONE agent, so `frame.contentDocument.body.appendChild(subframe)` is a mutation this
+           flow may make in another document's tree — and its navigable and its <script> preparation belong to
+           THAT document. The mutating ctx answered the parent's realm for both. */
+        JSContext *dctx = document_realm_of(n);
+
+        DCHECK(dctx != NULL,
+               "a tree write reached §4.2.3's post-connection steps in a document no realm was installed for "
+               "— a document that can hold a connected node is a document a flow can run steps in, so build "
+               "its realm rather than borrowing whichever one performed the write");
+        /* HTML §4.8.5 "The iframe element": "The iframe HTML element POST-CONNECTION steps, given insertedNode,
+           are: 1. If insertedNode has a sandbox attribute, then parse the sandboxing directive… 2. Create a
+           new child navigable for insertedNode. 3. Process the iframe attributes for insertedNode, with
+           initialInsertion set to true." It reads post-connection rather than insertion because it CREATES A
+           BROWSING CONTEXT, which §4.2.3 names among the things the insertion steps must not do. */
+        if (iframe_element_is(n)) {
+            JSValue w = node_wrap(dctx, n);
+            iframe_create_navigable(dctx, w);
+            /* …AND ITS THIRD STEP, which is where a srcless frame's `load` comes from: a url that matches
+               about:blank fires the iframe load event steps HERE and does not navigate. §7.5.8's own note says
+               why it has to be here rather than at the load's end ("we do not fire an asynchronous load event
+               on the container element for such cases"), and without it
+               `document.body.appendChild(document.createElement("iframe"))` never fires `onload` at all —
+               which is a deadlock and not a delay, because the handler is where a test first touches
+               `contentWindow` and touching it is what would have materialized the document the lifecycle walk
+               was waiting to see. */
+            iframe_process_attributes(dctx, w, /*initialInsertion*/ true);
+            JS_FreeValue(dctx, w);
+        }
+        /* HTML §4.12.1.1 "Processing model": "The script HTML element POST-CONNECTION steps, given
+           insertedNode, are: If insertedNode is parser-inserted, then return. Prepare the script element given
+           insertedNode." Post-connection rather than insertion because preparing a script RUNS IT, which is
+           the JavaScript execution §4.2.3 forbids the insertion steps. Its step 1 is also what makes a script
+           the fragment parse produced inert, because §13.4's default scripting mode marked it already started;
+           core/html/html_script.c owns both halves of that pair. */
+        /* NOT PARSER-INSERTED: the step above is "if insertedNode is parser-inserted, then return", so a node
+           that reaches this walk has a null parser document. A parser's own `<script>` is prepared at its end
+           tag instead (html_script_parser_inserted). */
+        html_script_prepare(dctx, el, /*parser_inserted*/false);
+    }
+    return b->k < b->list_n ? JS_STEP_YIELD : 0;
+}
+
+/* §4.2.3 INSERT STEP 7.7 (and the removing steps, which have no second phase). ONE NODE per call.
+   JS_STEP_YIELD while there is more to do — which is what makes the caller's drain a yield per node —
+   JS_STEP_FORK when a per-node effect's answer depends on unknown external state, and 0 only when the SECOND
+   phase is over too. `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm
+   is delivered back to the same call site inside the same node's phase. */
 static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
 {
     TreeStepBuf *b = vb;
     TreeStepEntry *e;
     lxb_dom_node_t *n;
 
-    DCHECK(b && b->i < b->n, "the tree-steps drain was stepped past its end");
+    DCHECK(b != NULL, "the tree-steps drain was stepped with no buffer");
+    if (b->phase == TS_PHASE_POST_CONNECTION) return tree_steps_post_connection(b);
+    DCHECK(b->phase == TS_PHASE_INSERTION, "the tree-steps drain is standing in a phase §4.2.3 does not have");
+    DCHECK(b->i < b->n, "the tree-steps drain was stepped past its end");
     e = &b->e[b->i];
     n = e->cursor;
     /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM, not the mutating member's. Two same-origin documents
        are ONE agent, so `frame.contentDocument.body.appendChild(subframe)` is a mutation this flow may make in
-       another document's tree — and its navigable, its <script> preparation and its custom-element upgrade all
-       belong to THAT document. The mutating ctx answered the parent's realm for every one of them. */
+       another document's tree — and its style sheet and its custom-element upgrade both belong to THAT
+       document. The mutating ctx answered the parent's realm for every one of them. */
     ctx = document_realm_of(n);
     DCHECK(ctx != NULL,
            "a tree write reached §4.2.3's steps in a document no realm was installed for — a document that can "
@@ -1716,74 +1908,55 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
             if (b->nphase == TS_NODE_EFFECTS) {
-                /* §4.8.5: an inserted <iframe> CREATES A CHILD NAVIGABLE, right here, which is where the spec
-                   puts it — `frame.contentWindow` answers on the line after the append. It does not suspend
-                   (the child's name is minted locally), so it does not need the enqueue this walk's buffer
-                   would otherwise demand; it joins <script> preparation and custom-element upgrades as one
-                   more per-node effect. */
-                if (iframe_element_is(n)) {
-                    JSValue w = node_wrap(ctx, n);
-                    iframe_create_navigable(ctx, w);
-                    /* …AND §4.8.5's NEXT STEP, which is where a srcless frame's `load` comes from. The post-
-                       connection steps are three — parse the sandboxing directive, create a new child
-                       navigable, process the iframe attributes with initialInsertion true — and the third has
-                       a branch no other algorithm reaches: a url that matches about:blank fires the iframe
-                       load event steps HERE and does not navigate. §7.5.8's own note says why it has to be
-                       here rather than at the load's end ("we do not fire an asynchronous load event on the
-                       container element for such cases"), and without it
-                       `document.body.appendChild(document.createElement("iframe"))` never fires `onload` at
-                       all — which is a deadlock and not a delay, because the handler is where a test first
-                       touches `contentWindow` and touching it is what would have materialized the document
-                       the lifecycle walk was waiting to see. */
-                    iframe_process_attributes(ctx, w, /*initialInsertion*/ true);
-                    JS_FreeValue(ctx, w);
-                }
-                /* HTML §4.12.1: an inserted `<script>` is PREPARED — and its step 1 is what makes a script the
-                   fragment parse produced inert, because §13.4's default scripting mode marked it already
-                   started. core/html/html_script.c owns both halves of that pair. */
-                /* NOT PARSER-INSERTED: §4.12.1.1's insertion steps are "if insertedNode is parser-inserted,
-                   then return", so a node that reaches this walk has a null parser document. A parser's own
-                   `<script>` is prepared at its end tag instead (html_script_parser_inserted). */
-                html_script_prepare(ctx, el, /*parser_inserted*/false);
-                /* HTML §4.8.12: an inserted `<source>` STARTS its parent media element's resource selection
-                   algorithm, which is how a `<video>` with no `src` and only `<source>` children ever loads
-                   anything. It is here rather than on node.c's tree-hook list because that list is the DOM's
-                   own step families and this is an HTML ELEMENT INSERTION STEPS entry — the same family as the
-                   `<script>` above and the `<iframe>` above that, which need this seam's realm (the inserted
-                   node's document, not the mutating one) and its position (insert step 7, before step 8's
-                   mutation record). */
+                /* HTML §4.8.2 "The source element": "The source HTML element INSERTION steps, given
+                   insertedNode, are: Let parent be insertedNode's parent. If parent is a media element that
+                   has no src attribute…" — which is how a `<video>` with no `src` and only `<source>` children
+                   ever loads anything. It is here rather than on node.c's tree-hook list because that list is
+                   the DOM's own step families and this is an HTML ELEMENT INSERTION STEPS entry, which needs
+                   this seam's realm (the inserted node's document, not the mutating one) and its position
+                   (insert step 7.7, before step 8's mutation record). */
                 media_element_source_inserted(ctx, el);
                 /* HTML §4.8.4.3.2: "The img or source HTML element insertion steps … count the mutation as a
                    relevant mutation" — so an `img` created with `createElement`, given a `src` and then
                    INSERTED updates its image data at the insertion, exactly as one whose `src` was written
-                   after insertion does. It is here rather than on node.c's tree-hook list for the reason the
-                   four above it are: an HTML ELEMENT INSERTION STEPS entry needs this seam's realm (the
-                   inserted node's document, not the mutating one) and its position. */
+                   after insertion does. HTML §4.8.3 "The img element" is where the steps themselves are
+                   written ("The img HTML element insertion steps, given insertedNode, are…"). It is here
+                   rather than on node.c's tree-hook list for the reason the one above it is: an HTML ELEMENT
+                   INSERTION STEPS entry needs this seam's realm (the inserted node's document, not the
+                   mutating one) and its position. */
                 html_image_inserted(ctx, el);
                 /* HTML §4.6.8.20: "The appropriate times to fetch and process the linked resource … When the
                    external resource link's link element becomes browsing-context connected." This is the seam
                    the whole lazy-chunk idiom runs through — a `<link rel=preload as=script>` is configured with
                    `createElement` and only becomes a request when it is INSERTED, and the `load` its response
-                   fires is what creates the `<script src>` two lines above this one prepares. It is here rather
-                   than on node.c's tree-hook list for the reason the five above it are: an HTML ELEMENT
+                   fires is what creates the `<script src>` that insert step 12 then prepares. It is here rather
+                   than on node.c's tree-hook list for the reason the two above it are: an HTML ELEMENT
                    INSERTION STEPS entry needs this seam's realm (the inserted node's document, not the mutating
                    one) and its position. */
                 html_link_inserted(ctx, el);
                 /* HTML §4.2.6's SECOND TRIGGER — "the element is not on the stack of open elements ... and it
                    becomes connected". `<style>` is the element whose insertion CREATES a CSS style sheet, and
-                   the algorithm decides for itself whether this element is one. It is here rather than on
-                   node.c's tree-hook list for the reason the three above it are: an HTML ELEMENT INSERTION
-                   STEPS entry needs this seam's realm (the inserted node's document, not the mutating one). */
+                   the algorithm decides for itself whether this element is one. IT IS AN INSERTION STEP AND
+                   THE DOM'S OWN WORKED EXAMPLE TURNS ON THAT: §4.2.3 walks through a fragment holding a
+                   <script> and a <style>, and "The HTML Standard's insertion steps run for the style element;
+                   they immediately apply its style rules to the document", after which "The HTML Standard's
+                   post-connection steps run for the script element; they run the script, which immediately
+                   observes the style rules that were applied in the above step." The script is FIRST in that
+                   fragment, so the phase split is the only thing that gives the example its answer. */
                 html_style_element_update(el);
-                /* DOM §4.2.3's insertion steps: an element that ENTERS a document gets its connectedCallback if
-                   it is already custom, and is otherwise tried for upgrade — the other half of "learned by
-                   execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never
-                   run: it constructs the page's class, and this walk is C that cannot park. */
+                /* DOM §4.2.3 insert step 7.7.3.2/7.7.3.3: an element that ENTERS a document gets its
+                   connectedCallback ENQUEUED if it is already custom, and is otherwise tried for upgrade —
+                   the other half of "learned by execution". It is an INSERTION-phase fact even though the
+                   reaction RUNS later: the enqueue is written inside step 7.7's loop, and HTML §4.13.6
+                   "Custom element reactions"' invoke-custom-element-reactions pops the queue in the
+                   [CEReactions] epilogue every declared member ends through, which is after step 12. Nothing
+                   here constructs the page's class, so nothing here parks. */
                 custom_elements_element_connected(ctx, el);
                 /* THE PHASE MOVES BEFORE THE STEP THAT CAN ASK, and that placement is the whole mechanism:
-                   everything above is DONE for this node, and a re-entry that ran it again would mint a second
-                   child navigable for one <iframe>, queue one <script>'s program twice and enqueue one custom
-                   element's upgrade twice — three real effects with nothing to say they happened twice. */
+                   everything above is DONE for this node, and a re-entry that ran it again would start one
+                   `<video>`'s resource selection twice, request one `<link>`'s resource twice and enqueue one
+                   custom element's upgrade twice — real effects on a real document with nothing to say they
+                   happened twice. */
                 b->nphase = TS_NODE_AUTOFOCUS;
             }
             DCHECK(b->nphase == TS_NODE_AUTOFOCUS,
@@ -1793,9 +1966,11 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
             /* HTML §6.6.7's insertion steps: an element carrying the `autofocus` content attribute becomes a
                CANDIDATE on the top-level traversable's active document, to be flushed at the next rendering
                opportunity (§8.1.7.3 step 7). It does NOT focus anything here — the standard's whole point is
-               that the decision is deferred and then taken once, over the whole queue. Last of the per-node
-               effects because an `<iframe autofocus>` is a candidate whose focusable area is the content
-               navigable created above.
+               that the decision is deferred and then taken once, over the whole queue. Its steps read the
+               ELEMENT'S OWN node document and that document's navigable ("let target be the element's node
+               document", "let topDocument be target's node navigable's top-level traversable's active
+               document"), never a child navigable, so an `<iframe autofocus>` becomes a candidate here even
+               though its own content navigable is not created until insert step 12.
                IT IS THE ONE THAT ASKS: its step 5 runs §6.6.6's allow focus steps, whose second clause is
                §6.4.1's transient activation — unknown external state, so this flow takes one arm and a sibling
                is snapshotted holding the other. */
@@ -1843,31 +2018,64 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
        two together are the resume point and a phase left behind would be read against a different node. */
     b->nphase = TS_NODE_EFFECTS;
     b->ua_phase = 0;
+    /* §4.2.3 insert step 11, for THIS node — appended after its insertion steps and after the one step that
+       can fork, so a re-entered node is collected exactly once. A REMOVAL contributes nothing: `remove` has no
+       staticNodeList and no post-connection steps, so its walk ends at the first phase. */
+    if (e->inserted) tree_steps_list_append(ctx, b, n);
     if (n->first_child) { e->cursor = n->first_child; return JS_STEP_YIELD; }
     while (n && !n->next) n = (n == e->root) ? NULL : n->parent;
     n = n ? n->next : NULL;
     e->cursor = n;
     if (n) return JS_STEP_YIELD;
-    return ++b->i < b->n ? JS_STEP_YIELD : 0;
+    if (++b->i < b->n) return JS_STEP_YIELD;
+    /* EVERY NODE'S INSERTION STEPS ARE DONE, so and only so does insert step 12 begin. A batch of nothing but
+       removals collects no staticNodeList and the walk is over here. */
+    b->phase = TS_PHASE_POST_CONNECTION;
+    return b->list_n ? JS_STEP_YIELD : 0;
 }
 
 static void element_tree_steps_free(JSContext *ctx, void *vb)
 {
-    js_free(ctx, vb);   /* ONE allocation, entries included */
+    TreeStepBuf *b = vb;
+
+    if (!b) return;
+    js_free(ctx, b->list);   /* §4.2.3 insert step 10's staticNodeList — see the visit for why it is separate */
+    js_free(ctx, b);
 }
 
-/* THE BUFFER ACROSS A FORK. Nothing in it holds a reference — an entry names two Lexbor nodes, and the tree
-   those name is the flow's own through the DOM COW delta — so the plain buffer copy IS the whole contract, and
-   each arm walks on with its own cursor, its own `i` and its own per-node phase. */
+/* A staticNodeList ENTRY across a fork: a bare Lexbor node pointer, holding no reference, named by the flow's
+   own tree through the DOM COW delta. It has nothing to take and nothing to release — this operation exists
+   for the ORDER `array` imposes on its two consumers, not for the element visit it performs. */
+static void tree_steps_list_elem(JSContext *ctx, void *elem, JSStepVisit *v)
+{
+    (void)ctx; (void)elem; (void)v;
+}
+
+/* THE OUTER BLOCK'S element visit, which is where the inner allocation is reached. */
+static void tree_steps_block_elem(JSContext *ctx, void *elem, JSStepVisit *v)
+{
+    TreeStepBuf *b = elem;
+
+    v->array(ctx, (void **)&b->list, sizeof *b->list, b->list_n, b->list_cap, tree_steps_list_elem);
+}
+
+/* THE BUFFER ACROSS A FORK. Nothing in it holds a reference — an entry names two Lexbor nodes and the list
+   names one each, and the tree those name is the flow's own through the DOM COW delta — so a plain copy IS the
+   whole contract, and each arm walks on with its own cursors, its own list and its own per-node phase.
+   IT IS TWO ALLOCATIONS AND THEREFORE NOT TWO `buf` CALLS. `buf` re-points its slot in place, so a nested pair
+   would have to run outer-first for the clone (the inner pointer must be re-pointed on the COPY) and
+   inner-first for the teardown (the outer free NULLs the slot the inner pointer was reachable through, and the
+   list would leak with nothing to say so). `array` is the operation whose two consumers already run in those
+   opposite orders — "the clone must copy the array before taking references into it, the teardown must release
+   those references before freeing it" — so the outer block is visited as a ONE-ELEMENT array whose element
+   visit reaches the inner one. */
 static void element_tree_steps_visit(JSContext *ctx, void **slot, JSStepVisit *v)
 {
     TreeStepBuf *b = *slot;
 
     if (!b) return;
-    v->buf(ctx, slot, sizeof *b + sizeof *b->e * (size_t)b->n);
+    v->array(ctx, slot, sizeof *b + sizeof *b->e * (size_t)b->n, 1, 1, tree_steps_block_elem);
 }
-
-static bool element_tree_steps_recorded(void) { return g_ts_n != 0; }
 
 static const IdlTreeSteps ELEMENT_TREE_STEPS = {
     element_tree_steps_take, element_tree_steps_step, element_tree_steps_free, element_tree_steps_recorded,
