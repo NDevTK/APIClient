@@ -3,8 +3,10 @@
  * IT IS A WritableStream, BUILT ON THE ONE THIS ENGINE HAS. §2.5 says so in the IDL — `interface
  * FileSystemWritableFileStream : WritableStream` — and in prose: "a WritableStream object with additional
  * convenience methods, which operates on a single file on disk ... getWriter() returns an instance of
- * WritableStreamDefaultWriter". So this is §5.4's CreateWritableStream with §2.5's three algorithms, wearing a
- * prototype chained to WritableStream.prototype, and NOT a second stream implementation beside core/streams/.
+ * WritableStreamDefaultWriter". So this is Streams §9.2.1 Creation and manipulation's `set up` — the operation
+ * §2.5's create a new FileSystemWritableFileStream reaches at its step 8, and NOT §5.5.1's CreateWritableStream,
+ * which takes a start algorithm this one does not have — with §2.5's three algorithms, wearing a prototype
+ * chained to WritableStream.prototype, and NOT a second stream implementation beside core/streams/.
  * The three convenience methods are exactly what §2.5.1-3 say they are: get a writer, write one chunk through
  * it, release the writer — every one of which is an abstract operation core/streams/writable_stream.h already
  * exposes as this realm's own function object, so a page that rebinds
@@ -15,9 +17,12 @@
  * writing the same stream must not share either. A record's field is an ordinary property write, which is what
  * the per-flow COW delta captures and what the snapshot machinery parks to the cold tier.
  *
- * THE THREE ALGORITHMS RETURN NOTHING AND THROW INSTEAD OF REJECTING, which is not a shortcut: §5.4 invokes an
- * underlying sink's algorithm through PromiseCall, so a throw is caught and becomes the rejection of exactly
- * the promise §2.5 names. "Reject p with a TypeError" and "throw a TypeError" are the same observable through
+ * THE THREE ALGORITHMS RETURN NOTHING AND THROW INSTEAD OF REJECTING, which is not a shortcut: Streams §9.2.1
+ * Creation and manipulation's `set up` wraps the close and abort algorithms in a step whose whole text is "If
+ * this throws an exception e, return a promise rejected with e", and §2.5's own write a chunk opens with the
+ * same sentence for its conversion — so a throw is caught and becomes the rejection of exactly the promise
+ * §2.5 names. (The catch this engine performs is at the controller, which is why every stage may throw and not
+ * only the first.) "Reject p with a TypeError" and "throw a TypeError" are the same observable through
  * that seam, and going the long way round would mean building a capability and settling it — a second run of
  * the page's code where the spec has none. */
 #include <stdint.h>
@@ -60,9 +65,10 @@ static int       g_id_write = -1, g_id_seek = -1, g_id_truncate = -1;
 /* ---- the record --------------------------------------------------------------------------------------- */
 
 /* THE RECORD A FileSystemWritableFileStream CARRIES, or JS_UNDEFINED for anything else — which is this
-   interface's BRAND. §3.7.5's check cannot be a class-id comparison here: the object IS a WritableStream and
-   wears that class, exactly as §4's File wears the Blob class, so what tells them apart is what the interface
-   gave it. OWNED. */
+   interface's BRAND. Web IDL §3.7.7 Operations' brand check — create an operation function's "If jsValue does
+   not implement the interface target, throw a TypeError" — cannot be a class-id comparison here: the object IS
+   a WritableStream and wears that class, exactly as File API §4 The File Interface's File wears the Blob class,
+   so what tells them apart is what the interface gave it. OWNED. */
 static JSValue fw_record(JSContext *ctx, JSValueConst stream)
 {
     JSValue rec = JS_UNDEFINED;
@@ -215,25 +221,29 @@ static int fw_truncate(JSContext *ctx, JSValueConst rec, double newsize)
     return 0;
 }
 
-/* ---- §2.5's WRITE A CHUNK algorithm, as a machine --------------------------------------------------------- */
+/* ---- File System §2.5's WRITE A CHUNK algorithm, as a machine ---------------------------------------------- */
 
 #define FWW_STAGES(X) \
     X(FWW_INPUT,    "File System §2.5 write a chunk step 1 (convert chunk to a FileSystemWriteChunkType — the " \
                     "union's dictionary arm is read one member at a time, and each read is the page's code)") \
     X(FWW_TYPE,     "File System §2.5 write a chunk step 3.2.2 (input[\"type\"], the WriteCommandType this " \
                     "chunk is)") \
-    X(FWW_POSITION, "File System §2.5 write a chunk steps 3.2.3.4 and 3.2.4.2 (the READ of " \
+    X(FWW_POSITION, "File System §2.5 write a chunk steps 3.2.3.4 and 3.2.4.2-3.2.4.3 (the READ of " \
                     "input[\"position\"], which on a Proxy or an accessor is the page's code)") \
-    X(FWW_POS_NUM,  "File System §2.5 write a chunk steps 3.2.3.4 and 3.2.4.2 (the `unsigned long long` " \
-                    "CONVERSION of that value, whose valueOf is the page's code — a stage of its own because a " \
-                    "machine may hold exactly one sub-sequence in flight per rest point)") \
-    X(FWW_SIZE,     "File System §2.5 write a chunk step 3.2.5.2 (the READ of input[\"size\"])") \
-    X(FWW_SIZE_NUM, "File System §2.5 write a chunk step 3.2.5.2 (the `unsigned long long` CONVERSION of that " \
-                    "value)") \
-    X(FWW_DATA,     "File System §2.5 write a chunk step 3.2.3.2 (the READ of input[\"data\"])") \
-    X(FWW_STRINGIFY, "File System §2.5 write a chunk step 3.2.3.7 (the union's USVString arm — ToString on a " \
-                     "page object runs its @@toPrimitive, valueOf or toString, which is the page's code)") \
-    X(FWW_APPLY,    "File System §2.5 write a chunk steps 3.2.3.5-3.2.5.5 (the buffer edit this command is)")
+    X(FWW_POS_NUM,  "File System §2.5 write a chunk step 1's conversion of WriteParams' `unsigned long long? " \
+                    "position`, deferred to the read above (its valueOf is the page's code — a stage of its " \
+                    "own because a machine may hold exactly one sub-sequence in flight per rest point)") \
+    X(FWW_SIZE,     "File System §2.5 write a chunk steps 3.2.5.2-3.2.5.3 (the existence check on " \
+                    "input[\"size\"] and the READ of it)") \
+    X(FWW_SIZE_NUM, "File System §2.5 write a chunk step 1's conversion of WriteParams' `unsigned long long? " \
+                    "size`, deferred to the read above") \
+    X(FWW_DATA,     "File System §2.5 write a chunk steps 3.2.3.1-3.2.3.2 (the existence check on " \
+                    "input[\"data\"] and the READ of it)") \
+    X(FWW_STRINGIFY, "File System §2.5 write a chunk step 1's union conversion reaching step 3.2.3.8's " \
+                     "USVString arm — ToString on a page object runs its @@toPrimitive, valueOf or toString, " \
+                     "which is the page's code") \
+    X(FWW_APPLY,    "File System §2.5 write a chunk steps 3.2.3.5-3.2.3.16, 3.2.4.3-3.2.4.4 and " \
+                    "3.2.5.3-3.2.5.8 (the buffer edit this command is)")
 enum { FWW_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FWW_STEPS[] = { FWW_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -262,19 +272,27 @@ static void fww_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->num);
 }
 
-/* Web IDL §3.2.25 over `(BufferSource or Blob or USVString or WriteParams)`. The three non-dictionary arms are
-   brand tests that run none of the page's code; everything else — including null and undefined, by step 3 —
-   is the DICTIONARY, whose `required type` member then throws for them, which is the TypeError §2.5's own
-   prose names. */
-static bool fww_is_plain_data(JSContext *ctx, JSValueConst v)
+/* THE THREE SHAPES A BufferSource IS, asked exactly as core/idl_args.c's IDL_BUFFERSOURCE position asks them —
+   an ArrayBuffer, a typed array or a DataView — because a union arm is one brand test and two spellings of it
+   are two things that can come apart. */
+static bool fww_is_buffer_source(JSValueConst v)
 {
-    (void)ctx;
-    if (blob_is(v)) return true;
-    if (JS_IsString(v)) return true;
-    /* THE THREE SHAPES A BufferSource IS, asked exactly as core/idl_args.c's IDL_BUFFERSOURCE position asks
-       them — an ArrayBuffer, a typed array or a DataView — because a union arm is one brand test and two
-       spellings of it are two things that can come apart. */
     return JS_IsArrayBuffer(v) || JS_GetTypedArrayType(v) >= 0 || JS_IsDataView(v);
+}
+
+/* WHICH ARM OF `(BufferSource or Blob or USVString or WriteParams)` DOES THE CHUNK TAKE? Web IDL §3.2.25 Union
+   types reaches the DICTIONARY from exactly two places — step 4.1, for null and undefined, and step 11.4, for
+   an Object none of the brand tests claimed — so `write()` with no `type` member throws the TypeError §2.5's
+   own prose names. Everything else is a VALUE arm, and that includes every primitive that is not null or
+   undefined: a Number falls past steps 12-14 (types holds no numeric type) to step 15's string type, so
+   `stream.write(42)` writes the two bytes `42` rather than complaining about a missing `type`.
+   THIS QUESTION IS NOT THE ONE FWW_STRINGIFY ASKS, and one predicate answering both is how a Number came to
+   take the dictionary here: the brand tests below run none of the page's code, while step 15's conversion runs
+   ToString, which is why that arm is a stage of its own and is not decided at this call. */
+static bool fww_chunk_is_dictionary(JSValueConst v)
+{
+    if (blob_is(v) || fww_is_buffer_source(v)) return false;
+    return JS_IsObject(v) || JS_IsNull(v) || JS_IsUndefined(v);
 }
 
 /* THE BYTES OF THE `data` ARM. §2.5: a BufferSource is copied, a Blob is READ, and a USVString is UTF-8
@@ -310,8 +328,8 @@ static char *fww_data_bytes(JSContext *ctx, JSValueConst data, size_t *plen, JSV
     } else {
         /* The only arm left is the BufferSource, because the machine's FWW_STRINGIFY stage has already turned
            everything that is not one into the union's USVString. */
-        DCHECK(JS_IsArrayBuffer(data) || JS_GetTypedArrayType(data) >= 0 || JS_IsDataView(data),
-               "§2.5's write command reached its BufferSource arm with something that is not one");
+        DCHECK(fww_is_buffer_source(data),
+               "File System §2.5's write command reached its BufferSource arm with something that is not one");
         if (encoding_buffer_source(ctx, data, &p, &len, phold) < 0) return NULL;
     }
     out = malloc(len + 1);
@@ -348,10 +366,14 @@ static int fww_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
                "§2.5's write algorithm ran with no internal slots — the algorithm is a CLOSURE over the record "
                "it was created beside, so a missing one means the stream was built without going through "
                "fs_writable_new_run");
-        if (fww_is_plain_data(ctx, chunk)) {
+        if (!fww_chunk_is_dictionary(chunk)) {
             s->data = JS_DupValue(ctx, chunk);
             s->hdr.stage = FWW_STRINGIFY;
         } else {
+            DCHECK(JS_IsObject(chunk) || JS_IsNull(chunk) || JS_IsUndefined(chunk),
+                   "a FileSystemWritableFileStream chunk took Web IDL §3.2.25 Union types' DICTIONARY arm "
+                   "without being an Object (step 11.4) or null or undefined (step 4.1) — step 15 sends every "
+                   "other primitive to the USVString arm");
             s->is_dict = 1;
             s->hdr.stage = FWW_TYPE;
         }
@@ -468,14 +490,18 @@ static int fww_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     }
 
     if (s->hdr.stage == FWW_STRINGIFY) {
-        /* WEB IDL §3.2.25's LAST ARM. A `data` that is not a Blob and not a BufferSource is a USVString, and
-           converting one is ToString — which on a page OBJECT runs its @@toPrimitive, its valueOf or its
-           toString, so it is a request and not a call. `write({type:"write", data:{}})` writes the eleven
-           bytes `[object Object]` in a browser, and a page that hands over a Date or a number expects the
-           same conversion.
+        /* WEB IDL §3.2.25 Union types' STRING ARM, step 15. A `data` that is not a Blob and not a BufferSource
+           is a USVString, and converting one is ToString — which on a page OBJECT runs its @@toPrimitive, its
+           valueOf or its toString, so it is a request and not a call. Here the member's own union is
+           `(BufferSource or Blob or USVString)?`, which has no dictionary arm, so step 11.4 is not on the way
+           and every object lands on step 15. `write({type:"write", data:{}})` writes the eleven bytes
+           `[object Object]` in a browser, and a page that hands over a Date or a number expects the same
+           conversion. THIS STAGE ALSO CONVERTS A BARE CHUNK the union sent to its own step 15 — `write(42)` —
+           which is why the question here is asked of the VALUE and never of which arm the chunk took.
            A CONCOLIC is left alone: it is already a string-shaped value carrying its example, and running the
            conversion over it would be a second ToString of a value the interpreter's own hook has answered. */
-        if (!blob_is(s->data) && !fww_is_plain_data(ctx, s->data) && !concolic_is(s->data)) {
+        if (!blob_is(s->data) && !fww_is_buffer_source(s->data) && !JS_IsString(s->data) &&
+            !concolic_is(s->data)) {
             JSValue str = JS_UNDEFINED;
 
             r = step_tostring_run(ctx, &s->hdr, s->data, cb_result, &str, out_cb, out_argc);
@@ -488,7 +514,8 @@ static int fww_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
         s->hdr.stage = FWW_APPLY;
     }
 
-    DCHECK(s->hdr.stage == FWW_APPLY, "§2.5's write a chunk resumed into a stage the algorithm does not have");
+    DCHECK(s->hdr.stage == FWW_APPLY,
+           "File System §2.5's write a chunk resumed into a stage the algorithm does not have");
     JS_FreeValue(ctx, cb_result);
     if (s->cmd == 1) {                                            /* "seek" */
         JS_SetPropertyStr(ctx, s->rec, FW_SEEK, JS_NewFloat64(ctx, s->position));
@@ -505,10 +532,10 @@ static int fww_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
         bool ok;
 
         DCHECK(blob_is(s->data) || JS_IsString(s->data) || concolic_is(s->data) ||
-               fww_is_plain_data(ctx, s->data),
-               "§2.5's write command reached a `data` that is none of the union's arms — FWW_STRINGIFY converts "
-               "everything that is not a Blob or a BufferSource to the USVString arm, so a value that is still "
-               "something else means that stage was skipped");
+               fww_is_buffer_source(s->data),
+               "File System §2.5's write command reached a `data` that is none of the union's arms — "
+               "FWW_STRINGIFY converts everything that is not a Blob or a BufferSource to the USVString arm, "
+               "so a value that is still something else means that stage was skipped");
         bytes = fww_data_bytes(ctx, s->data, &dlen, &hold);
         if (!bytes) return JS_STEP_ABRUPT;
         pos = s->have_pos ? s->position : fw_seek_offset(ctx, s->rec);
@@ -524,14 +551,15 @@ static int fww_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
 /* ---- §2.5's CLOSE and ABORT algorithms -------------------------------------------------------------------- */
 
 #define FWC_STAGES(X) \
-    X(FWC_COMMIT, "File System §2.5 create a new FileSystemWritableFileStream, the close algorithm's step 1.2.3 " \
-                  "(set stream's [[file]]'s binary data to stream's [[buffer]], then release the lock)")
+    X(FWC_COMMIT, "File System §2.5 create a new FileSystemWritableFileStream step 4.2.2.3 (set stream's " \
+                  "[[file]]'s binary data to stream's [[buffer]]) and step 4.2.2.4.1 (release the lock) — the " \
+                  "close algorithm is that step 4")
 enum { FWC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FWC_STEPS[] = { FWC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 #define FWA_STAGES(X) \
-    X(FWA_RELEASE, "File System §2.5 create a new FileSystemWritableFileStream, the abort algorithm (release " \
-                   "the lock on stream's [[file]])")
+    X(FWA_RELEASE, "File System §2.5 create a new FileSystemWritableFileStream step 5.1.1 (release the lock " \
+                   "on stream's [[file]]) — the abort algorithm is that step 5")
 enum { FWA_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FWA_STEPS[] = { FWA_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -540,8 +568,9 @@ typedef struct { JSStepHdr hdr; } FwEndState;
 static void fwe_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 /* THE RECORD IS THE CLOSURE'S CAPTURE — §2.5's three algorithms are written as closures over `stream`, and
    what they actually reach through it is its three internal slots. Capturing the RECORD rather than the stream
-   is what breaks the only circularity in the creation: §5.4 wants the algorithms in order to build the stream,
-   and the algorithms want the stream in order to reach its slots. The record exists before either. */
+   is what breaks the only circularity in the creation: Streams §9.2.1 Creation and manipulation's `set up`
+   wants the algorithms in order to build the stream, and the algorithms want the stream in order to reach its
+   slots. The record exists before either. */
 static JSValue fwe_record(JSContext *ctx, const JSStepHdr *h)
 {
     JSValue rec = JS_DupValue(ctx, JS_StepClosureData(h, 0));
@@ -563,9 +592,9 @@ static int fwc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     file = fw_slot(ctx, rec, FW_FILE);
     buffer = fw_slot(ctx, rec, FW_BUFFER);
     /* "Set stream's [[file]]'s binary data to stream's [[buffer]]" — and the modification timestamp with it,
-       because §2.3.1 answers `lastModified` from it and a commit that left it alone would report a file that
-       had never changed. The standard's note calls this an atomic update of the file's contents, which for one
-       property write it is. */
+       because §2.3.1 The getFile() method answers `lastModified` from entry's modification timestamp, and a
+       commit that left it alone would report a file that had never changed. The standard's note calls this an
+       atomic update of the file's contents, which for one property write it is. */
     file_system_set_data(ctx, file, buffer);
     file_system_touch(ctx, file);
     file_system_release_lock(ctx, file);
@@ -594,7 +623,9 @@ static int fwa_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
 }
 
 static const JSTrampStepDef FWW_DEF = {
-    /* §5.4 reads nothing from a sink algorithm but whether it threw, so there is no completion to state */
+    /* Streams §5.5.4 Default controllers' ProcessWrite and ProcessClose, and §5.4.4 Internal methods'
+       [[AbortSteps]], read nothing from a sink algorithm but whether it threw — the fulfilment VALUE is never
+       looked at — so there is no completion to state */
     sizeof(FwWriteState), fww_step, NULL, 0, .visit = fww_visit,
     .algorithm = "File System §2.5 write a chunk", .steps = FWW_STEPS
 };
@@ -632,12 +663,13 @@ int fs_writable_new_run(JSContext *ctx, StreamWork *w, JSValueConst entry, bool 
         int i;
 
         DCHECK(file_system_is_file(entry),
-               "§2.5's create a new FileSystemWritableFileStream was given something that is not a FILE ENTRY — "
-               "§2.3.2 asserts that before it ever reaches here");
+               "File System §2.5's create a new FileSystemWritableFileStream was given something that is not a "
+               "FILE ENTRY — §2.3.2 The createWritable() method step 5.5 asserts that before it ever reaches "
+               "here");
         rec = idl_slots_new(ctx);
         CHECK(!JS_IsException(rec), "file system writable: the stream's internal slots could not be allocated");
         JS_SetPropertyStr(ctx, rec, FW_FILE, JS_DupValue(ctx, entry));
-        /* "[[buffer]] ... is initially empty", and §2.3.2's `keepExistingData` makes it "a copy of entry's
+        /* "[[buffer]] ... is initially empty", and §2.3.2's step 5.7.3.1 makes it "a copy of entry's
            binary data" instead — a copy that is the VALUE, so a file whose contents are attacker input starts
            the stream tainted and the taint survives every splice. */
         data = keep_existing_data ? file_system_data(ctx, entry) : JS_NewStringLen(ctx, "", 0);
@@ -649,9 +681,11 @@ int fs_writable_new_run(JSContext *ctx, StreamWork *w, JSValueConst entry, bool 
         fns[2] = JS_NewStepClosure(ctx, g_stepid_abort, 1, 1, &cap);
         for (i = 0; i < 3; i++)
             CHECK(!JS_IsException(fns[i]), "file system writable: a §2.5 algorithm could not be allocated");
-        /* "Let highWaterMark be 1. Let sizeAlgorithm be an algorithm that returns 1" — which is §5.4's own
-           implicit one-per-chunk strategy, so the size algorithm is undefined rather than a function that
-           returns the number this stream would then have to keep a realm's copy of. */
+        /* §2.5's steps 6 and 7, "Let highWaterMark be 1. Let sizeAlgorithm be an algorithm that returns 1" —
+           which is what Streams §9.2.1 Creation and manipulation's `set up` already defaults to (highWaterMark
+           default 1, and "If sizeAlgorithm was not given, then set it to an algorithm that returns 1"), so the
+           size algorithm is undefined here rather than a function that returns the number this stream would
+           then have to keep a realm's copy of. */
         stream = writable_stream_create(ctx, fns[0], fns[1], fns[2], /*highWaterMark*/ 1, JS_UNDEFINED);
         for (i = 0; i < 3; i++) JS_FreeValue(ctx, fns[i]);
         if (JS_IsException(stream)) { JS_FreeValue(ctx, rec); return -1; }
@@ -659,17 +693,21 @@ int fs_writable_new_run(JSContext *ctx, StreamWork *w, JSValueConst entry, bool 
            non-configurable: it is an internal slot, so a page must not be able to move it — and it is also this
            interface's BRAND, which a page must not be able to forge onto a plain WritableStream. */
         JS_DefinePropertyValue(ctx, stream, g_slot_key, rec, 0);
-        /* `interface FileSystemWritableFileStream : WritableStream`. §5.4 built the object with §5's prototype
-           because that is the interface it knows; this is the derived interface saying which one it is. */
+        /* `interface FileSystemWritableFileStream : WritableStream`. Streams §9.2.1 Creation and manipulation's
+           `set up` operates on an object its CALLER minted — §2.5 step 1 mints a FileSystemWritableFileStream,
+           not a WritableStream — and this engine's helper mints the §5.2 The WritableStream class one, so this
+           is the derived interface saying which prototype it wanted. */
         proto = fs_writable_proto(ctx);
         JS_SetPrototype(ctx, stream, proto);
         JS_FreeValue(ctx, proto);
         *pstream = stream;
     }
-    /* "Set up stream" hands §5.4 a START PROMISE, and §2.5 declares no start algorithm — so the promise is one
-       resolved with undefined, built through the same PromiseResolve sub-sequence §6's TransformStream starts
-       its two halves through. Resolving is where 27.5.1.3 step 2.f reads `then`, which is why this is a
-       request and not a call. */
+    /* §2.5's step 8, "Set up stream", reaches Streams §5.5.4 Default controllers' SetUpWritableStreamDefault-
+       Controller, which builds a START PROMISE out of the start algorithm's result; §9.2.1's `set up` declares
+       that algorithm to be one that "returns undefined" — so the promise is one resolved with undefined, built
+       through the same PromiseResolve sub-sequence Streams §6 Transform streams' TransformStream starts its two
+       halves through. Resolving is where ECMAScript §27.5.1.3 CreateResolvingFunctions step 2.f reads `then`,
+       which is why this is a request and not a call. */
     r = stream_promise_of_run(ctx, w, 0, in, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return -1;
@@ -683,8 +721,9 @@ int fs_writable_new_run(JSContext *ctx, StreamWork *w, JSValueConst entry, bool 
  * this", "let result be the result of writing a chunk to writer given …", "release writer", "return result".
  * One machine with a magic, because the difference between them is the chunk and nothing else. */
 #define FWM_STAGES(X) \
-    X(FWM_GET_WRITER, "File System §2.5.1-3 step 1 (get a writer for this — §5.3's AcquireWritableStreamDefault" \
-                      "Writer, which throws for a locked stream)") \
+    X(FWM_GET_WRITER, "File System §2.5.1-3 step 1 (get a writer for this — Streams §9.2.2 Writing's get a " \
+                      "writer, which is §5.5.1 Working with writable streams' AcquireWritableStreamDefault" \
+                      "Writer and throws for a locked stream)") \
     X(FWM_WRITE,      "File System §2.5.1-3 step 2 (write a chunk to writer, whose promise IS this member's " \
                       "result)") \
     X(FWM_RELEASE,    "File System §2.5.1-3 step 3 (release writer)")
@@ -738,8 +777,9 @@ static int fwm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         s->writer = s->result = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, r) s->cb[r] = JS_UNDEFINED;
         s->cphase = 0;
-        /* WEB IDL §3.7.5's BRAND CHECK. `FileSystemWritableFileStream.prototype.write.call(new WritableStream)`
-           is a TypeError, and a page tells that apart from the stream simply refusing the chunk. */
+        /* WEB IDL §3.7.7 Operations' BRAND CHECK.
+           `FileSystemWritableFileStream.prototype.write.call(new WritableStream)` is a TypeError, and a page
+           tells that apart from the stream simply refusing the chunk. */
         if (!JS_IsObject(rec)) {
             JS_FreeValue(ctx, rec);
             JS_ThrowTypeError(ctx, "a FileSystemWritableFileStream method was called on something that is not "
@@ -803,12 +843,12 @@ static void fs_writable_install_realm(JSContext *ctx)
 {
     JSValue base, proto, prev, global;
 
-    /* `[Exposed=(Window,Worker), SecureContext]` — Web IDL §3.3.13 removes the whole interface in a non-secure
-       realm, interface object and prototype alike, so there is nothing to install rather than something that
-       throws. It is asked ONCE, for the interface, because that is the level the extended attribute is written
-       at; a per-member ask would be the hand-picked list core/idl_args.h warns about. Nothing can reach a
-       FileSystemWritableFileStream in such a realm either: the only mint is §2.3.2's `createWritable`, on a
-       handle whose own interface is gated by the same attribute. */
+    /* `[Exposed=(Window,Worker), SecureContext]` — Web IDL §3.3.13 [SecureContext] removes the whole interface
+       in a non-secure realm, interface object and prototype alike, so there is nothing to install rather than
+       something that throws. It is asked ONCE, for the interface, because that is the level the extended
+       attribute is written at; a per-member ask would be the hand-picked list core/idl_args.h warns about.
+       Nothing can reach a FileSystemWritableFileStream in such a realm either: the only mint is File System
+       §2.3.2 The createWritable() method, on a handle whose own interface is gated by the same attribute. */
     if (!secure_context_is(ctx)) return;
     base = writable_stream_proto(ctx);
     prev = JS_GetClassProto(ctx, g_fw_class);
@@ -857,9 +897,10 @@ void fs_writable_init(JSContext *ctx)
     g_id_write = idl_method_id_step(ctx, WRITE_ARGS, 1, NULL, 0, &FWM_DECL, FWM_WRITE_M);
     g_id_seek = idl_method_id_step(ctx, NUM_ARGS, 1, NULL, 0, &FWM_DECL, FWM_SEEK_M);
     g_id_truncate = idl_method_id_step(ctx, NUM_ARGS, 1, NULL, 0, &FWM_DECL, FWM_TRUNCATE_M);
-    agent_state_id("file_system_writable", &g_stepid_write, "§2.5.1's write machine, and the declaration latch");
-    agent_state_id("file_system_writable", &g_stepid_close, "§4.3.4's close machine");
-    agent_state_id("file_system_writable", &g_stepid_abort, "§4.3.5's abort machine");
+    agent_state_id("file_system_writable", &g_stepid_write,
+                   "File System §2.5's write-a-chunk machine, and the declaration latch");
+    agent_state_id("file_system_writable", &g_stepid_close, "§2.5's close-algorithm machine (its step 4)");
+    agent_state_id("file_system_writable", &g_stepid_abort, "§2.5's abort-algorithm machine (its step 5)");
     agent_state_atom("file_system_writable", &g_slot_key, "§2.5's internal-slot key");
     agent_state_atom("file_system_writable", &g_atom_type, "the write-params `type` member name");
     agent_state_atom("file_system_writable", &g_atom_data, "the write-params `data` member name");
