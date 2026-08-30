@@ -16,10 +16,11 @@
 #include "core/idl_slots.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/agent_state.h"
 #include "core/events/event.h"
 #include "core/xhr/progress_event.h"
 
-static JSValue    g_key;        /* the private Symbol this interface's own slots hang off */
+static JSValue    g_key = JS_UNDEFINED;   /* the private Symbol this interface's own slots hang off */
 static JSClassID  g_pe_class;   /* the class exists for its per-REALM prototype slot; nothing wears it */
 static int        g_ready;
 static int        g_ctor_stepid = -1;
@@ -174,6 +175,15 @@ void progress_event_init(JSContext *ctx)
                                        (int)(sizeof(PE_INIT) / sizeof(PE_INIT[0])), js_pe_ctor, 0);
     idl_optional_from(1);
     g_ready = 1;
+    /* A SUB-COMPONENT NAMES THE ROW THAT RELEASES IT, which core/agent_state.h states is a CLAIM about which
+       release undoes this and not a spelling of this file: §5 has no row of core/platform.c's own, because
+       xhr_init calls this init and xhr_free calls this release. Nothing here was declared at all, so the
+       pairing's own arm — does anybody release this? — was never asked about any of the four, and the row
+       that really owns them read as one that holds exactly seven slots. */
+    agent_state_flag("xml_http_request", &g_ready, "§5's declaration latch");
+    agent_state_class("xml_http_request", &g_pe_class, "§5's ProgressEvent class");
+    agent_state_id("xml_http_request", &g_ctor_stepid, "§5's ProgressEvent constructor");
+    agent_state_value("xml_http_request", &g_key, "the private Symbol §5's three slots hang off");
     realm_declare_intrinsic(progress_event_install_proto);
 }
 
@@ -217,9 +227,19 @@ JSValue progress_event_proto(JSContext *ctx)
 
 void progress_event_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
+    /* NOT `if (!g_ready) return;`, for the reason xhr_init states one file over: xhr_init calls
+       progress_event_init unconditionally and xhr_free — which has already asserted its own latch — calls this
+       unconditionally, so the test could never be true and what it could do was hide a release that left the
+       latch set. */
+    DCHECK(g_ready, "ProgressEvent was released in an agent that never declared it — xhr_init calls "
+                    "progress_event_init on the one declaration pass, so there is no arm that reaches here "
+                    "undeclared");
     JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
     g_ctor_stepid = -1;
+    /* core/agent_state.h's one policy: a class id is given back like every other slot. Nothing wears this
+       class — it exists for its per-realm prototype slot — so there is no finalizer or gc_mark here to owe the
+       JS_GetAnyOpaque the zeroing costs xml_http_request.c. */
+    g_pe_class = 0;
 }

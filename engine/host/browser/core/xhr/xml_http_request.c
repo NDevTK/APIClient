@@ -188,11 +188,29 @@ static XhrData *xhr_of(JSValueConst v)
     return d;
 }
 
+/* THE COLLECTOR'S TWO ENTRIES REACH THE RECORD THROUGH JS_GetAnyOpaque, NEVER THROUGH g_xhr_class.
+ *
+ * core/agent_state.h states the obligation and why it exists: every host's teardown is platform_agent_free()
+ * … JS_RunGC … JS_FreeRuntime, so both of these run with this component's class id already back at 0, and
+ * `JS_GetOpaque(val, 0)` answers NULL for every object of the class. The finalizer would then have leaked the
+ * XhrData and the twelve owned values XHR_VALS names, per live XMLHttpRequest — malloc'd bytes plus JSValues
+ * whose references were never given back. The gc_mark is the worse of the two: an unmarked child keeps the
+ * internal reference gc_decref subtracts, so gc_scan reads it as rooted from OUTSIDE the heap and the
+ * `xhr` ⇄ `xhr.upload` cycle the mark exists for is never collected at all.
+ * The id is not read because it is not needed — the collector dispatched HERE THROUGH the class, so the class
+ * is a fact these functions already have.
+ *
+ * THE `if (!d) return;` STAYS, and that is the difference from a component whose mint is atomic. Between
+ * JS_NewObjectProtoClass and JS_SetOpaque, js_xhr_ctor_step allocates the upload object, two Arrays, two
+ * Strings and an ArrayBuffer — every one of which may collect — so a half-built XMLHttpRequest carrying no
+ * record IS reachable by these entries, and a DCHECK here would fire on a correct program. */
 static void xhr_finalizer(JSRuntime *rt, JSValue val)
 {
-    XhrData *d = JS_GetOpaque(val, g_xhr_class);
+    JSClassID id = 0;
+    XhrData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
 
+    (void)id;
     if (!d) return;
     for (i = 0; i < sizeof(XHR_VALS) / sizeof(XHR_VALS[0]); i++)
         JS_FreeValueRT(rt, *(JSValue *)((char *)d + XHR_VALS[i]));
@@ -201,9 +219,11 @@ static void xhr_finalizer(JSRuntime *rt, JSValue val)
 
 static void xhr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    XhrData *d = JS_GetOpaque(val, g_xhr_class);
+    JSClassID id = 0;
+    XhrData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
 
+    (void)id;
     if (!d) return;
     /* THE UPLOAD OBJECT IS A CYCLE waiting to happen — a page routinely holds the XHR from a listener it
        registered on `upload`, and the XHR holds the upload. Without this the pair is unreachable to the
@@ -2398,11 +2418,37 @@ void xhr_init(JSContext *ctx)
     g_ready = 1;
     agent_state_flag("xml_http_request", &g_ready, "the declaration latch");
     agent_state_ptr("xml_http_request", &g_xhr_rt, "the runtime this interface's machines were registered in");
-    agent_state_id("xml_http_request", &g_ctor_stepid, "§3.5.1's constructor machine");
-    agent_state_id("xml_http_request", &g_open_stepid, "§3.5.2's open machine");
+    /* THE THREE CLASSES, which were held by this component and declared to nobody — so core/agent_state.h's
+       pairing never asked about them and xhr_free never gave them back. JS_NewClassID returns the EXISTING
+       value when the slot is non-zero, so a second agent's xhr_init handed JS_NewClass1 an id registered in a
+       runtime that is gone; §The class id doubles as nothing here (this component latches on `g_ready`), so
+       the re-registration DID happen and it happened against a number the new runtime never allocated. */
+    agent_state_class("xml_http_request", &g_xhr_class, "§3's XMLHttpRequest class");
+    agent_state_class("xml_http_request", &g_upload_class, "§3.4's XMLHttpRequestUpload class");
+    agent_state_class("xml_http_request", &g_xhr_et_class, "§3.3's XMLHttpRequestEventTarget class");
+    /* THE SECTION NUMBERS BELOW WERE BOTH WRONG AND THIS FILE ALREADY HELD THE RIGHT ONES: XHR_CTOR_STAGES
+       says "§3.1 new XMLHttpRequest()" and XHR_OPEN_DECL says "§3.5.1 open(...)", while these two labels said
+       §3.5.1 and §3.5.2 — one row of the standard's own list off, so the constructor was named after open()
+       and open() after §3.5.2 "The setRequestHeader() method". Verified against the live standard's own
+       heading list rather than recalled. */
+    agent_state_id("xml_http_request", &g_ctor_stepid, "§3.1's constructor machine");
+    agent_state_id("xml_http_request", &g_open_stepid, "§3.5.1's open machine");
     agent_state_id("xml_http_request", &g_send_stepid, "§3.5.6's send machine");
     agent_state_id("xml_http_request", &g_abort_stepid, "§3.5.7's abort machine");
     agent_state_id("xml_http_request", &g_run_stepid, "the request-running machine");
+    /* AND THE NINE MEMBER-POOL ENTRIES. They are the same kind of slot as the five machines above and were
+       simply not on the list — which is the arm the pairing passes in silence, because a component that
+       declares SOME of what it holds produces character-for-character the report of one that holds only
+       that. */
+    agent_state_id("xml_http_request", &g_id_set_request_header, "§3.5.2's setRequestHeader()");
+    agent_state_id("xml_http_request", &g_id_get_response_header, "§3.6.4's getResponseHeader()");
+    agent_state_id("xml_http_request", &g_id_get_all, "§3.6.5's getAllResponseHeaders()");
+    agent_state_id("xml_http_request", &g_id_override_mime, "§3.6.7's overrideMimeType()");
+    agent_state_id("xml_http_request", &g_set_timeout_id, "§3.5.3's timeout setter");
+    agent_state_id("xml_http_request", &g_set_with_credentials_id, "§3.5.4's withCredentials setter");
+    agent_state_id("xml_http_request", &g_set_response_type_id, "§3.6.8's responseType setter");
+    agent_state_id("xml_http_request", &g_response_getter_id, "§3.6.9's response getter");
+    agent_state_id("xml_http_request", &g_response_xml_getter_id, "§3.6.11's responseXML getter");
     realm_declare_intrinsic(xhr_install_protos);
 }
 
@@ -2510,4 +2556,12 @@ void xhr_free(JSRuntime *rt)
     g_xhr_rt = NULL;
     g_ctor_stepid = g_open_stepid = g_send_stepid = g_abort_stepid = -1;
     g_run_stepid = -1;
+    /* core/agent_state.h's one policy: a class id is given back like every other slot, because a carried id
+       names a class in a RUNTIME that is gone. What this costs is stated there and paid above —
+       xhr_finalizer and xhr_gc_mark reach the record through JS_GetAnyOpaque, since both run after this
+       column and neither may look their record up under an id this line has already returned. */
+    g_xhr_class = g_upload_class = g_xhr_et_class = 0;
+    g_id_set_request_header = g_id_get_response_header = g_id_get_all = g_id_override_mime = -1;
+    g_set_timeout_id = g_set_with_credentials_id = g_set_response_type_id = -1;
+    g_response_getter_id = g_response_xml_getter_id = -1;
 }
