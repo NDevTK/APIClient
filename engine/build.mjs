@@ -69,6 +69,17 @@ const CPU_BUDGET_SH =
   'p="$3"; shift 3; exec "$p" "$@"';
 const BUDGET_NOT_INSTALLED = "@BUDGET-NOT-INSTALLED";
 
+/* THE QUIET LIST IS DECLARED AT MODULE SCOPE, ABOVE EVERY READER, and both halves of that matter.
+   It must be ABOVE the `native` target, which reads it during module evaluation — a `const` below that
+   point is a temporal dead zone and the target dies before compiling anything. It must be at DEPTH ZERO,
+   because a declaration moved inside the function that reads it is invisible to the module-level reader
+   below and the DEFAULT target dies instead. Both failures were made here, in that order, and neither is
+   a syntax error: `node --check` passes on both, so only running each target catches them. */
+const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
+  "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
+  "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
+  "-Werror=implicit-function-declaration"];
+
 /* THE UNITS /proc/self/stat REPORTS CHILD CPU IN, ASKED RATHER THAN ASSUMED. USER_HZ is 100 on every Linux
    this project has run on, and writing 100 here would be a number nobody fetched — the same thing as a spec
    section quoted from memory. `getconf` answers it, and an answer that is not a positive integer THROWS
@@ -1007,15 +1018,7 @@ if (NATIVE) {
              : process.argv.includes("leak")    ? "leak" : "none";
   const bin = join(OUT, "qjs-native-" + kind);
   mkdirSync(OUT, { recursive: true });
-  /* THE QUIET LIST IS DECLARED ABOVE ITS FIRST READER, and that is not style: the `native` target reads it
-   during module evaluation, so a `const` below that point is a temporal dead zone and the target dies with
-   `Cannot access QUIET_WARNINGS before initialization` — which no default build ever hit, because the
-   default path does not take this branch. A build target no gate runs is outside the gate. */
-const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
-  "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
-  "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
-  "-Werror=implicit-function-declaration"];
-
+  
 /* LEXBOR, NATIVELY, exactly as wpt.mjs provisions it — the same vendored source and the same cached archive,
      because a second copy of that provisioning is a second thing to keep in step with the pinned tag. */
   const LEXBOR_NATIVE = join(WORK, "lexbor-native", "liblexbor_static.a");
