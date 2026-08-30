@@ -98,7 +98,13 @@ enum { TE_HANDLE = 0, TE_WHEN, TE_EVERY, TE_SEQ, TE_FN, TE_ARG0 };
 static int      g_slot = -1;
 static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
 static int      g_ready;
-static int      g_id_set_timeout, g_id_set_interval, g_id_clear_timeout, g_id_clear_interval;
+/* §8.7's FOUR MEMBER DECLARATIONS, EACH A POOL ID, AND THE `= -1` IS PART OF THE DECLARATION. Written bare,
+   their pre-init value is `0` — which core/agent_state.h's table reserves for a FLAG or a CLASS ID and which
+   the id pool hands out as a real entry, so the failure of carrying one is not that the next agent's install
+   fails but that it succeeds against whatever member the new pool put at 0. That is the worse of the two
+   shapes: it brands `setTimeout` with a declaration the live agent never made, and nothing anywhere says so. */
+static int      g_id_set_timeout = -1, g_id_set_interval = -1,
+                g_id_clear_timeout = -1, g_id_clear_interval = -1;
 static void   (*g_script_sink)(uint32_t doc, const char *src);
 
 static void timer_install_map(JSContext *ctx);
@@ -981,6 +987,10 @@ void timer_init(JSContext *ctx)
     agent_state_atom("timer", &g_atom_map, "§8.7 Timers's map key on a global's timer record");
     agent_state_atom("timer", &g_atom_next, "§8.7 Timers's next-handle key on that record");
     agent_state_id("timer", &g_slot, "the per-realm slot §8.7 Timers's map is held in");
+    agent_state_id("timer", &g_id_set_timeout, "§8.7 Timers's setTimeout declaration");
+    agent_state_id("timer", &g_id_set_interval, "§8.7 Timers's setInterval declaration");
+    agent_state_id("timer", &g_id_clear_timeout, "§8.7 Timers's clearTimeout declaration");
+    agent_state_id("timer", &g_id_clear_interval, "§8.7 Timers's clearInterval declaration");
     agent_state_ptr("timer", &g_script_sink, "the host edge a string-bodied setTimeout is queued through");
 }
 
@@ -1035,5 +1045,10 @@ void timer_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_next);
     g_atom_map = g_atom_next = JS_ATOM_NULL;
     g_slot = -1;
+    /* THE FOUR MEMBER DECLARATIONS, GIVEN BACK. They name entries in an id pool that goes with the agent, and
+       `idl_install_method` reads them at every realm — so a carried one would install this agent's setTimeout
+       from the last agent's pool entry. Nothing frees a pool id, which is exactly why nothing but this line
+       and agent_state_check_released can notice one that stayed. */
+    g_id_set_timeout = g_id_set_interval = g_id_clear_timeout = g_id_clear_interval = -1;
     g_script_sink = NULL;
 }

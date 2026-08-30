@@ -59,8 +59,18 @@ static int     g_ready;
    slot bag it cannot name, which is the same shape Event uses for its own. */
 /* PER REALM, for the reason event.c states — a C member runs in the realm that DEFINED it. Held in quickjs's
    own per-context class-proto slot. */
+/* THE CLASS ID IS AGENT STATE AND IS GIVEN BACK AT 0 — core/agent_state.h states the one policy and the
+   reason: a class is registered in a RUNTIME, so a carried id names a class in a runtime that is gone, and
+   `JS_NewClassID` returns the EXISTING value when the slot is non-zero, so the next agent's init would hand
+   `JS_NewClass` an id its own runtime never allocated while a zeroing component draws that same number from a
+   counter that restarted. There is no collector entry to pay the closing cost of that policy here: the
+   JSClassDef below carries a NAME only, so PromiseRejectionEvent has neither a finalizer nor a gc_mark that
+   could read this id after the release column has already put it back. */
 static JSClassID g_pre_class;
-static int g_id_pre_ctor;
+/* AND THE CONSTRUCTOR'S POOL ENTRY, `= -1` because that is core/agent_state.h's pre-init value for an id.
+   Bare, its pre-init value is `0` — a VALID entry of the next agent's member pool, which is the failure mode
+   that answers instead of failing. */
+static int g_id_pre_ctor = -1;
 static JSValue g_pre_key = JS_UNDEFINED;
 /* THE NOTIFICATION DRIVER IS PER REALM, and that is §8.1.4.7's own requirement rather than tidiness: the event
    is fired at "the promise's relevant global object", and this driver reads its global off the ctx it runs
@@ -336,6 +346,14 @@ void unhandled_rejection_init(JSContext *ctx)
     agent_state_value("unhandled_rejection", &g_pre_key, "PromiseRejectionEvent's internal-slot key");
     agent_state_id("unhandled_rejection", &g_notify_slot, "§8.1.4.7's notifyRejected realm slot");
     agent_state_id("unhandled_rejection", &g_notify_stepid, "§8.1.4.7's notification driver machine");
+    agent_state_class("unhandled_rejection", &g_pre_class, "§8.1.4.7's PromiseRejectionEvent class");
+    agent_state_id("unhandled_rejection", &g_id_pre_ctor, "§8.1.4.7's PromiseRejectionEvent constructor declaration");
+    /* THE REPORT HOOK WAS GIVEN BACK BY THE RELEASE AND DECLARED BY NOBODY — a slot on the released side of a
+       pairing that has only one side is a slot agent_state_check_released holds nothing to assert, which is
+       the same silence core/agent_state.h found on the other arm. It is a pointer INTO another component
+       (solver/engine.c installs it, and the solver is released after the platform), so it is exactly the kind
+       agent_state_ptr exists for. */
+    agent_state_ptr("unhandled_rejection", &g_report, "the host edge an unreported rejection is reported through");
     realm_declare_intrinsic(unhandled_rejection_install_proto);
 }
 
@@ -414,5 +432,12 @@ void unhandled_rejection_free(JSRuntime *rt)
        away — but they are also what the init above would find set, and this file's own paragraph about the
        early-return is the argument for why leaving them is not harmless. */
     g_notify_slot = g_notify_stepid = -1;
+    /* AND THE CLASS WITH ITS CONSTRUCTOR'S POOL ENTRY. The class is registered in `rt`, which is going away;
+       the pool entry names a member declaration of an agent that is going away. Neither is freed by anything —
+       what makes leaving them wrong is that both are READ by the next agent, the class id by `JS_NewClassID`
+       (which hands back a non-zero slot unchanged) and the pool entry by `idl_step_constructor` at every
+       realm. */
+    g_pre_class = 0;
+    g_id_pre_ctor = -1;
     g_report = NULL;
 }
