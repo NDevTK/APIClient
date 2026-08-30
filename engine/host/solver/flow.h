@@ -298,6 +298,38 @@ typedef struct Flow {
      * standing in the same report its parent is. It is NOT cold-tier state — a resumed flow replays the
      * document, the script throws again and the report is owed again. */
     int   reporting;
+    /* HAS THIS FLOW'S PATH EVER TAKEN AN ARM THE CONCRETE EXAMPLE CONTRADICTED — the DERIVED/FORCED
+     * discriminator, and the one fact a request this flow builds cannot state without it.
+     *
+     * CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE names three provenances and requires every outbound request
+     * to declare which it is. Two of them are facts about the PARK — a parser-inserted `<script src>` is named
+     * by bytes the trusted zone itself fetched — and the third is a fact about the PATH: "a value exists only
+     * because a gate was forced". A value can be perfectly concrete and still have been reached only through a
+     * branch this run took AGAINST what the example says, and the request built from it is then evidence about
+     * what a server answers to a request no client makes. That is not derivable from any value: the value is
+     * the same bytes either way, so the discriminator has to be recorded where the ARM was taken, which is
+     * here, beside the flow's other path state.
+     *
+     * IT IS THE CONTRADICTION AND NOT THE FORK. Forced multi-path forks both arms of every branch over an
+     * unknown, so "this flow forked" is true of nearly every flow and separates nothing. What separates is
+     * whether the flow's own arm disagrees with the concrete example the value carries — §Solver-half's "at a
+     * branch the example marks the real arm" — and a branch over a value with NO example contradicts no
+     * observation and marks nothing. decide.c is the single writer (there is exactly one place an arm is
+     * taken) and flow_mark_forced_arm is how it says so.
+     *
+     * MONOTONE, because a path cannot un-take an arm: once a flow stands past a contradicted branch,
+     * everything it computes afterwards stands on it. That is also why it can be a bit rather than a count —
+     * a count would be a second quantity with no reader, and the WFQ must never read either: this is not a
+     * weight term, and a flow that branched cheaply must not be able to change its rank by having done so.
+     * Carried by a fork exactly like every other field of the path (flow_fork_inherit states it and asserts
+     * it), because an arm is its parent's path with one more arm on it.
+     *
+     * NOT COLD-TIER STATE, for `reporting`'s reason one line up: a resumed flow REPLAYS its recorded arms
+     * through the same decide.c seam, so every contradiction it stood on is re-observed as it is re-reached —
+     * and re-observed against TODAY's examples, which §Time-travel-resume requires ("a resumed flow re-derives
+     * example VALUES from CURRENT sources"). A serialized bit would state last session's answer about this
+     * session's server. */
+    int   path_forced;
     /* THE DOCUMENT'S LOAD STAGE IS NOT HERE, and the field that was is DELETED. One integer cannot hold N
        documents: an agent is an origin-keyed CLUSTER, so a flow reaches several Documents and HTML gives each
        its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness
@@ -1083,6 +1115,18 @@ void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise 
    called for the same distance any number of times. It bumps the frontier generation exactly as an emission
    does, because a weight that moves without one is a rank the value-yield cannot see changing. */
 void  flow_set_distance(Flow *f, double d);
+/* THE RUNNING FLOW JUST TOOK AN ARM ITS CONCRETE EXAMPLE CONTRADICTS — `path_forced`'s ONE writer, and the
+   whole of what makes a request this flow goes on to build FORCED rather than DERIVED. Idempotent and
+   monotone: a path cannot un-take an arm, and the second contradiction says nothing the first did not.
+   IT IS NOT A CREDIT AND NOT A CHARGE. Nothing about the rank moves here — a fork is rank-neutral and a
+   contradicted arm is still a fork — so this deliberately does NOT bump the frontier generation the way
+   flow_credit_emit and flow_set_distance do: no weight changed, so no rival needs recomputing. */
+void  flow_mark_forced_arm(void);
+/* HAS THIS FLOW'S PATH STOOD ON ONE — read at the PARK, never at the join, because a park is a work item and
+   §scheduler's "an operation that becomes a work item takes its inputs with it" applies to its provenance
+   exactly as it applies to its address: a flow that parks a request and takes a contradicted arm afterwards
+   built that request on the path it had THEN. */
+int   flow_path_forced(const Flow *f);
 /* CHARGE THE RUNNING FLOW FOR THE THREAD TIME A STEP JUST BURNED, in MICROSECONDS — the same currency as the
    reward above, which is the only reason the aging term can ever outweigh it. Charged AFTER the step, because
    the quantity is not known before it, and by the scheduler alone (it is the only caller that holds both ends

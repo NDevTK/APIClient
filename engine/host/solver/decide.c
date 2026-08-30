@@ -902,6 +902,57 @@ static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonf
     return arm;
 }
 
+/* DID THIS FLOW JUST TAKE AN ARM ITS OWN EXAMPLE CONTRADICTS — the DERIVED/FORCED discriminator, observed at
+ * the ONE place an arm is taken and recorded on the flow (flow.h's `path_forced`).
+ *
+ * WHAT MAKES IT AN OBSERVATION AND NOT AN INVENTION. A concolic value is a triple, and where the third member
+ * is present the run has a CONCRETE example — a loaded config field, a modelled viewport's `matches`, an
+ * `AbortSignal`'s real aborted state, the real bytes of `location.search`. §Solver-half says what that means at
+ * a branch: "at a branch the example marks the real arm PRIMARY". So the example ALREADY answers "which arm
+ * would a session carrying real values take", by the interpreter's own §7.1.2 ToBoolean over a value this
+ * engine computed — no predicate is re-decided from a recorded constraint, nothing is solved, and nothing is
+ * picked. The flow taking the other arm is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED in as many
+ * words: "a value exists only because a gate was forced".
+ *
+ * A BRANCH WITH NO EXAMPLE MARKS NOTHING, and that is a positive statement rather than a gap. Genuinely
+ * external input and server-injected absent state are example-FREE by §Solver-half's design — that is what
+ * makes them symbolic — so neither arm of `if (__FLAGS.admin)` over an absent record contradicts any
+ * observation. Marking one would be picking an arm to call real, which is the invention this whole taxonomy
+ * exists to prevent; the request stays DERIVED, which is exactly what it is (the real code computed it, no
+ * session sent it).
+ *
+ * THE CONTRADICTED EXAMPLE IS NOT YET DROPPED FROM THE VALUE, and that is the NEXT diff rather than a silence:
+ * §Learning-from-replies' "the forced sibling drops the contradicted example" needs precisely the fact this
+ * function computes, so it could not be built before it. Until it is, a flow past a contradicted branch still
+ * reads the pinned-by-nothing example for its @H values — which the provenance now at least SAYS, instead of
+ * publishing it under the grade of a value a real session produced.
+ *
+ * `JS_ToBool` IS THE RIGHT COERCION AND IT RUNS NO PAGE CODE. §7.1.2 ToBoolean has no ToPrimitive step — an
+ * object is true, a string is its length — so this cannot re-enter the interpreter from inside a branch hook,
+ * which is what makes it askable here at all. */
+static void decide_note_forced_arm(JSContext *ctx, JSValueConst cond, int arm) {
+    JSValue ex = concolic_example(ctx, cond);
+    int real;
+
+    /* JS_UNDEFINED IS THE ABSENCE, WHICH IS concolic.h'S OWN SPELLING OF IT ("the concrete example (dup'd) or
+       JS_UNDEFINED"), and it is read here as the absence and never as a falsy example. The two are the same
+       tag, so a value whose example genuinely IS `undefined` is treated as carrying none — that is the
+       producer's encoding, not this reader's default, and the alternative would be this file inventing a
+       distinction the value class does not make. */
+    if (JS_IsUndefined(ex)) return;
+    real = JS_ToBool(ctx, ex);
+    JS_FreeValue(ctx, ex);
+    /* §7.1.2 ToBoolean's only failure is an exception VALUE, which an example can never be: an example rides
+       the value the interpreter actually produced, and a throw produces none. */
+    DCHECK(real == 0 || real == 1,
+           "a concolic value's example coerced to neither true nor false — §7.1.2 ToBoolean answers -1 only "
+           "for an exception value, so a producer has attached a pending throw to a value as its example");
+    DCHECK(arm == 0 || arm == 1,
+           "an arm that is neither taken nor not-taken was compared against an example — the contradiction is "
+           "between TWO booleans, so a third value here is a decision seam that answered something else");
+    if (arm != real) flow_mark_forced_arm();
+}
+
 /* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
    where its sibling comes back, and it is the only thing that differs between them. */
 static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking) {
@@ -918,6 +969,13 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     key = decide_key(cond);
     arm = decide_arm(ctx, key, restartable, nonforking, &forked);
     free(key);
+
+    /* WHICH ARM THIS FLOW STANDS ON, AGAINST WHAT THE EXAMPLE SAYS A REAL SESSION WOULD DO. It is asked of
+       EVERY arm and not only of a forked one, because a replayed arm (a cold resume re-running its recorded
+       path) and a refined one (the constraint already answers) stand exactly where a forked one stands — and a
+       resumed flow whose provenance came back DERIVED would be the whole discriminator lost at the tier that
+       exists to preserve it. */
+    decide_note_forced_arm(ctx, cond, arm);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     /* THE ROOT TRAVELS WITH THE PIN, and it is read off the COMPARISON RESULT rather than re-derived: pred_new
@@ -999,7 +1057,22 @@ int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking)
  * this engine goes through — so `x === "a"` and `JSON.parse(x)` are two facts about one value and no spelling
  * of either can compose to the other's key. The operation string is the machine's, so a machine that asks the
  * same question at successive POSITIONS (an iteration over an unknown collection) says so there — each position
- * is its own predicate and must not be decided by the last one's answer. */
+ * is its own predicate and must not be decided by the last one's answer.
+ *
+ * NO ARM TAKEN HERE IS MARKED FORCED, AND WHAT IS MISSING IS A DECLARATION AND NOT A LOOKUP. The branch seam
+ * one function up asks the CONDITION for its concrete example and compares the arm against §7.1.2 ToBoolean of
+ * it (decide_note_forced_arm); an outcome has no condition and its arms are not booleans — they are numbered
+ * COMPLETIONS of a real operation over `over`. Where `over` carries an example the answer exists and is
+ * computable, but only by the MACHINE: `JSON.parse` over the example `"{}"` completes normally and over `"#x"`
+ * throws, and this seam holds the operand and the operation's NAME, never its semantics. Deciding from the
+ * name would be the recognizer §C-stack bans, and picking arm 0 because machines number their ordinary
+ * completion there would be inventing which completion a real session reaches.
+ * SO THE THING TO BUILD IS THE SITE'S OWN STATEMENT, exactly as `nonforking` already is: the completion this
+ * machine's operation reaches when run on the operand's example, or a positive "this machine cannot say". Every
+ * machine then answers for itself, at its own definition, and a FORCED completion becomes as visible as a
+ * forced branch. Until it is built, a request derived past a forced JSON.parse arm reports DERIVED — which is
+ * an under-statement of its provenance and is named here so the next attempt starts from the declaration
+ * rather than from a table of operation names. */
 int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
     if (!g_running) return -1;
     DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "

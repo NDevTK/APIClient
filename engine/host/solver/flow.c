@@ -250,6 +250,38 @@ void flow_set_distance(Flow *f, double d) {
     frontier_rank_changed();
 }
 
+/* A THIRD KIND OF QUANTITY, AND THE THING TO SAY ABOUT IT IS WHAT IT IS *NOT*. The two above are the WFQ's:
+ * one a ledger, one a comparator, both read by flow_weight. This is neither, and it must never become either.
+ * It is a fact about the PATH — did this flow ever take an arm the concrete example contradicts — recorded so
+ * that a request the flow builds afterwards can declare itself FORCED rather than DERIVED (CLAUDE.md
+ * §A-REQUEST-CARRIES-THE-PROVENANCE, and see `path_forced` in flow.h for why no value can answer it).
+ * SO IT DOES NOT TOUCH THE FRONTIER GENERATION. §scheduler's fork-is-rank-neutral says a sibling is worth
+ * exactly what its parent is worth at the instant of the branch, and BOTH arms of a forced branch are that
+ * sibling — the one that agrees with the example and the one that does not. Re-ranking here would price a
+ * property of the arm, which is the reset-by-splitting every other term of this file is written to forbid, and
+ * flow_fork_inherit's rank-neutrality equality would not catch it because this quantity is not in the weight.
+ * IDEMPOTENT BY THE ASSIGNMENT and not by a guard: a path cannot un-take an arm, so the second contradiction
+ * says nothing the first did not, and there is no reading to discard. */
+void flow_mark_forced_arm(void) {
+    /* NO `if (g_running)` GUARD, for flow_age_running's reason exactly. The only caller is the branch seam,
+       which decide.c reaches only with a flow switched in (it returns -1 before asking anything otherwise), so
+       a mark with nothing running is a contradiction observed on a path belonging to no flow — and the arm
+       that took it would then go on to build requests that declare themselves DERIVED. */
+    DCHECK(g_running != NULL,
+           "an arm contradicting its own example was recorded with no flow running — the contradiction is a "
+           "fact about ONE path, so there is no flow here to be standing on it and the requests built past "
+           "that arm would declare themselves DERIVED");
+    g_running->path_forced = 1;
+}
+
+int flow_path_forced(const Flow *f) {
+    DCHECK(f != NULL, "a flow's path was asked whether it stood on a forced arm, of no flow");
+    DCHECK(f->path_forced == 0 || f->path_forced == 1,
+           "a flow's forced-path mark is neither set nor clear — it is written in exactly one place, as a "
+           "constant, so any other value is memory this field does not own");
+    return f->path_forced;
+}
+
 /* Age the running flow by the MICROSECONDS of thread time its step just burned. A monopolizer that runs without
    emitting sinks below productive + unrun flows — see FLOW_AGE_RATE for the exchange that makes that true.
    IT IS NOT THE ONLY CHARGE ON `cpu`: a DEPARTING flow hands what it burned to the flow that forked it (see
@@ -411,10 +443,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
     DCHECK(sib->val == 0.0 && sib->val_born == 0.0 && sib->cpu == 0 && sib->visits == 0 &&
-           sib->cand_dist == 0.0 &&
+           sib->cand_dist == 0.0 && sib->path_forced == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0,
-           "a forked sibling was credited or charged before it inherited its parent's account — it was ranked, "
-           "and possibly run, at a weight that belongs to no flow, and this assignment throws that away");
+           "a forked sibling was credited, charged or DECIDED before it inherited its parent's account — it "
+           "was ranked, and possibly run, at a weight that belongs to no flow, and this assignment throws that "
+           "away. `path_forced` is in the same list for the same reason one field over: a sibling that had "
+           "already recorded a contradicted arm would have recorded it on a path it had not yet been given");
     /* AND IT MAY NOT ALREADY STAND UNDER A FLOW IN THE FORK TREE. flow_new mints a root node, so a non-NULL
        `up` here is a second inheritance on one sibling: the first parent's node would be leaked and every arm
        this flow later sheds would be charged to the wrong chain. */
@@ -459,6 +493,19 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        the ranking is decided, and its place is UNDER the flow it branched from. */
     sib->acct->up = parent->acct;
     parent->acct->refcount++;
+    /* AND THE PATH'S FORCED MARK — the one thing inherited here that the ranking never reads, and it is stated
+       at this line for the SAME sentence the five terms above are stated for: an arm is its parent's path with
+       one more arm on it, so everything the parent's path has already stood on, the arm stands on too. A
+       sibling born clean of it would declare its requests DERIVED on the strength of having been forked, which
+       is the provenance equivalent of reset-by-splitting — and it is the shape the defect actually takes,
+       because forcing is what MAKES most siblings: the arm minted at a contradicted branch is exactly the one
+       that would deny the contradiction.
+       IT IS NOT IN THE EQUALITY BELOW, and that is a statement rather than an omission: `path_forced` is not a
+       weight term (flow.c's flow_mark_forced_arm says why it must never become one), so flow_weight cannot see
+       it and the equality would pass whether this line existed or not. What asserts it is the pair of claims
+       around this one — the precondition above that the sibling has decided nothing yet, and the equality
+       below that nothing has entered the WEIGHT unnoticed. */
+    sib->path_forced = parent->path_forced;
     /* §scheduler'S ONE WFQ, ASSERTED AT THE FORK: A FORK IS RANK-NEUTRAL. The sibling is the same flow's path
        with one more arm on it, so at the instant it is born it is worth exactly what the parent is worth —
        branching is neither a promotion nor a demotion. It is not a tautology dressed as a check: it fires the
