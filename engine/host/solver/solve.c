@@ -776,7 +776,20 @@ static void detect_sink(JSValueConst arg, int cls) {
      * per detector, which is the per-caller `if` on a question every caller asks identically — so a fourth
      * sink class would have had to remember it, and a class that forgot would call this function with a plain
      * string and abort on the root assert below rather than reporting an untainted arrival. One dispatch, N
-     * callers. */
+     * callers.
+     *
+     * …AND THE ONE QUESTION THAT IS NOT EVERY CALLER'S IS ASSERTED HERE RATHER THAN ASKED. ECMAScript
+     * §19.2.1.1 PerformEval ( source, strictCaller, direct ) step 2 — "If source is not a String, return
+     * source" — makes a CONCRETE non-string offered to `eval` a call that compiles nothing, and `reached` is
+     * defined one file up as how many times a code-execution sink was EXECUTED. The rule is the JS class's
+     * alone: a URL sink and a markup sink both run ToString on whatever they are handed, so
+     * `location = { toString(){ return "javascript:…" } }` is a real vector and declining an object there
+     * would delete a true finding. So the class that owns the rule asks it, and this — the point every class
+     * converges on — states it, which is what stops the two from drifting into disagreement silently. */
+    DCHECK(cls != SINK_EVAL || JS_IsString(arg) || concolic_is(arg),
+           "a JS-context arrival was recorded for a value ECMAScript §19.2.1.1 PerformEval step 2 hands back "
+           "unevaluated — no program is compiled and there is no §12 lexical state for a breakout to escape "
+           "from, so this would raise `reached` for a call that is not a code-execution sink at all");
     g_sink_reached++;
     if (!concolic_is(arg)) return;
     g_sink_tainted++;
@@ -1274,6 +1287,27 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
         }
         return;                                 /* the marker records the PoC when the engine runs these bytes */
     }
+    /* ECMAScript §19.2.1.1 PerformEval ( source, strictCaller, direct ) step 2, "If source is not a String,
+       return source" — ASKED ON THE DETECTION ARM TOO, because the seam above is announced UNCONDITIONALLY
+       (js_eval_program_source announces every source before it decides anything) while `reached` is defined in
+       solve.h as how many times a code-execution sink was EXECUTED. `eval(fn)`, `eval({})` and `eval(42)`
+       execute nothing: step 2 hands the argument straight back, no program is compiled, and there is no §12
+       lexical state for a breakout to escape from — so counting one raises the number whose ONLY job is to
+       make an empty `@S []` attributable, on a call that is not a sink.
+       WHAT THAT COSTS IS A WRONG READING AND NOT A WRONG DIGIT, WHICH IS WHY IT IS WORTH A LINE. solve.h's
+       four states each take a different action, and `reached > 0` beside `tainted == 0` is the THIRD — "a sink
+       ran and what reached it was the page's own strings", whose action is to go and look at the page. A run
+       that inflates `reached` off non-sinks presents that reading for a document that reached no sink at all,
+       whose action is the opposite one: build whatever the document died on.
+       A CONCOLIC IS NOT DECLINED HERE, AND THAT IS STEP 2'S OTHER ARM RATHER THAN AN EXCEPTION TO THIS ONE.
+       solve.h: "unknown external input is not a String, so `eval(location.hash)` takes step 2 and is DETECTED
+       here" — and js_eval_program_source compiles a concolic's EXAMPLE when it carries one, so the arm this
+       declines is exactly the arm nothing in the engine can ever run.
+       THE SIBLING SINKS MUST NOT COPY THIS LINE, for the reason the verifying branch above already states:
+       `location = { toString(){ return "javascript:X9()" } }` really does run ToString and really is a vector,
+       so an object declined there would be a deleted finding rather than a declined non-sink. That is why the
+       rule lives at this class's own entry and is ASSERTED at detect_sink, where all three converge. */
+    if (!JS_IsString(arg) && !concolic_is(arg)) return;
     detect_sink(arg, SINK_EVAL);   /* record the source; breakout SEARCHED at verify */
 }
 
