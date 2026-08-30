@@ -266,7 +266,7 @@ void event_loop_work_advance(JSContext *ctx, uint64_t units)
  * take the one the concrete says you are in.
  *
  * WHERE A MOMENT HAS NO EXAMPLE THERE IS NO ORDER, AND THIS SAYS SO RATHER THAN INVENTING ONE. An unknown with
- * no example is a moment NOTHING COMPUTED — its domain is the whole of §3.2.4.5's `long` and both orders are
+ * no example is a moment NOTHING COMPUTED — its domain is the whole of Web IDL §3.2.4.5 long and both orders are
  * feasible — so any answer here decides which of the page's two programs runs by nothing at all, and the tie
  * would not even be §8.1.7's insertion order, which breaks a tie between moments that are EQUAL rather than
  * unknown. SOLVER_NO_NONFORKING_ARM is the positive statement of that, and the seam crashes on it naming this
@@ -360,7 +360,8 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
 
         DCHECK(JS_IsNumber(moment) && JS_IsNumber(delta),
                "the event loop was asked to add something that is neither a moment nor a duration — both "
-               "operands of §13.15.3's `+` here are numbers on this clock or unknown external input");
+               "operands of ECMAScript §13.15.3 ApplyStringOrNumericBinaryOperator here are numbers on this "
+               "clock or unknown external input");
         JS_ToFloat64(ctx, &m, moment);
         JS_ToFloat64(ctx, &d, delta);
         return JS_NewFloat64(ctx, m + d);
@@ -369,7 +370,8 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
     sp[1] = JS_DupValue(ctx, delta);
     /* The hook's stack effect is js_add_slow's: both operands freed, the result placed in sp[-2]. */
     if (!concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_PLUS))
-        DFAIL("§13.15.3's `+` declined an operand this component has already established is UNKNOWN — the "
+        DFAIL("ECMAScript §13.15.3 ApplyStringOrNumericBinaryOperator declined an operand this component has "
+              "already established is UNKNOWN — the "
               "concolic value semantics are not installed in this host, so every operator over an unknown "
               "falls through to the ordinary-object path and the next coercion throws out of an expression "
               "the page never wrote (solver/concolic.h: concolic_install_hooks)");
