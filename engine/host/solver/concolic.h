@@ -196,6 +196,18 @@ int         concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
    "{state}.code") returns the concrete `payload` instead of a concolic. NULL/NULL clears it. */
 void        concolic_set_candidate(const char *src, const char *payload);
 
+/* …AND WHETHER THAT SUBSTITUTION HAS ACTUALLY HAPPENED YET IN THE RUNNING FLOW. Installing a substitution says
+   what a source read WILL return; this says whether one has been reached. They are different facts and only
+   the second one makes the payload's bytes exist in the page's program.
+   IT IS THE PRECONDITION OF EVERY OBSERVATION ABOUT A CANDIDATE'S BYTES — see the definition in concolic.c for
+   the measurement it was being taken without, and §@S for why a rung whose zero and whose absence read alike
+   is the defect. Per flow, monotone within a flow (a payload cannot leave a program), carried by a fork, and
+   RE-EARNED across a park rather than resumed, because a resumed candidate replays the document and reaches
+   its own source read again.
+   A `0` IS A POSITIVE STATEMENT: nothing in this program is this flow's, so any string that resembles the
+   candidate is the page's own text. */
+int         concolic_candidate_delivered(void);
+
 /* A SOURCE'S BROWSER DELIVERY — what the browser does to the attacker's bytes before the page ever reads them,
    declared by the component that owns the source.
    This was MISSING, and its absence is a false-PoC generator rather than a gap. The solver invents a breakout

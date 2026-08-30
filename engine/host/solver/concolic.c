@@ -687,23 +687,52 @@ static void cons_seg_unref(ConsSeg *s) {
     }
 }
 
+/* HAVE THE RUNNING FLOW'S OWN CANDIDATE BYTES ENTERED THE PROGRAM YET? — a per-flow fact, held here because
+   this component is the only one that can answer it and because concolic_deliver is the only place it becomes
+   true. See concolic.h for what it is a precondition OF; this is where it lives and how it travels.
+   PER FLOW, LIKE THE PINS BESIDE IT, AND IT TRAVELS THE SAME WAY: the live value is the RUNNING flow's,
+   concolic_pins_suspend copies it into that flow's blob (so a FORK's sibling starts from exactly what its
+   parent had at the branch — §scheduler's fork-is-rank-neutral, which matters the moment a rung reads it),
+   concolic_pins_resume installs a parked one, concolic_pins_blob_empty answers 0 for a flow that has never run
+   in this session, and concolic_clear_pins is the fresh-flow reset. Four points, all in this file.
+   IT DOES NOT CROSS THE COLD TIER, and that is not an omission — cold.c gives a resumed candidate an EMPTY pin
+   blob because such a flow REPLAYS the document from the baseline (park_rec_cand parks a recipe, never a live
+   frame chain), so it re-reaches its own source read and re-earns this. flow.h says the same thing about
+   `cand_surv`/`cand_rung`: an observation of a re-execution belongs to the session that made it. */
+static int g_cand_delivered;
+
+/* THIS IS THE PER-FLOW CONCOLIC STATE'S CLEAR AND NOT ONLY THE PINS' — which is a statement about its CALLERS
+   rather than about its name. decide.c's decide_enter calls it to give a FRESH flow an empty concolic state,
+   flow.c's teardown calls it when there is no flow left to own one, and concolic_pins_resume calls it before
+   installing a parked one. Every one of those means "nothing this component holds is this flow's yet", so a
+   per-flow fact of this component that is NOT reset here is a fact one flow reads off another — and the
+   delivery bit below is the second such fact this file holds. The name says `pins` because flow.h spells the
+   slot `pin_blob` and three of the four callers are outside this file; see concolic_candidate_delivered. */
 void concolic_clear_pins(void) {
     int i;
     for (i = 0; i < g_pins_n; i++) cons_entry_free(&g_pins[i]);
     free(g_pins); g_pins = NULL; g_pins_n = g_pins_cap = 0;
     free(g_pins_hash); g_pins_hash = NULL; g_pins_hash_cap = 0;
     cons_seg_unref(g_pins_base); g_pins_base = NULL;
+    g_cand_delivered = 0;
 }
 
 /* Per-flow constraint state is swappable so interleaved flows keep their OWN narrowing: suspend FREEZES the
    live head onto the chain and hands back a reference to it, resume installs a parked chain as the live one.
    A blob is one flow's constraint parked while another runs — and the blob a FORK takes is the sibling's whole
    starting knowledge, which is the same object either way and is why one function serves both. */
-typedef struct { ConsSeg *seg; } PinBlob;
+/* AND IT CARRIES EVERY PER-FLOW FACT THIS COMPONENT HOLDS, WHICH IS TWO AND USED TO BE ONE. `delivered` rides
+   here for the same reason `seg` does: it is the running flow's and nobody else's, so a switch that left it
+   behind would hand the incoming flow the outgoing one's answer. The struct's NAME is the slot's name in
+   flow.h (`pin_blob`), which is outside this file; the CONTENT is this component's. */
+typedef struct { ConsSeg *seg; int delivered; } PinBlob;
 void *concolic_pins_suspend(void) {
     PinBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "concolic: the path constraint could not be parked — the frontier never drops a work item, and a "
              "flow whose constraint is lost would re-fork every branch it has already decided");
+    /* TAKEN AND NOT MOVED — the live value stays where it is, because this function serves a FORK as well as a
+       park: the sibling starts from what the parent had at the branch AND the parent goes on holding it. */
+    b->delivered = g_cand_delivered;
     if (g_pins_n == 0) {
         /* NOTHING LEARNED SINCE THE LAST FREEZE, so there is nothing to freeze: the blob is one more reference
            on the chain the flow already stands on. Without this a park/resume pair with no writes between them
@@ -741,6 +770,9 @@ void concolic_pins_resume(void *blob) {
     concolic_clear_pins();                 /* the live head and chain belong to the flow that just parked */
     g_pins_base = b->seg;
     if (g_pins_base) g_pins_base->refcount++;   /* the blob keeps its own reference until it is freed */
+    /* AFTER THE CLEAR, WHICH IS WHERE THE ORDER IS LOAD-BEARING: the clear above is what resets every per-flow
+       fact this component holds, so a restore written before it would be erased by it. */
+    g_cand_delivered = b->delivered;
 }
 /* A CONSTRAINT THAT HAS LEARNED NOTHING YET, for a flow that RESUMES without ever having run in this session —
    the cold tier's. Such a flow is not fresh (it stands on a recorded decision chain, so the scheduler resumes it
@@ -753,6 +785,10 @@ void *concolic_pins_blob_empty(void) {
     PinBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "concolic: a resumed flow's empty path constraint could not be allocated");
     b->seg = NULL;
+    /* AND IT HAS DELIVERED NOTHING EITHER, for the same reason it knows nothing: such a flow REPLAYS the
+       document from the baseline, so it re-reaches its own source read and the substitution happens again in
+       THIS session. Carrying a 1 across would say the bytes are in a program this session never built. */
+    b->delivered = 0;
     return b;
 }
 
@@ -1146,7 +1182,35 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     size_t o = 0, n;
     int i;
 
-    if (!payload) payload = "";
+    /* THE ONE POINT AT WHICH THE ATTACKER'S BYTES BECOME A VALUE IN THE PAGE'S OWN PROGRAM — which is what
+     * makes it the observation site for concolic_candidate_delivered, and the reason that fact can be a fact
+     * at all. Both callers reach here through cand_matches, so there is no second door: a source read whose
+     * identity is the substitution's returns the payload HERE or the payload is not in the program.
+     * THE PAYLOAD IS ASSERTED RATHER THAN DEFAULTED, and the `if (!payload) payload = ""` that stood here is
+     * deleted with its own reason. It made "the scheduler installed a substitution with no bytes" into a
+     * delivery of the empty string: the source read succeeds, the page composes with nothing, every rung
+     * measures a zero-length payload, and solve.c's own denominator assert (`o.len > 0`) fires two subsystems
+     * away from the cause. That is §Architecture's defaulted field exactly — a hole a `?:` fills, in the one
+     * value the whole search is about. `CHECK` and not `DCHECK` because it is dereferenced immediately below,
+     * which is the rule solve.c states about its own two.
+     * AND THE BYTES BELONG TO THE FLOW THAT WILL BE CREDITED FOR THEM. concolic_set_candidate asserts the
+     * installed substitution matches the running flow at SWITCH-IN; this asks it at the moment the bytes
+     * actually enter, because everything downstream — the survival rung, the arrival rung, the PoC — is
+     * recorded against `flow_running()` and would be recorded against the wrong flow if the two had drifted
+     * between the switch and the read. */
+    {
+        const Flow *f = flow_running();
+        CHECK(payload != NULL,
+              "concolic: an @S candidate is being delivered with no payload — the substitution is (src,payload) "
+              "as one identity and solve.c refuses to seed a flow holding half of it, so a NULL here is an "
+              "installation that skipped concolic_set_candidate's own pairing; delivered as the empty string "
+              "it would read as a source the page composed nothing out of");
+        DCHECK(f != NULL && f->cand_payload != NULL && !strcmp(f->cand_payload, payload),
+               "an @S candidate's bytes are entering the program under a flow that is not carrying them — the "
+               "survival and arrival rungs, and any PoC, are recorded against the RUNNING flow, so this "
+               "delivery is about to be credited to a flow whose own payload is a different string");
+        g_cand_delivered = 1;
+    }
     for (i = 0; i < g_srcs_n; i++)
         if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }
     encode = concolic_source_encodes(root);
@@ -1194,6 +1258,32 @@ void concolic_set_candidate(const char *src, const char *payload) {
                "the installed @S substitution does not match the running flow — an exploring flow would read "
                "the previous candidate's payload in place of its concolic source");
     }
+}
+
+/* HAVE THE RUNNING FLOW'S OWN CANDIDATE BYTES ENTERED THE PROGRAM? — see the static above for where the fact
+   lives and how it travels; this is what it is FOR.
+   IT IS THE PRECONDITION OF EVERY OBSERVATION MADE ABOUT A CANDIDATE'S BYTES, and until it existed there was
+   none. solve.c's sink entries test `concolic_is(arg)` — "the injection did not reach this read" — and that
+   test is TRUE OF EVERY LITERAL THE PAGE WRITES, which solve_html_sink's own comment says in those words. So
+   during a candidate run the page's own `eval`, its own `innerHTML` and its own `location =` all reach the
+   measurement, and the survival rung (§@S's "filter-survived") takes the longest run of the candidate's bytes
+   in whatever string the PAGE built. A breakout is punctuation — `'><svg onload=X9()>`, `';X9();//` — so a run
+   of one or two characters is found in almost any markup, and the flow's fitness, the search's ratchet and the
+   popup's "S of L bytes of the furthest candidate survived" are then a reading of the page's own text.
+   THAT IS A NUMBER ABOUT NOTHING, WHICH IS WORSE THAN A ZERO: §@S's three indistinguishable zero-states — a
+   flow that never started, one whose bytes were eaten, one killed by a gate on the runway — were being told
+   apart by a coincidence, so the one rung that does exist read nonzero for candidates whose bytes were never
+   in the program at all. This fact is what the classes could not answer for themselves: a locator or an X9
+   partition identifies WHOSE bytes a string holds only once they are somewhere to be found.
+   A `0` IS NOT "NOT YET" — it is the positive statement that nothing in this program is this flow's, so a
+   string that looks like the candidate's is the page's own. Read at the sink, never latched by a reader. */
+int concolic_candidate_delivered(void) {
+    DCHECK(!g_cand_delivered || g_cand_payload != NULL,
+           "a flow is recorded as having delivered its @S payload while no substitution is installed — the "
+           "delivery is set at concolic_deliver, which cand_matches only reaches with one installed, so the "
+           "two have come apart and every sink observation below this is about to be attributed on a fact "
+           "belonging to a candidate that is no longer running");
+    return g_cand_delivered;
 }
 
 /* THE MEMBER'S OWN EXAMPLE — the third of §Solver's triple, computed by RUNNING THE REAL READ on the parent's
@@ -2431,6 +2521,11 @@ void concolic_free(void)
     free(g_cand_src);
     free(g_cand_payload);
     g_cand_src = g_cand_payload = NULL;
+    /* AND THE DELIVERY FACT GOES WITH THE PAIR IT IS ABOUT, because the two are read together: a `1` standing
+       beside a NULL payload is a claim that some flow's bytes are in a program this agent no longer has, and
+       concolic_candidate_delivered asserts exactly that they cannot come apart. It is the running flow's live
+       copy, so nothing else releases it — the parked copies went with their blobs. */
+    g_cand_delivered = 0;
     /* AND THE PUBLISHED-NAMESPACE PATHS, for the same reason the source rows above are given back here: a path
        names a record of a document that is gone, and the addresses it is keyed by are about to be reused. */
     absent_free();

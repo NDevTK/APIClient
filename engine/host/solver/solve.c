@@ -1109,6 +1109,14 @@ static void breakout_arrived(Cand *e) {
            "a sink recorded a BREAKOUT arriving while its search holds nothing but its own probes — a derived "
            "class's breakout exists only because a probe run returned one, and a single-context class's "
            "vectors are not probes at all (nprobe is 0 for it), so these bytes were not built by this search");
+    /* …AND THE SAME PRECONDITION filter_survived STATES, at the rung above it. The marker is a strong
+       partition and not a proof: `X9` is two characters and a minified bundle names things that way, so an
+       arrival credited without this is a whole rung — and, at the URL class, a FIRE — taken on the page's own
+       address. The entry asked already; this is what keeps that true of the next entry. */
+    DCHECK(concolic_candidate_delivered(),
+           "an @S breakout was recorded as ARRIVING for a flow whose payload has not entered the program — "
+           "the marker these bytes were found by is the page's own, so the ladder is about to advance a "
+           "candidate for a string it never produced");
     /* §@S's SECOND FITNESS RUNG, WRITTEN TO BOTH QUANTITIES — "the search is DISTANCE-DIRECTED (a fitness of
        {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)". A candidate flow records
        no endpoints by design (endpoint_suppress), so before this rung existed the ONLY thing that could ever
@@ -1196,6 +1204,18 @@ static void filter_survived(const char *out) {
           "solve: a candidate flow's bytes reached a sink for a search this session has no entry for — the "
           "candidate exists only because detection opened one and a cold-resumed one re-registers before it "
           "runs an opcode, so an absent entry is a search dropped under a live flow");
+    /* THE MEASUREMENT'S OWN PRECONDITION, ASSERTED WHERE THE MEASUREMENT IS AND NOT ONLY WHERE IT IS ROUTED.
+       Every candidate arm returns before reaching here unless this flow's substitution has been performed
+       (concolic.h), and asserting it again is what makes that STRUCTURAL: a fourth sink class, or a fourth
+       route into an existing one, cannot quietly re-open the door that let this rung measure the page's own
+       strings. Without it the failure is silent by construction — a nonzero fraction of a real payload found
+       in a real string, which is indistinguishable from an observation. */
+    DCHECK(concolic_candidate_delivered(),
+           "an @S survival fraction is about to be measured for a flow whose payload has not entered the "
+           "program — the run this is about to find is the PAGE'S own bytes coinciding with the candidate's, "
+           "so the flow's fitness, the search's ratchet and the report's surviving-byte count would all be "
+           "readings of text the attacker never supplied. The sink entry that reached here did not ask "
+           "concolic_candidate_delivered");
 
     /* AND THE DELIVERY PROBE IS READ HERE, at the same class-independent point and for the same reason this
        function already gives about its own rung: the observation is about the RUNNING FLOW'S OWN bytes, so it
@@ -1371,6 +1391,24 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
         Cand *e;
         const char *code;
         if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
+        /* …AND THE OTHER HALF OF THAT SENTENCE, WHICH THE LINE ABOVE CANNOT SAY. "The injection did not reach
+           this read" was being tested by "the value is not concolic", and solve_html_sink's own comment
+           already records that this "is also true of every literal the page writes". The classes each patched
+           it downstream with a locator/X9 partition, and everything ABOVE that partition — the survival rung,
+           which is deliberately class-independent — kept measuring the page's own strings against this
+           candidate's payload. A breakout is punctuation, so a run of one or two bytes is found in almost any
+           string a page builds: §@S's first rung read NONZERO for candidates whose bytes had never entered the
+           program, the search's ratchet paid for it once, and the popup rendered "S of L bytes of the furthest
+           candidate survived" about text the attacker never supplied.
+           THE FACT THAT ANSWERS IT IS NOT ABOUT THE STRING AT ALL — it is whether this flow's substitution has
+           been performed yet (concolic.h), which only the component that performs it can know. A `0` is the
+           positive statement that nothing here is this flow's, so there is nothing to measure, nothing to
+           partition and nothing to fire: this return is the whole candidate arm's precondition and is why the
+           two sibling sinks below carry the same line rather than a gate of their own.
+           IT IS NOT A BOUND. Nothing is counted, aged or remembered; the same flow reaching the same sink one
+           statement after its source read is measured in full, and a flow that never delivers loses only
+           readings that were never about it. */
+        if (!concolic_candidate_delivered()) return;
         /* A NON-STRING SOURCE IS NOT A SINK, AND THAT IS A POSITIVE STATEMENT RATHER THAN A GUARD.
            ECMAScript §19.2.1.1 PerformEval ( source, strictCaller, direct ) step 2 is "If source is not a
            String, return source" — the argument is handed back UNEVALUATED, so nothing is compiled, no JS
@@ -1614,6 +1652,11 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
         Cand *e;
         const char *url;
         if (concolic_is(arg)) return;
+        /* AND THE HALF THAT TEST CANNOT SAY — see solve_eval_sink for the whole of it. It matters most HERE:
+           this class has no context probe, so the marker alone identifies its bytes, and a page that ships a
+           minified `X9` in a URL it builds itself would have raised the arrival rung AND called url_fire on
+           its own address. */
+        if (!concolic_candidate_delivered()) return;
         /* CONVERTED BEFORE THE CLASS PARTITION — see solve_eval_sink for why the filter rung is asked first. */
         if (!(url = JS_ToCString(ctx, arg))) return;
         filter_survived(url);
@@ -1637,6 +1680,11 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         Cand *e;
         const char *html;
         if (concolic_is(arg)) return;   /* injection didn't reach this write */
+        /* AND THE HALF THAT TEST CANNOT SAY — see solve_eval_sink. This is the sink whose own comment below
+           records that "the value is not concolic" is true of every literal the page writes, which is the
+           observation this line completes: it is also true of every literal the page writes, and until now
+           each of those literals was measured against this candidate's payload. */
+        if (!concolic_candidate_delivered()) return;
         /* CONVERTED BEFORE THE CLASS PARTITION — see solve_eval_sink for why the filter rung is asked first. */
         if (!(html = JS_ToCString(ctx, arg))) return;
         filter_survived(html);
