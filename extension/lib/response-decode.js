@@ -4,17 +4,35 @@
 // (one problem per file); loaded before it, resolves callers (learnFromResponse, extractKeysFromText,
 // protobuf/discovery libs) at call-time. The Protocol Reverse-Engineering feature, just relocated.
 
+/* WHICH RECORD BUILDER RUNS IS DECIDED BY WHICH WRAPPER CAPTURED THE TRAFFIC, NEVER BY THE PAGE'S VERB.
+ *
+ * This dispatch used to read `msg.method`, and on the fetch/XHR arm that string is whatever the page passed
+ * its own `fetch()`. So `fetch(u, { method: "WS_OPEN" })` — a legal request — routed a plain HTTP round trip
+ * into the WebSocket builder, which then filed a socket record with no channel to match its later frames
+ * against. It is the §"a question some entries ask and others do not" shape: one set of bytes classified by a
+ * value the classifier does not own, reported as a subsystem failing on input it should never have been shown.
+ *
+ * `transport` is intercept.js's / content.js's own name for the wrapper that ran, and REFUSAL IS THE GATE, NOT
+ * AN ASSERT. This message arrives from the UNTRUSTED renderer (SECURITY.md), so a spelling this zone does not
+ * serve is a malformed relay message and gets dropped — a DCHECK here would be the trusted zone crashing on
+ * bytes a compromised page chose, which is the one thing check.js says an assertion must never be. What IS
+ * asserted, downstream at `_pushGlobalLog`, is the shape of the record THIS FILE then builds: by then every
+ * field is one of its own creators' statements, so a hole there is our logic and it crashes. */
+const _RESP_TRANSPORTS = ["fetch", "xhr", "websocket", "eventsource", "postmessage", "messagechannel"];
 async function handleResponseBody(tabId, msg, frameId, documentId) {
   if (!msg.url) return;
+  if (_RESP_TRANSPORTS.indexOf(msg.transport) < 0) {
+    console.warn("[brain] RESPONSE_BODY names no transport this zone serves — dropped:",
+                 String(msg.transport), msg.url);
+    return;
+  }
   await _globalStoreReady;
 
   // Normalize channel ID from relay messages
   const channelId = msg.channelId || msg.wsId;
 
   // WebSocket lifecycle: one log entry per connection, messages[] array
-  const isWs = msg.method === "WS_OPEN" || msg.method === "WS_CLOSE" ||
-    msg.method === "WS_SEND" || msg.method === "WS_RECV";
-  if (isWs) {
+  if (msg.transport === "websocket") {
     if (!_wsConnState.has(documentId)) _wsConnState.set(documentId, new Map());
     const conns = _wsConnState.get(documentId);
 
@@ -31,7 +49,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         wsOpen: true,
         messages: [],
       };
-      _pushGlobalLog(entry, tabId, documentId, frameId);
+      _pushGlobalLog(entry, "websocket", tabId, documentId, frameId);
       conns.set(channelId, { url: msg.url, readyState: 1, entryId: entry.id });
       notifyPopup(tabId);
       return;
@@ -41,7 +59,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       const conn = conns.get(channelId);
       if (conn) conn.readyState = 3;
       // Mark the log entry as closed
-      const entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "WEBSOCKET" && r.documentId === documentId);
+      const entry = globalRequestLog.find((r) => r.channelId === channelId && r.kind === "websocket" && r.documentId === documentId);
       if (entry) {
         entry.wsOpen = false;
         entry.messages.push({
@@ -59,7 +77,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
 
     // WS_SEND or WS_RECV — append message to existing connection entry
-    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "WEBSOCKET" && r.documentId === documentId);
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.kind === "websocket" && r.documentId === documentId);
     if (!entry) {
       // WS was opened before extension injected, or after SW restart — create entry now
       entry = {
@@ -73,7 +91,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         wsOpen: true,
         messages: [],
       };
-      _pushGlobalLog(entry, tabId, documentId, frameId);
+      _pushGlobalLog(entry, "websocket", tabId, documentId, frameId);
       conns.set(channelId, { url: msg.url, readyState: 1, entryId: entry.id });
     }
 
@@ -111,8 +129,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
   // postMessage: one log entry per source origin, messages[] array
   // Only PM_RECV — can't wrap window.postMessage (see intercept.js comments)
-  if (msg.method === "PM_RECV") {
-    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "POSTMESSAGE" && r.documentId === documentId);
+  if (msg.transport === "postmessage") {
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.kind === "postmessage" && r.documentId === documentId);
     if (!entry) {
       entry = {
         id: "pm_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
@@ -126,7 +144,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         targetOrigin: msg.targetOrigin || "",
         messages: [],
       };
-      _pushGlobalLog(entry, tabId, documentId, frameId);
+      _pushGlobalLog(entry, "postmessage", tabId, documentId, frameId);
     }
 
     entry.messages.push({
@@ -148,8 +166,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   }
 
   // MessageChannel: MC_OPEN creates entry, MC_RECV appends messages
-  if (msg.method === "MC_OPEN") {
-    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL" && r.documentId === documentId);
+  if (msg.transport === "messagechannel" && msg.method === "MC_OPEN") {
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.kind === "msgchannel" && r.documentId === documentId);
     if (!entry) {
       entry = {
         id: "mc_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
@@ -163,14 +181,14 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         targetOrigin: msg.targetOrigin || "",
         messages: [],
       };
-      _pushGlobalLog(entry, tabId, documentId, frameId);
+      _pushGlobalLog(entry, "msgchannel", tabId, documentId, frameId);
     }
     notifyPopup(tabId);
     return;
   }
 
-  if (msg.method === "MC_RECV") {
-    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.method === "MSGCHANNEL" && r.documentId === documentId);
+  if (msg.transport === "messagechannel") {
+    let entry = globalRequestLog.find((r) => r.channelId === channelId && r.kind === "msgchannel" && r.documentId === documentId);
     if (!entry) {
       // Port message arrived before MC_OPEN (race) — create entry
       entry = {
@@ -185,7 +203,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         targetOrigin: "",
         messages: [],
       };
-      _pushGlobalLog(entry, tabId, documentId, frameId);
+      _pushGlobalLog(entry, "msgchannel", tabId, documentId, frameId);
     }
     entry.messages.push({
       dir: "recv",
@@ -205,7 +223,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   }
 
   // ─── SSE: streaming events, no request data ─────────────────────────────
-  if (msg.method === "SSE") {
+  if (msg.transport === "eventsource") {
     if (!msg.body) return;
     const entry = {
       id: "alt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
@@ -214,12 +232,25 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       service: extractInterfaceName(new URL(msg.url)),
       timestamp: Date.now(),
       status: msg.status || 200,
+      /* AN EventSource MESSAGE IS AN HTTP RESPONSE THIS RECORD ONLY SEES THE MIDDLE OF, AND EVERY FIELD BELOW
+         SAYS WHICH KIND OF NOTHING IT HAS. The wrapper in intercept.js hooks the `message` event, not the
+         request, so there is no status line to read a reason phrase from, no request headers to list and no
+         request body to encode — and this record used to OMIT those four, which made lib/learn.js reach for
+         `entry.contentType?.includes(…)` and the HAR export reach for `r.requestHeaders ?`. Each of those
+         guards read as "this request might have had a content type" when the truth is that an EventSource
+         GET has none to have. Writing them makes the request half of the HTTP arm uniform across all three
+         of its creators, which is what lets the shape be asserted once at `_pushGlobalLog`. */
+      statusText: "",
+      completedAt: Date.now(),
+      requestHeaders: {},
+      contentType: "",
+      rawBodyB64: null,
       responseBody: msg.body,
       responseBase64: msg.base64Encoded || false,
       mimeType: msg.contentType || "",
       responseHeaders: msg.responseHeaders || {},
     };
-    _pushGlobalLog(entry, tabId, documentId, frameId);
+    _pushGlobalLog(entry, "http", tabId, documentId, frameId);
     if (msg.body) {
       extractKeysFromText(documentId, msg.body, msg.url, "response_body");
     }
@@ -299,6 +330,13 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     service: service,
     timestamp: Date.now(),
     status: msg.status,
+    /* THE SERVER'S OWN REASON PHRASE, CARRIED RATHER THAN RECONSTRUCTED. intercept.js reads it off the very
+       Response/XHR the status came from and content.js relays it per-transport; the HAR export used to
+       synthesize `r.statusText || (r.status === 200 ? "OK" : "")` from a field NO producer on this record has
+       ever written, so every exported entry carried a reason phrase nothing observed. It is `""` whenever the
+       server stated none — Fetch §2.2.6 Responses makes that the ALWAYS-case over HTTP/2 — and the empty
+       string travels as itself rather than becoming the synthesis. */
+    statusText: msg.statusText,
     completedAt: Date.now(),
     requestHeaders: headerMap,
     contentType: contentType || "",
@@ -694,7 +732,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   }
 
   // Add to request log
-  _pushGlobalLog(entry, tabId, documentId, frameId);
+  _pushGlobalLog(entry, "http", tabId, documentId, frameId);
 
   // Learn from response — skip for static assets.
   if (entry.responseBody && !_isAsset) {

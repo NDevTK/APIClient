@@ -34,6 +34,11 @@
                      `null` was that statement rendered as the value the classifier reads for "not opaque".
        wsId          written by the WebSocket wrapper alone; its absence is "this is not a socket frame", and
                      lib/response-decode.js reads exactly that (`msg.channelId || msg.wsId`).
+       statusText    Fetch §2.2.6 Responses' status message / XMLHttpRequest §3.6.3 `The statusText getter` —
+                     written by the fetch and XHR wrappers, which have a status LINE to have read one from. A
+                     WebSocket frame and an EventSource message have none, so its absence is "no status line
+                     was observed" and NOT "the reason phrase was empty", which is a different and legal
+                     answer the h2 wrappers do report.
        requestHeaders / requestBody / requestBodyBase64 / callStack
                      written by the fetch and XHR wrappers, which have a request to describe. A WS_OPEN /
                      WS_SEND / WS_RECV frame has none, and `null`/`false` said "the request carried no
@@ -42,12 +47,19 @@
      `targetOrigin` belong to the postMessage/MessageChannel records THIS FILE builds further down — a
      different producer on a different path — and reading them off intercept.js's detail was a read with no
      writer, with `|| null` as the reason it never crashed. */
-  const PER_TRANSPORT = ["responseType", "wsId", "requestHeaders", "requestBody", "requestBodyBase64", "callStack"];
+  const PER_TRANSPORT = ["responseType", "wsId", "statusText",
+                         "requestHeaders", "requestBody", "requestBodyBase64", "callStack"];
   document.addEventListener("__uasr_resp", (e) => {
     if (!e.detail) return;
     const d = e.detail;
     const m = {
       type: "RESPONSE_BODY",
+      /* THE TRANSPORT IS THE WRAPPER'S OWN NAME FOR ITSELF, and it is a BASE field precisely because every
+         wrapper writes one. It is what lib/response-decode.js routes on, and `method` is what it used to
+         route on — but on the fetch/XHR arm `method` is the verb the PAGE chose, so `fetch(u, {method:
+         "WS_OPEN"})` steered its own HTTP round trip into the WebSocket record builder. A page may still
+         spell any verb it likes; it cannot spell which of intercept.js's wrappers ran. */
+      transport: d.transport,
       url: d.url,
       method: d.method,
       status: d.status,
@@ -125,6 +137,7 @@
         }
         chrome.runtime.sendMessage({
           type: "RESPONSE_BODY",
+          transport: "messagechannel",
           url: location.href,
           method: "MC_RECV",
           channelId: mcId,
@@ -154,6 +167,7 @@
           // Notify background that a channel was established
           chrome.runtime.sendMessage({
             type: "RESPONSE_BODY",
+            transport: "messagechannel",
             url: location.href,
             method: "MC_OPEN",
             channelId: mcId,
@@ -184,6 +198,7 @@
       }
       chrome.runtime.sendMessage({
         type: "RESPONSE_BODY",
+        transport: "postmessage",
         url: location.href,
         method: "PM_RECV",
         channelId: pmId,

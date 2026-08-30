@@ -257,8 +257,19 @@
 
           emit({
             url,
+            transport: "fetch",
             method: method.toUpperCase(),
             status: clone.status,
+            /* Fetch §2.2.6 Responses' STATUS MESSAGE, read off the same Response the status came from. The
+               consumer that needs it is the HAR export, whose `response.statusText` it used to synthesize as
+               `"OK"` for every 200 and `""` for everything else — a reason phrase no server ever sent,
+               written into a document a reviewer reads as the server's own words. THE EMPTY STRING IS A REAL
+               ANSWER AND THE SYNTHESIS WAS WRONG EXACTLY WHERE IT LOOKED RIGHT: §2.2.6 states a response over
+               an HTTP/2 connection ALWAYS has the empty byte sequence as its status message, so on every h2
+               origin — which is most of them — the export was inventing "OK" for a field the protocol had
+               deliberately emptied. An opaque cross-origin response is `""` for the same reason: the browser
+               refusing to state one, travelling as itself. */
+            statusText: clone.statusText,
             // Response.type is "basic" | "cors" | "opaque" | "opaqueredirect"
             // | "error". Opaque is a fact-level signal that the body was
             // cross-origin-no-cors and therefore unreadable — treat as
@@ -351,8 +362,12 @@
 
         emit({
           url,
+          transport: "xhr",
           method: (this.__uasr_method || "GET").toUpperCase(),
           status: this.status,
+          // XMLHttpRequest §3.6.3 `The statusText getter` — the same field the fetch wrapper reads off its
+          // Response, so one HTTP log record shape covers both transports.
+          statusText: this.statusText,
           contentType: ct,
           responseHeaders: headers,
           body,
@@ -384,14 +399,14 @@
 
       this.addEventListener("open", function () {
         try {
-          emit({ url: wsUrl, method: "WS_OPEN", wsId: wsId, status: 0,
+          emit({ url: wsUrl, transport: "websocket", method: "WS_OPEN", wsId: wsId, status: 0,
             contentType: "websocket", responseHeaders: {}, body: null, base64Encoded: false });
         } catch (_) {}
       });
 
       this.addEventListener("close", function (ev) {
         try {
-          emit({ url: wsUrl, method: "WS_CLOSE", wsId: wsId, status: ev.code || 1000,
+          emit({ url: wsUrl, transport: "websocket", method: "WS_CLOSE", wsId: wsId, status: ev.code || 1000,
             contentType: "websocket", responseHeaders: {}, body: ev.reason || "", base64Encoded: false });
         } catch (_) {}
         _wsConnections.delete(wsId);
@@ -412,13 +427,13 @@
             base64Encoded = true;
           } else if (typeof Blob !== "undefined" && data instanceof Blob) {
             data.arrayBuffer().then(function (ab) {
-              emit({ url: wsUrl, method: "WS_SEND", wsId: wsId, status: 0,
+              emit({ url: wsUrl, transport: "websocket", method: "WS_SEND", wsId: wsId, status: 0,
                 contentType: "websocket", responseHeaders: {},
                 body: uint8ToBase64(new Uint8Array(ab)), base64Encoded: true });
             }).catch(function () {});
             return _origSend(data);
           }
-          emit({ url: wsUrl, method: "WS_SEND", wsId: wsId, status: 0,
+          emit({ url: wsUrl, transport: "websocket", method: "WS_SEND", wsId: wsId, status: 0,
             contentType: "websocket", responseHeaders: {}, body, base64Encoded });
         } catch (_) {}
         return _origSend(data);
@@ -435,13 +450,13 @@
             base64Encoded = true;
           } else if (typeof Blob !== "undefined" && e.data instanceof Blob) {
             e.data.arrayBuffer().then(function (ab) {
-              emit({ url: wsUrl, method: "WS_RECV", wsId: wsId, status: 0,
+              emit({ url: wsUrl, transport: "websocket", method: "WS_RECV", wsId: wsId, status: 0,
                 contentType: "websocket", responseHeaders: {},
                 body: uint8ToBase64(new Uint8Array(ab)), base64Encoded: true });
             }).catch(function () {});
             return;
           }
-          emit({ url: wsUrl, method: "WS_RECV", wsId: wsId, status: 0,
+          emit({ url: wsUrl, transport: "websocket", method: "WS_RECV", wsId: wsId, status: 0,
             contentType: "websocket", responseHeaders: {}, body, base64Encoded });
         } catch (_) {}
       });
@@ -464,6 +479,7 @@
           try {
             emit({
               url: esUrl,
+              transport: "eventsource",
               method: "SSE",
               status: 200,
               contentType: "text/event-stream",

@@ -5,7 +5,7 @@
 
 async function initMsgConsole(req) {
   currentChannelId = req.channelId;
-  currentChannelType = req.method; // "WEBSOCKET" or "POSTMESSAGE"
+  currentChannelType = req.kind; // the record's producer-stated kind, never the page-chosen verb
   /* For a PM reply the target is the page-claimed sourceOrigin — who the renderer says sent to us. It is
      carried VERBATIM, including the empty string the renderer sends when it stated no origin: what an absent
      one may NOT become is `"*"`, which is what sendConsoleMessage used to substitute. See the refusal there. */
@@ -24,11 +24,11 @@ async function initMsgConsole(req) {
   const urlEl = document.getElementById("ws-console-url");
   // THE ORIGIN PAIR IS THE PAGE'S CLAIM AND SAYS SO \u2014 one statement of that, in popup-reqlog.js, which
   // carries why (the halves are read in the untrusted renderer, and the browser never stated them).
-  if (currentChannelType === "POSTMESSAGE") {
+  if (currentChannelType === "postmessage") {
     labelEl.textContent = "postMessage";
     urlEl.textContent = "page-claimed: " + _claimedOriginPair(req);
     urlEl.title = PAGE_CLAIMED_ORIGINS_TITLE;
-  } else if (currentChannelType === "MSGCHANNEL") {
+  } else if (currentChannelType === "msgchannel") {
     labelEl.textContent = "MessageChannel";
     urlEl.textContent = "page-claimed: " + _claimedOriginPair(req);
     urlEl.title = PAGE_CLAIMED_ORIGINS_TITLE;
@@ -101,15 +101,15 @@ async function refreshMsgConsole() {
   }
 
   // Pick the right status message type based on channel
-  const statusType = currentChannelType === "POSTMESSAGE" ? "PM_GET_STATUS"
-    : currentChannelType === "MSGCHANNEL" ? "MC_GET_STATUS" : "WS_GET_STATUS";
+  const statusType = currentChannelType === "postmessage" ? "PM_GET_STATUS"
+    : currentChannelType === "msgchannel" ? "MC_GET_STATUS" : "WS_GET_STATUS";
   try {
     const routedTab = currentChannelTabId != null ? currentChannelTabId : currentTabId;
     const result = await chrome.runtime.sendMessage({
       type: statusType, tabId: routedTab, channelId: currentChannelId,
     });
 
-    if (currentChannelType === "POSTMESSAGE" || currentChannelType === "MSGCHANNEL") {
+    if (currentChannelType === "postmessage" || currentChannelType === "msgchannel") {
       // postMessage / MessageChannel — always "active", no connection lifecycle
       statusEl.innerHTML = '<span class="ws-status-open">ACTIVE</span>';
       sendBtn.disabled = false;
@@ -156,7 +156,7 @@ async function sendConsoleMessage() {
     // Route through the channel's OWN tab (captured) not the popup's tab.
     const routedTab = currentChannelTabId != null ? currentChannelTabId : currentTabId;
     let msgPayload;
-    if (currentChannelType === "POSTMESSAGE") {
+    if (currentChannelType === "postmessage") {
       /* NO `|| "*"`. `targetOrigin` is the one thing that keeps a postMessage from being readable by whatever
          document the target window holds by the time it lands, and the value here is a page CLAIM that may be
          the empty string (the renderer stated none) or `"null"` (the sender's origin was opaque, which is
@@ -180,7 +180,7 @@ async function sendConsoleMessage() {
         data: data, targetOrigin: currentTargetOrigin,
         documentId: currentChannelDocumentId, frameId: currentChannelFrameId,
       };
-    } else if (currentChannelType === "MSGCHANNEL") {
+    } else if (currentChannelType === "msgchannel") {
       msgPayload = {
         type: "MC_SEND_MSG", tabId: routedTab, channelId: currentChannelId,
         data: data, documentId: currentChannelDocumentId, frameId: currentChannelFrameId,

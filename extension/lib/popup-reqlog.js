@@ -29,7 +29,7 @@ function _renderLogCard(req, showTabLabel) {
   const hasProto = !!req.decodedBody;
 
   // Combined WebSocket entry — show message counts and connection status
-  if (req.method === "WEBSOCKET") {
+  if (req.kind === "websocket") {
     const msgs = req.messages || [];
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
@@ -53,7 +53,7 @@ function _renderLogCard(req, showTabLabel) {
   }
 
   // Combined postMessage entry — show origin pair and message counts
-  if (req.method === "POSTMESSAGE") {
+  if (req.kind === "postmessage") {
     const msgs = req.messages || [];
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
@@ -76,7 +76,7 @@ function _renderLogCard(req, showTabLabel) {
   }
 
   // Combined MessageChannel entry — show origin pair and message counts
-  if (req.method === "MSGCHANNEL") {
+  if (req.kind === "msgchannel") {
     const msgs = req.messages || [];
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;

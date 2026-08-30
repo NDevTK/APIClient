@@ -66,7 +66,7 @@ let mpState = { boundary: null, parts: [] };
 // PM_GET_STATUS / MC_SEND_MSG / WS_SEND_MSG calls route through this tab.
 let currentChannelTabId = null;
 let currentChannelId = null;
-let currentChannelType = null; // "WEBSOCKET" | "POSTMESSAGE" | "MSGCHANNEL"
+let currentChannelType = null; // the log record's own `kind`: "websocket" | "postmessage" | "msgchannel"
 let currentTargetOrigin = null; // For postMessage send
 let currentChannelFrameId = null; // Frame where the channel lives (legacy routing fallback)
 let currentChannelDocumentId = null; // Document the channel lives on — preferred routing target (stable across navigations)
@@ -1747,7 +1747,7 @@ async function replayRequest(reqId, sourceTabId) {
   }
 
   // Message console mode: WebSocket or postMessage
-  if (req.method === "WEBSOCKET" || req.method === "POSTMESSAGE" || req.method === "MSGCHANNEL") {
+  if (req.kind !== "http") {
     // Ensure the captured channel's origin tab is propagated — the click
     // path reaches here with the sourceTabId argument, which is what
     // initMsgConsole needs to route all subsequent SW calls correctly.

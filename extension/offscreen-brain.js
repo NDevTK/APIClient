@@ -73,11 +73,95 @@ const state = {
 // entries don't undo learning — only the request-log replay view loses them.
 const MAX_REQUEST_LOG_ENTRIES = 2000;
 let globalRequestLog = [];
+
+/* THE LOG ENTRY IS A DISCRIMINATED UNION, AND ITS DISCRIMINATOR IS THE PRODUCER'S, NOT THE PAGE'S.
+ *
+ * Six creators push onto this one array — a WebSocket connection, a postMessage stream, a MessageChannel
+ * stream, an EventSource stream, an HTTP round trip, and a form submission — and they do NOT write the same
+ * fields, because they are not the same thing. A channel record has a `messages` array and no response body;
+ * an HTTP record has a response body and no messages. That is a real union, and it was being read as a flat
+ * record through `||`, which is the ONE form that makes a field's absence indistinguishable from its value.
+ *
+ * `kind` IS WHY THE UNION CAN BE ASSERTED AT ALL, and `method` could never have been. Every consumer used to
+ * discriminate on `req.method === "WEBSOCKET"`, and on the HTTP arm `method` is `msg.method` — the verb the
+ * PAGE handed its own `fetch()`. `fetch(u, { method: "WEBSOCKET" })` is a legal request, so the page could
+ * spell the discriminator of a record it does not own: the popup would render its round trip as a socket card
+ * and read a `messages` array that is not there. A discriminator a consumer branches on must be a fact the
+ * PRODUCER states, so `_pushGlobalLog` takes it as an ARGUMENT — the creator that ran knows which it is, and
+ * no message content can name it. `method` stays what it always was: the verb, reported, never routed on.
+ *
+ * ABSENCE IS A STATEMENT, WHICH IS WHY THE ARMS DIFFER RATHER THAN THE FIELDS BEING OPTIONAL. A WebSocket
+ * record carries no `statusText` because there is no status line to have read one from — not because one went
+ * missing — and the assertion says so per arm, so a creator that STOPS writing a field it owns crashes here
+ * instead of rendering as a socket that never opened or a response with no reason phrase. */
+const _LOG_KINDS = ["websocket", "postmessage", "msgchannel", "http"];
+function _checkLogEntry(entry, kind) {
+  DCHECK(_LOG_KINDS.indexOf(kind) >= 0,
+         "a captured traffic record is being filed under a log kind nothing renders — the four arms are the " +
+         "four record shapes the popup, the HAR export and lib/learn.js each branch on, and a fifth spelling " +
+         "would reach every one of them as whichever arm their last `else` happens to be, got: " + kind);
+  /* The shared spine: what every one of the six creators states about the traffic it captured, whatever
+     transport carried it. `url` and `id` are non-empty because the popup keys its click-to-replay on the id
+     and renders the url as the card's whole identity. */
+  DCHECK(typeof entry.id === "string" && entry.id !== "" &&
+         typeof entry.url === "string" && entry.url !== "" &&
+         typeof entry.method === "string" && entry.method !== "" &&
+         typeof entry.service === "string" &&
+         typeof entry.timestamp === "number" && typeof entry.status === "number",
+         "a captured traffic record reached the global log without the spine every creator writes " +
+         "(id/url/method/service/timestamp/status) — the popup renders all six off every entry it lists, " +
+         "and a hole in one is a card identifying a request nobody can find again, for kind " + kind);
+  if (kind === "http") {
+    /* THE RESPONSE HALF. `responseBody` is `string | null` and the null is load-bearing: a captured request
+       whose response had no body says so, and every consumer that renders a body branches on it. */
+    DCHECK(typeof entry.statusText === "string" &&
+           (entry.responseBody === null || typeof entry.responseBody === "string") &&
+           typeof entry.responseBase64 === "boolean" &&
+           typeof entry.mimeType === "string" &&
+           !!entry.responseHeaders && typeof entry.responseHeaders === "object",
+           "a captured HTTP record reached the global log with an incomplete response half — the HAR export " +
+           "writes status/statusText/mimeType/headers/body straight into a document a reviewer reads as the " +
+           "server's own answer, so an absent one is exported as a server statement nothing observed");
+    /* THE REQUEST HALF. An EventSource stream and a GET form both truthfully have `{}` headers, `""`
+       content type and a `null` body — those are the request they made, not fillers for one nobody saw. */
+    DCHECK(typeof entry.completedAt === "number" &&
+           !!entry.requestHeaders && typeof entry.requestHeaders === "object" &&
+           typeof entry.contentType === "string" &&
+           (entry.rawBodyB64 === null || typeof entry.rawBodyB64 === "string"),
+           "a captured HTTP record reached the global log with an incomplete request half — the Send panel " +
+           "replays a request out of exactly these four fields, so a hole here is a replay that differs from " +
+           "the captured request in a way the operator cannot see");
+  } else {
+    /* A CHANNEL RECORD IS ONE CONNECTION AND ITS MESSAGES, appended to in place for the connection's whole
+       life — so `messages` must be a real array from the moment the record is filed, never a hole a later
+       push would have to create. */
+    DCHECK(typeof entry.channelId === "string" && entry.channelId !== "" && Array.isArray(entry.messages),
+           "a captured channel record reached the global log without the channel identity its own later " +
+           "frames are matched by — every WS_SEND / PM_RECV / MC_RECV finds its record by channelId, so an " +
+           "absent one opens a second record per frame and the console shows a channel with one message");
+    if (kind === "websocket") {
+      DCHECK(typeof entry.wsOpen === "boolean",
+             "a captured WebSocket record reached the global log without its open state — the request-log " +
+             "card renders OPEN/CLOSED off it, and absence would render every socket as closed");
+    } else {
+      /* Both halves are the RENDERER'S claim (lib/popup-reqlog.js says so where it prints them) and the
+         empty string is that renderer having stated no origin — a fact, and the one the reply path refuses
+         to address a postMessage to. It is not a missing value, so it is asserted as a string, not filled. */
+      DCHECK(typeof entry.sourceOrigin === "string" && typeof entry.targetOrigin === "string",
+             "a captured " + kind + " record reached the global log without both origin halves — the popup " +
+             "prints the pair as the page's own claim and the console refuses to reply to a channel whose " +
+             "source origin is not a real one, so an absent half is a refusal that never happens");
+    }
+  }
+}
+
 // Push a captured traffic entry onto the global log, stamping the {tabId,
 // documentId, frameId} filter metadata from the SENDER (the browser's answer for
 // THIS message, never a lookup that could name another document). Newest first;
 // oldest trimmed at the cap.
-function _pushGlobalLog(entry, tabId, documentId, frameId) {
+function _pushGlobalLog(entry, kind, tabId, documentId, frameId) {
+  _checkLogEntry(entry, kind);
+  entry.kind = kind;
   entry.tabId = tabId != null ? tabId : null;
   /* THE ENTRY'S DOCUMENT IDENTITY IS ASSERTED, NOT DEFAULTED. `documentId || null` stood here, and every one
      of this function's eight call sites is downstream of handleContentMessage's fail-closed check, which
@@ -548,9 +632,13 @@ function _docForLearning(documentId) {
 // Find a captured channel entry (WS/PM/MC) in the GLOBAL log. The popup
 // message console routes by tabId, so scope the match to that tab; channelId
 // is per-document (page-generated), hence not globally unique on its own.
-function _findLogEntry(tabId, channelId, method) {
+/* KEYED ON `kind`, NOT ON `method`, for the reason `kind` exists. A channel record's `method` is the literal
+   its creator wrote, but an HTTP record's is the verb the PAGE handed `fetch()` — so matching on "WEBSOCKET"
+   could return a plain round trip, and the console would then push a frame onto a `messages` array that
+   record does not have. */
+function _findLogEntry(tabId, channelId, kind) {
   return globalRequestLog.find(function (r) {
-    return r.channelId === channelId && r.method === method && r.tabId === tabId;
+    return r.channelId === channelId && r.kind === kind && r.tabId === tabId;
   }) || null;
 }
 
@@ -1018,14 +1106,24 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
     requestHeaders: method !== "GET" ? { "content-type": msg.enctype || "application/x-www-form-urlencoded" } : {},
     contentType: msg.enctype || "",
     rawBodyB64: reqBody ? btoa(reqBody) : null,
+    /* THE RESPONSE HALF IS EMPTY BECAUSE THE SUBMISSION WAS OBSERVED AND ITS ANSWER WAS NOT. This record is
+       built at the moment the page submits; the navigation that answers it lands in a document this log never
+       sees. `statusText: ""` is that statement in the field the HAR export reads — never the "OK" the export
+       used to synthesize from `status === 200`, which would have named a reason phrase for a round trip
+       nothing here observed the end of. */
+    statusText: "",
     responseBody: null,
     responseBase64: false,
     mimeType: "",
     responseHeaders: {},
-    _source: "form_submit",
+    /* `_source: "form_submit"` is GONE: nothing in this extension has ever read it. It was the other half of
+       the same contract defect — a field written so a consumer could tell this record apart, while every
+       consumer went on telling records apart by `method`, which is the string this whole change exists to
+       stop routing on. `kind` is the discriminator now and it has readers; a second, unread one beside it is
+       a name a future reader would trust and a producer would eventually stop writing. */
   };
 
-  _pushGlobalLog(entry, tabId, documentId, frameId);
+  _pushGlobalLog(entry, "http", tabId, documentId, frameId);
 
   // Learn from the form submission
   learnFromRequest(documentId, service, entry, entry.requestHeaders);

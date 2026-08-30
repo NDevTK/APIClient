@@ -406,7 +406,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // Also return the messages array for the WS console
       let messages = [];
       if (conn) {
-        const entry = _findLogEntry(tabId, msg.channelId, "WEBSOCKET");
+        const entry = _findLogEntry(tabId, msg.channelId, "websocket");
         if (entry) messages = entry.messages || [];
       }
       sendResponse({
@@ -436,7 +436,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         targetOrigin: msg.targetOrigin,
       }, _pmOpts).then(() => {
         // Record sent message in the log entry (intercept.js can't capture outgoing postMessage)
-        const entry = _findLogEntry(tabId, msg.channelId, "POSTMESSAGE");
+        const entry = _findLogEntry(tabId, msg.channelId, "postmessage");
         if (entry) {
           entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
@@ -449,7 +449,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "PM_GET_STATUS": {
       if (tabId == null) return;
-      const entry = _findLogEntry(tabId, msg.channelId, "POSTMESSAGE");
+      const entry = _findLogEntry(tabId, msg.channelId, "postmessage");
       sendResponse({
         readyState: 1, // postMessage is always "active"
         messages: entry ? (entry.messages || []) : [],
@@ -467,7 +467,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
         channelId: msg.channelId,
         data: msg.data,
       }, _mcOpts).then(() => {
-        const entry = _findLogEntry(tabId, msg.channelId, "MSGCHANNEL");
+        const entry = _findLogEntry(tabId, msg.channelId, "msgchannel");
         if (entry) {
           entry.messages.push({ dir: "sent", time: Date.now(), body: msg.data || "", base64: false });
           if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
@@ -480,7 +480,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     case "MC_GET_STATUS": {
       if (tabId == null) return;
-      const entry = _findLogEntry(tabId, msg.channelId, "MSGCHANNEL");
+      const entry = _findLogEntry(tabId, msg.channelId, "msgchannel");
       sendResponse({
         readyState: 1, // port is active once transferred
         messages: entry ? (entry.messages || []) : [],
