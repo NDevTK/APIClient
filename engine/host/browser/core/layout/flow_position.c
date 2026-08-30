@@ -101,10 +101,8 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
                       used_value_border_edge_px(el, false));
 }
 
-/* CSS 2 §8.1's two edges between a box's BORDER box and its CONTENT box on the leading side of one axis — the
-   top border and padding, or the left pair. §10.1's second case makes a containing block the CONTENT edge of a
-   box whose own origin is its BORDER edge, and this is the whole of the difference. */
-static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
+/* CSS 2 §8.1's ONE edge between a box's BORDER box and its PADDING box on the leading side of one axis. */
+static CssPx fp_border_before(lxb_dom_element_t *el, bool vertical)
 {
     CssLength b = css_computed_length(el, vertical ? "border-top-width" : "border-left-width");
 
@@ -112,7 +110,16 @@ static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
            "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 §3.3's "
            "`Computed value:` line is `absolute length, snapped as a border width`, so every arm of that "
            "derivation produces one and a percentage or a keyword here is a rule that did not run");
-    return css_px_add(b.px, used_value_px(el, vertical ? "padding-top" : "padding-left"));
+    return b.px;
+}
+
+/* CSS 2 §8.1's two edges between a box's BORDER box and its CONTENT box on the leading side of one axis — the
+   top border and padding, or the left pair. §10.1's second case makes a containing block the CONTENT edge of a
+   box whose own origin is its BORDER edge, and this is the whole of the difference. */
+static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
+{
+    return css_px_add(fp_border_before(el, vertical),
+                      used_value_px(el, vertical ? "padding-top" : "padding-left"));
 }
 
 /* WHICH BOX TYPES §9.4.1 PLACES, asked HERE and not left to whichever component this one calls next. The two
@@ -273,5 +280,18 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     p.x = css_px_add(css_px_add(o.x, fp_edge_before(cb, false)),
                      fp_left_offset(el, used_value_containing_block_width(el)));
     p.y = css_px_add(css_px_add(o.y, fp_edge_before(cb, true)), block_flow_child_top(el));
+    return p;
+}
+
+/* CSS 2 §8.1 "Box dimensions"' PADDING BOX ORIGIN — the border box origin above moved inward by the ONE leading
+   border on each axis. It is a second ENTRY and not a second answer: both coordinates come from
+   `flow_border_box_origin`, so a box this component cannot place crashes there, by its own section, before a
+   padding edge is ever asked for. */
+FlowPoint flow_padding_box_origin(lxb_dom_element_t *el)
+{
+    FlowPoint p = flow_border_box_origin(el);
+
+    p.x = css_px_add(p.x, fp_border_before(el, false));
+    p.y = css_px_add(p.y, fp_border_before(el, true));
     return p;
 }

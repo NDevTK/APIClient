@@ -55,4 +55,17 @@
    its own section; there is no fallback extent. */
 CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical);
 
+/* §2's OVERFLOW DIRECTIONS for `el`'s scrolling box, reduced to the one bit every consumer needs: does the
+   ENDING edge of the scrolling area sit at the LARGER coordinate on this axis. "A scrolling box of a viewport
+   or element has two overflow directions, which are the block-end and inline-end directions for that viewport
+   or element", derived through css-writing-modes-4 §6.2 "Flow-relative Directions" over the computed
+   `writing-mode` and `direction`.
+   IT IS EXPORTED BECAUSE §2's TABLE IS NOT ITS ONLY READER. CSSOM VIEW §6.1 "Element Scrolling Members"' scroll
+   an element to x,y states its clamp as four rows over the same fact — "if box has rightward overflow
+   direction … if box has leftward overflow direction" — and §6.1's determine the scroll-into-view position
+   needs it to know which physical edge is a scrolling box's BEGINNING edge. A second derivation beside this one
+   is one direction with two answers, free to disagree about `direction: rtl` in exactly the document where it
+   matters. */
+bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vertical);
+
 #endif

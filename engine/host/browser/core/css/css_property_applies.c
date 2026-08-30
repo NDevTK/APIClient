@@ -65,10 +65,37 @@ static const char *const CSS_PADDING_PROPERTIES[] = {
 };
 static const char *const CSS_INSET_PROPERTIES[] = { "top", "right", "bottom", "left" };
 
+/* css-overflow-3 §3.1 "Managing Overflow: the overflow-x, overflow-y, and overflow properties"' line, which is
+ * an INCLUSION where every line above is an exclusion: "block containers [CSS2], flex containers
+ * [CSS-FLEXBOX-1], grid containers [CSS-GRID-1], and table grid boxes [CSS-TABLES-3]". It is written as the
+ * computed `display` keywords that name those four box types, because that is the only fact an Applies-to line
+ * ever turns on (see the header) and because each of the four is named by a `display` value in its own spec:
+ *   BLOCK CONTAINERS — css-display-3 §2.2 "Inner Display Layout Models: the flow, flow-root, table, flex, grid,
+ *     and ruby keywords" is where the term is attached to a value: `flow` "generates a block container box"
+ *     unless its outer type makes it an inline box, and `flow-root` "generates a block container box" always.
+ *     So the keywords are `block` and `flow-root`, `inline-block` (the `<display-legacy>` spelling of `inline
+ *     flow-root`, an INLINE-LEVEL block container and so still one), `list-item` (css-display-3 §2.3
+ *     "Generating Marker Boxes: the list-item keyword", whose inner type is flow), and the two internal table
+ *     boxes css-display-3 §2.4 "Layout-Internal Display Types: the table-* and ruby-* keywords" gives an inner
+ *     type to by name — "table-cell boxes have a flow-root inner display type" and the same sentence for
+ *     `table-caption`. Every other `<display-internal>` keyword has none, which is why `table-row` is absent.
+ *   FLEX CONTAINERS — css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values".
+ *   GRID CONTAINERS — css-grid-2 §5.1 "Establishing Grid Containers: the grid and inline-grid display values".
+ *   TABLE GRID BOXES — css-tables-3 §2.1 "Table Structure": "table grid box: A block-level box containing the
+ *     table-internal boxes, excluding its captions", which `table` and `inline-table` generate.
+ * `inline` is the keyword this line's absence is actually about: `overflow: auto` on a `<span>` is a
+ * declaration the cascade computes and the property does not apply to, so the span establishes no scroll
+ * container (core/layout/scroll_container.h) — the one answer a reader of the computed value alone gets wrong. */
+static const char *const CSS_OVERFLOW_APPLIES[] = {
+    "block", "inline-block", "flow-root", "list-item", "table-cell", "table-caption",
+    "flex", "inline-flex", "grid", "inline-grid", "table", "inline-table",
+};
+static const char *const CSS_OVERFLOW_PROPERTIES[] = { "overflow-x", "overflow-y" };
+
 bool css_property_applies(lxb_dom_element_t *el, const char *name)
 {
     char *display;
-    bool is_size, is_margin, is_padding, applies;
+    bool is_size, is_margin, is_padding, is_overflow, applies;
 
     DCHECK(el != NULL && name != NULL,
            "an Applies-to line was asked for with no element or no property name");
@@ -86,10 +113,12 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
     is_size = css_pa_in(CSS_SIZE_PROPERTIES, CSS_PA_N(CSS_SIZE_PROPERTIES), name);
     is_margin = css_pa_in(CSS_MARGIN_PROPERTIES, CSS_PA_N(CSS_MARGIN_PROPERTIES), name);
     is_padding = css_pa_in(CSS_PADDING_PROPERTIES, CSS_PA_N(CSS_PADDING_PROPERTIES), name);
-    if (!is_size && !is_margin && !is_padding) {
-        DFAIL("CSSOM §9 asked whether a property APPLIES to an element, and this component has not recorded "
-              "that property's `Applies to:` line. The three groups it carries are the physical box-model "
-              "lengths, the physical insets and the two sizes; what §9's own table also routes here and this "
+    is_overflow = css_pa_in(CSS_OVERFLOW_PROPERTIES, CSS_PA_N(CSS_OVERFLOW_PROPERTIES), name);
+    if (!is_size && !is_margin && !is_padding && !is_overflow) {
+        DFAIL("A caller asked whether a property APPLIES to an element, and this component has not recorded "
+              "that property's `Applies to:` line. The four groups it carries are the physical box-model "
+              "lengths, the physical insets, the two sizes and the two overflow longhands; what CSSOM §9's own "
+              "table also routes here and this "
               "does not answer is (1) the LOGICAL box-model properties — `inline-size`, `block-size`, "
               "`margin-block-start`, `padding-inline-end` and the rest — whose Applies-to lines are their "
               "physical twins' but which need css-writing-modes §6's mapping from the element's computed "
@@ -126,6 +155,14 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
 
         free(display);
         return replaced;
+    }
+    /* css-overflow-3 §3.1's line is an INCLUSION, so it is tested before the exclusion lines below and not
+       written as their complement — `inline`, `table-row` and every other keyword outside the set is excluded
+       by the line saying nothing about it rather than by a second list naming it. */
+    if (is_overflow) {
+        applies = css_pa_in(CSS_OVERFLOW_APPLIES, CSS_PA_N(CSS_OVERFLOW_APPLIES), display);
+        free(display);
+        return applies;
     }
     if (is_size) {
         bool horizontal = strcmp(name, "width") == 0;

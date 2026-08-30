@@ -320,6 +320,18 @@ typedef enum {
        object is read as an ordinary dictionary. Named for the rule rather than for the member, because the
        rule is what the IDL states — the same reason IDL_STRING_UNLESS_CALLABLE is named that way. */
     IDL_DICT_OR_BOOL_FIRST,
+    /* `(boolean or ScrollIntoViewOptions)` — §3.2.25's SAME TWO ARMS as the row above with the SAME test, and
+       a different destination for the boolean, which is why it is a second row rather than a second caller of
+       that one. The row above bakes in DOM §2.7 "Interface EventTarget"'s flatten options ("if options is a
+       boolean, then return options" — as the `capture` MEMBER), because that is what DOM's own algorithm does
+       with the arm. CSSOM VIEW §6's `scrollIntoView(arg)` reads the boolean ITSELF at its step 6 — "otherwise,
+       if arg is false, then set block to 'end'" — and `true` sets nothing at all, so there is no member for it
+       to be flattened into and inventing one would be a dictionary field no IDL declares.
+       SO THE BOOLEAN ARM PLACES THE BOOLEAN and the dictionary arm places the built dictionary, and the BODY
+       tells them apart with `JS_IsBool` — which is §3.2.25's own output ("return the result of converting V to
+       boolean" against "return the result of converting V to that dictionary type") rather than a shape test
+       this file invented. An unknown external input FORKS, for the row above's reason and at the same site. */
+    IDL_BOOL_OR_DICT,
     /* `(T or DOMString)` where T is an INTERFACE type — the union §4.2.4 writes for every member that takes
        "a node or some text", and `el.append('hi')` is the ordinary way to write the second half. Its rule is a
        brand check: an object of the interface's CLASS crosses as itself, anything else is a DOMString. The
@@ -433,6 +445,11 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        wheel listener on a Window passive by default — so the two arms differ in what the algorithm observes
        and neither may be picked for a value nothing is known about. */
     case IDL_DICT_OR_BOOL_FIRST:
+    /* `(boolean or ScrollIntoViewOptions)` — the same fork for the same reason one row down: CSSOM VIEW §6's
+       `scrollIntoView` step 6 makes the boolean arm's `false` set `block` to "end" where the dictionary arm
+       leaves it at "start", and those are two different scroll positions rather than two spellings of one, so
+       neither arm may be picked for a value nothing is known about. */
+    case IDL_BOOL_OR_DICT:
         return IDL_CONCOLIC_FORKS;
     default:
         return IDL_CONCOLIC_CROSSES;

@@ -70,4 +70,15 @@ typedef struct {
    not crashes naming its own section; there is no fallback coordinate. */
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
 
+/* THE TOP-LEFT CORNER OF `el`'s PADDING BOX, in that same space — the border box origin moved inward by CSS 2
+   §8.1 "Box dimensions"' leading BORDER on each axis, and nothing else.
+   IT IS A SECOND ENTRY AND NOT A SECOND ANSWER: it is derived from `flow_border_box_origin`, so every box this
+   component cannot place crashes there naming its own section before a padding edge is asked for. TWO
+   ALGORITHMS NEED THIS EXACT RECTANGLE and each would otherwise carry its own copy of the border read: CSSOM
+   VIEW §2 "Terminology" states an element's scrolling area over "the element's top padding edge" and "the
+   element's left padding edge" (core/layout/scrolling_area.h), and css-overflow-3 §2.3 "Scrolling Overflow"
+   makes a scroll container's SCROLLPORT — the visual viewport CSSOM VIEW §6.1's determine the scroll-into-view
+   position aligns against — "coincide with its padding box". */
+FlowPoint flow_padding_box_origin(lxb_dom_element_t *el);
+
 #endif

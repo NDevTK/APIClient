@@ -833,7 +833,8 @@ static const void *idl_body_state_const(const IdlMember *m, const void *st)
  * "/", so `window.postMessage(msg)` read an undefined target origin where the spec reads "/". */
 static bool idl_type_is_dictionary(IdlArgType t)
 {
-    return t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_STRING_OR_DICT ||
+    return t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_BOOL_OR_DICT ||
+           t == IDL_STRING_OR_DICT ||
            t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT ||
            t == IDL_SEQUENCE_OBJECT_OR_DICT;
 }
@@ -1910,7 +1911,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             }
         }
 
-        if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
+        if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_BOOL_OR_DICT) {
             /* WHICH ARM OF `(dictionary or boolean)` THIS FLOW IS ON — §3.2.25 step 11 against steps 12/18.
                For a dictionary type there is no union and no arm, and the answer is the type's own §3.2.17
                step 1: an Object is read, anything else has already thrown or defaulted. */
@@ -1961,7 +1962,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                way to a sink. It is also the arm §3.2.25 gives the object an unknown is represented BY, so a
                no-policy run answers exactly as it did and the boolean world is the one the fork ADDS. */
             object_arm = JS_IsObject(a);
-            if (t == IDL_DICT_OR_BOOL_FIRST && concolic_is(a)) {
+            if (t != IDL_DICT && concolic_is(a)) {
                 int arm = 0, rc;
 
                 DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
@@ -1998,7 +1999,24 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                                       concolic_is(a) ? JS_DupValue(ctx, a)
                                                      : JS_NewBool(ctx, JS_ToBool(ctx, a)));
                 }
-                for (r = 0; r < m->dict_n; r++) {
+                /* §3.2.25's OTHER DESTINATION FOR THE SAME ARM — the boolean itself, where the member's own
+                   algorithm reads it (CSSOM VIEW §6's `scrollIntoView` step 6) rather than a dictionary member
+                   the IDL never declared. The dictionary this block had begun building is DISCARDED here, which
+                   is the union's own answer and not a leak of a half-built value: §3.2.25 converts V to exactly
+                   one of the two types, and on this arm the object that was minted so a dictionary WOULD have
+                   somewhere to go was never one. An unknown crosses as itself for the reason the branch above
+                   gives — the fork decided only which ARM V is on, which is not the same fact as V being true. */
+                if (t == IDL_BOOL_OR_DICT) {
+                    JSValue *slot_b = idl_arg_slot(m, s, s->i);
+
+                    JS_FreeValue(ctx, *slot_b);
+                    *slot_b = concolic_is(a) ? JS_DupValue(ctx, a) : JS_NewBool(ctx, JS_ToBool(ctx, a));
+                    /* The member loop below is what a dictionary arm runs, and this arm HAS no dictionary —
+                       there are no members to default and none to read, so the cursor is parked at the end and
+                       the block's own tail (which resets it) is what runs next. */
+                    s->dict_i = m->dict_n;
+                }
+                else for (r = 0; r < m->dict_n; r++) {
                     if (m->dict[r].required)
                         return JS_ThrowTypeError(ctx, "required member %s is undefined", m->dict[r].name),
                                JS_STEP_ABRUPT;

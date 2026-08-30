@@ -39,7 +39,7 @@ static bool sa_computed_is(lxb_dom_element_t *el, const char *name, const char *
    dimension. §6.2 states the split in so many words — "while determining the block-start and block-end sides
    of a box depends only on the writing-mode property, determining the inline-start and inline-end sides of a
    box depends not only on the writing-mode property but also the direction property". */
-static bool sa_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vertical)
+bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vertical)
 {
     bool horizontal_tb = sa_computed_is(el, "writing-mode", "horizontal-tb");
 
@@ -58,19 +58,6 @@ static bool sa_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vert
            "Directionality: the direction property\" gives the property the `Value:` line `ltr | rtl` and "
            "nothing else");
     return !sa_computed_is(el, "direction", "rtl");
-}
-
-/* CSS 2 §8.1 "Box dimensions"'s LEADING BORDER on one axis — the one edge between a box's border box, which is
-   what core/layout/flow_position.h places, and its PADDING box, which is what §2's table is stated over. */
-static CssPx sa_border_before(lxb_dom_element_t *el, bool vertical)
-{
-    CssLength b = css_computed_length(el, vertical ? "border-top-width" : "border-left-width");
-
-    DCHECK(b.kind == CSS_LENGTH_ABSOLUTE,
-           "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 §3.3's "
-           "`Computed value:` line is `absolute length, snapped as a border width`, so every arm of that "
-           "derivation produces one and a percentage or a keyword here is a rule that did not run");
-    return b.px;
 }
 
 /* §2's "excluding boxes that have an ancestor of the element as their containing block". A box laid out
@@ -186,16 +173,19 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
     FlowPoint origin;
 
     DCHECK(el != NULL, "a scrolling area was asked for with no element");
-    /* THE ELEMENT'S OWN BOX FIRST, because its position is the operand every other term is measured against
-       and because the placement is where a box type this engine cannot lay out crashes by its own name. */
-    origin = flow_border_box_origin(el);
-    ending_at_hi = sa_ending_edge_at_higher_coordinate(el, vertical);
+    /* THE ELEMENT'S OWN PADDING BOX FIRST, because its two edges are §2's table's own BEGINNING edges and
+       because the placement inside it is where a box type this engine cannot lay out crashes by its own name.
+       core/layout/flow_position.h owns the border-to-padding step, so the read of `border-top-width` that used
+       to sit in this file is gone rather than duplicated — css-overflow-3 §2.3 "Scrolling Overflow"'s scrollport
+       is the same rectangle and would have been the second copy. */
+    origin = flow_padding_box_origin(el);
+    ending_at_hi = scrolling_area_ending_edge_at_higher_coordinate(el, vertical);
     padding = used_value_padding_edge_px(el, vertical);
     /* §2's two BEGINNING edges for an element are "the element's top padding edge" and "the element's left
        padding edge", and its two ENDING edges are the extreme over that same padding edge and the descendants'
        margin edges — so the element's own padding box is in the extreme rather than beside it, which is what
        makes a scrolling area at least as large as the padding box for every element in every document. */
-    lo = css_px_add(vertical ? origin.y : origin.x, sa_border_before(el, vertical));
+    lo = vertical ? origin.y : origin.x;
     hi = css_px_add(lo, padding);
     if (ending_at_hi) hi = sa_descendants_extreme(el, vertical, true, hi);
     else              lo = sa_descendants_extreme(el, vertical, false, lo);
