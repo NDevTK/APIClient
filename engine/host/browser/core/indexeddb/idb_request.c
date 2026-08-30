@@ -12,7 +12,7 @@
  * ordinary preemptible flows while siblings overtake it.
  *
  * IT IS ALSO WHY THE STAGES ARE THE SPEC'S STEPS AND NOT A COUNTER. A parked flow can be resumed by a
- * cold-tier read in another session, and what it holds is the LABEL — "§5.9 step 8" — so a request suspended
+ * cold-tier read in another session, and what it holds is the LABEL — "§5.9 step 7" — so a request suspended
  * inside its own success dispatch last week resumes at the dispatch and not one step either side of it.
  *
  * WHAT A FLOW OWNS HERE. The four fields live in internal slots under a private Symbol on the IDBRequest
@@ -266,7 +266,7 @@ typedef struct {
        first entry, which IS "before performing operation" — RQX_PERFORM is the first stage and nothing between
        that entry and the call records a change. */
     uint32_t    changes_before;
-    uint8_t     not_canceled; /* §5.10 step 9.3's "event's canceled flag", as the dispatch answers it */
+    uint8_t     not_canceled; /* §5.10 step 8.3's "event's canceled flag", as the dispatch answers it */
 } JSIdbReqState;
 
 static void js_idb_req_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -312,12 +312,12 @@ static void rq_state_start(JSContext *ctx, JSIdbReqState *s, JSValueConst req)
     X(RQX_DELIVER,          "Indexed Database §5.6 steps 5.6.1-5.6.3 — ONE O(1) engine action: the request " \
                             "leaves the transaction's list at its head, its done flag is set, and its result " \
                             "or its error is written") \
-    X(RQX_ACTIVATE,         "Indexed Database §5.9 steps 1-7 / §5.10 steps 1-7 — ONE O(1) engine action: the " \
+    X(RQX_ACTIVATE,         "Indexed Database §5.9 steps 1-6 / §5.10 steps 1-6 — ONE O(1) engine action: the " \
                             "event is created with its type and its two flags, and an INACTIVE transaction " \
                             "is made active for the dispatch") \
-    X(RQX_DISPATCH,         "Indexed Database §5.9 step 8 / §5.10 step 8 (dispatch event at request with " \
+    X(RQX_DISPATCH,         "Indexed Database §5.9 step 7 / §5.10 step 7 (dispatch event at request with " \
                             "legacyOutputDidListenersThrowFlag)") \
-    X(RQX_DEACTIVATE,       "Indexed Database §5.9 step 9 / §5.10 step 9 (set the transaction inactive, then " \
+    X(RQX_DEACTIVATE,       "Indexed Database §5.9 step 8 / §5.10 step 8 (set the transaction inactive, then " \
                             "abort it or commit it)")
 enum { RQX_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RQX_STEPS[] = { RQX_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -462,25 +462,25 @@ static int js_idb_req_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     STEP_ARM(RQX_DEACTIVATE);
         JS_FreeValue(ctx, cb_result);
         tx = rq_get(ctx, req, RQ_TRANSACTION);
-        /* §5.9 step 9 / §5.10 step 9: "If transaction's state is active, then:". A listener that committed or
+        /* §5.9 step 8 / §5.10 step 8: "If transaction's state is active, then:". A listener that committed or
            aborted the transaction has already moved it, and then none of this runs. */
         if (idb_transaction_state(ctx, tx) == IDB_TX_ACTIVE) {
             idb_transaction_set_state(ctx, tx, IDB_TX_INACTIVE);
             if (event_listeners_threw(ctx, s->ev)) {
-                /* §5.9 step 9.2 / §5.10 step 9.2. §5.10 says "and terminate these steps ... This is done even
+                /* §5.9 step 8.2 / §5.10 step 8.2. §5.10 says "and terminate these steps ... This is done even
                    if event's canceled flag is false"; §5.9's wording omits the terminate, and THAT WORDING
-                   CANNOT BE FOLLOWED — its step 9.3 would then commit a transaction this step has just made
+                   CANNOT BE FOLLOWED — its step 8.3 would then commit a transaction this step has just made
                    FINISHED, which is not a transition §2.7.1 has and which idb_transaction_set_state refuses.
                    The two algorithms are the same shape and §5.10 states it; the omission is editorial. */
                 idb_transaction_abort(ctx, tx, rq_dom_exception(ctx, "AbortError",
                                                                "a listener threw during the request's event"));
             } else if (s->is_error && s->not_canceled) {
-                /* §5.10 step 9.3: an error event nobody called preventDefault() on ABORTS the transaction with
+                /* §5.10 step 8.3: an error event nobody called preventDefault() on ABORTS the transaction with
                    the request's own error. That is the sentence that makes an unhandled IndexedDB failure roll
                    the whole transaction back, and it is why the error event is cancelable at all. */
                 idb_transaction_abort(ctx, tx, rq_get(ctx, req, RQ_ERROR));
             } else if (idb_transaction_requests_empty(ctx, tx)) {
-                /* §5.9 step 9.3 / §5.10 step 9.4. */
+                /* §5.9 step 8.3 / §5.10 step 8.4. */
                 idb_transaction_commit(ctx, tx);
             }
         }

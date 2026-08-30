@@ -73,6 +73,7 @@
 #define TX_CHANGES     "changes"      /* §5.5 step 2's changes made to the database — see the header */
 #define TX_START       "start"        /* §2.7.1 Transaction lifecycle's `started`, as the three moments below */
 #define TX_HELD        "held"         /* §2.7 Transactions' requests kept track of until this one starts */
+#define TX_COMMIT      "commit"       /* §5.4 Committing a transaction step 2's in-parallel block — see below */
 
 /* §2.7.1 TRANSACTION LIFECYCLE's START, as the THREE moments its own sentence has: a transaction is created
    UNSTARTED; "when an implementation is able to enforce the constraints for the transaction's scope and mode,
@@ -82,6 +83,26 @@
    transaction". §5.7 Upgrading a database's step 6 starts its upgrade transaction DIRECTLY and never passes
    through the middle one. */
 enum { TX_START_NO = 0, TX_START_QUEUED, TX_START_YES };
+
+/* §5.4 COMMITTING A TRANSACTION step 2's IN-PARALLEL BLOCK, as the two moments it has here. Its FIRST step is a
+   WAIT — step 2.1, "wait until every item in transaction's request list is processed" — and its LAST is step
+   2.5's "queue a database task". Between them this engine has nothing to do (see the task's own comment on step
+   2.3), so the block IS that wait followed by that queueing, and the two moments are "the wait is outstanding"
+   and "the task has been queued".
+   THE WAIT CANNOT BE DISCHARGED BY QUEUE ORDER, WHICH IS WHAT THIS ENUM EXISTS TO SAY. That was the standing
+   design and it holds for §5.9 step 8.3 and §5.10 step 8.4, which run commit a transaction only with the request
+   list ALREADY EMPTY — but §4.10's `commit()` is stated over an ACTIVE transaction and says nothing about the
+   request list, so its whole purpose is to commit one with requests outstanding. Queueing the completion task
+   there put it AHEAD of them: against a transaction that has not yet started, §2.7's held request tasks are not
+   in the queue at all (idb_transaction_start appends them later), so the completion task overtook every one —
+   §5.4 step 2.5.2 set the state to FINISHED and step 2.5.3 fired `complete` while the requests were still in the
+   list, and each request's own §5.6 step 5.6 task then delivered its `success` AFTER `complete` and removed
+   itself from a transaction that had already finished. In dev that was the commit task's step 2.1 assert; in
+   release it is a page seeing its events in an order no browser produces.
+   SO THE WAIT IS THE STATE, AND IT IS DISCHARGED WHERE THE REQUEST SET CHANGES — idb_transaction_remove_request
+   is the ONE place the list can shrink (§5.6 step 5.6.1 is its only caller), so that is where step 2.1 is asked
+   again and where the task is queued once the answer is yes. */
+enum { TX_COMMIT_NO = 0, TX_COMMIT_QUEUED };
 
 static JSValue g_key;          /* the private Symbol the slot record hangs off */
 static int     g_ready;
@@ -102,6 +123,9 @@ static int g_complete_stepid = -1, g_abort_stepid = -1, g_start_stepid = -1;
 /* §2.7.2's consequence of a transaction leaving the live set, defined in the scheduling section below and
    called from the one line that performs that removal. */
 static void tx_release_blocked(JSContext *ctx);
+/* §5.4 step 2's in-parallel block, defined with the rest of §5.4 below and called from the one line that can
+   change its step 2.1's answer — the removal that shrinks the request list. */
+static void tx_commit_step2(JSContext *ctx, JSValueConst tx);
 /* §5.7 step 10's rendezvous — see the header. NULL until §5.1's component registers, which it does in its own
    declaration, so an upgrade transaction cannot finish before there is something to tell. */
 static void (*g_upgrade_finished)(JSContext *ctx, JSValueConst tx, bool aborted);
@@ -393,7 +417,7 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
            "committed or aborted, it enters this state\" — it is the last one, §5.5's abort returns "
            "immediately for a transaction already in it, and every member that could move it refuses first");
     DCHECK(!(state == IDB_TX_ACTIVE && now == IDB_TX_COMMITTING),
-           "an IDBTransaction that is COMMITTING was made ACTIVE again. §5.9 step 7 activates only an INACTIVE "
+           "an IDBTransaction that is COMMITTING was made ACTIVE again. §5.9 step 6 activates only an INACTIVE "
            "transaction, which is the whole of why a success event fired while a commit is in flight cannot "
            "let the page place another request against it");
     tx_set_int(ctx, tx, TX_STATE, state);
@@ -504,7 +528,7 @@ void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueCons
     list = JS_GetPropertyStr(ctx, slots, TX_REQUESTS);
     DCHECK(JS_IsArray(list), "a transaction carried no request list");
     DCHECK(head < tx_array_len(ctx, list),
-           "a request was removed from a transaction whose request list is already empty — §5.6 step 5.7.1 "
+           "a request was removed from a transaction whose request list is already empty — §5.6 step 5.6.1 "
            "removes each request exactly once, from the task that completes it");
     head_at = JS_GetPropertyUint32(ctx, list, head);
     DCHECK(JS_VALUE_GET_PTR(head_at) == JS_VALUE_GET_PTR(request),
@@ -520,6 +544,13 @@ void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueCons
     tx_set_int(ctx, tx, TX_HEAD, (int32_t)(head + 1));
     JS_FreeValue(ctx, list);
     JS_FreeValue(ctx, slots);
+    /* THIS LINE IS THE ONLY THING THAT CAN CHANGE §5.4 step 2.1's ANSWER, which is why the block is asked here
+       rather than polled: the list never grows once the transaction is committing (see tx_commit_step2), and
+       this is its one shrink. A transaction that is not COMMITTING has no step 2 block to make progress in —
+       §5.9 step 8.3 and §5.10 step 8.4 are what create one for a transaction whose last request just finished,
+       and they run LATER in the same task, after the event this removal precedes has been dispatched. */
+    if (idb_transaction_state(ctx, tx) == IDB_TX_COMMITTING)
+        tx_commit_step2(ctx, tx);
 }
 
 bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx)
@@ -709,6 +740,10 @@ static int js_idb_tx_complete_step(JSContext *ctx, void *st, JSValue cb_result, 
     STEP_DISPATCH(TXC_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(TXC_FINISH);
+        DCHECK(tx_int(ctx, tx, TX_COMMIT) == TX_COMMIT_QUEUED,
+               "§5.4 step 2.5's database task ran for a transaction whose step 2 block had not queued one — "
+               "tx_commit_step2 is the only writer of that moment and the only minter of this task, so a task "
+               "arriving without it was minted by something that did not run step 2.1's wait");
         /* §5.4 step 2.2: "If transaction's state is no longer committing, then terminate these steps." An
            abort that arrived between the commit and this task is exactly that, and it has already fired its
            own `abort` event — so the commit says nothing. */
@@ -716,15 +751,17 @@ static int js_idb_tx_complete_step(JSContext *ctx, void *st, JSValue cb_result, 
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_DONE;
         }
-        /* §5.4 step 2.1 ("wait until every item in transaction's request list is processed") is DISCHARGED BY
-           THE QUEUE rather than waited on: §5.6 performs its operation and sets the processed flag inside the
-           task it was queued as, so every request queued before this task has been processed by the time this
-           one runs. The assert is that statement, checked rather than believed. */
+        /* §5.4 step 2.1 ("wait until every item in transaction's request list is processed") was WAITED ON, by
+           the block that queued this task: tx_commit_step2 queues it only once the list is empty, and no
+           request can join a committing transaction's list. The assert is that statement, checked rather than
+           believed — and it is now about the block above rather than about queue order, which is the whole of
+           what changed when §4.10's `commit()` turned out to be stated over a transaction with requests
+           outstanding. */
         DCHECK(idb_transaction_requests_empty(ctx, tx),
                "§5.4's commit task ran while the transaction still holds requests. Step 2.1 waits until every "
-               "item in the request list is processed, and this engine discharges that wait through the task "
-               "queue — so an outstanding request here means a request was queued AFTER the commit, which "
-               "§2.7.1 forbids for a committing transaction");
+               "item in the request list is processed, and tx_commit_step2 is what performs that wait — so an "
+               "outstanding request here means a request joined the list after that block queued this task, "
+               "which §5.6 step 2's assert and §2.7.1's state both forbid for a committing transaction");
         /* §5.4 step 2.3's "attempt to write any outstanding changes to the database, considering the
            durability hint" has nothing to do: the store IS the heap (core/indexeddb/idb_database.c), §6.1
            wrote the record when it ran, and there is no medium behind it for a durability hint to reach. That
@@ -766,20 +803,48 @@ static const JSTrampStepDef js_idb_tx_complete_def = {
     .algorithm = "Indexed Database §5.4's commit-a-transaction database task", .steps = TXC_STEPS
 };
 
-void idb_transaction_commit(JSContext *ctx, JSValueConst tx)
+/* §5.4 step 2's IN-PARALLEL BLOCK, ASKED. Step 2.1 is a wait, so this is the block making its own progress: it
+   answers step 2.1 and, when the answer is yes, performs step 2.5's "queue a database task" — the whole of the
+   block, because steps 2.2 belong to the task and steps 2.3-2.4 have nothing to do here (see the task's comment).
+   It is called at the two moments the answer can CHANGE and at no others: when the block is created (§5.4 step 1
+   has just run) and when the request list shrinks. Nothing polls, for tx_release_blocked's reason — a request
+   leaves the list in exactly one place. */
+static void tx_commit_step2(JSContext *ctx, JSValueConst tx)
 {
     JSValue fn;
 
-    /* §5.4 step 1: "Set transaction's state to committing." */
-    idb_transaction_set_state(ctx, tx, IDB_TX_COMMITTING);
-    /* §5.4 step 2's "run the following steps in parallel" ends in "queue a database task". This engine has no
-       second thread and the write in between has nothing to do (see the task's own comment), so the parallel
-       half IS the task — one queue hop rather than two, which preserves the one thing the pair decides: that
-       the completion runs after every request task already queued against this transaction. */
+    DCHECK(idb_transaction_state(ctx, tx) == IDB_TX_COMMITTING,
+           "§5.4 step 2's in-parallel block was asked to make progress for a transaction that is not COMMITTING "
+           "— step 1 is what creates the block and it is the state it sets, so a block over any other state is "
+           "one nothing ran step 1 for");
+    DCHECK(tx_int(ctx, tx, TX_COMMIT) == TX_COMMIT_NO,
+           "§5.4 step 2's in-parallel block was asked to make progress after it had already queued step 2.5's "
+           "database task. A block that has queued it is finished, and a second task would run §5.4's whole "
+           "completion twice — firing `complete` at a transaction §5.4 step 2.5.2 has already made FINISHED");
+    /* §5.4 step 2.1: "Wait until every item in transaction's request list is processed." A request is removed
+       from the list by §5.6 step 5.6.1, which its own task performs AFTER step 5.5 has set its processed flag —
+       so an EMPTY list is the strictly later of the two conditions and asking it here answers step 2.1 without
+       reading a flag per request. While the answer is no this returns and the block stays parked: no request can
+       be ADDED to a committing transaction (§5.6 step 2 asserts the state is active and §4.5's and §4.6's
+       members report a "TransactionInactiveError" before reaching it), so the list only ever shrinks and the
+       removal that empties it is the one that resumes this. */
+    if (!idb_transaction_requests_empty(ctx, tx))
+        return;
+    /* §5.4 step 2.5: "Queue a database task to run these steps". */
+    tx_set_int(ctx, tx, TX_COMMIT, TX_COMMIT_QUEUED);
     fn = JS_NewStepClosure(ctx, g_complete_stepid, 0, 1, &tx);
     CHECK(!JS_IsException(fn), "IndexedDB: §5.4's commit task could not be minted");
     JS_EnqueueCallTask(ctx, fn, 0, NULL);
     JS_FreeValue(ctx, fn);
+}
+
+void idb_transaction_commit(JSContext *ctx, JSValueConst tx)
+{
+    /* §5.4 step 1: "Set transaction's state to committing." */
+    idb_transaction_set_state(ctx, tx, IDB_TX_COMMITTING);
+    /* §5.4 step 2: "Run the following steps in parallel". This engine has no second thread, so the block is
+       driven at the moments its first step's answer can change rather than by one — see tx_commit_step2. */
+    tx_commit_step2(ctx, tx);
 }
 
 /* ---- §5.5's ABORT: the database task that fires `abort` -------------------------------------------------- */
@@ -944,7 +1009,7 @@ static void idb_transaction_cleanup(JSContext *ctx)
                new requests have been placed against the transaction, and the transaction has not been
                aborted." A transaction deactivated with an EMPTY request list is exactly that state — nothing
                will ever run against it again — so this is where the automatic commit is due. A transaction
-               with outstanding requests commits from §5.9 step 9.3 instead, once the last one's success event
+               with outstanding requests commits from §5.9 step 8.3 instead, once the last one's success event
                has been handled. */
             if (idb_transaction_requests_empty(ctx, tx))
                 idb_transaction_commit(ctx, tx);
@@ -1240,8 +1305,10 @@ JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue sco
     changes = JS_NewArray(ctx);
     CHECK(!JS_IsException(changes), "IndexedDB: a transaction's list of database changes could not be allocated");
     JS_SetPropertyStr(ctx, st, TX_CHANGES, changes);
-    /* §2.7.1: "when a transaction is created ... its state is initially active" and it has not started. */
+    /* §2.7.1: "when a transaction is created ... its state is initially active" and it has not started. §5.4
+       step 2's block does not exist yet either — step 1 is what creates it, by moving the state to committing. */
     JS_SetPropertyStr(ctx, st, TX_START, JS_NewInt32(ctx, TX_START_NO));
+    JS_SetPropertyStr(ctx, st, TX_COMMIT, JS_NewInt32(ctx, TX_COMMIT_NO));
     held = JS_NewArray(ctx);
     CHECK(!JS_IsException(held), "IndexedDB: a transaction's list of held request tasks could not be allocated");
     JS_SetPropertyStr(ctx, st, TX_HELD, held);

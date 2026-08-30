@@ -1068,7 +1068,7 @@ static int js_idb_upgrade_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
                    transaction has NO cleanup event loop, so §2.7.1's cleanup will never see it — this is the
                    other site that sentence applies at, and without it a migration that placed no request
                    would leave the transaction inactive forever and §5.7 step 10 would never return. A
-                   transaction the handler DID place requests against commits from §5.9 step 9.3 instead. */
+                   transaction the handler DID place requests against commits from §5.9 step 8.3 instead. */
                 idb_transaction_commit(ctx, tx);
             }
         }

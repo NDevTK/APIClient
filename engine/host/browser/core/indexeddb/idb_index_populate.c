@@ -24,7 +24,7 @@
  * AND THE ABORT NEEDS NO SPECIAL CASE, which is the reason this is a REQUEST rather than a call. The operation
  * raises §6.1 step 5's "ConstraintError"; §5.6 step 5.4 reverts the index records this operation had already
  * written; §5.10 Firing an error event fires `error` at a request the page holds no reference to, so its
- * canceled flag is false because nothing can call `preventDefault()` on it; and §5.10 step 9.3 runs abort a
+ * canceled flag is false because nothing can call `preventDefault()` on it; and §5.10 step 8.3 runs abort a
  * transaction with the request's error. §5.5 Aborting a transaction step 2 then reverts the index's CREATION
  * along with everything else the upgrade did, and §5.8 puts the page's handles back.
  *
@@ -194,7 +194,7 @@ void idb_index_populate_request(JSContext *ctx, JSValueConst handle, JSValueCons
     req = idb_request_execute(ctx, handle, tx, op);
     JS_FreeValue(ctx, op);
     /* §5.6's "Return request" has no reader here: §4.5 returns an IDBIndex, and the page is never handed this
-       request. Dropping it is what makes §5.10 step 9.3 unconditional — a request nobody holds is a request
+       request. Dropping it is what makes §5.10 step 8.3 unconditional — a request nobody holds is a request
        nobody can register an `error` listener on, so its canceled flag is false and the transaction aborts. */
     JS_FreeValue(ctx, req);
 }
