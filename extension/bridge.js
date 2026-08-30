@@ -3069,8 +3069,8 @@ async function hostNotice(eng, line) {
        algorithm reading a set of things neither of them carries: the PARENT DOCUMENT's own recorded list, that
        Document's ORIGIN RECORD, and the container element. The parent field is a navigable IDENTITY and holds
        no Document's ancestry; the container field is §9.5's answer over two of the same inputs.
-       AND THE ORIGIN RECORD IS WHY THE ANSWER TRAVELS RATHER THAN THE INPUTS. §3.1.3's step 10 asks whether an
-       ancestor "is same origin with parentDoc's origin", HTML §7.1.1 decides an opaque origin by IDENTITY, and
+       AND THE ORIGIN RECORD IS WHY THE ANSWER TRAVELS RATHER THAN THE INPUTS. §3.1.3's step 12.1 asks whether
+       an ancestor "is same origin with parentDoc's origin", HTML §7.1.1 decides an opaque origin by IDENTITY, and
        every opaque origin serializes to the same three bytes `null` — so a receiving engine handed the
        creator's list plus a serialized parent origin would mask an entry that is not the parent's the moment
        the parent is opaque, which on this route is the ordinary case rather than a corner (a `data:` document
