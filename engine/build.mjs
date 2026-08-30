@@ -930,17 +930,44 @@ if (NATIVE) {
   /* The quiet list and -Werror=implicit-function-declaration are the SHIPPED build's, taken from the
      same place rather than restated, so the sanitized program is the program. */
   const quiet = QUIET_WARNINGS;
+  /* THE DIALECT THIS TARGET COMPILES IN, NAMED ONCE. Both clang invocations below are the SAME target and must
+     stay the same target, so the defines and include paths are one list rather than two that can drift — the
+     hand-copied-list defect this file warns about elsewhere, in miniature. */
+  const NATIVE_DIALECT = [
+    ...quiet,
+    "-D_GNU_SOURCE", "-DENABLE_DUMPS", '-DCONFIG_VERSION="native"', "-DAPICLIENT_DEV=1",
+    "-Werror=implicit-function-declaration",
+    "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + LEXBOR_INC,
+  ];
   const cc = spawnSync("clang", [
     "-O1", "-g", "-fno-omit-frame-pointer",
     ...(kind === "none" ? [] : ["-fsanitize=" + kind]),
-    ...quiet,
-    "-D_GNU_SOURCE", "-DENABLE_DUMPS", '-DCONFIG_VERSION="native"', "-DAPICLIENT_DEV=1",
-    "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + LEXBOR_INC,
+    ...NATIVE_DIALECT,
     /* THE SMOKE ENTRY, always: this target BUILDS AND RUNS a fixture, and main.c has no main() to run. */
     ...SHARED_SOURCES, ENTRY_SMOKE, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
   ], { stdio: "inherit" });
   if (cc.status !== 0) { console.error("[build] native build FAILED rc=" + cc.status); process.exit(cc.status || 1); }
   console.log("[build] OK -> " + bin);
+  /* THE ENTRY THIS TARGET DID NOT LINK — the rule the emcc path below already follows, applied to the half that
+     did not. `main.c` owns the `qjs_*` ABI and has no `main()`, so it cannot be linked into a program that RUNS
+     a fixture; the link above therefore takes ENTRY_SMOKE and ENTRY_ABI is in NO native build at all. That is
+     §Testing's own defect by name — "A TRANSLATION UNIT NO GATE COMPILES IS OUTSIDE THE GATE, AND THE SHIPPED
+     ENTRY POINT IS THE ONE THAT ROTS" — and it has already happened once to this exact file, which stopped
+     compiling across many commits in which every gate was green.
+     IT MATTERS MORE THAN THE WASM CASE, not less: `main.c` is the ONLY translation unit whose portability the
+     engine's host-independence rests on, so a gate that never compiles it for the native target is a gate that
+     cannot notice the day an edit makes the shipped entry emscripten-only. Compile-only, one TU, and it takes
+     NATIVE_DIALECT — the same list the link above took — so the two cannot come to disagree about what
+     "natively" means. Syntax-only is the right depth here and not a shortcut: what is being asserted is that
+     this entry's declarations resolve for a non-emscripten target, which is exactly what would rot. */
+  const abi = spawnSync("clang", ["-fsyntax-only", ...NATIVE_DIALECT, ENTRY_ABI], { stdio: "inherit" });
+  if (abi.status !== 0) {
+    console.error("[build] the SHIPPED ABI entry does not compile for this target rc=" + abi.status +
+                  " — " + ENTRY_ABI + " is linked by no native program, so nothing else here would have " +
+                  "said so. It is the one translation unit the engine's host-independence rests on.");
+    process.exit(abi.status || 1);
+  }
+  console.log("[build] OK -> " + ENTRY_ABI + " compiles natively (entry linked by no native program)");
   /* THE CROSS-SESSION ROUND TRIP: TWO INVOCATIONS OVER ONE SHELF.
    *
    * §Time-travel-resume's whole claim is that the frontier persists as suspended snapshots ACROSS SESSIONS, and
