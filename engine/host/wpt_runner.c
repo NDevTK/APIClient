@@ -102,11 +102,9 @@
 #include <errno.h>
 #include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
-#include "core/css/media_query_list.h"
 #include "core/frame/viewport.h"
 #include "core/frame/visual_viewport.h"
 #include "core/rendering/animation_frame.h"
-#include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
 #include <lexbor/html/html.h>
 #include "core/dom/element.h"
@@ -3395,8 +3393,14 @@ int main(int argc, char **argv)
     /* CSSOM VIEW §4's viewport and §12's VisualViewport are ROWS on that column now too — the pair every host
        wrote as `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the
        component whose every member is a derivation over it. Reverse declaration order decides it now. */
-    page_reveal_free(ctx);
-    media_query_list_free(ctx);
+    /* AND HTML §7.4.6.3 Revealing the document WITH CSSOM View §4.2 The MediaQueryList Interface, which used
+       to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above — and this is the group where all three hosts were wrong IDENTICALLY, which is
+       the one shape a hand-written list cannot show you. Written here, §4.2 was released AFTER the `viewport`
+       and `visual_viewport` rows platform_agent_free had already run, and §4.2's whole answer is a predicate
+       over the viewport, so the dependent component went second. Reverse declaration order gives
+       media_query_list, visual_viewport, viewport, page_reveal — this pair inverted, with two rows BETWEEN
+       them. See core/platform.c's entry, and the live leak it names. */
     /* §7.2.4's Location is a ROW on core/platform.h's release column now, run by the platform_agent_free
        above. It holds TWO CLAIMS in solver/concolic.c's source registry, and concolic_free asserts that
        registry is empty — an ordering that used to rest on all three hosts writing these two lines the same

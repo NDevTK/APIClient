@@ -5,6 +5,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/css/media_query.h"
 #include "core/css/media_query_list.h"
 #include "core/events/event.h"
@@ -18,7 +19,12 @@ static JSClassID g_mql_class, g_ev_class;
 static int  g_slot = -1;                      /* this document's collection, in creation order */
 static int  g_id_match = -1, g_id_add = -1, g_id_remove = -1, g_id_ev_ctor = -1;
 static JSValue g_ev_key = JS_UNDEFINED;       /* the private Symbol MediaQueryListEvent's two slots live under */
-static int  g_ready;
+/* THE RUNTIME THIS COMPONENT WAS DECLARED IN, and the only slot that says "declared". It replaces a `g_ready`
+   flag, and that is not a rename: a flag answers "did init run", this answers "did init run, AND in which
+   runtime" — which is strictly more, and is exactly what media_query_list_free asserts it is undoing. Keeping
+   both would be one fact with two spellings free to disagree, which is the shape core/agent_state.h opens by
+   describing. */
+static JSRuntime *g_rt;
 
 /* ---- the record --------------------------------------------------------------------------------------------- */
 
@@ -31,12 +37,33 @@ typedef struct {
     bool           last_matches;
 } MqlData;
 
+/* THE COLLECTOR'S ENTRY REACHES THE RECORD FROM THE OBJECT AND READS NO STATIC OF THIS FILE — core/agent_state.h's
+ * note on what a release owes a finalizer, and this was the LIVE half of the group that landed it here.
+ * media_query_list_free is a row on core/platform.h's release column now and gives g_mql_class back to 0, and
+ * every host's teardown is platform_agent_free() … JS_RunGC … JS_FreeRuntime, so this entry runs with the id
+ * already zero. `JS_GetOpaque(val, 0)` answers NULL for every object there is — no object wears class 0 — so
+ * this would have returned NULL for every MediaQueryList a page still held, and `if (!d) return;` was the
+ * swallow that made it silent: a MediaQuerySet, its serialization and the record itself, leaked per live list.
+ * All three are malloc'd blocks, which appear in NEITHER of JS_FreeRuntime's censuses — not the gc_obj_list
+ * walk, which reports objects that were not given back, and not the atom census — so nothing this tree has
+ * would have reported it. `matchMedia` is the surface that mints them, which is to say a responsive bundle
+ * holds one per media query it watches.
+ * The id is not read because it is not needed: the collector dispatched HERE THROUGH the class, so the class is
+ * a fact this function already has. */
 static void mql_finalizer(JSRuntime *rt, JSValue val)
 {
-    MqlData *d = JS_GetOpaque(val, g_mql_class);
+    JSClassID id = 0;
+    MqlData *d = JS_GetAnyOpaque(val, &id);
 
     (void)rt;
-    if (!d) return;
+    (void)id;
+    /* NOT `if (!d) return;`. js_match_media is the one mint, and between JS_NewObjectProtoClass and
+       JS_SetOpaque it allocates nothing on the JS heap and runs no page code — so there is no half-built
+       MediaQueryList for this entry to meet, and a NULL here means an object wearing §4.2's class was built
+       somewhere that is not this file. */
+    DCHECK(d != NULL,
+           "a MediaQueryList was finalized with no record — js_match_media attaches it before the object can "
+           "reach anything that would free it");
     media_query_free(d->set);
     free(d->media);
     free(d);
@@ -47,8 +74,22 @@ static void mql_finalizer(JSRuntime *rt, JSValue val)
    which is the only way this goes wrong. */
 static MqlData *mql_data(JSContext *ctx, JSValueConst obj)
 {
-    MqlData *d = JS_GetOpaque2(ctx, obj, g_mql_class);
+    MqlData *d;
 
+    /* WEB IDL §3.7.5's BRAND IS A FACT ABOUT THE OBJECT, AND THE DECLARATION IS A SEPARATE QUESTION — asked
+       here rather than folded into the comparison below, because the comparison cannot tell the two apart.
+       JS_GetOpaque2 answers NULL and throws for a class id that does not match, so once media_query_list_free
+       has given g_mql_class back to 0 this brand does not admit anything it should reject; it does the other
+       thing, and reports every LIVE MediaQueryList as not being one. That is a guaranteed FALSE TypeError,
+       which is core/frame/remote_object.c's shape and is precisely why the rule is "reads no static its own
+       release resets" rather than "the comparison is safe". No release reaches this function — every caller is
+       a §4.2 member or update-the-rendering step 10 — which is what makes this an assert and not a new failure
+       mode, but the predicate must not be the thing that decides that. */
+    DCHECK(g_rt != NULL,
+           "a MediaQueryList's brand was asked before media_query_list_init registered CSSOM View §4.2's class "
+           "or after media_query_list_free gave it back — with no class there is no answer, and asking "
+           "JS_GetOpaque2 against a released id reports every live MediaQueryList as something else");
+    d = JS_GetOpaque2(ctx, obj, g_mql_class);
     if (!d) return NULL;
     cow_capture_host_state(ctx, obj, &d->last_matches, sizeof d->last_matches);
     return d;
@@ -217,7 +258,8 @@ static JSValue mql_collection(JSContext *ctx)
 {
     JSValue arr;
 
-    DCHECK(g_ready, "a document's MediaQueryList collection was reached before §4.2 was declared");
+    DCHECK(g_rt != NULL, "a document's MediaQueryList collection was reached before §4.2 was declared, or "
+                         "after media_query_list_free gave its slot back");
     arr = realm_value_get(ctx, g_slot);
     DCHECK(JS_IsArray(arr),
            "a realm answered §4.2's collection of MediaQueryList objects with no collection — every Document "
@@ -296,7 +338,10 @@ JSValue media_query_list_change(JSContext *ctx, uint32_t i, JSValue *ptarget)
 
 /* ---- `Window.matchMedia` ------------------------------------------------------------------------------------- */
 
-/* CSSOM VIEW §7: `[NewObject] MediaQueryList matchMedia(CSSOMString query)`.
+/* CSSOM View §4 Extensions to the Window Interface: `[NewObject] MediaQueryList matchMedia(CSSOMString query)`.
+   The number here read §7 until this diff, and §7 is Extensions to the HTMLElement Interface — a citation that
+   reads as authoritative and sends the reader to a section saying nothing about this member. §4 is where the
+   partial `Window` declares it and where its own steps are stated; §4.2 below is the interface it returns.
    1. Let parsed be the result of parsing query. 2. Return a new MediaQueryList object with its document set to
    this's associated Document and its media set to parsed. No page code runs: the declaration converted the
    argument, and everything after it is this component's own data. */
@@ -352,14 +397,22 @@ void media_query_list_init(JSContext *ctx)
     static const IdlArgType LISTENER_ARGS[1] = { IDL_CALLBACK_INTERFACE_NULLABLE };
     JSRuntime *rt = JS_GetRuntime(ctx);
 
-    DCHECK(!g_ready, "media_query_list_init ran twice — §4.2's interfaces are declared once per agent");
+    /* THE LATCH, AND IT COMPILES OUT IN RELEASE — which is why neither class id may be carried past the
+       release. There is no early return here, so under -DAPICLIENT_DEV=0 a second agent runs this whole body,
+       and JS_NewClassID hands a NON-ZERO slot back UNCHANGED rather than allocating: the CHECKs below would
+       then ask JS_NewClass for numbers the new runtime's own allocator never issued and is about to issue to
+       whichever component asks next. */
+    DCHECK(g_rt == NULL, "media_query_list_init ran twice — §4.2's interfaces are declared once per agent");
+    g_rt = rt;
     {
         JSClassDef mql = { "MediaQueryList", .finalizer = mql_finalizer };
         JSClassDef ev = { "MediaQueryListEvent" };
         JS_NewClassID(rt, &g_mql_class);
-        JS_NewClass(rt, g_mql_class, &mql);
+        CHECK(JS_NewClass(rt, g_mql_class, &mql) == 0,
+              "MediaQueryList: the per-realm prototype slot could not be declared");
         JS_NewClassID(rt, &g_ev_class);
-        JS_NewClass(rt, g_ev_class, &ev);
+        CHECK(JS_NewClass(rt, g_ev_class, &ev) == 0,
+              "MediaQueryListEvent: the per-realm prototype slot could not be declared");
     }
     g_ev_key = JS_NewSymbol(ctx, "mediaQueryListEventSlots", false);
     CHECK(!JS_IsException(g_ev_key), "the MediaQueryListEvent slot key allocation failed");
@@ -370,7 +423,34 @@ void media_query_list_init(JSContext *ctx)
                                       (int)(sizeof(EV_INIT) / sizeof(EV_INIT[0])), js_ev_ctor, 0);
     idl_optional_from(1);   /* `optional MediaQueryListEventInit eventInitDict = {}` */
     g_slot = realm_value_declare(ctx, "CSSOM VIEW §4.2 the document's MediaQueryList objects");
-    g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING while its
+       row's release column was EMPTY, which is the pair of silences core/platform.c's list reads as agreement:
+       a component that holds everything and gives none of it back produces character-for-character the report
+       a component that holds nothing produces. It held eight slots and gave six of them back; the two it kept
+       are the CLASS IDS, and one of those is the class the finalizer above looks its record up under. */
+    agent_state_ptr("media_query_list", &g_rt,
+                    "the runtime CSSOM View §4.2 The MediaQueryList Interface's two classes, its realm-value "
+                    "slot and its four member declarations were registered in");
+    agent_state_class("media_query_list", &g_mql_class,
+                      "CSSOM View §4.2 The MediaQueryList Interface's per-realm prototype slot, the brand "
+                      "every member of it checks, and the class its finalizer is dispatched through");
+    agent_state_class("media_query_list", &g_ev_class,
+                      "CSSOM View §4.2 The MediaQueryList Interface's MediaQueryListEvent per-realm prototype "
+                      "slot");
+    agent_state_value("media_query_list", &g_ev_key,
+                      "§4.2's internal-slot key, the Symbol MediaQueryListEvent's `media` and `matches` live "
+                      "under");
+    agent_state_id("media_query_list", &g_slot,
+                   "the per-realm slot CSSOM View §4.2's collection of MediaQueryList objects lives in");
+    agent_state_id("media_query_list", &g_id_match,
+                   "CSSOM View §4 Extensions to the Window Interface's `matchMedia(query)` declaration");
+    agent_state_id("media_query_list", &g_id_add,
+                   "CSSOM View §4.2 The MediaQueryList Interface's `addListener(callback)` declaration");
+    agent_state_id("media_query_list", &g_id_remove,
+                   "CSSOM View §4.2 The MediaQueryList Interface's `removeListener(callback)` declaration");
+    agent_state_id("media_query_list", &g_id_ev_ctor,
+                   "CSSOM View §4.2 The MediaQueryList Interface's MediaQueryListEvent constructor "
+                   "declaration");
     realm_declare_intrinsic(media_query_list_install_proto);
 }
 
@@ -378,7 +458,7 @@ void media_query_list_install_proto(JSContext *ctx)
 {
     JSValue proto, prev, base, arr;
 
-    DCHECK(g_ready, "a realm asked for MediaQueryList.prototype before the interface was declared");
+    DCHECK(g_rt != NULL, "a realm asked for MediaQueryList.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_mql_class);
     DCHECK(JS_IsNull(prev), "media_query_list_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -415,7 +495,7 @@ void media_query_list_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor, proto;
 
-    DCHECK(g_ready, "CSSOM VIEW §4.2 was installed before it was declared");
+    DCHECK(g_rt != NULL, "CSSOM VIEW §4.2 was installed before it was declared");
     idl_install_method(ctx, (JSValue)global, "matchMedia", 1, g_id_match);
 
     /* §3.7.1: an interface with NO constructor still has an interface object, and calling it is a TypeError. */
@@ -435,12 +515,52 @@ void media_query_list_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "MediaQueryListEvent", ctor);
 }
 
-void media_query_list_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, and it takes the RUNTIME because that
+ * is what an agent is. It took a JSContext until this diff and used it for nothing but JS_FreeValue, which is
+ * JS_FreeValueRT(ctx->rt, v); that signature is the whole of what kept this component off the column and made
+ * it a hand-written line in three hosts instead.
+ *
+ * AND ITS PLACE ON THE COLUMN IS NOT WHERE THE HOSTS PUT IT. All three wrote `page_reveal_free(ctx);
+ * media_query_list_free(ctx);` adjacently, AFTER platform_agent_free — so this component was released after
+ * CSSOM View §4's `viewport` and §12's `visual_viewport`, both of which are already rows. That is the
+ * dependent-released-second order: §4.2's whole answer is a predicate over the viewport (media_query_matches
+ * reads it per realm), which is exactly why `media_query_list` is DECLARED after `viewport`. Reverse
+ * declaration order gives media_query_list, then visual_viewport, then viewport, then page_reveal — the hosts'
+ * pair inverted, with the two viewport rows between them — and no author has to agree with any other about it.
+ *
+ * NOTHING READS THIS COMPONENT AFTER IT RUNS, and that is a claim about a list rather than a hope. The only
+ * file outside this one that names any symbol of it is core/rendering/rendering.c — `media_query_list_pending`
+ * in its step-4 test, `_count` and `_change` at step 10 — and `rendering` is the row AFTER this one, so
+ * rendering_free has already run. core/css/media_query.c, which this file is built over, holds no agent state
+ * at all: it is a parser, a serializer and an evaluator over `const` tables. No other release on the column and
+ * no host teardown line names a static of this file. */
+void media_query_list_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
-    g_ready = 0;
+    /* NOT `if (!g_rt) return;`. This is a row on core/platform.c's list, whose declare pass is unconditional
+       and which runs only where platform_agent_init ran, so a null runtime here is a host tearing down a
+       browser it never built — and a silent return would make that indistinguishable from a release that
+       worked. */
+    DCHECK(g_rt != NULL,
+           "CSSOM View §4.2's MediaQueryList was released in an agent that never declared it — "
+           "media_query_list_init is a row on core/platform.c's declare column, so reaching here without it "
+           "is a teardown of a browser that was never brought up");
+    DCHECK(g_rt == rt,
+           "CSSOM View §4.2's MediaQueryList was released against a RUNTIME other than the one it was declared "
+           "in — its two classes, its realm-value slot and its four member declarations are registrations in "
+           "that runtime, and zeroing them against another leaves every one of them standing in the runtime "
+           "that issued them");
     /* The prototypes and the collections are the REALMS' — each goes with its context. */
-    JS_FreeValue(ctx, g_ev_key);
+    JS_FreeValueRT(rt, g_ev_key);
     g_ev_key = JS_UNDEFINED;
     g_slot = g_id_match = g_id_add = g_id_remove = g_id_ev_ctor = -1;
+    /* AND THE TWO CLASS IDS, which this release kept. core/agent_state.h settles it: a class is registered in a
+       RUNTIME, so a carried id names a class in a runtime that is gone — and because JS_NewClassID returns a
+       non-zero slot UNCHANGED rather than allocating, a second agent's media_query_list_init would hand
+       JS_NewClass numbers the new runtime's own allocator never issued and will issue to whichever component
+       asks next. Giving g_mql_class back is what made mql_finalizer's `JS_GetOpaque(val, g_mql_class)` a leak,
+       so that entry reaches its record through JS_GetAnyOpaque now — the obligation the zeroing creates,
+       discharged in the same diff rather than named in a comment. */
+    g_mql_class = 0;
+    g_ev_class = 0;
+    g_rt = NULL;
 }

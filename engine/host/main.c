@@ -83,9 +83,7 @@
 #include "browser/core/frame/viewport.h"
 #include "browser/core/frame/visual_viewport.h"
 #include "browser/core/frame/window.h"
-#include "browser/core/css/media_query_list.h"
 #include "browser/core/rendering/animation_frame.h"
-#include "browser/core/rendering/page_reveal.h"
 #include "browser/core/rendering/rendering.h"
 #include "browser/core/timing/event_loop.h"
 #include "browser/core/timing/timer.h"
@@ -1166,8 +1164,16 @@ QJS_EXPORT void qjs_teardown(void)
        where the drift was visible without any host being MISSING a line: all three wrote
        `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the component
        whose every member is a derivation over it. Reverse declaration order decides it now. */
-    page_reveal_free(g_ctx);
-    media_query_list_free(g_ctx);
+    /* AND HTML §7.4.6.3 Revealing the document WITH CSSOM View §4.2 The MediaQueryList Interface, which used
+       to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above — and this is the group where every host was wrong IDENTICALLY, which is the
+       one shape a hand-written list cannot show you. Written here, §4.2 was released AFTER the `viewport` and
+       `visual_viewport` rows that platform_agent_free had already run, and §4.2's whole answer is a predicate
+       over the viewport — so the dependent component went second, exactly as the pair above did before it
+       moved. Reverse declaration order gives media_query_list, visual_viewport, viewport, page_reveal: this
+       pair inverted, with two rows BETWEEN them, which no adjacency here can express. See core/platform.c's
+       entry — and the live leak it names, a MediaQuerySet per MediaQueryList that neither of JS_FreeRuntime's
+       censuses can see. */
     animation_frame_free(g_ctx);
     event_loop_free(g_ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     /* §8.1.3.3's about-to-be-notified rejected promises list is NOT freed here any more — it is a row on

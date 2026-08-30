@@ -39,7 +39,10 @@ void media_query_list_init(JSContext *ctx);
 void media_query_list_install_proto(JSContext *ctx);
 /* The Window member and the two interface objects, which are the host's per-document install. */
 void media_query_list_install(JSContext *ctx, JSValueConst global);
-void media_query_list_free(JSContext *ctx);
+/* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, so it takes the RUNTIME: §4.2's two
+   class ids, its realm-value slot and its four member declarations are registrations there, and the Symbol is
+   given back with JS_FreeValueRT. */
+void media_query_list_free(JSRuntime *rt);
 
 /* CSSOM VIEW §4.2 "evaluate media queries and report changes" — HTML §8.1.7.3 update-the-rendering STEP 10.
  *

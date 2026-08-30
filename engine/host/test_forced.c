@@ -42,13 +42,11 @@
 #include "core/dom/abort.h"
 #include "core/dom/observable.h"
 #include "core/html/unhandled_rejection.h"
-#include "core/css/media_query_list.h"
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_property_syntax.h"
 #include "core/css/css_math.h"   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction */
 #include "core/css/css_syntax_match.h"
 #include "core/rendering/animation_frame.h"
-#include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/node.h"
@@ -11194,8 +11192,14 @@ int main(int argc, char **argv) {
     /* CSSOM VIEW §4's viewport and §12's VisualViewport are ROWS on that column now too — the pair every host
        wrote as `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the
        component whose every member is a derivation over it. Reverse declaration order decides it now. */
-    page_reveal_free(ctx);
-    media_query_list_free(ctx);
+    /* AND HTML §7.4.6.3 Revealing the document WITH CSSOM View §4.2 The MediaQueryList Interface, which used
+       to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above — and this is the group where all three hosts were wrong IDENTICALLY, which is
+       the one shape a hand-written list cannot show you. Written here, §4.2 was released AFTER the `viewport`
+       and `visual_viewport` rows platform_agent_free had already run, and §4.2's whole answer is a predicate
+       over the viewport, so the dependent component went second. Reverse declaration order gives
+       media_query_list, visual_viewport, viewport, page_reveal — this pair inverted, with two rows BETWEEN
+       them. See core/platform.c's entry, and the live leak it names. */
     animation_frame_free(ctx);
     event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     /* §8.1.4.7's rejection list is a row on core/platform.h's release column now, run by the

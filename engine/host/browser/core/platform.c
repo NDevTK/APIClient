@@ -504,6 +504,41 @@ static void r_window(JSRuntime *rt) { window_free(rt); }
    `g_ready` — a flag that answered the same question with less in it. */
 static void r_navigation(JSRuntime *rt) { navigation_free(rt); }
 static void r_nav_history_entry(JSRuntime *rt) { navigation_history_entry_free(rt); }
+/* HTML §7.4.6.3 Revealing the document (with §7.2.7.5 The PageRevealEvent interface it fires) AND CSSOM View
+   §4.2 The MediaQueryList Interface, and this is the group where the hand-written lists were WRONG — in a way
+   no host could see, because all three were wrong identically. All three wrote `page_reveal_free(ctx);
+   media_query_list_free(ctx);` adjacently and FIRST among what is left in their teardowns, which is to say
+   AFTER platform_agent_free had already run `viewport` and `visual_viewport`. §4.2's whole answer is a
+   predicate over the viewport — media_query_matches reads §4's per-realm environment — which is exactly why
+   `media_query_list` is DECLARED after `viewport`, so the hand-written line released the dependent component
+   second. Reverse declaration order gives media_query_list, visual_viewport, viewport, page_reveal: the hosts'
+   pair inverted, with the two viewport rows BETWEEN them, which is a sequence no hand-written adjacency can
+   express at all. Neither component reads the other, so nothing decides their relative position except the
+   rows they were each declared after — which is the point of the column.
+   WHAT BLOCKED BOTH WAS THE SIGNATURE AND NOTHING ELSE: each took a JSContext and used it for nothing but
+   JS_FreeValue and JS_FreeAtom, which are JS_FreeValueRT(ctx->rt, v) and JS_FreeAtomRT(ctx->rt, a).
+   AND BOTH ROWS' RELEASE COLUMNS WERE EMPTY WHILE BOTH FILES DECLARED NOTHING, the pair of silences the
+   pairing below passes in agreement. Between them they held thirteen slots and gave back ten; the three they
+   kept were CLASS IDS, and each file's `g_ready` stood where a recorded runtime belongs — a flag answers "init
+   ran" where the pointer answers "init ran, AND in which", which is what the release asserts. Both are deleted
+   rather than kept beside one.
+   ONE OF THE THREE WAS LIVE, and it is why this group was worth landing rather than the tidier one beside it:
+   media_query_list.c's mql_finalizer looked its record up with `JS_GetOpaque(val, g_mql_class)`, which is
+   core/agent_state.h's closing obligation exactly — the collector runs AFTER this column, `JS_GetOpaque(val,
+   0)` answers NULL for every object there is, and `if (!d) return;` turned that into silence. A MediaQuerySet,
+   its serialization and the record leak per live MediaQueryList, all three malloc'd, so they appear in NEITHER
+   of JS_FreeRuntime's censuses and no detector this tree has would ever have said so. That entry reaches its
+   record through JS_GetAnyOpaque now. page_reveal.c has no collector entry (`JSClassDef d = { "PageRevealEvent"
+   }` leaves finalizer and gc_mark null) and, unlike the two files above, NO brand site at all — its class id is
+   read only by JS_GetClassProto, JS_SetClassProto and the mint — so the vacuous-`==` inversion the last group
+   found does not arise in either file here. §4.2's brand is JS_GetOpaque2, which fails the OTHER way: it
+   answers NULL and THROWS, reporting every live MediaQueryList as something else. Each file asks the
+   declaration off a recorded runtime now, separately from any value.
+   Nor does the pre-init-0 defect: both files already gave every pool entry and every realm-value slot an
+   `= -1` initialiser, so entry 0 — the first member idl_method_id_all hands out — was never a pre-init value
+   here. */
+static void r_page_reveal(JSRuntime *rt) { page_reveal_free(rt); }
+static void r_media_query_list(JSRuntime *rt) { media_query_list_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -767,10 +802,10 @@ static const PlatformComponent PLATFORM[] = {
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame },
-    { "page_reveal",         d_page_reveal,         i_page_reveal },
+    { "page_reveal",         d_page_reveal,         i_page_reveal, r_page_reveal },
     { "viewport",            d_viewport,            NULL,        r_viewport },
     { "visual_viewport",     d_visual_viewport,     NULL,        r_visual_viewport },
-    { "media_query_list",    d_media_query_list,    i_media_query_list },
+    { "media_query_list",    d_media_query_list,    i_media_query_list, r_media_query_list },
     /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },
     /* DOM §3.2 Interface AbortSignal, MOVED AHEAD OF `fetch` and not tidied there. Fetch §5.4's

@@ -33,7 +33,10 @@ void page_reveal_init(JSContext *ctx);
 void page_reveal_install_proto(JSContext *ctx);
 /* The interface OBJECT on the Window. */
 void page_reveal_install(JSContext *ctx, JSValueConst global);
-void page_reveal_free(JSContext *ctx);
+/* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, so it takes the RUNTIME: §7.2.7.5's
+   class id, §7.4.6.3's realm-value slot and the constructor declaration are registrations there, and the
+   Symbol and the interned `has been revealed` key are given back with JS_FreeValueRT/JS_FreeAtomRT. */
+void page_reveal_free(JSRuntime *rt);
 
 /* §7.4.6.3 step 1, asked from the other side: is this document still UNREVEALED? The rendering loop reads it
    as part of deciding whether the navigable might have a rendering opportunity at all — a document that has

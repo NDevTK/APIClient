@@ -3,6 +3,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event.h"
@@ -10,10 +11,15 @@
 
 static int      g_slot = -1;          /* the per-realm "has been revealed" record (a baseline object) */
 static JSAtom   g_atom_revealed = JS_ATOM_NULL;
-static JSClassID g_class;             /* PageRevealEvent.prototype, in quickjs's own per-context slot */
+static JSClassID g_class;             /* §7.2.7.5's prototype slot, in quickjs's own per-context table */
 static int      g_id_ctor = -1;
 static JSValue  g_key = JS_UNDEFINED; /* the private Symbol the event's one slot lives under */
-static int      g_ready;
+/* THE RUNTIME THIS COMPONENT WAS DECLARED IN, and the only slot that says "declared". It replaces a `g_ready`
+   flag, and that is not a rename: a flag answers "did init run", this answers "did init run, AND in which
+   runtime" — which is strictly more, and is exactly what page_reveal_free asserts it is undoing. Keeping both
+   would be one fact with two spellings free to disagree, which is the shape core/agent_state.h opens by
+   describing. */
+static JSRuntime *g_rt;
 
 /* ---- the interface ---------------------------------------------------------------------------------------
    `[Exposed=Window] interface PageRevealEvent : Event { constructor(DOMString type,
@@ -107,7 +113,8 @@ static JSValue pr_record(JSContext *ctx)
 {
     JSValue rec;
 
-    DCHECK(g_ready, "§7.4.6.3's record was reached before the component was declared");
+    DCHECK(g_rt != NULL, "§7.4.6.3's record was reached before the component was declared, or after "
+                         "page_reveal_free gave its slot back");
     rec = realm_value_get(ctx, g_slot);
     DCHECK(JS_IsObject(rec),
            "a realm answered §7.4.6.3's `has been revealed` with no record — every Document has one, so this "
@@ -161,21 +168,47 @@ JSValue page_reveal_begin(JSContext *ctx)
 
 void page_reveal_init(JSContext *ctx)
 {
-    DCHECK(!g_ready, "page_reveal_init ran twice — one declaration per agent");
+    /* THE LATCH, AND IT COMPILES OUT IN RELEASE — which is why the class id may not be carried past the
+       release. There is no early return here, so under -DAPICLIENT_DEV=0 a second agent runs this whole body,
+       and JS_NewClassID hands a NON-ZERO slot back UNCHANGED rather than allocating: the CHECK below would
+       then ask JS_NewClass for a number the new runtime's own allocator never issued and is about to issue to
+       whichever component asks next. */
+    DCHECK(g_rt == NULL, "page_reveal_init ran twice — one declaration per agent");
+    g_rt = JS_GetRuntime(ctx);
     g_atom_revealed = JS_NewAtom(ctx, "hasBeenRevealed");
     CHECK(g_atom_revealed != JS_ATOM_NULL, "§7.4.6.3's own key could not be interned");
     g_key = JS_NewSymbol(ctx, "pageRevealSlots", false);
     CHECK(!JS_IsException(g_key), "the PageRevealEvent slot key allocation failed");
     {
         JSClassDef d = { "PageRevealEvent" };
-        JS_NewClassID(JS_GetRuntime(ctx), &g_class);
-        JS_NewClass(JS_GetRuntime(ctx), g_class, &d);
+        JS_NewClassID(g_rt, &g_class);
+        CHECK(JS_NewClass(g_rt, g_class, &d) == 0,
+              "PageRevealEvent: the per-realm prototype slot could not be declared");
     }
     g_slot = realm_value_declare(ctx, "§7.4.6.3 has been revealed");
     g_id_ctor = idl_method_id_dict(ctx, PR_CTOR_ARGS, 2, PR_INIT,
                                    (int)(sizeof(PR_INIT) / sizeof(PR_INIT[0])), js_pr_ctor, 0);
     idl_optional_from(1);   /* `optional PageRevealEventInit eventInitDict = {}` */
-    g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING while its
+       row's release column was EMPTY, which is the pair of silences core/platform.c's list reads as agreement:
+       a component that holds everything and gives none of it back produces character-for-character the report
+       a component that holds nothing produces. It held five slots and gave four of them back; the one it kept
+       is the CLASS ID. */
+    agent_state_ptr("page_reveal", &g_rt,
+                    "the runtime HTML §7.2.7.5 The PageRevealEvent interface's class, §7.4.6.3 Revealing the "
+                    "document's realm-value slot and the constructor declaration were registered in");
+    agent_state_class("page_reveal", &g_class,
+                      "HTML §7.2.7.5 The PageRevealEvent interface's per-realm prototype slot");
+    agent_state_value("page_reveal", &g_key,
+                      "§7.2.7.5's internal-slot key, the Symbol `viewTransition` lives under");
+    agent_state_atom("page_reveal", &g_atom_revealed,
+                     "HTML §7.4.6.3 Revealing the document's `has been revealed`, interned as the key of the "
+                     "per-realm record");
+    agent_state_id("page_reveal", &g_slot,
+                   "the per-realm slot HTML §7.4.6.3 Revealing the document's `has been revealed` record "
+                   "lives in");
+    agent_state_id("page_reveal", &g_id_ctor,
+                   "HTML §7.2.7.5 The PageRevealEvent interface's constructor declaration");
     realm_declare_intrinsic(page_reveal_install_proto);
 }
 
@@ -183,7 +216,7 @@ void page_reveal_install_proto(JSContext *ctx)
 {
     JSValue proto, prev, base, rec;
 
-    DCHECK(g_ready, "a realm asked for PageRevealEvent.prototype before the interface was declared");
+    DCHECK(g_rt != NULL, "a realm asked for PageRevealEvent.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_class);
     DCHECK(JS_IsNull(prev), "page_reveal_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -208,7 +241,7 @@ void page_reveal_install(JSContext *ctx, JSValueConst global)
 {
     JSValue ctor;
 
-    DCHECK(g_ready, "PageRevealEvent was installed before it was declared");
+    DCHECK(g_rt != NULL, "PageRevealEvent was installed before it was declared");
     ctor = idl_step_constructor(ctx, "PageRevealEvent", 1, g_id_ctor);
     CHECK(!JS_IsException(ctor), "the PageRevealEvent interface object could not be allocated");
     {
@@ -220,14 +253,47 @@ void page_reveal_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "PageRevealEvent", ctor);
 }
 
-void page_reveal_free(JSContext *ctx)
+/* THE AGENT'S HALF, UNDONE — a row on core/platform.h's release column, and it takes the RUNTIME because that
+ * is what an agent is. It took a JSContext until this diff and used it for nothing but JS_FreeValue and
+ * JS_FreeAtom, which are JS_FreeValueRT(ctx->rt, v) and JS_FreeAtomRT(ctx->rt, a); that signature is the whole
+ * of what kept this component off the column and made it a hand-written line in three hosts instead.
+ *
+ * NOTHING READS THIS COMPONENT AFTER IT RUNS, and that is a claim about a list rather than a hope. The only
+ * file outside this one that names any symbol of it is core/rendering/rendering.c — `page_reveal_pending` in
+ * its step-4 test and `page_reveal_begin` at step 6 — and `rendering` is the row AFTER this one, so on reverse
+ * declaration order rendering_free has already run by the time this line is reached. No other release on the
+ * column and no host teardown line names a static of this file.
+ *
+ * AND THERE IS NO COLLECTOR ENTRY: `JSClassDef d = { "PageRevealEvent" }` leaves finalizer and gc_mark null,
+ * so core/agent_state.h's closing obligation — an entry running after the release column must reach its record
+ * through JS_GetAnyOpaque rather than by looking up an id this line has given back — has nothing here to apply
+ * to. Its twin in core/css/media_query_list.c did, and that is the leak this group was worth landing for. */
+void page_reveal_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
-    g_ready = 0;
+    /* NOT `if (!g_rt) return;`. This is a row on core/platform.c's list, whose declare pass is unconditional
+       and which runs only where platform_agent_init ran, so a null runtime here is a host tearing down a
+       browser it never built — and a silent return would make that indistinguishable from a release that
+       worked. */
+    DCHECK(g_rt != NULL,
+           "§7.4.6.3's reveal was released in an agent that never declared it — page_reveal_init is a row on "
+           "core/platform.c's declare column, so reaching here without it is a teardown of a browser that was "
+           "never brought up");
+    DCHECK(g_rt == rt,
+           "§7.4.6.3's reveal was released against a RUNTIME other than the one it was declared in — its "
+           "class, its realm-value slot and its constructor declaration are registrations in that runtime, and "
+           "zeroing them against another leaves every one of them standing in the runtime that issued them");
     /* The prototypes and the records are the REALMS' — each goes with its context. */
-    JS_FreeValue(ctx, g_key);
+    JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_revealed);
+    JS_FreeAtomRT(rt, g_atom_revealed);
     g_atom_revealed = JS_ATOM_NULL;
     g_slot = g_id_ctor = -1;
+    /* AND THE CLASS ID, which this release kept. core/agent_state.h settles it: a class is registered in a
+       RUNTIME, so a carried id names a class in a runtime that is gone — and because JS_NewClassID returns a
+       non-zero slot UNCHANGED rather than allocating, a second agent's page_reveal_init would hand JS_NewClass
+       a number the new runtime's own allocator never issued and will issue to whichever component asks next.
+       There is no brand site in this file to invert when it goes: g_class is read only by JS_GetClassProto,
+       JS_SetClassProto and the mint, none of which any release reaches. */
+    g_class = 0;
+    g_rt = NULL;
 }
