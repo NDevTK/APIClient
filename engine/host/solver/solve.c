@@ -323,7 +323,14 @@ enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML, SINK_DERIVE_JS };
        auto-firing element for exactly that reason, so a fired HTML PoC runs at insertion and never needs a
        click;
      - url_fire runs a URL's JS only when the scheme is `javascript:`, which is code that runs when the
-       NAVIGATION happens — for this engine's URL sink, a form whose action the page wrote, on submission.
+       NAVIGATION happens — a Location assignment on the line that makes it, a form's action on submission.
+       AND WHERE THE HOST PERFORMS THAT NAVIGATION ITSELF, ITS OWN §7.4.2.2 "Beginning navigation" step 16
+       EVALUATES THE PROGRAM TOO, so the marker is reached twice for one candidate. That is not the double
+       execution §Architecture forbids and it is not a fixture artifact either: record_sink is keyed on
+       (class, source) and returns on the second arrival, so the finding, its reward and its envelope are all
+       written once. What this oracle adds over the host's evaluation is the RUNG — `escaped` is raised here,
+       at the one place that knows the delivered address survived as a `javascript:` one, and a search whose
+       candidate arrived and did not fire needs that number whether or not any navigation followed.
    THE TRUSTED TYPES COLUMN IS THE SPEC'S, NOT THIS ENGINE'S CODE PATH: TT §3.8 makes the markup sinks
    TrustedHTML sinks and `eval` a TrustedScript sink, and navigating to a `javascript:` URL is not a TT sink at
    all — which is why the URL row declares none, and why its absence from the record is a positive statement

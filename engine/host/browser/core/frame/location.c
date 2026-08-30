@@ -82,6 +82,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "solver/solve.h"        /* §7.2.4's three whole-URL algorithms are the @S URL-context sink */
 #include "solver/world.h"        /* this agent HOSTS this Document — §7.2.4's security check's whole premise */
 #include "core/agent_state.h"
 #include "core/frame/location.h"
@@ -516,35 +517,75 @@ static bool loc_navigate_begin(JSContext *ctx, SessionHistoryFragmentNav *w, con
     return false;
 }
 
-/* THE ASSIGNED VALUE, AS BYTES. §7.2.4's setters write into a URL RECORD, which is bytes — so unknown external
-   input has no modelled answer here for the same reason core/html/hyperlink.c's §4.6.3 setters do not: asking
-   a concolic for a C string is the ToString this engine has no concolic semantics for, and it would take the
-   source identity and the domain off the triple on the way into the address bar.
-   IT IS THE @S OPEN-REDIRECT SHAPE, so the crash names what to build rather than pretending: `location.href =
-   location.hash.slice(1)` and `location = new URLSearchParams(location.search).get("next")` are the two
-   spellings, and both want the destination to stay concolic through the navigation so the sink is detected at
-   the address rather than lost at the assignment. Returns NULL with an exception pending.
-   AND THE SINK ITSELF IS THE OTHER HALF OF WHAT IS MISSING HERE, which the crash used to leave out. solve.h
-   names the URL class as "location = arg (or el.href = arg)" and the browser half calls its detector from ONE
-   production site — a form's action attribute — so `location =`, `location.href =`, `assign`, `replace` and
-   `window.open` reach no @S detector at all: the URL-context breakout (the `javascript:` scheme, the one class
-   whose vector is stated rather than derived) has no arrival to be searched from on the sink every open-redirect
-   and every `javascript:`-URL finding goes through. The two are one build and not two: the detector belongs at
-   §7.2.4's own convergence point (the location-object navigate all twelve algorithms end in, which is the only
-   place that sees the destination whichever spelling produced it), and it needs the destination to still BE a
-   concolic when it gets there — which is exactly what the record write below destroys. Building the concolic
-   URL-record write without the detector would carry a provenance nothing reads; building the detector without
-   it would announce a value whose taint has already been stripped. */
+/* WHICH OF §7.2.4's TWELVE ALGORITHMS IS A CODE-EXECUTION SINK, AND IT IS A PARTITION THE STANDARD DRAWS
+ * RATHER THAN A NARROWING THIS FILE CHOSE. The @S URL class has ONE context and therefore one written-down
+ * vector — solver/solve.h: "navigating executes the `javascript:` scheme and nothing else does" — so the
+ * question "is this member a sink" is exactly "can the value the page assigned become the destination's
+ * SCHEME", and §7.2.4 answers it per member in its own steps:
+ *   `href`, `assign` and `replace` ENCODING-PARSE THE WHOLE GIVEN VALUE ("let url be the result of
+ *      encoding-parsing a URL given the given value, relative to the entry settings object"), so the scheme is
+ *      the attacker's along with everything else. These three are the sink.
+ *   The seven component setters parse into A COPY OF THIS'S URL with a STATE OVERRIDE, and URL §4.4 "URL
+ *      parsing" enters the machine at that state ("let state be state override if given, or scheme start state
+ *      otherwise") — so host, hostname, port, pathname, search and hash never reach a scheme state at all and
+ *      the destination keeps THIS document's scheme.
+ *   `protocol` is the one that does reach one, and §7.2.4 stops it by name one step later: "if copyURL's
+ *      scheme is not an HTTP(S) scheme, then TERMINATE THESE STEPS". `location.protocol = "javascript"` is a
+ *      silent no-op, not a navigation.
+ * So opening a search from a component setter would queue `javascript:X9()` against an algorithm whose own
+ * steps make it unarrivable, and report it for ever as a search merely unfinished — which §@S calls a rung
+ * whose absence and whose zero read alike. What a component setter IS is an open redirect, and this engine
+ * has no such class: a redirect executes nothing, so there is no marker for it to fire and nothing for the
+ * one oracle §@S allows to prove. It is not reported as safe either — it is not reported at all, which is the
+ * same silence §Attacker-sources gives an unforgeable principal and for the same reason.
+ *
+ * THE ANNOUNCEMENT IS UNCONDITIONAL ON THAT ARM, taint or no taint, because the CANDIDATE run's value is a
+ * plain String by construction: solver/solve.c's URL detector is both the exploration-time recorder and the
+ * verification-time fire oracle, and a `location.href = { toString(){ return "javascript:…" } }` is a real
+ * vector its own comment names. It is placed after §7.2.4 step 1's null relevant Document and step 2's
+ * security check, because a Location those return from navigates nothing and is therefore no sink.
+ *
+ * ANSWERS TRUE WHEN §7.2.4's ALGORITHM ENDS HERE — an unknown destination has no address to navigate to, and
+ * §Solver-half's rule is that the browser RUNS the real operation on the concrete: there is no concrete. It is
+ * the same answer core/dom/element.c gives a concolic reaching the markup sink ("nothing concrete to parse;
+ * the sink is what this write means"), and it is not a swallowed navigation — the navigation happens, in the
+ * candidate flow, against the real §7.4.2.2 "Beginning navigation" with the attacker's real bytes, which is
+ * §Re-execution discharging the constraint rather than a model of it. Navigating the exploring flow on a
+ * guess would be worse than not navigating: it tears down the Document that flow is exploring for an address
+ * the run never computed.
+ *
+ * IT TAKES THE ANSWER AND NOT THE MAGIC, and that is not a style choice — the two bodies that call it count in
+ * TWO DIFFERENT NAMESPACES. `LOC_HREF` is the member table's first index and `LOC_ASSIGN` is the operations
+ * enum's first constant, so both are 0 and `LOC_ORIGIN` and `LOC_REPLACE` are both 1; a shared
+ * `magic == LOC_HREF || magic == LOC_ASSIGN` would read as a three-way test while being a one-way test that
+ * happens to agree, and the day §7.2.4 grows a tenth attribute the agreement moves without a word. Each caller
+ * knows which of ITS OWN members hands over a whole URL and says so at the call. */
+static bool loc_announce_url_sink(JSContext *ctx, JSValueConst val, bool value_is_whole_url)
+{
+    if (!value_is_whole_url) return false;
+    solve_url_sink(ctx, val);
+    return concolic_is(val) != 0;
+}
+
+/* THE ASSIGNED VALUE, AS BYTES — which by this line is the SEVEN COMPONENT SETTERS' value and nothing else,
+   because the three whole-URL algorithms have already ended above on a concolic.
+   §7.2.4's component setters write into a URL RECORD, which is bytes, so unknown external input still has no
+   modelled answer here for the same reason core/html/hyperlink.c's §4.6.3 setters do not: asking a concolic
+   for a C string is the ToString this engine has no concolic semantics for, and it would take the source
+   identity and the domain off the triple on the way into the address bar. Returns NULL with an exception
+   pending. */
 static const char *loc_value_bytes(JSContext *ctx, JSValueConst val, size_t *len)
 {
     DCHECK(!concolic_is(val),
-           "unknown external input was assigned to a Location member — §7.2.4's setter writes it into a URL "
-           "record as bytes, which takes the source identity and the domain off the triple, and the value is "
-           "then a destination this engine navigates to with no @S record that it came from the attacker. "
-           "Build the URL-record write over a concolic component (core/url/url.h's url_parse_override is where "
-           "the bytes land), carry the provenance into §7.4.2.2's navigate, and announce it to the @S "
-           "URL-context detector THERE — §7.2.4's navigate is the one point all twelve of its algorithms reach, "
-           "and today the whole class is detected from a form action and nowhere else");
+           "unknown external input was assigned to one of §7.2.4's COMPONENT setters — `location.hash = x`, "
+           "`location.pathname = x` and their five siblings parse the value into a copy of this document's "
+           "URL record as bytes, which takes the source identity and the domain off the triple, and the "
+           "address this navigable then carries is unknown input with nothing left saying so. Build the "
+           "URL-record write over a concolic component (core/url/url.h's url_parse_override is where the bytes "
+           "land) so the component the page wrote stays unknown through §7.4.2.2's navigate and a later read "
+           "of `location.search` gives back what was put there. It is NOT the missing @S URL sink — that one "
+           "is announced above, from the three algorithms whose value can carry a scheme, and no component "
+           "setter can produce the `javascript:` one this engine's URL class breaks out of");
     return JS_ToCStringLen(ctx, len, val);
 }
 
@@ -679,6 +720,9 @@ static int js_loc_set(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
     /* STEP 2 for every member but `href`, whose note says it intentionally has none. */
     if (magic != LOC_HREF) loc_assert_same_origin_domain(ctx);
 
+    /* §7.2.4's href setter step 2 DESTINATION, announced to the @S URL-context detector — see the partition
+       above for why `href` is the only one of the nine members this body serves that reaches it. */
+    if (loc_announce_url_sink(ctx, val, magic == LOC_HREF)) return JS_STEP_DONE;
     v = loc_value_bytes(ctx, val, &vlen);
     if (!v) return JS_STEP_ABRUPT;
 
@@ -895,6 +939,10 @@ static int js_loc_assign_replace(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     if (loc_document_is_null(ctx)) return JS_STEP_DONE;             /* step 1, both */
     if (magic == LOC_ASSIGN) loc_assert_same_origin_domain(ctx);    /* step 2, assign only */
 
+    /* §7.2.4's `USVString url` ARGUMENT IS THE WHOLE DESTINATION for both of these — the assert above has just
+       established that this body's magic is one of its own two — so both are the @S URL sink unconditionally.
+       See the partition above the byte conversion. */
+    if (loc_announce_url_sink(ctx, argv[0], true)) return JS_STEP_DONE;
     v = loc_value_bytes(ctx, argv[0], &vlen);
     if (!v) return JS_STEP_ABRUPT;
     url_record_init(&target);

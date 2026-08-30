@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>url sink</title>
+<body>
+<script>
+/* ONE PROBLEM: the @S URL class end to end — detected at a REAL navigation, and fire-verified rather than
+ * merely reached.
+ *
+ * IT IS hash_sink.html's OPPOSITE HALF, over the SAME source and the SAME delivery, and the pair is what makes
+ * either readable. Both documents read `location.hash`, which the browser percent-encodes on the way in per
+ * URL §1.3 "Percent-encoded bytes" — the fragment percent-encode set is the C0 control set plus U+0020 SPACE,
+ * U+0022 ("), U+003C (<), U+003E (>) and U+0060 (`). Every HTML §13.2.5 Tokenization escape needs `<`, which
+ * that set encodes, so the markup document is a PARKED search carrying the set that defeated it. The URL
+ * class's vector is `javascript:X9()`, whose only non-alphanumeric bytes are U+003A (:), U+0028 (() and
+ * U+0029 ()) — none of which is in the fragment set, and none of which is in the OTHER address source's set
+ * either: §1.3's special-query percent-encode set is the query set plus U+0027 ('), which comes to the C0
+ * control set plus SPACE, ("), (#), (<), (>) and (').
+ * So this is the one class of the three whose breakout arrives through an ADDRESS source intact, which makes
+ * it the only one that can carry a search all the way to `fires` from the victim's own URL. A run in which
+ * this document parks and hash_sink.html parks is reporting one fact about a source and calling it two.
+ *
+ * WHY THE `slice(1)`, and it is not decoration: the fragment's own value carries its U+0023 (#), so
+ * `location.href = location.hash` hands §7.2.4 "The Location interface"'s href setter a fragment-only URL,
+ * which HTML §7.4.2.2 "Beginning navigation" routes to a SAME-DOCUMENT navigation and which executes nothing.
+ * The slice is what a router does and what makes the destination a whole URL, and it also exercises the half
+ * of the delivery declaration that survives a derivation — the percent-encode set is a fact about the ROOT and
+ * the leading `#` is a fact about the injection POINT, so a candidate substituted here must still arrive
+ * encoded for the fragment and prefixed as one.
+ *
+ * WHAT FIRING MEANS HERE IS THE ENGINE'S OWN NAVIGATION AND NOT A MODEL OF ONE. §7.4.2.2 step 16 routes the
+ * `javascript` scheme to §7.4.2.3.2 "The javascript: URL special case", whose step 8 evaluates the program —
+ * so the exploring flow records the sink and navigates nowhere (its destination is unknown external input and
+ * there is no address), while the CANDIDATE flow performs the real navigation with the attacker's real bytes
+ * and X9 has to actually call. That is §@S's whole rule for this class: the vector is stated because the sink
+ * is one context, and only the fire proves it.
+ *
+ * AND AS A GATE DOCUMENT ITS JOB IS THE DIRECTION A PARKED SEARCH CANNOT MEASURE. The differential compares
+ * finding SETS across schedules; a document that parks can only ever show that a search stalls identically,
+ * and the failure this surface has that matters most is a fire-verified PoC one schedule produces and another
+ * loses — a finding reported to a person in one run and not the next, which is §scheduler's razor (drops,
+ * starves, skips, reorders, forgets) landing on the strongest thing this half of the tool emits. That needs a
+ * document that FIRES, so this one exists to be that document and would be worth nothing if it merely
+ * reached. If it ever parks, the fault is upstream of the schedule and the pair with hash_sink.html is what
+ * says which of the two sources' constraints moved. */
+location.href = location.hash.slice(1);
+</script>
+</body>
