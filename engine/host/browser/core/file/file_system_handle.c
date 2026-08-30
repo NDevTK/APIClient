@@ -1,4 +1,15 @@
-/* FileSystemHandle, FileSystemFileHandle and FileSystemDirectoryHandle — File System Standard §2.2, §2.3, §2.4.
+/* FileSystemHandle, FileSystemFileHandle and FileSystemDirectoryHandle — File System Standard §2.2 "The
+ * FileSystemHandle interface", §2.3 "The FileSystemFileHandle interface", §2.4 "The FileSystemDirectoryHandle
+ * interface".
+ *
+ * A BARE § IN A COMMENT HERE IS THE FILE SYSTEM STANDARD; EVERY CRASH MESSAGE NAMES IT IN FULL INSTEAD, and
+ * the asymmetry is the point — a banner convention is exactly what a reader standing at an abort cannot see,
+ * because the only text a crash prints is the message. `engine/citegen.mjs` cannot see it either: it resolves a
+ * standard-less citation by whichever standard the file's other citations name most, so a file whose only
+ * ANCHORED citations belong to a neighbouring standard has every bare number in it answered by that neighbour.
+ * This one's neighbour is Web IDL, and Web IDL HAS a §2.1, a §2.2, a §2.3 and a §2.4 — "Names", "Interfaces",
+ * "Interface mixins", "Callback interfaces". That is the worst state a citation can be in and it is worse than
+ * an invalid number: a wrong document behind a plausible number, with nothing anywhere to say so.
  *
  * A HANDLE IS A LOCATOR AND NOTHING ELSE. §2.2: "A FileSystemHandle object is associated with a locator", and
  * §2.1's locator is a kind, a root and a path — three facts fixed at the mint and never written again. So the
@@ -11,24 +22,29 @@
  * standard says to.
  *
  * EVERY METHOD IS A STEP MACHINE, and every one of them for the same two reasons. Each returns a PROMISE, and
- * settling one calls a resolving function — 27.5.1.3 step 2.f reads `then` off whatever it is resolved with,
- * which is the page's code and therefore a request rather than a call from C. And `createWritable` runs §2.5's
- * stream creation, which suspends on its own start promise. A member that ran either from a C activation would
- * be the drive-to-completion this engine aborts on.
+ * settling one calls a resolving function — ECMAScript §27.5.1.3 "CreateResolvingFunctions ( toResolve )"
+ * step 2.f reads `then` off whatever it is resolved with, which is the page's code and therefore a request
+ * rather than a call from C. And `createWritable` runs §2.5's stream creation, which suspends on its own start
+ * promise. A member that ran either from a C activation would be the drive-to-completion this engine aborts
+ * on.
  *
  * THEY ARE ONE MACHINE WITH A MAGIC. The seven of them differ in the ALGORITHM and agree in everything around
  * it: locate the entry, decide a completion, settle the promise. Written as seven machines that shape would be
  * copied seven times and the settle would be seven chances to drop a rejection.
  *
- * §2.4.1's DIRECTORY ITERATION is the same machine one layer down. `async_iterable<USVString,
- * FileSystemHandle>` is Web IDL §3.7.10's declaration, whose whole binding — `entries`, `keys`, `values`,
- * %Symbol.asyncIterator%, the iterator object and its `next` — is core/idl_async_iter.c's, and all this file
- * supplies is §2.5.10's two hooks: the initialization steps that give the iterator its past-results set, and
- * "get the next iteration result", which is a step machine for the same reason every member above is.
+ * §2.4.1 "Directory iteration" is the same machine one layer down. `async_iterable<USVString,
+ * FileSystemHandle>` is Web IDL §3.7.10 "Asynchronous iterable declarations", whose whole binding — `entries`,
+ * `keys`, `values`, %Symbol.asyncIterator%, the iterator object and its `next` — is core/idl_async_iter.c's,
+ * and all this file supplies is the two hooks Web IDL §2.5.10 "Asynchronously iterable declarations" requires
+ * the accompanying prose to define — the initialization steps that give the iterator its past-results set, and
+ * "get the next iteration result" — both of which the File System Standard writes under its own §2.4.1. Each
+ * is a step machine for the same reason every member above is. THE STANDARD ON §2.5.10 IS LOAD-BEARING: this
+ * file's default standard has a §2.5 "The FileSystemWritableFileStream interface" that stops at §2.5.3, so an
+ * unqualified §2.5.10 reads as a section the File System Standard does not have.
  *
- * WHAT IS ABSENT AND WHY. §2.6's FileSystemSyncAccessHandle is
- * `[Exposed=DedicatedWorker]` and this engine has no WorkerGlobalScope, so its exposure set is empty here. File
- * System Access §2.3's `queryPermission`/`requestPermission` are a PARTIAL interface of this one and live in
+ * WHAT IS ABSENT AND WHY. §2.6's FileSystemSyncAccessHandle is `[Exposed=DedicatedWorker]` and this engine
+ * has no WorkerGlobalScope, so its exposure set is empty here. File System Access §2.3 "The FileSystemHandle
+ * interface"'s `queryPermission`/`requestPermission` are a PARTIAL interface of this one and live in
  * core/file/file_system_access.c beside the "file-system" powerful feature they are the two doors onto; they
  * install onto the prototype this file builds, through fs_handle_proto. */
 #include <stdlib.h>
@@ -85,8 +101,9 @@ static void fsh_finalizer(JSRuntime *rt, JSValue val)
     /* NOT `if (!l) return;`. fs_handle_new is the one mint and it builds the record COMPLETE before attaching
        it, with nothing between JS_NewObjectProtoClass and JS_SetOpaque that allocates on the JS heap or
        returns — so there is no half-built handle for a collection to meet. */
-    DCHECK(l != NULL, "a FileSystemHandle was finalized with no locator — §2.2 says a handle IS associated "
-                      "with one, and fs_handle_new attaches it before the object can reach a collection");
+    DCHECK(l != NULL, "a FileSystemHandle was finalized with no locator — File System Standard §2.2 The "
+                      "FileSystemHandle interface says a handle IS associated with one, and fs_handle_new "
+                      "attaches it before the object can reach a collection");
     for (i = 0; i < l->npath; i++) free(l->path[i]);
     free(l->path);
     free(l->root);
@@ -112,14 +129,16 @@ bool fs_handle_locator(JSValueConst v, bool *directory, const char **root, const
     *root = l->root;
     *path = (const char *const *)l->path;
     *npath = l->npath;
-    DCHECK(*npath >= 1, "a handle's locator holds a path with no items — §2.1's path is a list of ONE OR "
+    DCHECK(*npath >= 1, "a handle's locator holds a path with no items — File System Standard §2.1 Concepts' "
+                        "file system path is a list of ONE OR "
                         "MORE strings, and fs_handle_new asserts that at the mint");
     return true;
 }
 
 JSValue fs_handle_proto(JSContext *ctx)
 {
-    DCHECK(g_handle_class != 0, "§2.2's prototype was asked for before fs_handle_init declared the class");
+    DCHECK(g_handle_class != 0, "File System Standard §2.2 The FileSystemHandle interface's prototype was "
+                                "asked for before fs_handle_init declared the class");
     return JS_GetClassProto(ctx, g_handle_class);
 }
 
@@ -130,8 +149,9 @@ JSValue fs_handle_new(JSContext *ctx, bool directory, const char *root, const ch
     FsLocator *l;
     int i;
 
-    DCHECK(npath >= 1, "a FileSystemHandle was minted with a path of no items — §2.1's file system path is \"a "
-                       "list of ONE OR MORE strings\", and `handle.name` is its last item");
+    DCHECK(npath >= 1, "a FileSystemHandle was minted with a path of no items — File System Standard §2.1 "
+                       "Concepts' file system path is a list of ONE OR MORE strings, and `handle.name` is its "
+                       "last item");
     DCHECK(!JS_IsNull(proto), "a FileSystemHandle was minted in a realm with no FileSystemHandle prototype — "
                               "all three interfaces are [SecureContext], so a NON-SECURE realm has none, and "
                               "every door onto a handle carries that same attribute; a mint here means a door "
@@ -165,7 +185,8 @@ static JSValue fsh_child(JSContext *ctx, const FsLocator *parent, const char *na
     JSValue h;
     int i;
 
-    DCHECK(parent->directory, "§2.3's create a child handle was given a locator that is not a DIRECTORY LOCATOR "
+    DCHECK(parent->directory, "File System Standard §2.3-§2.4's create a child FileSystemFileHandle / "
+                              "FileSystemDirectoryHandle was given a locator that is not a DIRECTORY LOCATOR "
                               "— a child's path extends a directory's, and a file has no children");
     path = malloc(sizeof *path * (size_t)(parent->npath + 1));
     CHECK(path != NULL, "file system handle: OOM building a child locator's path");
@@ -197,8 +218,10 @@ static bool fsh_same_locator(const FsLocator *a, const FsLocator *b)
 
 /* ---- §2.2's two attributes ------------------------------------------------------------------------------ */
 
-/* WEB IDL §3.7.5's BRAND CHECK, which for these two is the opaque: `FileSystemHandle.prototype.kind` read off a
-   plain object is a TypeError and a page tells that apart from `undefined`. */
+/* WEB IDL §3.7.6 "Attributes"' BRAND CHECK, which for these two is the opaque: `FileSystemHandle.prototype.kind`
+   read off a plain object is a TypeError and a page tells that apart from `undefined`. The number used to read
+   §3.7.5, which is "Constants" and defines nothing about a receiver; the check is in §3.7.6's create-an-
+   attribute-getter steps — "If jsValue does not implement target, then … throw a TypeError". */
 static FsLocator *fsh_brand(JSContext *ctx, JSValueConst this_val)
 {
     FsLocator *l = fsh_locator(this_val);
@@ -233,10 +256,11 @@ static JSValue fsh_get_name(JSContext *ctx, JSValueConst this_val, int magic)
 #define FSH_STAGES(X) \
     X(FSH_RUN,    "File System §2.3-§2.4 the enqueued file-system-queue steps of this member (locate the " \
                   "entry, and everything the algorithm decides from it)") \
-    X(FSH_STREAM, "File System §2.3.2 createWritable() step 3.5.2 (create a new FileSystemWritableFileStream " \
-                  "for entry — which suspends on §5.4's start promise)") \
+    X(FSH_STREAM, "File System §2.3.2 The createWritable() method step 5.7.2 (create a new " \
+                  "FileSystemWritableFileStream for entry — which suspends on the start promise Streams " \
+                  "§5.5.4 Default controllers' SetUpWritableStreamDefaultController builds)") \
     X(FSH_SETTLE, "File System §2.3-§2.4 the queued storage task of this member (resolve or reject result — " \
-                  "27.5.1.3 step 2.f's `then` read is the page's)")
+                  "ECMAScript §27.5.1.3 CreateResolvingFunctions step 2.f's `then` read is the page's)")
 enum { IDL_STEP_STAGE_BASE(FSH_STAGES) FSH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FSH_STEPS[] = { FSH_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -302,7 +326,8 @@ static JSValue fsh_resolve_path(JSContext *ctx, const FsLocator *root, const FsL
     for (i = 0; i < root->npath; i++)
         if (strcmp(root->path[i], child->path[i])) return JS_NULL;
     out = JS_NewArray(ctx);
-    CHECK(!JS_IsException(out), "file system handle: §2.1's resolve could not allocate its relative path");
+    CHECK(!JS_IsException(out), "file system handle: File System Standard §2.1 Concepts' resolve a file "
+                                "system locator could not allocate its relative path");
     /* "For each index of the range from rootPath's size to childPath's size, exclusive, append
        childPath.[[index]] to relativePath" — which for the same path is the empty list §2.4.5 promises. */
     for (i = root->npath; i < child->npath; i++)
@@ -381,7 +406,8 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                Otherwise resolve p with false." The DECLARATION has already brand-tested the argument. */
             FsLocator *o = fsh_locator(argc > 0 ? argv[0] : JS_UNDEFINED);
 
-            DCHECK(o != NULL, "§2.2.1's `other` reached the body as something that is not a FileSystemHandle — "
+            DCHECK(o != NULL, "File System Standard §2.2.1 The isSameEntry() method's `other` reached the body as "
+                              "something that is not a FileSystemHandle — "
                               "the argument is declared IDL_INTERFACE and branded against this class, so the "
                               "conversion has already thrown for anything else");
             s->value = JS_NewBool(ctx, o && fsh_same_locator(l, o));
@@ -393,8 +419,8 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                different file system answers null rather than rejecting. */
             FsLocator *o = fsh_locator(argc > 0 ? argv[0] : JS_UNDEFINED);
 
-            DCHECK(o != NULL, "§2.4.5's `possibleDescendant` reached the body as something that is not a "
-                              "FileSystemHandle");
+            DCHECK(o != NULL, "File System Standard §2.4.5 The resolve() method's `possibleDescendant` "
+                              "reached the body as something that is not a FileSystemHandle");
             s->value = o ? fsh_resolve_path(ctx, l, o) : JS_NULL;
             break;
         }
@@ -408,8 +434,9 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                 break;
             }
             DCHECK(file_system_is_file(entry),
-                   "§2.3.1's getFile() located a DIRECTORY entry — a FileSystemFileHandle's locator's kind is "
-                   "\"file\", and §2.1's locate an entry answers a file entry or null for one");
+                   "File System Standard §2.3.1 The getFile() method located a DIRECTORY entry — a "
+                   "FileSystemFileHandle's locator's kind is file, and File System Standard "
+                   "§2.1 Concepts' locate an entry answers a file entry or null for one");
             s->value = file_system_file_new(ctx, entry);
             break;
         case M_CREATE_WRITABLE:
@@ -418,7 +445,8 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                 reject = 1;
                 break;
             }
-            DCHECK(file_system_is_file(entry), "§2.3.2's createWritable() located a DIRECTORY entry");
+            DCHECK(file_system_is_file(entry), "File System Standard §2.3.2 The createWritable() "
+                                              "method located a DIRECTORY entry");
             /* "Let lockResult be the result of taking a lock with 'shared' on entry ... If lockResult is
                'failure', reject result with a NoModificationAllowedError." The lock is what stops a
                FileSystemSyncAccessHandle being taken on a file a stream is writing. */
@@ -454,8 +482,10 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                 break;
             }
             DCHECK(file_system_is_directory(entry),
-                   "a §2.4 member located a FILE entry — a FileSystemDirectoryHandle's locator's kind is "
-                   "\"directory\", and §2.1's locate an entry answers a directory entry or null for one");
+                   "a File System Standard §2.4 The FileSystemDirectoryHandle interface member located a FILE "
+                   "entry — a FileSystemDirectoryHandle's locator's kind is directory, and File "
+                   "System Standard §2.1 Concepts' locate an entry answers a directory entry or null "
+                   "for one");
             if (magic == M_REMOVE_ENTRY) {
                 JSValue child = file_system_child(ctx, entry, name);
 
@@ -513,7 +543,7 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
     }
 
     if (hdr->stage == FSH_STREAM) {
-        /* §2.3.2 step 3.5.2, and §2.5's creation is a sub-sequence because "set up stream" resolves a start
+        /* §2.3.2 step 5.7.2, and §2.5's creation is a sub-sequence because "set up stream" resolves a start
            promise. `keepExistingData` makes the stream's [[buffer]] a copy of the entry's binary data. */
         r = fs_writable_new_run(ctx, &s->w, s->entry, idl_dict_bool(ctx, argc > 0 ? argv[0] : JS_UNDEFINED,
                                                                     "keepExistingData"),
@@ -527,7 +557,8 @@ static int fsh_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         STEP_GOTO(hdr->stage, FSH_SETTLE, &s->w.phase, NULL);
     }
 
-    DCHECK(hdr->stage == FSH_SETTLE, "a FileSystemHandle member resumed into a stage §2.3-§2.4 does not have");
+    DCHECK(hdr->stage == FSH_SETTLE, "a FileSystemHandle member resumed into a stage File System "
+                                     "Standard §2.3-§2.4 does not have");
     {
         JSValue settled = JS_UNDEFINED;
 
@@ -592,22 +623,28 @@ static int fsdir_iter_init(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
        is handed is discharged here rather than left for a caller that has already given it away. */
     JS_FreeValue(ctx, in);
     if (JS_IsException(set)) return -1;
-    DCHECK(JS_IsUndefined(*pstate), "§2.4.1's initialization steps ran on an iterator that already had state — "
-                                    "Web IDL §3.7.10 step 3.1.6 runs them exactly once, at the mint");
+    DCHECK(JS_IsUndefined(*pstate), "File System Standard §2.4.1 Directory iteration's asynchronous "
+                                    "iterator initialization steps ran on an iterator that already had "
+                                    "state — Web IDL §3.7.10 step 3.1.6 runs them exactly once, at the mint");
     *pstate = set;
     return 0;
 }
 
-/* §2.4.1 steps 2.3.4-2.3.8: the first child whose name `past` does not already contain, appended to `past` and
+/* §2.4.1 steps 2.3.3-2.3.8: the first child whose name `past` does not already contain, appended to `past` and
    turned into a child handle. Answers the two-element value pair a PAIR declaration resolves with — « child's
-   name, result » — or §2.5.10's end of iteration when there is no such child. OWNED, or JS_EXCEPTION. */
+   name, result » — or Web IDL §2.5.10's end of iteration when there is no such child. OWNED, or JS_EXCEPTION.
+   THE SUB-NUMBERS HERE ARE COUNTED WITH LIST DEPTH. Step 2.3.2 CONTAINS a nested one-item list ("Assert:
+   directory is a directory entry"), so a flat count of the <li>s under step 2.3 promotes that assert to a peer
+   and every step from 2.3.3 down reads one too high — which is how this block came to cite 2.3.4-2.3.8 for an
+   algorithm whose last step IS 2.3.8. */
 static JSValue fsdir_iter_pick(JSContext *ctx, const FsLocator *l, JSValueConst dir, JSValueConst past)
 {
     int n = file_system_child_count(ctx, dir), i;
 
-    DCHECK(JS_IsObject(past), "§2.4.1's iteration reached its steps with no past results set — Web IDL §3.7.10 "
-                              "step 3.1.6 runs the initialization steps that create it before the iterator is "
-                              "ever handed out");
+    DCHECK(JS_IsObject(past), "File System Standard §2.4.1 Directory iteration's get the next "
+                              "iteration result reached its steps with no past results set — Web IDL "
+                              "§3.7.10 step 3.1.6 runs the initialization steps that create it before the "
+                              "iterator is ever handed out");
     for (i = 0; i < n; i++) {
         JSValue name = JS_UNDEFINED;
         JSValue child = file_system_child_at(ctx, dir, i, &name);
@@ -627,13 +664,14 @@ static JSValue fsdir_iter_pick(JSContext *ctx, const FsLocator *l, JSValueConst 
             if (seen < 0) return JS_EXCEPTION;
             continue;
         }
-        /* step 2.3.6: "Append child's name to iterator's past results." */
+        /* step 2.3.5: "Append child's name to iterator's past results." */
         JS_DefinePropertyValue(ctx, past, a, JS_TRUE, JS_PROP_C_W_E);
         JS_FreeAtom(ctx, a);
-        /* steps 2.3.7-2.3.8: a child FileSystemFileHandle for a file entry, a child FileSystemDirectoryHandle
+        /* steps 2.3.6-2.3.7: a child FileSystemFileHandle for a file entry, a child FileSystemDirectoryHandle
            for a directory entry — which is fsh_child, the same operation §2.4.2 and §2.4.3 reach. */
         nm = file_system_name_cstr(ctx, child);
-        CHECK(nm != NULL, "§2.4.1's iteration reached a child entry with no name");
+        CHECK(nm != NULL, "file system handle: File System Standard §2.4.1 Directory "
+                          "iteration reached a child entry with no name");
         handle = fsh_child(ctx, l, nm, file_system_is_directory(child));
         JS_FreeCString(ctx, nm);
         JS_FreeValue(ctx, child);
@@ -653,7 +691,7 @@ static JSValue fsdir_iter_pick(JSContext *ctx, const FsLocator *l, JSValueConst 
         }
         return pair;
     }
-    /* step 2.3.5: "If child is null, resolve promise with undefined and abort these steps" — which is Web IDL
+    /* step 2.3.4: "If child is null, resolve promise with undefined and abort these steps" — which is Web IDL
        §2.5.10's END OF ITERATION rather than the JavaScript value `undefined`: the fulfilment of this promise
        is read by §3.7.10.2's fulfillSteps, and `undefined` there is a value a declaration may legitimately
        yield. The two say the same thing; only the marker outside the value space says it unambiguously. */
@@ -671,13 +709,14 @@ typedef struct {
 } FsDirIterWork;
 
 /* WHERE §2.4.1's ITERATION RESTS — at its SETTLE, which is a Call of a resolving function and therefore reaches
-   27.5.1.3 step 2.f's `then` read on the value pair it is handed (an Array, one
+   ECMAScript §27.5.1.3 CreateResolvingFunctions step 2.f's `then` read on the value pair it is handed (an Array, one
    `Object.defineProperty(Array.prototype, "then", …)` away from being the page's code). Numbered from
    IDL_ASYNC_ITER_STEP_FIRST and joined onto Web IDL §3.7.10.2's own stages at the declaration, so a flow parked
    there reports the File System Standard's step rather than the Web IDL step that RUNS this algorithm. */
 #define FSD_STAGES(X) \
     X(FSD_NEXT_SETTLE, \
-      "File System §2.4.1 get the next iteration result steps 2.3.2, 2.3.5 and 2.3.8 (rejecting promise with a " \
+      "File System §2.4.1 Directory iteration, get the next iteration result steps 2.3.2, 2.3.4 and 2.3.8 " \
+      "(rejecting promise with a " \
       "NotFoundError DOMException, or resolving it with end of iteration or with « child's name, result »)")
 enum { IDL_ASYNC_ITER_STAGE_BASE(FSD_STAGES) FSD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FSD_STEPS[] = { FSD_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -691,8 +730,11 @@ static void fsdir_iter_visit(JSContext *ctx, void *work, JSStepVisit *v)
 }
 
 /* §2.4.1's "To get the next iteration result for a FileSystemDirectoryHandle handle and its async iterator
-   iterator". A STEP because its last act settles a promise, and a resolving function reaches 27.5.1.3's resolveSteps step
-   8's `then` read on what it is given — which for a value pair is an Array, one
+   iterator". A STEP because its last act settles a promise, and a resolving function reaches ECMAScript
+   §27.5.1.3 CreateResolvingFunctions step 2.f's `then` read on what it is given — the sixth sub-step of
+   `resolveSteps`, which ecmarkup renders lower-alpha at that depth. This read "step 8" until it was checked
+   against the text: step 2.h is `Let thenAction be then.[[Value]]`, one step PAST the Get, so the number named
+   a real step that is not the one the sentence is about — which for a value pair is an Array, one
    `Object.defineProperty(Array.prototype, "then", …)` away from being the page's code. */
 static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
                            JSValue *pstate, JSValue in, JSValue *ppromise, JSValue **out_cb, int *out_argc)
@@ -713,8 +755,9 @@ static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
            machine down through the ownership declaration, which frees exactly what it names. */
         stream_work_start(&k->w);
         k->promise = JS_UNDEFINED;
-        DCHECK(l != NULL, "§2.4.1's iteration reached a target that is not a FileSystemHandle — the iterator's "
-                          "target is the receiver Web IDL §3.7.10 step 3.1.3 has already brand-checked");
+        DCHECK(l != NULL, "File System Standard §2.4.1 Directory iteration reached a target that "
+                          "is not a FileSystemHandle — the iterator's target is the receiver Web IDL "
+                          "§3.7.10 step 3.1.3 has already brand-checked");
         k->promise = JS_NewPromiseCapability(ctx, funcs);   /* step 1: "Let promise be a new promise." */
         if (JS_IsException(k->promise)) return -1;
         entry = fsh_locate(ctx, l);                         /* step 2.1: locate an entry given handle's locator */
@@ -725,8 +768,9 @@ static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
             reject = 1;
         } else {
             DCHECK(file_system_is_directory(entry),
-                   "§2.4.1's iteration located a FILE entry — a FileSystemDirectoryHandle's locator's kind is "
-                   "\"directory\", and §2.1's locate an entry answers a directory entry or null for one");
+                   "File System Standard §2.4.1 Directory iteration located a FILE entry — a "
+                   "FileSystemDirectoryHandle's locator's kind is directory, and File System "
+                   "Standard §2.1 Concepts' locate an entry answers a directory entry or null for one");
             k->w.value = fsdir_iter_pick(ctx, l, entry, *pstate);
         }
         JS_FreeValue(ctx, entry);
@@ -741,7 +785,8 @@ static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
         STEP_GOTO(hdr->stage, FSD_NEXT_SETTLE, &k->w.phase, NULL);
     }
     DCHECK(hdr->stage == FSD_NEXT_SETTLE,
-           "§2.4.1's get the next iteration result resumed at a step it never rests at");
+           "File System Standard §2.4.1 Directory iteration's get the next "
+           "iteration result resumed at a step it never rests at");
     r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), k->w.func, JS_UNDEFINED, 1,
                       (JSValueConst *)&k->w.value, in, &settled, out_cb, out_argc);
     if (r > 0) return r;       /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
@@ -860,8 +905,8 @@ void fs_handle_init(JSContext *ctx)
     static const IdlArgType NAME_OPTS[]  = { IDL_USVSTRING, IDL_DICT };
     static const IdlArgType OPTS_ONLY[]  = { IDL_DICT };
 
-    DCHECK(g_handle_class == 0, "fs_handle_init ran twice — §2.2's class and its members are declared once per "
-                                "AGENT");
+    DCHECK(g_handle_class == 0, "fs_handle_init ran twice — File System Standard §2.2 The FileSystemHandle "
+                                "interface's class and its members are declared once per AGENT");
     JS_NewClassID(rt, &g_handle_class);
     CHECK(JS_NewClass(rt, g_handle_class, &hd) == 0, "FileSystemHandle: the class could not be declared");
     JS_NewClassID(rt, &g_file_handle_class);
