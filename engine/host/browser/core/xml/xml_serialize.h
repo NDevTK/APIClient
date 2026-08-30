@@ -149,13 +149,49 @@ typedef struct {
     X(P##_CLOSE,    W " → DOM Parsing and Serialization §3.2.1.1 XML serializing an Element node step 20 " \
                       "(\"</\", the qualified name, \">\")")
 
+/* WHICH OF §3.2.1's TWO SHAPES THE CALLER IS ASKING FOR, AND WHY IT IS AN ARGUMENT RATHER THAN A SECOND
+ * ALGORITHM. §3.2.1's step 5 dispatches on the node's INTERFACE, and for a Document (§3.2.1.2) and a
+ * DocumentFragment (§3.2.1.5) that dispatch is already "the concatenation of the XML serializations of each of
+ * node's children, in tree order" — the node's own markup is not part of the output because it has none. An
+ * ELEMENT reached through the same entry serializes its own start and end tags around that concatenation
+ * (§3.2.1.1), and BOTH answers have a consumer, so the shape is a question the caller answers rather than a
+ * property of the node.
+ *
+ * WHERE THE SECOND ANSWER COMES FROM, AND WHERE THE STANDARD IS AGAINST ITSELF. HTML §8.5.4 The innerHTML
+ * property's fragment serializing algorithm steps read, in full: "Let context document be node's node
+ * document. If context document is an HTML document, return the result of HTML fragment serialization
+ * algorithm with node, false, and « ». Return the XML serialization of node given require well-formed." The
+ * HTML arm is HTML §13.3 Serializing HTML fragments, whose output is the CHILDREN of node and never node's own
+ * tags; step 3 as written hands the same node to §3.2.1's interface dispatch, which for an Element includes
+ * them. So one member's two arms disagree about whether the receiver's own tags are in the answer, and the
+ * section itself is flagged in the standard's own words — "The innerHTML property has a number of outstanding
+ * issues in the DOM Parsing and Serialization issue tracker, documenting various problems with its
+ * specification."
+ *
+ * THE ORACLE DECIDES IT AND IT IS NOT AMBIGUOUS: web-platform-tests `domparsing/innerhtml-03.xhtml` asserts
+ * that a `div` holding one `xmp` answers `<xmp xmlns="http://www.w3.org/1999/xhtml">...</xmp>` — the child's
+ * markup, with the default namespace declaration on the CHILD, which is what a null context namespace at the
+ * child's own entry produces and what a `div` wrapper would have absorbed. So the XML arm is children-only for
+ * an Element too, which is also §3.2.1's own answer for the ShadowRoot the same getter is declared on. That is
+ * the entry below, and it is stated as a caller's argument rather than buried as a special case so that the
+ * consumer which genuinely wants the node itself — HTML §8.5.8 The XMLSerializer interface's
+ * `serializeToString(root)`, "return the XML serialization of root given false" — keeps saying so. */
+typedef enum {
+    /* §3.2.1 step 5's dispatch on `node`'s own interface: an Element's answer carries its own tags. */
+    XML_SERIALIZE_NODE = 0,
+    /* §3.2.1.5 XML serializing a DocumentFragment node's concatenation, applied to `node`'s children whatever
+       `node`'s interface is — with §3.2.1.1 step 18's template substitution, so a `template` element answers
+       with its template contents exactly as it does when the walk reaches it from above. */
+    XML_SERIALIZE_CHILDREN,
+} XmlSerializeEntry;
+
 /* Begin `produce an XML serialization of a Node node given a flag require well-formed` — §3.2.1's steps 1-4 (the
    null context namespace, the new prefix map with the XML namespace's "xml" in it, and the prefix index at 1).
    `base` is where the caller declared the stage block and `after` is the caller's own stage this resumes at,
    with the accumulated markup on the state. Every field the walk reads is placed before the first step that can
    allocate or throw. */
 void xml_serialize_start(JSContext *ctx, JSStepHdr *hdr, XmlSerializeState *s, lxb_dom_node_t *node,
-                         bool require_well_formed, int base, int after);
+                         XmlSerializeEntry entry, bool require_well_formed, int base, int after);
 /* ONE STAGE. JS_STEP_YIELD to rest, JS_STEP_ABRUPT having thrown §3.2.1 step 5's "InvalidStateError"; the
    finish sets `hdr->stage` to the caller's `after`, so a caller never tests for completion. */
 int  xml_serialize_run(JSContext *ctx, JSStepHdr *hdr, XmlSerializeState *s, int base);

@@ -372,6 +372,48 @@ static void xs_push(JSContext *ctx, XmlSerializeState *s, lxb_dom_node_t *node)
     s->sp++;
 }
 
+/* §3.2.1.1 step 18's SUBSTITUTION, AS ONE QUESTION WITH TWO ASKERS. "If ns is the HTML namespace, and the
+   node's localName matches the string 'template', then this is a template element. Append to markup the result
+   of XML serializing a DocumentFragment node given the template element's template contents" — so a template's
+   ORDINARY children are never serialized, and the node whose children the walk descends into is not always the
+   node the walk is standing on. Both askers are descents into a node's children and they differ only in where
+   the element's namespace was computed: step 18 already holds step 10's `ns` for the element it is opening,
+   while xml_serialize_start's XML_SERIALIZE_CHILDREN entry never runs step 10 at all, because the node it is
+   entered on contributes no tags to the output and therefore has no start tag to name. Asked at one of them
+   only, a `template` reached through the other answers with the children `t.appendChild(x)` created and with
+   its template contents absent — a real subtree replaced by a real subtree, with nothing to say so. */
+static lxb_dom_node_t *xs_children_container(lxb_dom_node_t *n, uint32_t elem_ns, uint32_t ns_html)
+{
+    size_t llen = 0;
+    const char *loc;
+    lxb_dom_node_t *content;
+
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || elem_ns != ns_html) return n;
+    loc = (const char *)lxb_dom_element_local_name(lxb_dom_interface_element(n), &llen);
+    DCHECK(loc != NULL, "an element in the tree has no local name");
+    if (llen != 8 || memcmp(loc, "template", 8) != 0) return n;
+    content = node_template_content(n);
+    DCHECK(content != NULL,
+           "an HTML-namespace `template` element has no template contents — HTML §4.12.3 The template "
+           "element establishes them when the element is created, so an element without them was made "
+           "some other way");
+    return content;
+}
+
+/* §3.2.1.2 XML serializing a Document node's and §3.2.1.5 XML serializing a DocumentFragment node's shared
+   sentence — "For each child child of node, in tree order, run the XML serialization algorithm on the child
+   passing along the provided arguments, and append the result to markup" — as the DESCENT it is. The level
+   carries a NULL node, so the walk ENDS when that level is popped rather than closing a tag nothing opened.
+   Returns whether there is a first child to dispatch on; a container with none finishes at §3.2.1's step 6
+   with the markup it already has. */
+static bool xs_enter_children(JSContext *ctx, XmlSerializeState *s, lxb_dom_node_t *container)
+{
+    xs_push(ctx, s, NULL);
+    s->limit = container;
+    s->cur = container->first_child;
+    return s->cur != NULL;
+}
+
 /* ---- the productions the require-well-formed flag reads --------------------------------------------------- */
 
 /* THE PREDICATES ARE core/xml's AND THE WALK IS THE ENGINE'S, and the split is deliberate rather than a second
@@ -869,9 +911,13 @@ static int xs_leaf(JSContext *ctx, XmlSerializeState *s, lxb_dom_node_t *n)
 /* ---- the machine ------------------------------------------------------------------------------------------ */
 
 void xml_serialize_start(JSContext *ctx, JSStepHdr *hdr, XmlSerializeState *s, lxb_dom_node_t *node,
-                         bool require_well_formed, int base, int after)
+                         XmlSerializeEntry entry, bool require_well_formed, int base, int after)
 {
     DCHECK(node != NULL, "the XML serialization algorithm was started on no node");
+    DCHECK(entry == XML_SERIALIZE_NODE || entry == XML_SERIALIZE_CHILDREN,
+           "the XML serialization algorithm was started at an entry it does not have — the two are the "
+           "interface dispatch of §3.2.1 step 5 and the child concatenation of §3.2.1.5, and a caller with a "
+           "third shape in mind is asking for a walk this algorithm does not define");
     DCHECK(s->cur == NULL, "a second XML serialization was started while one was still walking — the state "
                            "holds ONE walk, and the caller resumes at its `after` stage with the markup on it");
     s->cur = node;
@@ -895,6 +941,16 @@ void xml_serialize_start(JSContext *ctx, JSStepHdr *hdr, XmlSerializeState *s, l
     /* Step 4: "Let prefix index be a generated namespace prefix index with value 1." */
     s->prefix_index = 1;
 
+    if (entry == XML_SERIALIZE_CHILDREN) {
+        /* §3.2.1.5's concatenation over `node`'s children, with §3.2.1.1 step 18's substitution asked at the
+           one place both descents ask it. The context namespace stays null across the descent, which is what
+           puts a default namespace declaration on the FIRST CHILD rather than on a container whose tags are
+           not in the output — web-platform-tests `domparsing/innerhtml-03.xhtml`'s first assertion. */
+        hdr->stage = base + (xs_enter_children(ctx, s, xs_children_container(node, xs_ns_id(ctx, s, node),
+                                                                            s->ns_html))
+                             ? XS_PHASE_DISPATCH : XS_PHASE_NEXT);
+        return;
+    }
     hdr->stage = base + XS_PHASE_DISPATCH;
 }
 
@@ -958,13 +1014,10 @@ int xml_serialize_run(JSContext *ctx, JSStepHdr *hdr, XmlSerializeState *s, int 
                                               "Document node: the document has no documentElement, so its "
                                               "serialization would not be a well-formed document");
             }
-            /* §3.2.1.2 / §3.2.1.5: "For each child child of node, in tree order, run the XML serialization
-               algorithm on the child passing along the provided arguments, and append the result." The level
-               carries a NULL node, so the walk ENDS when it is popped rather than closing a tag. */
-            xs_push(ctx, s, NULL);
-            s->limit = n;
-            s->cur = n->first_child;
-            STEP_GOTO(hdr->stage, base + (s->cur ? XS_PHASE_DISPATCH : XS_PHASE_NEXT), NULL);
+            /* §3.2.1.2 / §3.2.1.5's descent — xs_enter_children. A Document and a DocumentFragment are never
+               `template` elements, so the container is the node itself and no substitution is asked for. */
+            STEP_GOTO(hdr->stage, base + (xs_enter_children(ctx, s, n) ? XS_PHASE_DISPATCH : XS_PHASE_NEXT),
+                      NULL);
             return JS_STEP_YIELD;
 
         case LXB_DOM_NODE_TYPE_ATTRIBUTE:
@@ -1035,7 +1088,7 @@ int xml_serialize_run(JSContext *ctx, JSStepHdr *hdr, XmlSerializeState *s, int 
     }
 
     if (phase == XS_PHASE_OPEN) {
-        lxb_dom_node_t *n = s->cur, *container = s->cur;
+        lxb_dom_node_t *n = s->cur, *container;
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         size_t llen = 0;
         const char *loc = (const char *)lxb_dom_element_local_name(el, &llen);
@@ -1068,17 +1121,9 @@ int xml_serialize_run(JSContext *ctx, JSStepHdr *hdr, XmlSerializeState *s, int 
             STEP_GOTO(hdr->stage, base + XS_PHASE_NEXT, NULL);
             return JS_STEP_YIELD;
         }
-        /* Step 18: "If ns is the HTML namespace, and the node's localName matches the string 'template' ...
-           append the result of XML serializing a DocumentFragment node given the template element's template
-           contents". The template's ORDINARY children are therefore not serialized at all — which is the same
-           substitution HTML §13.3 makes and the reason both walks ask core/dom/node.h for the contents. */
-        if (s->elem_ns == s->ns_html && llen == 8 && memcmp(loc, "template", 8) == 0) {
-            container = node_template_content(n);
-            DCHECK(container != NULL,
-                   "an HTML-namespace `template` element has no template contents — HTML §4.12.3 The template "
-                   "element establishes them when the element is created, so an element without them was made "
-                   "some other way");
-        }
+        /* Step 18's template substitution, asked through xs_children_container so that the entry which never
+           reaches this step asks the SAME question — see that function. */
+        container = xs_children_container(n, s->elem_ns, s->ns_html);
         s->stack[s->sp - 1].qname = s->qname;                        /* step 20's end tag, held for the pop */
         s->limit = container;
         s->ctx_ns = s->inherited_ns;

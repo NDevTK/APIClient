@@ -104,10 +104,13 @@ static int js_xml_serializer_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         n = node_of(argv[0]);
         DCHECK(n != NULL, "§8.5.8's serializeToString was reached with an argument that is not a Node — the "
                           "declared interface type is what refuses everything else, before step 1");
-        /* "Return the XML serialization of root given FALSE." The flag is §3.2.1's `require well-formed`, and
-           this member is the consumer that passes false; HTML §8.5.4's fragment serializing algorithm steps
-           are the one that passes true. */
-        xml_serialize_start(ctx, hdr, s, n, /*require_well_formed*/false, XMLSER_DISPATCH, XMLSER_RETURN);
+        /* "Return the XML serialization of ROOT given FALSE." Both arguments are this member's own answer and
+           the other consumer's differs in both: the node is `root` ITSELF, so an Element's start and end tags
+           are part of the string (XML_SERIALIZE_NODE), where HTML §8.5.4 The innerHTML property's fragment
+           serializing algorithm steps serialize a node's CHILDREN; and the flag is false, where §8.5.4's
+           getters pass true. */
+        xml_serialize_start(ctx, hdr, s, n, XML_SERIALIZE_NODE, /*require_well_formed*/false,
+                            XMLSER_DISPATCH, XMLSER_RETURN);
         return JS_STEP_YIELD;
     }
 
