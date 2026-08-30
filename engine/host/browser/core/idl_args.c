@@ -2457,9 +2457,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                        IT IS THE BLOBPART TYPE'S AND NOT THE LOOP'S: a `sequence<DOMString>` holding a Blob has
                        one element type and it is a string, so that element ToStrings to "[object Blob]" rather
                        than crossing as an interface the declaration never named. */
+                    if (t == IDL_SEQUENCE_BLOBPART && blob_is(s->seq.value)) {
+                        JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_DupValue(ctx, s->seq.value));
+                        continue;
+                    }
+                    /* THE BUFFERSOURCE ARM IS SPLIT OUT FROM THE BLOB ARM BECAUSE §3.2.25 DOES NOT HAND BACK
+                       THE OBJECT HERE — its buffer clauses say "return the result of CONVERTING V to
+                       ArrayBuffer" and "…to that type", so §3.2.26 Buffer source types' own conversion runs
+                       on this element, refusals included. A Blob is not a buffer source and must not be asked
+                       either question. */
                     if (t == IDL_SEQUENCE_BLOBPART &&
-                        (blob_is(s->seq.value) || JS_IsArrayBuffer(s->seq.value) ||
-                         JS_GetTypedArrayType(s->seq.value) >= 0 || JS_IsDataView(s->seq.value))) {
+                        (JS_IsArrayBuffer(s->seq.value) || JS_GetTypedArrayType(s->seq.value) >= 0 ||
+                         JS_IsDataView(s->seq.value))) {
+                        if (idl_buffer_source_refuse(ctx, s->seq.value, "BlobPart"))
+                            return JS_STEP_ABRUPT;
                         JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_DupValue(ctx, s->seq.value));
                         continue;
                     }
