@@ -2610,9 +2610,21 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             /* THE FOUR INTERFACE ARMS cross as themselves; only what is none of them takes the USVString arm.
                `new Response(blob)` stringified to the thirteen bytes of "[object Blob]" while three of those
                interfaces existed, because the test was written when none of them did. */
-            t = (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a) ||
-                 blob_is(a) || form_data_is(a) || usp_list_of(a) || readable_stream_is(a))
-              ? IDL_ANY : IDL_DOMSTRING;
+            /* THE BUFFERSOURCE ARM IS ASKED FIRST AND SEPARATELY, for the reason BlobPart's is: §3.2.25's
+               buffer clauses return the result of CONVERTING V, so §3.2.26 Buffer source types' refusals run
+               on a body that is one. The other four arms are INTERFACE types, which §3.2.25 does hand back as
+               references, so they cross untouched. A question some entries of a conversion ask and others do
+               not is one missing capability wearing several names, and this is the third entry of this one. */
+            if (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a)) {
+                if (idl_buffer_source_refuse(ctx, a, "BodyInit")) {
+                    JS_FreeValue(ctx, cb_result);
+                    return JS_STEP_ABRUPT;
+                }
+                t = IDL_ANY;
+            } else {
+                t = (blob_is(a) || form_data_is(a) || usp_list_of(a) || readable_stream_is(a))
+                  ? IDL_ANY : IDL_DOMSTRING;
+            }
         }
 
         /* `(File or USVString or FormData)?`: the same shape as BodyInit's, over the arms HTML §4.13.7.3
