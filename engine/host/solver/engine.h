@@ -840,10 +840,13 @@ typedef struct {
     int  completed;         /* highest program it has run to its END */
     long claims_met;        /* an inherited orphan drive whose body a take handed over */
     long claims_unmet;      /* …and one that FINISHED never having been handed one — the round trip's verdict */
-    long host_asked;        /* flows that asked the host for something */
-    long host_answered;     /* …and were paid */
-    long host_answers_late; /* answers refused because the session had already closed */
-    long paged_reqs;        /* synchronous requests a sale took with it */
+    long host_asked;         /* rendezvous ids this instance MINTED — every one the host is shown and must pay */
+    long host_answered;      /* …and the ONE delivery that SETTLED each: `answered <= asked` is asserted */
+    long host_answers_extra; /* answers landing on an ALREADY-settled request — one per extra peer TIMELINE,
+                              * each of which forks an arm. Not a payment: it unblocks nothing, and adding it
+                              * into `host_answered` is what made one ask read as four. */
+    long host_answers_late;  /* answers refused because the session had already closed */
+    long paged_reqs;         /* synchronous requests a sale took with it */
 } EngineFrontierCensus;
 void engine_frontier_census(EngineFrontierCensus *out);
 

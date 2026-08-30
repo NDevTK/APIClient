@@ -390,9 +390,37 @@ static uint32_t g_next_req = 1;
  * between the two that only ever widens is a host that is not paying at the rate the document asks.
  *
  * They are CUMULATIVE and they are read by NOTHING but the census (§NO BOUNDS): no pick, no weight and no exit
- * consults them, so there is no spelling of them that can truncate work. */
+ * consults them, so there is no spelling of them that can truncate work.
+ *
+ * THEY COUNT ONE POPULATION, AND THE TWO WAYS THAT STOPPED BEING TRUE ARE WHY THE PAIR IS NOW SPELLED THIS WAY.
+ * The census asserts `answered <= asked`, which is only a real invariant if an ASK is every id the host will be
+ * shown and a PAYMENT is the one delivery that SETTLES one of them. Both halves were broken, and neither was a
+ * counter surviving a session boundary — that hypothesis cannot produce this ordering at all, because these
+ * three are never reset (see engine_session_close), so a carried total carries BOTH and preserves their order.
+ *   - THE ASK WAS COUNTED AT AN ENTRY POINT INSTEAD OF AT THE MINT. This comment used to claim "every issue of
+ *     a request passes through engine_host_request", and a SECOND mint sat in engine_sibling_assemble: an
+ *     unanswered request is RE-ISSUED under a fresh id when a blocked flow forks, the host is shown that id
+ *     like any other (engine_host_requests joins every unanswered HOSTREQ across every flow), the host pays it
+ *     — and nothing counted the ask. That is why the count now rides `mint_req` and not a call site: a third
+ *     minting site cannot forget what it does not have to remember.
+ *   - AND A SECOND PEER TIMELINE'S ANSWER IS NOT A SECOND PAYMENT. See g_host_answers_extra below.
+ */
 static long g_host_asked;
 static long g_host_answered;
+/* …AND HOW MANY ANSWERS LANDED ON A REQUEST THAT WAS ALREADY SETTLED, which is a DIFFERENT POPULATION and was
+ * being added into the one above. A peer's document state IS its flows, so one rendezvous has one answer per
+ * peer TIMELINE and every one of them is true (engine_host_answer's `extra` arm records each and an arm forks
+ * over it) — but only the FIRST of them settles the ask: it is the one that writes the value, clears the flow's
+ * host-owed mark and makes the flow askable again. The rest arrive at a register entry that already has its
+ * value and unblock nothing.
+ * Merging them destroyed the one thing the pair is for. The rate is meant to separate "this frontier is waiting
+ * because of the RANKING" from "because the host has not paid", and a peer holding four timelines answered one
+ * ask four times — so a document in which the host settles almost nothing and a chatty peer answers a handful
+ * of cross-instance reads reads as a host paying three times what it was asked. Measured on the two-instance
+ * fixture: eleven asks settled, thirty-three deliveries credited.
+ * It is counted rather than dropped because it is the ONLY number that says how many peer timelines this
+ * instance was answered out of, which is exactly what the answer-fork machinery is judged by. */
+static long g_host_answers_extra;
 /* …AND HOW MANY ARRIVED WHEN THERE WAS NOTHING LEFT TO CONSUME THEM. A peer answers BY RUNNING A PROGRAM, so
  * its completion is produced on ITS timeline and relayed by a zone that cannot know what became of the asker in
  * the meantime — and §Time-travel's Level-1 eviction makes "the peer outlives the asking instance's park" the
@@ -402,6 +430,24 @@ static long g_host_answered;
  * because a refusal nobody can see is a drop: `hostAnswersLate` climbing while `hostAnswered` does not is a
  * host paying an instance that has already stopped listening. */
 static long g_host_answers_late;
+
+/* THE ONE PLACE A RENDEZVOUS ID IS MINTED, and therefore the one place an ASK is counted. There are two callers
+   — a machine issuing a request, and a blocked flow's fork re-issuing the one record it may not share — and
+   until this existed each of them carried its own `g_next_req++` and its own copy of the wrap CHECK, while only
+   one of them carried the count. A fact answered from two places is answered differently from one of them
+   eventually; the fix is never to add the missing line at the second site, it is to leave the second site
+   nothing to remember.
+   A REUSED ID ANSWERS THE WRONG QUESTION, which is why the wrap is a CHECK and not a DCHECK: the answer is
+   routed by this number alone, so a wrapped counter delivers one flow's cross-document read into another flow's
+   call site, in a world that never asked the question, and that is not a state to proceed from in release. */
+static uint32_t mint_req(void)
+{
+    uint32_t id = g_next_req++;
+    g_host_asked++;
+    CHECK(g_next_req != 0, "the host-request id counter wrapped — an answer would be delivered to the wrong "
+                           "call site, in a world that never asked the question");
+    return id;
+}
 
 /* WHAT A SOLD FLOW TOOK WITH IT — the same family as the three above and sitting with them, because every one
  * of these is a fact about a debt the host is carrying and what became of the flow that was owed it; the pager
@@ -469,12 +515,7 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
     e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ);
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
-    id = g_next_req++;
-    g_host_asked++;   /* the ASK half of the rate above — every issue of a request passes through here */
-    /* A REUSED ID ANSWERS THE WRONG QUESTION. The answer is routed by this number alone, so a wrapped counter
-       delivers one flow's cross-document read into another flow's call site — in another world. */
-    CHECK(g_next_req != 0, "the host-request id counter wrapped — an answer would be delivered to the wrong "
-                           "call site, in a world that never asked the question");
+    id = mint_req();   /* the ASK half of the rate above — counted at the mint, which is the only place it is */
     pending_set_int(e, PEND_REQ, id);
     JS_FreeValue(ctx, e);
     /* THE REQUEST IS WHAT MAKES THE FLOW BLOCKED, AND THE YIELD THAT FOLLOWS IS ONLY A PARK BECAUSE OF IT.
@@ -804,7 +845,11 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
             pending_extra_add(p, completion, JS_DupValue(ctx, value), world);
             JS_FreeValue(ctx, p);
             flow_clear_host_owed(f);
-            g_host_answered++;
+            /* …AND THIS IS NOT A PAYMENT. The ask was SETTLED by the first answer — that is the delivery that
+               wrote the value and made this flow askable again — and what lands here is another peer TIMELINE
+               answering a question that already has an answer on the register. Crediting it to `hostAnswered`
+               made one ask read as N payments and destroyed the starvation rate the pair exists for. */
+            g_host_answers_extra++;
             extra++;
         }
     }
@@ -3388,8 +3433,10 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
                arms must disagree about. It stops being shared first. */
             JS_FreeValue(ctx, p);
             p = pending_unshare(sib->pending, i);
-            pending_set_int(p, PEND_REQ, g_next_req++);
-            CHECK(g_next_req != 0, "the host-request id counter wrapped while forking a blocked flow");
+            /* AND THIS IS AN ASK LIKE ANY OTHER, which is what the census could not see while the count sat at
+               the other mint site: the host is shown this id by engine_host_requests exactly as it is shown the
+               parent's, and it must pay both. `mint_req` counts it. */
+            pending_set_int(p, PEND_REQ, mint_req());
         }
         JS_FreeValue(ctx, p);
     }
@@ -6530,8 +6577,14 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "the HOST that was shown the requests, so it crosses a session boundary with them; it must be "
            "carried into this session, never zeroed, or the first reply that arrives for a sold flow is "
            "reported as the host's pairing being off");
-    /* NOT RESET: g_host_asked/g_host_answered/g_host_answers_late are the INSTANCE's totals, not a session's —
-       an instance opens one session, and a rate that restarted would be a level again (see g_host_asked). */
+    /* NOT RESET: g_host_asked/g_host_answered/g_host_answers_extra/g_host_answers_late are the INSTANCE's
+       totals, not a session's — an instance opens one session, and a rate that restarted would be a level
+       again (see g_host_asked).
+       AND THIS LINE IS WHY "A COUNTER SURVIVED A SESSION BOUNDARY" IS NOT A HYPOTHESIS THE CENSUS'S PAIRING
+       ASSERT CAN BE ANSWERED WITH. All four are on this list together, so a total carried into a second session
+       carries every term of the inequality and preserves its ORDER; there is no reading of a survival that
+       makes `answered` overtake `asked`. A reader standing at that abort is looking at a mint or a credit, not
+       at a lifetime — which is what its message now says, and what it used to send them away from. */
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
@@ -7605,19 +7658,32 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->claims_met        = g_orphan_claims_met;
     out->claims_unmet      = g_orphan_claims_unmet;
     out->host_asked        = g_host_asked;
-    out->host_answered     = g_host_answered;
-    out->host_answers_late = g_host_answers_late;
-    out->paged_reqs        = g_paged_reqs;
+    out->host_answered      = g_host_answered;
+    out->host_answers_extra = g_host_answers_extra;
+    out->host_answers_late  = g_host_answers_late;
+    out->paged_reqs         = g_paged_reqs;
     /* THE PAYMENT PAIR IS AN INEQUALITY AND IT IS ASSERTED HERE, at the one place both halves are read
-       together. `answered` counts the asks this session PAID; `asked` counts the asks it took. A paid count
-       above the asked count is not a large number, it is the two counters having stopped describing one
-       population — a session that carried a previous session's total (the release column's own recorded
-       defect, one line over from `g_orphan_asks`) reads exactly like a healthy run in both numbers on its
-       own, and only their ORDER says otherwise. */
-    DCHECK(out->host_answered <= out->host_asked,
-           "the frontier census was taken with more host answers than host asks — the two count one "
-           "population (a flow that asked, and the payment that settled it), so `answered > asked` is a "
-           "counter that survived a session boundary or a payment credited against no ask");
+       together. `answered` counts the asks this session SETTLED; `asked` counts the ids it minted. A settled
+       count above the minted count is not a large number, it is the two counters having stopped describing one
+       population, and only their ORDER says so — both read as a healthy run on their own.
+       WHAT IT NAMES IS A MINT OR A CREDIT, AND NOT A LIFETIME. This message used to offer "a counter that
+       survived a session boundary" as the first of two hypotheses, and that hypothesis is unreachable: all
+       four host counters are on engine_session_close's NOT-RESET list together, so a carried total carries
+       every term and preserves the order. It cost a reader the wrong search once; a cause that cannot produce
+       the symptom is the stale-DFAIL failure with a number attached, so it is gone rather than demoted.
+       THE TWO REAL PRODUCERS ARE BOTH CLOSED AND BOTH ARE STRUCTURAL, which is what makes this an invariant
+       rather than an expectation: every id is minted by `mint_req` (so a re-issue at a fork is an ask like any
+       other), and `g_host_answered` is credited at exactly ONE line — the delivery that finds PEND_HAVE_VALUE
+       clear, writes the value and returns — so an id can be settled at most once and a second peer TIMELINE's
+       answer goes to `g_host_answers_extra` instead. A fire is therefore one of those two facts having stopped
+       being true: an id minted somewhere other than `mint_req`, or a second credit for one entry. */
+    DCHECKF(out->host_answered <= out->host_asked,
+            "the frontier census was taken with more host answers (%ld) than host asks (%ld) — the two count "
+            "one population (an id this instance minted, and the ONE delivery that settled it), so "
+            "`answered > asked` means either an id was minted outside mint_req and never counted as an ask, "
+            "or one request was credited as settled twice — a second peer TIMELINE's answer is not a second "
+            "payment and belongs in hostAnswersExtra (%ld), which is where the multi-timeline case goes",
+            out->host_answered, out->host_asked, out->host_answers_extra);
 }
 
 static int (*g_provider)(JSContext *ctx);

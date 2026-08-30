@@ -205,7 +205,7 @@ const loadNow = () => {
 const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                      "finished", "deepest", "completed", "sold", "forks",
                      "orphanClaims", "orphanClaimsMet", "orphanClaimsUnmet",
-                     "hostAsked", "hostAnswered", "hostAnswersLate", "pagedReqs",
+                     "hostAsked", "hostAnswered", "hostAnswersExtra", "hostAnswersLate", "pagedReqs",
                      "decEntries", "decKiB", "headEntries", "headKiB",
                      "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendKiB",
                      "miscKiB", "perFlowKiB",
@@ -704,6 +704,10 @@ function censusReading(out) {
        nobody paid it; `deepest` against `completed` says whether this document reaches its later programs at
        all; `orphanClaimsUnmet` is the cold round trip's loss, exactly. */
     parts.push(`payment: ${c.b.hostAnswered}/${c.b.hostAsked} asks paid` +
+               /* AND HOW MANY PEER TIMELINES ANSWERED BEYOND THE FIRST, which is a different population and
+                  used to be added into the numerator above — a peer holding four timelines then read as four
+                  payments for one ask, and the ratio this line exists to show was three times the truth. */
+               (c.b.hostAnswersExtra ? `, +${c.b.hostAnswersExtra} extra peer-timeline answer(s)` : ``) +
                (c.b.hostAnswersLate ? `, ${c.b.hostAnswersLate} refused after close` : ``) +
                (c.b.pagedReqs ? `, ${c.b.pagedReqs} taken by a sale` : ``) +
                `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +

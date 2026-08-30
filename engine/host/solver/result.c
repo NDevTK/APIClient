@@ -352,9 +352,14 @@ char *result_swap_json(void) {
    NO `orphans` ROW: the count of drives this session STARTED is `_orphansDriven` on the document already, and
    two spellings of one number in one document is the drift the record-field contract exists to catch.
 
-   THE ARITHMETIC, from the format string: fixed bytes 483 without the conversion specifiers, and the
-   thirty-eight numbers' widest forms are 733 (thirty-five longs at 20 and three ints at 11).
-   483 + 733 + 1 = 1217 against this 1280. RE-DO IT WHEN YOU ADD A ROW. */
+   `hostAnswersExtra` IS BESIDE `hostAnswered` AND IS NOT PART OF IT. One rendezvous has one answer per peer
+   TIMELINE and every one of them is true, but only the FIRST settles the ask; the rest each fork an arm and
+   unblock nothing. They were being added into `hostAnswered`, which made a peer holding four timelines read as
+   four payments for one ask and inverted the census's own `answered <= asked`.
+
+   THE ARITHMETIC, from the format string: fixed bytes 503 without the conversion specifiers, and the
+   thirty-nine numbers' widest forms are 753 (thirty-six longs at 20 and three ints at 11).
+   503 + 753 + 1 = 1257 against this 1280. RE-DO IT WHEN YOU ADD A ROW. */
 char *result_cold_json(void) {
     ColdCensus c;
     ColdResumed resumed;
@@ -372,7 +377,8 @@ char *result_cold_json(void) {
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                  "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"sold\":%ld,\"forks\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
-                 "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
+                 "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
+                 "\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                  "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                  "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
@@ -382,7 +388,7 @@ char *result_cold_json(void) {
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.deepest, e.completed, e.sold, e.forks,
                  resumed.orphans, e.claims_met, e.claims_unmet,
-                 e.host_asked, e.host_answered, e.host_answers_late, e.paged_reqs,
+                 e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.paged_reqs,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                  c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                  c.pend_bytes / 1024, c.misc_bytes / 1024,
