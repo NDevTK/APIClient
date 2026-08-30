@@ -161,10 +161,12 @@ const loadNow = () => {
    printing an instruction to a human about numbers the reporter itself could have read. Every child now runs
    through `runChild`, which gives the run a FILE instead of the terminal and hands the bytes here, so the two
    causes the paragraph above distinguishes are distinguished BY THIS FUNCTION.
-   The samples compared are the LAST and the MIDDLE one rather than the last two, because the paragraph's own
-   caveat — "a plateau that resolves is WFQ re-ranking, not a stall" — is exactly what two adjacent samples
-   cannot see: one re-ranking pause between them reads as a stall, and a stall that happens to emit once reads
-   as health. Half the run is the shortest window in which neither is true.
+   The samples compared are the last one and one an ABSOLUTE span of engine work behind it, never two adjacent
+   ones, because the paragraph's own caveat — "a plateau that resolves is WFQ re-ranking, not a stall" — is
+   exactly what two adjacent samples cannot see: one re-ranking pause between them reads as a stall, and a
+   stall that happens to emit once reads as health. That window used to be HALF THE RUN, which made its left
+   edge a function of where the budget ran out; the paragraph at the window's own definition says what that
+   cost and why the width is fixed now.
    THE VERDICT IS STILL A NON-PASS AND STILL CODE 2. A healthy frontier that wanted more budget is a REAL
    change in this fixture — this same smoke terminated inside the backstop until it did not — so naming the
    cause is diagnosis, never permission to call the run green. */
@@ -190,7 +192,7 @@ const loadNow = () => {
    More budget helps the first state and does nothing for this one, so telling them apart is the whole point.
    The probe table is the second stream and the fixture's OWN measure of progress — @COLD says work is moving,
    @H says whether any of it arrived — so the discriminator reads both or it is guessing from half the evidence.
-   The window is the same half-the-run window, for the same reason: one WFQ re-ranking pause is not a freeze. */
+   The window is the same absolute window, for the same reason: one WFQ re-ranking pause is not a freeze. */
 /* THE LIST IS THE CONTRACT AND THE READING IS A SUBSET OF IT, which is exactly what WFQ_FIELDS is and why it
    is written the same way. Its job is not that every name below is compared — `hungCause` uses five of them —
    it is that a row solver/result.c STOPS EMITTING, or renames, fails the build at this line instead of being
@@ -234,17 +236,27 @@ function probeFlips(out) {
    ABSENCE IS REPORTED AS ABSENCE. A stage that drives no scheduler prints no @H at all (the two-instance ABI
    drive, the browser-process layer), and `0/0` for one of those would be the same lie as counting a marker no
    shipped path writes. */
+/* AND IT IS A READING OF THE LAST INSTANT, WHICH IS ONLY HALF OF WHAT THE STREAM SAYS. `answered` is the last
+   @H row, and a probe row can go 1→0 — this file says so itself, in the arm that calls that "the finding rather
+   than the frontier's pace" — so a run that established a statement and then stopped making it reports the same
+   fraction as one that never established it. Those are opposite findings and the count that separates them is
+   the MONOTONE one: how many distinct rows were 1 at ANY sample. It is carried beside the instant reading and
+   printed only where the two DIFFER, because a difference is the whole of the information: equal, it is noise
+   in the one line everybody reads; unequal, it is a document that stopped saying something it had said. */
 function probeStanding(out) {
   const rows = probeFlips(out);
   if (!rows.length) return null;
   const last = rows[rows.length - 1];
   const names = Object.keys(last);
+  const ever = new Set();
+  for (const r of rows) for (const k of Object.keys(r)) if (r[k]) ever.add(k);
   return { answered: names.filter((k) => last[k]).length, asked: names.length,
-           unanswered: names.filter((k) => !last[k]) };
+           unanswered: names.filter((k) => !last[k]), ever: ever.size, samples: rows.length };
 }
 const standingText = (s) =>
   s === null ? "no @H probe stream in this run — this stage makes no statement of that kind"
-             : `${s.answered}/${s.asked} of the fixture's statements answered`;
+             : `${s.answered}/${s.asked} of the fixture's statements answered` +
+               (s.ever > s.answered ? ` (${s.ever} ever — ${s.ever - s.answered} went back to 0)` : "");
 
 /* AN ABORT IS AN ABORT EVEN WHERE NO SIGNAL CAN CARRY IT, AND UNDER EMSCRIPTEN NONE CAN.
    `runOutcome`'s `.signal` arm exists precisely so that a DCHECK doing its job is never misfiled as a timing
@@ -349,21 +361,25 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        coincidence that the next charge moves. "Structurally an offset" is the finding that
                        says stop looking. The reader states it now instead of assuming it. */
                     "families"];
-/* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. Throws on an
-   absent or unparseable define, because the alternative is this reader quietly pricing a notch at a rate the
-   engine stopped charging — the same class of defect as comparing an absent census field as undefined, and
-   caught the same way. `HOST` is initialised long before any stage calls this. */
-function ageQuantum() {
-  const one = (file, name) => {
-    const m = readFileSync(join(HOST, file), "utf8")
-      .match(new RegExp(`^#define\\s+${name}\\s+\\(?\\(?(?:\\(int64_t\\))?\\s*(\\d+)`, "m"));
-    if (!m) throw new Error(`[build] cannot read \`${name}\` from engine/host/${file} — the @WFQ reader prices ` +
-                            `the aging term from flow.c's FLOW_AGE_QUANTUM factors and will not substitute a ` +
-                            `remembered value for one it cannot find.`);
-    return Number(m[1]);
-  };
-  return one("solver/engine.h", "ENGINE_QUANTUM_MS") * 1000 / one("solver/flow.c", "FLOW_SILENCE_US");
+/* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
+   for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
+   copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
+   quietly pricing something at a rate the engine stopped charging — the same class of defect as comparing an
+   absent census field as undefined, and caught the same way. `HOST` is initialised long before any stage calls
+   this. */
+function hostDefine(file, name, why) {
+  const m = readFileSync(join(HOST, file), "utf8")
+    .match(new RegExp(`^#define\\s+${name}\\s+\\(?\\(?(?:\\(int64_t\\))?\\s*(\\d+)`, "m"));
+  if (!m) throw new Error(`[build] cannot read \`${name}\` from engine/host/${file} — ${why}, and it will not ` +
+                          `substitute a remembered value for one it cannot find.`);
+  return Number(m[1]);
 }
+/* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. */
+const ageQuantum = () =>
+  hostDefine("solver/engine.h", "ENGINE_QUANTUM_MS",
+             "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors") * 1000 /
+  hostDefine("solver/flow.c", "FLOW_SILENCE_US",
+             "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors");
 
 function wfqReading(out) {
   const s = [];
@@ -763,21 +779,76 @@ function hungCause(out) {
   }
   if (s.length < 2) return `only ${s.length} @COLD census line(s) — too few to say why. The run reached ` +
                            `engine_sched_begin's first census and then stopped producing them.`;
-  const b = s[s.length - 1], a = s[Math.floor((s.length - 1) / 2)];
+  /* THE WINDOW IS AN ABSOLUTE SPAN OF THE ENGINE'S OWN WORK, NEVER A FRACTION OF THE RUN — and the fraction is
+     the defect this whole function was quoted for. It read `a = s[floor((n-1)/2)]`, so the LEFT EDGE of the
+     comparison was set by where the CPU budget happened to run out: a run that reached 60 censuses asked about
+     work-points 30..60 and a run of the SAME trajectory that reached 200 asked about 100..200. Those are
+     DISJOINT stretches of one run, so a frontier that retires its boot flows early and then climbs into a long
+     search answers HEALTHY through the first window and STALL through the second — with nothing whatever
+     different about the engine. MEASURED, and it is what sent this file's own verdict to be rewritten: two
+     consecutive revisions, the SAME 95/159 probe standing, and the verdicts `a HEALTHY FRONTIER THAT WANTED
+     MORE BUDGET` and `a STALL` — the STALL on the revision that had just made the reply path 3.2x FASTER, i.e.
+     on the run that got FURTHER. A verdict a faster build flips is a verdict about the budget, not the tree.
+     SO THE WIDTH IS FIXED AND THE RIGHT EDGE FLOATS. Two runs that both end in the same phase then read the
+     same width of that phase and answer the same way, whatever extent each reached; only a run that stops
+     exactly on a phase boundary can differ, and the landmarks below say when that happened.
+     IT IS A GRANULARITY AND NOT A BOUND (§NO BOUNDS): it truncates nothing, drops no flow, and decides only how
+     much of the tail this reader looks at. So it is a POLICY INPUT stated here with its reasoning and PRINTED
+     with the verdict, rather than a constant hidden in an expression. The width is in CENSUSES because that is
+     what the stream is made of, and one census is ENGINE_PROGRESS_EVERY units of engine_work_done — read from
+     engine.c so a retuned cadence cannot leave this sentence quoting a span the engine stopped taking.
+     WHY TWENTY: the window has to be longer than one WFQ RE-RANKING PAUSE, which is this function's own
+     standing reason for not comparing adjacent samples — a flow outranked and another picked costs a handful of
+     context switches, and twenty censuses is twenty thousand units of forks+flows+jobs+switches, four orders of
+     magnitude above that. It is clamped to half the run so a SHORT run never reads a window longer than it has
+     evidence for, which is exactly the old behaviour and is therefore the floor rather than a new risk. */
+  const PROGRESS_EVERY = hostDefine("solver/engine.c", "ENGINE_PROGRESS_EVERY",
+    "hungCause states its window as an absolute span of engine_work_done and the census cadence is what " +
+    "converts censuses to work units");
+  const HUNG_WINDOW_CENSUSES = 20;
+  const n = s.length;
+  const width = Math.min(HUNG_WINDOW_CENSUSES, Math.max(1, Math.floor(n / 2)));
+  const b = s[n - 1], a = s[n - 1 - width];
   for (const f of COLD_FIELDS) for (const c of [a, b])
     if (typeof c[f] !== "number")
       throw new Error(`[build] the @COLD census has no numeric \`${f}\` — this discriminator reads ` +
                       `${COLD_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
                       `field must be renamed here rather than silently compared as undefined.`);
-  const span = `over the last ${s.length - Math.floor((s.length - 1) / 2)} of ${s.length} censuses: ` +
-               `finished ${a.finished}→${b.finished}, live ${a.live}→${b.live}, ` +
-               `sold ${a.sold}→${b.sold}, blocked ${b.blocked}, owed ${b.owed}`;
+  /* WHERE THE MONOTONE COUNTERS LAST MOVED, OVER THE WHOLE RUN — the numbers that make two runs comparable and
+     which nothing here has ever computed. `finished` and `sold` only ever climb, so "the last census at which
+     this one climbed" is a fact about the run's TRAJECTORY rather than about the instant it stopped: two runs of
+     one revision that both get past a plateau report the SAME landmark and differ only in how far past it they
+     went. NEVER-MOVED is a stronger statement than silent-across-the-window and is reported as its own word,
+     because "this run retired nothing at all" and "this run stopped retiring" take different work. They ride the
+     verdict's NAME rather than its parenthetical, which is where this function's own history says every number
+     it computed went to die: `causeName` cuts at the first " (" or " — ", so a landmark behind either is a
+     number the one line anybody reads does not carry. */
+  const lastRise = (key) => { let i = -1; for (let k = 1; k < n; k++) if (s[k][key] > s[k - 1][key]) i = k; return i; };
+  const lastRetire = lastRise("finished"), lastSale = lastRise("sold");
+  const mark = (i, tot) => (i < 0 ? "never" : `${i}/${tot}`);
 
-  /* THE FIXTURE'S OWN PROGRESS, over the same half-the-run window. */
+  /* THE FIXTURE'S OWN PROGRESS, over a window of the SAME absolute shape — its own stream and its own cadence
+     (test_forced.c's PROBE_SAMPLE_EVERY), so it is counted in ITS samples and clamped the same way. */
   const h = probeFlips(out);
-  const hb = h[h.length - 1], ha = h[Math.floor((h.length - 1) / 2)];
+  const hwidth = Math.min(HUNG_WINDOW_CENSUSES, Math.max(1, Math.floor(h.length / 2)));
+  const hb = h[h.length - 1], ha = h[h.length - 1 - hwidth];
   const flipped = h.length >= 2 ? Object.keys(hb).filter((k) => hb[k] && !ha[k]) : [];
   const zero = h.length ? Object.keys(hb).filter((k) => !hb[k]) : [];
+  let lastFlip = -1;
+  for (let k = 1; k < h.length; k++)
+    if (Object.keys(h[k]).some((x) => h[k][x] && !h[k - 1][x])) lastFlip = k;
+  /* THE COMPACT FORM THAT SURVIVES INTO THE STAGE TABLE. Semicolon-and-comma only: `causeName` ends a name at
+     the first " (" or " — ", so these separators are chosen to be neither. */
+  const landmarks = `; retire ${mark(lastRetire, n)}, flip ${mark(lastFlip, h.length)}`;
+  const span = `over the last ${width} of ${n} censuses — an ABSOLUTE window of ${width * PROGRESS_EVERY} ` +
+               `units of engine_work_done, not a fraction of the run: ` +
+               `finished ${a.finished}→${b.finished}, live ${a.live}→${b.live}, ` +
+               `sold ${a.sold}→${b.sold}, blocked ${b.blocked}, owed ${b.owed}. ` +
+               `Over the WHOLE run, finished last rose at census ${mark(lastRetire, n)} and sold at ` +
+               `${mark(lastSale, n)}` +
+               (h.length ? `, and the probe table last flipped a row at sample ${mark(lastFlip, h.length)}` : ``) +
+               ` — those are the landmarks two runs of one revision are compared on, and `+
+               `blocked/owed/live above are readings of the LAST census alone`;
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while
@@ -790,7 +861,7 @@ function hungCause(out) {
   const neverOne = zero.filter((k) => !everOne.has(k));
   const hspan = h.length < 2
     ? `no @H stream to read`
-    : `@H: ${flipped.length} row(s) reached 1 across the last ${h.length - Math.floor((h.length - 1) / 2)} of ` +
+    : `@H: ${flipped.length} row(s) reached 1 across the last ${hwidth} of ` +
       `${h.length} samples` + (flipped.length ? ` (${flipped.join(" ")})` : "") +
       `, ${zero.length} still 0` + (zero.length ? ` (${zero.join(" ")})` : "") +
       `, ${neverOne.length} of them 0 in every one of the ${h.length} samples`;
@@ -800,9 +871,26 @@ function hungCause(out) {
      name a cause: a healthy-but-short run whose arena is climbing and a healthy-but-short run whose arena is
      flat want different next steps, and "wanted more budget" is the same sentence for both. */
   const cs = censusReading(out);
-  if (b.finished > a.finished && b.blocked === 0 && b.owed === 0 && h.length >= 2 && flipped.length === 0)
-    return `WORK THAT ADVANCES NO STATEMENT (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows retired steadily and not ` +
-           `one probe row reached 1 across half the run, so more time buys more of the same. ` +
+  /* WHAT THE ARMS BELOW ARE ALLOWED TO DECIDE ON, AND WHY IT IS NOT WHAT THEY USED TO DECIDE ON.
+     `finished` and `sold` are CUMULATIVE COUNTERS, so "did this one climb across the window" is a statement
+     about work the run PERFORMED. `live`, `blocked` and `owed` are GAUGES, and a gauge read at the last census
+     is a reading of the microsecond the kernel's SIGXCPU happened to land in. Three of this function's five
+     arms turned on a gauge, and each one was a way for two runs of one revision to disagree:
+       - HEALTHY and WORK-THAT-ADVANCES-NO-STATEMENT both required `blocked === 0 && owed === 0` AT THE LAST
+         CENSUS. A run retiring flows steadily across twenty thousand units of work was thrown out of both arms
+         — and, because arms 3 and 4 require `finished` to be FLAT, straight past them into `NEITHER named
+         cause` — because one flow happened to be mid-fetch when the last census was taken. That is a run whose
+         cause this function HAD and reported as unnameable.
+       - STALL and PAGED-OUT both required `b.live > a.live`. A frontier that retired nothing and paged nothing
+         is a stall whether or not its live count happened to be higher at one instant than at another.
+     So the gauges are REPORTED at every arm and DECIDE only the one thing they are the sole evidence for: the
+     unmodelled arm, where the live count fell while nothing retired and nothing was sold, which is the
+     counters disagreeing and is worth saying rather than inferring past. And `blocked`/`owed` get an arm of
+     their OWN — a frontier parked on the host is a cause this function could see and had no word for. */
+  const retiring = b.finished > a.finished;
+  if (retiring && h.length >= 2 && flipped.length === 0)
+    return `WORK THAT ADVANCES NO STATEMENT${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows retired steadily and not ` +
+           `one probe row reached 1 across the window, so more time buys more of the same. ` +
            (wfq.ordered
              ? `The reward spread is wider than the optimism term's whole range and members are sitting at ` +
                `reward 0, so the ORDER is the inherited reward's: those members are reached only as the aging ` +
@@ -815,10 +903,11 @@ function hungCause(out) {
                `is structurally an offset, or a level moment in a frontier it does order — this line used to ` +
                `name the first of those without reading the row that tells them apart.`) +
            ` The rows still 0 name what nothing scheduled was working toward.`;
-  if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
-    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows were still ` +
-           `finishing when the budget ran out, nothing was waiting on the host, and ${flipped.length} row(s) ` +
-           `reached 1 across half the run. ` +
+  if (retiring)
+    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows were still ` +
+           `finishing when the budget ran out, ${b.blocked} flow(s) were blocked and ${b.owed} reply(s) owed at ` +
+           `the last census, and ${flipped.length} row(s) ` +
+           `reached 1 across the window. ` +
            (neverOne.length
              ? `THAT ADVANCE IS NOT THE WHOLE DOCUMENT: ${neverOne.length} row(s) have been 0 in every sample ` +
                `of this run, so more budget extends a search that is moving and does nothing for those — read ` +
@@ -832,20 +921,47 @@ function hungCause(out) {
      correct behaviour and not a defect, and it reads identically in `finished` and `live`. The row that says
      which is `sold`, and it could not be read here at all until the cold census carried it: it was a
      @PROGRESS name, and @PROGRESS was printed by this same unreachable loop. */
-  if (b.finished === a.finished && b.live > a.live && b.sold > a.sold)
-    return `a FRONTIER BEING PAGED OUT (${span}; ${hspan}; ${cs}) — no flow finished across half the run and ` +
-           `the live count rose, which alone would be a stall, but ${b.sold - a.sold} flow(s) were SOLD to ` +
-           `the cold tier in the same window. That is the RAM floor doing its job, so the question is what ` +
+  /* THE FRONTIER PARKED ON THE HOST, which this function could always see and had no word for. `blocked` and
+     `owed` are the two registers engine.h calls "what the host is owed", and a frontier that retires nothing
+     while one of them is non-empty is not stalled on its own ordering at all — it is waiting for something
+     only the host can supply, and the work to do is in the HOST rather than in the WFQ. It is asked only where
+     nothing retired, because a run that IS retiring is not characterised by one parked flow. */
+  if (b.blocked > 0 || b.owed > 0)
+    return `WAITING ON THE HOST${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — no flow finished across the ` +
+           `window while ${b.blocked} flow(s) sat blocked on a host request and ${b.owed} reply(s) were owed. ` +
+           `Those two are readings of the LAST census, so what they establish is that the frontier ended parked ` +
+           `on the host — the question is which record was never answered, not why the ordering retires nothing.`;
+  /* A STALL AND A PAGE-OUT ARE DIFFERENT VERDICTS ON THE SAME COUNTER, and `sold` is the whole of the
+     difference. `finished` flat says work is not being RETIRED — but a frontier under RAM pressure retires
+     nothing and pages instead, which §Time-travel-resume calls the correct behaviour and not a defect, and it
+     reads identically in `finished`. The row that says which is `sold`, and it could not be read here at all
+     until the cold census carried it: it was a @PROGRESS name, and @PROGRESS was printed by an unreachable
+     loop. Both arms used to ALSO require `live` to have risen, which is a gauge comparison — see above. */
+  if (b.sold > a.sold)
+    return `a FRONTIER BEING PAGED OUT${landmarks} (${span}; ${hspan}; ${cs}) — no flow finished across the ` +
+           `window, but ${b.sold - a.sold} flow(s) were SOLD to ` +
+           `the cold tier in it. That is the RAM floor doing its job, so the question is what ` +
            `the working set is made of rather than why nothing retires.`;
-  if (b.finished === a.finished && b.live > a.live)
-    return `a STALL (${span}; ${hspan}; ${cs}) — no flow finished across half the run while the live flow ` +
-           `count rose and nothing was paged out, so work is being admitted and not retired.`;
+  if (b.live >= a.live)
+    return `a STALL${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — no flow finished across the window, ` +
+           `nothing was paged out and nothing was waiting on the host, so work is being admitted and not ` +
+           `retired. ` +
+           (lastRetire < 0
+             ? `AND NOTHING HAS RETIRED IN THIS RUN AT ALL, which is the stronger statement: this is not a ` +
+               `frontier that stopped retiring, it is one that never did, so the first question is whether any ` +
+               `flow of this document has a terminating shape rather than why these ones do not.`
+             : `finished last rose at census ${lastRetire} of ${n}, so the silence is the ` +
+               `${n - 1 - lastRetire} census(es) — ${(n - 1 - lastRetire) * PROGRESS_EVERY} units of engine ` +
+               `work — since then, and THAT is the number two runs of one revision must agree on.`);
   /* THE UNMODELLED ARM CARRIES THE MOST EVIDENCE, NOT THE LEAST, which is the inversion it used to be. It
      said "the two censuses above are the measurement to start from" and printed neither the heap, the delta
      chains nor the fork table — the three streams that model precisely the causes the frontier counts do not.
      An arm that admits it cannot name the cause is the one arm that owes the reader everything it has. */
-  return `NEITHER named cause (${span}; ${hspan}; ${wfq.text}; ${cs}) — the frontier is doing something this ` +
-         `discriminator does not model, and the censuses above are the measurement to start from.`;
+  return `NEITHER named cause${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — nothing retired across the ` +
+         `window, nothing was sold to the cold tier, nothing was owed by the host, and the live count FELL ` +
+         `(${a.live}→${b.live}) anyway. A member leaves the frontier by finishing or by being sold, so the ` +
+         `three counters disagree about where ${a.live - b.live} of them went — that contradiction is the ` +
+         `measurement to start from, and the streams above are the rest of what this run said.`;
 }
 
 /* ONE WAY TO RUN A CHILD, and it hands the run's own bytes to the reporter that judges it. The five call sites
