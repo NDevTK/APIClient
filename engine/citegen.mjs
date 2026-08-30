@@ -801,6 +801,33 @@ const OTHER_SPECS = [
      different sections from XML 1.0, and "Selection API" and "Web Cryptography API" are not the File API.
      anchorTokens tries the longest tail first, so a listed multi-word name wins over its own last word. */
   "namespaces in xml", "selection api", "cryptography api", "web cryptography api",
+  /* FILE SYSTEM ACCESS, and it is here because the audit's own gap report asked for it: `Access=32` stood in
+     the capitalised-tokens line — "a standard among these is coverage this audit is not getting" — while
+     `core/file/file_picker.c`, whose banner reads "FILE SYSTEM ACCESS §3", had every one of its §3.x crash
+     messages filed under WEB IDL by the file vote. That file cites Web IDL correctly three times (§3.2.21
+     sequences, §3.2.17 dictionary types, §3.3.13 [SecureContext]) and those anchored sites are what made IDL
+     its dominant standard, so the vote answered `process accept types` with Web IDL §3.2.1 "any" and
+     `remember a picked directory` with §3.2.2 "undefined". Both real numbers, neither the right document. */
+  "file system access",
+  /* AND THE FILE SYSTEM STANDARD IS A DIFFERENT DOCUMENT WHOSE NUMBERS COLLIDE WITH IT HEAD-ON, which is why
+     both rows exist and why neither may be spelled loosely. FS §2.2 is "The FileSystemHandle interface" and
+     FSA §2.2 is "Permissions"; FS §2.3 is "The FileSystemFileHandle interface" and FSA §2.3 is "The
+     FileSystemHandle interface". `core/file/file_system_handle.h` cites BOTH, correctly, four lines apart —
+     `§2.2's INTERFACE PROTOTYPE OBJECT, which File System Access §2.3's partial interface installs
+     queryPermission and requestPermission on` is FS §2.2 and FSA §2.3 in one sentence. A tokenizer that reads
+     neither name files the whole file under whatever it votes for, and the vote there was WEB IDL: it raised
+     `"partial interface" is defined in idl §2.2 — nothing defines it at §2.3`, an accusation against a
+     citation that was right. anchorTokens strips a trailing `Standard`, so this row is the two words that
+     survive it, and `file system access` above is a longer tail that is tried first.
+     AND IT IS THE `database` HAZARD — a common noun this tree writes in prose — SO IT WAS CHECKED RATHER THAN
+     ASSUMED. Every occurrence of `File System §` in engine/host is a citation of that standard and not one is
+     the noun; the tree writes the noun without a number. The risk direction is also the safe one: a wrongly
+     anchored site becomes FOREIGN and is never judged, where the vote it replaces was judging it. Measured on
+     the diff that added this row: `file_system_writable.c` cites File System §2.5's `write a chunk` eleven
+     times in its step-machine strings, and the vote — the file is streams-dense — read every one as Streams
+     §2.5 "Internal queues and queuing strategies" and reported ten of them as misattributed. File System
+     Standard §2.5 defines `write a chunk`, so all ten were false and all ten are gone. */
+  "file system",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",

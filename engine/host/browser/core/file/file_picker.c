@@ -113,12 +113,13 @@ static void picker_process_accept_types(JSContext *ctx, JSValueConst options)
               "`sequence<FilePickerAcceptType>` — an ITERATOR-PROTOCOL conversion (Web IDL §3.2.21) whose "
               "element is a DICTIONARY carrying a `record<USVString, (USVString or sequence<USVString>)>`. "
               "core/idl_args.h declares neither: IDL_SEQUENCE_STRING_OR_DICT is the nearest and its union has a "
-              "STRING arm, which would cross `types: [\"x\"]` as a string where §3.2.17 makes it a TypeError. "
-              "BUILD those two declared types (a `sequence<D>` over a dictionary, and `record<K,V>` over "
-              "step_ownkeys_run + step_getownprop_run, both of which quickjs-step.h already provides), then "
-              "run §3.2.1's steps 1-4 over the result — INCLUDING `validate a suffix`, whose four TypeErrors "
-              "(does not start with '.', a code point that is not ASCII alphanumeric / '+' / '.', ends with "
-              "'.', longer than 16 code points) are reachable from NOWHERE ELSE and are therefore not written "
+              "STRING arm, which would cross `types: [\"x\"]` as a string where Web IDL §3.2.17 makes it a "
+              "TypeError. BUILD those two declared types (a `sequence<D>` over a dictionary, and `record<K,V>` "
+              "over step_ownkeys_run + step_getownprop_run, both of which quickjs-step.h already provides), "
+              "then run File System Access §3.2.1's steps 1-4 over the result — INCLUDING `validate a suffix`, "
+              "whose four TypeErrors (does not start with '.', a code point that is not ASCII alphanumeric / "
+              "'+' / '.', ends with '.', longer than 16 code points) are reachable from NOWHERE ELSE and are "
+              "therefore not written "
               "yet — and give each option's filter to picker_select in place of the all-files one");
 }
 
@@ -162,8 +163,8 @@ static int picker_path_c(JSContext *ctx, JSValueConst path, const char ***pout)
 
     JS_ToUint32(ctx, &n, len_v);
     JS_FreeValue(ctx, len_v);
-    DCHECK(n >= 1, "a file picker path with no items — §2.1's path is a list of ONE OR MORE strings and its "
-                   "first item names the root");
+    DCHECK(n >= 1, "a file picker path with no items — File System Access §2.1's path is a list of ONE OR "
+                   "MORE strings and its first item names the root");
     out = calloc(n ? n : 1, sizeof *out);
     CHECK(out != NULL, "file picker: OOM building a path vector");
     for (i = 0; i < n; i++) {
@@ -236,9 +237,10 @@ static JSValue picker_starting_directory(JSContext *ctx, JSValueConst id_v, JSVa
                 return picker_path_new(ctx, path, npath);
             }
             if (is_file) {
-                DCHECK(npath >= 2, "§3.2.2 step 4 located a FILE entry whose locator's path is one item — the "
-                                   "first item of a path names the root, and a root is a directory entry, so a "
-                                   "file at that position is a locator this model cannot hold");
+                DCHECK(npath >= 2, "File System Access §3.2.2 step 4 located a FILE entry whose locator's path "
+                                   "is one item — the first item of a path names the root, and a root is a "
+                                   "directory entry, so a file at that position is a locator this model "
+                                   "cannot hold");
                 if (id) JS_FreeCString(ctx, id);
                 return picker_path_new(ctx, path, npath - 1);
             }
@@ -296,7 +298,8 @@ static void picker_remember(JSContext *ctx, JSValueConst id_v, JSValueConst entr
     JSValue dir;
 
     if (!entry_is_directory) {
-        DCHECK(n >= 2, "§3.2.2's remember a picked directory was given a FILE whose path is one item");
+        DCHECK(n >= 2, "File System Access §3.2.2's remember a picked directory was given a FILE whose path "
+                       "is one item");
         keep = n - 1;
     }
     dir = picker_path_new(ctx, items, keep);
@@ -373,7 +376,8 @@ static JSValue picker_select(JSContext *ctx, JSValueConst start_path, int magic,
     JS_FreeValue(ctx, dir);
     picker_path_c_free(ctx, items, n);
     DCHECK(multiple || taken <= 1, "a file picker selected more than one entry for a call whose `multiple` is "
-                                   "false — §3.3 step 7.5 allows no more than one file selected in that case");
+                                   "false — File System Access §3.3 step 7.5 allows no more than one file "
+                                   "selected in that case");
     return out;
 }
 
@@ -438,8 +442,8 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, const
             JSValue entry = file_system_locate(ctx, path[0], path, np);
 
             DCHECK(!JS_IsNull(entry) && file_system_is_file(entry),
-                   "§3.4's selection located something that is not a file entry at the path picker_select just "
-                   "took it from — the two walk the same model in the same flow");
+                   "File System Access §3.4's selection located something that is not a file entry at the path "
+                   "picker_select just took it from — the two walk the same model in the same flow");
             file_system_set_data(ctx, entry, file_system_bytes_value(ctx, "", 0));
             file_system_touch(ctx, entry);
             JS_FreeValue(ctx, entry);
@@ -802,8 +806,9 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         JS_FreeValue(ctx, cb_result);
         /* STEP 7.10 — remember a picked directory, given options["id"], entries[0] and environment. */
         DCHECK(!JS_IsUndefined(s->picked),
-               "a file picker made a selection and recorded no path for it — §3.3 step 7.10 remembers the "
-               "directory entries[0] was picked from, and the path is the only thing that names it");
+               "a file picker made a selection and recorded no path for it — File System Access §3.3 step "
+               "7.10 remembers the directory entries[0] was picked from, and the path is the only thing that "
+               "names it");
         picker_remember(ctx, s->id, s->picked, magic == M_DIRECTORY);
         JS_FreeValue(ctx, s->picked);
         s->picked = JS_UNDEFINED;
@@ -855,7 +860,8 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         return JS_STEP_DONE;
     }
     }
-    DFAIL("a file picker was stepped at a stage §3.3-§3.5 does not declare");
+    DFAIL("a file picker was stepped at a stage File System Access §3.3 through File System Access §3.5 does "
+          "not declare");
     return -1;
 
 reject:
@@ -911,7 +917,8 @@ static void file_picker_install_realm(JSContext *ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
-    DCHECK(g_id_open >= 0, "§3's factories were installed before file_picker_init declared them");
+    DCHECK(g_id_open >= 0, "File System Access §3's factories were installed before file_picker_init declared "
+                           "them");
     /* The whole partial interface is `[SecureContext]`, and Web IDL §3.3.13 REMOVES a member in a non-secure
        realm rather than making it throw — `'showOpenFilePicker' in window` is what a bundle feature-detects
        with, and the three answers (absent, throwing, undefined) are three different branches. It is also what
@@ -927,13 +934,14 @@ void file_picker_init(JSContext *ctx)
 {
     static const IdlArgType OPTS_ONLY[] = { IDL_DICT };
 
-    DCHECK(g_id_open < 0, "file_picker_init ran twice — the three members' pool ids and §3.2.2's map are the "
-                          "AGENT's");
+    DCHECK(g_id_open < 0, "file_picker_init ran twice — the three members' pool ids and File System Access "
+                          "§3.2.2's map are the AGENT's");
     g_rt = JS_GetRuntime(ctx);
     /* §3.2.2's MAP, BUILT AT THE PRE-BOOT BASELINE. A map allocated lazily inside a flow would be that flow's
        own object and no sibling would ever see what it remembered. */
     g_recent = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_recent), "§3.2.2's recently picked directory map could not be allocated");
+    CHECK(!JS_IsException(g_recent),
+          "File System Access §3.2.2's recently picked directory map could not be allocated");
     g_id_open = idl_method_id_step(ctx, OPTS_ONLY, 1, OPEN_OPTIONS,
                                    (int)(sizeof OPEN_OPTIONS / sizeof OPEN_OPTIONS[0]), &FPK_DECL, M_OPEN);
     idl_optional_from(0);
@@ -960,7 +968,8 @@ void file_picker_free(void)
 {
     if (g_id_open < 0)
         return;
-    DCHECK(g_rt != NULL, "§3.2.2's map was built without recording the runtime that owns it");
+    DCHECK(g_rt != NULL,
+           "File System Access §3.2.2's map was built without recording the runtime that owns it");
     JS_FreeValueRT(g_rt, g_recent);
     g_recent = JS_UNDEFINED;
     g_id_open = g_id_save = g_id_directory = -1;
