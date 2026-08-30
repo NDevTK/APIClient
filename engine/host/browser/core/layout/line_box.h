@@ -131,9 +131,12 @@ CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, l
  *   content box's own — is a coordinate the CALLER'S extreme absorbs, because CSSOM VIEW §2's other operand is
  *   that same element's padding edge. The number is therefore not a per-fragment position and MUST NOT BE READ
  *   AS ONE: this entry answers where the boxes reach OUTSIDE the content box, and inside it answers the content
- *   box. CSSOM VIEW §6's `getClientRects()` wants the position and is not this entry's caller — that is the
- *   per-item offset along the line core/layout/flow_position.c crashes for, and it needs `text-align`, which
- *   core/css/css_computed_value.c derives no computed value for.
+ *   box. CSSOM VIEW §6's `getClientRects()` wants the POSITION and is still not this entry's caller — it is
+ *   `line_box_inline_fragments`', below, which computes the per-item offset and the alignment this one is
+ *   constructed to avoid needing. The two answers stay separate because the reason this one needs neither is a
+ *   THEOREM about an extreme and not a gap: an entry that took the fragment positions and re-derived an extreme
+ *   from them would read a used content width for every formatting context, including the ones §10.3 still
+ *   crashes for, in order to reach a number this derivation already has.
  *
  * THE BLOCK AXIS IS A MAXIMUM OVER THE BOXES AND DELIBERATELY NOT THE STACK'S OWN BOTTOM, which is the one
  * place this entry and `line_box_content_height` are answering different questions about the same lines. CSS
@@ -150,5 +153,75 @@ CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, l
  * the fitting-line answer above harmless, stated once for the degenerate case too. */
 void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
                            bool vertical, CssPx *lo, CssPx *hi);
+
+/* ONE BOX FRAGMENT of an inline box — CSSOM VIEW §6 "Extensions to the Element Interface"'s getClientRects()
+ * step 3's "one for each box fragment", which for an inline box is one per LINE BOX it spans. The four numbers
+ * are the fragment's BORDER AREA as OFFSETS FROM THE CONTENT BOX ORIGIN of the block container that establishes
+ * the formatting context — the same frame `line_box_content_span` reports in, and the frame
+ * core/layout/flow_position.h turns into an initial-containing-block coordinate by adding that box's own origin
+ * plus CSS 2 §8.1's leading border and padding.
+ *
+ * WHY THE BORDER AREA AND NOT THE CONTENT AREA. §6's step 3 says "describing its BORDER AREA", and for an
+ * inline box that area is exactly what core/layout/text_run.h collects as the box's two EDGE items:
+ * css-sizing-3 §2.2's outer size at each boundary, which CSS 2.2 §9.4.2 puts on the line ("horizontal margins,
+ * borders, and padding are respected between these boxes"). An edge is the MARGIN box's contribution, so the
+ * inline-axis border area is that span less the box's own two horizontal margins — the one subtraction this
+ * component makes, and it is stated here because it is the whole difference between what the fill holds and
+ * what §6 asks for.
+ *
+ * THE BLOCK AXIS IS THE BOX'S OWN CONTENT AREA AND EMPHATICALLY NOT THE LINE BOX'S, and CSS 2.2 §10.6.1
+ * "Inline, non-replaced elements" is explicit about it in a sentence written to be misread the other way: "the
+ * vertical padding, border and margin of an inline, non-replaced box start at the top and bottom of the CONTENT
+ * AREA, and has NOTHING TO DO WITH the 'line-height'. But only the 'line-height' is used when calculating the
+ * height of the LINE BOX." Two heights, and §6's step 3 wants the first. `<div style="line-height:100px"><span>
+ * x</span></div>` renders a 100px line box around a span whose border area is one font tall, and reporting the
+ * line box would be a rectangle no border is drawn on.
+ * WHERE THE CONTENT AREA SITS IS THE BASELINE, which is the one number the line box does supply: §10.8's step 3
+ * makes the line box "the distance between the uppermost box top and the lowermost box bottom", so its baseline
+ * is the line's own maximum `A'` below its top and every box on it hangs from that one line. The content area
+ * is then `A` above the baseline and `D` below it, and §8.1's padding and border nest outside it.
+ * §10.6.1 LEAVES THE CONTENT AREA'S HEIGHT TO THE UA and this engine's choice is stated rather than assumed:
+ * "the height of the content area should be based on the font, but this specification does not specify how. A
+ * UA may, e.g., use the em-box or the MAXIMUM ASCENDER AND DESCENDER of the font." The second is taken, and it
+ * is taken because it is the SAME `A` and `D` §10.8.1's strut already reads off the first available font — one
+ * pair of numbers for both heights, so a fragment's rectangle and the line it sits on cannot come to describe
+ * different fonts.
+ * A LINE §9.4.2 says "must be treated as ZERO-HEIGHT line boxes for the purposes of determining the positions
+ * of any elements INSIDE of them" still carries a fragment, at the position the stack has reached: §6's step 3
+ * asks for zero-extent rectangles by name ("including those with a height or width of zero"), and §9.4.2's
+ * "not existing for any other purpose" is about §8.3.1's margin collapsing and §10.6.3's height, both of which
+ * this entry answers nothing for.
+ *
+ * §7.1's ALIGNMENT IS APPLIED HERE AND THE COORDINATE IS COMPLETE. css-text-4 §7.1 "Text Alignment: the
+ * text-align shorthand" is a shorthand with a `Computed value:` line of "see individual properties", so what
+ * this reads is §7.3 "Default Text Alignment: the text-align-all property" and, for the last line of the block
+ * and for a line a forced break ends, §7.4 "Last Line Alignment: the text-align-last property". A caller
+ * receives a distance from the content box and never an alignment to apply itself: two callers applying it
+ * would be two answers to where one fragment is. */
+typedef struct {
+    CssPx inline_start, inline_end;   /* from the content box's LEFT edge (horizontal-tb, asserted) */
+    CssPx block_start, block_end;     /* from the content box's TOP edge */
+} LineBoxFragment;
+
+/* `el`'s FRAGMENTS, in content order, with `*establishing` receiving the block container whose content box
+ * origin they are measured from. Answers the count and stores a newly allocated array of that many at `*out`,
+ * WHICH THE CALLER OWNS AND MUST FREE; the count is never zero, because an inline box that generates a box is
+ * on at least one line ("line boxes are created as needed to hold inline-level content", and this box's two
+ * edge items ARE content the fill partitions).
+ *
+ * `el` MUST BE A NON-REPLACED INLINE BOX — a computed `display` of `inline` that is in flow. An atomic
+ * inline-level box (`inline-block` and the rest of css-display §2's inline-outer list) is ONE fragment and not
+ * a span of them, and it reaches this component's own walk as the capability that walk crashes for; the caller
+ * establishes which it has before asking, and this asserts it.
+ *
+ * IT FINDS THE FORMATTING CONTEXT ITSELF, and that is why it takes an element where the two entries above take
+ * a run: the question "which inline formatting context is this box in" is answered by walking PAST every inline
+ * ancestor to the nearest block container, which is NOT §10.1's containing block — §10.1's second case stops at
+ * the nearest block container too but its own exception makes an INLINE ancestor a containing block of a
+ * different shape ("the bounding box around the padding boxes of the first and the last inline boxes"), so
+ * core/layout/used_value.h answers a different question and crashes there rather than stepping over it. One
+ * walk, here, because both of §6's and §7's consumers would otherwise carry a copy. */
+size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                 LineBoxFragment **out);
 
 #endif

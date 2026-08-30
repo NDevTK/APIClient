@@ -405,17 +405,31 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
 
 /* ---- the measurement ---------------------------------------------------------------------------------------- */
 
-/* ONE LINE'S INLINE SIZE — the sum of `[lo, hi)`'s advance measures, less css-text-3 §4.1.2 "Phase II: Trimming
-   and Positioning"'s edges: "a sequence of collapsible spaces at the beginning of a line is removed", "a
-   sequence of collapsible spaces at the end of a line is removed". The trimming is a SEQUENCE in the spec and a
-   loop here even though §4.1.1 leaves at most one such space per run, because the two statements are
-   independent: the day preserved white space is built, a line can begin with several. */
-static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
+/* HOW FAR ALONG THE LINE `[lo, hi)` ITEM `upto` BEGINS — the sum of the advance measures and box edges of
+   `[lo, upto)`, less css-text-3 §4.1.2 "Phase II: Trimming and Positioning"'s edges: "a sequence of collapsible
+   spaces at the beginning of a line is removed", "a sequence of collapsible spaces at the end of a line is
+   removed". The trimming is a SEQUENCE in the spec and a loop here even though §4.1.1 leaves at most one such
+   space per run, because the two statements are independent: the day preserved white space is built, a line can
+   begin with several.
+   THE TRIM RANGE IS THE WHOLE LINE'S AND THE SUM IS THE PREFIX'S, WHICH IS THE ONLY WAY A POSITION AND A SIZE
+   CAN AGREE. §4.1.2's two edges are properties of the LINE — which spaces disappear depends on where the line
+   ends, not on where the item being located sits — so a prefix that recomputed them over `[lo, upto)` would
+   trim a space in the MIDDLE of the line as though it were at the end, and the offsets of a line's items would
+   not add up to that line's own size. That is why this is one walk with a third bound rather than two
+   functions: `upto == hi` is the SIZE and every smaller `upto` is a POSITION inside it, and the two cannot
+   drift apart because there is nothing for them to drift between.
+   `upto == hi` IS THEREFORE A REAL ANSWER AND NOT AN EDGE CASE — it is where the line's last item ENDS, which
+   is what a caller reporting a fragment's far edge asks for. */
+static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_t upto)
 {
     CssPx sum = css_px(0.0);
     size_t i, keep_lo = hi, keep_hi = lo;
 
     DCHECK(lo <= hi && hi <= m->count, "a line was measured over a range that is not inside the collected run");
+    DCHECK(lo <= upto && upto <= hi,
+           "css-text-3 §4.1.2's per-line sum was asked for a prefix that ends outside the line it is a prefix "
+           "of. The trim range below is the LINE's, so a bound past `hi` would sum items §4.1.2 never looked at "
+           "and a bound before `lo` would sum a negative span");
     /* §4.1.2's TWO EDGES ARE FOUND OVER THE CHARACTERS AND AN EDGE ITEM DOES NOT STOP THE SCAN. The section
        removes "a sequence of collapsible spaces at the BEGINNING of a line" and again at the end, and a box
        boundary is not a space — an inline box opened before a line's leading space leaves that space at the
@@ -427,7 +441,7 @@ static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
         if (m->items[i].kind == TEXT_RUN_ITEM_CHAR && !m->items[i].collapsible_space) { keep_lo = i; break; }
     for (i = hi; i > lo; i--)
         if (m->items[i - 1].kind == TEXT_RUN_ITEM_CHAR && !m->items[i - 1].collapsible_space) { keep_hi = i; break; }
-    for (i = lo; i < hi; i++) {
+    for (i = lo; i < upto; i++) {
         CssPx advance;
 
         if (m->items[i].kind == TEXT_RUN_ITEM_EDGE) {
@@ -450,6 +464,13 @@ static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
         sum = css_px_add(sum, advance);
     }
     return sum;
+}
+
+/* ONE LINE'S INLINE SIZE — the prefix above taken to the line's own end, which is what CSS 2.2 §9.4.2's
+   distribution compares against an available width. */
+static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
+{
+    return tr_line_prefix(m, lo, hi, hi);
 }
 
 /* IS THE SOFT WRAP OPPORTUNITY AT THIS BOUNDARY ENABLED — css-text-3 §5.5 "Line Breaking Details" states the
@@ -886,4 +907,22 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
            "derived from nothing");
     *lines = out;
     return n;
+}
+
+/* CSS 2.2 §9.4.2's PER-ITEM POSITION ON ONE LINE BOX — see text_run.h for what the number is measured from and
+   for why it is a distance from the LINE BOX's start edge and not a coordinate. */
+CssPx text_run_measure_line_offset(const TextRunMeasure *m, TextRunLine line, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(line.from <= line.to && line.to <= m->count,
+           "CSS 2.2 §9.4.2's per-item position was asked over a line that is not one of the fill's — the fill's "
+           "lines PARTITION the collected items, so a range outside `[0, count]` is a `TextRunLine` some other "
+           "measurement produced and the offsets would be into another document's text");
+    DCHECK(line.from <= i && i <= line.to,
+           "CSS 2.2 §9.4.2's per-item position was asked for an item that is not on the line it was asked "
+           "about. A box is on a line exactly when one of its items is (core/layout/line_box.c takes the "
+           "intersection), so an index outside the line is a caller that has lost which fragment it is placing "
+           "— and the answer would be a real distance measured along the wrong line. `line.to` itself IS "
+           "admitted: it is where the line's last item ENDS, which is a fragment's far edge");
+    return tr_line_prefix(m, line.from, line.to, i);
 }

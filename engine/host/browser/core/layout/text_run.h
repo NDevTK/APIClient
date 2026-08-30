@@ -315,6 +315,30 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
    at every available width, so a caller need not derive one. See the header above. */
 bool text_run_measure_splits(const TextRunMeasure *m);
 
+/* WHERE ITEM `i` BEGINS ALONG THE LINE BOX `line` — the inline-axis distance from the LINE BOX'S OWN START EDGE
+ * to that item's start edge, in CSS pixels, with css-text-3 §4.1.2 "Phase II: Trimming and Positioning" applied
+ * over the whole line exactly as `TextRunLine.size` has it applied.
+ *
+ * IT IS THE THIRD ANSWER OVER THE SAME FILL, AND IT IS A DISTANCE AND NOT A COORDINATE. The fill says WHICH
+ * line each item is on and how wide each line's content is; §10.8 (core/layout/line_box.h) says how tall each
+ * line is; this says where along its line an item sits. What none of the three says is where the line box's
+ * start edge IS, and that is deliberate: CSS 2.2 §9.4.2 gives the line box the containing block's width ("in
+ * general, the left edge of a line box touches the left edge of its containing block and the right edge touches
+ * the right edge of its containing block") and then hands the content's position inside it to css-text-4 §7.3
+ * "Default Text Alignment: the text-align-all property" — a computed value about the ESTABLISHING BOX, which
+ * this component is not given and must not read, since it is handed a run rather than an element.
+ *
+ * `i == line.to` IS ADMITTED AND IS THE LINE'S OWN SIZE — where the last item ENDS. A fragment is a half-open
+ * range of items exactly as a line is, so its two edges are this entry at its two bounds, and a caller that had
+ * to special-case the far one would be re-deriving `TextRunLine.size` beside a number that already is it.
+ *
+ * IT SHARES ONE WALK WITH `TextRunLine.size` RATHER THAN REPRODUCING IT, which is the same rule text_run.h's
+ * three partitions follow one level up and matters for the same reason: §4.1.2's trimming is a property of the
+ * LINE, so a position derived from a prefix that re-trimmed would not add up to the size derived from the
+ * whole, and the offsets of a line's items would not reach its own end. Two sums of one line is the one way
+ * this component could hand a caller a fragment whose left edge and width describe different text. */
+CssPx text_run_measure_line_offset(const TextRunMeasure *m, TextRunLine line, size_t i);
+
 /* THE ELEMENT WHOSE COMPUTED PROPERTIES ITEM `i`'s BOX HAS — the inline box a character is in, or the box an
    edge belongs to. It is the one field asked WITHOUT a kind because both kinds carry it and for the same
    reason: css-values-4 §6.1.1's advance measure is stated over "the element on which it is used" and

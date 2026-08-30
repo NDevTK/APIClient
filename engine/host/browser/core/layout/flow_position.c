@@ -13,6 +13,7 @@
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
 
 static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
@@ -141,6 +142,73 @@ static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
  * §9.4.1 IS NOT ASKED ABOUT A BOX THAT DOES NOT EXIST, which is the caller's own first step (flow_position.h),
  * so `none` and `contents` are a DCHECK rather than an arm: reaching here with either means the predicate that
  * decides box existence and this one disagree. */
+static bool fp_is_inline_box(lxb_dom_element_t *el)
+{
+    return fp_computed_is(el, "display", "inline");
+}
+
+/* CSS 2 §9.4.2 "Inline formatting contexts"' PLACEMENT of a non-replaced inline box — "boxes are laid out
+   horizontally, one after the other, beginning at the top of a containing block", broken into line boxes whose
+   width the containing block decides.
+   ITS ORIGIN IS ITS FIRST FRAGMENT'S, and that is §9.4.2's own consequence rather than a choice among several:
+   "when an inline box exceeds the width of a line box, it is SPLIT into several boxes and these boxes are
+   distributed across several line boxes", so the box has as many border areas as it has fragments and exactly
+   one of them begins first in content order. CSSOM VIEW §7's `offsetTop`/`offsetLeft` and §6's
+   `getBoundingClientRect` both want that one; §6's `getClientRects` wants them ALL and does not come through
+   here — core/dom/element_view.c asks core/layout/line_box.h for the list directly, so this entry answering
+   the first is not this component deciding the others do not matter.
+   THE FRAME IS THE ESTABLISHING BOX'S CONTENT BOX, which core/layout/line_box.h reports in and which is the
+   same second case of §10.1 the block-level arm below composes: that box's own origin (this function, one
+   level up) plus CSS 2 §8.1's leading border and padding. */
+size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
+{
+    lxb_dom_element_t *style = NULL;
+    LineBoxFragment *frags = NULL;
+    FlowRect *rects;
+    FlowPoint o;
+    CssPx left, top;
+    size_t n, i;
+
+    DCHECK(el != NULL && out != NULL,
+           "CSS 2 §9.4.2's fragment rectangles were asked for with no element or nowhere to report them");
+    n = line_box_inline_fragments(el, &style, &frags);
+    DCHECK(n >= 1 && frags != NULL && style != NULL,
+           "CSS 2 §9.4.2's fragments were reported as none for an inline box that generates one. That entry's "
+           "own asserts make a zero count impossible — an inline box's two edge items are content the fill "
+           "partitions — so this is that contract having been broken between the two files");
+    /* §10.1's SECOND CASE, composed exactly as the block-level arm below composes it: the establishing box's
+       own origin (this function, one level up — which is where a float, an out-of-flow ancestor or a vertical
+       writing mode crashes by its own section) plus CSS 2 §8.1's leading border and padding, which is the
+       difference between that box's BORDER edge and the CONTENT edge core/layout/line_box.h measures from. */
+    o = flow_border_box_origin(style);
+    left = css_px_add(o.x, fp_edge_before(style, false));
+    top = css_px_add(o.y, fp_edge_before(style, true));
+    rects = malloc(n * sizeof *rects);
+    CHECK(rects != NULL, "out of memory placing CSS 2 §9.4.2's box fragments — one entry per fragment of one "
+                         "inline box, so a failure here is the physical floor");
+    for (i = 0; i < n; i++) {
+        rects[i].x = css_px_add(left, frags[i].inline_start);
+        rects[i].y = css_px_add(top, frags[i].block_start);
+        rects[i].width = css_px_sub(frags[i].inline_end, frags[i].inline_start);
+        rects[i].height = css_px_sub(frags[i].block_end, frags[i].block_start);
+    }
+    free(frags);
+    *out = rects;
+    return n;
+}
+
+static FlowPoint fp_inline_box_origin(lxb_dom_element_t *el)
+{
+    FlowRect *rects = NULL;
+    FlowPoint p;
+
+    (void)flow_inline_fragment_rects(el, &rects);
+    p.x = rects[0].x;
+    p.y = rects[0].y;
+    free(rects);
+    return p;
+}
+
 static void fp_require_placeable(lxb_dom_element_t *el)
 {
     static const char *const TABLE_INTERNAL[] = {
@@ -160,7 +228,11 @@ static void fp_require_placeable(lxb_dom_element_t *el)
            "asking where it is, so this is that predicate and this test disagreeing");
     for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
         if (strcmp(d, TABLE_INTERNAL[i]) == 0) table_internal = true;
-    inline_level = strcmp(d, "inline") == 0 || strcmp(d, "inline-block") == 0 ||
+    /* `inline` IS NOT IN THIS LIST, and that is the one change that makes this function's name true: a
+       non-replaced inline box is PLACED now, by §9.4.2 through core/layout/line_box.h, and it leaves through
+       `fp_inline_box_origin` before this classification is asked. What is left here is the ATOMIC inline-level
+       boxes CSS 2.1 §9.2.2 "Inline-level elements and inline boxes" separates from it. */
+    inline_level = strcmp(d, "inline-block") == 0 ||
                    strcmp(d, "inline-table") == 0 || strcmp(d, "inline-flex") == 0 ||
                    strcmp(d, "inline-grid") == 0;
     /* THE STRING IS RELEASED BEFORE EITHER CRASH AND NEITHER CRASH READS IT AGAIN. `DFAIL` is compiled out in
@@ -179,45 +251,29 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "author wrote — and then §17.5.2's and §17.5.3's algorithms over it, which core/layout/"
               "used_value.c already crashes for when a table's EXTENT is asked. BUILD §17.2.1, then §17.5");
     if (inline_level)
-        DFAIL("this box is INLINE-LEVEL, so CSS 2 §9.4.2 'Inline formatting contexts' places it and §9.4.1 "
-              "does not: 'boxes are laid out horizontally, one after the other, beginning at the top of a "
-              "containing block', and the line box that results is as tall as the boxes in it. CSS 2.1 §9.2.2 "
-              "'Inline-level elements and inline boxes' is what puts `inline-block` and `inline-table` here "
-              "beside `inline` — they are ATOMIC inline-level boxes, which 'participate in their inline "
-              "formatting context as a single opaque box', so their CONTENTS are laid out differently and "
-              "their POSITION is a position on a line box exactly as an inline box's is. css-display §2's "
-              "`inline flex` and `inline grid` are the same case one level up. The same fact is why an inline "
-              "element can be SEVERAL fragments and therefore several rectangles. THE MEASUREMENT IS NO "
-              "LONGER WHAT IS MISSING, AND THIS LINE SAID IT WAS: it named core/css/font_metrics.h as holding "
-              "CSS 2 §10.8.1 'Leading and half-leading''s `A` and `D` and no advance for an arbitrary glyph, "
-              "and instructed the reader to build that advance — which `font_metrics_advance_measure_em` now "
-              "answers for every Unicode scalar value off the first available face's own 'cmap' and 'hmtx', "
-              "and which core/layout/text_run.h already sums per run beside its widest unbreakable segment. "
-              "Following this line as it stood would have built a capability twice. THE GREEDY FILL IS BUILT "
-              "TOO, AND THIS LINE ALSO SAID IT WAS NOT: `text_run_measure_fill` (core/layout/text_run.h) "
-              "distributes an inline formatting context's run across §9.4.2's line boxes against the "
-              "establishing block container's used content width, and core/layout/line_box.c measures §10.8 "
-              "over each of them — so WHICH LINE this box is on is already answered, by the range of items the "
-              "fill assigned to each line. WHAT IS LEFT IS A POSITION, AND IT IS TWO NUMBERS THE FILL DOES NOT "
-              "PRODUCE. (1) The line box's own TOP, which is the sum of the heights of the line boxes above it "
-              "— arithmetic line_box.c already performs to reach §10.6.3's total and currently keeps to "
-              "itself. (2) The OFFSET ALONG the line, which the fill reports for no item: it answers each "
-              "line's own inline size and not a running position inside it, and §9.4.2's "
-              "\"when the total width of the inline-level boxes on a line is less than the width of the line "
-              "box containing them, their horizontal distribution within the line box is determined by the "
-              "'text-align' property\" is what turns that offset into a coordinate — a property "
-              "core/css/css_computed_value.c derives no computed value for. BUILD the per-item position "
-              "beside the fill, then `text-align`, then this box's origin is (1) and (2). THIS LINE USED TO "
-              "SAY core/layout/scrolling_area.c CRASHES FOR THE SAME CAPABILITY AND IT NO LONGER DOES, which "
-              "is worth stating because the two questions still LOOK identical and one of them turned out not "
-              "to need `text-align` at all. CSSOM VIEW §2's scrolling area takes an EXTREME whose other "
-              "operand is the element's own padding edge, so a line whose content FITS its line box is "
-              "absorbed wherever the alignment put it, and css-text-4 §7.1 \"Text Alignment: the text-align "
-              "shorthand\" settles the only case that is left — \"if (after justification, if any) the inline "
-              "contents of a line box are too long to fit within it, then the contents are start-aligned\". "
-              "`line_box_content_span` is that answer. THIS member is asking for a COORDINATE with nothing to "
-              "absorb it, so neither half of that derivation is available to it and it is the sole remaining "
-              "consumer of the per-item position");
+        DFAIL("CSS 2.1 §9.2.2 'Inline-level elements and inline boxes' makes this an ATOMIC INLINE-LEVEL box — "
+              "`inline-block`, `inline-table`, or css-display §2's `inline flex` and `inline grid` — which "
+              "\"participate in their inline formatting context as a single opaque box\". So §9.4.2 places it, "
+              "not §9.4.1, and its position is a position ON A LINE BOX exactly as a non-replaced inline box's "
+              "is. THAT PLACEMENT IS BUILT AND THIS LINE USED TO SAY IT WAS NOT: it named the per-item offset "
+              "along the line and `text-align` as the two missing numbers, and both now exist — "
+              "`text_run_measure_line_offset` (core/layout/text_run.h) is the offset, css-text-4 §7.3 "
+              "\"Default Text Alignment: the text-align-all property\" is the alignment (core/css/"
+              "css_computed_value.c derives it, and core/css/css_shorthand.c carries the §7.1 shorthand row "
+              "that makes a `text-align` declaration reach it), and `line_box_inline_fragments` composes them "
+              "into a fragment rectangle that `fp_inline_box_origin` above turns into this very coordinate for "
+              "a `display: inline` box. Following this line as it stood would have built all of that a second "
+              "time. WHAT IS MISSING IS THIS BOX'S OWN CONTRIBUTION TO THE RUN, and core/layout/line_box.c "
+              "crashes for it by name at the same arm of the same walk: an atomic inline puts a SOFT WRAP "
+              "OPPORTUNITY before and after itself (css-text-3 §5.5 \"Line Breaking Details\": \"for "
+              "Web-compatibility there is a soft wrap opportunity before and after each replaced element or "
+              "other atomic inline\"), so how many line boxes there are becomes a function of this box's own "
+              "USED WIDTH — and core/layout/text_run.h has no item kind that carries one: a CHAR is sized by an "
+              "advance measure, an EDGE introduces no break, and a FORCED BREAK has no width. BUILD that item "
+              "kind, fill it from core/layout/used_value.c (§10.3.9 for an inline-block, its own module for an "
+              "inline-flex or inline-grid), and take CSS 2 §10.8's step 1 over its MARGIN BOX rather than its "
+              "`line-height` (\"for replaced elements, inline-block elements, and inline-table elements, this "
+              "is the height of their margin box\"). Then this box reaches the line and this arm deletes");
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
        what the two rules below are written about. A `table` is one of them and stays on this path: §17.4
        'Tables in the visual formatting model' says the table wrapper box is block-level for `display: table`
@@ -254,6 +310,12 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
               "the box's content — so the extent is no longer the blocker and the POSITION is the whole of what "
               "is left. BUILD §9.5.1's nine constraints over the line boxes the float interacts with");
     fp_require_horizontal_tb(el);
+    /* §9.4's TWO NORMAL-FLOW FORMATTING CONTEXTS ARE ALTERNATIVES, and which one places a box is its own
+       inline-or-block LEVEL — §9.4.1 is written about a block-level box and §9.4.2 about the boxes on a line.
+       A non-replaced inline box therefore leaves through its own section HERE, before the classification
+       below, exactly as a float and an out-of-flow box leave through theirs above: the two rules at the end of
+       this function are §9.4.1's and say nothing about a box on a line box. */
+    if (fp_is_inline_box(el)) return fp_inline_box_origin(el);
     fp_require_placeable(el);
 
     /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,

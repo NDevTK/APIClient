@@ -41,9 +41,19 @@
  * containing block's width less its own `margin-right` and less its border box's width, and an over-constrained
  * box differs between them exactly where §10.3.3 says it does.
  *
+ * A NON-REPLACED INLINE BOX IS THE ONE BOX THIS FILE PLACES BY A DIFFERENT SECTION, and it leaves through that
+ * section rather than through the induction above. §9.4's two normal-flow formatting contexts are ALTERNATIVES
+ * decided by a box's own level: §9.4.1's two rules are written about a block-level box, and a box on a line is
+ * §9.4.2's — "boxes are laid out horizontally, one after the other, beginning at the top of a containing
+ * block". Its origin is its FIRST FRAGMENT's, because §9.4.2 splits an inline box across line boxes and gives
+ * it one border area per fragment; core/layout/line_box.h computes them all against the establishing block
+ * container's content box, and this file adds that box's own origin and CSS 2 §8.1's leading border and
+ * padding — the same composition §10.1's second case makes for a block-level child.
+ *
  * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
- * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an inline box is
- * §9.4.2's line boxes, and a box whose computed `writing-mode` is not `horizontal-tb` waits on
+ * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an ATOMIC
+ * inline-level box (§9.2.2's `inline-block` and the rest) waits on the run item that carries a used WIDTH and
+ * its own two soft wrap opportunities, and a box whose computed `writing-mode` is not `horizontal-tb` waits on
  * css-writing-modes-4 §7.4's flow-relative restatement of the two rules this file implements physically.
  *
  * THE ANSWER IS A `CssPx` PAIR FOR used_value.h's REASON. §10.1's base case is the viewport, so a coordinate
@@ -80,5 +90,35 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
    makes a scroll container's SCROLLPORT — the visual viewport CSSOM VIEW §6.1's determine the scroll-into-view
    position aligns against — "coincide with its padding box". */
 FlowPoint flow_padding_box_origin(lxb_dom_element_t *el);
+
+/* ONE BORDER AREA in the same space — a position and the two extents that go with it. */
+typedef struct {
+    CssPx x, y, width, height;
+} FlowRect;
+
+/* EVERY BORDER AREA OF A NON-REPLACED INLINE BOX, in content order, in the initial containing block's space.
+ * Answers the count and stores a newly allocated array of that many at `*out`, WHICH THE CALLER OWNS AND MUST
+ * FREE; the count is never zero.
+ *
+ * IT IS A SECOND ENTRY BECAUSE AN INLINE BOX HAS MORE THAN ONE RECTANGLE AND `flow_border_box_origin` HAS ONE
+ * ANSWER. CSS 2 §9.4.2 "Inline formatting contexts": "when an inline box exceeds the width of a line box, it is
+ * SPLIT into several boxes and these boxes are distributed across several line boxes" — and CSSOM VIEW §6
+ * "Extensions to the Element Interface"'s getClientRects() step 3 returns "one for each box fragment", which is
+ * exactly this list, while §7's `offsetLeft` and §6's getBoundingClientRect want the first one's corner. Two
+ * members, one derivation: `flow_border_box_origin` answers an inline box out of `*out[0]`, so the corner a
+ * page reads and the first rectangle it enumerates cannot disagree.
+ *
+ * IT ANSWERS THE FULL RECTANGLE AND NOT A POINT, which is the one place this component and core/layout/
+ * used_value.h are not separable. An inline box's border area is not "an extent at a position": its inline
+ * extent is how far its own fragment runs ON THAT LINE, which is a different number per fragment and is not
+ * §10.3.1's used `width` (the property "does not apply"), and its block extent is §10.6.1's content area out
+ * of the first available font rather than a used `height`. Both come out of core/layout/line_box.h's fragment,
+ * so splitting them across two entries would put half of one rectangle behind a component that cannot answer
+ * for the other half.
+ *
+ * `el` MUST BE A NON-REPLACED INLINE BOX in normal flow with a `horizontal-tb` writing mode; every other box
+ * crashes naming its own section, in this file for the positioning scheme and in core/layout/line_box.c for
+ * what it contributes to a line. */
+size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out);
 
 #endif

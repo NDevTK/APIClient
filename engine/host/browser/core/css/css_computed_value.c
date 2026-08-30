@@ -335,7 +335,8 @@ static CssPx css_cv_parent_font_size(lxb_dom_element_t *el)
     return len.px;
 }
 
-/* THE ROOT ELEMENT of this element's document — DOM §4.5's document element, which is what CSS calls the root
+/* THE ROOT ELEMENT of this element's document — DOM §4.2.1 "Document tree"'s document element, which is what
+   CSS calls the root
    element and what §6.1.1's `rem` is measured on. NULL is a real answer and the spec states its arm: "when
    specified in a document with no root element, the root font-relative lengths are resolved assuming the
    initial values of the font and line-height properties." */
@@ -889,6 +890,63 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
     return len;
 }
 
+/* ---- css-text-4 §7.1's `match-parent`, which is the ONLY thing §7.3 and §7.4 compute ----------------------
+   Both longhands state `Computed value: keyword as specified, EXCEPT for match-parent which computes as
+   defined above`, and "above" is §7.1 "Text Alignment: the text-align shorthand": "this value behaves the
+   same as inherit (computes to its parent's computed value) EXCEPT that an inherited value of start or end is
+   interpreted against the parent's direction value and results in a computed value of either left or right.
+   Computes to start when specified on the root element."
+   IT IS NOT `inherit`, AND THE DIFFERENCE IS THE WHOLE OF THE RULE. CSS Cascade §7.3's `inherit` would hand
+   down the parent's `start` unchanged, so a `direction: rtl` parent and its `direction: ltr` child would align
+   their lines the same way; §7.1 resolves the flow-relative keyword AT THE PARENT, against the PARENT'S
+   `direction`, and hands down the physical answer — which is what makes `match-parent` a value worth having
+   and not a spelling of `inherit`. The resolution is therefore performed here, at the computed value, where
+   §7.1 puts it, and never at the point a line box reads the answer: a consumer that saw `match-parent` would
+   have to walk the tree to interpret it, and every consumer would carry its own copy of that walk.
+   AN ELEMENT WITH NO PARENT ELEMENT TAKES THE ROOT ELEMENT'S ANSWER, and the two are one case rather than an
+   approximation of one: §7.1 names the root because the root has no parent computed value to match, and an
+   element whose parent is a DocumentFragment (a `<template>`'s contents, a detached subtree) has none for the
+   same reason. There is no third thing for the value to mean. */
+static char *computed_text_align(lxb_dom_element_t *el, const char *name, char *spec)
+{
+    lxb_dom_element_t *parent;
+    char *inherited, *dir;
+    bool start, rtl;
+
+    if (!css_cv_is(spec, "match-parent")) return spec;
+    free(spec);
+    parent = css_parent_element(el);
+    if (parent == NULL) return css_cv_strdup("start");
+    inherited = css_computed_value(parent, name);
+    DCHECK(inherited != NULL,
+           "css-text-4 §7.1's `match-parent` found no COMPUTED value on the parent element for the longhand it "
+           "matches. §7.3 and §7.4 both give their property an `Initial:` line, so §7's defaulting always "
+           "answers one node up — a NULL here is that chain having stopped short");
+    /* §7.1's exception is over `start` and `end` ALONE. `left`, `right`, `center`, `justify` and — for §7.4 —
+       `auto` are already physical or already direction-independent, so they are the plain inherit half of the
+       sentence and are taken whole. */
+    if (!css_cv_is(inherited, "start") && !css_cv_is(inherited, "end")) return inherited;
+    start = css_cv_is(inherited, "start");
+    free(inherited);
+    /* "interpreted against the PARENT's direction value" — the parent's, not this element's, which is what
+       makes the answer a fact about where the parent's own lines begin. */
+    dir = css_computed_value(parent, "direction");
+    DCHECK(dir != NULL, "css-writing-modes-4 §2.1 \"Specifying Directionality: the direction property\" "
+                        "produced no computed value for an element css-text-4 §7.1's `match-parent` is "
+                        "resolving against");
+    rtl = css_cv_is(dir, "rtl");
+    DCHECK(rtl || css_cv_is(dir, "ltr"),
+           "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 gives the property the "
+           "`Value:` line `ltr | rtl` and nothing else, so a third spelling is a declaration the cascade should "
+           "have refused — asserted rather than read as \"not rtl\", which would quietly mean `ltr` and put "
+           "this line's content at the wrong edge");
+    free(dir);
+    /* css-writing-modes-4 §6.2 "Flow-relative Directions": the inline-start side of an `ltr` inline axis is
+       its line-left one and of an `rtl` one its line-right. `start` is therefore `left` under `ltr` and
+       `right` under `rtl`, and `end` is the mirror. */
+    return css_cv_strdup(start == rtl ? "right" : "left");
+}
+
 /* ---- the computed value ----------------------------------------------------------------------------------- */
 
 bool css_computed_models_length(const char *name)
@@ -925,6 +983,7 @@ bool css_computed_models(const char *name)
            strcmp(name, "direction") == 0 || strcmp(name, "writing-mode") == 0 ||
            strcmp(name, "line-height") == 0 ||
            strcmp(name, "alignment-baseline") == 0 || strcmp(name, "baseline-source") == 0 ||
+           strcmp(name, "text-align-all") == 0 || strcmp(name, "text-align-last") == 0 ||
            strcmp(name, "transform") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
@@ -1147,6 +1206,8 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
         return computed_overflow(el, name, spec);
     if (strcmp(name, "display") == 0)
         return computed_display(el, spec);
+    if (strcmp(name, "text-align-all") == 0 || strcmp(name, "text-align-last") == 0)
+        return computed_text_align(el, name, spec);
     /* css-transforms-1 §3 "The transform Property" states `Computed value: as specified, but with lengths made
        absolute` — TWO CLAUSES, and `none` satisfies the second vacuously because it contains no lengths, so
        for that value the specified value IS the computed one and this is a derivation rather than a default.

@@ -992,6 +992,37 @@ static void ev_border_area_px(const EvTarget *t, CssPx out[4])
               "matrices of the element and of every ancestor and maps the border area's four corners through "
               "the product — the result is the AXIS-ALIGNED bounding box of those corners, which is why a "
               "rotated box reports a rectangle wider than its own width");
+    /* AN INLINE BOX'S BORDER AREA IS NOT AN EXTENT AT A POSITION and cannot be assembled the way the block
+       arm below assembles one: CSS 2 §10.3.1 "Inline, non-replaced elements" says the `width` property "does
+       not apply", and §10.6.1 says the same of `height` while making the box's own content area a function of
+       its font — so `used_value_border_edge_px` has no answer for either axis. Both numbers come out of the
+       FRAGMENT instead (core/layout/flow_position.h), which is the same list `getClientRects` enumerates. */
+    if (element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
+        FlowRect *frags = NULL;
+        size_t n = flow_inline_fragment_rects(el, &frags);
+        FlowRect first = frags[0];
+
+        free(frags);
+        if (n > 1)
+            DFAIL("CSSOM VIEW §6's get-the-bounding-box was asked in css_length.h's vocabulary for an inline "
+                  "box that CSS 2 §9.4.2 \"Inline formatting contexts\" split across SEVERAL line boxes — "
+                  "\"when an inline box exceeds the width of a line box, it is split into several boxes and "
+                  "these boxes are distributed across several line boxes\" — so §6's steps 3 and 4 must CHOOSE "
+                  "between them, and this entry has one rectangle to answer with. The choice is the same one "
+                  "`ev_bounding_rect` above crashes for and it is the SAME BUILD: step 3 returns the first "
+                  "rectangle when every one has a zero width or height, step 4 otherwise returns the smallest "
+                  "rectangle enclosing those that do not — both COMPARISONS over rectangles whose numbers are "
+                  "concolics derived from the initial containing block, so neither may be a C branch on the "
+                  "example (that deletes the arm a responsive bundle explores) and both go through Geometry "
+                  "Interfaces §3's NaN-safe derived edges. BUILD it ONCE, over CssPx, and let both entries "
+                  "call it — this entry and that one are two vocabularies for one algorithm and a second copy "
+                  "of the choice would be two answers");
+        out[0] = css_px_sub(first.x, css_px(viewport_window_scroll(t->dctx, false)));
+        out[1] = css_px_sub(first.y, css_px(viewport_window_scroll(t->dctx, true)));
+        out[2] = first.width;
+        out[3] = first.height;
+        return;
+    }
     w = used_value_border_edge_px(el, false);
     h = used_value_border_edge_px(el, true);
     o = flow_border_box_origin(el);
@@ -1050,29 +1081,16 @@ ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
     return ELEMENT_VIEW_FRAGMENTS_ONE;
 }
 
-static void ev_require_single_fragment(const EvTarget *t)
+/* §6's step 3's SECOND CONSTRAINT — the one fragment shape this engine cannot enumerate. THE INLINE ARM IS
+   GONE FROM HERE BECAUSE IT IS BUILT, and this comment says so because the crash that stood here instructed
+   the reader to build it: core/layout/flow_position.h's `flow_inline_fragment_rects` answers every border area
+   of a non-replaced inline box, out of `line_box_inline_fragments`' per-line fragments, out of
+   `text_run_measure_line_offset`'s per-item position and css-text-4 §7.3 "Default Text Alignment: the
+   text-align-all property"'s alignment. `ev_client_rects` below emits one rect per line box the box spans. */
+static void ev_require_enumerable_fragments(const EvTarget *t)
 {
     ElementViewFragments kind = element_view_fragment_kind(lxb_dom_interface_element(t->node));
 
-    if (kind == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES)
-        DFAIL("CSSOM VIEW §6's getClientRects() step 3 returns one DOMRect PER BOX FRAGMENT, and an INLINE box "
-              "has one fragment per LINE BOX it spans — which is the whole reason this member answers a list "
-              "rather than a rectangle. CSS 2 §9.4.2 'Inline formatting contexts' is what produces them: "
-              "'boxes are laid out horizontally, one after the other, beginning at the top of a containing "
-              "block', broken into lines whose width the containing block and the floats decide. THE "
-              "MEASUREMENT IS NO LONGER WHAT IS MISSING AND THIS LINE SAID IT WAS: it named the per-glyph "
-              "advance as having none, and core/css/font_metrics.h now answers it for every Unicode scalar "
-              "value off the first available face; §9.4.2's line boxes are built over it too — "
-              "`text_run_measure_fill` (core/layout/text_run.h) distributes the run and reports which items "
-              "landed on each line, which is exactly this step's fragment COUNT for an inline box, and "
-              "core/layout/line_box.c measures §10.8 over each line. WHAT IS LEFT IS THE RECTANGLES. A "
-              "fragment's border area is an extent AND A POSITION, and the position is the two numbers "
-              "core/layout/flow_position.c crashes for by name — the line box's own top, and the offset ALONG "
-              "the line, which §9.4.2 hands to `text-align`. AND THE COUNT IS NOT THIS COMPONENT'S TO READ AS "
-              "IT STANDS: the fill answers about the whole formatting context, so this member's fragments are "
-              "the lines that hold at least one of THIS box's items — a question core/layout/line_box.h does "
-              "not export, because until there are rectangles to hang on it a count alone is a number no "
-              "caller can use. BUILD the per-item position, then this member returns one rect per such line");
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
         DFAIL("CSSOM VIEW §6's getClientRects() step 3's SECOND CONSTRAINT: an element whose computed `display` "
               "is `table` or `inline-table` contributes 'both the TABLE BOX and the CAPTION BOX, if any, but "
@@ -1109,14 +1127,35 @@ static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
               "no margins and no borders; its bounds are its own segments). This engine lays out no SVG at all. "
               "BUILD SVG 2's bounding box beside the CSS one, in its own component, since none of §10's used "
               "values applies to it");
-    /* step 3, whose count and whose second constraint are decided first */
-    ev_require_single_fragment(t);
+    /* step 3, whose second constraint is decided first */
+    ev_require_enumerable_fragments(t);
     /* Step 3's THIRD constraint — "replace each anonymous block box with its child box(es) and repeat" — never
        fires for a list this engine produces, because an ELEMENT's own principal box is never anonymous: CSS 2
        §9.2.1.1 generates one only around block-level children of an inline-containing block container, and it
        belongs to no element. The list below is therefore already in the constraint's final form. */
     rects = JS_NewArray(t->rctx);
     CHECK(!JS_IsException(rects), "the client-rect list could not be allocated");
+    /* STEP 3'S COUNT — "one for each BOX FRAGMENT", "IN CONTENT ORDER". For an inline box that is one per line
+       box it spans, which is the whole reason this member answers a list; `flow_inline_fragment_rects` reports
+       them in the order the fill assigned the items, which IS content order because CSS 2 §9.4.2 distributes
+       the run in document order and stacks the lines downward. */
+    if (element_view_fragment_kind(lxb_dom_interface_element(t->node)) == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
+        FlowRect *frags = NULL;
+        size_t n = flow_inline_fragment_rects(lxb_dom_interface_element(t->node), &frags), i;
+
+        for (i = 0; i < n; i++) {
+            CssPx x = css_px_sub(frags[i].x, css_px(viewport_window_scroll(t->dctx, false)));
+            CssPx y = css_px_sub(frags[i].y, css_px(viewport_window_scroll(t->dctx, true)));
+
+            JS_SetPropertyUint32(t->rctx, rects, (uint32_t)i,
+                                 dom_rect_new_values(t->rctx, ev_client_px(t->rctx, x),
+                                                     ev_client_px(t->rctx, y),
+                                                     ev_client_px(t->rctx, frags[i].width),
+                                                     ev_client_px(t->rctx, frags[i].height)));
+        }
+        free(frags);
+        return dom_rect_list_new(t->rctx, rects);
+    }
     JS_SetPropertyUint32(t->rctx, rects, 0, ev_border_area(t));
     return dom_rect_list_new(t->rctx, rects);
 }
@@ -1156,7 +1195,7 @@ void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
               "SPECIFICATION', which is SVG 2's own object bounding box and not a special case of CSS 2 §8.1's "
               "border box. This engine lays out no SVG at all. BUILD SVG 2's bounding box beside the CSS one, "
               "in its own component");
-    ev_require_single_fragment(&t);
+    ev_require_enumerable_fragments(&t);
     ev_border_area_px(&t, out);
 }
 

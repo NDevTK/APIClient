@@ -256,6 +256,61 @@ static const char *const VERTICAL_ALIGN_INITIAL[] = { "auto", "baseline", "0px" 
 
 static const char *const LH_VERTICAL_ALIGN[] = { "baseline-source", "alignment-baseline", "baseline-shift" };
 
+/* ---- css-text-4 §7.1 "Text Alignment: the text-align shorthand" ------------------------------------------
+   ITS TWO LONGHANDS, in the order §7.1's own sentence names them: "this shorthand property sets the
+   text-align-all and text-align-last properties". §7.1's `Computed value:` line is "see individual
+   properties", so the SHORTHAND has no computed value of its own and a consumer that wants the alignment of a
+   line box asks §7.3's `text-align-all` (or §7.4's `text-align-last` for the last line) — which is exactly why
+   this row has to exist before either of those can be modelled: without it a `text-align: center` sets NEITHER
+   longhand, both read their initial values, and there is a real number to show for a declaration nothing
+   looked at. */
+static const char *const LH_TEXT_ALIGN[] = { "text-align-all", "text-align-last" };
+
+/* §7.3 "Default Text Alignment: the text-align-all property"'s `Value:` line —
+   `start | end | left | right | center | <string> | justify | match-parent` — LESS the `<string>`, and that
+   omission is lexbor's grammar rather than a choice made here. §7.1 says of the string "the string must be a
+   single character; otherwise the declaration is invalid and must be ignored", and §7.2 "Character-based
+   Alignment in a Table Column" is the whole of what it does — a table-cell alignment character. Lexbor's
+   property registry admits no `<string>` arm for `text-align`, `text-align-all` or `text-align-last` (its
+   value enums are the seven keywords below, plus `justify-all` for the shorthand and `auto` for the last-line
+   longhand), so such a declaration is dropped by the parser and never reaches this expansion at all.
+   THE SET IS THE `text-align-all` GRAMMAR AND NOT THE SHORTHAND'S: §7.1 adds `justify-all`, which is a value
+   of the shorthand alone and is handled where the assignment is. */
+static const char *const TEXT_ALIGN_KEYWORDS[] = {
+    "start", "end", "left", "right", "center", "justify", "match-parent"
+};
+
+static int text_align_longhand_index(const char *longhand)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(LH_TEXT_ALIGN); i++)
+        if (strcmp(LH_TEXT_ALIGN[i], longhand) == 0) return (int)i;
+    return -1;
+}
+
+/* §7.1's ASSIGNMENT, which is one sentence plus two named exceptions and nothing else:
+     "Values other than justify-all or match-parent are assigned to text-align-all and RESET text-align-last to
+      auto";
+     `justify-all` "sets both text-align-all and text-align-last to justify";
+     `match-parent`, "when specified on the text-align shorthand, sets both text-align-all and text-align-last
+      to match-parent".
+   THE RESET IS THE PART THAT MAKES THIS A SHORTHAND RATHER THAN AN ALIAS, and it is why the second longhand's
+   answer is `auto` rather than NULL: a `text-align: center` after a `text-align-last: right` must undo the
+   second declaration, and a component that answered nothing for it would leave it standing. */
+static char *text_align_component(const char *value, int term)
+{
+    const char *w[1], *kw;
+    size_t wl[1];
+
+    if (css_words(value, w, wl, 1) != 1) return NULL;
+    if (css_word_is(w[0], wl[0], "justify-all")) return css_sh_strdup("justify");
+    kw = css_sh_keyword(TEXT_ALIGN_KEYWORDS, CSS_SH_N(TEXT_ALIGN_KEYWORDS), w[0], wl[0]);
+    if (kw == NULL) return NULL;
+    if (strcmp(kw, "match-parent") == 0) return css_sh_strdup(kw);
+    return css_sh_strdup(term == 0 ? kw : "auto");
+}
+
 /* WHICH OF §4.2's THREE TERMS the component value `w` is — 0 the source, 1 the alignment baseline, 2 the
    shift — or -1 for a value outside the shorthand's grammar, which drops the declaration. `*canon` is set to
    the keyword's CANONICAL (lower-case) spelling, or to NULL for the `<length-percentage>` arm, which has no
@@ -452,6 +507,20 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
            grammar, in which `inherit` is no term at all. §7's DEFAULTING step is what resolves it. */
         if (css_wide_keyword(value)) return css_sh_strdup(value);
         return vertical_align_component(value, term);
+    }
+
+    /* ---- css-text-4 §7.1's `text-align` ------------------------------------------------------------------- */
+    if (strcmp(shorthand, "text-align") == 0) {
+        int term = text_align_longhand_index(longhand);
+
+        if (term < 0) return NULL;
+        /* CSS Cascade §Shorthand Properties: "if a shorthand is specified as one of the CSS-wide keywords, it
+           sets all of its sub-properties to that keyword" — the ENTIRE value, ahead of §7.1's own grammar, in
+           which `inherit` is no value at all. §7's DEFAULTING step is what resolves it, and for THESE two that
+           matters more than for most: both are `Inherited: yes`, so §7.3's and §7.4's own inheritance and an
+           explicit `inherit` reach the same answer through different steps and must not be conflated here. */
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
+        return text_align_component(value, term);
     }
 
     /* ---- css-backgrounds-3 §3.2, §3.3 and §3.4's BORDER SHORTHANDS ---------------------------------------- */
@@ -655,7 +724,8 @@ typedef enum {
     CSS_SH_TWO_AXIS,    /* css-overflow §3.1's `{1,2}`: the second omitted when it equals the first */
     CSS_SH_TRIPLE,      /* a three-term `||`, each term omitted when it is that longhand's initial */
     CSS_SH_BORDER,      /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
-    CSS_SH_FONT         /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
+    CSS_SH_FONT,        /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
+    CSS_SH_TEXT_ALIGN   /* css-text-4 §7.1's one keyword redistributed over two longhands, plus its two pairs */
 } CssShKind;
 
 typedef struct {
@@ -734,6 +804,11 @@ static const CssShorthandRow SHORTHANDS[] = {
     { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px", NULL, NULL },
     { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto", NULL, NULL },
     { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px", NULL, NULL },
+    /* css-text-4 §7.1. The fixture is the case §7.1's own sentence is about — a value "other than justify-all
+       or match-parent", which is assigned to `text-align-all` and RESETS `text-align-last` to `auto` — so the
+       round trip exercises the reset, which is the half an alias would not have. The two exception values are
+       each their own fixed pair and are exercised by the serialization's own two equality tests. */
+    { "text-align",    LH_TEXT_ALIGN,     2, CSS_SH_TEXT_ALIGN, "center", NULL, NULL },
     /* css-inline-3 §4.2. The fixture names all three terms, in the grammar's canonical order and none of them
        at its initial, so the round trip exercises every arm of the partition at once — a `[first|last]`, an
        `<'alignment-baseline'>` and an `<'baseline-shift'>` keyword. */
@@ -1020,6 +1095,24 @@ static char *css_sh_border_value(const char *const *v)
     }
 }
 
+/* css-text-4 §7.1's ASSIGNMENT RUN BACKWARDS, and it is a function rather than a search because
+   `text-align-last` alone tells the three cases apart. `auto` is the reset EVERY value other than the two
+   named exceptions performs, so a pair ending in it was written as `text-align-all`'s own value; a pair of
+   `justify` is the only one `justify-all` produces; a pair of `match-parent` is the only one `match-parent`
+   produces.
+   ANY OTHER PAIR IS ONE NO `text-align` DECLARATION COULD HAVE MADE — a `text-align-last: center` set on its
+   own beside a `text-align-all: left` — and CSSOM §6.7.2's "cannot exactly represent the values" arm is the
+   answer, which the block serialization emits as the empty string. That is the same shape as `border`'s
+   disagreeing sides and is reported the same way, by NULL. */
+static char *css_sh_text_align_value(const char *const *v)
+{
+    if (strcmp(v[1], "auto") == 0) return css_sh_strdup(v[0]);
+    if (strcmp(v[0], "justify") == 0 && strcmp(v[1], "justify") == 0) return css_sh_strdup("justify-all");
+    if (strcmp(v[0], "match-parent") == 0 && strcmp(v[1], "match-parent") == 0)
+        return css_sh_strdup("match-parent");
+    return NULL;
+}
+
 char *css_shorthand_serialize_value(const char *shorthand, const char *const *values)
 {
     const CssShorthandRow *row;
@@ -1048,6 +1141,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     case CSS_SH_TWO_AXIS:  return css_sh_two_axis_value(values);
     case CSS_SH_TRIPLE:    return css_sh_triple_value(values, row->initial, row->whole_initial);
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
+    case CSS_SH_TEXT_ALIGN: return css_sh_text_align_value(values);
     default:
         DCHECK(row->kind == CSS_SH_BORDER,
                "a shorthand row carries a value-serialization kind this switch does not implement");
@@ -1255,11 +1349,27 @@ bool css_shorthand_complete_for(const char *longhand)
        `font-variant-caps` AND THE SIX OTHER `font-variant-*` LONGHANDS ARE NOT, and the reason is one row this
        table does not have: css-fonts-4 §6.11's `font-variant` is a second shorthand that sets every one of
        them, and it is not here. Recording them would assert a completeness that is false in the direction that
-       matters — a `font-variant: small-caps` two lines above a `font-variant-caps` read would be invisible. */
+       matters — a `font-variant: small-caps` two lines above a `font-variant-caps` read would be invisible.
+
+       `text-align-all` and `text-align-last` — css-text-4 §7.1's `text-align` is the ONLY shorthand in CSS
+       that sets either, and it is in the table above. §7.1 states the whole of the relation in its own words
+       ("this shorthand property sets the text-align-all and text-align-last properties"), while §7.3 "Default
+       Text Alignment: the text-align-all property" and §7.4 "Last Line Alignment: the text-align-last
+       property" declare each as a standalone longhand with its own `Value:` and `Computed value:` lines. No
+       module states a second container over them: §7.5's `text-justify` selects the METHOD a `justify`
+       alignment uses and is a sibling property, and §7.6's `text-group-align` aligns a block within its
+       container rather than content within a line.
+       THE ROW IS WHAT MADE THIS ANSWERABLE, exactly as `vertical-align`'s did one paragraph up. `text-align`
+       IS in lexbor's property registry, so a `text-align: center` declaration was TYPED and serialized all
+       along and simply set no longhand — which is the quietest shape this defect has: nothing was dropped and
+       nothing was unknown, the value was just filed under a name no consumer reads. CSS 2.2 §9.4.2's "their
+       horizontal distribution within the line box is determined by the 'text-align' property" would have read
+       `start` for every line box in every document, with a real coordinate to show for it. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
         "direction", "writing-mode", "transform",
         "baseline-source", "alignment-baseline", "baseline-shift",
+        "text-align-all", "text-align-last",
         "font-size", "line-height", "font-family", "font-style", "font-weight", "font-stretch",
         "font-feature-settings", "font-kerning", "font-language-override", "font-optical-sizing",
         "font-size-adjust", "font-variation-settings",
