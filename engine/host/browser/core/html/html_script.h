@@ -2,7 +2,8 @@
  *
  * WHY IT IS A COMPONENT AND NOT A STATIC IN element.c. §4.12.1 step 1 is "if el's already started is true,
  * then return", and `already started` is not a property of the element's markup — it is written by the PARSER
- * that built the element, read by the preparation that would run it, and copied by §4.12.1's cloning steps.
+ * that built the element, read by the preparation that would run it, and copied by §4.12.1.1 "Processing
+ * model"'s cloning steps.
  * Three call sites in three files over one boolean is a component; a static beside one of them is the same
  * boolean answered from wherever the reader happened to be.
  *
@@ -153,9 +154,9 @@ void html_script_parser_inserted(lxb_dom_node_t *script);
    answering for two rows of one dispatch table. The realm is derived the same way and for the same reason. */
 void html_script_end_of_file(lxb_dom_node_t *script);
 
-/* HTML §4.12.1's CLONING STEPS — "the cloning steps for script elements given node, copy, and subtree are to
-   set copy's already started to node's already started" — run from DOM §4.4 clone a node's step 3, which is
-   where every one of a clone's nodes passes.
+/* HTML §4.12.1.1 "Processing model"'s CLONING STEPS — "the cloning steps for script elements given node, copy,
+   and subtree are to set copy's already started to node's already started" — run from DOM §4.4 clone a
+   node's step 3, which is where every one of a clone's nodes passes.
    THEY ARE NOT BOOKKEEPING. Without them `parent.innerHTML = "<script>…</script>"` produces an inert script
    whose CLONE is a live one, so `doc.body.appendChild(parent.firstChild.cloneNode(true))` runs exactly the
    code the Inert mode exists to stop. A flag is only worth writing if it survives the operations the standard
@@ -183,8 +184,11 @@ void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char 
                               const char *val);
 
 /* HTML §4.12.1.1 "Processing model", the src step: "Let url be the result of encoding-parsing a URL given src,
- * RELATIVE TO EL'S NODE DOCUMENT" — §4.4's API base URL, which for an element in a child navigable's document
- * is THAT document's and not the creator's. `ctx` is the node document's realm.
+ * RELATIVE TO EL'S NODE DOCUMENT" — §2.4.2 "Parsing URLs"'s encoding-parse a URL takes a Document, and the
+ * base it resolves against is then §2.4.3 "Document base URLs"'s document base URL, which for an element in a
+ * child navigable's document is THAT document's and not the creator's. It is NOT §8.1.3.2 "Environment
+ * settings objects"'s API base URL: that is a settings object's answer, and this step names a Document.
+ * `ctx` is the node document's realm.
  *
  * NULL IS THE STANDARD'S OWN NEXT STEP and not an error code: "if url is failure, then queue an element task on
  * the DOM manipulation task source given el to fire an event named error at el, and RETURN" — so the element

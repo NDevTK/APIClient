@@ -31,8 +31,8 @@ static JSAtom  g_atom_force_async = JS_ATOM_NULL;
 static int     g_id_set_async = -1;   /* the `async` setter's pool id — declared per AGENT, installed per REALM */
 
 /* CONFIGURABLE AND WRITABLE for the reason custom_elements.c's slots are: the flag is written more than once
-   over one element's life — the parse marks it, and §4.12.1's cloning steps write the copy's from the
-   original's — and a slot defined with no flags makes the second write a silent no-op. */
+   over one element's life — the parse marks it, and §4.12.1.1 "Processing model"'s cloning steps write the
+   copy's from the original's — and a slot defined with no flags makes the second write a silent no-op. */
 #define SCRIPT_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
 
 /* §4.12.1's `async` SETTER STEPS, declared here because the declaration is the agent's and the init below is
@@ -55,7 +55,9 @@ void html_script_init(JSContext *ctx)
     g_atom_force_async = JS_ValueToAtom(ctx, g_force_async_key);
     CHECK(g_atom_force_async != JS_ATOM_NULL, "the script force-async slot key could not be interned");
     g_id_set_async = idl_setter_id(ctx, IDL_BOOLEAN, false, js_script_set_async, 0);
-    /* §4.12.1.1's children changed steps — the third of the three doors into `prepare`. See
+    /* HTML §4.12.1.1 "Processing model"'s children changed steps FOR `script` ELEMENTS — the family is DOM
+       §4.2.3 "Mutation algorithms"'s and this standard states this element's — the third of the three doors
+       into `prepare`. See
        script_children_changed for why only having the second one silently lost every text-injected chunk. */
     node_add_children_changed_hook(script_children_changed);
 }
@@ -265,8 +267,10 @@ void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char 
 {
     if (!html_script_is(lxb_dom_interface_node(el))) return;
     if (ns != NULL || !local) return;   /* "If namespace is not null, then return." */
-    /* §4.12.1.1's attribute change steps: "If localName is `src`, value is not null, and element is connected,
-       then run the script HTML element post-connection steps, given element." REMOVING `src` is not one of
+    /* HTML §4.12.1.1 "Processing model"'s attribute change steps FOR `script` ELEMENTS — the family is DOM
+       §4.9 "Interface Element"'s and this standard states this element's: "If localName is `src`, value is not
+       null, and element is connected, then run the script HTML element post-connection steps, given
+       element." REMOVING `src` is not one of
        them — the step asks for a non-null value — so a page that clears the attribute loads nothing, which is
        what it does in a browser. */
     if (!strcmp(local, "src")) {
@@ -300,7 +304,8 @@ void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert)
        IT ENTERS `<template>` CONTENTS, which the walk beside it does not have to. The parser puts a template's
        markup in its CONTENT FRAGMENT, and a `<script>` in there was created by THIS parse under the same Inert
        mode, so it is already started too — and it is reachable: `t.content.cloneNode(true)` copies it out, and
-       §4.12.1's cloning steps carry the flag with it, so an unmarked one would run from the clone. lexbor
+       §4.12.1.1 "Processing model"'s cloning steps carry the flag with it, so an unmarked one would run from
+       the clone. lexbor
        leaves the fragment's `parent` NULL and points its `host` back at the element, which is what the ascent
        climbs; a template can hold BOTH lists (only the parser and `t.content` reach the fragment, while
        `t.appendChild(x)` reaches the element), so coming back visits the ordinary children next. */
@@ -506,7 +511,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     /* No src: the element's own text IS the program. WHERE it runs is the schedule's answer and the two
        answers are different spec steps — §4.12.1.1 reaches `immediately execute the script element` only for
        what falls past "If el's type is `classic` and el has a src attribute, or el's type is `module`", so an
-       inline CLASSIC script runs at the slot after the program that inserted it and an inline MODULE joins one
+       inline CLASSIC script runs INSIDE the operation that reached these steps and an inline MODULE joins one
        of the two `as soon as possible` destinations and takes a POSITION in the sequence. A module has a graph
        to LOAD before its result exists, which is exactly why the standard does not run it in place. */
     DCHECK(sched == SCRIPT_SCHED_IMMEDIATE || st == SCRIPT_TYPE_MODULE,
@@ -528,12 +533,12 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
             /* IN THE DOCUMENT WHOSE TREE IT WAS INSERTED INTO — "prepare the script" runs it with the
                element's node document's settings object, which is the realm this chokepoint was entered
                with. A program is a program OF a document (solver/flow.h), so it names one. */
-            /* …AND AT THE SLOT THE ASSERT ABOVE ALREADY NAMED. §4.12.1.1's last step is "immediately execute
-               the script element el, even if other scripts are already executing", so this program runs before
-               anything the flow's sequence already holds. It went to the APPEND entries, which take
-               the TAIL — the position of the `as soon as possible` destinations this element is explicitly not
-               in — so an injected <script> ran after every remaining program of the document instead of
-               before the next statement of the code that injected it. */
+            /* …AND AT THE SLOT THE ASSERT ABOVE ALREADY NAMED, WHICH IS AHEAD OF EVERYTHING THE SEQUENCE HOLDS
+               AND STILL BEHIND THE PROGRAM THAT CAUSED IT. §4.12.1.1's last step is "immediately execute the
+               script element el, even if other scripts are already executing"; the slot after the cursor is
+               ahead of every program the flow has left, which is what the APPEND entries — the TAIL, the
+               position of the `as soon as possible` destinations this element is explicitly not in — got
+               wrong. It is not what "immediately" means, and the DFAIL below is where that is stated. */
             /* AN INLINE MODULE TAKES A POSITION INSTEAD — see the schedule note above. Both `as soon as
                possible` destinations an injected module reaches hold their elements in order, or in the SET's
                case have no position at all (§13.2.7 waits for the set only before the load event), so the tail
@@ -551,10 +556,51 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                    what makes a PARSED inline script NUL-free. ECMAScript §11.1 "Source Text" permits every
                    code point from U+0000 up, so an assignment of `x="<U+0000>";X9()` is a program a browser
                    runs whole and this engine ran the three bytes in front of that code point of. */
-                if (st == SCRIPT_TYPE_MODULE) engine_queue_element_script(document_doc(ctx),
-                                                                          (const char *)txt, n_len, st, el);
-                else                          engine_queue_script_immediate(document_doc(ctx),
-                                                                            (const char *)txt, n_len, el);
+                if (st == SCRIPT_TYPE_MODULE) {
+                    engine_queue_element_script(document_doc(ctx), (const char *)txt, n_len, st, el);
+                } else {
+                    /* AND THIS IS THE ONE ROW WHOSE POSITION IS A DEVIATION RATHER THAN A MODEL OF ONE, so it
+                       crashes here instead of being described. Every OTHER destination §4.12.1 has is a
+                       POSITION IN A SEQUENCE — a list, a set, a pending slot — and a row expresses each of them
+                       exactly. `immediately execute` is not a position in any sequence: it is a nested run
+                       INSIDE the operation that reached these steps, and the flow's one program sequence has no
+                       way to say that, so the queue's nearest expression of it (the slot after the running
+                       program) puts the rest of the causing program in front of it. That is a timeline no
+                       browser produces, and it was invisible for exactly as long as the prose above it claimed
+                       the slot WAS the step. */
+                    DFAIL("HTML §4.12.1.1 \"Processing model\" step 36 is \"Otherwise, immediately execute the "
+                          "script element el, even if other scripts are already executing\", and this engine "
+                          "cannot perform it: the program is queued at the slot AFTER the program that "
+                          "inserted the element, so `body.appendChild(s); f()` runs f() before s's code where "
+                          "a browser runs it after — and so does `s.textContent = code; f()` through the "
+                          "children changed steps, and a `document.write` of an inline classic script through "
+                          "the parser. DOM §4.2.3 \"Mutation algorithms\"'s insert step 12 is \"for "
+                          "each node of staticNodeList: if node is connected, then run the post-connection "
+                          "steps with node\", so the causing program is mid-statement while the script runs. "
+                          "WHAT THE NEXT DIFF BUILDS: this call becomes a program sub-sequence on the "
+                          "tree-steps drain, which is already a step machine holding a JSStepHdr "
+                          "(core/dom/element.c's element_tree_steps_step) — the same shape ECMAScript "
+                          "§19.2.1.1 PerformEval already has in the fork (step_program_run), where the program "
+                          "is compiled, its closure handed to the trampoline and the machine parked until the "
+                          "value comes back. "
+                          "IT NEEDS ITS SUBPROBLEM FIRST, AND THE SUBPROBLEM IS AN ORDER RATHER THAN PLUMBING: "
+                          "this engine drains §4.2.3's insertion steps (insert step 7.7) and its "
+                          "post-connection steps (step 12) as ONE per-node walk over entries recorded at the "
+                          "write, and insert runs EVERY node's insertion steps before ANY node's "
+                          "post-connection steps, over a staticNodeList step 10 collects up front because "
+                          "\"the post-connection steps can modify the tree's structure, making live traversal "
+                          "unsafe\". §4.12.1.1's own worked example is the proof and it is about this exact "
+                          "element: `body.append(script1, script2)` where script1's body removes script2 "
+                          "prints nothing, because script2 is no longer connected when its turn comes and so "
+                          "is never prepared. A per-node walk that runs the program at script1's entry and "
+                          "re-reads no connectedness at script2's prepares it anyway. That stays latent only "
+                          "while nothing runs there, so building the run above is what makes it live. "
+                          "HOW ITS ABSENCE SHOWS: web-platform-tests "
+                          "domparsing/createContextualFragment.html's \"<script>s should be run when appended "
+                          "to the document (but not before)\" fails at its LAST assertion and passes the two "
+                          "before it, which only require that nothing ran too EARLY");
+                    engine_queue_script_immediate(document_doc(ctx), (const char *)txt, n_len, el);
+                }
             }
             lxb_dom_document_destroy_text(n->owner_document, txt);
         }
