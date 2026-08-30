@@ -194,6 +194,29 @@ void      cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, si
 typedef struct { size_t size; const uint16_t *val_off; int n_val; } CowRecord;
 void      cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec);
 
+/* AND THE WRITE, WHICH THE LAYOUT HAD NO OPERATION FOR — PUBLISH BEFORE RELEASE.
+ *
+ * `val_off` is the one statement of what a record OWNS and it has FOUR consumers, not three: the finalizer
+ * frees it, the gc_mark walks it, the capture above dups it, and something WRITES it. Only the write had no
+ * operation, so every component spelled it by hand as `JS_FreeValue(ctx, d->f); d->f = <build a new one>;` —
+ * and that order leaves the slot naming FREED STORAGE for the whole of the build.
+ *
+ * IT IS NOT A NARROW WINDOW, AND THAT IS THE WHOLE POINT: an object allocation IS a collection
+ * (JS_NewObjectFromShape calls js_trigger_gc), so `d->f = JS_NewArray(ctx)` collects with the slot dangling,
+ * the collector reaches the record through the component's own gc_mark — which walks exactly this list — and
+ * decrefs a JSObject whose storage is already back on the allocator's free list. quickjs asserts the child's
+ * refcount at that decrement, which is the ONLY reason the defect has a symptom rather than a silent
+ * corruption; the assert names quickjs's collector and says nothing about the component that dangled the slot.
+ * The release of the OLD value is the same hazard from the other side: a host class's finalizer is the page's
+ * platform code, and it may allocate.
+ * quickjs's own name for the correct order is `set_value`, which is `static inline` inside quickjs.c and so
+ * cannot be reached by a component under engine/host/browser. This is that operation, plus the one assert the
+ * layout makes possible: the slot written must be a slot the layout NAMES, so a field added to the struct and
+ * not to `*_VALS[]` crashes at its FIRST write rather than being missed by the walk and the finalizer both.
+ * A record's INITIALIZATION is not a write and must not come here — before JS_SetOpaque the collector cannot
+ * reach the record and there is no previous value to release. */
+void      cow_record_set(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v);
+
 /* The session's context, for the captures that have no call-site one. The DOM delta's twin is dom_cow_set_ctx. */
 void      cow_set_ctx(JSContext *ctx);
 

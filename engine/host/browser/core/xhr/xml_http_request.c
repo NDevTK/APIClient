@@ -188,6 +188,16 @@ static XhrData *xhr_of(JSValueConst v)
     return d;
 }
 
+/* WRITE ONE OF THE TWELVE, and never `JS_FreeValue(ctx, d->f); d->f = <build one>;` — see cow.h. The record
+   and its layout are bound HERE rather than at each call, so no site can pass a slot from one record with the
+   layout of another. Every write below goes through it; the CONSTRUCTOR does not, and that is the one honest
+   exception: before JS_SetOpaque the record is unreachable by the collector and its slots hold no value to
+   release. */
+static void xhr_set(JSContext *ctx, XhrData *d, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, d, &XHR_REC, slot, v);
+}
+
 /* THE COLLECTOR'S TWO ENTRIES REACH THE RECORD THROUGH JS_GetAnyOpaque, NEVER THROUGH g_xhr_class.
  *
  * core/agent_state.h states the obligation and why it exists: every host's teardown is platform_agent_free()
@@ -519,25 +529,18 @@ static void js_xhr_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void xhr_reset_request(JSContext *ctx, XhrData *d)
 {
     d->send_invoked = 0;
-    JS_FreeValue(ctx, d->author_headers);
-    d->author_headers = JS_NewArray(ctx);
-    JS_FreeValue(ctx, d->request_body);
-    d->request_body = JS_NULL;
+    xhr_set(ctx, d, &d->author_headers, JS_NewArray(ctx));
+    xhr_set(ctx, d, &d->request_body, JS_NULL);
     d->upload_listener = 0;
     /* "Set this's response to a network error", which is the initial value of every response field. */
     d->network_error = 1;
     d->aborted = 0;
     d->status = 0;
-    JS_FreeValue(ctx, d->status_text);
-    d->status_text = JS_NewString(ctx, "");
-    JS_FreeValue(ctx, d->response_url);
-    d->response_url = JS_NewString(ctx, "");
-    JS_FreeValue(ctx, d->response_headers);
-    d->response_headers = JS_NewArray(ctx);
-    JS_FreeValue(ctx, d->received);
-    d->received = JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
-    JS_FreeValue(ctx, d->response_object);
-    d->response_object = JS_NULL;
+    xhr_set(ctx, d, &d->status_text, JS_NewString(ctx, ""));
+    xhr_set(ctx, d, &d->response_url, JS_NewString(ctx, ""));
+    xhr_set(ctx, d, &d->response_headers, JS_NewArray(ctx));
+    xhr_set(ctx, d, &d->received, JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0));
+    xhr_set(ctx, d, &d->response_object, JS_NULL);
     d->response_object_failure = 0;
 }
 
@@ -667,21 +670,18 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            machine's own "handle errors" returns immediately for an object that is not sending. */
         /* Step 11. */
         xhr_reset_request(ctx, d);
-        JS_FreeValue(ctx, d->method);
-        d->method = JS_NewString(ctx, norm);
+        xhr_set(ctx, d, &d->method, JS_NewString(ctx, norm));
         js_free(ctx, norm);
         {
             char *ser = url_serialize(&rec, false);
-            JS_FreeValue(ctx, d->url);
-            d->url = JS_NewString(ctx, ser ? ser : "");
+            xhr_set(ctx, d, &d->url, JS_NewString(ctx, ser ? ser : ""));
             free(ser);
         }
         /* AND THE ARGUMENT ITSELF, kept beside the serialization for the @H surface — see `url_src`. Held only
            when it carries something the serialization does not: a plain string IS its own parse, so storing
            one would make every endpoint carry a second copy of its own address. */
-        JS_FreeValue(ctx, d->url_src);
-        d->url_src = concolic_is(xhr_idl_arg(argc, argv, 1))
-                   ? JS_DupValue(ctx, xhr_idl_arg(argc, argv, 1)) : JS_NULL;
+        xhr_set(ctx, d, &d->url_src, concolic_is(xhr_idl_arg(argc, argv, 1))
+                                   ? JS_DupValue(ctx, xhr_idl_arg(argc, argv, 1)) : JS_NULL);
         url_record_free(&rec);
         d->synchronous = async ? 0 : 1;
         /* Step 12: only a state that is not already opened fires. */
@@ -949,8 +949,7 @@ static JSValue js_xhr_override_mime_type(JSContext *ctx, JSValueConst this_val, 
     if (!mime_type_parse(&m, mime, strlen(mime)))
         xhr_mime_literal(&m, "application/octet-stream");
     ser = mime_type_serialize(&m);
-    JS_FreeValue(ctx, d->override_mime);
-    d->override_mime = JS_NewString(ctx, ser);
+    xhr_set(ctx, d, &d->override_mime, JS_NewString(ctx, ser));
     free(ser);
     mime_type_free(&m);
     JS_FreeCString(ctx, mime);
@@ -1133,9 +1132,8 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
             return;                                                                             /* null */
         }
         url = JS_ToCString(ctx, d->response_url);
-        JS_FreeValue(ctx, d->response_object);
         /* Steps 8-11, as on the HTML arm below and for its reasons. */
-        d->response_object = document_new(ctx, dom, url ? url : "", content_type);
+        xhr_set(ctx, d, &d->response_object, document_new(ctx, dom, url ? url : "", content_type));
         if (url) JS_FreeCString(ctx, url);
         free(content_type);
         return;
@@ -1163,10 +1161,9 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
     CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)bytes, len) == LXB_STATUS_OK,
           "XMLHttpRequest: the response document could not be parsed");
     url = JS_ToCString(ctx, d->response_url);
-    JS_FreeValue(ctx, d->response_object);
     /* Steps 8-11: the document's encoding, content type, URL and origin. document_new takes the address and
        the content type; the origin is the realm's, which is what a document made in this realm has. */
-    d->response_object = document_new(ctx, dom, url ? url : "", content_type);
+    xhr_set(ctx, d, &d->response_object, document_new(ctx, dom, url ? url : "", content_type));
     if (url) JS_FreeCString(ctx, url);
     free(content_type);
 }
@@ -1224,8 +1221,7 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             *presult = JS_NULL;
             return 0;
         }
-        JS_FreeValue(ctx, d->response_object);
-        d->response_object = buf;
+        xhr_set(ctx, d, &d->response_object, buf);
     } else if (d->response_type == RT_BLOB) {
         size_t len = 0;
         const uint8_t *bytes = fetch_body_bytes(ctx, d->received, &len);
@@ -1237,8 +1233,7 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         xhr_final_mime(ctx, d, &m);
         type = mime_type_serialize(&m);
         mime_type_free(&m);
-        JS_FreeValue(ctx, d->response_object);
-        d->response_object = blob_new(ctx, (const char *)bytes, len, type);
+        xhr_set(ctx, d, &d->response_object, blob_new(ctx, (const char *)bytes, len, type));
         free(type);
     } else if (d->response_type == RT_DOCUMENT) {
         xhr_set_document_response(ctx, d);
@@ -1264,12 +1259,11 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             *presult = JS_NULL;
             return 0;
         }
-        JS_FreeValue(ctx, d->response_object);
         /* THE PROVENANCE RIDES THE CACHED OBJECT AND NOT THE READ. §3.6.9 step 4 answers with this's response
            object once it is set, so `xhr.response === xhr.response` — minting per read would hand the page two
            records where the spec gives it one, and only the first read's would be the one a later gate is
            deciding about. */
-        d->response_object = xhr_reply_content(ctx, d, parsed);
+        xhr_set(ctx, d, &d->response_object, xhr_reply_content(ctx, d, parsed));
     }
     *presult = JS_DupValue(ctx, d->response_object);
     return 0;
@@ -1479,10 +1473,8 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
     hs_v = JS_GetPropertyStr(ctx, reply, "headers");
     JS_ToInt32(ctx, &status, st_v);
     d->status = status;
-    JS_FreeValue(ctx, d->status_text);
-    d->status_text = JS_IsString(stx_v) ? JS_DupValue(ctx, stx_v) : JS_NewString(ctx, "");
-    JS_FreeValue(ctx, d->response_headers);
-    d->response_headers = JS_NewArray(ctx);
+    xhr_set(ctx, d, &d->status_text, JS_IsString(stx_v) ? JS_DupValue(ctx, stx_v) : JS_NewString(ctx, ""));
+    xhr_set(ctx, d, &d->response_headers, JS_NewArray(ctx));
     {
         JSValue len_v = JS_GetPropertyStr(ctx, hs_v, "length");
         JS_ToUint32(ctx, &hn, len_v);
@@ -1492,8 +1484,7 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
         JSValue pair = JS_GetPropertyUint32(ctx, hs_v, i);
         JS_SetPropertyUint32(ctx, d->response_headers, i, pair);
     }
-    JS_FreeValue(ctx, d->received);
-    d->received = JS_DupValue(ctx, bd_v);
+    xhr_set(ctx, d, &d->received, JS_DupValue(ctx, bd_v));
     /* No redirect is modelled here, so the response's URL is the request's — see the file comment.
        IT IS SERIALIZED WITHOUT ITS FRAGMENT, HERE AND NOT AT THE GETTER. §3.6.1 The responseURL getter says
        "otherwise its serialization with the exclude fragment flag set", and §3.5.1 The open() method keeps the
@@ -1503,7 +1494,6 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
        are one reply, and naming it under both would split every predicate over its bytes in two.
        The exclusion is the URL PARSER'S — the record is run back over the serialization and asked to serialize
        it again without its fragment, rather than this file deciding where a fragment starts. */
-    JS_FreeValue(ctx, d->response_url);
     {
         size_t ulen = 0;
         const char *u = JS_ToCStringLen(ctx, &ulen, d->url);
@@ -1522,7 +1512,7 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
                    "serialization and that parser disagreeing");
         ser = ok ? url_serialize(&rec, /*exclude_fragment*/ true) : NULL;
         url_record_free(&rec);
-        d->response_url = JS_NewString(ctx, ser ? ser : "");
+        xhr_set(ctx, d, &d->response_url, JS_NewString(ctx, ser ? ser : ""));
         free(ser);
     }
     d->network_error = 0;
@@ -2114,8 +2104,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     if (hdr->stage == SEND_BODY) {
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
-        JS_FreeValue(ctx, d->request_body);
-        d->request_body = JS_NULL;
+        xhr_set(ctx, d, &d->request_body, JS_NULL);
         s->body_len = 0;
         if (!JS_IsNull(s->body) && !JS_IsUndefined(s->body)) {
             BodyState b = { 0 };
@@ -2127,7 +2116,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             /* §3.5.6 step 4 extracts with no keepalive flag — XHR has no such concept, which is exactly what
                §5.2's `= false` default states for every caller that does not name one. */
             if (body_extract(ctx, &b, s->body, /*keepalive*/ false, &mime) < 0) { free(mime); return -1; }
-            d->request_body = JS_NewStringLen(ctx, b.bytes ? b.bytes : "", b.len);
+            xhr_set(ctx, d, &d->request_body, JS_NewStringLen(ctx, b.bytes ? b.bytes : "", b.len));
             s->body_len = (double)b.len;
             body_state_free(JS_GetRuntime(ctx), &b);
             /* Step 4's Content-Type: the author's own wins, and only an absent one takes the extracted type. */
@@ -2345,6 +2334,10 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     if (JS_IsException(upload)) { JS_FreeValue(ctx, obj); return -1; }
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "XMLHttpRequest: OOM building an XMLHttpRequest");
+    /* INITIALIZATION, NOT A WRITE — so this is the one place the twelve are assigned directly rather than
+       through xhr_set. The record is calloc'd and unreachable until JS_SetOpaque below, so no slot holds a
+       value to release and no collector can walk one; xhr_set here would free whatever calloc's zeroes decode
+       to. Every assignment AFTER this function is a write and goes through xhr_set. */
     d->upload = upload;
     d->method = d->url = d->url_src = d->request_body = d->override_mime = d->response_object = JS_NULL;
     d->author_headers = JS_NewArray(ctx);

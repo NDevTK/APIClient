@@ -881,6 +881,44 @@ void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) 
     cow_capture_end();
 }
 
+/* Does the layout NAME this slot? The one question the layout makes answerable at a write, asked from the
+   DCHECK below and nowhere else — it reads and decides nothing, which is what a DCHECK condition must be. */
+static bool cow_record_names_slot(const void *p, const CowRecord *rec, const JSValue *slot) {
+    size_t off = (size_t)((const char *)slot - (const char *)p);
+    int i;
+    for (i = 0; i < rec->n_val; i++)
+        if ((size_t)rec->val_off[i] == off) return true;
+    return false;
+}
+
+/* PUBLISH BEFORE RELEASE — see cow.h for the defect this exists to make impossible. It captures NOTHING: the
+   isolation is taken where the flow REACHES the record (the component's accessor calls cow_capture_host_record),
+   so a second capture here would be the same entry asked for twice. What this owns is the ORDER. */
+void cow_record_set(JSContext *ctx, void *p, const CowRecord *rec, JSValue *slot, JSValue v) {
+    JSValue old;
+
+    DCHECK(p != NULL && rec != NULL && slot != NULL,
+           "a component record's owned slot was written with no record, no layout or no slot — the write cannot "
+           "be checked against the list the finalizer frees and the gc_mark walks");
+    DCHECK((const char *)slot >= (const char *)p &&
+           (const char *)slot + sizeof(JSValue) <= (const char *)p + rec->size,
+           "a component record's owned slot was written THROUGH A SLOT OUTSIDE THE RECORD — the pointer names "
+           "storage this layout does not describe, so the value published here is one no finalizer will free "
+           "and no gc_mark will walk");
+    DCHECK(cow_record_names_slot(p, rec, slot),
+           "a component record's owned slot was written at an offset the layout does not NAME — the layout is "
+           "the one statement of what the record owns, so a field the write knows about and `*_VALS[]` does not "
+           "is a value the finalizer leaks, the gc_mark misses (leaving the reference gc_decref subtracts, so "
+           "its cycle is never collected) and the COW capture neither dups nor restores; add the field's "
+           "offsetof to the record's layout");
+    /* PUBLISHED FIRST. From this store on, a collection reaching the record through the component's gc_mark
+       reads the new value — so the release below may run a host finalizer, and the caller's construction of
+       `v` may have collected, with the slot naming a live value throughout. */
+    old = *slot;
+    *slot = v;
+    JS_FreeValue(ctx, old);
+}
+
 void cow_capture_varref(JSContext *ctx, void *vref) {
     if (cow_hooks_off() || !g_current || !vref) return;
     CowDelta *d = g_current;
