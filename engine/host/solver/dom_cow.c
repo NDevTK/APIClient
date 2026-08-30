@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>   /* uintptr_t/uint64_t — the creation-claim index hashes a node's ADDRESS */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"        /* CHECK — an OOM here corrupts DOM isolation, fatal in every build */
 #include "solver/dom_cow.h"
@@ -273,6 +274,157 @@ static void attr_drop(const DomUndo *u) {
     if (a) dom_attr_detach(a);   /* §9.4.7: the node survives — the delta that CREATED it is what frees it */
 }
 
+/* THE LIVE CREATION CLAIMS, INDEXED BY THE ADDRESS THEY CLAIM — the O(1) form of the one question a creation
+ * has to ask before it records ownership.
+ *
+ * A kind-4 entry is an OWNERSHIP CLAIM, and two of them over one address is a second
+ * `lxb_dom_node_destroy_deep` of memory the first release already freed. That is why every creation is checked
+ * against the claims already standing, and the check WAS A WALK — the running flow's head, then every entry of
+ * every segment in its base chain, once per creation. It is a DCHECK, so it is an O(delta) assert sitting
+ * inside an O(1) primitive, and for a creation-heavy document the delta IS the creations (one entry each), so
+ * a page that builds N nodes pays N²/2 comparisons in the DEV build — which is the build a CPU budget is
+ * measured on. A document that builds a hundred thousand elements and gives each of them a shadow root spends
+ * its whole budget inside this one assert, and the release build it is compiled out of runs fine, which is the
+ * signature of a check that costs more than the thing it guards.
+ *
+ * SO THE CLAIM IS INDEXED WHERE IT IS MADE AND WHERE IT IS SPENT, and nowhere else has to remember. Made is
+ * dom_undo_push — the one line every producer goes through, which is why the capture scope is asserted there
+ * too — and spent is dom_release_created, the one place a kind-4 entry's node is nulled. No other operation on
+ * a delta brings a claim into existence or ends one: a fork MOVES the head's entries into a segment, a park
+ * MOVES the head's array to the flow, and a swap moves neither.
+ *
+ * WHICH IS WHY IT IS SWITCH-INVARIANT AND NO SWAP TOUCHES IT. A context switch changes which entries are
+ * REACHABLE from the running flow (dom_buf_take/dom_buf_load hand the head over, dom_install_chain moves the
+ * applied chain) and creates and spends nothing — so an index over EVERY live claim needs no patching at a
+ * switch and has no way to drift out of step with one. It is deliberately NOT delta state: a per-flow set
+ * carried in the delta would have to be applied, unapplied, forked and parked alongside it, and a malloc'd
+ * side structure whose head is reverted by pointer at a switch is exactly the shape that leaves its contents
+ * reachable from nothing. Nothing here is captured, so a flow-private creation is as invisible to the delta as
+ * it was — the index records the ENTRY, and an entry only exists where one was already going to be written.
+ *
+ * AND THE QUESTION IT ANSWERS IS STRICTLY STRONGER THAN THE WALK'S, which is the point rather than a side
+ * effect. The walk saw the RUNNING flow's chain only, so it answered "no claim" for one parked in another
+ * flow's delta — and that is precisely the shape of the second way to reach the assert it serves: an arena
+ * address recycled under an unspent claim is a document destroyed while some OTHER delta still named a node
+ * inside it, and that delta is a parked one every time the running flow is the one creating. The index holds
+ * every live claim there is, so it fires where the walk was silent, and what it names then is a delta that
+ * will `destroy_deep` an address the allocator has already handed to somebody else.
+ *
+ * PLAIN calloc/free AND NOT reclaim_malloc, for re-entrancy and not for taste. A reclaim allocation SELLS A
+ * FLOW; a sale releases DOM segments; dom_release_created is where a released segment spends its claims — so
+ * an ask from inside this table's own rehash would mutate the table that rehash is standing on, through the
+ * pointer it is copying out of. A direct call to the C library cannot ask, so it cannot re-enter. The cost of
+ * that choice is that a dev build meets a real memory wall here instead of paging its tail out, which is the
+ * right trade for one pointer per node a delta owns, in a structure that vanishes with the assert it serves. */
+#if APICLIENT_DEV
+/* A slot is NULL when it has never been used and DOM_CLAIM_SPENT when a claim that lived there was spent —
+   the two cannot be one value, because a probe stops at the first NULL and a spent slot must not end a probe
+   that was placed past it. */
+#define DOM_CLAIM_SPENT ((const lxb_dom_node_t *)(uintptr_t)1)
+static const lxb_dom_node_t **g_dom_claim;
+static size_t g_dom_claim_cap;    /* a power of two, 0 before the first claim */
+static size_t g_dom_claim_live;   /* claims standing */
+static size_t g_dom_claim_used;   /* claims standing + spent slots — what the probe actually walks */
+static unsigned g_dom_claim_bits;
+
+/* The multiplicative ("Fibonacci") hash over the ADDRESS, taking the TOP `bits` of the product: a node comes
+   out of an arena, so consecutive nodes differ by a fixed stride in the LOW bits, which a mask alone would
+   turn into a run of collisions — the multiply is what carries that stride up into the bits the mask keeps. */
+static size_t dom_claim_hash(const lxb_dom_node_t *n, unsigned bits)
+{
+    uint64_t h = (uint64_t)(uintptr_t)n * 0x9E3779B97F4A7C15ULL;
+    return (size_t)(h >> (64 - bits));
+}
+
+/* The slot holding `n`, or NULL when no claim on it is standing. The probe terminates because the table is
+   rehashed before it can fill: `used` never reaches `cap`, so a NULL slot always exists to stop at. */
+static const lxb_dom_node_t **dom_claim_find(const lxb_dom_node_t *n)
+{
+    size_t mask, i;
+
+    if (g_dom_claim_cap == 0)
+        return NULL;
+    mask = g_dom_claim_cap - 1;
+    for (i = dom_claim_hash(n, g_dom_claim_bits) & mask; ; i = (i + 1) & mask) {
+        const lxb_dom_node_t *k = g_dom_claim[i];
+        if (k == NULL) return NULL;
+        if (k == n) return &g_dom_claim[i];
+    }
+}
+
+/* Rebuild the table. It GROWS only when the STANDING claims are what filled it; a table full of spent slots is
+   rebuilt at the same size, so a run that creates and discards forever does not climb. */
+static void dom_claim_rehash(void)
+{
+    unsigned bits = g_dom_claim_bits;
+    const lxb_dom_node_t **tab;
+    size_t cap, i;
+
+    if (bits == 0) bits = 9;                                            /* 512 slots for the first claim */
+    else if ((g_dom_claim_live + 1) * 4 > ((size_t)1 << bits) * 3) bits++;
+    cap = (size_t)1 << bits;
+    tab = calloc(cap, sizeof *tab);
+    CHECK(tab != NULL, "dom-cow-oom: the DOM creation-claim index could not be grown — the assert that keeps "
+                       "one node from being claimed twice, and so destroyed twice, cannot be answered");
+    for (i = 0; i < g_dom_claim_cap; i++) {
+        const lxb_dom_node_t *k = g_dom_claim[i];
+        size_t j;
+        if (k == NULL || k == DOM_CLAIM_SPENT) continue;
+        for (j = dom_claim_hash(k, bits) & (cap - 1); tab[j] != NULL; j = (j + 1) & (cap - 1)) ;
+        tab[j] = k;
+    }
+    free(g_dom_claim);
+    g_dom_claim = tab; g_dom_claim_cap = cap; g_dom_claim_bits = bits;
+    g_dom_claim_used = g_dom_claim_live;   /* the spent slots are gone with the old table */
+}
+
+/* Record that a kind-4 entry now claims `n`. */
+static void dom_claim_note(const lxb_dom_node_t *n)
+{
+    size_t mask, i, reuse;
+
+    DCHECK(n != NULL, "a DOM creation claim was indexed for no node — NULL is this table's empty slot, so "
+                      "storing one would make every later probe stop at it and report every claim past it as "
+                      "absent");
+    if ((g_dom_claim_used + 1) * 4 > g_dom_claim_cap * 3)
+        dom_claim_rehash();
+    mask = g_dom_claim_cap - 1;
+    reuse = g_dom_claim_cap;
+    for (i = dom_claim_hash(n, g_dom_claim_bits) & mask; ; i = (i + 1) & mask) {
+        const lxb_dom_node_t *k = g_dom_claim[i];
+        if (k == NULL) break;
+        if (k == DOM_CLAIM_SPENT) { if (reuse == g_dom_claim_cap) reuse = i; continue; }
+        DCHECK(k != n, "the creation-claim index was asked to record a claim it already holds — dom_undo_push "
+                       "is the only writer and dom_cow_note_created asserts against this same index before it "
+                       "pushes, so the two disagree and a node is about to be owned by two entries");
+    }
+    if (reuse != g_dom_claim_cap) { g_dom_claim[reuse] = n; }
+    else                          { g_dom_claim[i] = n; g_dom_claim_used++; }
+    g_dom_claim_live++;
+}
+
+/* The claim on `n` has been spent — its entry is about to be nulled and the node destroyed. */
+static void dom_claim_forget(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t **slot = dom_claim_find(n);
+
+    DCHECK(slot != NULL, "a DOM creation claim was spent that the index never held — every kind-4 entry is "
+                         "indexed by dom_undo_push, so a claim missing here is one written past that push, "
+                         "and the index now under-reports: the next creation at this address passes the "
+                         "double-ownership assert and the node is destroyed twice");
+    *slot = DOM_CLAIM_SPENT;
+    g_dom_claim_live--;
+}
+
+static bool dom_claim_holds(const lxb_dom_node_t *n) { return dom_claim_find(n) != NULL; }
+#else
+/* Release: the index exists only to answer a DCHECK, which is compiled out with it. The query survives as a
+   definition because a compiled-out DCHECK still type-checks its condition. */
+static void dom_claim_note(const lxb_dom_node_t *n) { (void)n; }
+static void dom_claim_forget(const lxb_dom_node_t *n) { (void)n; }
+static bool dom_claim_holds(const lxb_dom_node_t *n) { (void)n; return false; }
+#endif
+
 static void dom_undo_push(DomUndo u) {
     /* THE ONE LINE EVERY PRODUCER GOES THROUGH, which is why the scope is asserted here and not at each of the
        ten of them: an eleventh entry kind written tomorrow does not get to choose whether it declares the read
@@ -301,6 +453,11 @@ static void dom_undo_push(DomUndo u) {
         g_dom_undo = n; g_dom_undo_cap = nc;
     }
     g_dom_undo[g_dom_undo_n++] = u;
+    /* AFTER THE STORE AND AFTER EVERY ALLOCATION THAT COULD SELL A FLOW. A sale spends claims through
+       dom_release_created, so an index write interleaved with the grow above would be a write into a table a
+       nested spend is editing; by here the reclaim_realloc has returned and nothing else on this path asks. */
+    if (u.kind == 4)
+        dom_claim_note(u.node);
 }
 /* Record (element, namespace, local name)'s BASELINE — value and taint together, because a restore that put one
    back without the other would hand a sink either clean bytes that are attacker input or a stale provenance on
@@ -745,20 +902,6 @@ static bool dom_delta_removed(lxb_dom_node_t *n) {
     return false;
 }
 
-/* Does some live delta ALREADY name this node as a creation? Same walk as dom_delta_removed and for the
-   mirror-image reason: a kind-4 entry is an OWNERSHIP claim, and two of them over one node is a
-   `lxb_dom_node_destroy_deep` of memory the first release already freed. The whole chain, because a claim made
-   before a fork lives in the frozen segment both siblings reference. A SPENT entry is NULL (every release nulls
-   its own), so this reports live claims only. Dev-only and O(delta). */
-static bool dom_delta_created(const lxb_dom_node_t *n) {
-    for (int i = 0; i < g_dom_undo_n; i++)
-        if (g_dom_undo[i].kind == 4 && g_dom_undo[i].node == n) return true;
-    for (DomSeg *s = g_dom_base; s; s = s->base)
-        for (int i = 0; i < s->n; i++)
-            if (s->e[i].kind == 4 && s->e[i].node == n) return true;
-    return false;
-}
-
 /* The declaration, asserted. Every operation below runs it on the root it was handed, so a caller cannot
    establish privacy once and then drift into a tree that stopped being private. */
 static void dom_private_check(lxb_dom_node_t *root) {
@@ -927,6 +1070,10 @@ static void dom_release_created(DomUndo *u)
        here would be one of a list of callers that must remember, and this file HELD that list — four of them,
        while a document's whole tree died through dom_document_destroy with none. core/dom/node_interface.c's
        dispatcher is what every `lxb_dom_node_destroy_deep` reaches, per node, so there is nothing to remember. */
+    /* THE CLAIM IS SPENT BEFORE THE NODE IS, so the index never names an address the allocator has taken
+       back — a stale key would make the next node handed out at that address fail the double-ownership assert
+       for a claim nobody holds. */
+    dom_claim_forget(u->node);
     lxb_dom_node_destroy_deep(u->node);
     u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
 }
@@ -1016,9 +1163,13 @@ void dom_cow_note_created(lxb_dom_node_t *node)
        dom_cow_take_private — that parse must record nothing and let this seam make the claim (see
        dom_cow_take_private). (b) A node whose address lexbor has RECYCLED out of an arena while some delta
        still holds a live claim on the old occupant — which is a document freed out from under an unspent
-       entry, and the entry, not this creation, is the bug. */
-    DCHECK(!dom_delta_created(node),
-           "a node was recorded as this flow's creation while a live delta entry already claims it. Ownership "
+       entry, and the entry, not this creation, is the bug.
+       THE ANSWER COMES FROM THE CLAIM INDEX AND NOT FROM A WALK OF THIS FLOW'S DELTA, which is what makes (b)
+       reachable at all: the delta holding the stale claim is a PARKED one every time the running flow is the
+       one doing the creating, and a walk of the running chain says nothing whatever about those. */
+    DCHECK(!dom_claim_holds(node),
+           "a node was recorded as a creation while a live delta entry — in ANY delta, running or parked — "
+           "already claims that address. Ownership "
            "is recorded ONCE: a parse declared DOM_PARSE_ROOT_PRIVATE records nothing and its nodes are owned "
            "by the private root, and a node's own claim is made where it LEAVES that root "
            "(dom_cow_take_private) — so a parse that also records per node double-claims every node it places, "
