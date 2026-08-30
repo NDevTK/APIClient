@@ -122,6 +122,50 @@
 
   // ─── Request header/body capture helpers ──────────────────────────────────
 
+  /* Fetch §2.2.1 "Methods"' NORMALIZE A METHOD, WHICH IS NOT `toUpperCase()`. Verbatim: "To normalize a
+     method, if it is a byte-case-insensitive match for `DELETE`, `GET`, `HEAD`, `OPTIONS`, `POST`, or `PUT`,
+     byte-uppercase it." SIX NAMES, AND EVERY OTHER VERB GOES OUT AS THE PAGE SPELLED IT — the same section
+     says so twice, once as a warning ("Using `patch` is highly likely to result in a `405 Method Not
+     Allowed`. `PATCH` is much more likely to succeed.") and once as a rule ("Other than those that are
+     normalized there are no casing restrictions either. `Egg` or `eGg` would be fine"). So
+     `fetch(u, {method:"patch"})` puts `patch` on the wire, and the blanket uppercase that stood at both emit
+     sites below wrote `PATCH` into the one record whose entire job is to say what the network carried.
+
+     IT IS ONE OPERATION WITH TWO CALLERS AND NOT AN EXPRESSION AT EACH OF THEM, because the two producers
+     ask the identical question: Fetch §5.4 "Request class" step 25 runs "Normalize method" over
+     `init["method"]`, and XMLHttpRequest §3.5.1 "The open() method" step 4 is the bare instruction
+     "Normalize method." over `open()`'s first argument — one rule, reached through two APIs.
+
+     AND THE ENGINE ALREADY SPELLS IT THIS WAY, WHICH IS WHY THE UPPERCASE WAS NOT MERELY COSMETIC. The C
+     half implements §2.2.1 exactly (`method_normalize` in browser/core/fetch/request.c, the six names
+     uppercased and everything else byte-for-byte), so the AST/@H surface has been recording `patch` while
+     this observer recorded `PATCH` — TWO SPELLINGS OF ONE RULE, which is two rules. Both write the same
+     `httpMethod` field on the same learned-method record (lib/learn.js writes it from the engine's call site
+     and from this file's log entry), and three consumers compare that field with `===`: the templated-method
+     match, the same-path verb-collision branch beside it, and the popup's replay dropdown. For a `patch`
+     endpoint all three disagreed with themselves — the template merge that exists to keep one endpoint from
+     splitting into an `[ast]` record plus a `[live]` one silently did not fire, the collision branch then
+     renamed the AST entry and deleted the base name, and the replay dropdown could not select the endpoint
+     the log record named. Nothing crashed and nothing said so.
+
+     THE FOLD IS ASCII AND NOT `String.prototype.toUpperCase`. §2.2.1 says "byte-case-insensitive", and
+     Unicode case mapping is wider than ASCII case: U+017F LATIN SMALL LETTER LONG S uppercases to `S`, so
+     `toUpperCase()` calls `pOſt` a match for `POST` when no byte comparison does. That string cannot reach
+     here today — a method must be a token, and §5.4 step 25 and §3.5.1 step 2 throw for one that is not —
+     but being right only because a different rule holds upstream is not a property worth resting on when the
+     honest fold costs one loop. */
+  const _NORMALIZED_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"];
+  function _normalizeMethod(m) {
+    var up = "";
+    for (var i = 0; i < m.length; i++) {
+      var c = m.charCodeAt(i);
+      up += (c >= 0x61 && c <= 0x7a) ? String.fromCharCode(c - 0x20) : m.charAt(i);
+    }
+    for (var j = 0; j < _NORMALIZED_METHODS.length; j++)
+      if (up === _NORMALIZED_METHODS[j]) return _NORMALIZED_METHODS[j];
+    return m;
+  }
+
   function _captureHeaders(input, init) {
     var h = {};
     try {
@@ -255,7 +299,17 @@
        AN ABSENT `init.method` IS THEREFORE NOT A MISSING DATUM. It is the page declaring that the answer is
        one of the other two, and this expression reads it as that. `init.method === ""` cannot reach here at
        all: §5.4 throws a TypeError for a value that "is not a method", so the await above would have rejected
-       and this line would never run. */
+       and this line would never run.
+
+       "EXISTS" IS WEB IDL'S QUESTION AND NOT A TRUTH TEST, WHICH IS THE DIFFERENCE A `||` GOT WRONG. §5.4's
+       step reads "If init["method"] exists", and a `RequestInit` member with no default exists when it is
+       present and not `undefined` — so `fetch(u, {method: 0})` DOES exist, converts to the DOMString "0",
+       which is a token and not a forbidden method, and goes out as the verb `0`. The `||` that stood here
+       skipped it for being falsy and reported `GET`: a verb the request did not carry, in the field the
+       firing and provenance rules key on. `!== undefined` asks §5.4's question instead, and the conversion
+       is spelled here because Web IDL performs it before the constructor steps run — the member is a
+       DOMString, so `String()` is what the browser itself saw. It reaches the page's own `toString` and
+       therefore belongs inside this page-owned read, beside the `String(input)` above it. */
     const seen = _pageOwned(function () {
       const raw =
         typeof input === "string"
@@ -263,11 +317,16 @@
           : input instanceof Request
             ? input.url
             : String(input);
+      const initMethod = init ? init.method : undefined;
       return {
         url: new URL(raw, location.href).href,
-        method:
-          (init && init.method) ||
-          (input instanceof Request ? input.method : "GET"),
+        method: _normalizeMethod(
+          initMethod !== undefined
+            ? String(initMethod)
+            : input instanceof Request
+              ? input.method
+              : "GET",
+        ),
       };
     });
     /* THE PAGE'S OWN CODE REFUSED TO BE READ — a positive answer, and the only one available: this request
@@ -345,7 +404,7 @@
         emit({
           url,
           transport: "fetch",
-          method: method.toUpperCase(),
+          method,
           status: clone.status,
           /* Fetch §2.2.6 Responses' STATUS MESSAGE, read off the same Response the status came from. The
              consumer that needs it is the HAR export, whose `response.statusText` it used to synthesize as
@@ -419,10 +478,33 @@
 
     this.addEventListener("load", function () {
       try {
-        const url = new URL(
-          String(this.__uasr_url || ""),
-          location.href,
-        ).href;
+        /* THE VERB AND ADDRESS THIS `send()`'s OWN `open()` WAS GIVEN, OR NO RECORD AT ALL. `undefined` here
+           is not a page value this wrapper read — it is the property this wrapper never wrote, which happens
+           when the `open()` that opened this object bypassed the prototype patch (a page holding a saved
+           reference to the original, or an `XMLHttpRequest` minted in another realm). That is a request whose
+           verb and address were never observed, and the `(this.__uasr_method || "GET")` and
+           `String(this.__uasr_url || "")` that stood at the two reads answered it with `GET` against
+           `location.href` — a complete round trip, wholly fabricated, filed beside real ones. The fetch
+           wrapper already states the same thing the same way at `_PAGE_THREW`: a request that could not be
+           observed produces nothing.
+           WITH THE OBSERVATION ESTABLISHED, BOTH DEFAULTS ARE DEAD RATHER THAN LOAD-BEARING. `open()` writes
+           the two together, and XMLHttpRequest §3.5.1 "The open() method" had already thrown before the state
+           reached `opened` — step 2 for a method that is not a method, step 3 for `CONNECT`/`TRACE`/`TRACK`,
+           step 6 for a URL that does not parse — so a `load` event is proof that both arguments were ones the
+           browser accepted, and `send()` on an unopened object throws `InvalidStateError` and fires nothing.
+           §3.5.1 step 4 is "Normalize method.", the same operation `_normalizeMethod` performs for fetch.
+           RESIDUAL — ONE PAGE VALUE IS INDISTINGUISHABLE FROM THE ABSENCE, AND THIS TEST DROPS IT. Web IDL
+           converts `open()`'s `method` argument to a ByteString, so `xhr.open(undefined, u)` really sends the
+           verb `undefined` — a token, and not one §2.2.1 forbids — and this wrapper stored the value
+           `undefined` for it, which reads here as an unobserved open. The record is dropped rather than
+           fabricated, so nothing states anything false; it is narrower than §3.5.1, not wrong. The next diff
+           stores a wrapper this file mints (`{ raw: method }`), so a property this file never wrote and a
+           page value of `undefined` stop sharing one answer. Its absence shows as a request the network tab
+           lists and the log does not, for a page whose method argument is literally `undefined`. */
+        if (this.__uasr_method === undefined) return;
+        const method = _normalizeMethod(String(this.__uasr_method));
+
+        const url = new URL(String(this.__uasr_url), location.href).href;
 
         if (_isInternalUrl(url)) return;
 
@@ -459,7 +541,7 @@
         emit({
           url,
           transport: "xhr",
-          method: (this.__uasr_method || "GET").toUpperCase(),
+          method,
           status: this.status,
           // XMLHttpRequest §3.6.3 `The statusText getter` — the same field the fetch wrapper reads off its
           // Response, so one HTTP log record shape covers both transports.
