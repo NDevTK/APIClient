@@ -34,6 +34,45 @@ static bool is_asset(const MimeType *m)
            mime_type_is_font(m)  || mime_type_is_zip_based(m) || mime_type_is_archive(m);
 }
 
+/* DID THE SERVER REFUSE THIS REQUEST — and the question is asked of the STATUS alone, because that is the one
+ * thing this file can ask that is a fact about the exchange rather than a guess about the bytes.
+ *
+ * WHY IT DECIDES WHETHER ANYTHING BELOW MAY RUN AT ALL. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE: "a reply
+ * whose status DENIES the request (401/403/redirect-to-login) is evidence the FORCING failed and never
+ * evidence about the surface behind the gate", and the reason it gives is that the failure is not that such a
+ * body is useless but that it is PLAUSIBLE — "a 401 body parses as JSON and yields fields that exist nowhere,
+ * an error envelope becomes a config, and the fabrication then PROPAGATES, since one invented field is the
+ * example that shapes the next endpoint". Every reader below is written on the assumption that the bytes
+ * DESCRIBE THE RESOURCE, and RFC 9110 says in as many words that they do not when the status is one of these
+ * two: §15.5.2 "401 Unauthorized" — "the request has not been applied because it lacks valid authentication
+ * credentials for the target resource" — and §15.5.4 "403 Forbidden" — "the server understood the request but
+ * refuses to fulfill it. A server that wishes to make public why the request has been forbidden can describe
+ * that reason in the response content". The content is the REFUSAL's, and the resource behind the gate was
+ * never reached, so a chunk address mined out of it is an address the server named while declining to serve
+ * the page that would have named it.
+ *
+ * IT IS THESE TWO AND NOT "4xx", WHICH IS A LINE THIS FILE HAS TO DRAW RATHER THAN ROUND. §15.5.5's 404 says
+ * the origin server "did not find a current representation" — a statement about the ADDRESS and not about the
+ * requester — and §15.5.6's 405 is about the METHOD; neither is a gate the forcing failed to pass, and
+ * refusing to read them would be a bound on learning dressed as a safety rule. §15.5.8's 407 is a PROXY's
+ * demand and names nothing about the origin server's resource, so it is not in the set either.
+ *
+ * NAMED RESIDUAL — REDIRECT-TO-LOGIN, the third denial CLAUDE.md's own sentence lists and the one not covered
+ * here. WHAT IS NOT COVERED: a server that answers an unauthenticated request with 302 to a sign-in page
+ * delivers that page's bytes under status 200, so this predicate is silent and the login document is read as
+ * the resource. WHAT THE NEXT DIFF BUILDS: the test over §2.2.6's URL LIST rather than over the status — the
+ * record carries it (`urlList`), the reply is `redirected` exactly when it has more than one entry, and the
+ * denial is the narrower fact that the FINAL address is not the one that was requested AND the request was
+ * not OBSERVED, which needs the request's provenance to reach this file (see reply_decode_learn). It is not
+ * "any redirect", which would refuse the http→https and trailing-slash hops every site performs and would be
+ * the bound this paragraph just declined to write one line up. HOW ITS ABSENCE WOULD SHOW: an @H surface on a
+ * logged-out SPA in which every learned address resolves under the sign-in route's own bundle rather than
+ * under the route that was fetched. */
+static bool status_denies(int status)
+{
+    return status == 401 || status == 403;
+}
+
 /* ── React Flight ────────────────────────────────────────────────────────────────────────────────────────
  *
  * A Flight response (React Server Components; `text/x-component`, which is what React's own fetch responses
@@ -290,6 +329,24 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
     /* A NETWORK ERROR IS AN ANSWER, and it carries no record at all. This is a shape test on what the host
        delivered rather than an `if` past a broken invariant. */
     if (!JS_IsObject(reply)) return;
+
+    /* DID THE SERVER REFUSE THIS REQUEST — asked BEFORE the body is looked at, because the answer decides
+       whether these bytes describe the RESOURCE or the REFUSAL, and every read below is written on the
+       assumption that they describe the resource. See `status_denies`.
+       NAMED RESIDUAL — THE REQUEST'S OWN PROVENANCE DOES NOT REACH THIS FILE. WHAT IS NOT COVERED:
+       CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE requires that "a forced reply's values are learned and
+       CARRIED AS FORCED, never merged into the observed pool", and this entry is handed (method, url, reply)
+       only — solver/pending.h stamps `PROV_OBSERVED`/`_DERIVED`/`_FORCED` on the parked record and
+       engine_provide holds those records at the very call that reaches here, so the fact exists and is
+       dropped one frame up. Everything learned below therefore enters solver/endpoint.c's surface at one
+       grade. WHAT THE NEXT DIFF BUILDS: `engine_provide` joins the `PEND_PROV` of the records it fills (the
+       MOST OBSERVED of them, which is the rule its own pending-line join already uses) and passes it here as
+       a parameter, this file carries it into `record_chunk`, and `endpoint_record` takes it and emits it on
+       the @H record so a consumer can tell an address a real load fetches from one that exists only because
+       a gate was forced. HOW ITS ABSENCE WOULD SHOW: a Flight client reference mined out of a route reached
+       only on a forced arm publishes its chunk addresses in `@H` with bytes identical to a chunk the
+       document's own parser fetched, and `netdiff --unused` counts both as surface the bundle can reach. */
+    if (status_denies(fetch_reply_status(ctx, reply))) return;
 
     /* THE BYTES, AS BYTES. This read the record's `body` as a STRING, which §2.2.5 says a body is not; the
        record carries a byte sequence now (core/fetch/fetch.h) and the decode below is this file's own. */

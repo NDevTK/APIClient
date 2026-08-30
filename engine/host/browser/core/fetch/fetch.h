@@ -173,4 +173,24 @@ void fetch_reply_header_list(JSContext *ctx, JSValueConst reply, HeaderList *out
    must distinguish from "" — "this address answered nothing" against "it answered, and named nothing". */
 char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply);
 
+/* WHAT THE SERVER ANSWERED WITH — Fetch §2.2.6 "Responses"' status, whose vocabulary that section fixes: "A
+   status is an integer in the range 0 to 999, inclusive."
+   IT IS A READER BECAUSE THE FIELD HAD TWO HAND-WRITTEN ONES AND BOTH OF THEM DEFAULTED IT. This is
+   `fetch_reply_header_list`'s argument about the same record — "a record shape known in more than one place is
+   a record shape that drifts from its writer" — arriving at the one field whose absence is INDISTINGUISHABLE
+   FROM A VALUE. Each did `int32_t status = <literal>; JS_ToInt32(ctx, &status, v);`, so a record that had lost
+   the field reported that literal: 200 at the `fetch()` delivery (a refusal read as a success) and 0 at
+   XMLHttpRequest (a real reply read as a network error). Neither could crash, because both numbers are
+   statuses a reply legitimately carries. The `fetch()` one is converted; XMLHttpRequest's §3.5.6 reply read is
+   the one still spelled out by hand.
+   A NETWORK ERROR ANSWERS 0, AND THAT IS THE SPEC'S OWN VALUE RATHER THAN THIS READER'S SENTINEL: §2.2.6 says
+   "A network error is a response whose type is `error`, status is 0, status message is the empty byte
+   sequence, header list is « », …", and the JSON `null` a host sends for one IS that response. So a caller
+   telling "nothing answered" apart from "the server refused" compares 0 against 401 and needs no second call.
+   THE FIELD IS ASSERTED AND NEVER DEFAULTED, for `computedType`'s reason with a sharper failure: `JS_ToInt32`
+   of `undefined` is 0, which is exactly §2.2.6's network-error status — so a producer that stopped writing
+   `status` would make every reply this engine ever fetched read as a request that never reached a server, and
+   every reader downstream would be correct about the value it was handed. */
+int fetch_reply_status(JSContext *ctx, JSValueConst reply);
+
 #endif

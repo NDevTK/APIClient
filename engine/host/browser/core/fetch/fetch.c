@@ -90,7 +90,7 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
            "a request was owed to the host with no address — the reply seam is keyed on (method, url), so a "
            "request with neither names nothing the host can be asked for");
     DCHECK(req->method != NULL && *req->method,
-           "a request was owed to the host without stating its METHOD — Fetch §2.2.5 "Requests" gives every "
+           "a request was owed to the host without stating its METHOD — Fetch §2.2.5 \"Requests\" gives every "
            "request one (`GET` unless stated otherwise), so a component that reached this seam unnamed "
            "dropped a field rather than made a request that lacks it");
     /* AND ITS DESTINATION, ASSERTED HERE AS WELL AS AT THE PARK because THIS is where the component that
@@ -234,7 +234,6 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                the host can answer: the fetch is the TRUSTED zone's (SECURITY.md), so the redirect chain is
                observed there and crosses here as TEXT carrying its type — an Array of serialized URLs. */
             JSValue ul_v = JS_GetPropertyStr(ctx, body_v, "urlList");
-            JSValue st_v = JS_GetPropertyStr(ctx, body_v, "status");
             JSValue stx_v = JS_GetPropertyStr(ctx, body_v, "statusText");
             JSValue bd_v = JS_GetPropertyStr(ctx, body_v, "body");
             const char *stx = JS_ToCString(ctx, stx_v);
@@ -245,9 +244,13 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             size_t body_len = 0;
             const uint8_t *body = fetch_body_bytes(ctx, bd_v, &body_len);
             HeaderList hl = { 0 };
-            int32_t status = 200;
-
-            JS_ToInt32(ctx, &status, st_v);
+            /* §2.2.6's STATUS, THROUGH THE ONE READER OF THAT FIELD (fetch.h), for the reason the header list
+               one line down is read through one. This was `int32_t status = 200; JS_ToInt32(ctx, &status, v);`
+               — a DEFAULT on a field every producer writes, and the worse of the two the record had: a reply
+               that arrived without one settled the page's `fetch()` with `response.ok === true` and a 200 it
+               was never sent, which is a refusal read as a success and is exactly the plausible datum
+               CLAUDE.md §Architecture counts. The reader asserts the field instead. */
+            int status = fetch_reply_status(ctx, body_v);
             /* THE RECORD'S HEADER LIST, through the ONE reader of that field (above). The pair walk stood here
                written out, and a second consumer of the same record — the script decode that needs the
                `Content-Type` charset — would have been a second copy of it. */
@@ -258,12 +261,12 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             DCHECK(JS_IsArray(ul_v),
                    "the host delivered a reply carrying no `urlList` — §2.2.6's URL list is what `url` and "
                    "`redirected` are, and the host is the only zone that performed the fetch that grew it");
-            s->value = response_new(ctx, ul_v, (int)status, stx ? stx : "",
+            s->value = response_new(ctx, ul_v, status, stx ? stx : "",
                                     hl.n ? &hl : NULL, (const char *)body, body_len);
             header_list_free(&hl);
             if (stx) JS_FreeCString(ctx, stx);
             JS_FreeValue(ctx, ul_v);
-            JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v);
+            JS_FreeValue(ctx, stx_v);
             JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
@@ -537,6 +540,43 @@ char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply)
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, v);
     return out;
+}
+
+/* §2.2.6 "Responses"' STATUS, READ BACK — see fetch.h for why it is one reader and not a literal per caller. */
+int fetch_reply_status(JSContext *ctx, JSValueConst reply)
+{
+    JSValue v;
+    int32_t st = 0;
+    int coerced;
+
+    DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
+           "a status was asked of something that is not the host's reply record — qjs_provide parses the "
+           "trusted zone's JSON and every C host builds the same record, and a network error is the JSON "
+           "`null`");
+    if (!JS_IsObject(reply)) return 0;   /* §2.2.6: a network error's status IS 0 — the answer, not a sentinel */
+    v = JS_GetPropertyStr(ctx, reply, "status");
+    /* THE FIELD IS ASSERTED, NEVER DEFAULTED. `fetch_reply_new` defines it on every record and the trusted
+       zone stamps it on the JSON qjs_provide parses, so `undefined` here is a producer that stopped — and it
+       is the one absence that cannot show as one, because its coercion is 0 and 0 is a status §2.2.6 gives a
+       meaning to. */
+    DCHECK(JS_IsNumber(v),
+           "the host's reply record carries no `status` — every producer writes a NUMBER there, and an absent "
+           "one coerces to 0, which is Fetch §2.2.6 \"Responses\"' NETWORK-ERROR status: every reply this "
+           "engine ever fetched would read as a request that never reached a server, with nothing to say so");
+    coerced = JS_ToInt32(ctx, &st, v);
+    JS_FreeValue(ctx, v);
+    /* ALWAYS FATAL, BECAUSE THERE IS NO ANSWER TO CONTINUE WITH. A status that would not coerce is a value the
+       page put where the trusted zone's number belongs, and every consumer of this reader decides from the
+       number whether the server ANSWERED the request or REFUSED it — so proceeding on a guess is the reply of
+       a refusal being mined as though it described the resource. */
+    CHECK(coerced == 0,
+          "fetch: a reply record's `status` refused an integer coercion — the field is written as a number by "
+          "every producer, so a value that throws out of ToNumber is not a status this seam can report");
+    DCHECK(st >= 0 && st <= 999,
+           "the host's reply record carries a `status` outside Fetch §2.2.6 \"Responses\"' own range — \"A "
+           "status is an integer in the range 0 to 999, inclusive\" — so a number beyond it is a producer "
+           "inventing one rather than a server having sent it");
+    return st;
 }
 
 /* SETTLING A REQUEST §4.1 MAIN FETCH STEP 7 REFUSED — a bad port, or a Content Security Policy that blocks it.
