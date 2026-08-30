@@ -2,7 +2,32 @@
    + DOM). renderResponse dispatches a Send result to renderResultBody, which renders JSON / a decoded
    protobuf tree (renderPbTree/_renderPbNode/jsonToTree) with the request's schema (findSchemaForRequest).
    Protocol-specific renderers (gRPC-Web/SSE/NDJSON/GraphQL) remain in popup.js and are called globally. */
+/* WHAT A SEND RESULT IS, ASSERTED WHERE IT ARRIVES IN THE POPUP. lib/send.js answers a manual replay with
+   exactly two shapes and this is the popup's statement of both: an ERROR arm carrying `error` (and `timing`
+   on the two arms that got as far as issuing the request), and a SUCCESS record that writes
+   `ok`/`status`/`statusText`/`headers`/`body`/`timing` in ONE object literal, downstream of the page-context
+   relay contract lib/schema.js asserts. Everything this file renders comes off that record, so a producer
+   that stopped writing a field would be rendered rather than reported — `statusText || ""` and `timing || 0`
+   are the two that show it best, because "" and 0 are BOTH REAL ANSWERS (an HTTP/2 response carries no reason
+   phrase; a cached reply can measure 0 ms), so the fallback said exactly what a healthy answer says.
+   THE DISCRIMINANT IS `error`, NOT `status`. It was `result.error && !result.status`, which asks the error
+   arm to prove itself with the ABSENCE of a field belonging to the other arm — and the success record carries
+   `error: null`, so the two are already distinguishable by the one field that means it. */
 function renderResponse(result) {
+  DCHECK(!!result && typeof result === "object",
+         "the popup was handed a send result that is not a record — lib/send.js returns an object from every " +
+         "arm, so an absent one is that path broken rather than a request the page refused");
+  if (result.error) {
+    DCHECK(typeof result.error === "string" && result.error !== "",
+           "a send result reports an error that names nothing — the reason IS the whole of what this arm " +
+           "carries, and an empty one is rendered to the reviewer as a failure with no stated cause");
+  } else {
+    DCHECK(typeof result.ok === "boolean" && typeof result.status === "number" &&
+           typeof result.statusText === "string" && !!result.headers && typeof result.headers === "object" &&
+           !!result.body && typeof result.body === "object" && typeof result.timing === "number",
+           "a send result is missing part of its response record — lib/send.js writes ok/status/statusText/" +
+           "headers/body/timing in one literal, and a gap in it renders as the server's own answer");
+  }
   lastSendResult = result;
   const container = document.getElementById("send-response");
   container.style.display = "block";
@@ -17,7 +42,7 @@ function renderResponse(result) {
       '<div id="send-response-body"></div>';
   }
 
-  if (result.error && !result.status) {
+  if (result.error) {
     document.getElementById("send-response-status").innerHTML = "";
     document.getElementById("send-response-headers").innerHTML = "";
     document.getElementById("send-response-body").innerHTML =
@@ -26,29 +51,24 @@ function renderResponse(result) {
   }
 
   const statusEl = document.getElementById("send-response-status");
-  const statusClass =
-    result.ok || (result.status >= 200 && result.status < 300)
-      ? "resp-status-ok"
-      : "resp-status-error";
+  /* `ok` IS THE WHOLE ANSWER. content.js reads it off a real `Response`, whose `ok` getter (Fetch §5.5
+     Response class) returns whether the status is an OK STATUS — "a status in the range 200 to 299,
+     inclusive" (Fetch §2.2.3 Statuses). So `result.status >= 200 && result.status < 300` was that same
+     predicate written out beside the field that already states it, and its only reachable effect was to
+     answer for an ABSENT `ok`. There is no absent `ok` here; the assert at the top says so. */
+  const statusClass = result.ok ? "resp-status-ok" : "resp-status-error";
   statusEl.innerHTML =
-    `<span class="${statusClass}">${esc(String(result.status))} ${esc(result.statusText || "")}</span>` +
-    ` <span class="resp-timing">${esc(String(result.timing || 0))}ms</span>` +
-    ` <span class="resp-size">${esc(String(result.body?.size || 0))} bytes</span>`;
+    `<span class="${statusClass}">${esc(String(result.status))} ${esc(result.statusText)}</span>` +
+    ` <span class="resp-timing">${esc(String(result.timing))}ms</span>` +
+    ` <span class="resp-size">${esc(String(result.body.size))} bytes</span>`;
 
   const headersTable = document.getElementById("send-response-headers");
   headersTable.innerHTML = "";
-  if (result.headers) {
-    for (const [k, v] of Object.entries(result.headers)) {
-      headersTable.innerHTML += `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`;
-    }
+  for (const [k, v] of Object.entries(result.headers)) {
+    headersTable.innerHTML += `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`;
   }
 
   const bodyEl = document.getElementById("send-response-body");
-  if (!result.body) {
-    bodyEl.innerHTML = '<div class="hint">No response body</div>';
-    return;
-  }
-
   bodyEl.innerHTML = renderResultBody(result);
 
   const dlBtn = document.getElementById("btn-download-response");
@@ -90,9 +110,12 @@ function renderResultBody(result) {
     }
   }
 
-  // Check raw body for async chunked format (takes priority — it wraps JSPB)
-  const rawBody = result.body.raw || "";
-  const respContentType = result.headers?.["content-type"] || "";
+  /* `raw` IS THE RESPONSE TEXT AND IT IS ALWAYS WRITTEN — every arm of lib/send.js's bodyResult carries it,
+     and an empty response is the empty string rather than the absence of one. `headers` is proven by the
+     assert at the top of this file; what is legitimately absent is a HEADER, which is a fact about the server
+     and is what the `|| ""` on the key lookup reads. */
+  const rawBody = result.body.raw;
+  const respContentType = result.headers["content-type"] || "";
 
   if (isAsyncChunkedResponse(rawBody)) {
     return renderAsyncResponse(
