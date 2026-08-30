@@ -1007,7 +1007,16 @@ if (NATIVE) {
              : process.argv.includes("leak")    ? "leak" : "none";
   const bin = join(OUT, "qjs-native-" + kind);
   mkdirSync(OUT, { recursive: true });
-  /* LEXBOR, NATIVELY, exactly as wpt.mjs provisions it — the same vendored source and the same cached archive,
+  /* THE QUIET LIST IS DECLARED ABOVE ITS FIRST READER, and that is not style: the `native` target reads it
+   during module evaluation, so a `const` below that point is a temporal dead zone and the target dies with
+   `Cannot access QUIET_WARNINGS before initialization` — which no default build ever hit, because the
+   default path does not take this branch. A build target no gate runs is outside the gate. */
+const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
+  "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
+  "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
+  "-Werror=implicit-function-declaration"];
+
+/* LEXBOR, NATIVELY, exactly as wpt.mjs provisions it — the same vendored source and the same cached archive,
      because a second copy of that provisioning is a second thing to keep in step with the pinned tag. */
   const LEXBOR_NATIVE = join(WORK, "lexbor-native", "liblexbor_static.a");
   if (!existsSync(LEXBOR_NATIVE)) {
@@ -1102,7 +1111,7 @@ if (NATIVE) {
    off it, and no gate said a word. */
 const QJS_ABI = ["qjs_init", "qjs_join", "qjs_unload", "qjs_bundle_id", "qjs_begin", "qjs_step",
                  "qjs_result", "qjs_teardown",
-                 "qjs_pending", "qjs_chunks", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
+                 "qjs_pending", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route",
                  "qjs_perform", "qjs_host_answer_remote", "qjs_world_gone"];
@@ -1176,11 +1185,6 @@ const ABI_LIST = abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_"
    before removing it rather than argued: at the level `-Wall` gives, ONE warning across 40 host translation
    units, plus three in url.c that are all `u->port` (max 65535) into a 7-byte buffer where the compiler cannot
    see the range. That is the whole cost. The rest of the list stays quiet for the reason below. */
-const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
-  "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
-  "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
-  "-Werror=implicit-function-declaration"];
-
 const CFLAGS = [
   ...dashI(ENGINE_INCLUDE_ROOTS),   // declared once beside the source sets; see ENGINE_INCLUDE_ROOTS
   /* -Werror ON IMPLICIT DECLARATIONS, and the reason `-w` is NOT here beside it. A missing #include makes C
