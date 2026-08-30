@@ -389,7 +389,13 @@ async function main() {
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
       ready: [], answered: new Map(), stalled: false, live: true, result: null,
-      closed: new Promise((res) => child.on('close', res)),
+      /* BOTH HALVES OF HOW A CHILD ENDED, BECAUSE ONE OF THEM IS THE ONLY WAY AN ABORT IS VISIBLE FROM HERE.
+         Node's `close` carries `(code, signal)` and a process killed by a signal has code `null`; taking the
+         first argument alone therefore reported a `SIGABRT` — which is what every DCHECK in the engine ends
+         as — as the string "null", indistinguishable from an ordinary exit this zone could not read. The
+         engine's whole verification story is that its asserts fire loudly, and the party relaying that was
+         erasing the one field that says one fired. */
+      closed: new Promise((res) => child.on('close', (code, signal) => res({ code, signal }))),
     };
     child.stdout.setEncoding('utf8');   /* a StringDecoder, so a multi-byte character split across two chunk
                                            boundaries is not two replacement characters — the @RESULT line is
@@ -568,7 +574,7 @@ async function main() {
       return true;
     };
 
-    if (!go()) held.push({ what: `operation ${token} \`${op.slice(0, 90)}\` -> ${target}`, go });
+    if (!go()) held.push({ doc: target, what: `operation ${token} \`${op.slice(0, 90)}\` -> ${target}`, go });
   }
 
   /* THE ONE-WAY NOTICES, ROUTED. Every one is a CROSS-INSTANCE fact and the routing is this zone's alone; the
@@ -676,7 +682,7 @@ async function main() {
         flush();
         return true;
       };
-      if (!go()) held.push({ what: `post ${f[2]} -> ${f[1]}`, go });
+      if (!go()) held.push({ doc: f[1], what: `post ${f[2]} -> ${f[1]}`, go });
       return;
     }
     /* `remoteop.answer <token> <world> <completion>` — a COMPLETION the answering instance produced for an
@@ -841,7 +847,9 @@ async function main() {
     }
     if (buf) await onLine(e, buf);
     e.live = false;
-    e.exit = await e.closed;
+    ({ code: e.exit, signal: e.signal } = await e.closed);
+    /* HOW THIS INSTANCE ENDED, IN ONE PHRASE, so every reader below states the same fact the same way. */
+    e.ended = e.signal ? `on ${e.signal}` : `with code ${e.exit}`;
     /* AN INSTANCE LEAVING CAN BE WHAT UNBLOCKS THE REST — the stuck answer is GLOBAL, so it is re-asked here
        as well as at every stall. */
     retryHeld();
@@ -860,10 +868,31 @@ async function main() {
 
   /* WHAT COULD NOT BE ROUTED FOR THE WHOLE SESSION. A held record is an asking flow parked on a question
      nothing will ever answer, so it is a failure and not a note — reported HERE because "no holder YET" and
-     "no holder EVER" are the same observation until every instance has ended. */
-  if (held.length)
-    console.error(`[trusted] ${held.length} record(s) named a document no instance ever held, so their askers ` +
-                  `were parked on a question nothing answered: ${held.map((h) => h.what).join(' ; ')}`);
+     "no holder EVER" are the same observation until every instance has ended.
+     AND ONCE THEY HAVE, THEY STOP BEING ONE OBSERVATION AND THIS ZONE OWNS THE DIFFERENCE. Two states end up
+     here and they are different failures with different next diffs: a document NO INSTANCE WAS EVER
+     PROVISIONED FOR (the create was declined, or a record named a document nothing announced — a routing or
+     policy failure), and a document an instance HELD AND THEN LEFT (the holder ended while an asker was still
+     parked on it — a LIFETIME failure, and the asker's read is one §7.2.1 would still answer). Reporting both
+     as "no instance ever held" was measurable and measured: a three-instance chain whose middle process
+     aborted printed it about a document that had been provisioned, run, and answered an earlier read from the
+     same asker. That is the defect CLAUDE.md names at §@S — a rung whose ABSENCE and whose ZERO read alike —
+     performed on the one report that says what this zone could not do. The routing table still holds the
+     ended instance, so the answer is a lookup and never an inference. */
+  if (held.length) {
+    const everHeld = (h) => instances.filter((i) => i.docId === h.doc);
+    const orphaned = held.filter((h) => everHeld(h).length);
+    const unknown = held.filter((h) => !everHeld(h).length);
+    if (orphaned.length)
+      console.error(`[trusted] ${orphaned.length} record(s) named a document whose instance HELD IT AND THEN ` +
+                    'LEFT, so their askers were parked on a question that had an answerer and no longer ' +
+                    `does: ${orphaned.map((h) => `${h.what} (instance ${everHeld(h).map((i) => i.tag)
+                      .join(', ')} ended ${everHeld(h).map((i) => i.ended).join(', ')})`).join(' ; ')}`);
+    if (unknown.length)
+      console.error(`[trusted] ${unknown.length} record(s) named a document NO instance was ever provisioned ` +
+                    `for, so their askers were parked on a question nothing answered: ${
+                      unknown.map((h) => h.what).join(' ; ')}`);
+  }
   if (parkedWorlds.length)
     console.error(`[trusted] ${parkedWorlds.length} foreign world vector(s) went to a residue this zone holds ` +
                   'no index for — a `world name -> parked document` index that outlives a session is what ' +
@@ -874,13 +903,13 @@ async function main() {
      bundle ids, two frontiers — and inventing one here would be this zone deciding what a finding set means. */
   for (const i of instances)
     if (i !== root)
-      console.error(`[trusted] peer instance [${i.tag}] at ${i.docUrl} exited ${i.exit} and ` +
+      console.error(`[trusted] peer instance [${i.tag}] at ${i.docUrl} ended ${i.ended} and ` +
                     (i.result === null ? 'produced no @RESULT'
                                        : `produced a result of ${i.result.length} bytes, which this zone does ` +
                                          'not merge into the seed\'s'));
 
   if (root.result === null) {
-    console.error(`[trusted] the host produced no @RESULT (exit ${root.exit}) — an ABSENT result and a result ` +
+    console.error(`[trusted] the host produced no @RESULT (ended ${root.ended}) — an ABSENT result and a result ` +
                   'that found nothing are different facts and this is the first, so nothing here may be ' +
                   'reported as a page that was analysed and found clean.');
     process.exitCode = root.exit || 1;
@@ -889,7 +918,11 @@ async function main() {
   console.log(root.result);
   /* `exitCode` AND NOT `exit()`: the result is a line on a pipe and `process.exit` does not wait for it to
      drain, so the one thing this process exists to produce is the one thing that would be truncated. */
-  process.exitCode = root.exit;
+  /* A CHILD KILLED BY A SIGNAL HAS NO EXIT CODE, AND `exitCode = null` IS NODE'S WORD FOR SUCCESS. So a
+     session whose engine printed an `@RESULT` and then ABORTED — a DCHECK firing after the result line, which
+     is exactly the ordering `@RESULT`-then-teardown makes possible — left this process exiting 0 while the
+     assert that fired was on its own stderr. The signal is the fact, so it decides the status. */
+  process.exitCode = root.signal ? 1 : root.exit;
 }
 
 await main();
