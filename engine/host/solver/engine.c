@@ -7647,13 +7647,23 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                 flow_wfq_census(&w);
                 printf("@WFQ {\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
                        "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,\"svcMax\":%lld,"
+                       /* …AND THE FLOOR OF THE SAME SCAN, WHICH THIS LINE COMPUTED AND DID NOT PRINT. `svc_min`
+                          has been in the census since the aging term was priced, is described in flow.h as
+                          "the only number in this struct that can answer 'is the aging term measuring this
+                          flow or the whole frontier'", and reached NO reader: this printf is the struct's only
+                          consumer. A row computed on every census and emitted nowhere is the mirror of the
+                          defaulted-field defect (§Architecture) — a value that is real, asserted about, and
+                          consumed by nothing — and it bit exactly where flow.h said it would: a frontier whose
+                          aging term was 856 points and whose entire weight spread was 0.020, with no emitted
+                          number from which those two could be told apart. */
+                       "\"svcMin\":%lld,"
                        /* …AND THE FORK FAMILY'S OWN SERVICE BESIDE IT (solver/flow.h's svc_fam_max), which is
                           the one reading that says whether the REWARD SCALE is what a run is stuck on: `val`
                           is copied at every fork and the aging that cancels it is charged per arm, so
                           svcFamMax / svcMax is the factor by which this frontier over-charges itself for one
                           family's silence. It decides nothing — it is here so the next change to flow_weight
                           starts from a number instead of from this paragraph. */
-                       "\"svcFamMax\":%lld,"
+                       "\"svcFamMax\":%lld,\"svcFamMin\":%lld,"
                        /* …AND THE OPTIMISM TERM'S OWN COORDINATE, WHICH IS THE ROW THIS LINE HAD NO ANALOGUE OF
                           AND NEEDED MOST. Everything else here is thread time; `visMax` is COMPLETED UNITS OF
                           WORK, and `visMax == 0` on a frontier of thousands says that no member has reached the
@@ -7664,12 +7674,21 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                           is the order concentrating, and both at 0 is nothing finishing at all. */
                        "\"visMin\":%lld,\"visMax\":%lld,"
                        "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,"
+                       /* …AND §@S'S FITNESS TERM, WHICH flow_weight ADDS AND NO ROW HERE REPORTED. `cands`
+                          says how many candidates are live; `distMax` says how far the best of them has
+                          travelled, which is the quantity the WFQ actually reads. Without it a run in which
+                          the fitness orders nothing is indistinguishable from one in which it orders
+                          everything, and `cands: 0` — every sample of the smoke fixture — is only the first
+                          of the two reasons this can read zero. */
+                       "\"distMax\":%.3f,"
                        "\"decMax\":%ld,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f}\n",
                        w.members, w.val_min, w.val_max, w.val_top,
                        w.val_zero, w.self_emit, w.unrun, (long long)w.svc_max,
-                       (long long)w.svc_fam_max,
+                       (long long)w.svc_min,
+                       (long long)w.svc_fam_max, (long long)w.svc_fam_min,
                        (long long)w.vis_min, (long long)w.vis_max,
                        w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max,
+                       w.dist_max,
                        w.dec_max, w.w_top, w.w_min, w.cand_w_max);
             }
             /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose

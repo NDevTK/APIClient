@@ -2056,6 +2056,24 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     return best;
 }
 
+/* HOW MUCH OF AN ORDER SPREAD THE CENSUS'S OWN ROWS CAN ACCOUNT FOR — one term of flow_weight per line, each
+   contributing at most its own reported RANGE, because the range of a sum is at most the sum of the ranges.
+   It is the bound the assertion at the end of flow_wfq_census holds the observed spread to, and it is written
+   term-by-term against flow_weight rather than as a single constant so that ADDING a term to the weight
+   without adding its range here is a compile-visible omission in one place and a fired assert in the other.
+   READ IT AS THE DERIVATION IT IS. `val` and `cand_dist` enter the weight positively and contribute
+   max−min directly — `cand_dist`'s floor is 0 by the type (flow.h), so its maximum IS its range. The optimism
+   term is 1/(1+visits), decreasing, so its range is taken at the visit count's two ends in that order. The
+   aging enters negatively at FLOW_AGE_QUANTUM per notch, and its notch is flow_silence_notch's floor of the
+   SUM `(cpu + fam_us)` while the census floors the two halves separately: floor(a+b) <= floor(a)+floor(b)+1,
+   so the two reported spreads plus ONE notch bound it exactly. That +1 is the only slack in this function. */
+static double wfq_accounted_spread(const WfqCensus *c) {
+    return (c->val_max - c->val_min)
+         + c->dist_max
+         + (1.0 / (double)(1 + c->vis_min) - 1.0 / (double)(1 + c->vis_max))
+         + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM;
+}
+
 /* WHAT THE ORDERING IS MADE OF — see flow.h for what each row answers and why `val` alone cannot answer it.
  *
  * IT IS A SEPARATE SCAN AND NOT A FIFTH QUESTION FOR flow_pick, which is the opposite of the rule one function
@@ -2075,11 +2093,12 @@ void flow_wfq_census(WfqCensus *out) {
     out->members = g_flows_n;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
-    out->svc_max = out->svc_min = out->svc_fam_max = 0;
+    out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
     out->vis_min = out->vis_max = 0;
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
     out->cand_svc_max = 0;
     out->dec_max = 0;
+    out->dist_max = 0.0;
     out->w_top = out->w_min = out->cand_w_max = 0.0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
@@ -2120,6 +2139,10 @@ void flow_wfq_census(WfqCensus *out) {
         {
             int64_t fam = flow_family_notch(f);
             if (fam > out->svc_fam_max) out->svc_fam_max = fam;
+            /* …AND ITS FLOOR, WHICH IS WHAT SAYS THE TERM IS ORDERING RATHER THAN OFFSETTING — see flow.h.
+               A maximum states how LARGE the family half is; only the pair states how much of it any
+               comparison in this frontier can see, and on a single-family frontier that is exactly zero. */
+            if (i == 0 || fam < out->svc_fam_min) out->svc_fam_min = fam;
         }
         /* THE FLOOR, TAKEN OVER EVERY MEMBER AND NOT ONLY THE SERVED ONES — see flow.h. A frontier holding one
            never-run flow reads 0 here and that is the answer, not a hole in it: the aging term is then charging
@@ -2127,6 +2150,11 @@ void flow_wfq_census(WfqCensus *out) {
            was priced for. It is `svc_max` read the other way, so it shares its scan and its unit. */
         if (i == 0 || s < out->svc_min) out->svc_min = s;
         if (i == 0 || w < out->w_min) out->w_min = w;
+        /* THE FITNESS TERM'S RANGE — the fourth term of flow_weight and the last one this scan could not see.
+           Its floor is 0 by the type rather than by measurement (flow.h says why), so the maximum IS the
+           range. Taken over every member and not only the candidates, because the bound below is over the
+           weights of every member and a candidate's distance is what lifts it above the rest of them. */
+        if (f->cand_dist > out->dist_max) out->dist_max = f->cand_dist;
         /* AND THE SAME QUESTIONS ASKED OF THE CANDIDATES ALONE — see flow.h. `cand_src` is what a candidate
            session IS (the substitution it carries), and engine.c copies it to a sibling, so this counts the
            search's whole live population rather than its roots. */
@@ -2140,6 +2168,46 @@ void flow_wfq_census(WfqCensus *out) {
     }
     top = flow_best();
     if (top) { out->val_top = top->val; out->w_top = flow_weight(top); }
+
+    /* THE CENSUS ACCOUNTS FOR THE ORDER IT REPORTS — the one assertion that makes this a measurement of
+     * flow_weight rather than a hand-kept list of fields that used to be one.
+     *
+     * WHAT IT IS. `w_top - w_min` is the observed spread of the order. Every term of flow_weight contributes
+     * at most its own range to that spread, and the range of a sum is at most the sum of the ranges, so the
+     * spread is bounded by the ranges THIS STRUCT REPORTS. Written as that inequality — over flow_weight,
+     * exactly as flow_fork_inherit's rank-neutrality equality is written over flow_weight — because what it
+     * has to catch is an EDIT and not a state: the moment a term enters the weight whose range no row here
+     * carries, the reported ranges stop covering the observed spread and this fires, naming the gap at the
+     * census rather than in a reader's arithmetic three exchanges later.
+     *
+     * WHY IT HAD TO EXIST. The alternative is what stood here: a struct whose fields are added by hand and
+     * emitted by a printf in another file that is also maintained by hand. `svc_min` was computed on every
+     * census since it was added, described in flow.h as "the only number in this struct that can answer 'is
+     * the aging term measuring this flow or the whole frontier'", and printed by nobody — a writer with no
+     * reader, which §Architecture names as the mirror of the defaulted-field defect and which is harder to see
+     * precisely because the value is real and asserted about. Meanwhile the aging term had grown a SECOND
+     * scope (`fam_us`) whose floor no row reported at all, and the fitness term (`cand_dist`) had entered
+     * flow_weight with no row here of any kind. Three terms, three different ways of being invisible, and the
+     * census kept reporting a spread it could not account for. Measured on the smoke fixture's steady state:
+     * an aging term of 856 points, of which 93.3% was the family half, over a frontier whose entire weight
+     * spread was 0.020 — and not one emitted row from which a reader could tell those two numbers apart.
+     *
+     * WHY THE SLACK IS EXACTLY ONE NOTCH AND NOT A TOLERANCE. flow_silence_notch floors `(cpu + fam_us)` as a
+     * SUM while this scan floors the two halves separately, so the term's own notch can exceed the sum of the
+     * two reported notches by at most 1 (floor(a+b) <= floor(a)+floor(b)+1, exactly). That is arithmetic, not
+     * a fudge factor, and it is the only slack the derivation takes: the 1e-9 beside it covers the FPU and
+     * nothing else. A larger slack would be a tolerance, and a tolerance is where the next unreported term
+     * would hide.
+     *
+     * IT DECIDES NOTHING, like the scan it closes, and it is a FUNCTION for the same two reasons
+     * flow_is_min_weight is one: a DCHECK condition must be side-effect-free (this reads the struct and
+     * returns a double), and because it is evaluated only inside the condition, a release build never computes
+     * the bound at all. `top` NULL is an empty frontier, which has no spread to account for. */
+    DCHECK(!top || out->w_top - out->w_min <= wfq_accounted_spread(out) + 1e-9,
+           "the WFQ census reports an order spread wider than the term ranges it reports can account for — "
+           "flow_weight has a term this census cannot see, so every reading taken from it (which term is "
+           "ordering the frontier, whether the aging is measuring one flow or all of them) is a statement "
+           "about an instrument rather than about the run");
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */

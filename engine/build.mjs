@@ -281,7 +281,32 @@ const causeName = (cause) => {
    Same field contract as @COLD: the names are engine.c's printf, and an absent one throws rather than being
    silently compared as undefined. */
 const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmit", "unrun",
-                    "cands", "candUnrun", "candDecMax", "decMax", "wTop", "candWMax"];
+                    "cands", "candUnrun", "candDecMax", "decMax", "wTop", "wMin", "candWMax",
+                    /* THE TERMS THAT ARE NOT THE REWARD, WHICH THIS LIST OMITTED AND THE VERDICT BELOW NEEDED.
+                       `ordered` is FALSE whenever the reward spread is within one optimism bonus, and the text
+                       that case printed said only that the reward is not what is holding the run and that "that
+                       census is the measurement to start from" — while naming none of the terms that ARE
+                       ordering it. Measured on the smoke fixture: reward spread 0.0, aging 856 points, whole
+                       weight spread 0.020, and every number in that sentence absent from this list. A
+                       discriminator that can rule a cause out and cannot name the alternative sends the reader
+                       back to a census it did not read. */
+                    "svcMax", "svcMin", "svcFamMax", "svcFamMin", "visMin", "visMax", "distMax"];
+/* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. Throws on an
+   absent or unparseable define, because the alternative is this reader quietly pricing a notch at a rate the
+   engine stopped charging — the same class of defect as comparing an absent census field as undefined, and
+   caught the same way. `HOST` is initialised long before any stage calls this. */
+function ageQuantum() {
+  const one = (file, name) => {
+    const m = readFileSync(join(HOST, file), "utf8")
+      .match(new RegExp(`^#define\\s+${name}\\s+\\(?\\(?(?:\\(int64_t\\))?\\s*(\\d+)`, "m"));
+    if (!m) throw new Error(`[build] cannot read \`${name}\` from engine/host/${file} — the @WFQ reader prices ` +
+                            `the aging term from flow.c's FLOW_AGE_QUANTUM factors and will not substitute a ` +
+                            `remembered value for one it cannot find.`);
+    return Number(m[1]);
+  };
+  return one("solver/engine.h", "ENGINE_QUANTUM_MS") * 1000 / one("solver/flow.c", "FLOW_SILENCE_US");
+}
+
 function wfqReading(out) {
   const s = [];
   for (const m of out.matchAll(/^@WFQ (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -292,12 +317,43 @@ function wfqReading(out) {
       throw new Error(`[build] the @WFQ census has no numeric \`${f}\` — this discriminator reads ` +
                       `${WFQ_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
                       `field must be renamed here rather than silently compared as undefined.`);
+  /* EACH TERM OF flow_weight AGAINST THE SPREAD IT COULD ORDER — the reading that says which term is deciding
+     this run, rather than which one is largest. A term's magnitude and a term's RANGE take opposite actions:
+     an aging term of 856 points whose two ends are identical orders nothing at all and is a common offset, and
+     that is what a single-family frontier is (flow.h's svc_fam_min).
+     THE PRICE OF A NOTCH IS READ FROM THE SOURCE THAT DEFINES IT, NEVER RESTATED HERE. flow.c's
+     FLOW_AGE_QUANTUM is `ENGINE_QUANTUM_MS * 1000 / FLOW_SILENCE_US`, and a reader that hardcodes today's
+     0.012 keeps reporting 0.012 after the engine is retuned — a number that is true when written and wrong
+     soon after, which is the one failure mode a build-time reader has no excuse for when both constants are
+     one grep away. An absent define THROWS rather than defaulting: a consumer never fills a producer's hole
+     with a plausible value (§Architecture). */
+  const AGE_QUANTUM = ageQuantum();
+  const rangeVal  = w.valMax - w.valMin;
+  const rangeUcb  = 1 / (1 + w.visMin) - 1 / (1 + w.visMax);
+  const rangeOwn  = (w.svcMax - w.svcMin) * AGE_QUANTUM;
+  const rangeFam  = (w.svcFamMax - w.svcFamMin) * AGE_QUANTUM;
+  const agingPts  = (w.svcMax + w.svcFamMax) * AGE_QUANTUM;
+  const spread    = w.wTop - w.wMin;
+  const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
+                `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
+                `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
+                `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep`;
   return {
     ordered: w.valMax - w.valMin > 1 && w.valZero > 0,
+    /* WHICH TERM THE ORDER ACTUALLY IS, named from the ranges rather than inferred. A term that cannot move
+       two members apart is not ordering them however large it is, so the biggest RANGE is the answer and a
+       frontier whose ranges are all zero is one the pick cannot distinguish at all — which is a true and
+       reportable state (one fork family, equal reward, no candidates) and not a defect to be inferred into. */
+    orderedBy: (() => {
+      const t = [["reward", rangeVal], ["fitness", w.distMax], ["optimism", rangeUcb],
+                 ["aging", rangeOwn + rangeFam]].sort((a, b) => b[1] - a[1]);
+      return t[0][1] <= 0 ? "nothing — every term reads the same at both ends of this frontier" : t[0][0];
+    })(),
     text: `@WFQ: ${w.members} members, reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ${w.valZero} at ` +
           `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread; ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
-          `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate`,
+          `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate; ` +
+          terms,
   };
 }
 
@@ -363,8 +419,10 @@ function hungCause(out) {
                `reward 0, so the ORDER is the inherited reward's: those members are reached only as the aging ` +
                `term gives back about one point per second of unproductive thread time, per member ahead of them.`
              : `The @WFQ census does NOT show a reward-ordered frontier — its ends are within one optimism ` +
-               `bonus of each other — so the reward term is not what is holding this run, and that census is ` +
-               `the measurement to start from.`) +
+               `bonus of each other — so the reward term is not what is holding this run. What IS ordering it ` +
+               `is the ${wfq.orderedBy} term, read from the ranges above rather than from the magnitudes: a ` +
+               `term whose two ends read the same cannot separate two members however many points deep it is, ` +
+               `which is what a frontier that is ONE fork family looks like from the aging term's side.`) +
            ` The rows still 0 name what nothing scheduled was working toward.`;
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
     return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}; ${wfq.text}) — flows were still ` +

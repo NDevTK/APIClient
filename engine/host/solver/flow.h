@@ -839,6 +839,23 @@ typedef struct {
        would be a defect is `svc_fam_max` sitting far below `svc_max`, which cannot happen while every arm's
        charge lands on the family — and flow_age_running asserts the invariant that makes it impossible. */
     int64_t svc_fam_max;
+    /* …AND ITS FLOOR, WHICH IS THE HALF `svc_min` COULD NOT SUPPLY AND WHICH CARRIES 93% OF THE TERM. The row
+       above says `svc_min` is "the only number in this struct that can answer 'is the aging term measuring
+       this flow or the whole frontier'", and that was true of the term the aging USED to read; the term now
+       reads `(cpu + fam_us)` and `svc_min` is the floor of the FIRST summand only. So the answer it gives is
+       the answer for a fraction of the quantity: measured on the smoke fixture's steady state, `svc_fam_max`
+       66580 against `svc_max` 4790 — the family half is 93.3% of the aging, and nothing here reported either
+       end of it. A pair of maxima cannot say whether a term ORDERS anything, only how large it is, and those
+       are the two readings that took opposite actions on that run: an aging term of 856 points on a frontier
+       whose entire weight spread was 0.020.
+       WHAT A UNIFORM FAMILY MEANS IS NOT A DEFECT AND MUST NOT BE READ AS ONE. A frontier that is ONE family —
+       which a real page's is, every flow descending from the boot flow — reads the identical `fam_us` at every
+       member by construction (flow_fork_inherit joins the parent's account), so `svc_fam_max == svc_fam_min` is
+       that term contributing a COMMON OFFSET and ordering nothing, which is exactly what flow_silence_notch's
+       own comment says the own half exists to cover. The reading is worth having precisely because it is the
+       one state the maxima cannot be distinguished from: a genuine multi-family frontier in which one chain is
+       monopolising presents the SAME `svc_fam_max` and a floor far below it. */
+    int64_t svc_fam_min;
 
     /* THE @S CANDIDATE SESSIONS, ASKED DIRECTLY, because the first reading of this census had to INFER them
      * and the inference was three fields long: `val_zero` counts members that inherited nothing, `unrun`
@@ -916,7 +933,22 @@ typedef struct {
      * a document that boots today enters at 1.0. Nothing but an EMISSION ever raises a weight, and a document
      * that cannot win the Level-1 pick cannot emit, so the crossing at `(reward + 1)` seconds is a RATCHET: past
      * it a mature document is outranked by every page that arrives afterwards, permanently, for as long as the
-     * pool keeps being fed. That is what `svc_min` above is for — the frame of reference, measured. */
+     * pool keeps being fed. That is what `svc_min` and `svc_fam_min` above are for — the frame of reference,
+     * measured, at BOTH the scopes the aging term is summed over.
+     * AND "MEASURED" IS A CLAIM ABOUT AN EMITTED ROW, NOT ABOUT A COMPUTED ONE. This sentence named `svc_min`
+     * alone and was written while the only consumer of this struct — engine.c's @WFQ printf — did not print
+     * it, so a row that was computed on every census, asserted about in three paragraphs here, and reachable
+     * by nobody read as the frame of reference the file kept pointing at. That is the mirror of the
+     * defaulted-field defect (§Architecture: a name READ somewhere and WRITTEN nowhere) with the arrow
+     * reversed, and it is harder to see because the value is real. Every field of this struct is emitted; the
+     * accounting assertion at the end of flow_wfq_census is what keeps that true as terms are added. */
+    /* THE FITNESS TERM'S OWN RANGE — §@S's distance, which flow_weight adds and which no row here reported.
+       Its FLOOR is not a field because it is a constant of the type: a flow with no payload has no distance
+       to be a fraction of and flow_set_distance refuses to record one, so every non-candidate stands at
+       exactly 0 and [0, dist_max] is the range rather than an estimate of it. Read beside `cands`: a run with
+       `cands: 0` has this at 0 by construction and the fitness term is then ordering nothing — which is a fact
+       about the run's @S population and not about the term, and the pair is what separates them. */
+    double dist_max;
     double w_top;         /* flow_best's weight — what holds the front of the queue */
     double w_min;         /* the lowest weight in the frontier — the other end of the same order */
     double cand_w_max;    /* the best weight any @S candidate can offer against `w_top` */
