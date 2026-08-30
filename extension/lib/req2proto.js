@@ -416,7 +416,11 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
   // Binary protobuf payload: Uint8Array → base64 for message relay
   const isBinary = payload instanceof Uint8Array;
   const body = isBinary ? uint8ToBase64(payload) : JSON.stringify(payload);
-  const bodyEncoding = isBinary ? "base64" : undefined;
+  /* NULL, NOT `undefined` — the relay's own vocabulary. lib/schema.js's `_sendPageFetch` asserts this field is
+     either "base64" or null and content.js reads null as "the body is text"; `undefined` was a third spelling
+     that only ever survived because a `?? null` downstream translated it, and a translation is the thing that
+     makes a producer which stopped writing the field indistinguishable from one that meant text. */
+  const bodyEncoding = isBinary ? "base64" : null;
 
   try {
     const resp = await fetchFn(url, {
@@ -766,7 +770,9 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
       // For binary protobuf, send minimal binary message instead of JSON
       const isBinaryCt = ct === "application/x-protobuf";
       const reqBody = isBinaryCt ? uint8ToBase64(new Uint8Array(0)) : "{}";
-      const bodyEncoding = isBinaryCt ? "base64" : undefined;
+      /* NULL, NOT `undefined` — see `sendProbe`: "base64" or null is the relay's whole vocabulary for this
+         field, and a third spelling is one a downstream default has to translate. */
+      const bodyEncoding = isBinaryCt ? "base64" : null;
 
       const resp = await fetchFn(url, {
         method: "POST",

@@ -197,6 +197,38 @@
     } catch (_) { return ""; }
   }
 
+  /* A PAGE-SUPPLIED VALUE IS READ THROUGH PAGE CODE, AND THAT IS THE ONLY THING THIS FILE MAY CATCH.
+     intercept.js is injected into the page's OWN realm (manifest content_scripts, "world": "MAIN",
+     run_at document_start), so a `fetch()` argument, the prototypes it reaches and every getter on it belong
+     to the PAGE: `input.url` can be a getter that throws, `String(input)` runs the page's own
+     `Symbol.toPrimitive`, and `init` is whatever object the page passed. A throw from one of those is the
+     page misbehaving — or deliberately defending against instrumentation — never a bug in this file, and the
+     honest consequence is that THIS REQUEST COULD NOT BE OBSERVED: the capture is dropped and the page's own
+     fetch is untouched.
+
+     IT IS A NAMED OPERATION RATHER THAN A `try` WRAPPED ROUND A PARAGRAPH. The paragraph it replaces held
+     this file's OWN logic too — the internal-URL test, the response clone, the record composition — under one
+     silent `catch (_) {}`, so a defect in any of those was indistinguishable from a page that refused to be
+     read. This file is the PASSIVE-OBSERVATION half of the tool, the one CLAUDE.md calls a thermometer: when
+     it goes quietly wrong the number it reports goes quietly wrong with it. So the page's failures are
+     swallowed HERE, by name, at debug volume, and nothing else is swallowed anywhere.
+
+     THERE IS NO DCHECK ON THIS PATH AND THERE MUST NOT BE. extension/check.js is loaded into the ISOLATED
+     world only (manifest content_scripts, second entry) — this realm is UNTRUSTED per SECURITY.md, and the
+     values it reads are the page's, which CLAUDE.md's own carve-out names as exactly what must NOT be
+     asserted ("a forced-exec flow THROWING on opaque/attacker input ... is the exploration surface, not a
+     broken invariant"). The sentinel is the statement instead: a caller compares against it and says what
+     the absence MEANS, rather than continuing over a value it never got. */
+  var _PAGE_THREW = { apiclientPageThrew: true };
+  function _pageOwned(read) {
+    try {
+      return read();
+    } catch (e) {
+      console.debug("[apiclient:page-owned read threw]", (e && e.message) || e);
+      return _PAGE_THREW;
+    }
+  }
+
   const _fetch = window.fetch;
 
   window.fetch = async function (input, init) {
@@ -210,91 +242,147 @@
 
     const response = await _fetch.apply(this, arguments);
 
-    try {
+    /* THE REQUEST'S ADDRESS AND VERB, AS Fetch §5.4 "Request class" COMPUTES THEM. This is a STATEMENT of
+       that constructor's own precedence, not a hole three defaults fill:
+         - "If input is a string ... Set request to a new request whose URL is parsedURL", and a new request's
+           method is Fetch §2.2.5 "Requests" verbatim — "A request has an associated method (a method). Unless
+           stated otherwise it is `GET`." So the trailing "GET" is the SPEC's answer, never an invented one.
+         - "Otherwise: Assert: input is a Request object. Set request to input's request." — so both answers
+           come off the Request, read through §5.4's own getters ("The url getter steps are to return this's
+           request's URL, serialized"; "The method getter steps are to return this's request's method").
+         - and last in the constructor steps, "If init["method"] exists, then: ... Set request's method to
+           method" — which is why an init method WINS over the other two.
+       AN ABSENT `init.method` IS THEREFORE NOT A MISSING DATUM. It is the page declaring that the answer is
+       one of the other two, and this expression reads it as that. `init.method === ""` cannot reach here at
+       all: §5.4 throws a TypeError for a value that "is not a method", so the await above would have rejected
+       and this line would never run. */
+    const seen = _pageOwned(function () {
       const raw =
         typeof input === "string"
           ? input
           : input instanceof Request
             ? input.url
             : String(input);
-      const url = new URL(raw, location.href).href;
+      return {
+        url: new URL(raw, location.href).href,
+        method:
+          (init && init.method) ||
+          (input instanceof Request ? input.method : "GET"),
+      };
+    });
+    /* THE PAGE'S OWN CODE REFUSED TO BE READ — a positive answer, and the only one available: this request
+       cannot be observed, so NOTHING is emitted for it. A partially-read record would be a plausible datum. */
+    if (seen === _PAGE_THREW) return response;
 
-      if (_isInternalUrl(url)) return response;
+    const url = seen.url;
+    const method = seen.method;
 
-      const method =
-        (init && init.method) ||
-        (input instanceof Request ? input.method : "GET");
-      const ct = response.headers.get("content-type") || "";
+    if (_isInternalUrl(url)) return response;
 
-      const clone = response.clone();
-      // Read body asynchronously — never blocks the caller
-      (async () => {
-        try {
-          const headers = {};
-          clone.headers.forEach((v, k) => {
-            headers[k] = v;
-          });
+    /* THE RESPONSE IS A REAL Response, BUT ITS PROTOTYPE IS THE PAGE'S — `headers` and `clone` are reachable
+       through objects the page may have replaced, so these two reads are page-owned exactly like the two
+       above. The clone is taken AFTER the internal-URL bail so a probe of our own never tees a body stream
+       that nothing will read. */
+    const snap = _pageOwned(function () {
+      return {
+        ct: response.headers.get("content-type") || "",
+        clone: response.clone(),
+      };
+    });
+    if (snap === _PAGE_THREW) return response;
 
-          // If body wasn't captured synchronously (Request with stream body),
-          // try reading from a cloned Request
-          if (reqBody === null && input instanceof Request && !init) {
-            try {
-              var rc = input.clone();
-              var ct2 = reqHeaders["content-type"] || "";
-              if (isBinary(ct2)) {
-                var ab = await rc.arrayBuffer();
-                reqBody = uint8ToBase64(new Uint8Array(ab));
-                reqBase64 = true;
-              } else {
-                reqBody = await rc.text();
-              }
-            } catch (_) {}
+    const ct = snap.ct;
+    const clone = snap.clone;
+
+    /* NOTHING BELOW THIS LINE IS PAGE-OWNED AND NOTHING BELOW IT IS WRAPPED. `_isInternalUrl` is a
+       `String.prototype.includes` over a string this file built, and an async function's invocation cannot
+       throw synchronously — so the paragraph-wide `try` that used to stand here had, once the page-owned
+       reads moved into `_pageOwned`, nothing left to catch. It is deleted rather than kept empty. */
+
+    // Read body asynchronously — never blocks the caller
+    (async () => {
+      try {
+        const headers = {};
+        clone.headers.forEach((v, k) => {
+          headers[k] = v;
+        });
+
+        // If body wasn't captured synchronously (Request with stream body),
+        // try reading from a cloned Request
+        if (reqBody === null && input instanceof Request && !init) {
+          try {
+            var rc = input.clone();
+            var ct2 = reqHeaders["content-type"] || "";
+            if (isBinary(ct2)) {
+              var ab = await rc.arrayBuffer();
+              reqBody = uint8ToBase64(new Uint8Array(ab));
+              reqBase64 = true;
+            } else {
+              reqBody = await rc.text();
+            }
+          } catch (e) {
+            /* A REQUEST BODY THAT WAS ALREADY A STREAM. Fetch §5.4 "Request class": "The clone() method
+               steps are: If this is unusable, then throw a TypeError", and §5.3 "Body mixin" defines unusable
+               as "its body is non-null and its body's stream is disturbed or locked" — the ordinary outcome
+               when the page handed `fetch()` a Request it had already begun to consume. That is a request
+               whose body this file cannot see, not a defect in it: `reqBody` stays null, which the record
+               already states as "no body captured", and saying so at debug volume is what separates that
+               from a bug here. */
+            console.debug("[apiclient:req body]", (e && e.message) || e);
           }
+        }
 
-          let body,
-            base64Encoded = false;
-          if (isBinary(ct)) {
-            const buf = await clone.arrayBuffer();
-            body = uint8ToBase64(new Uint8Array(buf));
-            base64Encoded = true;
-          } else {
-            body = await clone.text();
-          }
+        let body,
+          base64Encoded = false;
+        if (isBinary(ct)) {
+          const buf = await clone.arrayBuffer();
+          body = uint8ToBase64(new Uint8Array(buf));
+          base64Encoded = true;
+        } else {
+          body = await clone.text();
+        }
 
-          emit({
-            url,
-            transport: "fetch",
-            method: method.toUpperCase(),
-            status: clone.status,
-            /* Fetch §2.2.6 Responses' STATUS MESSAGE, read off the same Response the status came from. The
-               consumer that needs it is the HAR export, whose `response.statusText` it used to synthesize as
-               `"OK"` for every 200 and `""` for everything else — a reason phrase no server ever sent,
-               written into a document a reviewer reads as the server's own words. THE EMPTY STRING IS A REAL
-               ANSWER AND THE SYNTHESIS WAS WRONG EXACTLY WHERE IT LOOKED RIGHT: §2.2.6 states a response over
-               an HTTP/2 connection ALWAYS has the empty byte sequence as its status message, so on every h2
-               origin — which is most of them — the export was inventing "OK" for a field the protocol had
-               deliberately emptied. An opaque cross-origin response is `""` for the same reason: the browser
-               refusing to state one, travelling as itself. */
-            statusText: clone.statusText,
-            /* Fetch §2.2.6 Responses' TYPE: "basic" | "cors" | "opaque" | "opaqueredirect" | "error".
-               Opaque is a fact-level signal that the body was cross-origin-no-cors and therefore unreadable —
-               treated as fire-and-forget rather than an API response by the classifier. Every one of the five
-               is a non-empty string, so the `|| null` that stood here could not fire; what it DID do was tell
-               the reader that absence was possible, and the offscreen wrote a matching `|| null` on the far
-               side. One dead default at each end of a field that is always present. */
-            responseType: clone.type,
-            contentType: ct,
-            responseHeaders: headers,
-            body,
-            base64Encoded,
-            requestHeaders: reqHeaders,
-            requestBody: reqBody,
-            requestBodyBase64: reqBase64,
-            callStack: callStack,
-          });
-        } catch (_) {}
-      })();
-    } catch (_) {}
+        emit({
+          url,
+          transport: "fetch",
+          method: method.toUpperCase(),
+          status: clone.status,
+          /* Fetch §2.2.6 Responses' STATUS MESSAGE, read off the same Response the status came from. The
+             consumer that needs it is the HAR export, whose `response.statusText` it used to synthesize as
+             `"OK"` for every 200 and `""` for everything else — a reason phrase no server ever sent,
+             written into a document a reviewer reads as the server's own words. THE EMPTY STRING IS A REAL
+             ANSWER AND THE SYNTHESIS WAS WRONG EXACTLY WHERE IT LOOKED RIGHT: §2.2.6 states a response over
+             an HTTP/2 connection ALWAYS has the empty byte sequence as its status message, so on every h2
+             origin — which is most of them — the export was inventing "OK" for a field the protocol had
+             deliberately emptied. An opaque cross-origin response is `""` for the same reason: the browser
+             refusing to state one, travelling as itself. */
+          statusText: clone.statusText,
+          /* Fetch §2.2.6 Responses' TYPE: "basic" | "cors" | "opaque" | "opaqueredirect" | "error".
+             Opaque is a fact-level signal that the body was cross-origin-no-cors and therefore unreadable —
+             treated as fire-and-forget rather than an API response by the classifier. Every one of the five
+             is a non-empty string, so the `|| null` that stood here could not fire; what it DID do was tell
+             the reader that absence was possible, and the offscreen wrote a matching `|| null` on the far
+             side. One dead default at each end of a field that is always present. */
+          responseType: clone.type,
+          contentType: ct,
+          responseHeaders: headers,
+          body,
+          base64Encoded,
+          requestHeaders: reqHeaders,
+          requestBody: reqBody,
+          requestBodyBase64: reqBase64,
+          callStack: callStack,
+        });
+      } catch (e) {
+        /* READING A BODY IS THE ONE THING HERE THAT LEGITIMATELY FAILS, AND IT NO LONGER FAILS SILENTLY.
+           `clone.arrayBuffer()`/`.text()` reject when the underlying stream errors or the document is torn
+           down mid-read (Fetch §5.3 "Body mixin"), and `clone.headers`/`.status`/`.type` reach through
+           prototypes the page owns. Those are real conditions for one capture to be lost. What must NOT be
+           lost with them is a defect in the record composition above — so this states which capture went and
+           why, at the same debug volume `emit` and the WebSocket send guard already use. */
+        console.debug("[apiclient:fetch capture]", url, (e && e.message) || e);
+      }
+    })();
 
     return response;
   };

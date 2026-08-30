@@ -411,6 +411,23 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
          "a page-context fetch reached the relay with no headers object — every entry writes one (empty when " +
          "there is nothing to send), and an absent one is a header list its caller composed and this " +
          "message would carry none of");
+  /* NULL IS THE STATEMENT, AND NOW EVERY CALLER MAKES IT — which is what turned these two from defaults into
+     assertions. content.js branches on `msg.body != null` and on `msg.bodyEncoding === "base64"`, so `null`
+     means "no request body" and "the body is text"; those are POSITIVE answers a bodyless GET is entitled to
+     give, and they are exactly what `pageContextGet` now writes rather than leaving out. The `?? null` that
+     stood here spoke them on the caller's behalf, and that is the whole defect: a producer that STOPPED
+     writing `body` — a rename, a dropped branch in `lib/send.js`'s encoder — was indistinguishable from a GET,
+     so a POST the popup composed would have been relayed as a request carrying nothing and its answer
+     rendered as the server's reply to the body the user typed. There is no third spelling on this edge:
+     `undefined` is now a caller that named neither. */
+  DCHECK(opts.body === null || typeof opts.body === "string",
+         "a page-context fetch reached the relay with no body statement — lib/send.js and lib/req2proto.js " +
+         "each write a string or null, and pageContextGet writes null because a GET has none, so an absent " +
+         "one is a caller whose body went missing and whose request would be relayed carrying nothing");
+  DCHECK(opts.bodyEncoding === null || opts.bodyEncoding === "base64",
+         "a page-context fetch named a body encoding this edge does not speak — content.js decodes base64 " +
+         "and treats null as text, so any third spelling (or an absent one) is a body the page would send " +
+         "raw where its caller had encoded it, or decode where its caller had not");
   const reply = await swRpc(
     "tabs.sendMessage",
     tabId,
@@ -419,11 +436,8 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
       url,
       method: opts.method,
       headers: opts.headers,
-      /* NULL IS THE STATEMENT, not the filler: content.js branches on `msg.body != null`, so a bodyless GET
-         says so with null and never by omission. Same for `bodyEncoding`, whose `undefined` on this side is
-         the caller declaring text. */
-      body: opts.body ?? null,
-      bodyEncoding: opts.bodyEncoding ?? null,
+      body: opts.body,
+      bodyEncoding: opts.bodyEncoding,
     },
     { documentId },
   );
@@ -451,7 +465,17 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
 
 /* LEARNING. A GET of a published URL as the page, credentialed by the page's own jar. */
 async function pageContextGet(tabId, url, headers, documentId) {
-  return pageContextFetch(tabId, url, { method: "GET", headers: headers || {} }, documentId);
+  /* A GET HAS NO BODY, AND THIS ENTRY SAYS SO RATHER THAN LEAVING THE RELAY TO INFER IT. This was the one
+     producer of the three that omitted `body`/`bodyEncoding`, and that omission is what forced `_sendPageFetch`
+     to spell a `?? null` — a default that then covered every OTHER caller too, so a body one of them stopped
+     writing arrived looking exactly like this one. Stating the absence here is what lets the relay assert it
+     for all three. */
+  return pageContextFetch(
+    tabId,
+    url,
+    { method: "GET", headers: headers || {}, body: null, bodyEncoding: null },
+    documentId,
+  );
 }
 
 /* THE POPUP'S MANUAL REPLAY — the user named the method, the URL and the body in the Send panel. */

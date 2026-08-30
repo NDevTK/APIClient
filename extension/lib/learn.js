@@ -1763,7 +1763,6 @@ function learnFromResponse(documentId, interfaceName, entry) {
 
 // (Schema inference -- generateSchemaFromPbTree/Json, inferJsonType, inferRepeatedItemType,
 //  mergeSchemaInto -- extracted to lib/schema.js, loaded first. One problem per file.)
-
-/**
- * Create a fetchFn bound to a specific tab.
- */
+// (The page-context fetch binders -- makePageGetFn/makePageFetchFn -- live in offscreen-brain.js beside the
+//  relay entries they wrap. A docblock for them survived here after the move, describing a function this file
+//  no longer has; prose that outlives its mechanism reads as a gap where there is none.)
