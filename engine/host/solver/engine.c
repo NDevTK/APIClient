@@ -27,10 +27,10 @@
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
-#include "core/frame/navigable.h"   /* @HEAP's realm count: the one component that holds this agent's realms */
+#include "core/frame/navigable.h"   /* HTML §7.3.1 Navigables: tree order over this agent's navigables */
 #include "core/frame/document_lifecycle.h"   /* HTML §7.4.6.1: what a navigation does to the Document it replaces */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
-#include "solver/cold.h"      /* what the frontier's parked snapshots are made of — the cold tier's census */
+#include "solver/cold.h"      /* the park and the resume themselves; their CENSUS is composed in result.c */
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/reply_decode.h" /* …and what the reply BODY itself teaches — see engine_provide */
@@ -39,7 +39,7 @@
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
-#include <malloc.h>   /* @HEAP's allocator numbers — see engine_c_alloc_live */
+#include <malloc.h>   /* the allocator under the JS heap — see engine_c_alloc_live, read by result.c */
 #include <stdio.h>
 #include <string.h>
 
@@ -7428,7 +7428,7 @@ int engine_sched_step(void) {
    thousand switches, so a cadence in the hundreds of thousands emits nothing and tells nobody anything. */
 #define ENGINE_PROGRESS_EVERY 1000
 
-/* THE C ALLOCATOR'S OWN TWO NUMBERS — see the @HEAP line for why they are here. `live` is what it has handed
+/* THE C ALLOCATOR'S OWN TWO NUMBERS — see engine.h for what each says. `live` is what it has handed
    out and not been given back (quickjs's bytes included, since js_malloc routes to malloc); `arena` is the
    total space it has taken from the system, which in wasm is LINEAR MEMORY AND ONLY EVER GROWS. It is one
    allocator interface with two spellings: emscripten's dlmalloc exports the classic `mallinfo` with size_t
@@ -7443,16 +7443,47 @@ int engine_sched_step(void) {
 #define ENGINE_MALLINFO() mallinfo2()
 #endif
 
-static size_t engine_c_alloc_live(void)
+size_t engine_c_alloc_live(void)
 {
     ENGINE_MALLINFO_T m = ENGINE_MALLINFO();
     return (size_t)m.uordblks;
 }
 
-static size_t engine_c_alloc_arena(void)
+size_t engine_c_alloc_arena(void)
 {
     ENGINE_MALLINFO_T m = ENGINE_MALLINFO();
     return (size_t)m.arena + (size_t)m.hblkhd;   /* brk'd space plus whatever came from mmap */
+}
+
+/* THE FRONTIER'S OWN READING — see engine.h for what each row is and for why this is one struct rather than
+   twelve getters. It DECIDES NOTHING and it reads no other component: every row is a static of this file, and
+   the things a reader wants BESIDE them (the delta chains, the cold tier's byte census, the WFQ's order) are
+   their own components' to answer and are composed beside this one in solver/result.c. */
+void engine_frontier_census(EngineFrontierCensus *out)
+{
+    DCHECK(out != NULL, "the frontier census was asked for into no record — a reading of an instant that lands "
+                        "nowhere is a census whose caller cannot have taken it at one instant");
+    out->finished          = g_finished;
+    out->sold              = g_flows_sold;
+    out->forks             = decide_fork_total();
+    out->deepest           = g_deepest;
+    out->completed         = g_completed;
+    out->claims_met        = g_orphan_claims_met;
+    out->claims_unmet      = g_orphan_claims_unmet;
+    out->host_asked        = g_host_asked;
+    out->host_answered     = g_host_answered;
+    out->host_answers_late = g_host_answers_late;
+    out->paged_reqs        = g_paged_reqs;
+    /* THE PAYMENT PAIR IS AN INEQUALITY AND IT IS ASSERTED HERE, at the one place both halves are read
+       together. `answered` counts the asks this session PAID; `asked` counts the asks it took. A paid count
+       above the asked count is not a large number, it is the two counters having stopped describing one
+       population — a session that carried a previous session's total (the release column's own recorded
+       defect, one line over from `g_orphan_asks`) reads exactly like a healthy run in both numbers on its
+       own, and only their ORDER says otherwise. */
+    DCHECK(out->host_answered <= out->host_asked,
+           "the frontier census was taken with more host answers than host asks — the two count one "
+           "population (a flow that asked, and the payment that settled it), so `answered > asked` is a "
+           "counter that survived a session boundary or a payment credited against no ask");
 }
 
 static int (*g_provider)(JSContext *ctx);
@@ -7580,271 +7611,54 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
         if (engine_work_done() >= next || solve_candidate_count() != last_cands) {
             while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
             last_cands = solve_candidate_count();
-            /* WHAT IS RUNNING, not just how much has run. A run that stops advancing is the one thing this
-               stream exists to make visible, and a line of pure counters cannot name the flow it stopped in —
-               it says a stall happened and nothing about where, which leaves bisecting the fixture as the only
-               way to localise it. A candidate flow is identified by the (sink, payload) it is verifying, so the
-               last line before a stall names the search that entered it. */
-            {
-                long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
-                cow_swap_stats(&sc, &st, &sm);
-                /* AND WHAT THE TWO CHAINS ARE STILL HOLDING. The three numbers above are about the COST of a
-                   switch and say nothing about RETENTION, which is the other thing a delta can get wrong: a
-                   frontier of four flows whose chains hold tens of thousands of frozen segments is a lifetime
-                   bug, and it reads exactly like a healthy run in `installs`/`entries`/`worst`. */
-                cow_chain_stats(&hs, &he);
-                dom_cow_chain_stats(&ds, &de);
-                printf("@SWAP {\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
-                       "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld}\n",
-                       sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de);
-            }
-            /* WHAT THE FRONTIER'S PARKED SNAPSHOTS ARE MADE OF — the cold tier's census (solver/cold.h). The
-               @SWAP line above says what a context SWITCH costs and the @HEAP line below says what the RUNTIME
-               holds; between them a parked flow's own state — its decision vector, its delta head, its DOM
-               head, its queued work — had no number at all, and that is exactly the thing a pager pages. The
-               PER-FLOW rows are what multiply by the frontier's size; the SHARED rows are counted once for the
-               whole frontier because a frozen segment is referenced by every flow forked below it. */
-            {
-                ColdCensus c;
-                ColdResumed resumed;
-                cold_census(&c);
-                cold_resumed(&resumed);
-                /* `owed` BESIDE `blocked`, because the two answer different questions and the GAP between them
-                   is the diagnostic. `blocked` asks each flow's REGISTER whether the host owes it anything;
-                   `owed` counts the flows that have told the SCHEDULER they cannot progress, which is what the
-                   pick actually reads. A fully blocked frontier reporting `blocked: 512, owed: 59` is one whose
-                   marks are being cleared faster than the sweep can lay them down — the state that made this
-                   document swap COW deltas 1.76 million times instead of reporting STALLED, and which had to be
-                   inferred from a switch count because no number named it. On a healthy stall the two agree. */
-                /* `finished` AND `deepest` BESIDE THEM, because "not one flow has ever completed" and "the
-                   document never reaches its second script" were both being read off numbers that cannot say
-                   it: `live == flows` is the frontier's size against the number ever created, and `script` is
-                   the CURRENT flow's cursor. Both are facts this engine holds — see g_finished/g_deepest. */
-                /* AND `hostAsked`/`hostAnswered` BESIDE THEM, for the question those four leave open: whether
-                   a waiting frontier is waiting because of the RANKING or because nobody has paid it. `blocked`
-                   and `owed` are LEVELS and cannot say (see g_host_asked); these two are the run's TOTALS, so
-                   the gap between them is the answer, and a run whose `hostAnswered` is 0 has never once been
-                   paid. THEY ARE NOT TWO NAMES FOR `blocked`, and the register one over is why: a flow parked
-                   on a DISCOVERY probe or on a fetch reply is host-OWED without being host-BLOCKED, so `owed`
-                   counts a superset of `blocked` — and neither counts what has already been settled, which is
-                   the only thing that distinguishes a paid frontier from a starved one. */
-                /* AND `completed` BESIDE `deepest`, because one number was carrying two facts and the readings
-                   of it disagreed — see g_completed. `deepest` is the highest program STARTED; this is the
-                   highest program this document has ever run to its END. */
-                /* AND `orphans` BESIDE THE THREE OF THEM, because they are all coverage facts about the
-                   DOCUMENT and this is the one that says how much of its code was reached by nothing but
-                   forced invocation. `deepest`/`completed` measure the sequence the page arranged; this counts
-                   the functions the page shipped and never called, each of which became a flow of this
-                   frontier. A page with a large bundle and a zero here is one whose uncalled surface is not
-                   being reached at all, which is the headline capability failing silently — see
-                   engine_orphan_fork. */
-                /* AND THE THREE ORPHAN-CLAIM ROWS BESIDE IT, because `orphans` counts what this session
-                   STARTED and says nothing about what it INHERITED. A park writes an 'o' record per drive it is
-                   holding; a resume rebuilds one flow per record, each waiting for a body the document's own
-                   replay has to re-create. `orphanClaims` is how many were rebuilt, `orphanClaimsMet` how many
-                   waits a take satisfied, and `orphanClaimsUnmet` how many waiting flows FINISHED never having
-                   been handed one.
-                   THE LAST IS THE VERDICT AND THE FIRST TWO ARE CONTEXT. Met can legitimately EXCEED the
-                   records, because a waiting drive forks arms while it replays and every arm of it is the same
-                   drive of the same body; so met-minus-claims is not a loss and must not be read as one.
-                   Unmet is the loss, exactly: on a document whose bytes did not change between two sessions it
-                   is ZERO, and a resumed frontier whose most expensive members drive nothing is otherwise
-                   indistinguishable from one that worked. */
-                /* AND `hostAnswersLate`/`pagedReqs` BESIDE THEM, because a REFUSAL nobody can see is a drop.
-                   The first counts the answers that arrived after this session closed and were refused rather
-                   than written onto a flow that can never run again; the second is how many synchronous
-                   requests this session's sales took with them. Both are what a reader standing at
-                   engine_host_answer's remaining abort needs in order to tell which door the asking flow left
-                   by, and neither decides anything. */
-                printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
-                       "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"orphans\":%ld,"
-                       "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
-                       "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
-                       "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
-                       "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
-                       "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
-                       /* `dynKiB` MOVED FROM THE PER-FLOW HALF TO THE SHARED ONE and took its count with it —
-                          a program's text is one buffer however many timelines hold that program
-                          (solver/dyn_body.h), so it is priced like a frozen segment and not like a delta head.
-                          Summed per flow it reported the sharing as if it did not exist, which is the one
-                          thing this line's own comment says a pager must not do. */
-                       "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
-                       "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
-                       "\"dynBodies\":%ld,\"dynKiB\":%ld,"
-                       "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
-                       c.flows, c.framed, c.blocked, flow_host_owed_count(),
-                       g_finished, g_deepest, g_completed, g_orphans_driven,
-                       resumed.orphans, g_orphan_claims_met, g_orphan_claims_unmet,
-                       g_host_asked, g_host_answered,
-                       g_host_answers_late, g_paged_reqs,
-                       c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
-                       c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
-                       c.pend_bytes / 1024, c.misc_bytes / 1024,
-                       (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes +
-                        c.misc_bytes) / 1024,
-                       c.seg_bytes / 1024, c.dom_seg_bytes / 1024,
-                       c.pin_seg_count, c.pin_seg_entries, c.pin_seg_bytes / 1024,
-                       c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
-                       c.dyn_count, c.dyn_bytes / 1024,
-                       (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes +
-                        c.dyn_bytes) / 1024,
-                       JS_StepMachineCount(JS_GetRuntime(g_sess_ctx)));
-            }
-            /* AND WHAT THE ORDER ITSELF IS MADE OF — solver/result.c's `result_wfq_json`, which is the
-               SAME BYTES the result document carries as `_wfq` and not a second rendering of the same struct.
-               @PROGRESS says how much work is happening and @COLD says how much of it RETIRES, and a run in
-               which both climb while the fixture's probe table stops advancing is one whose entire frontier is
-               doing something that emits nothing — a state neither line can explain, because neither reads any
-               term the pick is made of.
-               WHY THE COMPOSITION IS NOT HERE ANY MORE, AND IT IS THE WHOLE POINT OF THE MOVE. This printf was
-               the WfqCensus struct's only consumer, and this loop runs for exactly one host: `engine_run` is
-               called by the smoke fixture and by nothing else, while the extension's ABI drives
-               `engine_sched_step` directly and never enters this function. So the one measurement §scheduler
-               makes a claim about at both levels was emitted only where a single document can ever stand, and
-               a rank frozen at a constant across documents had no row anywhere that could have shown it. Being
-               the struct's only consumer is also how `svc_min` came to be computed on every census and printed
-               by nobody, and how `families` came to be printed and read by nobody: a struct maintained by hand
-               in flow.h and serialized by a printf here is two hand-kept lists that drift in both directions.
-               There is one composer now, it lives beside the document that ships it, and this host prints what
-               that composer produced.
-               A HOST WHOSE OUTPUT IS A STREAM OF LINES STILL PRINTS ITS OWN LINE, and that is not a second
-               reporting mechanism: it is the same rule result.h states for a page error and test_forced.c
-               states for the @S array — a host that publishes a DOCUMENT reads the census out of it, and a
-               host whose output IS lines must print it when it is taken or it is not in the output at all.
-               The bytes are identical either way, so the two can never disagree. */
-            {
-                char *w = result_wfq_json();
-                CHECK(w != NULL, "the WFQ census could not be composed — this is the only statement this host "
-                                 "makes about the order its frontier is in, and the run continues without it");
-                printf("@WFQ %s\n", w);
-                free(w);
-            }
-            /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose
-               created-flow count climbs with the switch count is either CHURN (each flow finishes and the
-               frontier stays small) or ACCUMULATION (the frontier itself grows) — two different defects with
-               one number between them, and the whole difference is `live`. Beside it the RUNTIME's own live
-               heap, because a frontier that stays small while the heap climbs is a leak somewhere else
-               entirely, and that is the third answer this line has to be able to give. `script` names WHICH
-               program the running flow is in, which is the only thing that turns "it stopped advancing" into a
-               place in the fixture. */
-            {
-                JSMemoryUsage mem;
-                JS_ComputeMemoryUsage(JS_GetRuntime(g_sess_ctx), &mem);
-                /* WHAT THE HEAP IS MADE OF, because "it grew" names nothing to fix. The runtime already counts
-                   its own allocations by KIND, and the kinds answer different questions: a climbing
-                   `allocations` with a flat `objects` is memory no GC object owns (an atom, a string, a
-                   property table, a bytecode function), and each of those has a different owner and a
-                   different place where the owner forgot to let go. */
-                /* A COUNTER IS NAMED AFTER WHAT IT COUNTS, AND THESE TWO WERE NOT. They were emitted as
-                   `realmBytes`/`realmParts` on the claim that `memory_used_*` is "the runtime's own walk of its
-                   CONTEXT LIST", so a reader asking "is the growth child realms?" read them and got an answer
-                   about something else. JS_ComputeMemoryUsage's own body says otherwise: the context walk adds
-                   two entries per realm, and then EVERY object's property array, EVERY fast array's element
-                   vector, every var_ref, bound function, C-closure record and module entry adds to the same
-                   pair. It is the MISCELLANEOUS bucket — everything the typed counters above do not name — and
-                   at this fixture's first switch it already reads 5977 parts with one realm in the runtime.
-                   So it is called that, and the realm question is answered by the one component that knows the
-                   answer: navigable.c's own list of the child realms this agent built, which is precisely the
-                   working set its OOM `CHECK` names (one per flow that created a navigable with an address,
-                   none reclaimed). A mislabelled counter is worse than a missing one — it is a wrong answer
-                   that looks like a measurement. */
-                /* AND WHAT THE BYTES ARE, not just how many of each kind there are. `allocations` and the
-                   counts cannot be compared against `heapKiB`, so a run whose allocator holds 655 MB with 72k
-                   objects has nothing in this line to say where those bytes are; the SIZE fields the runtime
-                   already computes do, and `unattributed` is the residual — malloc_size minus every kind the
-                   runtime can name, which is the engine's OWN js_malloc'd memory (heap call frames, flow
-                   blobs) and is the number that names the next thing to fix when it is the one that climbs. */
-                /* AND THE ALLOCATOR UNDER ALL OF IT, because every number above is quickjs's own accounting and
-                   the engine is not the only thing in the address space. Lexbor's document arenas, the per-flow
-                   COW deltas and every other `malloc` in the host are invisible to `heapKiB`, so a run whose
-                   RSS is sixteen times its JS heap has nothing in this line to say what the other fifteen
-                   sixteenths are. `cLive` is what the C allocator currently has handed out — quickjs's bytes
-                   INCLUDED, since js_malloc routes to malloc — so `cLive - heapKiB` is the host's own live
-                   memory, and `arena` is the address space that allocator has ever needed. In wasm those two
-                   differ permanently: LINEAR MEMORY ONLY GROWS. A page the allocator hands back stays mapped,
-                   so `arena` is a HIGH-WATER MARK and RSS follows it rather than `cLive` — which means a run
-                   whose `cLive` is flat while `arena` climbs is not leaking at all, it is fragmenting, and the
-                   two have entirely different fixes. Nothing in this engine could tell those apart before. */
-                {
-                    /* `memory_used_size` IS THE TOTAL, NOT A ROW BESIDE THE OTHERS. JS_ComputeMemoryUsage's last
-                       two statements add atoms, strings, objects, properties, shapes, function bytecode and
-                       pc2line INTO it, and every fast-array element vector was already added to it in the
-                       object walk — so summing those rows again beside it counted the whole named heap TWICE
-                       and subtracted it twice from malloc_size. `unattributed` was therefore too small by the
-                       size of the entire attributed heap, and could read as a healthy residual while the named
-                       part of the heap was the thing growing. The residual is one subtraction: what the
-                       allocator holds, minus everything the runtime can name. */
-                    long long attributed = (long long)mem.memory_used_size;
-                    printf("@HEAP {\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
-                           "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
-                           "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
-                           "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
-                           "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
-                           "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,\"cLiveKiB\":%lld,\"arenaKiB\":%lld}\n",
-                           (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
-                           (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
-                           (long long)mem.js_func_count, (long long)mem.js_func_code_size,
-                           (long long)mem.array_count,
-                           (long long)mem.memory_used_size, (long long)mem.memory_used_count,
-                           navigable_realm_count(),
-                           (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
-                           (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
-                           (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
-                           (long long)mem.malloc_size - attributed,
-                           /* HOW MUCH OF THAT RESIDUAL IS SUSPENDED BUILTINS. `unattributed` is by construction
-                              everything JS_ComputeMemoryUsage cannot name, and a step machine is the largest
-                              thing in it: one per continuation-holding builtin a flow is inside, each carrying
-                              its captured arguments, so a frontier of parked flows holds one per parked call.
-                              Without this the residual is a number with no decomposition — the same defect
-                              `live` fixed for `flows`. */
-                           JS_StepMachineCount(JS_GetRuntime(g_sess_ctx)),
-                           /* AND THE HEAP CALL STACK, the other half of that residual and the larger one:
-                              a parked flow is a SUSPENDED CHAIN, so this is the frontier's depth in frames.
-                              Growth here with a flat `live` is a chain nothing unwound. */
-                           JS_TrampFrameCount(JS_GetRuntime(g_sess_ctx)),
-                           (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
-                }
-                /* `sold` BETWEEN THEM, because it is the only thing that makes the gap between `flows` and
-                   `live` readable. A frontier that stops growing has either finished flows or PAGED them, and
-                   those are opposite verdicts on the same two numbers: the first says the document drained,
-                   the second says the RAM floor is being traded for cold-tier records. See g_flows_sold. */
-                printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"sold\":%ld,\"objects\":%lld,"
-                       "\"heapKiB\":%lld,\"script\":%d,\"candidates\":%d,\"running\":\"%s\",\"forkedAt\":{",
-                       g_switches, flow_created_count(), flow_count(), g_flows_sold,
-                       (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
-                       g_sess_cur ? g_sess_cur->script_i : -1, last_cands,
-                       g_sess_cur && g_sess_cur->cand_sink ? g_sess_cur->cand_sink : "-");
-                /* WHERE the frontier is growing, not just that it is. The key holds the separator bytes the
-                   constraint is keyed with, which are control characters, so it is escaped like the payload
-                   below rather than emitted raw into JSON. */
-                {
-                    long hits = 0;
-                    const char *k;
-                    int i;
+            /* THE FOUR CENSUSES, EACH PRINTED FROM THE ONE COMPOSER THAT ALSO PUTS IT ON THE RESULT DOCUMENT
+               — solver/result.c's `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`
+               and solver/decide.c's `decide_fork_json`. Not four renderings of four structs: one composer per
+               census, two emission sites, and the bytes are the SAME BYTES, so the two can never disagree.
 
-                    for (i = 0; (k = decide_fork_at(i, &hits)) != NULL; i++) {
-                        if (i) printf(",");
-                        putchar('"');
-                        for (; *k; k++) {
-                            if (*k == '"' || *k == '\\') printf("\\%c", *k);
-                            else if ((unsigned char)*k < 0x20) printf("\\u%04x", (unsigned char)*k);
-                            else putchar(*k);
-                        }
-                        printf("\":%ld", hits);
-                    }
-                    printf("},\"forks\":%ld", decide_fork_total());
-                }
+               WHY THEY MOVED, AND IT IS THE SAME SENTENCE FOR ALL OF THEM. This loop runs for exactly one
+               host: `engine_run` is called by the smoke fixture and by nothing else, while the extension's ABI
+               drives `engine_sched_step` directly and never enters this function. So the pager's own
+               accounting, the runtime's heap decomposition, the cost of a context switch and the frontier's
+               provenance were computed on every census of every production run and printed on NONE of them —
+               §Testing's "measure what the shipped path writes, not what a harness prints" with the writer on
+               the wrong side of it. Sixty-nine numbers, not one of them ever read off a real page.
+
+               A HOST WHOSE OUTPUT IS A STREAM OF LINES STILL PRINTS ITS OWN LINE, and that is not a second
+               reporting mechanism: it is the rule result.h states for a page error and test_forced.c states
+               for the @S array — a host that publishes a DOCUMENT reads the census out of it, and a host whose
+               output IS lines must print it when it is TAKEN or it is not in the output at all.
+
+               THE @PROGRESS LINE IS GONE AND ITS ROWS ARE NOT. `switches`, `flows` and `candidates` were the
+               result document's `_switches`/`_flows`/`_candidates` under a second spelling; `objects` and
+               `heapKiB` were the @HEAP line's own rows; `live` and `sold` are the frontier's and are in the
+               cold census, where `finished` beside them is what tells a frontier that RETIRED its flows from
+               one that PAGED them; `forks` and the fork table are `_forkAt` and its total. What is deleted
+               outright is the three that were a SAMPLE of one flow rather than a census of anything — the
+               running flow's script cursor, and the sink and payload of whichever candidate happened to be
+               switched in. `deepest` and `completed` answer the cursor's question as facts about the DOCUMENT,
+               and the @S array already carries every candidate's sink and payload; a sample of one flow at one
+               instant is not a measurement the next reader can compare against anything. */
+            {
+                char *swap = result_swap_json(), *cold = result_cold_json();
+                char *heap = result_heap_json(ctx), *wfq = result_wfq_json(), *forks = decide_fork_json();
+
+                CHECK(swap && cold && heap && wfq && forks,
+                      "a census could not be composed — these five lines are the whole of what this host says "
+                      "about the frontier it is draining, and a run that continues without one reports its "
+                      "cost, its heap and its order as an absence that reads exactly like a zero");
+                /* ONE PRINT PER MARKER, because a marker is what a reader MATCHES on: build.mjs greps
+                   `^@COLD (\{.*\})$` and `^@WFQ (\{.*\})$` to drive its stuck-run discriminators, and a
+                   single format string carrying five of them puts four marker names in the middle of an
+                   emission where nothing looking for an emission's marker can see them. The bytes on the
+                   stream are identical; what differs is whether the stream is READABLE as five records. */
+                printf("@SWAP %s\n", swap);
+                printf("@COLD %s\n", cold);
+                printf("@HEAP %s\n", heap);
+                printf("@WFQ %s\n", wfq);
+                printf("@FORKAT %s\n", forks);
+                free(swap); free(cold); free(heap); free(wfq); free(forks);
             }
-            if (g_sess_cur && g_sess_cur->cand_payload) {
-                printf(",\"payload\":\"");
-                for (const char *p = g_sess_cur->cand_payload; *p; p++) {
-                    if (*p == '"' || *p == '\\') printf("\\%c", *p);
-                    else if ((unsigned char)*p < 0x20) printf("\\u%04x", (unsigned char)*p);
-                    else putchar(*p);
-                }
-                printf("\"");
-            }
-            printf("}\n");
             fflush(stdout);
         }
     }

@@ -144,9 +144,13 @@ int  decide_cursor(void);
    It is keyed by the CONSTRAINT key rather than a file:line because that is what a predicate IS here — two
    forks at one source and operation are one predicate however many call sites spell it, and a chain (a source
    whose operation string carries a position) shows as `distinct` climbing with `total`, which distinguishes
-   the two shapes on its own. Walk `i` from 0 until it answers NULL; the key is borrowed and stable. */
-const char *decide_fork_at(int i, long *hits);
-long        decide_fork_total(void);
+   the two shapes on its own.
+   THE TABLE RENDERS ITSELF, as one JSON object of key→hits (caller frees) — see the composer for why the
+   escaping belongs here and for why it rides solver/result.c's document as `_forkAt` rather than a host's
+   printf. The indexed accessor this replaces had exactly ONE caller, in `run_scheduler`, which the production
+   ABI never enters. */
+char *decide_fork_json(void);
+long  decide_fork_total(void);
 
 /* THE SIBLING'S DECISION STATE AT A FORK THAT TOOK NO ARM — and the arm-taking fork above is the special case,
  * not this one. A flow forks over a VALUE as well as over a predicate: a peer document's state IS its flows, so

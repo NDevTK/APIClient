@@ -212,6 +212,46 @@ function assertResultDocument(r) {
            "the engine's WFQ census carries a non-finite `" + k + "` — every row of it is a count, a service " +
            "notch or a weight, and a NaN reaching a reader makes every comparison against it false, which is " +
            "the same silent failure §engineRecordFacts asserts one level up for the Level-1 weight");
+  /* THE THREE SUBSYSTEM CENSUSES AND THE FRONTIER'S PROVENANCE — solver/result.h's `_cold`, `_heap`, `_swap`
+     and solver/decide.h's `_forkAt`. They arrive for the reason `_wfq` did and it is the same defect at four
+     times the size: every one of them was printed ONLY by `run_scheduler`, the smoke driver's loop, which
+     `qjs_step` does not call — so what the frontier is made of, what the runtime and the C allocator under it
+     hold, what a context switch costs, and which predicate is growing the frontier were computed on every
+     census of every production run and readable off NONE of them. Sixty-nine numbers, and the subsystems they
+     measure are precisely the ones that only do their real work HERE: the pager pages under RAM pressure in
+     the extension, the realm ceiling is reached on real pages, a delta chain accumulates over a real frontier.
+     ONE LOOP AND NO NAME LIST, WHICH IS THE SAME SPLIT `_wfq` MAKES ONE BLOCK UP. The counters above are named
+     because this zone READS each of them onto the run record one field at a time; these are relayed WHOLE and
+     rendered generically by popup.js, so a row added to a census reaches a human with nothing edited here and
+     a hand-copied list would be a second copy of solver/result.c's format string to keep in step. What this
+     consumer depends on is exactly what is checked: it is an object and every value in it is a finite number.
+     AND THE EMPTY SHAPE IS A DIFFERENT FACT FOR THE FOURTH THAN FOR THE FIRST THREE, so it is asked
+     separately rather than waived. `_cold`, `_heap` and `_swap` read the frontier, the runtime and the
+     allocator — all of which exist at every instant a document can be composed at — so EVERY row is always
+     present and an empty object is a broken contract with no second reading. `_forkAt` is a table of the
+     predicates that actually forked, so `{}` is the positive statement THIS DOCUMENT NEVER FORKED, which is a
+     real and loud answer on a page whose bundle should have branched on opaque input. Collapsing those two
+     into one check would make the loudest finding in this block indistinguishable from a relay that broke. */
+  for (const k of ["_cold", "_heap", "_swap", "_forkAt"]) {
+    DCHECK(r[k] && typeof r[k] === "object" && !Array.isArray(r[k]),
+           "the engine's result document carries no " + k + " census — solver/result.c composes it into " +
+           "every document it builds, partials included. Its absence has the same two causes as a missing " +
+           "counter above and in the same order: check first whether the loaded wasm predates this reader " +
+           "(extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed " +
+           "under this seam. NEVER SOFTEN IT INTO A DEFAULT — these are the only readings this zone has ever " +
+           "been handed of what the pager, the heap and the delta chains are doing on a real page");
+    for (const f of Object.keys(r[k]))
+      DCHECK(typeof r[k][f] === "number" && Number.isFinite(r[k][f]),
+             "the engine's " + k + " census carries a non-finite `" + f + "` — every row of it is a count, a " +
+             "byte figure or a per-switch mean, and a NaN reaching a reader makes every comparison against " +
+             "it false, which is the same silent failure asserted for the WFQ census one block up");
+  }
+  for (const k of ["_cold", "_heap", "_swap"])
+    DCHECK(Object.keys(r[k]).length > 0,
+           "the engine's " + k + " census is EMPTY — unlike `_wfq`, whose absent rows are how a drained " +
+           "frontier says there was no order to report, this one reads the frontier, the runtime or the C " +
+           "allocator, and all three exist at every instant a document can be composed at. There is no " +
+           "reading in which it has no rows, so an empty object is the composer having stopped composing");
   DCHECK(Array.isArray(r._park),
          "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
          "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
@@ -366,6 +406,16 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            composed after the frontier drained or parked and carries `{members: 0}`, which is the true reading
            of that instant and not a reading of the run. */
         wfq: result._wfq,
+        /* AND THE THREE SUBSYSTEM CENSUSES BESIDE IT, CROSSING WHOLE FOR THE IDENTICAL REASON. What the
+           FRONTIER is made of, what the RUNTIME and the C allocator hold, what a context SWITCH costs, and
+           which PREDICATE is growing the frontier — four readings of an instant, four objects, and this zone
+           reads no row of any of them. Until they rode this document they were printed only by the smoke
+           driver's loop, so every one of these numbers had been quoted about one fixture and never once about
+           a real page; a row added to any of them now reaches the popup with nothing edited on this path.
+           THEY STAY FOUR OBJECTS AND ARE NOT FOLDED INTO ONE, because a reader compares WITHIN a census and
+           never across: a byte figure beside a switch count beside a realm count is three different questions
+           and folding them invites exactly the comparison none of them supports. */
+        cold: result._cold, heap: result._heap, swap: result._swap, forkAt: result._forkAt,
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
@@ -2321,14 +2371,44 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     if (!canFetch) return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
+      /* THE CREDENTIALS MODE IS PART OF THE REQUEST'S IDENTITY TOO, AND IT IS REFUSED RATHER THAN DOWNGRADED —
+         the method paragraph's own argument, one field over, and the field it rests on was being written by
+         the engine and read by nothing.
+         XHR §3.5.6 The send() method sets the request's credentials mode from §3.5.4 The withCredentials
+         getter and setter: "If this's cross-origin credentials is true, then `include`; otherwise
+         `same-origin`" — which is exactly what xml_http_request.c writes on the record. safeFetch performs an
+         UNCREDENTIALED fetch, and for a CROSS-ORIGIN `include` request that is not a weaker fetch, it is a
+         DIFFERENT ONE: Fetch's CORS check under credentials mode "include" refuses `Access-Control-Allow-
+         Origin: *` and additionally requires `Access-Control-Allow-Credentials: true` (safe-fetch.js
+         implements both), while the same request uncredentialed sails through a `*`. So a page whose XHR real
+         Chrome answers with a network error was being handed a 200 and a body — and every @H example value
+         and every @S verdict derived from that reply is derived from a response no browser would deliver.
+         A wrong answer is worse than an absent one; `blocked-credentialed-cross-origin` is the same refusal
+         shape as `blocked-method:` and `blocked-scheme:`, and with no bytes beside it xhr_take_reply leaves
+         the response the network error §3 starts it as, which §3.5.6's "handle errors" turns into `error` —
+         which is what the page would have seen.
+         IT IS SCOPED TO CROSS-ORIGIN AND THAT IS THE WHOLE OF THE SCOPE. Same-origin, "include" and
+         "same-origin" attach the identical cookies, so a same-origin XHR is not made wrong by
+         `withCredentials`; it is subject to SECURITY.md's cookies-omitted-by-default, which is a deliberate
+         standing choice about this zone and not a substitution this record can see.
+         THIS DOES NOT TURN CREDENTIALS ON AND CANNOT. `q.credentials` is still NOT mapped onto
+         `opts.credentialed` — that flag is the trusted zone's decision to replay a learned GET with the user's
+         cookies, and taking it from the page's `withCredentials` would let the analysed bundle turn credential
+         attachment on for itself. The field is read only in the REFUSING direction, which is the one direction
+         an untrusted bundle cannot exploit: the worst it can do with it is decline its own request. */
+      DCHECK(q.credentials === "include" || q.credentials === "same-origin",
+             "the engine's xhr.send record names no credentials mode this zone speaks (`" + q.credentials +
+             "`) — XHR §3.5.6 The send() method computes exactly two, and xhr_request_op writes one on every " +
+             "record. A request whose credentials mode is unknown cannot be refused OR issued, and answering " +
+             "it uncredentialed would hand the page a response for a request it did not make");
+      if (q.credentials === "include" && new URL(abs).origin !== new URL(msg.sourceUrl).origin)
+        return { meta: { status: 0, statusText: "blocked-credentialed-cross-origin", headers: [] },
+                 bytes: null };
       /* @security-finding  `headers` COMES FROM THE UNTRUSTED BUNDLE and IS read by the chokepoint: within
          the model (uncredentialed GET to a public host, forbidden header names stripped by the browser), but
          it is why safeFetch's "analyzer probe headers only" comment is no longer the whole truth, and it must
-         be re-decided the day credentialed mode is turned on. `q.credentials` is deliberately NOT mapped onto
-         `opts.credentialed`: that flag is the trusted zone's decision to replay a learned GET with the user's
-         cookies, and taking it from the page's `withCredentials` would let the analysed bundle turn credential
-         attachment on for itself. Only what the chokepoint reads is passed, so there is nothing left here for
-         it to drop in silence. */
+         be re-decided the day credentialed mode is turned on. Only what the chokepoint reads is passed, so
+         there is nothing left here for it to drop in silence. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",

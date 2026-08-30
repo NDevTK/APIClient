@@ -289,9 +289,17 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
        what this component contributed, and it says WHERE TO LOOK FIRST, because it does not know what else in
        the run was allocating: the same fixture with no src'd navigable in it at all builds zero realms and
        still reaches gigabytes (navigable_realm's note has the numbers), so a reader who arrives here must
-       check `childRealms` on the @HEAP line before believing this paragraph is their answer. */
+       check the realm count before believing this paragraph is their answer.
+       WHERE THAT NUMBER IS, AND IT IS NOT WHERE THIS MESSAGE USED TO SEND PEOPLE. It named the heap-census
+       LINE, which is printed by `run_scheduler` — a loop only `engine_run` enters, so the extension, which is
+       where a real page reaches this OOM, prints no such line at all. An instruction that is accurate about
+       the ENGINE and wrong about THIS HOST is the stale-DFAIL failure with an allocation under it: the reader
+       is standing at the crash and is sent to look for output nothing wrote. The census rides the result
+       document now (solver/result.c's `_heap`), which every host publishes, so the message names a FIELD
+       rather than a stream. */
     CHECK(dom != NULL,
-          "OOM creating a child navigable's Document — CHECK @HEAP's `childRealms` FIRST: it counts the child "
+          "OOM creating a child navigable's Document — CHECK the result document's `_heap.childRealms` "
+          "FIRST (a host whose output is a stream of lines prints those same bytes): it counts the child "
           "realms that are LIVE, and a realm is live exactly while its navigable is reachable. If it is small, "
           "this OOM is a bystander and the memory is elsewhere in the run (measured: the smoke fixture builds "
           "zero child realms over 14003 flows and still reaches 3.39 GB). If it is large, the working set is "

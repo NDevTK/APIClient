@@ -49,8 +49,10 @@
  * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
  * `_sinkTainted`, `_sinkSuppressed`), the routed-delivery pair and the four ends of the task it queues
  * (`_routedDelivered`, `_routedRefused`, `_routedTasksFired`, `_routedTasksTargetOrigin`,
- * `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census (`_orphansDriven`, `_orphansAsked`), and a
- * parked search's `tried` and `turns`. `_switches` exists precisely BECAUSE it differs between an
+ * `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census (`_orphansDriven`, `_orphansAsked`), the
+ * four subsystem censuses (`_cold`, `_heap`, `_swap`, `_forkAt` — dropped as READINGS OF AN INSTANT rather
+ * than as costs; see the row itself, and note that `_wfq` is deliberately NOT dropped because the terminal
+ * document's frontier is empty under every schedule), and a parked search's `tried` and `turns`. `_switches` exists precisely BECAUSE it differs between an
  * interleaving scheduler and a FIFO one (result.c says so), so comparing it would fail every schedule by
  * construction. THE ARRIVAL
  * CENSUS IS ARGUED IN ON THAT SAME GROUND AND NOT WAIVED: each of its four is a count of EVENTS, and the
@@ -562,7 +564,27 @@ const DROP = new Map([
                    endpoint lands in `fetchCallSites`, which is compared — so a schedule that drove the same
                    uncalled code and learned the same endpoints passes whatever these two say, and one that
                    learned less fails on the surface rather than on the counter. */
-                "_orphansDriven", "_orphansAsked"])],
+                "_orphansDriven", "_orphansAsked",
+                /* THE FOUR CENSUSES, AND THEY ARE DROPPED ON A GROUND NOTHING ELSE IN THIS LIST IS. Every
+                   name above is a COST — a total over the run whose magnitude the schedule chooses. These are
+                   not totals at all: each is a READING OF AN INSTANT, taken at whatever moment the document
+                   was composed at, of the frontier's live size, the runtime's live heap, the C allocator's
+                   live arena and the fork table. Two schedules that learn the identical findings reach that
+                   instant having allocated differently, switched differently and forked in a different order,
+                   so holding any row of them invariant would fail every schedule against the reference ON
+                   HEALTHY CODE — the false red §Testing names, manufactured by the gate itself.
+                   `_wfq` IS NOT IN THIS LIST AND THAT IS NOT AN OVERSIGHT: it is the one census with an EMPTY
+                   shape, and the document this gate compares is the terminal one, which a session reaches by
+                   draining or parking — both of which leave no members standing. So its value is `{members:0}`
+                   under every schedule and comparing it is free. The other four have no empty shape (result.h
+                   says why), so there is no instant at which they agree by construction.
+                   WHAT IS HELD INVARIANT INSTEAD IS WHAT THE WORK PRODUCED — `fetchCallSites` and
+                   `securitySinks` — so a schedule that paged more, forked elsewhere or held a bigger heap and
+                   still learned the same surface passes, and one that learned less fails on the surface rather
+                   than on a byte count. WHAT IT COSTS IS STATED PLAINLY: this gate cannot catch a census
+                   itself regressing, and nothing else can either — the DCHECKs in solver/result.c and the
+                   shape asserts in extension/bridge.js are what stand there. */
+                "_cold", "_heap", "_swap", "_forkAt"])],
   /* `turns` IS A SWITCH-IN COUNT, WHICH IS `_switches` ONE LEVEL DOWN. solve.c counts it in solve_flow_begin —
      the scheduler's every switch-in of a candidate flow — and says so where it counts it: "IT IS SWITCH-INS AND
      NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a second copy of `tried`: a

@@ -789,6 +789,50 @@ long engine_jobs_run(void);
    eligible. See the declaration in engine.c for the measurement that made the pair necessary. */
 long engine_units_done(void);
 
+/* ---- THE FRONTIER'S OWN NUMBERS, AS ONE READING ----------------------------------------------------------
+ *
+ * Every row here is a static of engine.c that had EXACTLY ONE consumer — the `@COLD`/`@PROGRESS` printfs in
+ * `run_scheduler` — and `run_scheduler` is reached only through `engine_run`, which the smoke fixture calls and
+ * nothing else does. The extension's ABI drives `engine_sched_step` directly and never enters that loop, so
+ * the pager's own accounting, the host-payment pair and the frontier's retirement count were computed on every
+ * census of every production run and printed on none of them. That is §Testing's "measure what the shipped
+ * path writes" with the writer on the wrong side of it: not a wrong number, a number about a host nobody runs.
+ *
+ * IT IS A FILLED STRUCT AND NOT TWELVE GETTERS FOR THE REASON `WfqCensus` IS ONE: the rows are a READING OF AN
+ * INSTANT and must be taken together, so a caller that assembles them from separate calls is a caller that can
+ * assemble them from two instants. solver/result.c renders it; this component decides what it holds. The
+ * accessors above stay accessors because each of them is a TOTAL that any caller may ask for on its own.
+ *
+ * WHAT IS DELIBERATELY NOT HERE: the count of orphan drives (`engine_orphan_census`, which the document
+ * already carries under its own name — a second spelling of one number in one document is the drift the
+ * record-field gate exists to catch) and the RUNNING flow's cursor (a sample of one flow, which `deepest` and
+ * `completed` answer as facts about the DOCUMENT). */
+typedef struct {
+    long finished;          /* flows that ran to their end */
+    long sold;              /* flows this instance PAGED OUT — see g_flows_sold */
+    long forks;             /* decide.c's fork total: how many times the decision seam split a flow */
+    int  deepest;           /* highest program this document has STARTED */
+    int  completed;         /* highest program it has run to its END */
+    long claims_met;        /* an inherited orphan drive whose body a take handed over */
+    long claims_unmet;      /* …and one that FINISHED never having been handed one — the round trip's verdict */
+    long host_asked;        /* flows that asked the host for something */
+    long host_answered;     /* …and were paid */
+    long host_answers_late; /* answers refused because the session had already closed */
+    long paged_reqs;        /* synchronous requests a sale took with it */
+} EngineFrontierCensus;
+void engine_frontier_census(EngineFrontierCensus *out);
+
+/* THE ALLOCATOR UNDER THE JS HEAP, which is the one number quickjs's own accounting structurally cannot give.
+ * `JS_ComputeMemoryUsage` walks the RUNTIME; Lexbor's document arenas, the per-flow COW deltas and every other
+ * `malloc` in this host are invisible to it, so a run whose RSS is sixteen times its JS heap has nothing in
+ * that census to say what the other fifteen sixteenths are. `live` is what the C allocator currently has handed
+ * out (quickjs's bytes INCLUDED, since js_malloc routes to malloc), and `arena` is the address space it has
+ * ever needed. IN WASM THE TWO DIFFER PERMANENTLY AND THAT DIFFERENCE IS THE DIAGNOSIS: linear memory only
+ * grows, so a page handed back stays mapped and `arena` is a HIGH-WATER MARK that RSS follows. A run whose
+ * `live` is flat while `arena` climbs is FRAGMENTING and not leaking, and the two have different fixes. */
+size_t engine_c_alloc_live(void);
+size_t engine_c_alloc_arena(void);
+
 /* WHAT THIS INSTANCE'S TIMELINES DID WITH THE ROUTED RECORDS HANDED TO IT — how many they DELIVERED (each one
    became §9.3.3 step 8's one global task at the receiving Window) and how many they CONSUMED as not theirs (a
    message belonging to the other side of a sender branch this timeline has taken a side at).

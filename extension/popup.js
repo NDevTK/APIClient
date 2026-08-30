@@ -1304,13 +1304,43 @@ function renderEngineRuns() {
       : `frontier order over ${esc(String(m.wfq.members))} flows: `
         + Object.keys(m.wfq).filter((k) => k !== "members")
                 .map((k) => esc(k) + " " + esc(String(m.wfq[k]))).join(" · ");
+    /* AND THE THREE SUBSYSTEMS UNDER THE ORDER — solver/result.c's `_cold`, `_heap`, `_swap` and decide.c's
+       `_forkAt`, relayed whole by bridge.js. Same defect as `_wfq` and four times the size: each was printed
+       ONLY by the smoke driver's loop, which the extension's ABI never enters, so what the pager is holding,
+       what the heap is made of, what a context switch costs and which predicate is growing the frontier had
+       never once been visible to a person running this — on the one host where a real page actually reaches
+       RAM pressure, the realm ceiling and a long-lived delta chain.
+       RENDERED GENERICALLY FOR THE REASON THE ORDER IS: a hand list here would be a third copy of
+       solver/result.c's format string, and that surface's own history is a row computed and printed by nobody
+       beside a row printed and read by nobody. A row added to any census reaches this reader unedited.
+       AND THE FORK TABLE'S EMPTY SHAPE IS RENDERED IN WORDS, NEVER AS A BLANK. `{}` is the positive statement
+       that this document never forked — loud on a bundle that should have branched on opaque input — and a
+       row that simply printed nothing there would say it in the same way as a census that failed to arrive.
+       The other three cannot be empty; bridge.js asserts that rather than this view assuming it. */
+    const CENSUS = [["cold", "frontier + cold tier"], ["heap", "heap"], ["swap", "COW switch"]];
+    const censusRows = CENSUS.map(([k, label]) => {
+      DCHECK(m[k] && typeof m[k] === "object",
+             "an engine run record reached the popup with no `" + k + "` census — solver/result.c composes " +
+             "it into every document it builds and bridge.js asserts its shape before relaying it whole, so " +
+             "a record that has an @RESULT document and no `" + k + "` is that relay broken");
+      return `<span class="deep-label">${esc(label)}: `
+           + Object.keys(m[k]).map((f) => esc(f) + " " + esc(String(m[k][f]))).join(" · ") + `</span>`;
+    });
+    DCHECK(m.forkAt && typeof m.forkAt === "object",
+           "an engine run record reached the popup with no `forkAt` table — solver/decide.c composes it into " +
+           "every document result.c builds, so its absence is that relay broken and not a document that " +
+           "never forked, which is `{}` and is rendered as the sentence it is");
+    censusRows.push(`<span class="deep-label">` + (Object.keys(m.forkAt).length === 0
+      ? `forked at: nothing — no predicate of this document ever split a flow`
+      : `forked at: ` + Object.keys(m.forkAt).map((f) => esc(f) + " ×" + esc(String(m.forkAt[f]))).join(" · "))
+      + `</span>`);
     // The numbers on a snapshot are real observations of a page that is STILL being analysed, so they are
     // shown — and they are labelled as a running total, which is the one thing a completed run's row is not.
     const head = live
       ? `<strong>still running</strong> — snapshot, not a total; ${esc(String(m.resumed))} resumed · so far: `
       : `run complete · ${esc(String(m.resumed))} resumed · `;
     return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
-         + `</span><span class="deep-label">${order}</span></div>`;
+         + `</span><span class="deep-label">${order}</span>` + censusRows.join("") + `</div>`;
   }).join("");
   const live = engineRuns.filter((m) => m.run === "partial").length;
   return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked `

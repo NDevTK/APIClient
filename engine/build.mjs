@@ -169,12 +169,18 @@ const loadNow = () => {
    change in this fixture — this same smoke terminated inside the backstop until it did not — so naming the
    cause is diagnosis, never permission to call the run green. */
 /* THE FIELDS ARE NAMED AND THEIR ABSENCE THROWS, because the paragraph this function replaced read a field the
-   census does not have. It told the reader "`finished` flat with `live` rising is the stall" — and @COLD has no
-   `live`: engine.c prints `flows` for the live count, and `live` is a @PROGRESS name. Written as a comparison
-   that was the worst possible form of the mistake, `undefined > undefined`, which is FALSE for every input, so
-   the stall arm could never once have fired and the discriminator would have answered "healthy" to a stall
+   census does not have. It told the reader "`finished` flat with `live` rising is the stall" — and @COLD had no
+   `live`: it printed `flows` for the live count, and `live` was a @PROGRESS name. Written as a comparison that
+   was the worst possible form of the mistake, `undefined > undefined`, which is FALSE for every input, so the
+   stall arm could never once have fired and the discriminator would have answered "healthy" to a stall
    forever. A JS property read that answers `undefined` is this file's silent-fallback, and the fix is the same
-   one C gets: name the contract and abort on the origin that breaks it. */
+   one C gets: name the contract and abort on the origin that breaks it.
+   AND THE READER WAS RIGHT ABOUT THE NAME, WHICH IS WHY THE PRODUCER MOVED RATHER THAN THIS LIST. `flows` was
+   the frontier's LIVE size and `flows` was ALSO the number of flows ever created, one line apart in two
+   markers — and those are opposite verdicts on the same shape, since a frontier that stops growing has either
+   RETIRED its members or PAGED them. solver/result.c names it `live` now, for what it counts, and the created
+   total keeps `_flows` on the document where it is a TOTAL among totals. A counter named after something it
+   does not count is worse than a missing one: it is a wrong answer that looks like a measurement. */
 /* AND `finished` RISING IS NOT SUFFICIENT FOR "HEALTHY", WHICH THIS FUNCTION LEARNED FROM ITS OWN FIRST REAL
    READING. Measured on the full-document smoke: 150 @H samples, the last row to flip did so at sample 82, and
    the 68 samples after it moved NOTHING — sixteen rows still 0, every `-atsink` row among them — while @COLD's
@@ -185,7 +191,24 @@ const loadNow = () => {
    The probe table is the second stream and the fixture's OWN measure of progress — @COLD says work is moving,
    @H says whether any of it arrived — so the discriminator reads both or it is guessing from half the evidence.
    The window is the same half-the-run window, for the same reason: one WFQ re-ranking pause is not a freeze. */
-const COLD_FIELDS = ["finished", "flows", "blocked", "owed"];
+/* THE LIST IS THE CONTRACT AND THE READING IS A SUBSET OF IT, which is exactly what WFQ_FIELDS is and why it
+   is written the same way. Its job is not that every name below is compared — `hungCause` uses five of them —
+   it is that a row solver/result.c STOPS EMITTING, or renames, fails the build at this line instead of being
+   compared as `undefined` (which is FALSE for every input, so the arm reading it can never fire again). That
+   is not hypothetical here: this file records THREE separate WFQ rows that were added to the census and not to
+   its list, each one a number computed on every sample and read by nothing until somebody noticed months
+   later. A census whose consumer names a subset is a census whose next row joins the unchecked half by
+   default. So the list is solver/result.c's `result_cold_json` format string, in full, and adding a row there
+   is a change in two places on purpose. */
+const COLD_FIELDS = ["live", "framed", "blocked", "owed",
+                     "finished", "deepest", "completed", "sold", "forks",
+                     "orphanClaims", "orphanClaimsMet", "orphanClaimsUnmet",
+                     "hostAsked", "hostAnswered", "hostAnswersLate", "pagedReqs",
+                     "decEntries", "decKiB", "headEntries", "headKiB",
+                     "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendKiB",
+                     "miscKiB", "perFlowKiB",
+                     "segKiB", "domSegKiB", "pinSegs", "pinSegEntries", "pinSegKiB",
+                     "decSegs", "decSegEntries", "decSegKiB", "dynBodies", "dynKiB", "sharedKiB"];
 function probeFlips(out) {
   const rows = [];
   for (const m of out.matchAll(/^@H (.*)$/gm)) {
@@ -454,6 +477,271 @@ function wfqReading(out) {
   };
 }
 
+/* THE COLD ROUND TRIP, PER RECORD KIND — @COLDPARK from session ONE against @COLDRESUME from session TWO, and
+   `orphansMet`/`orphansUnmet` beside them, which is the round trip's own VERDICT and which nothing has ever
+   read. §Time-travel-resume rests entirely on this pair of sessions, and until now the only thing said about
+   it was `[build] cold round trip (native) — residue at <path>`: a statement that two processes exited 0.
+   WHAT A KIND-BY-KIND COMPARISON CATCHES THAT AN EXIT CODE CANNOT. A residue that carried a kind and a resume
+   that rebuilt none of it are two numbers, ABSENT, and with nothing reading them a round trip that silently
+   stopped rebuilding foreign world segments or orphan drives looks exactly like one that worked. That is why
+   test_forced.c added `worlds` to BOTH lines at once: "a kind that is written and never reported is a kind
+   whose absence and whose zero read alike."
+   `orphansUnmet` IS THE VERDICT AND `orphansMet` IS CONTEXT, in test_forced.c's own words. Met can legitimately
+   EXCEED the records — a waiting drive forks arms while it replays and every arm is the same drive of the same
+   body — so met-minus-claims is NOT a loss and must never be reported as one. Unmet is the loss, exactly: on a
+   document whose bytes did not change between two sessions it is ZERO, and a resumed frontier whose most
+   expensive members drive nothing is otherwise indistinguishable from one that worked.
+   SAME FIELD CONTRACT AS EVERY OTHER CENSUS READER HERE: an absent name throws rather than being compared as
+   undefined. THE ABSENCE OF A LINE IS REPORTED AS AN ABSENCE — a park that was never taken prints no
+   @COLDPARK, and reporting `0 records` for that would be the same lie as counting a marker nothing writes. */
+/* THE TWO CONTRACTS IN FULL — spelled out rather than spread into each other, because a field list is only a
+   contract if a reader can see the names in it: a computed key is a name that is not a static fact, and this
+   file's own record-field gate refuses one rather than guessing past it. */
+const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "bytes", "store"];
+/* THE @S ARRIVAL CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT. test_forced.c prints the same four numbers
+   the document carries as `_sourceReads`/`_sinkReached`/`_sinkTainted`/`_sinkSuppressed`, from the same
+   producers, and it prints them under the document's own names — one namespace, so a reader who learns these
+   off `@RESULT` can read them off the line and a rename breaks in one place rather than drifting in two. */
+const SCENSUS_FIELDS = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"];
+const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "orphansMet", "orphansUnmet"];
+function oneCensus(out, marker, fields) {
+  const m = [...out.matchAll(new RegExp(`^${marker} (\\{.*\\})$`, "gm"))];
+  if (!m.length) return null;
+  let v;
+  try { v = JSON.parse(m[m.length - 1][1]); }
+  catch { throw new Error(`[build] the last ${marker} line is not JSON — test_forced.c composes it in one ` +
+                          `printf, so a line that will not parse is that printf truncated or interleaved.`); }
+  for (const f of fields)
+    if (typeof v[f] !== "number")
+      throw new Error(`[build] the ${marker} census has no numeric \`${f}\` — this reader compares ` +
+                      `${fields.join(", ")} and test_forced.c's printf is what decides they exist; a renamed ` +
+                      `field must be renamed here rather than silently compared as undefined.`);
+  return v;
+}
+function coldRoundTrip(v1, v2, store) {
+  const park = oneCensus(v1.captured, "@COLDPARK", COLDPARK_FIELDS);
+  const res = oneCensus(v2.captured, "@COLDRESUME", COLDRESUME_FIELDS);
+  if (!park) return "session ONE printed no @COLDPARK line, so it took no park and there is no round trip to " +
+                    "report — this is the absence of the measurement, not a residue of nothing";
+  if (!res) return `session ONE parked ${park.records} record(s) and session TWO printed no @COLDRESUME line, ` +
+                   `so nothing says what it rebuilt`;
+  /* THE SHELF IS THE SAME SHELF, ASSERTED RATHER THAN ASSUMED. This stage hands session ONE a path and hands
+     session TWO the same path, and if the fixture wrote its residue somewhere else BOTH sessions still exit 0
+     — session two resumes from whatever is at the path it was given (an earlier build's residue, or nothing)
+     and every number below is then a comparison between two unrelated runs. It is one string and it is the
+     one thing that makes the rest of this function a round trip rather than two censuses side by side. */
+  if (park.store !== store)
+    throw new Error(`[build] session ONE parked its residue at ${JSON.stringify(park.store)} and this stage ` +
+                    `handed it ${JSON.stringify(store)} — session TWO resumes from the path THIS stage names, ` +
+                    `so the two sessions are not two ends of one round trip and every kind compared below ` +
+                    `would be a comparison between unrelated runs.`);
+  /* A KIND WRITTEN AND NOT REBUILT IS THE FINDING, and each is named at its own read rather than looped over a
+     list of strings: the whole value of splitting the residue by kind is that the arm which stopped working is
+     the arm to look at, and a kind reached through a computed key is a kind no reader of this file can see. */
+  const kinds = [["segs", park.segs, res.segs], ["flows", park.flows, res.flows],
+                 ["cands", park.cands, res.cands], ["orphans", park.orphans, res.orphans],
+                 ["worlds", park.worlds, res.worlds]];
+  const lost = kinds.filter(([, p, r]) => p > 0 && r < p).map(([k]) => k);
+  const never = kinds.filter(([, p]) => p === 0).map(([k]) => k);
+  return `${park.records} record(s) / ${park.bytes} B parked into ` +
+         kinds.map(([k, p, r]) => `${k} ${p}→${r}`).join(", ") +
+         (lost.length ? `; REBUILT SHORT on ${lost.join(", ")} — a kind session ONE wrote and session TWO did ` +
+                        `not fully re-materialize is the arm to look at`
+                      : `; every kind session ONE wrote came back`) +
+         (never.length ? `; ${never.join(", ")} carried NOTHING to exercise (a zero the residue wrote, not a ` +
+                         `rebuild that failed)` : ``) +
+         `; inherited drives: ${res.orphansMet} met, ${res.orphansUnmet} UNMET` +
+         (res.orphansUnmet > 0
+           ? ` — unmet is the round trip's loss, exactly: on a document whose bytes did not change between the ` +
+             `two sessions it is ZERO, so every one of these is an inherited drive that finished having been ` +
+             `handed no body. (met ABOVE the record count is not a loss: a waiting drive forks arms while it ` +
+             `replays and every arm is the same drive of the same body.)`
+           : ` — zero unmet is the pass: every inherited drive that waited for a body was handed one`);
+}
+
+/* WHAT THE HEAP, THE DELTA CHAINS AND THE FORK TABLE WERE DOING — the @HEAP, @SWAP and @FORKAT censuses, which
+   are emitted at the SAME cadence as @COLD and, until they rode solver/result.c's document, were printed only
+   by `run_scheduler`, a loop `qjs_step` never enters. So `hungCause` below has always ended with "the frontier
+   is doing something this discriminator does not model" while three streams that model exactly those things
+   existed and no reader took them.
+   EACH ROW HERE ANSWERS A CAUSE THE FRONTIER COUNTS STRUCTURALLY CANNOT.
+     `arenaKiB` vs `cLiveKiB` — the allocator's high-water mark against what it currently holds. In wasm linear
+        memory ONLY GROWS, so a run whose `cLive` is flat while `arena` climbs is FRAGMENTING and not leaking,
+        and the two have entirely different fixes. `finished`/`live`/`blocked` cannot see either.
+     `childRealms` — §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling, one realm per flow that creates a navigable
+        with an address, none reclaimed. navigable.c's OOM CHECK sends its reader to this number BY NAME, and
+        until now the extension printed no line carrying it.
+     `unattributed`, `trampFrames`, `stepMachines` — what the residual is MADE of. "The heap grew" names nothing
+        to fix; a residual that is suspended heap frames and a residual that is atoms have different owners.
+     `mean` and `heapSegs` — the COST of a context switch and the RETENTION under it, which are independent and
+        the second is invisible in the first: a frontier of four flows whose chains hold tens of thousands of
+        frozen segments is a lifetime bug that reads exactly like a healthy run in `installs`/`entries`/`worst`.
+     the @FORKAT table's largest row — WHICH PREDICATE is growing the frontier, which is the first question a
+        run whose frontier explodes asks and the one nothing in @COLD or @H can answer.
+   SAME FIELD CONTRACT AS @COLD AND @WFQ: the names are solver/result.c's composers, and an absent one THROWS
+   rather than being silently compared as undefined. ABSENCE OF THE STREAM IS REPORTED AS ABSENCE, because a
+   stage that drives no scheduler prints none of these and for that stage the silence is expected. */
+/* BOTH LISTS ARE THE CONTRACT IN FULL, for COLD_FIELDS' reason exactly — solver/result.c's `result_heap_json`
+   and `result_swap_json` format strings, every row, whether or not the sentence below reads it. */
+const HEAP_FIELDS = ["allocations", "atoms", "strings", "objects", "shapes", "props", "funcs", "funcCode",
+                     "arrays", "miscBytes", "miscParts", "childRealms",
+                     "objBytes", "propBytes", "shapeBytes", "strBytes", "atomBytes", "funcBytes",
+                     "arrayElemBytes", "unattributed", "stepMachines", "trampFrames",
+                     "cLiveKiB", "arenaKiB"];
+const SWAP_FIELDS = ["installs", "entries", "worst", "mean",
+                     "heapSegs", "heapSegEntries", "domSegs", "domSegEntries"];
+function lastTwo(out, marker, fields, composer) {
+  const s = [];
+  for (const m of out.matchAll(new RegExp(`^${marker} (\\{.*\\})$`, "gm")))
+    { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
+  if (s.length === 0) return null;
+  const b = s[s.length - 1], a = s[Math.floor((s.length - 1) / 2)];
+  for (const f of fields) for (const c of [a, b])
+    if (typeof c[f] !== "number")
+      throw new Error(`[build] the ${marker} census has no numeric \`${f}\` — this discriminator reads ` +
+                      `${fields.join(", ")} and ${composer} is what decides they exist; a renamed field must ` +
+                      `be renamed here rather than silently compared as undefined.`);
+  return { a, b, n: s.length };
+}
+/* THE LARGEST OF A NAMED SET, AND WHICH OF THEM MOVED — the shape every reading below is built out of. The
+   pairs are written with each field NAMED at its read rather than looped over a list of strings, and that is
+   deliberate: a field name reached through a computed key is a name no reader of this file and no auditor of
+   this seam can see, so a row solver/result.c renamed would go on being summed under a key that no longer
+   exists. Naming them is what makes the two halves of the contract legible from one side. */
+const biggest = (pairs) => pairs.reduce((x, p) => (p[1] > x[1] ? p : x), pairs[0]);
+const shareText = (pairs, total) => {
+  const t = biggest(pairs);
+  return total > 0 ? `${t[0]} ${t[1]} (${Math.round(100 * t[1] / total)}%)` : `nothing — all ${pairs.length} are 0`;
+};
+function censusReading(out) {
+  const h = lastTwo(out, "@HEAP", HEAP_FIELDS, "solver/result.c's result_heap_json");
+  const w = lastTwo(out, "@SWAP", SWAP_FIELDS, "solver/result.c's result_swap_json");
+  const c = lastTwo(out, "@COLD", COLD_FIELDS, "solver/result.c's result_cold_json");
+  const parts = [];
+  if (h) {
+    const grew = (k) => h.b[k] - h.a[k];
+    /* FRAGMENTING AND LEAKING ARE NAMED APART rather than both reported as "memory grew", because engine.h
+       states the difference and it is the whole of what a reader does next. */
+    parts.push(`heap: live ${h.b.cLiveKiB} KiB / arena ${h.b.arenaKiB} KiB` +
+               (grew("arenaKiB") > 0 && grew("cLiveKiB") <= 0
+                 ? ` — arena grew ${grew("arenaKiB")} KiB while live did NOT, which is FRAGMENTATION and not a leak`
+                 : grew("cLiveKiB") > 0 ? ` — live grew ${grew("cLiveKiB")} KiB` : ` — flat`) +
+               `; ${h.b.childRealms} child realm(s), ${h.b.trampFrames} heap frame(s), ` +
+               `${h.b.stepMachines} suspended builtin(s), ${h.b.unattributed} B the runtime cannot name`);
+    /* WHICH KIND GREW, WHICH IS THE COMPARISON result_heap_json'S OWN COMMENT DESCRIBES AND NOTHING PERFORMED.
+       "A climbing `allocations` with a flat `objects` is memory no GC object owns — an atom, a string, a
+       property table, a bytecode function — and each of those has a different owner and a different place
+       where the owner forgot to let go." Every one of those kinds was emitted on every census of every run
+       and no reader had ever compared two of them. */
+    const top = biggest([["allocations", h.b.allocations - h.a.allocations],
+                         ["atoms", h.b.atoms - h.a.atoms], ["strings", h.b.strings - h.a.strings],
+                         ["objects", h.b.objects - h.a.objects], ["shapes", h.b.shapes - h.a.shapes],
+                         ["props", h.b.props - h.a.props], ["funcs", h.b.funcs - h.a.funcs],
+                         ["funcCode", h.b.funcCode - h.a.funcCode],
+                         ["arrays", h.b.arrays - h.a.arrays],
+                         ["miscParts", h.b.miscParts - h.a.miscParts]]);
+    parts.push(`heap kinds: ${top[1] > 0 ? `${top[0]} grew most (+${top[1]})` : `nothing grew`}` +
+               (h.b.allocations > h.a.allocations && h.b.objects <= h.a.objects
+                 ? `, and allocations climbed with objects FLAT — memory no GC object owns`
+                 : ``));
+    /* AND WHERE THE ATTRIBUTED BYTES ARE, which is the other half of the same sentence: the counts say how
+       many of each kind, and only the SIZE rows say which kind is the memory. `miscBytes` is quickjs's total
+       and is the denominator rather than a row beside them — result_heap_json says why summing it with the
+       others counts the named heap twice. */
+    parts.push(`heap bytes: ${h.b.miscBytes} B attributed, largest ` +
+               shareText([["objBytes", h.b.objBytes], ["propBytes", h.b.propBytes],
+                          ["shapeBytes", h.b.shapeBytes], ["strBytes", h.b.strBytes],
+                          ["atomBytes", h.b.atomBytes], ["funcBytes", h.b.funcBytes],
+                          ["arrayElemBytes", h.b.arrayElemBytes]], h.b.miscBytes));
+  }
+  if (w)
+    parts.push(`swap: ${w.b.installs} switches over ${w.b.entries} delta entries, ${w.b.mean} each and ` +
+               `${w.b.worst} at the worst; chains holding ${w.b.heapSegs} heap segment(s) ` +
+               `(${w.b.heapSegEntries} entries) + ${w.b.domSegs} DOM (${w.b.domSegEntries})` +
+               (w.b.heapSegs > w.a.heapSegs ? ` and still growing` : ``));
+  if (c) {
+    /* WHAT THE PARKED FRONTIER WEIGHS AND WHICH HALF OF IT — the pager's own trade, and the reason
+       result_cold_json splits per-flow from shared: the first multiplies by the frontier's size and the second
+       does not, so a frontier that is expensive because it is BIG and one that is expensive because its shared
+       prefixes are huge take opposite work. Neither total had a reader, nor did any of the rows they are made
+       of. */
+    parts.push(`frontier weight: ${c.b.perFlowKiB} KiB per-flow (largest ` +
+               shareText([["decKiB", c.b.decKiB], ["headKiB", c.b.headKiB],
+                          ["domHeadKiB", c.b.domHeadKiB], ["pendKiB", c.b.pendKiB],
+                          ["miscKiB", c.b.miscKiB]], c.b.perFlowKiB) +
+               `) + ${c.b.sharedKiB} KiB shared (largest ` +
+               shareText([["segKiB", c.b.segKiB], ["domSegKiB", c.b.domSegKiB],
+                          ["pinSegKiB", c.b.pinSegKiB], ["decSegKiB", c.b.decSegKiB],
+                          ["dynKiB", c.b.dynKiB]], c.b.sharedKiB) + `)`);
+    /* AND WHAT IT IS MADE OF IN ENTRIES RATHER THAN BYTES, because those answer different questions: a chain
+       that is long and a chain that is heavy have different causes, and `decEntries` in particular is the
+       number that was QUADRATIC before the decision vector was shared — so a run where it climbs with the
+       frontier's size rather than with its depth is that sharing having stopped working. */
+    parts.push(`frontier shape: ${c.b.framed} framed of ${c.b.live} live, ` +
+               `${c.b.decEntries} decision + ${c.b.headEntries} heap + ${c.b.domHeadEntries} DOM head ` +
+               `entries, ${c.b.jobs} queued job(s), ${c.b.pend} owed repl(ies), ` +
+               `${c.b.dynBodies} shared program(s); frozen: ${c.b.pinSegs}/${c.b.pinSegEntries} pin, ` +
+               `${c.b.decSegs}/${c.b.decSegEntries} decision`);
+    /* AND WHETHER THE HOST PAID, WHETHER THE DOCUMENT GOT ANYWHERE, AND WHAT THE INHERITED DRIVES DID — three
+       questions the frontier's size cannot answer and which each have a row that nothing read. `hostAsked`
+       against `hostAnswered` says whether a waiting frontier is waiting because of the RANKING or because
+       nobody paid it; `deepest` against `completed` says whether this document reaches its later programs at
+       all; `orphanClaimsUnmet` is the cold round trip's loss, exactly. */
+    parts.push(`payment: ${c.b.hostAnswered}/${c.b.hostAsked} asks paid` +
+               (c.b.hostAnswersLate ? `, ${c.b.hostAnswersLate} refused after close` : ``) +
+               (c.b.pagedReqs ? `, ${c.b.pagedReqs} taken by a sale` : ``) +
+               `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +
+               `; forks ${c.b.forks}` +
+               (c.b.orphanClaims
+                 ? `; inherited drives ${c.b.orphanClaims} rebuilt, ${c.b.orphanClaimsMet} met, ` +
+                   `${c.b.orphanClaimsUnmet} UNMET`
+                 : `; no inherited drives in this session`));
+  }
+  /* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
+     chain of gates produces rows in a geometric series and the last site in program order is always the
+     biggest — so a list of every row is a list, and the one row plus how much of all forking it is, is the
+     reading. `{}` is the positive statement that nothing forked, which on a bundle that should have branched
+     on opaque input is the loudest thing in this sentence and must not render as a blank. */
+  const f = [];
+  for (const m of out.matchAll(/^@FORKAT (\{.*\})$/gm)) { try { f.push(JSON.parse(m[1])); } catch { /* tail */ } }
+  if (f.length) {
+    const t = f[f.length - 1], keys = Object.keys(t);
+    if (!keys.length) parts.push(`forks: NONE — not one predicate of this document ever split a flow`);
+    else {
+      const total = keys.reduce((n, k) => n + t[k], 0);
+      const top = keys.reduce((x, k) => (t[k] > t[x] ? k : x), keys[0]);
+      parts.push(`forks: ${total} across ${keys.length} predicate(s), the largest ` +
+                 `${Math.round(100 * t[top] / total)}% at ${JSON.stringify(top)}`);
+    }
+  }
+  /* AND WHAT THE @S HALF MET, WHICH IS THE ONE THING AN EMPTY SECURITY SURFACE CANNOT SAY ABOUT ITSELF. The
+     probe rows above say whether a sink FIRED; `@S []` has four readings that take opposite work — the page
+     never read an attacker source, a source was read but no sink RAN, a sink ran and only the page's own
+     strings arrived, or something tainted arrived and the search was SUPPRESSED because the check on it was
+     unforgeable — and the last of those is the engine's STRONGEST negative result rendered as the same
+     nothing as never having looked. test_forced.c's own note records the measurement that forced the line
+     into existence: a full-budget run emitted 349 samples of `@S []` and 349 @WFQ lines reading `cands: 0`,
+     and neither said whether a sink had run at all. It had not — the script holding all four of them ended on
+     an uncaught throw more than a thousand statements earlier — and `_sinkReached: 0` is the one number that
+     says so. It had no reader; this is it, and it sits beside the @PAGEERR count that names the throw. */
+  const sc = oneCensus(out, "@SCENSUS", SCENSUS_FIELDS);
+  if (sc)
+    parts.push(`@S arrivals: ${sc._sourceReads} attacker-source read(s), ${sc._sinkReached} sink(s) reached, ` +
+               `${sc._sinkTainted} with tainted input, ${sc._sinkSuppressed} search(es) declined as ` +
+               `unforgeable` +
+               (sc._sourceReads === 0
+                 ? ` — ZERO source reads, so an empty @S surface here says nothing about the page: no attacker `
+                   + `input was ever acquired, which is a driving gap and not a finding`
+                 : sc._sinkReached === 0
+                   ? ` — sources were read and NO sink ever ran, so an empty @S surface is a reach problem `
+                     + `rather than a page with nothing to find`
+                   : ``));
+  return parts.length ? parts.join("; ")
+                      : "no @HEAP/@SWAP/@COLD/@FORKAT/@SCENSUS census in this run — a stage that drives no " +
+                        "scheduler prints none of them, so this is the absence of the signal and not a " +
+                        "reading of the run";
+}
+
 /* A DIAGNOSIS DERIVED FROM A SIGNAL THE SUBJECT DOES NOT EMIT IS A CLAIM ABOUT THE INSTRUMENT, NOT THE RUN.
    This discriminator reads @COLD, which only a stage that drives a scheduler prints. Applied to a stage that
    never prints one -- the two-instance ABI drive -- it concluded "has not reached engine_sched_begin's first
@@ -482,8 +770,8 @@ function hungCause(out) {
                       `${COLD_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
                       `field must be renamed here rather than silently compared as undefined.`);
   const span = `over the last ${s.length - Math.floor((s.length - 1) / 2)} of ${s.length} censuses: ` +
-               `finished ${a.finished}→${b.finished}, flows ${a.flows}→${b.flows}, ` +
-               `blocked ${b.blocked}, owed ${b.owed}`;
+               `finished ${a.finished}→${b.finished}, live ${a.live}→${b.live}, ` +
+               `sold ${a.sold}→${b.sold}, blocked ${b.blocked}, owed ${b.owed}`;
 
   /* THE FIXTURE'S OWN PROGRESS, over the same half-the-run window. */
   const h = probeFlips(out);
@@ -508,8 +796,12 @@ function hungCause(out) {
       `, ${neverOne.length} of them 0 in every one of the ${h.length} samples`;
 
   const wfq = wfqReading(out);
+  /* AND THE THREE STREAMS THE VERDICT USED TO END WITHOUT. Every arm below carries it, including the two that
+     name a cause: a healthy-but-short run whose arena is climbing and a healthy-but-short run whose arena is
+     flat want different next steps, and "wanted more budget" is the same sentence for both. */
+  const cs = censusReading(out);
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0 && h.length >= 2 && flipped.length === 0)
-    return `WORK THAT ADVANCES NO STATEMENT (${span}; ${hspan}; ${wfq.text}) — flows retired steadily and not ` +
+    return `WORK THAT ADVANCES NO STATEMENT (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows retired steadily and not ` +
            `one probe row reached 1 across half the run, so more time buys more of the same. ` +
            (wfq.ordered
              ? `The reward spread is wider than the optimism term's whole range and members are sitting at ` +
@@ -524,7 +816,7 @@ function hungCause(out) {
                `name the first of those without reading the row that tells them apart.`) +
            ` The rows still 0 name what nothing scheduled was working toward.`;
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
-    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}; ${wfq.text}) — flows were still ` +
+    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows were still ` +
            `finishing when the budget ran out, nothing was waiting on the host, and ${flipped.length} row(s) ` +
            `reached 1 across half the run. ` +
            (neverOne.length
@@ -534,11 +826,26 @@ function hungCause(out) {
              : `AND EVERY ROW STILL 0 HAS BEEN 1 AT SOME SAMPLE, which is not a budget question at all — a ` +
                `probe row is a statement the result document makes, so one that goes 1→0 means the document ` +
                `stopped making it, and that is the finding rather than the frontier's pace.`);
-  if (b.finished === a.finished && b.flows > a.flows)
-    return `a STALL (${span}; ${hspan}) — no flow finished across half the run while the live flow count rose, ` +
-           `so work is being admitted and not retired.`;
-  return `NEITHER named cause (${span}) — the frontier is doing something this discriminator does not model, ` +
-         `and the two censuses above are the measurement to start from.`;
+  /* A STALL AND A PAGE-OUT ARE DIFFERENT VERDICTS ON THE SAME TWO NUMBERS, and `sold` is the whole of the
+     difference. `finished` flat with `live` rising says work is being ADMITTED and not RETIRED — but a
+     frontier under RAM pressure retires nothing and pages instead, which §Time-travel-resume calls the
+     correct behaviour and not a defect, and it reads identically in `finished` and `live`. The row that says
+     which is `sold`, and it could not be read here at all until the cold census carried it: it was a
+     @PROGRESS name, and @PROGRESS was printed by this same unreachable loop. */
+  if (b.finished === a.finished && b.live > a.live && b.sold > a.sold)
+    return `a FRONTIER BEING PAGED OUT (${span}; ${hspan}; ${cs}) — no flow finished across half the run and ` +
+           `the live count rose, which alone would be a stall, but ${b.sold - a.sold} flow(s) were SOLD to ` +
+           `the cold tier in the same window. That is the RAM floor doing its job, so the question is what ` +
+           `the working set is made of rather than why nothing retires.`;
+  if (b.finished === a.finished && b.live > a.live)
+    return `a STALL (${span}; ${hspan}; ${cs}) — no flow finished across half the run while the live flow ` +
+           `count rose and nothing was paged out, so work is being admitted and not retired.`;
+  /* THE UNMODELLED ARM CARRIES THE MOST EVIDENCE, NOT THE LEAST, which is the inversion it used to be. It
+     said "the two censuses above are the measurement to start from" and printed neither the heap, the delta
+     chains nor the fork table — the three streams that model precisely the causes the frontier counts do not.
+     An arm that admits it cannot name the cause is the one arm that owes the reader everything it has. */
+  return `NEITHER named cause (${span}; ${hspan}; ${wfq.text}; ${cs}) — the frontier is doing something this ` +
+         `discriminator does not model, and the censuses above are the measurement to start from.`;
 }
 
 /* ONE WAY TO RUN A CHILD, and it hands the run's own bytes to the reporter that judges it. The five call sites
@@ -586,7 +893,11 @@ function runChild(label, prog, args, hint) {
   try { rmSync(stable, { force: true }); symlinkSync(log, stable); } catch { /* not fatal */ }
   t.captured = readFileSync(log, "utf8");
   process.stdout.write(t.captured);
-  return runOutcome(label, t, hint);
+  /* THE BYTES TRAVEL WITH THE OUTCOME, because a stage whose verdict spans TWO runs cannot be reached from
+     inside either one. The cold round trip is exactly that shape — session ONE writes a residue and session
+     TWO rebuilds it, and "a kind session one wrote and this one did not rebuild" is a comparison of two
+     children's output that nothing but the caller holds both halves of. */
+  return Object.assign(runOutcome(label, t, hint), { captured: t.captured });
 }
 
 /* BOTH NUMBERS, AT EVERY OUTCOME, WITH THE VERDICT NAMING WHICH ONE DECIDED — CLAUDE.md §Testing, and the
@@ -600,12 +911,71 @@ const runNumbers = (t) =>
   `[build]   elapsed ${t.wallSeconds.toFixed(1)} s against a ${RUN_DEADLOCK_MS / 60000} min deadlock ` +
   `backstop, at load ${loadNow()} on ${cpus().length} cores — CONTEXT, never the verdict`;
 
+/* THE PAGE'S OWN UNCAUGHT ERRORS, WHICH ARE THE ONE THING A GREEN RUN CAN BE HIDING. A `<script>` that throws
+   ends at the throw — spec-correct, and CLAUDE.md deliberately makes this a PRINT rather than an assert,
+   because a forced-exec flow throwing on opaque or attacker input is the one class of error that is NOT a
+   should-never-happen. What was wrong was never that the error happened; it was that nothing SAID so. Every
+   endpoint the rest of that script would have emitted is simply absent, every probe row over them reads 0,
+   and a 0 row is indistinguishable from the capability behind it being unbuilt — three states behind one
+   answer, which is the defect the fixture's whole design exists to prevent.
+   ITS READER IS THIS FUNCTION AND EVERY ARM OF IT, INCLUDING THE PASS. That is the point of putting it here
+   rather than in a hint: a run can answer its whole probe table while a script died a thousand statements
+   before the rows that script would have moved, and the arm that reports such a run is the PASS arm. It paid
+   for itself on its first run by naming a document-ending regression that had been invisible across every
+   prior build, and the only thing it lacked was a reporter — a marker a person has to scroll a log for is a
+   measurement nobody takes. It is REPORTED and never a verdict: a page error is evidence, not a failure. */
+function pageErrorText(out) {
+  const errs = [...out.matchAll(/^@PAGEERR (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x);
+  if (!errs.length) return "";
+  return ` — ${errs.length} UNCAUGHT PAGE ERROR(S), first: ${JSON.stringify(errs[0].slice(0, 160))}` +
+         (errs.length > 1 ? ` (+${errs.length - 1} more, deduped by solver/result.c)` : "");
+}
+
+/* WHAT THE PAGE ITSELF SAID WENT WRONG — the @LOG stream's `level`, which is Console Standard §2.3 Printer's
+   own severity and is the ONLY thing that separates a bundle's ordinary chatter from the page reporting a
+   failure. It is evidence of a different STRENGTH from an uncaught throw and the two belong beside each
+   other: a throw ENDS the script (every endpoint after it silently absent), while `console.error` means the
+   page noticed something and CARRIED ON. Reported, never a verdict — a page's own error log is a fact about
+   the page, not a defect in this engine.
+   IT COUNTS BY LEVEL AND REPORTS ONLY THE SEVERE ONES, because a real bundle logs constantly (the corpus logs
+   carry hundreds of `warn` lines from one analytics library) and a count of everything is a count of nothing.
+   `level` was written on every console line this engine has ever printed and read by nothing, which made the
+   severity of a page's own output a distinction the stream carried and no report used.
+   IT IS NOT ON THE RESULT DOCUMENT AND SHOULD NOT BE. `pageErrors` rides the document because an uncaught
+   throw is ONE deduped fact per script; a page's console output is unbounded and would put a bundle's whole
+   log inside a record composed every PARTIAL_MS. So this is the line-oriented host's half of the same split
+   result.h states for a page error: a host whose output IS lines reports it from the lines. */
+function consoleSeverityText(out) {
+  const bad = { error: 0, warn: 0, assert: 0 };
+  let first = "";
+  for (const m of out.matchAll(/^@LOG (\{.*\})$/gm)) {
+    let v;
+    try { v = JSON.parse(m[1]); } catch { continue; }   /* a truncated tail is not a finding about the page */
+    if (typeof v.level !== "string")
+      throw new Error("[build] an @LOG line carries no string `level` — browser/core/console/console.c writes " +
+                      "one on every line it prints (Console Standard §2.3 Printer's severity), so a line " +
+                      "without it is that printer having changed under this reader, and the severity of a " +
+                      "page's own output would silently become uncountable.");
+    if (!(v.level in bad)) continue;
+    bad[v.level]++;
+    if (!first) first = m[1].slice(0, 160);
+  }
+  const n = bad.error + bad.assert;
+  if (!n && !bad.warn) return "";
+  return ` — the page's own console: ${bad.error} error, ${bad.assert} assert, ${bad.warn} warn` +
+         (n ? `, first severe: ${JSON.stringify(first)}` : ``);
+}
+
 function runOutcome(label, t, hint) {
+  /* APPENDED TO EVERY VERDICT THIS FUNCTION PRODUCES, which is why it is computed once here and folded into
+     `bad` rather than added at each arm — an arm added later would otherwise be the one that drops it, and
+     the arm most likely to be added later is another failure arm. */
+  const pe = pageErrorText(t.captured) + consoleSeverityText(t.captured);
   const bad = (verdict, code, why) => {
     console.error(`[build] ${label} ${why}`);
     console.error(runNumbers(t));
     if (hint) console.error(`[build]   ${hint}`);
-    return { label, verdict, code };
+    return { label, verdict: verdict + pe, code };
   };
   /* THE BUDGET INSTALL, WHICH MUST NEVER FAIL QUIETLY. A run without its rlimit is an UNMEASURED run wearing a
      measured one's report, so the shell says so in the log and this reads the marker rather than trusting a
@@ -691,7 +1061,10 @@ function runOutcome(label, t, hint) {
      invisible if it is only ever printed on the runs that failed. */
   console.log(runNumbers(t));
   const stand = probeStanding(t.captured);
-  return { label, verdict: stand ? `PASS — ${standingText(stand)}` : "PASS", code: 0 };
+  /* THE PASS ARM CARRIES IT TOO, AND IT IS THE ARM THAT NEEDS IT MOST — see pageErrorText. A run that answers
+     every statement it makes while one of the page's scripts died is still a PASS of the probe table and is
+     not a clean run of the document, and those two are the same green line without this. */
+  return { label, verdict: (stand ? `PASS — ${standingText(stand)}` : "PASS") + pe, code: 0 };
 }
 
 /* A STAGE THAT CANNOT RUN IS REPORTED AS SKIPPED WITH ITS REASON, AND IT CARRIES A NON-ZERO CODE. Absorbing it
@@ -1083,7 +1456,7 @@ if (NATIVE) {
        flows standing on segments this build never wrote — and it would look like a pass. */
     rmSync(store, { force: true });
     const v1 = runChild("session ONE (--cold-park)", bin, ["--cold-park", store],
-      "read its `@H park-*` rows and the @COLDPARK census: a 0 there names which record kind the park did " +
+      "read its `@H park-*` rows beside the round-trip line below: a 0 kind names which record the park did " +
       "not write, and the moment it was taken at is `fixture_want_park` in engine/host/test_forced.c.");
     /* SESSION TWO IS SKIPPED AND NOT MERELY UNREPORTED. This is a real data dependency and not a door — the
        resume reads the residue session ONE writes, so with no residue there is nothing for it to be a test OF
@@ -1091,9 +1464,15 @@ if (NATIVE) {
     const v2 = v1.code
       ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
       : runChild("session TWO (--cold-resume)", bin, ["--cold-resume", store],
-                 "`@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a kind " +
-                 "session one wrote and this one did not rebuild is the arm to look at.");
-    if (!v1.code && !v2.code) console.log("[build] cold round trip (" + kind + ") — residue at " + store);
+                 "the round-trip line below says what it rebuilt out of the residue; a kind session one " +
+                 "wrote and this one did not rebuild is the arm to look at.");
+    /* AND THE ROUND TRIP IS REPORTED RATHER THAN HINTED AT, which is this file's own recorded lesson applied
+       to the last two places that had not had it. The hints these replace "named the mechanism, named the
+       obstacle, and left the reporter printing an instruction to a human about numbers the reporter itself
+       could have read" — and worse, they printed only on a NON-PASS, so the round trip that WORKED said
+       nothing at all and `orphansUnmet`, the round trip's own verdict, has never been read by anything. */
+    if (!v1.code && !v2.code) console.log("[build] cold round trip (" + kind + ") — " +
+                                          coldRoundTrip(v1, v2, store) + " — residue at " + store);
     report([v1, v2]);
   }
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is

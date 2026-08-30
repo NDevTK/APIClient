@@ -446,21 +446,70 @@ static void fork_key_count(const char *key)
     g_fork_other++;
 }
 
-const char *decide_fork_at(int i, long *hits)
+/* THE CENSUS SERIALIZES ITSELF, which is the rule solver/result.c states for every surface it composes:
+   endpoint.c walks its deduped endpoints, solve.c its fire-verified sinks, and the table this file owns is
+   rendered by this file. The alternative is what it replaced — an indexed accessor whose ONE caller was a
+   printf in a third file, hand-escaping keys it did not own — and the keys are precisely why that was the
+   wrong shape: a constraint key carries the SEPARATOR BYTES it is built with, which are control characters, so
+   the escaping is a fact about this table's own contents and belongs where the table is.
+
+   IT MOVED FOR THE REASON EVERY OTHER CENSUS DID (result.h): its only emission was `run_scheduler`'s
+   `@PROGRESS` line, and `run_scheduler` is reached only through `engine_run`, so "which predicate is growing
+   the frontier" — the first question a run whose frontier explodes asks — had never once been answerable off a
+   production run. It rides the result document as `_forkAt`.
+
+   THE OVERFLOW ROW IS A ROW. An undercount that says so is a measurement; one that does not is a lie. It is
+   emitted whenever the table overflowed, under a name no constraint key can collide with because no key is
+   prose. Caller frees. */
+char *decide_fork_json(void)
 {
-    if (i < 0 || i > DECIDE_FORK_KEYS) return NULL;
-    if (i < DECIDE_FORK_KEYS && g_fork_keys[i].n) {
-        *hits = g_fork_keys[i].n;
-        return g_fork_keys[i].key;
+    static const char OVERFLOW_KEY[] = "(more predicates than this table holds)";
+    size_t n = 3;   /* "{}" and the NUL */
+    char *out;
+    size_t len = 0;
+    int i, rows = 0;
+
+    /* THE SIZE IS COUNTED FROM THE ROWS THEMSELVES rather than estimated, because a key is the PAGE's bytes
+       and has no bound this file may assume. Every byte of a key can escape to six (`\u00XX`), a row costs the
+       two quotes, the colon, the comma and a long's widest 20 digits, and the object costs its braces. */
+    for (i = 0; i < DECIDE_FORK_KEYS; i++)
+        if (g_fork_keys[i].n) n += strlen(g_fork_keys[i].key) * 6 + 24;
+    if (g_fork_other) n += sizeof OVERFLOW_KEY * 6 + 24;
+    out = malloc(n);
+    if (!out) return NULL;
+    out[len++] = '{';
+    for (i = 0; i <= DECIDE_FORK_KEYS; i++) {
+        const char *k;
+        long hits;
+
+        if (i < DECIDE_FORK_KEYS) {
+            if (!g_fork_keys[i].n) continue;
+            k = g_fork_keys[i].key; hits = g_fork_keys[i].n;
+        } else {
+            if (!g_fork_other) break;
+            k = OVERFLOW_KEY; hits = g_fork_other;
+        }
+        if (rows++) out[len++] = ',';
+        out[len++] = '"';
+        for (; *k; k++) {
+            if (*k == '"' || *k == '\\') { out[len++] = '\\'; out[len++] = *k; }
+            else if ((unsigned char)*k < 0x20) len += (size_t)snprintf(out + len, n - len, "\\u%04x",
+                                                                      (unsigned char)*k);
+            else out[len++] = *k;
+        }
+        out[len++] = '"';
+        out[len++] = ':';
+        len += (size_t)snprintf(out + len, n - len, "%ld", hits);
+        DCHECK(len < n, "the fork census overran the size its own rows were counted from — the count above is "
+                        "over the same table this loop walks, so a row that does not fit is a key that grew "
+                        "between the two passes or an escape wider than the six bytes priced for it");
     }
-    /* THE OVERFLOW ROW IS A ROW, and it is the one right after the last real one — rows are claimed in order,
-       so the FIRST empty index is where the real ones end and is the only index it may appear at. An
-       undercount that says so is a measurement; one that does not is a lie. */
-    if (g_fork_other && i <= DECIDE_FORK_KEYS && (i == 0 || g_fork_keys[i - 1].n)) {
-        *hits = g_fork_other;
-        return "(more predicates than this table holds)";
-    }
-    return NULL;
+    out[len++] = '}';
+    out[len] = 0;
+    DCHECK(len < n, "the fork census overran its buffer at the closing brace — a truncation here does not lose "
+                    "a row, it loses the brace, so the document that embeds it will not parse and every "
+                    "finding for this page is discarded");
+    return out;
 }
 
 long decide_fork_total(void) { return g_fork_total; }

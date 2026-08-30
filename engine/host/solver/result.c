@@ -11,6 +11,13 @@
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
 #include "solver/concolic.h"   /* whether this run ever acquired attacker input — see concolic_source_reads */
 #include "solver/cold.h"    /* …and what it PARKED, if the host asked this engine to page out */
+#include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
+#include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
+/* THE REALM COUNT IS THE ONE ROW OF THE HEAP CENSUS THAT quickjs CANNOT ANSWER, and it is a BROWSER fact: a
+   child realm is built per flow that creates a navigable with an address, so the component that holds the list
+   is the one that answers. §A-CAPABILITY-MATERIALIZED-PER-FLOW makes it a ceiling, and navigable.c's own OOM
+   CHECK sends its reader to this number by name. */
+#include "core/frame/navigable.h"
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
    unbuilt capability, and it was silent. This is a plain string set — the message is the page's own, so nothing
@@ -229,6 +236,193 @@ char *result_wfq_json(void) {
     return out;
 }
 
+/* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes
+   here rather than in a host's printf. It DECIDES NOTHING: it reads cow.c's and dom_cow.c's own stats and
+   renders them.
+
+   THE TWO HALVES ANSWER DIFFERENT QUESTIONS AND THAT IS WHY THEY ARE ON ONE LINE. `installs`/`entries`/`worst`
+   are the COST of a switch — how many the scheduler made and how many delta slots it had to unapply and
+   re-apply, with `mean` the per-switch figure a reader actually compares. `heapSegs`/`domSegs` and their entry
+   counts are RETENTION, which is the other thing a delta can get wrong and which the cost rows are blind to: a
+   frontier of four flows whose chains hold tens of thousands of frozen segments is a lifetime bug that reads
+   exactly like a healthy run in the first three numbers.
+
+   THE ARITHMETIC, DONE FROM THE FORMAT STRING RATHER THAN ESTIMATED: its fixed bytes are 99 without the
+   conversion specifiers, and the eight numbers' widest forms are 452 (seven longs at 20 and one `%.1f` double
+   at 312 — 309 integer digits plus sign, point and fraction). 99 + 452 + 1 = 552 against this 576. RE-DO IT
+   WHEN YOU ADD A ROW; the DCHECK below catches the arithmetic being re-done wrong and is not a substitute for
+   doing it. */
+char *result_swap_json(void) {
+    long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
+    size_t n = 576;
+    char *out;
+    int m;
+
+    cow_swap_stats(&sc, &st, &sm);
+    cow_chain_stats(&hs, &he);
+    dom_cow_chain_stats(&ds, &de);
+    out = malloc(n);
+    if (!out) return NULL;
+    m = snprintf(out, n,
+                 "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
+                 "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld}",
+                 sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de);
+    DCHECK(m > 0 && (size_t)m < n,
+           "the swap census did not fit its buffer — a truncation here does not lose a digit, it loses the "
+           "closing brace, so the document that embeds it will not parse and every finding for this page is "
+           "discarded. Re-do the byte count above rather than widening it by eye");
+    return out;
+}
+
+/* WHAT THE FRONTIER IS MADE OF AND WHAT ITS PARKED SNAPSHOTS WEIGH — solver/cold.h's ColdCensus, this
+   instance's own totals (solver/engine.h's EngineFrontierCensus) and what a resume rebuilt out of a residue.
+   See result.h for why it composes here.
+
+   THE PER-FLOW ROWS ARE WHAT MULTIPLY BY THE FRONTIER'S SIZE and the SHARED rows are counted once for the
+   whole frontier, because a frozen segment is referenced by every flow forked below it — so `perFlowKiB` and
+   `sharedKiB` are the two totals a pager actually trades against each other, and each is a SUM of the rows
+   named beside it rather than a separate measurement. `dynKiB` is priced with the shared half and not the
+   per-flow one: a program's text is ONE buffer however many timelines hold that program (solver/dyn_body.h),
+   and summing it per flow would report the sharing as if it did not exist.
+
+   `owed` BESIDE `blocked`, because the two answer different questions and the GAP between them is the
+   diagnostic. `blocked` asks each flow's REGISTER whether the host owes it anything; `owed` counts the flows
+   that have told the SCHEDULER they cannot progress, which is what the pick actually reads. A fully blocked
+   frontier reporting `blocked: 512, owed: 59` is one whose marks are being cleared faster than the sweep can
+   lay them down. On a healthy stall the two agree.
+
+   `live` IS NAMED AFTER WHAT IT COUNTS, WHICH IT WAS NOT. It was emitted as `flows` while the run's created
+   count was ALSO called `flows` one line away, so the frontier's current size and the number of flows ever
+   made were one word — and those two are opposite verdicts on the same shape: a frontier that stops growing
+   has either RETIRED its flows or PAGED them out, and `finished` and `sold` beside `live` are what tells those
+   apart. The created total keeps its own name on the document (`_flows`), where it is a TOTAL among totals.
+
+   THE THREE ORPHAN-CLAIM ROWS ARE THE COLD ROUND TRIP'S VERDICT. `orphanClaims` is how many inherited drives a
+   resume rebuilt out of the residue, `orphanClaimsMet` how many of those waits a take satisfied, and
+   `orphanClaimsUnmet` how many waiting flows FINISHED never having been handed a body. THE LAST IS THE VERDICT
+   AND THE FIRST TWO ARE CONTEXT: met can legitimately EXCEED the records, because a waiting drive forks arms
+   while it replays and every arm is the same drive of the same body, so met-minus-claims is not a loss.
+   Unmet is the loss, exactly — on a document whose bytes did not change between two sessions it is ZERO.
+
+   NO `orphans` ROW: the count of drives this session STARTED is `_orphansDriven` on the document already, and
+   two spellings of one number in one document is the drift the record-field contract exists to catch.
+
+   THE ARITHMETIC, from the format string: fixed bytes 483 without the conversion specifiers, and the
+   thirty-eight numbers' widest forms are 733 (thirty-five longs at 20 and three ints at 11).
+   483 + 733 + 1 = 1217 against this 1280. RE-DO IT WHEN YOU ADD A ROW. */
+char *result_cold_json(void) {
+    ColdCensus c;
+    ColdResumed resumed;
+    EngineFrontierCensus e;
+    size_t n = 1280;
+    char *out;
+    int m;
+
+    cold_census(&c);
+    cold_resumed(&resumed);
+    engine_frontier_census(&e);
+    out = malloc(n);
+    if (!out) return NULL;
+    m = snprintf(out, n,
+                 "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
+                 "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"sold\":%ld,\"forks\":%ld,"
+                 "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
+                 "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
+                 "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
+                 "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
+                 "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
+                 "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
+                 "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
+                 "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld}",
+                 c.flows, c.framed, c.blocked, flow_host_owed_count(),
+                 e.finished, e.deepest, e.completed, e.sold, e.forks,
+                 resumed.orphans, e.claims_met, e.claims_unmet,
+                 e.host_asked, e.host_answered, e.host_answers_late, e.paged_reqs,
+                 c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
+                 c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
+                 c.pend_bytes / 1024, c.misc_bytes / 1024,
+                 (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes) / 1024,
+                 c.seg_bytes / 1024, c.dom_seg_bytes / 1024,
+                 c.pin_seg_count, c.pin_seg_entries, c.pin_seg_bytes / 1024,
+                 c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
+                 c.dyn_count, c.dyn_bytes / 1024,
+                 (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024);
+    DCHECK(m > 0 && (size_t)m < n,
+           "the cold/frontier census did not fit its buffer — a truncation here loses the closing brace, so "
+           "the document that embeds it will not parse and every finding for this page is discarded. Re-do "
+           "the byte count above rather than widening it by eye");
+    return out;
+}
+
+/* WHAT THE RUNTIME AND THE C ALLOCATOR UNDER IT HOLD — quickjs's own JS_ComputeMemoryUsage walk, the child
+   realms navigable.c built, and mallinfo. See result.h for why it composes here.
+
+   "IT GREW" NAMES NOTHING TO FIX, which is why the kinds are here and not just a total. A climbing
+   `allocations` with a flat `objects` is memory no GC object owns — an atom, a string, a property table, a
+   bytecode function — and each of those has a different owner and a different place the owner forgot to let go.
+
+   `miscBytes`/`miscParts` ARE NAMED AFTER WHAT THEY COUNT AND WERE NOT. They were emitted as
+   `realmBytes`/`realmParts` on the claim that quickjs's `memory_used_*` is a walk of the CONTEXT LIST, so a
+   reader asking "is the growth child realms?" read them and got an answer about something else:
+   JS_ComputeMemoryUsage adds two entries per realm and then adds EVERY object's property array, every fast
+   array's element vector, every var_ref, bound function, C-closure record and module entry to the same pair.
+   It is the MISCELLANEOUS bucket. The realm question is answered by the component that knows —
+   `navigable_realm_count`, which is the working set §A-CAPABILITY-MATERIALIZED-PER-FLOW names as a ceiling and
+   which navigable.c's own OOM CHECK sends its reader to by name.
+
+   `unattributed` IS ONE SUBTRACTION AND NOT A SUM OF ROWS. JS_ComputeMemoryUsage's last statements add atoms,
+   strings, objects, properties, shapes, function bytecode and pc2line INTO `memory_used_size`, and every fast
+   array's elements were already added to it in the object walk — so summing those rows again beside it counts
+   the named heap TWICE and subtracts it twice from malloc_size, leaving a residual that reads healthy while
+   the named part of the heap is the thing growing. The residual is: what the allocator holds, minus everything
+   the runtime can name. `stepMachines` and `trampFrames` are what decompose it — a suspended continuation-
+   holding builtin and a heap call frame are the two largest things quickjs cannot name, and a frontier of
+   parked flows holds one of each per parked call and per suspended activation.
+
+   THE ARITHMETIC, from the format string: fixed bytes 304 without the conversion specifiers, and the
+   twenty-four numbers' widest forms are 453 (twenty-one int64s at 20 and three ints at 11).
+   304 + 453 + 1 = 758 against this 768. RE-DO IT WHEN YOU ADD A ROW. */
+char *result_heap_json(JSContext *ctx) {
+    JSMemoryUsage mem;
+    JSRuntime *rt;
+    long long attributed;
+    size_t n = 768;
+    char *out;
+    int m;
+
+    DCHECK(ctx != NULL, "the heap census was asked for against no realm — every row of it is a walk of ONE "
+                        "runtime, so a census with no runtime to walk is a reading of nothing");
+    rt = JS_GetRuntime(ctx);
+    JS_ComputeMemoryUsage(rt, &mem);
+    attributed = (long long)mem.memory_used_size;
+    out = malloc(n);
+    if (!out) return NULL;
+    m = snprintf(out, n,
+                 "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
+                 "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
+                 "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
+                 "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
+                 "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
+                 "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,"
+                 "\"cLiveKiB\":%lld,\"arenaKiB\":%lld}",
+                 (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
+                 (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
+                 (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
+                 (long long)mem.memory_used_size, (long long)mem.memory_used_count,
+                 navigable_realm_count(),
+                 (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
+                 (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
+                 (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
+                 (long long)mem.malloc_size - attributed,
+                 JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
+                 (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
+    DCHECK(m > 0 && (size_t)m < n,
+           "the heap census did not fit its buffer — a truncation here loses the closing brace, so the "
+           "document that embeds it will not parse and every finding for this page is discarded. Re-do the "
+           "byte count above rather than widening it by eye");
+    return out;
+}
+
 /* The composition, and nothing else. Each surface serializes itself — endpoint.c walks its deduped endpoints,
    solve.c its fire-verified sinks — and this only decides that they are ONE document and what it is called.
    Keeping that decision in one place is the point: a second caller that wanted "just the endpoints" is how a
@@ -240,6 +434,14 @@ char *result_json(JSContext *ctx) {
     /* THE ORDERING, ON THE ONE SURFACE THAT CROSSES THE ABI — see result.h. Composed here rather than by a
        host, because the host that had it is a driver the production entry does not call. */
     char *wfq = result_wfq_json();
+    /* AND THE THREE CENSUSES THAT RODE NOTHING AT ALL, for the same reason and on the same surface: what the
+       FRONTIER is made of, what the RUNTIME holds, and what a context SWITCH costs. result.h states the
+       argument; `decide.c`'s table joins them because "which predicate is growing the frontier" is the same
+       question one level down and had the same single unreachable emission site. */
+    char *cold = result_cold_json();
+    char *heap = result_heap_json(ctx);
+    char *swap = result_swap_json();
+    char *forkAt = decide_fork_json();
     /* NO `probeResults` SURFACE. It carried the schemas an API's own REJECTION described, and a rejection is
        the answer to a DELIBERATELY MALFORMED REQUEST — one this engine cannot make, since its only network
        edge is the pending register and the host performs a GET through safeFetch. The reader on this side was
@@ -249,11 +451,17 @@ char *result_json(JSContext *ctx) {
     size_t n;
     char *out;
 
-    if (!eps || !sinks || !errs || !wfq) { free(eps); free(sinks); free(errs); free(wfq); return NULL; }
+    if (!eps || !sinks || !errs || !wfq || !cold || !heap || !swap || !forkAt) {
+        free(eps); free(sinks); free(errs); free(wfq);
+        free(cold); free(heap); free(swap); free(forkAt);
+        return NULL;
+    }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 518 with its conversion specifiers
-       and 450 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
-       longs at 20), so the worst case is 826 against this 896. It was 192 for a shape whose widest form was
+       and stated so the count can be re-done: the format's fixed bytes are 564 with its conversion specifiers
+       and 488 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
+       longs at 20), so the worst case is 864 against this 928. The NINE `%s` contribute nothing to that
+       figure and everything to the sum above it — each is a composed surface whose real length is added by
+       `strlen`, which is why a census joining the document costs a term in `n` and 11 bytes of literal here. It was 192 for a shape whose widest form was
        already 197 — inside only because the real numbers are small — then 384 against a worst case the arrival
        census took to 454, then 512 against 488, then 640 against the routed-delivery pair's 566, then 768.
        THAT 768 WAS ALREADY 50 BYTES SHORT WHEN THIS COUNT WAS RE-DONE, and the prose above it was the reason
@@ -270,7 +478,8 @@ char *result_json(JSContext *ctx) {
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(wfq) + strlen(cold_park_json()) + 896;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(wfq) + strlen(cold_park_json()) +
+        strlen(cold) + strlen(heap) + strlen(swap) + strlen(forkAt) + 928;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -338,14 +547,21 @@ char *result_json(JSContext *ctx) {
                                 nested object and not twenty-three more `_`-prefixed siblings: a consumer that
                                 mixed them into the same row would be showing an instantaneous spread beside a
                                 cumulative switch count and calling both "so far". */
-                             "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_wfq\":%s,\"_park\":%s}",
+                             "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_wfq\":%s,"
+                             /* THE THREE SUBSYSTEM CENSUSES, EACH ONE NESTED OBJECT, for the reason `_wfq` is
+                                one: every `_`-prefixed sibling above is a TOTAL over the run and every row
+                                inside these is a READING OF AN INSTANT, so spreading them into siblings would
+                                put a cumulative switch count beside a momentary byte figure and call both "so
+                                far". Three objects and not one, because a reader compares WITHIN a census and
+                                never across — see result.h. */
+                             "\"_cold\":%s,\"_heap\":%s,\"_swap\":%s,\"_forkAt\":%s,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
-                     orphansDriven, orphansAsked, wfq, cold_park_json());
+                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED, AND IT IS THE ONLY THING THAT WAS STILL RIGHT. It was
            192 bytes for three counters and now carries twenty-one, whose widest form is 375 digits beside 450
            bytes of literal — and the previous 768 did not cover that, which nothing noticed because the prose
@@ -360,5 +576,9 @@ char *result_json(JSContext *ctx) {
     free(sinks);
     free(errs);
     free(wfq);
+    free(cold);
+    free(heap);
+    free(swap);
+    free(forkAt);
     return out;
 }

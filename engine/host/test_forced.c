@@ -6764,12 +6764,20 @@ static int fixture_have_answers(void) {
        holding all four of them ended on an uncaught throw more than a thousand statements earlier — and
        `reached=0` is the one number that says so.
        IT IS THE PRODUCERS' OWN COUNTS AND NOT A RE-DERIVATION OUT OF `js`, for the reason the @S array above
-       is: measure what the shipped path writes, or the number is a property of the instrument. */
+       is: measure what the shipped path writes, or the number is a property of the instrument.
+       AND IT SPELLS THEM THE WAY THE DOCUMENT DOES, WHICH IT DID NOT. The same four producers reach a reader
+       twice — this line, and `result_json`'s `_sourceReads`/`_sinkReached`/`_sinkTainted`/`_sinkSuppressed`,
+       which bridge.js asserts and the popup renders — and while this line dropped the underscore they were
+       EIGHT names for four numbers, four of which nothing anywhere read. That is not a cosmetic difference: a
+       field name is the whole of what a reader has, so a second spelling is a second contract, and the one
+       with no consumer is the one that goes quietly wrong. One namespace, one spelling, and a reader who
+       learns these names off the document can read them off this line. */
     {
         long reached = 0, tainted = 0, suppressed = 0;
 
         solve_arrival_census(&reached, &tainted, &suppressed);
-        printf("@SCENSUS {\"sourceReads\":%ld,\"sinkReached\":%ld,\"sinkTainted\":%ld,\"sinkSuppressed\":%ld}\n",
+        printf("@SCENSUS {\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
+               "\"_sinkSuppressed\":%ld}\n",
                concolic_source_reads(), reached, tainted, suppressed);
     }
     free(js);

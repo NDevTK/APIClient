@@ -53,6 +53,42 @@ char *result_json(JSContext *ctx);
  * READING — where before, all three would have been the same zeroes. */
 char *result_wfq_json(void);
 
+/* ---- THE THREE CENSUSES THAT RODE NOTHING -----------------------------------------------------------------
+ *
+ * `result_wfq_json` moved here because the ordering was written only by `run_scheduler`. THESE THREE HAVE THE
+ * IDENTICAL DEFECT AND IT IS THE LARGER HALF OF IT: `@COLD`, `@HEAP` and `@SWAP` are also printed only from
+ * that loop, which `engine_run` alone enters and which `qjs_step` does not, so between them SIXTY-NINE computed
+ * numbers reached a host the extension never runs and NOT ONE of them has ever been readable off a production
+ * run. §Testing's rule is the whole of the argument — "measure what the shipped path writes, not what a
+ * harness prints" — and its consequence is not that the numbers were wrong: it is that the subsystems they
+ * measure have never been measured where they actually do their work. The pager pages under RAM pressure in
+ * the EXTENSION; the realm ceiling is reached on REAL pages; a delta chain accumulates over a REAL frontier.
+ *
+ * SO THEY RIDE THE DOCUMENT, and the document is already a TIME SERIES on the shipped path: `main.c`'s
+ * `qjs_emit_partial` composes a fresh one on the host's own cadence for the whole of a long analysis. A census
+ * is a READING OF AN INSTANT rather than a total, and the objection that one end-of-run record cannot express
+ * a per-step series is FALSE OF THIS DOCUMENT for exactly that reason.
+ *
+ * ONE COMPOSER, TWO EMISSION SITES, AND THE BYTES ARE THE SAME BYTES. `run_scheduler` still prints its lines —
+ * a host whose output IS a stream of lines has to print a census when it is taken or it is not in the output at
+ * all — but it prints what these produced. Neither side hand-serializes a struct any more, which is what
+ * `result_wfq_json`'s own history says goes wrong: a struct maintained by hand in one file and serialized by a
+ * printf in a third is two hand-kept lists that drift in BOTH directions at once.
+ *
+ * WHY THREE AND NOT ONE. Each answers a different subsystem's question and a reader compares WITHIN one, never
+ * across: `_swap` is what a CONTEXT SWITCH costs and what the two COW chains are still holding; `_cold` is what
+ * the FRONTIER is made of and what its parked snapshots weigh; `_heap` is what the RUNTIME and the C allocator
+ * under it hold. Folding them into one object would put a switch count beside a byte count beside a realm
+ * count and invite exactly the comparison none of them supports.
+ *
+ * AND UNLIKE `_wfq` THERE IS NO EMPTY SHAPE. The WFQ's rows are readings of a FRONTIER, which can legitimately
+ * have no members — so its absence of rows is a positive statement. These three read the allocator, the
+ * runtime and this instance's own totals, all of which exist at every instant a document is composed at, so
+ * every row is always present and a missing one is a broken contract with no second reading. Caller frees. */
+char *result_cold_json(void);
+char *result_heap_json(JSContext *ctx);
+char *result_swap_json(void);
+
 /* AN UNCAUGHT ERROR FROM ONE OF THE PAGE'S OWN SCRIPTS. A page's throw ending its script is intentional — it is
    the forcing function that names an unbuilt capability — but the name was invisible: the flow simply stopped
    and the document reported the surface it had reached, with nothing to say a script had died. Recording it
