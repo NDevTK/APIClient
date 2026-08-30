@@ -407,6 +407,16 @@ char       *concolic_hole_key(const char *shape);
    Present exactly when the pin is (concolic_cmp answers something other than OPCMP_NONE): the operator, the
    token and the subject are ONE observation, asserted together at the mint. */
 const char *concolic_cmp_subject(JSValueConst v);
+/* …AND THE SAME OPERAND BY ITS OWN IDENTITY, which is a different name for a different consumer and not a
+   spelling variant of the hole above. The HOLE is what a report prints and is derived from the display shape
+   by stripping braces, so it is lossy and not total — `{}` has none, and two shapes can strip to one string —
+   which is right for a name the emission has to RECONSTRUCT from printed text and wrong for a key an
+   execution fact is filed under. This is the operand VALUE's composed identity, and it is what
+   concolic_contradict_example is keyed by: on the arm that contradicts the predicate's own example, the
+   operand's example is contradicted with it, exactly as the pin and the exclusion are two arms of one
+   observation. NULL when both sides are unknown (the contradicting arm proves one example wrong and never
+   which), and NULL for an operand this engine cannot spell. Borrowed. */
+const char *concolic_cmp_subject_ident(JSValueConst v);
 /* THE NEGATIVE HALF OF THE EQUALITY OBSERVATION — the arm concolic_pin does NOT cover, and it is an
    OBSERVATION rather than an absence.
    Forced multi-path execution runs BOTH arms of every equality gate, so each `x === "admin"` in a bundle

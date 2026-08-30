@@ -1009,7 +1009,32 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
  * THE DROP IS KEYED BY THE VALUE'S IDENTITY AND SKIPPED WHERE THERE IS NONE. A concolic whose identity this
  * engine cannot spell has nowhere per-flow to file the fact, and filing it under anything shared would silence
  * that value in flows that proved nothing about it. The MARK still fires there — it needs no key — so the
- * request still states what it is, and only the degrade is missed. */
+ * request still states what it is, and only the degrade is missed.
+ *
+ * AND IT DROPS THE PREDICATE'S SUBJECT TOO, WHICH IS WHERE THE @H VALUE ACTUALLY LIVES. Dropping the
+ * CONDITION's example is nearly free of consequence for an equality: a program rarely composes a URL out of a
+ * comparison's boolean. What it composes one out of is the OPERAND — and on the arm that contradicts, that
+ * operand's example is wrong too. `x === 'admin'` over an example of `'admin'` taken FALSE leaves a flow that
+ * has recorded `x != 'admin'` and goes on reading `'admin'`, so `"/api/" + x` emits bytes this very path
+ * disproved: §@H's "never invent" pointing the other way, and a WRONG report rather than a partial one.
+ *
+ * IT IS EXACT FOR AN EQUALITY AND IS NOT A CHAIN INVERSION. The comparison's example was COMPUTED from the
+ * operand's by running §7.2.13 or §7.2.14 on it (concolic.c's cmp_example), so "the result's example is
+ * contradicted, and the predicate is an equality about operand O" gives "O's example is contradicted" with no
+ * step in between — the identical inference `concolic_pin` and `concolic_exclude` already make from the same
+ * two facts on the same two arms. What §Re-execution forbids is deriving a value by INVERTING a transform,
+ * and nothing here is inverted: both directions of the equality are read off observations this run made.
+ * BOTH ARMS ARE COVERED AND THE PIN ONLY COVERS ONE. On the true arm of `x === 'admin'` over an example of
+ * `'guest'`, concretize-on-pin makes a LATER MINT of `x` answer `'admin'`; a source minted ONCE and held in a
+ * page variable is never re-minted, so it kept answering `'guest'` on a path that had proved otherwise. The
+ * degrade reaches it because it is asked at the READ.
+ *
+ * THE SUBJECT IS NAMED BY ITS OWN IDENTITY AND NOT BY THE HOLE THE EXCLUSION USES, AND THAT PAIR IS NOT AN
+ * INCONSISTENCY TO UNIFY. They are two names for two consumers: the hole is what the EMISSION reconstructs
+ * from printed text (endpoint.c reads `page={state.page}` out of a URL and has nothing else), and the identity
+ * is what an execution fact must be filed under. The hole cannot be that key — it is derived by stripping
+ * braces, so it is lossy and not even total (`{}` has none while the value still has a source) — and the
+ * identity cannot be the report's, because by the time a URL string carries a hole the value is gone. */
 static void decide_note_forced_arm(JSValueConst cond, int real_arm, int arm) {
     const char *ident;
 
@@ -1019,6 +1044,8 @@ static void decide_note_forced_arm(JSValueConst cond, int real_arm, int arm) {
     if (real_arm == REAL_ARM_UNOBSERVED || arm == real_arm) return;
     flow_mark_forced_arm();
     ident = concolic_ident_c(cond);
+    if (ident) concolic_contradict_example(ident);
+    ident = concolic_cmp_subject_ident(cond);
     if (ident) concolic_contradict_example(ident);
 }
 

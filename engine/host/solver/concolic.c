@@ -54,6 +54,17 @@ typedef struct {
     char *cmp_subj;     /* …and the HOLE KEY of the unknown side — see concolic_cmp_subject. The three are ONE
                            observation: written together at pred_new, asserted together there, and read
                            together by decide.c, which pins on one arm and excludes on the other. */
+    /* …AND THE UNKNOWN SIDE'S IDENTITY, WHICH IS A FOURTH NAME FOR A REASON AND NOT A DUPLICATE OF `cmp_subj`.
+       The hole above is what a REPORT prints and is derived from the display shape by stripping braces, so it
+       is a lossy, total-only-sometimes name: `{}` has no hole at all, and two shapes can strip to one string.
+       This is the OPERAND VALUE's own identity — precise, composed, and the key the per-flow record of "this
+       flow proved that value's example wrong" is filed under. Written at the same line as the hole and under
+       the same condition, so a predicate cannot carry one and not the other.
+       IT IS ABSENT WHEN BOTH SIDES ARE UNKNOWN, and that is a positive statement: `x === y` over two examples
+       proves, on the contradicting arm, that at least one of them is wrong and never WHICH, so naming either
+       would be the invention §@H forbids. The pin and the exclusion already refuse that case for the same
+       reason (there is no concrete side to spell), which is why one condition covers all three. */
+    char *cmp_subj_ident;
     /* …AND THE ORDERING'S OWN THREE FIELDS, which are the SAME observation for the other half of §Solver-half's
        two-facts rule and are deliberately NOT the equality's. An equality determines a VALUE on one arm; an
        ordering determines a BOUND on both, so the two cannot share `cmp_op` without one of them answering a
@@ -766,6 +777,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->ident);
     free(c->cmp_tok);
     free(c->cmp_subj);
+    free(c->cmp_subj_ident);
     free(c->rel_tok);
     free(c->rel_subj);
     JS_FreeValueRT(rt, c->example);
@@ -1347,6 +1359,29 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     return r;
 }
 
+/* THE UNKNOWN OPERAND'S OWN IDENTITY, STAMPED ON A PREDICATE pred_new HAS JUST MINTED — a second call for
+   pred_set_bound's reason exactly, and the reason is stronger here: only ONE of pred_new's three callers has
+   an operand VALUE at all. concolic_new_cmp mints a comparison result for a component whose IDL member IS a
+   comparison (HTML §6.2's `hidden`), so there is no separate operand this engine ever minted and nothing whose
+   example could be filed against — an absence that is a fact about that entry rather than a field it forgot.
+   THE PAIR IS ASSERTED, because the hole and the identity are two names for ONE operand and a predicate
+   carrying one without the other is a decide.c that can exclude a value it cannot degrade, or degrade one it
+   cannot name in the report. */
+static void pred_set_subject_ident(JSValueConst pred, const char *ident) {
+    Concolic *c = JS_GetOpaque(pred, g_concolic_class);
+
+    DCHECK(c != NULL, "an operand identity was stamped on something that is not a comparison result");
+    DCHECK(c->cmp_subj != NULL,
+           "a predicate was given the identity of an unknown operand it records no HOLE for — the two are "
+           "written under one condition and read by one line of decide.c, so a result carrying only the "
+           "identity is a fact the report cannot name and a fact the domain cannot be filed under");
+    DCHECK(c->cmp_subj_ident == NULL,
+           "a comparison result was given a second subject identity — a predicate is about ONE unknown "
+           "operand, so a second write is two values wearing one predicate");
+    c->cmp_subj_ident = strdup(ident);
+    CHECK(c->cmp_subj_ident, "concolic: OOM recording the value an equality is a fact about");
+}
+
 /* THE ORDERING'S OBSERVATION, STAMPED ON A PREDICATE pred_new HAS JUST MINTED. It is a second call rather than
    four more parameters because only ONE of pred_new's callers has an ordering to state, and a signature every
    caller has to spell `REL_NONE, NULL, 0, NULL` into is a signature that invites a caller to spell it wrong.
@@ -1450,6 +1485,11 @@ const char *concolic_cmp_subject(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     if (!c || c->cmp_op == OPCMP_NONE) return NULL;
     return c->cmp_subj;   /* NULL = the operand's shape names no hole this surface prints — see pred_new */
+}
+
+const char *concolic_cmp_subject_ident(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    return c ? c->cmp_subj_ident : NULL;
 }
 
 /* JSConcolicCmpHook for == / === : a concolic operand -> a concolic bool whose IDENTITY is the operator and
@@ -1581,6 +1621,15 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        algorithm is now stated by the caller, so the identity can say which. */
     res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, iu, io,
                    tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok, subj);
+    /* AND WHICH VALUE THE PREDICATE IS ABOUT, BY ITS OWN IDENTITY — read off `opq` BEFORE any reordering, and
+       under exactly the condition the hole is minted under (`subj`, which is `tok`, which is "one side is a
+       spellable literal"). `iu` above is NOT this: it is swapped with `io` when both operands are unknown, so
+       reading the subject out of it would name whichever identity happened to sort first. */
+    /* AN OPERAND THIS ENGINE CANNOT SPELL GETS NO SUBJECT IDENTITY, and the predicate is unaffected in every
+       other way: it still forks, still pins and still excludes under the hole. What is lost is only the
+       per-flow degrade, which has nowhere to be filed — the same answer, for the same reason, that
+       decide.c gives for a condition whose own identity is absent. */
+    if (subj && concolic_ident_c(opq)) pred_set_subject_ident(res, concolic_ident_c(opq));
     /* …AND THE RESULT'S OWN EXAMPLE, run rather than derived. It is attached AFTER the mint for the reason
        page_visibility.c attaches one: pred_new's parameters are the PREDICATE (its operator, operands, pin and
        subject), and the example is not part of the predicate — it is what this run computed the predicate to
