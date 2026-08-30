@@ -34,9 +34,14 @@ void focus_install_shadow_root_members(JSContext *ctx, JSValueConst proto);
    this engine can install, on HTMLElement.prototype. The mixin's other two homes, SVGElement and MathMLElement,
    do not exist here (both are names on browser/platform_names.h), so this is the whole of the mixin's reach. */
 void focus_install_html_members(JSContext *ctx, JSValueConst proto);
-/* §6.6.6's `Window.focus()`. `Window.blur()` is NOT here: §6.6.6 states its method steps as "do nothing", so
-   it is the spec's own no-effect and belongs with the Window's other members. */
-void focus_install_window_members(JSContext *ctx, JSValueConst global);
+/* §6.6.6's `Window.focus()` AND `Window.blur()`, on ONE object named by the caller.
+   THIS USED TO SAY `Window.blur()` IS NOT HERE — that its "do nothing" steps made it the spec's own no-effect
+   and put it with the Window's other members — and that reasoning held only while §7.2.2's global was the one
+   place a Window member goes. HTML §7.2.1.3.1 CrossOriginProperties lists `focus` and `blur` among the thirteen
+   cross-origin accessible window property names, so both are ALSO own properties of §7.2.3's WindowProxy
+   surface, and a two-member list installed from two files drifts silently (a member missing from one surface
+   answers `undefined` there while the other still answers). §6.6.6 defines both; this installs both. */
+void focus_install_window_members(JSContext *ctx, JSValueConst target);
 
 /* ---- HTML §8.1.7.3 update the rendering step 17 — the FOCUS FIXUP RULE --------------------------------------
  *

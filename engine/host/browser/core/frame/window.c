@@ -119,33 +119,6 @@ static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-/* HTML §6.6.6 "Focus management APIs"' `Window.blur()`, whose METHOD STEPS ARE "TO DO NOTHING" — the standard's
-   own words, and the note beside them says why: "historically, the focus() and blur() methods actually affected
-   the system-level focus of the system widget that contained the navigable, but hostile sites widely abuse this
-   behavior to the user's detriment". So this is the SPEC's no-effect and not this engine's; `Window.focus()` is
-   NOT one of these and is no longer here — §6.6.6 gives it real steps (the navigable, the allow focus steps,
-   then §6.6.4's focusing steps), which core/html/focus.c runs.
-
-   IT SERVES ONE MEMBER AND IS NAMED FOR IT, WHICH IS THE WHOLE OF THIS EDIT. It was `js_win_noeffect`, shared
-   with `stop()` — and a body named for its SHAPE rather than for its member is what makes the two indistinguishable
-   at the declaration: §NO STUBS permits a no-effect only where the spec defines no scriptable headless result,
-   §6.6.6 says exactly that for `blur` and §7.2.2.1 says the opposite for `stop`, and a shared body records
-   neither fact. The generic name is also the thing that makes the NEXT unbuilt member cheap to hide here, since
-   adding one costs a magic and no new sentence. A member whose absence is honest declares its own body. */
-static JSValue js_win_blur(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    (void)ctx; (void)this_val; (void)argv; (void)magic;
-    /* §6.6.6 declares `undefined blur()` — no arguments, ever, so a body that could be handed one is a body
-       whose declaration and whose member have come apart. A non-variadic member's count is min(passed,
-       declared) (core/idl_args.c), so `window.blur(1)` still arrives here as zero and the only way this fires
-       is a declaration that stopped matching the IDL. */
-    DCHECK(argc == 0,
-           "HTML §6.6.6 Focus management APIs declares `undefined blur()` with no arguments and this body was "
-           "reached with one — the declaration in window_init and the IDL have come apart");
-    (void)argc;
-    return JS_UNDEFINED;
-}
-
 /* HTML §7.2.2.1 "Opening and closing windows"' `stop()`, WHICH HAS REAL STEPS AND IS NOT §6.6.6's NO-EFFECT.
  * The standard states two: "If this's navigable is null, then return. Stop loading this's navigable." Step 1 is
  * written below because this engine can answer it; step 2 is the capability that does not exist, and it now
@@ -525,7 +498,7 @@ static JSValue js_win_set_status(JSContext *ctx, JSValueConst this_val, JSValueC
  * find_own_property found nothing), so a global variable read pays for this only when it was going to fail
  * anyway — and the index test is the engine's own, not a re-parse of the atom's text. */
 static JSClassID g_window_class;
-/* THE RUNTIME THE TWO CLASSES AND THE SIX POOL ENTRIES BELOW WERE DECLARED IN. It is what makes "this
+/* THE RUNTIME THE TWO CLASSES AND THE FIVE POOL ENTRIES BELOW WERE DECLARED IN. It is what makes "this
    component is declared" a fact separate from any one of the values it declares — see window_is. */
 static JSRuntime *g_window_rt;
 
@@ -784,13 +757,13 @@ static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ont
    browser. So this registers, and window_install builds. */
 /* EACH IS `-1` BEFORE ANYTHING RUNS, and the initialiser is the whole of what says so. A pool entry is an
    INDEX — idl_method_id_all hands out `g_n++`, so ZERO IS A VALID ENTRY, the first one the platform declares —
-   and these six carried no initialiser at all, which made their pre-init value 0 and therefore
+   and every one of these carried no initialiser at all, which made their pre-init value 0 and therefore
    indistinguishable from a real declaration. That is core/agent_state.h's fetch defect exactly (JS_ATOM_NULL is
    a valid atom; entry 0 is a valid member): a second agent's window_install would have installed `close`,
-   `blur`, `stop` and the three setters out of whatever the new pool put at those indices, with a live-looking
+   `stop` and the three setters out of whatever the new pool put at those indices, with a live-looking
    number behind every one and nothing in either of JS_FreeRuntime's censuses to report it. `-1` is what
    idl_install_accessor already reads as "no setter", so it is this file's own sentinel and not a new one. */
-static int g_id_close = -1, g_id_blur = -1, g_id_stop = -1;   /* declared once per agent — see window_init */
+static int g_id_close = -1, g_id_stop = -1;   /* declared once per agent — see window_init */
 static int g_id_opener_set = -1;   /* §7.2.2.4's `opener` setter, declared with them for the same reason */
 static int g_id_name_set = -1;     /* §7.2.2.1's `name` setter — its DOMString conversion is the page's code */
 static int g_id_status_set = -1;   /* §7.2.2.5's `status` setter — likewise */
@@ -820,11 +793,11 @@ void window_init(JSContext *ctx)
     g_id_name_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_name, 0);
     g_id_status_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_status, 0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
-    /* ONE BODY PER MEMBER. These two shared `js_win_noeffect` and were told apart only by a magic, which is
-       how §6.6.6's specified do-nothing and §7.2.2.1's unbuilt two steps came to be byte-identical at every
-       call site; the magic is now unused by both and stays 0, because what distinguishes them is which body
-       runs and not which number it was handed. */
-    g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_blur, 0);
+    /* ONE BODY PER MEMBER. `stop` and §6.6.6's `blur` shared `js_win_noeffect` and were told apart only by a
+       magic, which is how §6.6.6's specified do-nothing and §7.2.2.1's unbuilt two steps came to be
+       byte-identical at every call site; the magic is unused and stays 0, because what distinguishes them is
+       which body runs and not which number it was handed. `blur` is declared by core/html/focus.c now — see
+       focus_install_window_members for why §6.6.6's two Window members have to be one list. */
     g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_stop, 0);
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING, and its row
        had an EMPTY RELEASE COLUMN, which is the pair of silences that list reads as agreement: a component
@@ -832,7 +805,7 @@ void window_init(JSContext *ctx)
        nothing produces. §7.2.2.5's BarProp declares under this same name, because a sub-component names the row
        whose release reaches it and window_free is what reaches bar_prop_free. */
     agent_state_ptr("window", &g_window_rt,
-                    "the runtime §7.2.2's two classes and six member declarations were registered in");
+                    "the runtime §7.2.2's two classes and five member declarations were registered in");
     agent_state_class("window", &g_window_class,
                       "HTML §7.2.2 The Window object's per-realm prototype slot and the brand the global "
                       "carries");
@@ -850,8 +823,6 @@ void window_init(JSContext *ctx)
                    "HTML §7.2.2.5 Historical browser interface element APIs' `status` setter declaration");
     agent_state_id("window", &g_id_close,
                    "HTML §7.2.2.1 Opening and closing windows' `close` declaration");
-    agent_state_id("window", &g_id_blur,
-                   "HTML §6.6.6 Focus management APIs' `blur` declaration");
     agent_state_id("window", &g_id_stop,
                    "HTML §7.2.2.1 Opening and closing windows' `stop` declaration");
 }
@@ -961,13 +932,14 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);
     idl_install_replaceable(ctx, g, "length", js_win_length, 0);   /* [Replaceable] readonly */
     idl_install_method(ctx, g, "close", 0, g_id_close);
-    /* §6.6.6's `Window.focus()` — its OWN algorithm, installed by the component that owns §6.6.4's steps. */
+    /* §6.6.6's `Window.focus()` AND `Window.blur()` — installed by the component that owns §6.6.4's steps, as
+       ONE list, because §7.2.1.3.1 CrossOriginProperties puts both names on §7.2.3's WindowProxy surface too
+       and a two-member list installed from two files drifts with nothing to say so. */
     focus_install_window_members(ctx, g);
     /* Selection API §4.2's `Selection? getSelection()`, installed by the component that owns it for the same
        reason. §4.2 defines it as §4.1's member invoked on `this's Window.document`, so it is not a second
        algorithm and the two cannot answer differently. */
     selection_install_window_members(ctx, g);
-    idl_install_method(ctx, g, "blur",  0, g_id_blur);
     idl_install_method(ctx, g, "stop",  0, g_id_stop);
 
     /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
@@ -1020,7 +992,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
  * §7.2.6.5's NavigationHistoryEntry and the cross-agent seam, while wpt_runner.c ran it a whole teardown later,
  * after solver_agent_free and after document_free. Reverse declaration order decides it now and no author has
  * to agree with any other. Nothing here ever needed a JSContext: what this gives back is two class ids, a
- * realm-value slot id and six pool entries, every one of which is a registration in the RUNTIME. */
+ * realm-value slot id and five pool entries, every one of which is a registration in the RUNTIME. */
 void window_free(JSRuntime *rt)
 {
     /* NOT a null check. This runs from a release column that runs only where platform_agent_init ran, and this
@@ -1031,7 +1003,7 @@ void window_free(JSRuntime *rt)
            "never brought up");
     DCHECK(g_window_rt == rt,
            "§7.2.2's Window was released against a RUNTIME other than the one it was declared in — its two "
-           "classes, its realm-value slot and its six pool entries are registrations in that runtime, and "
+           "classes, its realm-value slot and its five pool entries are registrations in that runtime, and "
            "zeroing them against another leaves every one of them standing in the runtime that issued them");
     g_window_class = 0;
     g_window_props_class = 0;
@@ -1040,12 +1012,12 @@ void window_free(JSRuntime *rt)
        asserts it is back at -1, which is the half that makes a forgotten reset crash rather than hand a second
        agent a slot in a runtime that no longer exists. */
     g_status_slot = -1;
-    /* AND THE SIX POOL ENTRIES, which this release kept — the same slots window_proxy_free was keeping one file
+    /* AND THE FIVE POOL ENTRIES, which this release kept — the same slots window_proxy_free was keeping one file
        over, and the same consequence: a declaration is a registration in a runtime, so a carried index names an
        entry in a pool the next agent has not built, read by the first window_install that agent runs. Their
        pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
     g_id_opener_set = g_id_name_set = g_id_status_set = -1;
-    g_id_close = g_id_blur = g_id_stop = -1;
+    g_id_close = g_id_stop = -1;
     /* §7.2.2.5's BarProp, which has no row of its own because this release is what reaches it. */
     bar_prop_free(rt);
     g_window_rt = NULL;

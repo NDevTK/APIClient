@@ -46,6 +46,9 @@
 #include "solver/flow.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+/* §6.6.6's two Window members: §7.2.1.3.1 puts `focus` and `blur` on the cross-origin list, so §7.2.3's own
+   surface owns them too and takes them from the component that owns §6.6.4's steps. */
+#include "core/html/focus.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
 #include "core/frame/window.h"
@@ -1691,19 +1694,18 @@ static bool proxy_read_permitted(const ProxyData *p, int magic)
  *
  * SO THE LIST IS THE STANDARD'S OWN, AND IT IS NOT THE MEMBER TABLE. §7.2.1.3.1 names THIRTEEN cross-origin
  * accessible window property names, and four of them (`close`, `focus`, `blur`, `postMessage`) are not members
- * of the table above — `close` and `postMessage` are installed as methods by this component and
- * window_message.c, and `focus`/`blur` by core/frame/window.c (§6.6.6's `Window.focus()` through
- * focus_install_window_members, and `blur` beside it). A name on this list is therefore answered by whatever
- * owns it, INCLUDING nothing: a member this engine has not built is `undefined` at the end of the prototype
- * chain, which is the truthful answer for a member the origins permit. The two tables are tied to each other by
- * an assert at capture rather than by a reader keeping them in step.
+ * of the table above: `close` is installed as a method by this component, `postMessage` by window_message.c,
+ * and `focus`/`blur` by core/html/focus.c, which owns §6.6.6's steps and installs its two Window members onto
+ * BOTH §7.2.2's global and this surface from one list. The two tables are tied to each other by an assert at
+ * capture rather than by a reader keeping them in step.
  *
- * THIS PARAGRAPH SAID `focus`/`blur` WERE "honestly ABSENT", AND THEY ARE NOT: window.c installs both on the
- * Window, and `Object.getOwnPropertyNames(self)` reports them. That is the stale-claim failure CLAUDE.md names
- * — true when written, wrong about this tree — and it was load-bearing rather than decorative, because it is
- * the reason given for the WindowProxy's own surface not having them, which is to say for the two surfaces
- * disagreeing about two members. Measured: the Window owns all thirteen of §7.2.1.3.1's names, this component's
- * prototype owns eleven.
+ * THE THIRTEEN ARE ANSWERED FROM TWO ENDS AND BOTH ENDS ARE ASSERTED, WHICH TOOK TWO SEPARATE CORRECTIONS OF
+ * THIS PARAGRAPH TO REACH — the shape is worth more than the incident. It first claimed `focus`/`blur` were
+ * "honestly ABSENT", which was false about the Window; corrected, it then said a listed name is answered "by
+ * whatever owns it, INCLUDING nothing", which reads as a design allowance and is not one: `undefined` at the
+ * end of the prototype chain is the exact answer §7.2.1.3.2 CrossOriginPropertyFallback's last step rules out,
+ * and it is what `otherW.focus` returned while both sentences stood. A claim about which surface owns what is
+ * therefore not prose here — it is a loop, in proxy_get_own's steps 4-6, over this list.
  *
  * IT IS DECLARED HERE AND ASKED ONCE, at the object's own [[GetOwnProperty]], because that is where §7.2.3.5
  * puts it — before the prototype walk, so a name outside the list never reaches a member at all. Asking it
@@ -1914,9 +1916,11 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * THE CARVE-OUT IS ASKED OF THE PROTOTYPE, WHICH IS THAT SURFACE. A list written out here would be a second
  * copy of window_proxy_install_proto's — one that `postMessage` (window_message.c installs it) was never on,
  * and the first name it fell behind is a name this component would hand to the other document's Window while
- * its own member sat one link up the chain answering nothing. `focus` and `blur` are the proof it matters in
- * the other direction too: they are on §7.2.1.3.1's list and this component installs NEITHER, so they forward
- * and `otherW.focus()` reaches the Window's own method.
+ * its own member sat one link up the chain answering nothing. `focus` and `blur` were the proof: they are on
+ * §7.2.1.3.1's list, this surface had NEITHER, and a same-origin read of them forwarded to the Window's own
+ * method while a CROSS-ORIGIN read — which cannot forward, since there is no local W — walked to this object
+ * and found nothing. They are on the surface now (focus_install_window_members), so both spellings answer, and
+ * the carve-out below covers them like every other name this object owns.
  *
  * §7.2.3.1's [[GetPrototypeOf]] IS BUILT (proxy_get_prototype), AND IT IS NOT YET THE WHOLE OF THE CHAIN.
  * REFLECTION asks it — `Object.getPrototypeOf(otherW)`, `Reflect.getPrototypeOf`, `otherW.__proto__`,
@@ -1943,8 +1947,10 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * [[OwnPropertyKeys]], so a member reachable ONLY up a prototype chain is a member
  * `Object.getOwnPropertyDescriptor(w, n)` answers `undefined` for while `w.n` answers a value, and one
  * `Object.getOwnPropertyNames(w)` never mentions. That is ONE FACT ANSWERED FROM TWO PLACES — the Window owns
- * all thirteen of §7.2.1.3.1's names and this object's surface owned eleven of them — and the two had already
- * disagreed about `name` once (window.c's own comment records it).
+ * all thirteen of §7.2.1.3.1's names and this object's surface owned eleven of them, missing `focus` and
+ * `blur` — and the two had already disagreed about `name` once (window.c's own comment records it). Both
+ * surfaces carry the thirteen now, and proxy_get_own's steps 4-6 assert it rather than this sentence claiming
+ * it: a count in a comment is a measurement that stops being re-taken the moment it is written down.
  *
  * THE OBJECT IS STILL THE CLASS PROTO, and that is a second ROLE rather than a second surface: §7.2.3.5's
  * cross-origin branch (steps 4-6) answers `0` for §7.2.1.3.1's names and lets the walk reach the same members,
@@ -2181,11 +2187,37 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
        opener, and what left `Object.getOwnPropertyNames(popup)` empty for an object with fourteen members. */
     if (proxy_same_origin(p)) return proxy_surface_desc(ctx, desc, prop);
 
-    /* STEPS 4-6, WHICH ONLY A CROSS-ORIGIN W REACHES. A name on the standard's list is answered by whatever
-       owns it — including nothing at all, which is the truthful `undefined` for a member the origins permit
-       and this engine has not built. */
+    /* STEPS 4-6, WHICH ONLY A CROSS-ORIGIN W REACHES — AND THE PERMIT SIDE OF THE FILTER, CHECKED IN THE SAME
+       PASS AS THE REFUSE SIDE.
+     *
+     * Returning `0` here says "not an own property of this exotic object", which lets the ordinary walk reach
+     * §7.2.3's surface — this object's class prototype — and answer out of it. That is only an ANSWER while the
+     * surface OWNS the name: a listed name the surface does not own walks off the end of the chain and yields
+     * `undefined`, which is precisely the value §7.2.1.3.2 CrossOriginPropertyFallback exists to forbid, and it
+     * is indistinguishable from a member the peer's document does not have.
+     *
+     * THE REFUSAL WAS COMPLETE AND THE PERMISSION WAS NOT, WHICH IS WHY THIS IS ONE LOOP AND NOT TWO CHECKS. A
+     * filter that throws for every name outside the list passes any test that only looks for the throw; the two
+     * members that were missing (`focus` and `blur`) were on the list, refused nothing, and answered nothing.
+     * The reconciliation in proxy_capture_names cannot see that class of gap at all — it iterates the MEMBER
+     * TABLE, so a §7.2.1.3.1 name that no member of this component declares is not a row it visits. This loop
+     * visits the STANDARD'S list, so a name is checked from both ends: it is refused unless listed, and it is
+     * answerable because listed. Side-effect-free — proxy_surface_desc with a NULL descriptor reads one own
+     * property of an ordinary object and frees what it took. */
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
-        if (prop == g_xo_atom[i]) return 0;
+        if (prop == g_xo_atom[i]) {
+            DCHECKF(proxy_surface_desc(ctx, NULL, prop) == 1,
+                    "HTML §7.2.1.3.1 CrossOriginProperties lists `%s` among the cross-origin accessible window "
+                    "property names, and §7.2.3's own surface for this realm does not own it — so this read is "
+                    "PERMITTED and then answered with `undefined` by a prototype walk that finds nothing, which "
+                    "is the one answer §7.2.1.3.2 CrossOriginPropertyFallback rules out (its last step is the "
+                    "SecurityError, and a page tells the two apart). §7.2.1.3.4 CrossOriginGetOwnPropertyHelper "
+                    "runs OrdinaryGetOwnProperty on the Window, so the member exists and only this surface is "
+                    "missing it: install it from the component that owns the member onto the object "
+                    "window_proxy_install_proto builds, the way `close`, `postMessage` and §6.6.6's `focus` and "
+                    "`blur` are", CROSS_ORIGIN_NAME[i]);
+            return 0;
+        }
 
     for (i = 0; i < XO_FALLBACK_N; i++)
         if (prop == g_xo_fallback[i]) {
@@ -2286,20 +2318,22 @@ static int proxy_own_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
     DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
 
     if (!proxy_same_origin(p)) {
-        /* §7.2.3.10 step 5, AND THE TWO THINGS IT NEEDS THAT DO NOT EXIST. Step 2's maxProperties is the child
-           count of an active document this instance does not hold, which is the same cross-instance read
-           proxy_indexed_get_own already names — an exotic [[OwnPropertyKeys]] is a C hook that must return a
-           list, so it cannot park the flow the way an IDL accessor driven as a step machine can. And
-           §7.2.1.3.7 CrossOriginOwnPropertyKeys's list is §7.2.1.3.1's thirteen names, of which §7.2.3.5's
-           cross-origin branch answers eleven (`focus` and `blur` are window.c's, and this surface installs
-           neither) — so publishing the list here would name keys whose descriptors are `undefined`, which is a
-           plausible datum in place of a measurement rather than a partial answer. */
-        DFAIL("§7.2.3.10 [[OwnPropertyKeys]] of a CROSS-ORIGIN WindowProxy. Two things are missing and both "
-              "are named: step 2's maxProperties is the child-navigable count of an active document ANOTHER "
-              "instance holds (route this onto the keyed entry's GP_GETOWNPROP so the flow suspends, exactly "
-              "as proxy_indexed_get_own names for §7.2.3.5 step 2), and §7.2.1.3.7's key list may only be "
-              "published once §7.2.1.3.4 CrossOriginGetOwnPropertyHelper answers a DESCRIPTOR for all "
-              "thirteen of §7.2.1.3.1's names — `focus` and `blur` are not on this surface");
+        /* §7.2.3.10 step 5, AND THE ONE THING IT NEEDS THAT DOES NOT EXIST. This used to name TWO, and the
+           second is CLOSED: §7.2.1.3.7 CrossOriginOwnPropertyKeys's list is §7.2.1.3.1's thirteen names, of
+           which this surface owned eleven — `focus` and `blur` were the Window's alone — and it owns all
+           thirteen now, asserted per name in proxy_get_own's steps 4-6 rather than restated here. What remains
+           is step 2's maxProperties: the child-navigable count of an active document this instance does not
+           hold, which is the same cross-instance read proxy_indexed_get_own already names. An exotic
+           [[OwnPropertyKeys]] is a C hook that must return a list, so it cannot park the flow the way an IDL
+           accessor driven as a step machine can, and a list published without that count would state a frame
+           range this side invented. */
+        DFAIL("§7.2.3.10 [[OwnPropertyKeys]] of a CROSS-ORIGIN WindowProxy. ONE thing is missing and it is "
+              "named: step 2's maxProperties is the child-navigable count of an active document ANOTHER "
+              "instance holds. Route this onto the keyed entry's GP_GETOWNPROP so the flow suspends, exactly "
+              "as proxy_indexed_get_own names for §7.2.3.5 step 2, and then concatenate that index range with "
+              "§7.2.1.3.7 CrossOriginOwnPropertyKeys's thirteen names — which this surface now owns in full, "
+              "so every published key has a descriptor behind it. (The `focus`/`blur` half of this crash's "
+              "old reason is BUILT; if you are reading it as an absence, re-read the loop in proxy_get_own.)");
         return 0;
     }
 
@@ -3268,6 +3302,17 @@ void window_proxy_install_proto(JSContext *ctx)
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, -1);
     }
     idl_install_method(ctx, proto, "close", 0, g_wp_close_id);
+    /* §7.2.1.3.1's LAST TWO NAMES, and the ones this surface did not have. `focus` and `blur` are on the
+       thirteen-name cross-origin list and were installed on the Window GLOBAL only, so §7.2.3.5's cross-origin
+       branch answered `0` for them, the walk reached this object, found nothing, and `otherW.focus` was
+       `undefined` — where §7.2.1.3.4 CrossOriginGetOwnPropertyHelper runs OrdinaryGetOwnProperty on the Window,
+       which DOES own it, and returns a callable. `otherW.focus()` therefore threw a TypeError instead of
+       running §6.6.6's steps, and no assert could see it: proxy_capture_names's reconciliation iterates the
+       MEMBER TABLE, so a name with no member entry is structurally out of its reach. The loop in
+       proxy_get_own's steps 4-6 is the other direction, added with this line.
+       IT IS §6.6.6's OWN INSTALL, not two lines written out here — the same one window_install calls, so the
+       global and this surface cannot come to hold different sets. */
+    focus_install_window_members(ctx, proto);
     JS_SetClassProto(ctx, g_proxy_class, proto);
 }
 

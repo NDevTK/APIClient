@@ -325,7 +325,12 @@ JSValue window_proxy_proto(JSContext *ctx);
    answers the NAVIGABLE's own state — window/self/frames/globalThis/parent/top/opener/closed/name, plus
    close() — in this turn too, because the navigable belongs to the instance that created it; only a member that
    reads through to the ACTIVE DOCUMENT SUSPENDS the flow on a host request carrying (document, world,
-   member). */
+   member).
+   THE SURFACE IS NOT ONLY THIS COMPONENT'S. §7.2.1.3.1 CrossOriginProperties' thirteen names must ALL be own
+   properties of it (a listed name the surface does not own is answered `undefined`, which §7.2.1.3.2's last
+   step rules out), and three of them belong to other components: `postMessage` is window_message.c's and
+   §6.6.6's `focus`/`blur` are core/html/focus.c's. Each is installed by its OWNER onto this one object — never
+   restated here — and proxy_get_own's steps 4-6 assert per name that the object ended up with all thirteen. */
 void window_proxy_install_proto(JSContext *ctx);
 
 /* WEB IDL §3.7.6 "Attributes"' `jsValue` FOR A MEMBER WHOSE ANSWER IS A NAVIGABLE — "the this value, if it is

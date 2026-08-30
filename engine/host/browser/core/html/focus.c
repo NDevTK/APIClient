@@ -55,6 +55,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -82,6 +83,7 @@ enum { FA_NONE = 0, FA_ELEMENT, FA_VIEWPORT, FA_DOCUMENT, FA_NAVIGABLE };
 
 static int g_focus_slot = -1;
 static int g_id_el_focus = -1, g_id_el_blur = -1, g_id_win_focus = -1, g_id_has_focus = -1;
+static int g_id_win_blur = -1;        /* §6.6.6's `Window.blur()`, whose method steps are TO DO NOTHING */
 static int g_id_set_tab_index = -1;   /* §6.6.3's `tabIndex` setter — the mixin's, installed beside focus/blur */
 static int g_id_viewport = -1, g_id_autofocus = -1;
 static int g_ready;
@@ -992,10 +994,41 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                    trigger — step 5's is a user-agent presentation with no scriptable result.
                    THE DOCUMENT THE ALLOW FOCUS STEPS ARE GIVEN IS CARRIED to the stage that asks, as its
                    WindowProxy: that stage is a rest point, so the operand travels with the work item instead
-                   of being read back off the running realm after other flows have run. */
+                   of being read back off the running realm after other flows have run.
+                 *
+                 * STEP 1 IS "LET CURRENT BE *THIS*'S NAVIGABLE", AND IT IS THE RECEIVER'S — NOT THE RUNNING
+                 * REALM'S. This read `document_window_proxy(ctx)`, which is Web IDL §3.7.7 Operations' `this`
+                 * only for the ONE receiver that happens to be the member's own realm's global. It was correct
+                 * by accident and by accident only: `otherW.focus()` reached the OTHER realm's own function
+                 * object, whose `ctx` js_call_c_function takes from the callee, so the realm answered what the
+                 * receiver should have. The moment §7.2.1.3.1's list put this member on §7.2.3's WindowProxy
+                 * surface — where §7.2.1.3.4 CrossOriginGetOwnPropertyHelper mints it "in the CURRENT realm"
+                 * and performs its steps "on object O" — that accident inverts: one function object, minted in
+                 * the READING realm, would have focused the reader's own navigable for every window a page
+                 * called it on. window_proxy.h states the rule at the helper; this is the site it applies to. */
+                JSValueConst nav;
+
+                nav = window_proxy_this_navigable(ctx, hdr->this_val);
+                if (JS_IsUninitialized(nav)) return -1;   /* §3.7.7's TypeError, already thrown */
+                /* STEP 2: "If current is null, then return." */
+                if (window_proxy_navigable_null(ctx, nav)) return 0;
+                /* THE PEER'S NAVIGABLE IS A SUSPEND, NOT A REALM, and it is asserted HERE rather than left to
+                   the helpers below because those are shared: window_proxy_realm's crash names the seam for
+                   every caller in the engine, and get-the-focusable-area's names window_proxy.c without saying
+                   which operation wanted it. §6.6.6's is the one that has to travel — see the sentence in
+                   traversable_has_system_focus, which is the SAME transfer asked one step later. */
+                DCHECK(!window_proxy_is_remote(nav),
+                       "HTML §6.6.6 Focus management APIs' `Window.focus()` was called on a navigable whose "
+                       "active document is in ANOTHER WASM instance — its step 3 runs the allow focus steps "
+                       "over THAT document and its step 4 the focusing steps in THAT agent, so neither can be "
+                       "answered out of this heap. Build it as a cross-instance request beside §7.2.1.3.1's "
+                       "other members in core/frame/window_proxy.c: the flow SUSPENDS here, the peer runs "
+                       "§6.6.6's steps in its own scheduled turn under this flow's world, and the flow resumes "
+                       "with the completion. It is the same transfer traversable_has_system_focus names for "
+                       "§6.6.2's system focus, and the two land together");
                 s->kind = FA_NAVIGABLE;
-                s->target = JS_DupValue(ctx, document_window_proxy(ctx));
-                s->allow_win = JS_DupValue(ctx, document_window_proxy(ctx));
+                s->target = JS_DupValue(ctx, nav);
+                s->allow_win = JS_DupValue(ctx, nav);
                 STEP_GOTO(hdr->stage, FOC_ALLOW, &s->fphase, &s->ua_phase, NULL);
                 continue;
             }
@@ -1668,6 +1701,36 @@ static JSValue js_tab_index_set(JSContext *ctx, JSValueConst this_val, JSValueCo
     return JS_UNDEFINED;
 }
 
+/* HTML §6.6.6 Focus management APIs' `Window.blur()`, WHOSE METHOD STEPS ARE "TO DO NOTHING" — the standard's
+   own words, and the note beside them says why: "historically, the focus() and blur() methods actually affected
+   the system-level focus of the system widget that contained the navigable, but hostile sites widely abuse this
+   behavior to the user's detriment". So this is the SPEC's no-effect and not this engine's, which is the one
+   shape §NO STUBS admits: a dedicated documented no-effect where the spec ITSELF states the steps are to do
+   nothing. `Window.focus()` is NOT one of these — §6.6.6 gives it real steps, which focus_step runs.
+
+   IT LIVED IN core/frame/window.c, BESIDE THE WINDOW'S OTHER MEMBERS, AND THAT PLACEMENT HAD A REASON THIS DIFF
+   OVERTURNS. focus.h stated it: a member whose steps are "do nothing" has no §6.6.4 algorithm to own, so it
+   belonged with the interface rather than with the section. That was true while §7.2.2's global was the ONE
+   place a Window member is installed. It is not any more: HTML §7.2.1.3.1 CrossOriginProperties names `focus`
+   AND `blur` among the thirteen cross-origin accessible window property names, so both must ALSO be own
+   properties of §7.2.3's WindowProxy surface — and a two-member list installed from two files is the
+   hand-copied list that drifts, with the drift invisible because a name missing from one surface answers
+   `undefined` there rather than crashing. §6.6.6 defines both members; ONE function installs both, wherever
+   they go. */
+static JSValue js_win_blur(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)ctx; (void)this_val; (void)argv; (void)magic;
+    /* §6.6.6 declares `undefined blur()` — no arguments, ever, so a body that could be handed one is a body
+       whose declaration and whose member have come apart. A non-variadic member's count is min(passed,
+       declared) (core/idl_args.c), so `window.blur(1)` still arrives here as zero and the only way this fires
+       is a declaration that stopped matching the IDL. */
+    DCHECK(argc == 0,
+           "HTML §6.6.6 Focus management APIs declares `undefined blur()` with no arguments and this body was "
+           "reached with one — the declaration in focus_init and the IDL have come apart");
+    (void)argc;
+    return JS_UNDEFINED;
+}
+
 /* ---- declaration and install -------------------------------------------------------------------------------- */
 
 void focus_init(JSContext *ctx)
@@ -1697,6 +1760,10 @@ void focus_init(JSContext *ctx)
     idl_optional_from(0);
     g_id_el_blur = idl_method_id_step(ctx, NULL, 0, NULL, 0, &EL_BLUR_STEP, FOCUS_EL_BLUR);
     g_id_win_focus = idl_method_id_step(ctx, NULL, 0, NULL, 0, &WIN_FOCUS_STEP, FOCUS_WIN_FOCUS);
+    /* §6.6.6's OTHER Window member. It is a plain body and not a step machine because its steps are to do
+       nothing: there is no page code to run and so nothing to rest on. The magic stays 0 — what distinguishes
+       it from any other no-effect is which BODY runs, never which number it was handed. */
+    g_id_win_blur = idl_method_id(ctx, NULL, 0, js_win_blur, 0);
     /* HTML §8.1.7.3 step 17's and §6.6.7 step 5.11.3's entries. Declared with the members although they are
        installed on nothing, because what a declaration buys — the stage labels, the pool's name, the one mint —
        is what makes a parked fixup say where it is parked, and that has nothing to do with a page being able to
@@ -1707,6 +1774,30 @@ void focus_init(JSContext *ctx)
     /* §6.6.3's `[CEReactions, ReflectSetter] attribute long tabIndex` — the `long` conversion (ToNumber, then
        modulo 2^32 signed) runs on the page's own `valueOf` before the body below is entered. */
     g_id_set_tab_index = idl_setter_id(ctx, IDL_LONG, false, js_tab_index_set, 0);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING, and a
+       component holding a realm slot and a pool entry per member while declaring none of them is character-for-
+       character the report a component holding nothing produces. The row is `document`, not this file's name:
+       a sub-component names the row whose RELEASE reaches it, and document_agent_free is what reaches
+       focus_free. Each `what` names §6.6's own standard for the same reason — the line is read out of a report
+       headed by document's row. */
+    agent_state_id("document", &g_focus_slot,
+                   "the per-realm slot HTML §6.6.2 Data model's FOCUSED AREA OF THE DOCUMENT record lives in");
+    agent_state_id("document", &g_id_el_focus,
+                   "HTML §6.6.6 Focus management APIs' HTMLOrSVGOrMathMLElement `focus(options)` declaration");
+    agent_state_id("document", &g_id_el_blur,
+                   "HTML §6.6.6 Focus management APIs' HTMLOrSVGOrMathMLElement `blur()` declaration");
+    agent_state_id("document", &g_id_win_focus,
+                   "HTML §6.6.6 Focus management APIs' `Window.focus()` declaration");
+    agent_state_id("document", &g_id_win_blur,
+                   "HTML §6.6.6 Focus management APIs' `Window.blur()` declaration");
+    agent_state_id("document", &g_id_has_focus,
+                   "HTML §6.6.6 Focus management APIs' `Document.hasFocus()` declaration");
+    agent_state_id("document", &g_id_set_tab_index,
+                   "HTML §6.6.3 The tabindex attribute's `tabIndex` setter declaration");
+    agent_state_id("document", &g_id_viewport,
+                   "HTML §8.1.7.3 update the rendering step 17's entry into §6.6.4's focusing steps");
+    agent_state_id("document", &g_id_autofocus,
+                   "HTML §6.6.7 The autofocus attribute step 5.11.3's entry into §6.6.4's focusing steps");
     g_ready = 1;
 }
 
@@ -1743,10 +1834,31 @@ void focus_install_html_members(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "tabIndex", js_tab_index_get, 0, g_id_set_tab_index);
 }
 
-void focus_install_window_members(JSContext *ctx, JSValueConst global)
+/* §6.6.6's TWO Window members, ON ONE OBJECT — and the object is a PARAMETER because there are two of them.
+ *
+ * §7.2.2's global is one: Web IDL §3.7.3 Interface prototype object makes every member of a [Global] interface
+ * an OWN property of the global itself. HTML §7.2.3's WindowProxy surface is the other, and it is not a
+ * convenience: §7.2.1.3.1 CrossOriginProperties names `focus` and `blur` among the thirteen cross-origin
+ * accessible window property names, and §7.2.3.5's cross-origin branch answers those names by letting the walk
+ * reach that surface — so a name absent from it answers `undefined` across origins where §7.2.1.3.4
+ * CrossOriginGetOwnPropertyHelper returns "an anonymous built-in function, created in the current realm, that
+ * performs the same steps as the IDL operation P on object O". `otherW.focus()` then threw a TypeError instead
+ * of running the steps, and nothing said so, because `undefined` is a plausible value for a member.
+ *
+ * ONE FUNCTION FOR BOTH SURFACES, which is the whole reason it takes a target. Two install sites naming two
+ * members each is four lines that drift in pairs, and the drift is silent in exactly the direction that
+ * matters: a member missing from the proxy surface is `undefined` there while the global still answers, so one
+ * spelling of one member behaves differently from the other with no crash anywhere.
+ *
+ * §6.6.6's STEPS ARE THE RECEIVER'S, WHICH IS WHAT MAKES ONE FUNCTION OBJECT PER REALM SOUND. `Window.focus()`
+ * reads `this`'s navigable (see the FOCUS_WIN_FOCUS arm of focus_step), so the copy installed on the reading
+ * realm's proxy surface focuses the window it was CALLED ON — which is §7.2.1.3.4's "created in the current
+ * realm … on object O" exactly. A member that read its own realm instead could not be installed here at all. */
+void focus_install_window_members(JSContext *ctx, JSValueConst target)
 {
-    DCHECK(g_ready, "§6.6's Window member was installed before focus_init ran");
-    idl_install_method(ctx, global, "focus", 0, g_id_win_focus);
+    DCHECK(g_ready, "§6.6's Window members were installed before focus_init ran");
+    idl_install_method(ctx, target, "focus", 0, g_id_win_focus);
+    idl_install_method(ctx, target, "blur", 0, g_id_win_blur);
 }
 
 /* RELEASED BY ITS DECLARER — §6.6's focused area is declared from document_init, so document_agent_free gives
@@ -1760,5 +1872,6 @@ void focus_free(void)
     g_ready = 0;
     g_focus_slot = -1;
     g_id_el_focus = g_id_el_blur = g_id_win_focus = g_id_has_focus = g_id_set_tab_index = -1;
+    g_id_win_blur = -1;
     g_id_viewport = g_id_autofocus = -1;
 }
