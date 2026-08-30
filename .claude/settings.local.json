@@ -4,7 +4,11 @@
       "Bash(node test-ast.js:*)",
       "mcp__Claude_Code_Remote__add_repo",
       "Bash(git checkout *)",
-      "Bash(rm -rf .git .github .travis.yml benchmarks examples images packaging test utils wasm pvs_studio.sh single.pl)"
+      "Bash(rm -rf .git .github .travis.yml benchmarks examples images packaging test utils wasm pvs_studio.sh single.pl)",
+      "Bash(cp /root/.claude/projects/-home-user-APIClient/724c265e-f1c6-54ce-a3d6-e94c5ba2bce9/tool-results/brhbjaxdj.txt /tmp/claude-0/-home-user-APIClient/724c265e-f1c6-54ce-a3d6-e94c5ba2bce9/scratchpad/concolic.h.txt; grep -n \"^[a-zA-Z].*concolic_\\\\|^const char \\\\*concolic\\\\|^bool concolic\\\\|^JSValue concolic\\\\|^void concolic\\\\|^int concolic\" /tmp/claude-0/-home-user-APIClient/724c265e-f1c6-54ce-a3d6-e94c5ba2bce9/scratchpad/concolic.h.txt)",
+      "Bash(head -3 /srv.log)",
+      "Bash(pkill -f \"wptserve.py\")",
+      "Bash(rm -f /srv.log)"
     ]
   }
 }
