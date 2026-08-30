@@ -181,7 +181,7 @@ void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
  *
  * THE GUARANTEE WAS `if (g_tree_hook && g_cow_ctx)`, AND THAT SECOND TERM UNDID IT. A host that registered the
  * hook but never named its context ran NO insertion steps and NO removing steps at all — no <script>
- * preparation, no custom-element upgrade, no §4.8.5 child navigable — and nothing said so, because a skipped
+ * preparation, no custom-element upgrade, no §7.3.1.3 Child navigables' child navigable — and nothing said so, because a skipped
  * step looks exactly like a tree with nothing in it that needed one. That is what the WPT runner did for its
  * whole life: `document.body.appendChild(iframe)` produced an element with no navigable, and the failure
  * surfaced three layers away as `contentWindow` being null. The context is now ASSERTED rather than tested, and
@@ -1261,7 +1261,7 @@ void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
  * shadow-including inclusive descendant it walks, and the delta had kinds for tree structure, attributes and
  * character data and none for this — so a flow that adopted a subtree moved those nodes into another document
  * for EVERY flow. A sibling arm that never adopted read `node.ownerDocument` as the adopting arm's answer, and
- * anything it derived from that (the document a `createElement` on it builds into, §4.4's base URL, which
+ * anything it derived from that (the document a `createElement` on it builds into, §2.4.3 Document base URLs' base URL, which
  * registry §4.13 looks a definition up in) followed the wrong document. Nothing said so: node.c's write was a
  * plain field assignment that DCHECKed capture was OFF, which is honest about the gap and is exactly the shape
  * this entry closes.
