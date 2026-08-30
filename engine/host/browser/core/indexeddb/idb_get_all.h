@@ -76,30 +76,67 @@ int idb_get_all_count_enforce_range(JSContext *ctx, JSValueConst v, uint32_t *pc
                                       "bullet (set range to the result of converting a value to a key range " \
                                       "with queryOrOptions, or with queryOrOptions[\"query\"])")
 
-/* §5.12 IN FLIGHT. `rw` is the conversion, which is the whole of the algorithm's suspendable part; everything
-   else is what steps 8 and 9 decided BEFORE it and what step 10 mints the operation over. */
+/* WHICH OF STEP 9's TWO CONVERSIONS A RESUME COMES BACK INTO. Step 9 is two conversions in sequence — Web IDL
+   §3.2.17 Dictionary types over `queryOrOptions` itself, and then §2.9's convert-a-value-to-a-key-range over
+   the `query` member it produced — and BOTH park inside the ONE stage block above, because neither has a
+   stage of its own to park in: §3.2.17's rest points are all REQUESTS, which park and resume at their own call
+   site with the hosting machine's stage unmoved, and §2.9's are the block's own. So a stage cannot tell the
+   two apart on a resume and this byte is what does.
+   THE KEY RANGE IS ZERO because a step state is js_mallocz'd and every other way into this walk — step 8's
+   branch, and step 9's for `getAllRecords`, whose dictionary Web IDL converted at the argument boundary —
+   begins at the range with no dictionary conversion ever started.
+
+   NAMED RESIDUAL — THE MACHINERY IS RIGHT AND THE LABEL A PARKED FLOW SAYS IS NOT. A flow parked inside a
+   member's [[Get]] during step 9's §3.2.17 conversion holds this block's FIRST stage, whose label is §7.4's
+   Array arm step 1 (`len is ? ToLength(? Get(input, "length"))`) — a conversion that has not started and may
+   never start. The resume itself is correct: the label resolves to that stage, and this byte is what the run
+   reads there, so the dictionary conversion continues exactly where it stopped. What is narrower is the
+   REPORT. The next diff gives step 9's dictionary a stage of its own in IDB_GET_ALL_ALGO_STAGES below, naming
+   Web IDL §3.2.17 Dictionary types, and adds its STEP_ARM to the two members that expand the block
+   (core/indexeddb/idb_object_store.c and core/indexeddb/idb_index_handle.c) — which is why it is a separate
+   diff and not this one: the block is expanded in files this change does not touch. HOW ITS ABSENCE SHOWS: an
+   abort or a park report taken while `store.getAll({get count(){…}})` is running names §7.4's Array arm and
+   sends the reader hunting an array conversion that never happened. */
+enum { IDB_GET_ALL_CONV_RANGE = 0, IDB_GET_ALL_CONV_OPTIONS };
+
+/* §5.12 IN FLIGHT. `opts` and `rw` are the conversions, which are the whole of the algorithm's suspendable
+   part; everything else is what steps 8 and 9 decided BEFORE them and what step 10 mints the operation over. */
 typedef struct IdbGetAllWalk {
     IdbRangeWalk rw;
+    /* STEP 9's §3.2.17 conversion, for the two members whose first argument is a bare `any`. It carries NO
+       nested-conversion frames, and that is a STATEMENT about the declaration rather than a shortcut:
+       idl_args.c's `idl_members_depth` over IDBGetAllOptions is 0, because a frame is pushed only for an
+       IDL_SEQUENCE_STRING_OR_DICT member and this dictionary declares none. idl_dict_walk_start asserts that
+       number against what it is handed, so the day such a member is added the START crashes naming the host
+       block that has to be sized for it, rather than the conversion failing at the depth. */
+    IdlDictWalk opts;
     JSValue  source;      /* step 1's source — a §2.2 object store or a §2.6 index record (owned) */
     JSValue  tx;          /* step 4's transaction (owned) */
+    /* THE CALLER'S OWN STAGE, carried because step 9's two conversions are SEQUENTIAL and only the first of
+       them is begun where the caller named it: `run` is handed the block's `base` and nothing else, so the
+       point at which the dictionary answers and the key range conversion begins has no other way to know where
+       to hand control back. */
+    int      after;
     uint32_t count;       /* step 8's or step 9's count, meaningless unless `has_count` */
     uint8_t  has_count;   /* "count IF GIVEN" — §6.2 step 1's own distinction */
     uint8_t  kind;
     uint8_t  is_index;    /* which of step 10's two operations, and which list the walk reads */
     uint8_t  direction;
+    uint8_t  conv;        /* IDB_GET_ALL_CONV_* */
 } IdbGetAllWalk;
 
-/* BEGIN §5.12 AT STEP 6, the member having performed steps 1-5. Performs steps 6-9 here — they are one O(1)
+/* BEGIN §5.12 AT STEP 6, the member having performed steps 1-5. Steps 6, 7 and step 8's OWN TEST are one O(1)
  * engine action each, and "is a potentially valid key range" is O(1) BY CONSTRUCTION: §7.4's arms that decide
  * it all answer without reading anything of the page's, and its Array arm can only ever produce a key or
  * "invalid value", never the "invalid type" that is the only false answer. So the branch is taken without a
- * rest point, and step 8's or step 9's conversion is begun.
+ * rest point, and the conversion the chosen arm names is BEGUN here and driven from the caller's block.
  *
  * `options_converted` is TRUE for `getAllRecords`, whose IDL declares `optional IDBGetAllOptions options = {}`
  * — so what arrives is a dictionary Web IDL already converted at the argument boundary, and step 9's three
  * lookups are reads of an engine-built object. It is FALSE for `getAll` and `getAllKeys`, whose first argument
- * is `any`: step 9 must then convert one HERE, which is a capability this engine does not have, and the false
- * branch says so at the site rather than answering with a dictionary nobody built.
+ * is `any`: step 9's own §3.2.17 conversion is then run HERE, inside the algorithm, because step 8's "is a
+ * potentially valid key range" is what decided the value is a dictionary at all and the argument boundary
+ * could not have known. Either way step 9's three lookups read ONE shape, and they are performed in one place.
  *
  * `count_arg` is the positional argument's already-range-checked value; `has_count_arg` is whether the member
  * was given one. Step 9 OVERWRITES both from the dictionary, which is what makes

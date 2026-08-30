@@ -52,7 +52,7 @@
  * the walking stage returns JS_STEP_YIELD at every turn so the scheduler is ASKED at each one. There is no C
  * entry: a second, non-suspending copy of this walk is the thing this shape exists to prevent.
  *
- * ---- WHAT IS NOT BUILT, NAMED AT THE SITE --------------------------------------------------------------------
+ * ---- WHERE STEP 9's DICTIONARY IS CONVERTED, AND WHY IT IS NOT AT THE ARGUMENT BOUNDARY ----------------------
  *
  * §5.12 step 9 reads `queryOrOptions["query"]`, `["count"]` and `["direction"]` — Web IDL dictionary-member
  * lookups on a value that, for `getAll` and `getAllKeys`, arrives as a bare `any`. So the conversion to
@@ -65,12 +65,20 @@
  * of step_getprop_run calls would be a second dictionary machine, with its own answer to the required-member
  * rule, to §3.2.17 (ES-to-IDL list) step 4.1.5's defaults and to each member's own coercion.
  *
- * WHAT IS STILL MISSING IS THE EMBEDDING AND NOT THE CAPABILITY, and the DFAIL at the branch names it
- * exactly. Three of the four ways step 9 is reached need none of it: `getAllRecords` declares the dictionary,
- * so the args machine converted it at the argument boundary; undefined and null never reach step 9 (they are
- * potentially valid key ranges — see ga_potentially_valid_key_range); and a non-object PRIMITIVE is §3.2.17
- * (ES-to-IDL list) step 1's TypeError, which reads nothing and is thrown here. So what waits is exactly
- * `getAll(obj)` / `getAllKeys(obj)` with a real options object, which is what WPT's `*-options` files pass. */
+ * SO STEP 9 IS TWO CONVERSIONS IN SEQUENCE and the walk carries both: §3.2.17 over `queryOrOptions`, then §2.9
+ * over the `query` member it produced. Neither needs a stage of its own — §3.2.17's rest points are REQUESTS,
+ * which park and resume at their own call site with the stage unmoved, and §2.9's are the block the caller
+ * already declares — so what the caller gained is nothing at all, and what this record gained is a field, a
+ * byte saying which conversion a resume comes back into, and the caller's `after` to hand the second one.
+ *
+ * AND STEP 9's THREE READS ARE PERFORMED IN ONE PLACE (ga_step9_reads) FOR BOTH ENTRIES. `getAllRecords`
+ * declares `optional IDBGetAllOptions options = {}`, so the args machine converted its dictionary at the
+ * argument boundary and the algorithm is handed one already built; `getAll` and `getAllKeys` build one here.
+ * The two arrive at step 9 holding the same shape — a §3.2.17 idlDict — and a second copy of the three reads
+ * would be a second answer to which member overwrites the positional count. Two of the four ways step 9 is
+ * reached never convert anything: undefined and null do not reach it at all (they are potentially valid key
+ * ranges — see ga_potentially_valid_key_range), and a non-object PRIMITIVE is §3.2.17 (ES-to-IDL list) step
+ * 1's TypeError, which reads nothing and is thrown at the branch. */
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -98,6 +106,18 @@ const IdlDictMember IDB_GET_ALL_OPTIONS[3] = {
     { "direction", IDL_ENUM, false, IDB_CURSOR_DIRECTIONS, 0, NULL, IDL_DEFAULT_STRING, "next" },
     { "query", IDL_ANY, false, NULL, 0, NULL, IDL_DEFAULT_NULL },
 };
+
+/* THE SAME MEMBER LIST, NAMED — which is what a conversion reached from inside an ALGORITHM needs and what a
+   declared ARGUMENT position does not. `getAllRecords`'s position declares the bare list (idl_method_id_step
+   takes it), because there the diagnostic can name the argument; step 9's conversion has no argument position
+   to be named at, so the identifier travels with the list. */
+static const IdlDictDecl IDB_GET_ALL_OPTIONS_DECL = {
+    "IDBGetAllOptions", IDB_GET_ALL_OPTIONS,
+    (int)(sizeof IDB_GET_ALL_OPTIONS / sizeof IDB_GET_ALL_OPTIONS[0])
+};
+/* Its member names, interned ONCE at this component's init: a member read is two halves with a suspension
+   between them, so the atom has to outlive the park and cannot be made per read. */
+static const JSAtom *g_get_all_options_atoms;
 
 int idb_get_all_count_enforce_range(JSContext *ctx, JSValueConst v, uint32_t *pcount)
 {
@@ -478,14 +498,75 @@ static bool ga_potentially_valid_key_range(JSContext *ctx, JSValueConst v)
     return r != IDB_KEY_INVALID_TYPE;
 }
 
+/* §5.12 STEP 9's THREE SUB-STEPS, over the IDBGetAllOptions that reached this algorithm — one copy, driven by
+ * both entries, because the dictionary arrives two ways (Web IDL converted `getAllRecords`'s at the argument
+ * boundary; `getAll` and `getAllKeys` convert theirs here) and BOTH hold the same shape once it is built. Two
+ * copies would be two answers to which `count` wins, which is the one thing about this step that is easy to
+ * get differently in two places.
+ *
+ * THE ORDER IS count, direction, query WHERE THE STANDARD WRITES 9.1 query, 9.2 count, 9.3 direction, and the
+ * swap is what keeps the observable order right rather than what breaks it. The reads themselves run none of
+ * the page's code — all three are reads of a §3.2.17 idlDict the engine built — so among the three the order
+ * is unobservable. What IS observable is the one REFUSAL in here: `[EnforceRange]`, which Web IDL performs
+ * inside §3.2.17 (ES-to-IDL list) step 4.1.4.1's "converting jsMemberValue to an IDL value" and therefore
+ * BEFORE step 9 begins at all. This engine defers it to the consumer because the member is declared
+ * IDL_UNRESTRICTED_DOUBLE so that the DECLARATION performs the ToNumber (the page's `valueOf`, which has to be
+ * a request) and the range test stays one copy (idb_get_all_count_enforce_range). Performed ahead of step
+ * 9.1's key range conversion it lands where a browser's lands; performed after, `getAll({count: -1, query: a})`
+ * would run §7.4's Array arm over `a` — the PAGE'S code — before a TypeError that was already owed.
+ *
+ * NAMED RESIDUAL: the deferral still moves that TypeError from the `count` MEMBER's own step 4.1.4.1 to the end
+ * of the whole dictionary conversion, so `getAll({get count(){ return -1 }, get direction(){ log(); return
+ * "prev" }})` throws the TypeError a browser throws having run one getter a browser never reaches. The next
+ * diff declares `[EnforceRange] unsigned long` as a member TYPE in core/idl_args.h — a range composed INTO the
+ * declaration's ToNumber instead of following it — and every DICTIONARY-member call of
+ * idb_get_all_count_enforce_range goes with it; the POSITIONAL argument's call stays, because there §3.6
+ * converts at the position and the consumer is the position. HOW ITS ABSENCE SHOWS: a side-effecting member
+ * declared lexicographically after an out-of-range `count` runs when it should not have.
+ *
+ * `options` is BORROWED. Returns the step code the caller must return. */
+static int ga_step9_reads(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w, JSValueConst options,
+                          int base, int after)
+{
+    JSValue cv, dv, query;
+    int r;
+
+    DCHECK(JS_IsObject(options),
+           "§5.12 step 9's options are not an object — both entries hand this a §3.2.17 idlDict, and the "
+           "argument path builds one on every path including the one where the member was called with nothing");
+    cv = idl_dict_get(ctx, options, "count");
+    dv = idl_dict_get(ctx, options, "direction");
+    /* STEP 9.2: "Set count to queryOrOptions["count"]" — and the member carries NO default, so an absent one
+       leaves §6.2 step 1's "not given" arm in place rather than becoming a 0 this consumer invented. The
+       positional `count` an overload may also have passed is DISCARDED here, which is what makes
+       `store.getAll({count: 10}, 17)` a request for ten. */
+    w->has_count = 0;
+    if (!JS_IsUndefined(cv)) {
+        if (idb_get_all_count_enforce_range(ctx, cv, &w->count) < 0) {
+            JS_FreeValue(ctx, cv);
+            JS_FreeValue(ctx, dv);
+            return JS_STEP_ABRUPT;
+        }
+        w->has_count = 1;
+    }
+    /* STEP 9.3: "Set direction to queryOrOptions["direction"]". */
+    w->direction = (uint8_t)idb_cursor_direction_of(ctx, dv);
+    JS_FreeValue(ctx, cv);
+    JS_FreeValue(ctx, dv);
+    /* STEP 9.1: "Set range to the result of converting a value to a key range with queryOrOptions["query"].
+       Rethrow any exceptions." The member declares `any query = null`, so an absent one is the IDL null, which
+       §2.9 makes the unbounded key range — the answer `store.getAllRecords({})` must give. */
+    query = idl_dict_get(ctx, options, "query");
+    r = idb_key_range_walk_start(ctx, hdr, &w->rw, query, /*null_disallowed*/ false, base, after);
+    JS_FreeValue(ctx, query);
+    return r;
+}
+
 int idb_get_all_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w,
                            JSValueConst source, JSValueConst tx, bool is_index, int kind,
                            JSValueConst query_or_options, bool options_converted,
                            uint32_t count_arg, bool has_count_arg, int base, int after)
 {
-    JSValue query;
-    int r;
-
     DCHECK(JS_IsObject(source), "§5.12 step 1 produced something that is not an object store or an index");
     DCHECK(idb_transaction_is(tx), "§5.12 step 4 produced something that is not a transaction");
     DCHECK(idb_transaction_state(ctx, tx) == IDB_TX_ACTIVE,
@@ -498,6 +579,12 @@ int idb_get_all_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w,
     w->direction = IDB_CURSOR_DIR_NEXT;                                              /* STEP 7 */
     w->count = count_arg;
     w->has_count = has_count_arg ? 1 : 0;
+    /* THE STATE IS COMPLETE BEFORE THE FIRST OPERATION THAT CAN THROW — which on the dictionary arm is
+       idl_dict_walk_start's minting of §3.2.17 step 2's idlDict. `after` is placed here rather than inside
+       that arm for the same reason: a failure tears this record down through the ONE `visit` its host chains,
+       and a field handed over late is a field that teardown does not know about. */
+    w->after = after;
+    w->conv = IDB_GET_ALL_CONV_RANGE;
 
     if (ga_potentially_valid_key_range(ctx, query_or_options)) {              /* STEP 8 */
         DCHECK(!options_converted,
@@ -524,78 +611,53 @@ int idb_get_all_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w,
             JS_ThrowTypeError(ctx, "the first argument is neither a key nor an IDBGetAllOptions dictionary");
             return JS_STEP_ABRUPT;
         }
-        /* THE CONVERSION EXISTS AND THIS ALGORITHM CANNOT YET HOLD IT — that is the whole of what is left, and
-           it is a RESIDUAL of this block's shape rather than a missing capability. core/idl_args.h's
-           `idl_dict_walk_start`/`_run`/`_take` is the step-driven §3.2.17 conversion, embeddable in an
-           algorithm and sharing the argument machine's own member loop; what §5.12 does not have is anywhere
-           to PARK one. `idb_get_all_walk_start` performs steps 6-9 as O(1) engine actions and hands the only
-           suspendable part to `w->rw`, so a conversion that rests on the member it is on has no field to rest
-           in and no re-entry to come back through.
-           WHAT THE NEXT DIFF BUILDS, all of it in core/indexeddb/idb_get_all.h and this file:
-             1. `IdbGetAllWalk` gains an `IdlDictWalk opts` and a byte saying which of step 9's two conversions
-                is in flight — the dictionary, then the key range it hands `queryOrOptions["query"]` to.
-             2. `idb_get_all_walk_run` drives `idl_dict_walk_run` while that byte says so and only then falls
-                through to `idb_key_range_walk_run`; step 9's three reads move behind the walk's `_take`.
-             3. `idb_get_all_walk_visit` chains `idl_dict_walk_visit`, whose frames are NULL/0 — every member
-                of IDBGetAllOptions is a flat type, so `idl_members_depth` over it is 0.
-             4. `idb_get_all_init` calls `idl_dict_declare` for an `IdlDictDecl` naming IDBGetAllOptions, which
-                is what interns the member atoms this walk is handed.
-           IT NEEDS NO STAGE BLOCK, which is why this is a field and a re-entry rather than a stage-list
-           change: every rest point the walk has is a REQUEST, and a request parks and resumes at its own call
-           site with the hosting machine's stage unmoved.
-           HOW ITS ABSENCE SHOWS: `getAll(obj)` and `getAllKeys(obj)` with a real options object abort here —
-           WPT's `*-options` files are what pass one. `getAllRecords` does not reach this: its IDL declares the
-           dictionary, so the args machine converted it at the argument boundary. */
-        DFAIL("Indexed Database §5.12 step 9 was reached with an UNCONVERTED `queryOrOptions`. The §3.2.17 "
-              "conversion this needs EXISTS — core/idl_args.h's idl_dict_walk_start/_run/_take — and what is "
-              "missing is the field to park it in: IdbGetAllWalk holds no IdlDictWalk, so steps 6-9 have "
-              "nowhere to rest on the member they are on. Build the four items listed above this DFAIL");
-        JS_ThrowTypeError(ctx, "an IDBGetAllOptions dictionary cannot yet be converted inside this algorithm: "
-                               "§5.12's walk has no field to park the conversion in");
-        return JS_STEP_ABRUPT;
+        /* AND THE REST OF §3.2.17 IS THE ONE WALK, BEGUN HERE AND DRIVEN FROM THE BLOCK THE CALLER ALREADY
+           DECLARED. The stage moves to `base` and the byte says which conversion is standing there, because
+           §3.2.17 has no stage of its own to be told apart by: every rest point it has is a REQUEST, which
+           parks and resumes at its own call site with the stage unmoved.
+           NO FRAMES, which is a statement about the declaration and not a shortcut — see IdbGetAllWalk::opts,
+           and idl_dict_walk_start asserts the number against idl_members_depth over the member list. */
+        if (idl_dict_walk_start(ctx, &w->opts, query_or_options,
+                                IDB_GET_ALL_OPTIONS, IDB_GET_ALL_OPTIONS_DECL.n, g_get_all_options_atoms,
+                                IDB_GET_ALL_OPTIONS_DECL.name, /*iface*/ 0, /*narrow*/ NULL,
+                                /*frames*/ NULL, /*frames_cap*/ 0) < 0)
+            return JS_STEP_ABRUPT;
+        w->conv = IDB_GET_ALL_CONV_OPTIONS;
+        STEP_GOTO(hdr->stage, (uint16_t)base, &hdr->get_phase, &hdr->num_phase, &hdr->str_phase, NULL);
+        return JS_STEP_YIELD;
     }
-    DCHECK(JS_IsObject(query_or_options),
-           "§5.12 step 9's options are not an object — `optional IDBGetAllOptions options = {}` makes the "
-           "args machine build one on every path, including the one where the member was called with nothing");
-    {
-        JSValue cv = idl_dict_get(ctx, query_or_options, "count");
-        JSValue dv = idl_dict_get(ctx, query_or_options, "direction");
-
-        /* "Set count to queryOrOptions["count"]" — and the member carries NO default, so an absent one leaves
-           §6.2 step 1's "not given" arm in place rather than becoming a 0 this consumer invented. The
-           positional `count` an overload may also have passed is DISCARDED here, which is what makes
-           `store.getAll({count: 10}, 17)` a request for ten. */
-        w->has_count = 0;
-        if (!JS_IsUndefined(cv)) {
-            if (idb_get_all_count_enforce_range(ctx, cv, &w->count) < 0) {
-                JS_FreeValue(ctx, cv);
-                JS_FreeValue(ctx, dv);
-                return JS_STEP_ABRUPT;
-            }
-            w->has_count = 1;
-        }
-        w->direction = (uint8_t)idb_cursor_direction_of(ctx, dv);   /* "Set direction to queryOrOptions[direction]" */
-        JS_FreeValue(ctx, cv);
-        JS_FreeValue(ctx, dv);
-    }
-    /* "Set range to the result of converting a value to a key range with queryOrOptions["query"]. Rethrow any
-       exceptions." The member declares `any query = null`, so an absent one is the IDL null, which §2.9 makes
-       the unbounded key range — the answer `store.getAllRecords({})` must give. */
-    query = idl_dict_get(ctx, query_or_options, "query");
-    r = idb_key_range_walk_start(ctx, hdr, &w->rw, query, /*null_disallowed*/ false, base, after);
-    JS_FreeValue(ctx, query);
-    return r;
+    /* `getAllRecords`: the dictionary is the one Web IDL built at the argument boundary, so step 9's three
+       reads run straight away over it. */
+    return ga_step9_reads(ctx, hdr, w, query_or_options, base, after);
 }
 
 int idb_get_all_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w, JSValue in, int base,
                          JSValue **out_cb, int *out_argc)
 {
+    if (w->conv == IDB_GET_ALL_CONV_OPTIONS) {
+        JSValue options;
+        int r = idl_dict_walk_run(ctx, hdr, &w->opts, /*frames*/ NULL, /*frames_cap*/ 0, in, out_cb, out_argc);
+
+        if (r > 0) return r;    /* parked in a member's [[Get]] or in that member's own coercion */
+        if (r < 0) return JS_STEP_ABRUPT;   /* §3.2.17's `?` — the page's throw leaves §5.12 entirely */
+        /* THE BYTE MOVES BEFORE THE SECOND CONVERSION IS BEGUN, because that conversion is what points the
+           stage back into this same block: a resume arriving with the byte still saying "dictionary" would
+           drive a walk that has just been taken. */
+        w->conv = IDB_GET_ALL_CONV_RANGE;
+        options = idl_dict_walk_take(ctx, &w->opts);
+        r = ga_step9_reads(ctx, hdr, w, options, base, w->after);
+        JS_FreeValue(ctx, options);
+        return r;
+    }
     return idb_key_range_walk_run(ctx, hdr, &w->rw, in, base, out_cb, out_argc);
 }
 
 void idb_get_all_walk_visit(JSContext *ctx, IdbGetAllWalk *w, JSStepVisit *v)
 {
     idb_key_range_walk_visit(ctx, &w->rw, v);
+    /* The SAME NULL/0 the start and the run are given: the frames are one statement of this host's layout, and
+       a `visit` that named a different pair would drop what a live frame still held. */
+    idl_dict_walk_visit(ctx, &w->opts, /*frames*/ NULL, /*frames_cap*/ 0, v);
     v->val(ctx, &w->source);
     v->val(ctx, &w->tx);
 }
@@ -606,6 +668,11 @@ JSValue idb_get_all_walk_take(JSContext *ctx, IdbGetAllWalk *w, JSValueConst sou
     JSValue range, op, req;
 
     DCHECK(g_get_all_stepid >= 0, "§5.12's operation was minted before idb_get_all_init declared its machine");
+    DCHECK(w->conv == IDB_GET_ALL_CONV_RANGE,
+           "§5.12 reached step 10 with step 9's §3.2.17 dictionary conversion still in flight — the caller's "
+           "`after` stage is handed to the KEY RANGE conversion, which is begun only once the dictionary has "
+           "been taken, so a walk standing here on the dictionary is one whose two conversions ran in the "
+           "wrong order");
     if (idb_key_range_walk_take(ctx, &w->rw, &range) < 0)                     /* step 8/9's DataError */
         return JS_EXCEPTION;
     /* §2.7.1's cleanup is a checkpoint of the event loop, so nothing may deactivate a transaction across a
@@ -637,6 +704,13 @@ void idb_get_all_init(JSContext *ctx)
     g_get_all_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_idb_get_all_def);
     agent_state_id("idb_get_all", &g_get_all_stepid,
                    "§6.2's and §6.3's retrieve-multiple machine, and the declaration latch");
+    /* §5.12 step 9's dictionary has no ARGUMENT POSITION to be declared at — `getAll`'s first argument is a
+       bare `any` — so its member names are interned here, at this component's own init, and the walk is handed
+       them. The declaration is idempotent and also runs §3.2.17's read-order check over the list, which is why
+       it goes through idl_dict_declare rather than reaching for JS_NewAtom. */
+    g_get_all_options_atoms = idl_dict_declare(ctx, &IDB_GET_ALL_OPTIONS_DECL);
+    agent_state_ptr("idb_get_all", &g_get_all_options_atoms,
+                    "IDBGetAllOptions's interned member names, for §5.12 step 9's own §3.2.17 conversion");
 }
 
 void idb_get_all_free(JSRuntime *rt)
@@ -644,4 +718,8 @@ void idb_get_all_free(JSRuntime *rt)
     (void)rt;
     DCHECK(g_get_all_stepid >= 0, "§5.12's machinery was released in an agent that never declared it");
     g_get_all_stepid = -1;
+    /* The atoms themselves belong to the IDL pool, which gives them back with the runtime; what this component
+       owns is the HANDLE, and a handle left pointing into a released pool is the stale-slot defect
+       core/agent_state.h was written about. */
+    g_get_all_options_atoms = NULL;
 }
