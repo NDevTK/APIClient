@@ -151,7 +151,27 @@ function _encodeSentence(item) {
 // which is why this reads the absence positively rather than defaulting it.
 function _parkedProgress(item) {
   var held = 'its candidates have held the thread ' + item.turns + ' time' + (item.turns === 1 ? "" : "s");
-  var got  = item.survived + ' of ' + item.survivedOf + ' bytes of the furthest candidate';
+  // …AND WHICH SEGMENT THAT WAS, WHICH IS THE HALF A SIZE CANNOT SAY AND THE HALF A MUTATION ACTS ON.
+  // `survivedAt` is the offset into the CANDIDATE at which the longest surviving run begins (solve.h), so the
+  // two readings take OPPOSITE work: a run beginning at byte 0 is a payload whose TAIL broke — the escape
+  // opened and its terminator never arrived — and one beginning later is a payload with no longer contiguous
+  // run ahead of it, so what broke is the HEAD and the escape never opened at all. Same gap, same sentence,
+  // until this line. `survivedTo` says where that segment landed in the string the sink was handed, which is
+  // what distinguishes a run that arrived at the front of a large template from one buried inside it.
+  // ABSENT IS NOT ZERO AND IS NOT DEFAULTED HERE: solve.c omits the pair exactly when no run was recorded, the
+  // biconditional is asserted where the record arrives, and the `survived === 0` branches below never reach
+  // this string. Nothing is claimed about bytes OUTSIDE the run — a shorter run of them may have survived
+  // elsewhere — so the sentence states what the longest run says and no more.
+  var seg = item.survived === 0 ? ""
+    : item.survivedAt === 0
+      ? (item.survived === item.survivedOf
+         ? ' (all of it, contiguous, landing at byte ' + item.survivedTo + ' of what the sink was handed)'
+         : ' — its leading ' + item.survived + ', landing at byte ' + item.survivedTo + ' of what the sink was '
+           + 'handed, so what broke is the TAIL')
+      : ' — the segment beginning at byte ' + item.survivedAt + ' of the candidate, landing at byte '
+        + item.survivedTo + ' of what the sink was handed, with no longer contiguous run ahead of it, so what '
+        + 'broke is the HEAD';
+  var got  = item.survived + ' of ' + item.survivedOf + ' bytes of the furthest candidate' + seg;
   // HOW MANY OF THIS SEARCH'S CANDIDATES HAVE NEVER BEEN SEEN AT A SINK — counted, never indexed. solve.h
   // says the inert context probe is entry 0 of a DERIVED class and that it is told apart by carrying no
   // marker; deciding WHICH entry is the probe from its POSITION would be this view restating a producer fact
@@ -618,6 +638,25 @@ function renderSecurityPanel() {
         + "WHICH question this search is stuck on out of numbers that are not measurements (sink=" + pit.sink
         + " survived=" + JSON.stringify(pit.survived) + " survivedOf=" + JSON.stringify(pit.survivedOf)
         + " escaped=" + JSON.stringify(pit.escaped) + ")");
+      // …AND WHERE THAT RUN IS, WHICH IS THE HALF THE PAIR ABOVE CANNOT STATE. solve.c emits `survivedAt` and
+      // `survivedTo` exactly when a run has been recorded and omits BOTH when it has not, because 0 is a real
+      // and common offset — so their presence is the biconditional asserted here rather than a `!== undefined`
+      // read per field, which would let a relay that dropped one of them render a segment out of the other.
+      // `survivedAt` is the offset into the CANDIDATE, so it plus the run is bounded by `survivedOf` for the
+      // same reason `survived <= survivedOf` is: the run is a substring of its own candidate by construction,
+      // and a card that states WHICH segment died out of numbers that do not fit inside the candidate states
+      // it about bytes no candidate ever carried.
+      DCHECK((pit.survived > 0) === (typeof pit.survivedAt === "number")
+             && (typeof pit.survivedAt === "number") === (typeof pit.survivedTo === "number")
+             && (pit.survived === 0 || (pit.survivedAt >= 0 && pit.survivedTo >= 0
+                                        && pit.survivedAt + pit.survived <= pit.survivedOf)),
+        "a parked @S record carries a surviving run without the offsets that say WHERE it is, carries offsets "
+        + "for a run it never recorded, or names a segment that does not fit inside the candidate it measured "
+        + "— solve.c writes the pair in the same ratchet branch as the run and omits both when there is none, "
+        + "so any of those means the card is about to state which segment the page ate out of a position "
+        + "measured against some other string (sink=" + pit.sink + " survived=" + JSON.stringify(pit.survived)
+        + " survivedOf=" + JSON.stringify(pit.survivedOf) + " survivedAt=" + JSON.stringify(pit.survivedAt)
+        + " survivedTo=" + JSON.stringify(pit.survivedTo) + ")");
       // AND THE IMPLICATIONS BETWEEN THE FOUR RUNGS, which are the only thing that can say the four numbers
       // are about the same search rather than four counters that happen to travel together. An escape is
       // observed on a string a breakout ARRIVED in (solve.c asserts the same at its origin); and for a class

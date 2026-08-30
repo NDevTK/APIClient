@@ -23,7 +23,32 @@
  * page re-encoded (`&lt;`, `%3C`) or dropped is a byte that CANNOT break the sink out of its context, so for a
  * fitness the two are one answer and that answer is "did not survive" — reporting `&lt;` as a surviving `<`
  * would be the false-PoC direction. What §@S(2)'s vocabulary is FOR is the mutation step, which reads WHICH
- * segment died and WHERE the rest landed; both are reported here (`at`, `out_at`) so that step has its input.
+ * segment died and WHERE the rest landed; both are reported here (`at`, `out_at`).
+ *
+ * WHO READS THEM, STATED RATHER THAN ASSUMED — because this sentence used to end "so that step has its input",
+ * which is a claim about a CONSUMER and was true of nobody. The offsets were computed on every observation,
+ * checked by this file's own two-sided assert (which RE-READS the bytes at them — the only thing that can say
+ * the pair NAMES the run rather than merely being in range), and then discarded with the caller's `FilterObs`
+ * local, which reads `run` and `len` and nothing else. §@S: "an observation with a computed writer and no
+ * reader is not a mechanism" — the mirror of the read-with-no-writer defect, and harder to see, because
+ * nothing was absent and nothing defaulted. They now reach solve.c's search record (`surv_at`/`surv_out`,
+ * written in the same ratchet branch as the run they describe) and the parked report (`survivedAt`/
+ * `survivedTo`), where a reader acts on the DIRECTION of a near miss: a run at offset 0 is a payload whose
+ * TAIL the page cut, one at offset 3 is a payload whose HEAD it ate, and those are opposite mutations that the
+ * size alone reports identically.
+ *
+ * WHAT IS STILL NARROWER THAN §@S(2), NAMED SO THE NEXT DIFF STARTS FROM BUILDING IT RATHER THAN FROM
+ * REDISCOVERING IT. The DERIVATION does not read these offsets. solve.c re-derives after a near miss from the
+ * context probe's stored WITNESS under the byte-deliverability table below, so it aims by WHICH BYTES arrive
+ * and never by WHERE this candidate's own surviving segment landed. That is correct as far as it goes — every
+ * escape it constructs is still the sink state's own exit transition — and it is narrower than "breakout bytes
+ * are placed where they survive in the surviving form". WHAT THE NEXT DIFF BUILDS is an offset-addressed
+ * derivation entry, the shape solve_js_at_source already has (a string plus a position, rather than a string
+ * the callee scans for a locator), so a breakout's OWN output can be read at `out_at` as a witness in its own
+ * right. HOW ITS ABSENCE SHOWS: a search whose `survivedAt` WALKS — successive candidates losing a different
+ * segment each time — while `payloads` stops growing, because the run measured a new gap on every arrival and
+ * nothing was constructed toward it; the delivery table did not move, and it is the only thing the derivation
+ * is listening to.
  * Case folding is deliberately absent: whether a case-folded run still counts is a fact about the SINK's own
  * language (HTML §13.2.5 lowercases tag and attribute names, ECMAScript §12 does not), so it belongs to the
  * class that owns the sink and not to a component that has never heard of either. */

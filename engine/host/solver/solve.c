@@ -133,7 +133,33 @@ typedef struct {
        TOWARD a fire; a candidate whose bytes this search has measured cannot arrive intact has made no such
        progress, and paying it is paying for ground the search already knows leads nowhere. */
     int reach_credited;
-    int surv_run, surv_len; int escaped;
+    int surv_run, surv_len;
+    /* …AND WHERE THAT RUN IS, WHICH IS THE HALF THE PAIR CANNOT SAY AND THE HALF A MUTATION ACTS ON.
+       `surv_run`/`surv_len` is HOW MUCH of a candidate survived; these two are WHICH PART. `surv_at` is the
+       offset into the CANDIDATE at which the surviving run begins — so the rest of the candidate is the
+       segment that died — and `surv_out` is where that run was found IN THE STRING the sink was handed. They
+       are §@S(2)'s two named facts read literally ("which bytes survive to which positions"), and §@S names
+       them again as the input to the step that follows: "a near-miss is mutated toward the gap using the
+       byte-provenance the run already measured — which segment died and where the rest landed".
+       THEY WERE COMPUTED, VERIFIED, AND THROWN AWAY. solve_filter_survival reports both on every observation
+       and its own two-sided assert RE-READS the bytes at them, so the numbers were real and checked; they
+       then died with the `FilterObs` local in filter_survived, which reads `run` and `len` and nothing else.
+       That is §@S's closing sentence exactly — "an observation with a computed writer and no reader is not a
+       mechanism" — and it is the mirror of the read-with-no-writer defect this file has fixed twice
+       (`witnessed`, and the derivation's own return count): harder to see, because nothing is missing, nothing
+       defaults, and the value is asserted on the way to nowhere.
+       WHAT THE READER GAINS IS A DIRECTION AND NOT A DETAIL. `survived:11,survivedOf:14` says three bytes died
+       and cannot say which three, and the two answers take OPPOSITE work: a run at offset 0 is a payload whose
+       TAIL the page cut — the escape opened and never closed — and a run at offset 3 is one whose HEAD it ate,
+       so the escape never opened at all. The size of the gap was reported and its position was not, so the two
+       read alike in the field built to tell distances apart.
+       THEY DESCRIBE THE RATCHET'S RECORDED RUN AND NOTHING ELSE, so they are written in its improvement branch
+       and never on their own: offsets from one observation beside a length from another would name a segment
+       of a string no candidate ever produced. -1 is the no-observation state — the same one FilterObs uses,
+       for the same reason — and it is why the report OMITS them rather than emitting 0, since offset 0 is a
+       real answer and the most common one. */
+    int surv_at, surv_out;
+    int escaped;
     /* …AND THE SAME LATCH ONE RUNG UP, WHICH IS THE SENTENCE ABOVE READ AGAIN AT THE RUNG IT WAS NOT READ AT.
        `escaped` is the ESCAPE rung's report counter for exactly the reason `reached` is the arrival rung's —
        every arrival at an executable position is counted, including one by a spelling the delivery table has
@@ -580,6 +606,10 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        best-so-far ratchet that is not merely a wrong report — a garbage `surv_len` makes the first real
        observation compare against a maximum nothing ever achieved and the rung never pays at all. */
     e->surv_run = 0; e->surv_len = 0;
+    /* THE OFFSETS OF A RUN THAT DOES NOT EXIST YET — -1 and not 0, for the reason FilterObs gives about its
+       own pair: 0 is a real offset, so a zeroed pair states that a run this search has never observed begins
+       at the candidate's first byte. Same realloc'd-and-never-zeroed line as every field around it. */
+    e->surv_at = -1; e->surv_out = -1;
     e->surv_pl = NULL; e->svcap = 0;
     /* EVERYTHING DELIVERS UNTIL A RUN SAYS OTHERWISE — the sound-only direction (solve_filter.h): a search
        whose delivery probe has not come back keeps every arm, exactly as a branch whose domain permits both
@@ -1217,6 +1247,21 @@ static void filter_survived(const char *out) {
            "one line up is the whole of what makes this rung worth at most one point, so a credit that is not "
            "an improvement is a value leak that reorders the frontier on noise");
     e->surv_run = o.run; e->surv_len = o.len;
+    /* …AND THE OFFSETS OF THE RUN JUST RECORDED, IN THE SAME BRANCH, because the length and the position are
+       ONE observation: solve_filter_survival reports them together and its own assert re-reads the bytes at
+       them, so a split write would let this search hold a run measured on one string and a position measured
+       in another. There is no state in which the pair moves and the offsets do not.
+       ASSERTED AGAINST WHAT THE SEARCH NOW HOLDS, which is the half the component cannot check. solve_filter.c
+       has already verified that these offsets name this run inside THIS observation's two strings; what only
+       this site can say is that the four numbers the SEARCH is left holding are consistent with each other,
+       which is the invariant every later reader — the report, and the mutation that reads which segment died —
+       actually depends on. */
+    e->surv_at = o.at; e->surv_out = o.out_at;
+    DCHECK(e->surv_at >= 0 && e->surv_out >= 0 && e->surv_at + e->surv_run <= e->surv_len,
+           "the @S survival ratchet recorded a surviving segment that does not fit inside the candidate it "
+           "measured, or recorded a run with no position — the offset is into the candidate and the run is a "
+           "substring of it by construction, so a segment running past its own end names bytes of some other "
+           "string, and the mutation these offsets exist to aim would be aimed at them");
     flow_credit_emit(now - had);
 }
 
@@ -2077,6 +2122,25 @@ char *solve_json_array(JSContext *ctx) {
         snprintf(t, sizeof t, "%d", g_pending[i].surv_run); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "survivedOf");
         snprintf(t, sizeof t, "%d", g_pending[i].surv_len); json_buf_raw(&b, t);
+        /* WHICH SEGMENT LIVED AND WHERE IT LANDED — the two facts the pair above measures and cannot state,
+           and the ones §@S(2) names as the input to the mutation that follows a near miss ("which bytes
+           survive to which positions", "which segment died and where the rest landed"). `survivedAt` is the
+           offset into the CANDIDATE where the recorded run begins; `survivedTo` is where that run was found in
+           the string the sink was handed.
+           IT SPLITS ONE READING INTO TWO OPPOSITE INSTRUCTIONS. `survived:11,survivedOf:14,survivedAt:0` is a
+           payload whose TAIL the page cut — the escape opened and its terminator never arrived — and
+           `survived:11,survivedOf:14,survivedAt:3` is one whose HEAD it ate, so the escape never opened at
+           all. Same three-byte gap, opposite mutations of opposite segments, and until now one report.
+           ABSENT WHEN NO RUN HAS BEEN RECORDED, decided on the RUN rather than on the offset, because 0 is a
+           real and common offset: emitting it for a search that has observed nothing would state that a run
+           nobody has seen begins at the candidate's first byte. Same shape and same reason as `fires` and
+           `witnessed` — the absence is the positive statement, never a zero standing in for one. */
+        if (g_pending[i].surv_run > 0) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "survivedAt");
+            snprintf(t, sizeof t, "%d", g_pending[i].surv_at); json_buf_raw(&b, t);
+            json_buf_raw(&b, ","); json_buf_key(&b, "survivedTo");
+            snprintf(t, sizeof t, "%d", g_pending[i].surv_out); json_buf_raw(&b, t);
+        }
         json_buf_raw(&b, ","); json_buf_key(&b, "escaped");
         snprintf(t, sizeof t, "%d", g_pending[i].escaped); json_buf_raw(&b, t);
         /* AND WHAT WAS ACTUALLY TRIED, which three counts cannot say. `tried` is how many runs, `reached` how

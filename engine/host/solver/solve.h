@@ -157,7 +157,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
                       [,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
-                      "survivedOf":L,"escaped":E[,"fires":F][,"witnessed":W],"probes":P,"payloads":[..],
+                      "survivedOf":L[,"survivedAt":A,"survivedTo":O],"escaped":E[,"fires":F][,"witnessed":W]
+                      ,"probes":P,"payloads":[..],
                       "survivedBy":[..],"withdrawn":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
@@ -226,6 +227,23 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    report. §@S(2)'s other forms — dropped, escaped, re-encoded — are not separate numbers here on purpose: a
    byte the page re-encoded cannot break a sink out of its context, so for a FITNESS it is exactly "did not
    survive", and reporting `&lt;` as a surviving `<` is the false-PoC direction.
+   `survivedAt`/`survivedTo` ARE WHERE THAT RUN IS, AND THEY ARE THE HALF THE PAIR ABOVE STRUCTURALLY CANNOT
+   SAY. `survived`/`survivedOf` is a SIZE, and every mutation of a near miss is a question about a POSITION:
+   `survived:11,survivedOf:14,survivedAt:0` is a payload whose TAIL the page cut — the escape opened and its
+   terminator never arrived — while `survived:11,survivedOf:14,survivedAt:3` is one whose HEAD it ate, so the
+   escape never opened at all. Identical gap, opposite segments, opposite work, and one report until now.
+   `survivedAt` is the offset into the CANDIDATE at which the recorded run begins (so what is outside it is
+   what died) and `survivedTo` is where that run was found in the string the sink was handed — §@S(2)'s "which
+   bytes survive to which positions" read literally, and §@S's named input to the step that follows a near miss
+   ("which segment died and where the rest landed").
+   THEY EXIST BECAUSE THE OBSERVATION ALREADY DID AND NOTHING READ IT. solve_filter_survival has always
+   reported both, and its own two-sided assert RE-READS the bytes at them, so they were computed and verified
+   on every observation and then discarded with the C local that held them — §@S: "an observation with a
+   computed writer and no reader is not a mechanism". That is the mirror of the read-with-no-writer defect and
+   is harder to see, because nothing was absent, nothing defaulted, and the numbers were real.
+   ABSENT TOGETHER WHENEVER `survived` IS 0, decided on the RUN and never on the offset: 0 is a real and common
+   offset — the commonest one — so a 0 emitted for a search that has observed nothing would state that a run
+   nobody has seen begins at the candidate's first byte. Same shape and same reason as `fires` and `witnessed`.
    `escaped` is how many arrivals reached an EXECUTABLE position, which is the fact between ARRIVING and
    FIRING and which nothing measured. Each class answers it from its own language: the eval sink asks the same
    ECMAScript §12 "ECMAScript Language: Lexical Grammar" scan that built the escape whether the marker now
@@ -304,8 +322,12 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     the string where it stands), "parse-insert" (an auto-firing handler in markup, at insertion,
                     no interaction), "navigation" (a `javascript:` URL, when the navigation happens). ALWAYS
                     present — a PoC that does not say how it fires is not reproducible.
-     `cspBlocks`    the page's serialized CSP, present only when it kills THIS vector. Absent = CSP §4.2.3's
-                    inline check (or §4.4.1's, for `eval`) said Allowed.
+     `cspBlocks`    the page's serialized CSP, present only when it kills THIS vector. Absent = CSP §4.2.3
+                    "Should element's inline type behavior be blocked by Content Security Policy?" (or, for
+                    `eval`, §4.4.1 "EnsureCSPDoesNotBlockStringCompilation") returned "Allowed". The titles are
+                    here because the numbers alone resolved to where the TERM "inline check" is DEFINED (§2.3
+                    "Directives") rather than to the algorithm this sentence is about, which is exactly the
+                    unfalsifiable state §Browser-half says a title exists to prevent.
      `trustedTypes` the CSP sink GROUP required at this sink, present only when the document requires one — the
                     assignment throws before the markup is parsed. Absent = no requirement applies, which
                     covers both "the document requires none" and "the standard makes this no TT sink".
