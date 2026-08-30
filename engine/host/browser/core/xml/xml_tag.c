@@ -56,12 +56,11 @@ const char *xml_tag_error_message(XmlTagError err)
         return "fatal error (§3.1 Start-Tags, End-Tags, and Empty-Element Tags, [WFC: Unique Att Spec]): \"An "
                "attribute name MUST NOT appear more than once in the same start-tag or empty-element tag\"";
     case XML_TAG_ERR_ENTITY_UNDECLARED:
-        return "fatal error (§4.1 Character and Entity References, [WFC: Entity Declared]): \"In a document "
-               "without any DTD ... the Name given in the entity reference MUST match that in an entity "
-               "declaration ... except that well-formed documents need not declare any of the following "
-               "entities: amp, lt, gt, apos, quot\" — this document declares no entities, because nothing in "
-               "this build reads §2.8's [28] doctypedecl, so the five are the whole of what a reference may "
-               "name";
+        return "fatal error (§4.1 Character and Entity References, [WFC: Entity Declared]): \"the Name given "
+               "in the entity reference MUST match that in an entity declaration ... except that well-formed "
+               "documents need not declare any of the following entities: amp, lt, gt, apos, quot\" — no "
+               "declaration this parse read matches this Name and it is none of §4.6 Predefined Entities' "
+               "five";
     case XML_TAG_ERR_UNTERMINATED:
         return "fatal error (§3.1 Start-Tags, End-Tags, and Empty-Element Tags): [40] STag closes with '>', "
                "[44] EmptyElemTag with '/>' and [42] ETag with '>', and the entity ends before this tag does";

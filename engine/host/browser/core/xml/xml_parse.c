@@ -7,7 +7,10 @@
 
 #include "core/dom/element.h"
 #include "core/xml/xml_decl.h"
+#include "core/xml/xml_doctype.h"
 #include "core/xml/xml_element.h"
+#include "core/xml/xml_external_id.h"
+#include "core/xml/xml_literal.h"
 #include "core/xml/xml_markup.h"
 #include "core/xml/xml_parse.h"
 #include "core/xml/xml_ref.h"
@@ -42,6 +45,16 @@ const char *xml_parse_report_message(const XmlParseReport *report)
     switch (report->detail.document) {
     case XML_DOCUMENT_ERR_DECL:
         return xml_decl_error_message(report->detail.within.decl);
+    case XML_DOCUMENT_ERR_DOCTYPE:
+        /* §2.8's [28] over §4.2.2's [75] over §2.3's [11]/[12] — THREE layers on this arm rather than the one
+           every other arm has, which is the standard's nesting and not an exception invented here. The chain
+           is followed the same way at each step: ask the layer whose answer says a layer below it reported. */
+        if (report->detail.within.doctype == XML_DOCTYPE_ERR_EXTERNAL_ID) {
+            if (report->detail.within.doctype_within.external == XML_EXTERNAL_ID_ERR_LITERAL)
+                return xml_literal_error_message(report->detail.within.doctype_within.literal);
+            return xml_external_id_error_message(report->detail.within.doctype_within.external);
+        }
+        return xml_doctype_error_message(report->detail.within.doctype);
     case XML_DOCUMENT_ERR_MISC:
         return xml_markup_error_message(report->detail.within.misc);
     case XML_DOCUMENT_ERR_CHARACTER:

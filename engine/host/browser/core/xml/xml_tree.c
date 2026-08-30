@@ -4,6 +4,7 @@
 
 #include <lexbor/dom/interfaces/cdata_section.h>
 #include <lexbor/dom/interfaces/comment.h>
+#include <lexbor/dom/interfaces/document_type.h>
 #include <lexbor/dom/interfaces/processing_instruction.h>
 #include <lexbor/dom/interfaces/text.h>
 
@@ -476,14 +477,16 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
     case XML_CONTENT_REFERENCE:
         /* §4.1's [66] CharRef and the five [68] EntityRefs §4.6 predefines are ALREADY the character they
            refer to — core/xml/xml_ref.h resolved them — so what joins the run is that character's own §4.3.3
-           bytes. An XML_REF_ENTITY cannot arrive: with no [28] doctypedecl read, core/xml/xml_element.c
-           answers a reference outside those five with §4.1's [WFC: Entity Declared], which is this build's
-           XML_TREE_ERR_DOCUMENT and never an item. */
+           bytes. An XML_REF_ENTITY cannot arrive: no ENTITY DECLARATION is read anywhere in this build —
+           §2.8's [28] doctypedecl is scanned but its [28b] intSubset crashes and no external subset is ever
+           dereferenced — so core/xml/xml_element.c answers a reference outside those five with §4.1's
+           [WFC: Entity Declared], which is this build's XML_TREE_ERR_DOCUMENT and never an item. */
         DCHECK(item.ref.kind != XML_REF_ENTITY,
-               "an unresolved [68] EntityRef reached the tree builder as an item — with no §2.8 [28] "
-               "doctypedecl in this build, core/xml/xml_element.c answers every reference outside §4.6's five "
-               "with [WFC: Entity Declared], so an XML_REF_ENTITY item is that layer's contract broken. "
-               "Whoever builds [28] owes this site the §4.5 replacement text in the same diff");
+               "an unresolved [68] EntityRef reached the tree builder as an item — no entity declaration is "
+               "read anywhere in this build, so core/xml/xml_element.c answers every reference outside §4.6's "
+               "five with [WFC: Entity Declared] and an XML_REF_ENTITY item is that layer's contract broken. "
+               "Whoever builds §4.2's [70] EntityDecl owes this site the §4.5 replacement text in the same "
+               "diff");
         DCHECK(xml_char_is_char(item.ref.cp),
                "a [67] Reference item carried a code point outside XML §2.2's [2] Char — [66] CharRef's "
                "[WFC: Legal Character] is what core/xml/xml_ref.h enforces, so a value outside it is that "
@@ -590,6 +593,68 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         free(norm);
         CHECK(pi != NULL, "OOM creating a ProcessingInstruction node");
         xml_tree_place_created(xml_tree_root(b), b->kind, b->current, lxb_dom_interface_node(pi));
+        return XML_TREE_OK;
+    }
+
+    case XML_CONTENT_DOCTYPE: {
+        lxb_dom_document_type_t *dt;
+        lxb_dom_exception_code_t code = LXB_DOM_EXCEPTION_OK;
+        char  *pub = NULL, *sys = NULL;
+        size_t pub_n = 0, sys_n = 0;
+        lxb_dom_node_t *c;
+
+        /* WHERE §2.8's [28] LANDS IS FIXED BY [22] AND ASSERTED HERE, WHICH IS THE CLOSURE AT THE CONSUMER
+           CLAUDE.md §Browser half asks for: core/xml/xml_document.h enforces "before the first element" and
+           "at most one" from the grammar's side, and DOM §4.2.3 Mutation algorithms' ensure pre-insert
+           validity refuses both from the tree's side ("parent has a doctype child", and "child is null and
+           parent has an element child"). Asserting it where the node is PLACED means a route added later
+           fires instead of silently building a tree the DOM would have thrown for. */
+        DCHECK(b->current == b->root_parent && b->tpl_n == 0,
+               "§2.8's [28] doctypedecl reached the tree builder with an element open — [28] stands in [22] "
+               "prolog, before the first element, so the insertion point can only be [1] document's own");
+        DCHECK(b->root_parent->type == LXB_DOM_NODE_TYPE_DOCUMENT,
+               "§2.8's [28] doctypedecl reached a parse whose [1] document children go somewhere that is not "
+               "a Document — DOM §4.2.3's ensure pre-insert validity throws HierarchyRequestError for a "
+               "doctype whose parent is not a document, and HTML §14.4 \"Parsing XML fragments\" is the parse "
+               "that hands this walk a DocumentFragment, where the wrapper start tag makes a `<!DOCTYPE` [43] "
+               "content and never [22] prolog");
+        DCHECK(b->text_len == 0,
+               "§2.8's [28] doctypedecl arrived with a §2.4 run still being coalesced — character data in "
+               "[22] prolog matches none of its constructs, so there is nothing there for a run to have come "
+               "from");
+        for (c = b->root_parent->first_child; c != NULL; c = c->next)
+            DCHECK(c->type != LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
+                   "a second DOM §4.6 DocumentType is being placed under one Document — [22] prolog writes "
+                   "`(doctypedecl Misc*)?` with no star, so core/xml/xml_document.h's at-most-one record and "
+                   "this tree have disagreed");
+
+        /* §2.11 End-of-Line Handling STANDS BETWEEN THE BYTES AND THE CHARACTERS FOR THE TWO IDENTIFIERS AND
+           NOT FOR THE NAME. core/xml/xml_literal.h hands back a borrowed slice of BYTES, and §2.11 rewrites
+           #xD — which [13] PubidChar lists and [11] SystemLiteral's `[^"]*` admits. [5] Name cannot contain
+           one at all (neither [4] NameStartChar nor [4a] NameChar has #xD), which is why it is passed
+           through unchanged and the two ids are not. */
+        if (item.doctype.external.public_id != NULL) {
+            pub_n = xml_char_normalized_len(item.doctype.external.public_id, item.doctype.external.public_id_len);
+            pub = (char *)malloc(pub_n + 1);
+            CHECK(pub != NULL, "OOM normalizing the [12] PubidLiteral of a DOM §4.6 DocumentType");
+            (void)xml_char_normalize(item.doctype.external.public_id, item.doctype.external.public_id_len, pub);
+        }
+        if (item.doctype.external.system_id != NULL) {
+            sys_n = xml_char_normalized_len(item.doctype.external.system_id, item.doctype.external.system_id_len);
+            sys = (char *)malloc(sys_n + 1);
+            CHECK(sys != NULL, "OOM normalizing the [11] SystemLiteral of a DOM §4.6 DocumentType");
+            (void)xml_char_normalize(item.doctype.external.system_id, item.doctype.external.system_id_len, sys);
+        }
+        dt = lxb_dom_document_type_create(b->doc, (const lxb_char_t *)item.doctype.name, item.doctype.name_len,
+                                          (const lxb_char_t *)pub, pub_n,
+                                          (const lxb_char_t *)sys, sys_n, &code);
+        free(pub); free(sys);
+        DCHECK(dt != NULL || code != LXB_DOM_EXCEPTION_INVALID_CHARACTER_ERR,
+               "lexbor rejected [28]'s Name as invalid for DOM §4.5.1 createDocumentType while "
+               "core/xml/xml_doctype.c scanned it as a [5] Name — that is one production transcribed twice "
+               "and the two readings disagreeing, not a document's mistake");
+        CHECK(dt != NULL, "OOM creating the DOM §4.6 DocumentType node for XML §2.8's [28] doctypedecl");
+        xml_tree_place_created(xml_tree_root(b), b->kind, b->current, lxb_dom_interface_node(dt));
         return XML_TREE_OK;
     }
     }

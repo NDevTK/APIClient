@@ -51,10 +51,16 @@
  * Name precisely because whether it resolves depends on facts only a caller has, and the two callers are about
  * to DIVERGE: §4.4 Entity Type Table gives "Reference in Content" and "Reference in Attribute Value" different
  * rows, and §4.4.4 Forbidden's third bullet makes "a reference to an external entity in an attribute value" a
- * fatal error while the same reference in CONTENT is included. So one site cannot answer for both. Until
- * §2.8's [28] `doctypedecl` is read, both sites give the standard's answer for a document with no DTD — the
- * Name must be one of §4.6's five or it is undeclared — and the security consequence is stated where the
- * doctypedecl is not read, which is core/xml/xml_document.h.
+ * fatal error while the same reference in CONTENT is included. So one site cannot answer for both. What each
+ * site answers is the same one for now: the Name must be one of §4.6 Predefined Entities' five or no
+ * declaration this parse read matches it.
+ *   WHETHER THAT ANSWER IS THE CONSTRAINT'S OR MERELY THIS PARSE'S IS NOT DECIDED HERE, AND MUST NOT BE.
+ * [WFC: Entity Declared] applies to "a document without any DTD, a document with only an internal DTD subset
+ * which contains no parameter entity references, or a document with `standalone='yes'`", so a document whose
+ * §2.8's [28] `doctypedecl` points at an EXTERNAL SUBSET this non-validating processor did not read is
+ * outside all three clauses and the constraint says nothing about it. That is a fact about the DOCUMENT —
+ * [28]'s [75] `ExternalID` conjoined with §2.9's [32] `SDDecl` — and neither is visible from inside [39], so
+ * this walk reports what it found and core/xml/xml_document.h, which holds both, decides what it means.
  *
  * EVERY ERROR IS FATAL AND IS RETURNED RATHER THAN ASSERTED, AND A FAILED CALL CONSUMES NOTHING — for
  * core/xml/xml_markup.h's reasons, which are that a malformed document is a page's INPUT and that the position
@@ -81,6 +87,7 @@
 #include <stddef.h>
 
 #include "core/xml/xml_char.h"
+#include "core/xml/xml_doctype.h"
 #include "core/xml/xml_markup.h"
 #include "core/xml/xml_ref.h"
 #include "core/xml/xml_tag.h"
@@ -123,9 +130,16 @@ typedef struct {
     XmlRefError    ref;
 } XmlElementDetail;
 
-/* WHICH OF [43]'s ALTERNATIVES THIS ITEM IS, plus the two halves of [39] itself. The element pair is here and
-   not in [43]'s list because [43]'s `element` alternative is a WHOLE subtree, and a pull walk reports its
-   boundaries rather than handing back a thing it did not build. */
+/* WHICH OF [43]'s ALTERNATIVES THIS ITEM IS, plus the two halves of [39] itself, plus the ONE construct of
+   [22] `prolog` that becomes a node. The element pair is here and not in [43]'s list because [43]'s `element`
+   alternative is a WHOLE subtree, and a pull walk reports its boundaries rather than handing back a thing it
+   did not build.
+     §2.8's [28] `doctypedecl` IS IN THIS ENUM AND IS NOT IN [43], which is not a blurring of the two
+   productions but the consequence of what an ITEM is: an item is a construct the tree builder turns into a
+   node, and [28] becomes a DOM §4.6 `DocumentType`. [27] `Misc`'s `Comment` and `PI` are already in this list
+   for exactly that reason and are equally not [43]'s alone. What is NOT here is [23] `XMLDecl` — a
+   declaration ABOUT the entity, which becomes no node and is asked for by name (core/xml/xml_document.h). The
+   walk that may PRODUCE a doctype item is the document walk and never the [39] walk, which asserts it. */
 typedef enum {
     XML_CONTENT_ELEMENT_START,   /* [40] STag, or [44] EmptyElemTag's opening half */
     XML_CONTENT_ELEMENT_END,     /* [42] ETag, or the close [44] stands for */
@@ -133,16 +147,17 @@ typedef enum {
     XML_CONTENT_REFERENCE,       /* §4.1's [67] Reference, already resolved to its character */
     XML_CONTENT_CDSECT,          /* §2.7's [18] CDSect */
     XML_CONTENT_PI,              /* §2.6's [16] PI */
-    XML_CONTENT_COMMENT          /* §2.5's [15] Comment */
+    XML_CONTENT_COMMENT,         /* §2.5's [15] Comment */
+    XML_CONTENT_DOCTYPE          /* §2.8's [28] doctypedecl — [22] prolog's, never [43] content's */
 } XmlContentKind;
 
 /* ONE CONSTRUCT OF [43] `content`, OR ONE BOUNDARY OF [39] `element`.
  *
  * THE FIELDS THAT DO NOT APPLY ARE SET TO VALUES NO PREDICATE ACCEPTS, never to plausible ones — which is
  * core/xml/xml_ref.h's discipline and is why `kind` can be trusted as the only thing that decides what to
- * read. `tag.name` and `name` and `text.raw` and `pi.target` are NULL where the kind does not write them, and
- * `ref.cp` is XML_CHAR_EOF, which is above §2.2's [2] Char ceiling so a consumer that read it would fail
- * xml_char_is_char rather than emit U+0000 as a character the document contained.
+ * read. `tag.name` and `name` and `text.raw` and `pi.target` and `doctype.name` are NULL where the kind does
+ * not write them, and `ref.cp` is XML_CHAR_EOF, which is above §2.2's [2] Char ceiling so a consumer that
+ * read it would fail xml_char_is_char rather than emit U+0000 as a character the document contained.
  *
  * EVERYTHING HERE IS VALID UNTIL THE NEXT CALL ON THE SAME WALK, AND `tag` IS THE REASON THAT MATTERS. §3.3.3
  * builds attribute values out of text the entity does not contain, so a start-tag OWNS an allocation — and the
@@ -162,6 +177,7 @@ typedef struct {
     XmlMarkupText  text;       /* CHARDATA, CDSECT, COMMENT */
     XmlPi          pi;         /* PI */
     XmlRef         ref;        /* REFERENCE */
+    XmlDoctype     doctype;    /* DOCTYPE */
 } XmlContentItem;
 
 typedef struct XmlElementWalk XmlElementWalk;

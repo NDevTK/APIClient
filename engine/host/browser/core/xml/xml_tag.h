@@ -51,25 +51,29 @@
  *
  * §3.3.3 STEP 4 IS UNREACHABLE IN THIS BUILD AND THAT IS THE STANDARD'S ANSWER, NOT A STUB. Step 4 — discard
  * leading and trailing #x20 and collapse runs — applies only when "the attribute type is not CDATA", which is
- * a fact from a §3.3 attribute-list declaration inside §2.8's [28] `doctypedecl`. Nothing in this build reads
- * a doctypedecl, so no declaration can have been read, and §3.3.3 states what a processor does then in its own
- * words: "All attributes for which no declaration has been read SHOULD be treated by a non-validating
+ * a fact from a §3.3 attribute-list declaration, which stands only inside §2.8's [28] `doctypedecl`'s [28b]
+ * `intSubset` or in an external subset. Nothing in this build reads either — core/xml/xml_doctype.h crashes at
+ * the `'['` and no external subset is ever dereferenced — so no declaration can have been read, and §3.3.3
+ * states what a processor does then in its own words: "All attributes for which no declaration has been read
+ * SHOULD be treated by a non-validating
  * processor as if declared CDATA." The CDATA arm is therefore the only arm this build can reach rather than
  * the easy one it took. When §3.3 exists, step 4 is applied BY WHOEVER KNOWS THE TYPE, over the value this
  * component produced — it is a second pass over a finished string and needs nothing from the scan.
  *
  * THE ONLY ENTITIES THAT RESOLVE ARE §4.6'S FIVE, AND THAT CLOSES THE EXTERNAL-ENTITY SURFACE AT THE GRAMMAR
  * RATHER THAN BY A POLICY. An [68] `EntityRef` whose Name is not one of amp, lt, gt, apos, quot is answered
- * XML_TAG_ERR_ENTITY_UNDECLARED, which is what [WFC: Entity Declared] says about the only kind of document
- * this build can reach: "In a document without any DTD ... the Name given in the entity reference MUST match
- * that in an entity declaration ... except that well-formed documents need not declare any of the following
- * entities: amp, lt, gt, apos, quot." So no code path here can resolve an entity to a SystemLiteral, which
- * means no attribute value can cause a fetch — the classic external-entity read, closed because there is
- * nothing to widen rather than because something narrowed it. When §4.2's [70] `EntityDecl` is built, the two
- * sentences that must be built WITH it are §3.1's [WFC: No External Entity References] ("Attribute values MUST
- * NOT contain direct or indirect entity references to external entities") and §4.4.4 Forbidden's third bullet
- * ("a reference to an external entity in an attribute value"), which make it a FATAL ERROR and not a
- * configuration choice. Until then the doctypedecl is what must crash, at the layer that would read one.
+ * XML_TAG_ERR_ENTITY_UNDECLARED — "the Name given in the entity reference MUST match that in an entity
+ * declaration ... except that well-formed documents need not declare any of the following entities: amp, lt,
+ * gt, apos, quot" — and no declaration is ever read here, so the five are the whole of what resolves. No code
+ * path can therefore turn an entity into a SystemLiteral, which means no attribute value can cause a fetch:
+ * the classic external-entity read, closed because there is nothing to widen rather than because something
+ * narrowed it. WHETHER THAT ANSWER IS THE CONSTRAINT'S IS NOT THIS COMPONENT'S QUESTION — [WFC: Entity
+ * Declared]'s three clauses turn on facts about the DOCUMENT (§2.8's [28] `ExternalID` and §2.9's [32]
+ * `SDDecl`) that no tag can see, and core/xml/xml_document.h holds both and decides. When §4.2's [70]
+ * `EntityDecl` is built, the two sentences that must be built WITH it are §3.1's [WFC: No External Entity
+ * References] ("Attribute values MUST NOT contain direct or indirect entity references to external entities")
+ * and §4.4.4 Forbidden's third bullet ("a reference to an external entity in an attribute value"), which make
+ * it a FATAL ERROR and not a configuration choice.
  *
  * §4.6'S DOUBLE ESCAPING IS WHY [WFC: No < in Attribute Values] IS FULLY DECIDED HERE. §4.6 requires that "if
  * the entities lt or amp are declared, they MUST be declared as internal entities whose replacement text is a

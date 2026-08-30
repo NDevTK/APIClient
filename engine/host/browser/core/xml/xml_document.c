@@ -5,25 +5,61 @@
 #include "check.h"
 #include "core/xml/xml_char.h"
 #include "core/xml/xml_decl.h"
+#include "core/xml/xml_doctype.h"
 #include "core/xml/xml_document.h"
 #include "core/xml/xml_element.h"
 #include "core/xml/xml_markup.h"
 #include "core/xml/xml_tag.h"
 #include "solver/flow.h"
 
-/* §2.8's [28] `doctypedecl ::= '<!DOCTYPE' S Name (S ExternalID)? S? ('[' intSubset ']' S?)? '>'`, AS ITS
-   OPENING DELIMITER AND NOWHERE ELSE IN THIS TREE. §1.2 Terminology's `match` performs no case folding, so
-   `<!doctype` is not this string and is answered §2.8's own "matches none of [22]'s constructs" instead. The
-   byte compare is exact for core/xml/xml_markup.h's reason: every character of it is ASCII, so none can occur
-   as a continuation byte of some other code point. It stands here rather than in a component of its own
-   because the crash that names it stands here — see xml_document.h — and one site is what makes building [28]
-   move the delimiter and the crash together. */
-#define DOC_DOCTYPE     "<!DOCTYPE"
-#define DOC_DOCTYPE_LEN 9
-
 #define DOC_NO_BYTE 0x100u
 #define DOC_OPEN    '<'
 #define DOC_BANG    '!'
+
+/* §4.1's [WFC: Entity Declared], AS THE DOCUMENT-LEVEL FACT ITS OWN THREE CLAUSES TURN ON — see
+   xml_document.h for the whole argument. It is private to this file because it is not a thing any consumer
+   asks about: it decides only whether the two entity sites' report is the constraint's answer or a question
+   this build cannot answer, and both of those are settled before an item leaves this walk. Zero is the
+   answer for a document with no [28] at all, which is what `calloc` writes and what every document reaching
+   this walk starts as. */
+typedef enum {
+    /* Clause 1, 2 or 3 holds: every declaration that exists has been read (there are none), or §2.9's [32]
+       SDDecl says `yes`. An [68] EntityRef outside §4.6's five IS the violation the layers below report. */
+    DOC_ENTITY_DECIDED = 0,
+    /* None of the three holds: [28] pointed at an external subset this non-validating processor did not read
+       and the document is not standalone. The constraint says nothing about such a reference. */
+    DOC_ENTITY_EXTERNAL_UNREAD
+} XmlDocumentEntityDeclared;
+
+/* THE ONE SENTENCE THE CRASH BELOW STATES, WRITTEN ONCE AND EXPANDED AT EACH SITE. It is a macro and not a
+   function for CLAUDE.md §Offensive-programming's reason: a check inside a helper stamps the HELPER's line
+   for every caller, and the two call sites here are two different constructs of [1] `document` — the first
+   item of the root element, and every item after it. */
+#define DOC_ENTITY_UNDECIDABLE_MESSAGE                                                                        \
+    "XML 1.0 (Fifth Edition) §4.1 Character and Entity References' [WFC: Entity Declared] does not apply to "  \
+    "this document and this build cannot answer the reference without it. §2.8's [28] doctypedecl names an "   \
+    "[75] ExternalID, so the document HAS an external subset, and §2.9's [32] SDDecl is not `yes` — which "    \
+    "puts it outside all three of the constraint's clauses (\"In a document without any DTD, a document with " \
+    "only an internal DTD subset which contains no parameter entity references, or a document with "          \
+    "standalone='yes'\"), and §4.1's own note says so directly: \"non-validating processors are not "          \
+    "obligated to read and process entity declarations occurring in parameter entities or in the external "    \
+    "subset; for such documents, the rule that an entity must be declared is a well-formedness constraint "    \
+    "only if standalone='yes'\". SO REPORTING IT ILL-FORMED WOULD BE A WELL-FORMED DOCUMENT REPORTED "         \
+    "ILL-FORMED, and resolving it would mean dereferencing a system identifier, which is the XXE this engine " \
+    "must not have. WHAT MUST BE BUILT: HTML §14.2 \"Parsing XML documents\"' built-in entity set — that "     \
+    "section lists public identifiers (the XHTML 1.0 Transitional/Strict/Frameset, XHTML 1.1 and XHTML Basic " \
+    "1.0 DTDs among them) that all \"correspond to the URL given by this link\", a DTD \"containing the "      \
+    "entity declarations for the names listed in the named character references section\", which a user agent "\
+    "SHOULD use when retrieving an external entity. That is a TABLE KEYED ON [12] PubidLiteral and not a "     \
+    "fetch, so it closes the common case with no network edge; core/xml/xml_doctype.h hands the public "       \
+    "identifier over by name. A document whose external subset is NOT one of those stays here until §4.4.3 "   \
+    "Included If Validating's other half is built — \"If a non-validating processor does not include the "     \
+    "replacement text, it MUST inform the application that it recognized, but did not read, the entity\", "    \
+    "which is a signal to the DOM and not an error"
+
+#define DOC_ENTITY_UNDECIDABLE_CHECK(w, ee, detail)                                                           \
+    CHECK((w)->declared == DOC_ENTITY_DECIDED || !doc_reports_entity_undeclared((ee), (detail)),               \
+          DOC_ENTITY_UNDECIDABLE_MESSAGE)
 
 /* WHERE IN [1] THE WALK STANDS. Three states because [1] has three parts and each admits a DIFFERENT set of
    constructs — a single loop with flags would be the same three rules with nothing naming which one is in
@@ -34,12 +70,29 @@ struct XmlDocumentWalk {
     XmlElementWalk  *element;    /* §3's [39], delegated whole — see xml_document.h */
     XmlDecl          decl;       /* §2.8's [23], when there was one */
     bool             has_decl;
+    bool             has_doctype;/* §2.8's [28] — [22] writes `(doctypedecl Misc*)?`, so at most one */
     bool             prolog_entered;
     XmlDocumentState state;
+    /* §4.1's [WFC: Entity Declared]'s applicability, decided the moment [28] is read or the prolog ends
+       without one. It is a DERIVED fact and not a second copy of one: it is a function of `has_doctype`, that
+       declaration's [75] ExternalID and `decl.standalone`, and it is written at exactly the line those become
+       known so that no reader can consult it before it means anything. */
+    XmlDocumentEntityDeclared declared;
     bool             ended;      /* [1] matched to the last byte of the entity */
     bool             stopped;    /* ended, or §1.2's fatal error was reported */
     Flow            *owner;      /* the flow that created it; see xml_document.h */
 };
+
+/* DID THE LAYERS BELOW REPORT §4.1's [WFC: Entity Declared]? Both entity sites answer it and they answer with
+   different values, because §4.4 XML Processor Treatment of Entities and References gives "Reference in
+   Content" and "Reference in Attribute Value" different rows and core/xml/xml_element.h keeps them two. One
+   predicate over both, because the applicability question above is the SAME for both rows — what differs is
+   what a processor that could decide it would then DO. */
+static bool doc_reports_entity_undeclared(XmlElementError ee, const XmlElementDetail *within)
+{
+    return ee == XML_ELEMENT_ERR_ENTITY_UNDECLARED
+           || (ee == XML_ELEMENT_ERR_TAG && within->tag == XML_TAG_ERR_ENTITY_UNDECLARED);
+}
 
 static void assert_owner(const XmlDocumentWalk *w)
 {
@@ -73,6 +126,9 @@ const char *xml_document_error_message(XmlDocumentError err)
     case XML_DOCUMENT_ERR_DECL:
         return "fatal error (§2.8 Prolog and Document Type Declaration's [23] XMLDecl): ask "
                "xml_decl_error_message(detail.decl), whose sentence this is";
+    case XML_DOCUMENT_ERR_DOCTYPE:
+        return "fatal error (§2.8 Prolog and Document Type Declaration's [28] doctypedecl): ask "
+               "xml_doctype_error_message(detail.doctype), whose sentence this is";
     case XML_DOCUMENT_ERR_MISC:
         return "fatal error (§2.5 Comments or §2.6 Processing Instructions, reached from [27] Misc): ask "
                "xml_markup_error_message(detail.misc), whose sentence this is";
@@ -148,11 +204,6 @@ static unsigned peek_at(const XmlCharReader *r, size_t n)
     return (size_t)(r->end - r->p) > n ? (unsigned)(unsigned char)r->p[n] : DOC_NO_BYTE;
 }
 
-static bool at_doctype(const XmlCharReader *r)
-{
-    return (size_t)(r->end - r->p) >= DOC_DOCTYPE_LEN && memcmp(r->p, DOC_DOCTYPE, DOC_DOCTYPE_LEN) == 0;
-}
-
 /* §2.3's [3] `S`, as the run [27] `Misc`'s third alternative is. Answers nothing, because whether a run was
    there is not a fact any consumer of [1] can see: white space outside the document element becomes no node.
    A latched character error is the CALLER's to notice, exactly as it is in every other scan in this family. */
@@ -202,8 +253,8 @@ static XmlDocumentError scan_misc_item(XmlCharReader *r, XmlContentItem *it, Xml
 static void document_rewind(XmlCharReader *r, const XmlCharReader *start, XmlDocumentError e)
 {
     if (r->fatal != XML_CHAR_OK) {
-        DCHECK(e == XML_DOCUMENT_ERR_CHARACTER || e == XML_DOCUMENT_ERR_DECL || e == XML_DOCUMENT_ERR_MISC
-                   || e == XML_DOCUMENT_ERR_ELEMENT,
+        DCHECK(e == XML_DOCUMENT_ERR_CHARACTER || e == XML_DOCUMENT_ERR_DECL || e == XML_DOCUMENT_ERR_DOCTYPE
+                   || e == XML_DOCUMENT_ERR_MISC || e == XML_DOCUMENT_ERR_ELEMENT,
                "an XML document scan left the character layer's §1.2 latch set while reporting a failure that "
                "no layer below it accounts for — a latch was set on a path that does not say so, and the "
                "sentence a report quotes would be the wrong one");
@@ -256,6 +307,9 @@ XmlDocumentError xml_document_next(XmlDocumentWalk *w, XmlCharReader *r, XmlCont
            "§1.2 Terminology: once one is detected the processor MUST NOT continue");
 
     detail->decl = XML_DECL_OK;
+    detail->doctype = XML_DOCTYPE_OK;
+    detail->doctype_within.external = XML_EXTERNAL_ID_OK;
+    detail->doctype_within.literal = XML_LITERAL_OK;
     detail->misc = XML_MARKUP_OK;
     detail->element = XML_ELEMENT_OK;
     detail->within.tag = XML_TAG_OK;
@@ -268,6 +322,7 @@ XmlDocumentError xml_document_next(XmlDocumentWalk *w, XmlCharReader *r, XmlCont
     if (w->state == DOC_ELEMENT) {
         XmlElementError ee = xml_element_next(w->element, r, &it, &detail->within);
 
+        DOC_ENTITY_UNDECIDABLE_CHECK(w, ee, &detail->within);
         if (ee != XML_ELEMENT_OK) { detail->element = ee; e = XML_DOCUMENT_ERR_ELEMENT; goto fail; }
         /* The element walk's stack emptying IS the end of [39], which is the end of [1]'s middle part. */
         if (xml_element_depth(w->element) == 0) { w->state = DOC_TRAILING; note_end(w, r); }
@@ -303,37 +358,33 @@ XmlDocumentError xml_document_next(XmlDocumentWalk *w, XmlCharReader *r, XmlCont
             if (e != XML_DOCUMENT_OK) goto fail;
             goto done;
         }
-        /* §2.8's [28], the one construct here that is a MISSING CAPABILITY rather than a mistake — see
-           xml_document.h for what must be built with it and why skipping it would be a security defect.
-           IT IS A `CHECK_FAIL` AND NOT A `DFAIL`, WHICH IS THE ONE PLACE IN THIS COMPONENT SET THAT IS TRUE,
-           and the reason is what a release build would otherwise SAY. A DFAIL compiles to nothing outside
-           development, so the `<!DOCTYPE` would fall through to the arm below and be reported
-           XML_DOCUMENT_ERR_PROLOG — "what stands before the document element matches none of [22]'s
-           constructs" — about a document that matches [22] EXACTLY. That is a plausible diagnosis of the
-           wrong thing, which is worse than silence, and it is a sentence a page author would be sent to
-           §2.8 to check and find correct. The parse must fail in both builds (§Offensive-programming: a
-           capability that is not supportable outside development fails rather than fabricating an answer),
-           so it fails ONCE, through one mechanism, naming the real reason. It goes away when [28] is
-           built — it is transition scaffolding whose only correct trajectory is to zero. */
-        if (at_doctype(r))
-            CHECK_FAIL("XML 1.0 (Fifth Edition) §2.8's [28] doctypedecl stands in this document's [22] prolog "
-                       "and this build has no DTD subsystem. THIS IS A SECURITY BOUNDARY AND NOT A GAP TO "
-                       "SKIP: nothing here reads a DTD, which is exactly why core/xml/xml_tag.c and "
-                       "core/xml/xml_element.c may answer an [68] EntityRef outside §4.6's five with §4.1's "
-                       "[WFC: Entity Declared] — for a document with no DTD that IS the standard's answer. "
-                       "Reading past this declaration would leave both of those sites answering for a document "
-                       "that HAS declarations. WHAT MUST BE BUILT, IN ONE DIFF: §4.2's [70] EntityDecl and "
-                       "[71] GEDecl over §4.2.2's [75] ExternalID (core/xml/xml_literal.h already holds its "
-                       "[11] SystemLiteral and [12] PubidLiteral), TOGETHER WITH §3.1's [WFC: No External "
-                       "Entity References] (\"Attribute values MUST NOT contain direct or indirect entity "
-                       "references to external entities\") and §4.4.4 Forbidden's third bullet (\"a reference "
-                       "to an external entity in an attribute value\"), both of which make it a FATAL ERROR "
-                       "and not a configuration choice. §4.4's Entity Type Table is why the two entity sites "
-                       "must stay two: `Reference in Content` and `Reference in Attribute Value` are different "
-                       "rows, and an external entity is Included in the first and Forbidden in the second. "
-                       "§2.9's [32] SDDecl is already answered — xml_document_declaration hands back the [23] "
-                       "XMLDecl this walk read — and it is the third alternative of [WFC: Entity Declared], so "
-                       "the constraint becomes decidable in full the moment [28] is read");
+        /* §2.8's [28]. WHERE IT MAY STAND AND HOW OFTEN IS THIS COMPONENT'S RULE AND THE PRODUCTION IS
+           core/xml/xml_doctype.h's — see xml_document.h. [22] writes `(doctypedecl Misc*)?`, a group with no
+           star, so a SECOND one is not a declaration at all and falls through to [22]'s own "matches none of
+           its constructs" below; and the DOC_PROLOG state is the whole of "before the first element", which
+           §2.8 states in those words. */
+        if (xml_doctype_at(r) && !w->has_doctype) {
+            XmlDoctypeError dte = xml_doctype_scan(r, &it.doctype, &detail->doctype_within);
+
+            if (dte != XML_DOCTYPE_OK) { detail->doctype = dte; e = XML_DOCUMENT_ERR_DOCTYPE; goto fail; }
+            w->has_doctype = true;
+            /* §4.1's [WFC: Entity Declared]'s APPLICABILITY, decided here because this is the one line at
+               which both of its inputs are known — see xml_document.h. `standalone` comes from the [23]
+               XMLDecl, which [22] puts at offset zero and this walk therefore read before reaching [28];
+               core/xml/xml_decl.h states from its side that ABSENT and NO are both merely not-`yes` and that
+               collapsing them is this caller's question rather than that one's, which is exactly the reading
+               taken here. */
+            DCHECK(w->prolog_entered,
+                   "§2.8's [28] doctypedecl was read before the prolog had been entered — [22] puts [23] "
+                   "XMLDecl at offset zero and this walk reads it on the call that enters the prolog, so a "
+                   "[28] read first would decide [WFC: Entity Declared] from a standalone declaration nobody "
+                   "had looked for yet");
+            w->declared = (it.doctype.has_external
+                           && !(w->has_decl && w->decl.standalone == XML_STANDALONE_YES))
+                              ? DOC_ENTITY_EXTERNAL_UNREAD : DOC_ENTITY_DECIDED;
+            it.kind = XML_CONTENT_DOCTYPE;
+            goto done;
+        }
         if (peek_at(r, 0) == DOC_OPEN && peek_at(r, 1) != DOC_BANG && !xml_tag_at_etag(r)) {
             /* [1]'s `element`. A `<` that opens neither a `<!` form nor an end-tag is [40]/[44]'s, which is
                core/xml/xml_tag.h's own peek — asked here through its two halves because a `</` standing
@@ -347,6 +398,7 @@ XmlDocumentError xml_document_next(XmlDocumentWalk *w, XmlCharReader *r, XmlCont
                    "start-tag — the two spellings of that delimiter have drifted apart");
             w->state = DOC_ELEMENT;
             ee = xml_element_next(w->element, r, &it, &detail->within);
+            DOC_ENTITY_UNDECIDABLE_CHECK(w, ee, &detail->within);
             if (ee != XML_ELEMENT_OK) { detail->element = ee; e = XML_DOCUMENT_ERR_ELEMENT; goto fail; }
             DCHECK(it.kind == XML_CONTENT_ELEMENT_START,
                    "the first item of [1]'s element is not a start — [39] begins with [40] or [44] and both "
@@ -369,9 +421,20 @@ XmlDocumentError xml_document_next(XmlDocumentWalk *w, XmlCharReader *r, XmlCont
     note_end(w, r);
 
 done:
-    DCHECK(detail->decl == XML_DECL_OK && detail->misc == XML_MARKUP_OK
-               && detail->element == XML_ELEMENT_OK,
+    DCHECK(detail->decl == XML_DECL_OK && detail->doctype == XML_DOCTYPE_OK
+               && detail->misc == XML_MARKUP_OK && detail->element == XML_ELEMENT_OK,
            "a successful XML document item carries a layer's error report");
+    DCHECK((it.kind == XML_CONTENT_DOCTYPE) == (it.doctype.name != NULL),
+           "a document item's [28] doctypedecl and its kind disagree — core/xml/xml_element.h's rule is that "
+           "every field the kind does not write holds a value no predicate accepts, so a Name here on any "
+           "other kind would be read as a declaration the document does not contain");
+    DCHECK(it.kind != XML_CONTENT_DOCTYPE || (w->has_doctype && w->state == DOC_PROLOG),
+           "a [28] doctypedecl item was produced without this walk recording that the document has one, or "
+           "from outside [22] prolog — the record is what makes [22]'s `(doctypedecl Misc*)?` at-most-one and "
+           "the state is what makes it precede the first element, and DOM §4.2.3 Mutation algorithms' ensure "
+           "pre-insert validity throws HierarchyRequestError for both (\"parent has a doctype child\", and "
+           "\"child is null and parent has an element child\"), so either would build a tree the DOM refuses "
+           "to be asked for");
     DCHECK(r->fatal == XML_CHAR_OK, "a successful XML document scan left the reader's §1.2 latch set");
     DCHECK(r->p > start.p || it.kind == XML_CONTENT_ELEMENT_END,
            "an XML document scan produced an item without consuming anything — [44] EmptyElemTag's owed close "
@@ -386,6 +449,9 @@ done:
 fail:
     DCHECK((e == XML_DOCUMENT_ERR_DECL) == (detail->decl != XML_DECL_OK),
            "an XML document answer and its §2.8 detail disagree about whether the declaration layer reported "
+           "anything");
+    DCHECK((e == XML_DOCUMENT_ERR_DOCTYPE) == (detail->doctype != XML_DOCTYPE_OK),
+           "an XML document answer and its [28] doctypedecl detail disagree about whether that layer reported "
            "anything");
     DCHECK((e == XML_DOCUMENT_ERR_MISC) == (detail->misc != XML_MARKUP_OK),
            "an XML document answer and its [27] Misc detail disagree about whether that layer reported "

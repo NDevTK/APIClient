@@ -9220,6 +9220,10 @@ static void xml_element_selftest(void)
                 CHECK(it.ref.cp == DOC[i].exp[n].cp, DOC[i].why);
                 CHECK(it.ref.kind != XML_REF_ENTITY, DOC[i].why);
                 break;
+            case XML_CONTENT_DOCTYPE:
+                CHECK_FAIL("§2.8's [28] doctypedecl came out of the [39] element walk — [28] stands in [22] "
+                           "prolog, before the first element, and [43] content has no alternative it could "
+                           "match, so only core/xml/xml_document.h may produce one");
             }
             n++;
             if (xml_element_depth(w) == 0) break;
@@ -9328,6 +9332,144 @@ static void xml_element_selftest(void)
     }
 }
 
+/* XML 1.0 (Fifth Edition) §2.8 Prolog and Document Type Declaration's [28] `doctypedecl` over §4.2.2 External
+ * Entities' [75] `ExternalID` — core/xml/xml_doctype.h and core/xml/xml_external_id.h.
+ *
+ * WHAT THIS FIXTURE IS FOR THAT THE DOCUMENT FIXTURE IS NOT. That one asks whether a declaration becomes an
+ * ITEM in the right position; this one asks what the declaration SAID, which is the two identifiers, and those
+ * are exactly what a document-level row cannot see. Every member of DOM §4.6's `DocumentType` comes from here:
+ * `name` from [28]'s [5] `Name`, `publicId` and `systemId` from [75]'s two literals.
+ *
+ * THE ASYMMETRY BETWEEN [75]'s TWO ALTERNATIVES IS THE POINT OF HALF THESE ROWS. `'SYSTEM' S SystemLiteral`
+ * has no [12] in it AT ALL, so its public identifier is ABSENT — a NULL — while `PUBLIC "" "x"` is a public
+ * identifier of zero characters standing at a position in the entity, which is a non-NULL pointer with a zero
+ * length. Collapsing those two would make an absent identifier indistinguishable from an empty one at every
+ * consumer, which is the defaulted-field defect performed by a producer.
+ *
+ * §2.8's [28b] `intSubset` HAS NO ROW AND CANNOT HAVE ONE: it is a CHECK_FAIL, and a row for it would be a row
+ * for an abort. The boundary beside it is checkable and is checked — a declaration with no bracket group is a
+ * WHOLE reading of [28] and is scanned end to end. */
+static void xml_doctype_selftest(void)
+{
+    static const struct { const char *in; XmlDoctypeError err; const char *name; bool has_ext;
+                          const char *pub; const char *sys; const char *why; } DT[] = {
+        { "<!DOCTYPE html>", XML_DOCTYPE_OK, "html", false, NULL, NULL,
+          "the declaration the overwhelming majority of XML documents on the web carry, and §2.8's own note "
+          "that a doctypedecl \"neither points to an external subset nor contains an internal subset\" can "
+          "still be well-formed" },
+        { "<!DOCTYPE greeting SYSTEM \"hello.dtd\">", XML_DOCTYPE_OK, "greeting", true, NULL, "hello.dtd",
+          "§2.8's own printed example. The SYSTEM alternative has no [12] PubidLiteral in it at all, so the "
+          "public identifier is ABSENT and not empty — DOM §4.6's `publicId` answers \"\" for both, which is "
+          "exactly why the distinction has to survive up to the node rather than being made there" },
+        { "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"svg11.dtd\">", XML_DOCTYPE_OK, "svg", true,
+          "-//W3C//DTD SVG 1.1//EN", "svg11.dtd",
+          "[75]'s PUBLIC alternative carries BOTH literals, in that order, and [13] PubidChar's punctuation "
+          "set is what admits the slashes and the hyphens of a real public identifier" },
+        { "<!DOCTYPE a PUBLIC '' 'x'>", XML_DOCTYPE_OK, "a", true, "", "x",
+          "AN EMPTY PUBLIC IDENTIFIER IS NOT AN ABSENT ONE. [12] admits a zero-character run, so this is a "
+          "[12] standing AT a position in the entity — the SYSTEM row above is the absence" },
+        { "<!DOCTYPE a >", XML_DOCTYPE_OK, "a", false, NULL, NULL,
+          "[28]'s `S?` before the '>' — one run of [3] S after the Name serves both `(S ExternalID)?` and "
+          "that `S?` when no identifier stands there" },
+        { "<!DOCTYPEa>", XML_DOCTYPE_ERR_SPACE, NULL, false, NULL, NULL,
+          "[28] writes `S` and not `S?` between the delimiter and the Name" },
+        { "<!DOCTYPE 1a>", XML_DOCTYPE_ERR_NAME, NULL, false, NULL, NULL,
+          "[5] Name ::= NameStartChar (NameChar)* and [4] NameStartChar has no digit in it, though [4a] "
+          "NameChar does — which is why the first character is asked a different question from the rest" },
+        { "<!DOCTYPE a SYSTEM>", XML_DOCTYPE_ERR_EXTERNAL_ID, NULL, false, NULL, NULL,
+          "[75] writes `'SYSTEM' S SystemLiteral` — the space is required and so is the literal" },
+        { "<!DOCTYPE a PUBLIC \"p\">", XML_DOCTYPE_ERR_EXTERNAL_ID, NULL, false, NULL, NULL,
+          "and the PUBLIC alternative's SECOND literal is not optional either, which is the whole difference "
+          "between [75] and §4.7's [83] PublicID" },
+        { "<!DOCTYPE a system \"x\">", XML_DOCTYPE_ERR_COMPONENT, NULL, false, NULL, NULL,
+          "§1.2 Terminology's `match` performs no case folding, so `system` is not [75]'s keyword — and once "
+          "it is not, what stands here is neither the '[' nor the '>' [28] admits" },
+        { "<!DOCTYPE a", XML_DOCTYPE_ERR_UNTERMINATED, NULL, false, NULL, NULL,
+          "[28] closes with '>' and the entity ends first, which is a different sentence from \"what stands "
+          "here is not one of the two constructs admitted\"" },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(DT) / sizeof(DT[0]); i++) {
+        XmlCharReader    r;
+        XmlDoctype       dt;
+        XmlDoctypeDetail d;
+        XmlDoctypeError  e;
+        size_t           len = strlen(DT[i].in);
+
+        xml_char_reader_init(&r, DT[i].in, len);
+        CHECK(xml_doctype_at(&r), DT[i].why);
+        memset(&dt, 0, sizeof dt);
+        e = xml_doctype_scan(&r, &dt, &d);
+        CHECK(e == DT[i].err, DT[i].why);
+        if (e != XML_DOCTYPE_OK) {
+            /* A FAILED SCAN CONSUMES NOTHING — the family's contract, and the reader is the whole of it. */
+            CHECK(r.p == r.start, DT[i].why);
+            CHECK(strcmp(xml_doctype_error_message(e), xml_doctype_error_message(XML_DOCTYPE_OK)) != 0,
+                  "every XmlDoctypeError names a different sentence and XML_DOCTYPE_OK is one of them");
+            continue;
+        }
+        CHECK(r.p == r.end, "a successful [28] scan left bytes of the declaration unread");
+        CHECK(dt.name_len == strlen(DT[i].name)
+                  && memcmp(dt.name, DT[i].name, dt.name_len) == 0, DT[i].why);
+        CHECK(dt.has_external == DT[i].has_ext, DT[i].why);
+        CHECK((dt.external.public_id != NULL) == (DT[i].pub != NULL), DT[i].why);
+        if (DT[i].pub != NULL)
+            CHECK(dt.external.public_id_len == strlen(DT[i].pub)
+                      && memcmp(dt.external.public_id, DT[i].pub, dt.external.public_id_len) == 0, DT[i].why);
+        CHECK((dt.external.system_id != NULL) == (DT[i].sys != NULL), DT[i].why);
+        if (DT[i].sys != NULL)
+            CHECK(dt.external.system_id_len == strlen(DT[i].sys)
+                      && memcmp(dt.external.system_id, DT[i].sys, dt.external.system_id_len) == 0, DT[i].why);
+        /* EVERY SLICE BORROWS THE ENTITY — core/xml/xml_doctype.h's contract, and the one thing a consumer
+           that outlives the entity would get wrong without anybody noticing. */
+        CHECK(dt.name > DT[i].in && dt.name + dt.name_len <= DT[i].in + len, DT[i].why);
+    }
+
+    /* §1.2 Terminology's `match` PERFORMS NO CASE FOLDING, ASKED AT THE PEEK RATHER THAN AT THE SCAN — a
+       `<!doctype` is not this delimiter at all, so it never reaches the production and [22] answers it "matches
+       none of its constructs" instead. */
+    {
+        XmlCharReader r;
+
+        xml_char_reader_init(&r, "<!doctype html>", 15);
+        CHECK(!xml_doctype_at(&r), "`<!doctype` is not `<!DOCTYPE` and §1.2's match does not fold case");
+        xml_char_reader_init(&r, "<!DOCTYP", 8);
+        CHECK(!xml_doctype_at(&r), "a prefix of the delimiter is not the delimiter, and the peek must not read "
+                                   "past the end of the entity to decide that");
+        xml_char_reader_init(&r, "system \"x\"", 10);
+        CHECK(!xml_external_id_at(&r), "§1.2 Terminology's `match` performs no case folding, so `system` is "
+                                       "not [75]'s keyword");
+        xml_char_reader_init(&r, "SYSTE", 5);
+        CHECK(!xml_external_id_at(&r), "a prefix of [75]'s keyword is not the keyword, and the peek must not "
+                                       "read past the end of the entity to decide that");
+    }
+
+    /* ONE SENTENCE PER VALUE, HELD PAIRWISE — the family's rule, and the one thing that stops two values
+       becoming two names for one report. Both enums, because a caller follows the chain across them. */
+    {
+        static const XmlDoctypeError DE[] = {
+            XML_DOCTYPE_OK, XML_DOCTYPE_ERR_SPACE, XML_DOCTYPE_ERR_NAME, XML_DOCTYPE_ERR_EXTERNAL_ID,
+            XML_DOCTYPE_ERR_COMPONENT, XML_DOCTYPE_ERR_UNTERMINATED, XML_DOCTYPE_ERR_CHARACTER };
+        static const XmlExternalIdError XE[] = {
+            XML_EXTERNAL_ID_OK, XML_EXTERNAL_ID_ERR_SPACE, XML_EXTERNAL_ID_ERR_QUOTE,
+            XML_EXTERNAL_ID_ERR_LITERAL, XML_EXTERNAL_ID_ERR_CHARACTER };
+        size_t a, b;
+
+        for (a = 0; a < sizeof(DE) / sizeof(DE[0]); a++)
+            for (b = a + 1; b < sizeof(DE) / sizeof(DE[0]); b++)
+                CHECK(strcmp(xml_doctype_error_message(DE[a]), xml_doctype_error_message(DE[b])) != 0,
+                      "two XmlDoctypeErrors report the same sentence, so one of them names no constraint of "
+                      "its own");
+        for (a = 0; a < sizeof(XE) / sizeof(XE[0]); a++)
+            for (b = a + 1; b < sizeof(XE) / sizeof(XE[0]); b++)
+                CHECK(strcmp(xml_external_id_error_message(XE[a]),
+                             xml_external_id_error_message(XE[b])) != 0,
+                      "two XmlExternalIdErrors report the same sentence, so one of them names no constraint "
+                      "of its own");
+    }
+}
+
 /* XML 1.0 (Fifth Edition) §2.1 Well-Formed XML Documents' [1] `document` with §2.8's [22] `prolog` and [27]
  * `Misc` — core/xml/xml_document.h, the whole of what an XML entity is.
  *
@@ -9352,12 +9494,14 @@ static void xml_element_selftest(void)
  * unreportable, discarding a construct the document really contains because of a byte after it. Here the close
  * IS delivered and the next call reports the character where it stands.
  *
- * §2.8's [28] doctypedecl HAS NO ROW AND CANNOT HAVE ONE. It is a CHECK_FAIL — the parse aborts in dev and in
- * release alike, because nothing here reads a DTD and that is exactly what lets both entity sites answer §4.1's
- * [WFC: Entity Declared]. A fixture row for it would be a fixture row for an abort. What this file can check,
- * and does, is the boundary beside it: a `<!` in the prolog that is NOT `<!DOCTYPE` is a document's own mistake
- * (§2.8 puts every markup declaration inside [28]'s intSubset), so `<!ENTITY x "y">` standing loose is
- * XML_DOCUMENT_ERR_PROLOG and reaches no crash. */
+ * §2.8's [28] doctypedecl HAS ROWS AND ITS INTERNAL SUBSET STILL CANNOT. The declaration with no `[' … ]'`
+ * group is a whole reading of [28] and is scanned end to end, so it is an ordinary item here — and the
+ * distinction the rows are for is that it becomes a NODE while [23] does not, which is DOM's doing and not the
+ * grammar's. What remains a CHECK_FAIL is [28b] intSubset, and a fixture row for that would be a fixture row
+ * for an abort. Two boundaries beside it are checkable and are checked: a `<!` in the prolog that is NOT
+ * `<!DOCTYPE` is a document's own mistake (§2.8 puts every markup declaration inside [28]'s intSubset), so
+ * `<!ENTITY x "y">` standing loose is XML_DOCUMENT_ERR_PROLOG; and [22] writes `(doctypedecl Misc*)?` with no
+ * star, so a SECOND declaration is not a declaration at all and gets the same answer. */
 static void xml_document_selftest(void)
 {
     typedef struct { XmlContentKind kind; const char *s; uint32_t cp; } XmlDocItemExp;
@@ -9382,6 +9526,13 @@ static void xml_document_selftest(void)
         { XML_CONTENT_ELEMENT_END, "b", 0 },   { XML_CONTENT_ELEMENT_END, "a", 0 } };
     static const XmlDocItemExp D_COMMENT[] = { { XML_CONTENT_COMMENT, "c", 0 } };
     static const XmlDocItemExp D_START[] = { { XML_CONTENT_ELEMENT_START, "a", 0 } };
+    static const XmlDocItemExp D_DTD[] = {
+        { XML_CONTENT_DOCTYPE, "a", 0 },
+        { XML_CONTENT_ELEMENT_START, "a", 0 }, { XML_CONTENT_ELEMENT_END, "a", 0 } };
+    static const XmlDocItemExp D_DTD_GREET[] = {
+        { XML_CONTENT_DOCTYPE, "greeting", 0 },
+        { XML_CONTENT_ELEMENT_START, "greeting", 0 }, { XML_CONTENT_CHARDATA, "Hello, world!", 0 },
+        { XML_CONTENT_ELEMENT_END, "greeting", 0 } };
 
     static const struct { const char *in; const XmlDocItemExp *exp; size_t n_exp; XmlDocumentError err;
                           const char *version; const char *encoding; XmlStandalone standalone;
@@ -9460,8 +9611,38 @@ static void xml_document_selftest(void)
           XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
           "THE BOUNDARY BESIDE THE ONE CONSTRUCT THAT CRASHES. §2.8 puts every markup declaration inside "
           "[28] doctypedecl's `intSubset`, so an entity declaration standing loose in the prolog is a "
-          "document's own mistake and reaches no missing capability — only `<!DOCTYPE` itself is the "
-          "unbuilt one" },
+          "document's own mistake and reaches no missing capability — only that subset is the unbuilt one" },
+        { "<!DOCTYPE a><a/>", D_DTD, 3, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.8's note that \"it is possible to construct a well-formed document containing a doctypedecl "
+          "that neither points to an external subset nor contains an internal subset\" — and unlike [23] it "
+          "IS an item, because DOM §4.6 gives it an interface and `document.doctype` answers with the node" },
+        { "<!DOCTYPE a ><a/>", D_DTD, 3, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[28]'s `S?` before the '>' — the ONE run of [3] S after the Name serves both `(S ExternalID)?` "
+          "and that `S?` when no identifier stands there, which is why the scan reads it once and not twice" },
+        { "<?xml version=\"1.0\"?><!DOCTYPE greeting SYSTEM \"hello.dtd\"><greeting>Hello, world!</greeting>",
+          D_DTD_GREET, 4, XML_DOCUMENT_OK, "1.0", NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.8's OWN printed example of a document with a document type declaration, verbatim. It is also "
+          "the shape that makes §4.1's [WFC: Entity Declared] inapplicable — an external subset with no "
+          "`standalone='yes'` — which costs nothing here because the document names no entity" },
+        { "<!DOCTYPE a><!DOCTYPE a><a/>", D_DTD, 1, XML_DOCUMENT_ERR_PROLOG, NULL, NULL,
+          XML_STANDALONE_ABSENT, XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[22] writes `(doctypedecl Misc*)?` — a group with NO star — so a second declaration is not a "
+          "declaration this grammar has, and the first is complete and delivered before the report" },
+        { "<a/><!DOCTYPE a>", D_ROOT, 2, XML_DOCUMENT_ERR_TRAILING, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.8: \"The document type declaration MUST appear before the first element in the document\" — "
+          "[1]'s trailing `Misc*` admits [27]'s three and [28] is none of them" },
+        { "<!DOCTYPEa><a/>", D_DTD, 0, XML_DOCUMENT_ERR_DOCTYPE, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[28] writes `S` and not `S?` between the delimiter and the Name, and nothing else in [22] begins "
+          "with those nine bytes — so this is the declaration's own mistake and not some other production" },
+        { "<!DOCTYPE a PUBLIC \"p\"><a/>", D_DTD, 0, XML_DOCUMENT_ERR_DOCTYPE, NULL, NULL,
+          XML_STANDALONE_ABSENT, XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[75] ExternalID's PUBLIC alternative is `'PUBLIC' S PubidLiteral S SystemLiteral` — the system "
+          "identifier is not optional on it, which is the asymmetry between the two alternatives" },
         { "<a/><b/>", D_ROOT, 2, XML_DOCUMENT_ERR_TRAILING, NULL, NULL, XML_STANDALONE_ABSENT,
           XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
           "§2.1: \"There is exactly one element, called the root, or document element, no part of which "
@@ -9505,7 +9686,8 @@ static void xml_document_selftest(void)
     };
     static const XmlDocumentError ALL[] = {
         XML_DOCUMENT_OK, XML_DOCUMENT_ERR_NO_ELEMENT, XML_DOCUMENT_ERR_PROLOG, XML_DOCUMENT_ERR_TRAILING,
-        XML_DOCUMENT_ERR_DECL, XML_DOCUMENT_ERR_MISC, XML_DOCUMENT_ERR_ELEMENT, XML_DOCUMENT_ERR_CHARACTER
+        XML_DOCUMENT_ERR_DECL, XML_DOCUMENT_ERR_DOCTYPE, XML_DOCUMENT_ERR_MISC, XML_DOCUMENT_ERR_ELEMENT,
+        XML_DOCUMENT_ERR_CHARACTER
     };
     size_t i, a, b;
 
@@ -9551,6 +9733,15 @@ static void xml_document_selftest(void)
             case XML_CONTENT_REFERENCE:
                 CHECK(it.ref.cp == DOC[i].exp[n].cp, DOC[i].why);
                 break;
+            case XML_CONTENT_DOCTYPE:
+                CHECK(it.doctype.name_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.doctype.name, DOC[i].exp[n].s, it.doctype.name_len) == 0, DOC[i].why);
+                /* The Name is BORROWED from the entity and byte-exact — §2.11 rewrites only #xD, which is in
+                   neither [4] NameStartChar nor [4a] NameChar, so the slice cannot differ from its bytes. */
+                CHECK(it.doctype.name > DOC[i].in && it.doctype.name + it.doctype.name_len <= DOC[i].in + len,
+                      "a [28] doctypedecl's Name does not point inside the entity it was scanned from");
+                CHECK(it.doctype.has_external == (it.doctype.external.system_id != NULL), DOC[i].why);
+                break;
             }
             n++;
             if (xml_document_ended(w)) break;
@@ -9559,6 +9750,11 @@ static void xml_document_selftest(void)
         CHECK(n == DOC[i].n_exp, DOC[i].why);
         CHECK(d.decl == DOC[i].d_decl && d.misc == DOC[i].d_misc && d.element == DOC[i].d_element,
               DOC[i].why);
+        /* §2.8's [28] LAYER, ASKED IN BOTH DIRECTIONS ON EVERY ROW rather than through a column of its own —
+           the answer and the detail are one fact, so a row that names the doctype layer must carry its
+           sentence and a row that does not must carry XML_DOCTYPE_OK, which is the positive statement that
+           the layer found nothing rather than a field nobody wrote. */
+        CHECK((e == XML_DOCUMENT_ERR_DOCTYPE) == (d.doctype != XML_DOCTYPE_OK), DOC[i].why);
 
         /* §2.8's [23], ASKED ON EVERY ROW — a declaration nobody wrote and a declaration nobody looked for
            would otherwise be the same NULL, which is the defaulted-field defect performed by a producer. */
@@ -11296,6 +11492,9 @@ int main(int argc, char **argv) {
                               Attribute-Value Normalization — AFTER the reference fixture, because every
                               value row is built through §4.1's layer and a failure there must be read as
                               that component's rather than as this one's */
+    xml_doctype_selftest();/* XML §2.8's [28] doctypedecl over §4.2.2's [75] ExternalID — AFTER the literal
+                              fixture, because both of [75]'s components are [11]/[12] and a failure there
+                              must be read as that component's rather than as this one's */
     xml_element_selftest();/* XML §3's [39] element over §3.1's [43] content — AFTER every leaf, because its
                               item stream is produced by all of them and a failure in any one must be read
                               where that layer's own fixture reports it */

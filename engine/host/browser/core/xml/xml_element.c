@@ -74,10 +74,11 @@ const char *xml_element_error_message(XmlElementError err)
                "none of them — §2.8 puts [28] doctypedecl in [22] prolog, before the first element, and the "
                "markup declarations it contains stand only inside it";
     case XML_ELEMENT_ERR_ENTITY_UNDECLARED:
-        return "fatal error (§4.1 Character and Entity References) [WFC: Entity Declared]: in a document "
-               "without any DTD the Name in an entity reference MUST match one in an entity declaration, "
-               "\"except that well-formed documents need not declare any of the following entities: amp, lt, "
-               "gt, apos, quot\" — this document declares nothing and names none of those five";
+        return "fatal error (§4.1 Character and Entity References) [WFC: Entity Declared]: \"the Name given "
+               "in the entity reference MUST match that in an entity declaration ... except that well-formed "
+               "documents need not declare any of the following entities: amp, lt, gt, apos, quot\" — no "
+               "declaration this parse read matches this Name and it is none of §4.6 Predefined Entities' "
+               "five";
     case XML_ELEMENT_ERR_TAG:
         return "fatal error (§3.1 Start-Tags, End-Tags, and Empty-Element Tags): ask "
                "xml_tag_error_message(detail.tag), whose sentence this is";
@@ -191,6 +192,10 @@ static void assert_item(const XmlContentItem *it)
     DCHECK(!ref || it->ref.kind != XML_REF_ENTITY,
            "an unresolved [68] EntityRef reached a content item — §4.1's [WFC: Entity Declared] is decided "
            "before the item is built, so a kind that survives it has a character");
+    DCHECK(it->kind != XML_CONTENT_DOCTYPE && it->doctype.name == NULL,
+           "§2.8's [28] doctypedecl reached an item this walk produced — [28] stands in [22] prolog, before "
+           "the first element, and [43] content has no alternative it could match, so the only walk that may "
+           "produce one is core/xml/xml_document.h's and a doctype here means the two have been confused");
 }
 
 /* THE DETAIL IS WRITTEN ON EVERY ANSWER AND IS THEN HELD TO THE ANSWER. xml_element.h states the one

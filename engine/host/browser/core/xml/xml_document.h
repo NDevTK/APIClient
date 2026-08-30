@@ -1,40 +1,48 @@
 /* XML 1.0 (Fifth Edition) §2.1 Well-Formed XML Documents' [1] `document`, with §2.8 Prolog and Document Type
- * Declaration's [22] `prolog` and [27] `Misc` — THE WHOLE OF WHAT AN XML ENTITY IS, AND THE PLACE §2.8's [28]
- * `doctypedecl` MUST CRASH.
+ * Declaration's [22] `prolog` and [27] `Misc` — THE WHOLE OF WHAT AN XML ENTITY IS, AND THE PLACE §4.1's
+ * [WFC: Entity Declared] IS DECIDED TO APPLY.
  *
- * WHAT IT IS. Three productions over one delegation. §2.1's [1] `document ::= prolog element Misc*`, §2.8's
+ * WHAT IT IS. Three productions over two delegations. §2.1's [1] `document ::= prolog element Misc*`, §2.8's
  * [22] `prolog ::= XMLDecl? Misc* (doctypedecl Misc*)?` and its [27] `Misc ::= Comment | PI | S`. The
  * `element` in the middle is §3's [39] and is not re-derived here for one line — core/xml/xml_element.h owns
- * it and the stack that decides [WFC: Element Type Match]. It sits on that, on core/xml/xml_decl.h for [23]
- * `XMLDecl`, on core/xml/xml_markup.h for [15] and [16], and on core/xml/xml_char.h for [3] `S` — and on
- * NOTHING ELSE. It builds no tree, for core/xml/xml_element.h's reason.
+ * it and the stack that decides [WFC: Element Type Match]; the `doctypedecl` is §2.8's [28] and is
+ * core/xml/xml_doctype.h's. It sits on those two, on core/xml/xml_decl.h for [23] `XMLDecl`, on
+ * core/xml/xml_markup.h for [15] and [16], and on core/xml/xml_char.h for [3] `S` — and on NOTHING ELSE. It
+ * builds no tree, for core/xml/xml_element.h's reason.
  *
- * §2.8's [28] `doctypedecl` IS AN UNBUILT CAPABILITY AND THIS IS THE PLACE THAT SAYS SO BY CRASHING. Nothing
- * in this build reads a DTD, which is precisely why core/xml/xml_tag.c and core/xml/xml_element.c may answer
- * an [68] `EntityRef` outside §4.6's five with §4.1's [WFC: Entity Declared] — "In a document without any DTD
- * ... the Name given in the entity reference MUST match that in an entity declaration ... except that
- * well-formed documents need not declare any of the following entities: amp, lt, gt, apos, quot" is the
- * standard's own answer for the only kind of document this build can reach, and not a shortcut. The moment
- * [28] is read that stops being true. So a `<!DOCTYPE` standing where [22] admits one CRASHES here and
- * NEVER a construct skipped to reach the element: skipping it would leave the two entity sites answering for a
- * document that HAS declarations, and §Offensive-programming's rule is that a not-yet-built capability crashes
- * at the root rather than degrading. Whoever builds [28] owes §4.2's [70] `EntityDecl` WITH §3.1's [WFC: No
- * External Entity References] and §4.4.4 Forbidden's third bullet IN THE SAME DIFF — an attribute value MUST
- * NOT contain direct or indirect entity references to external entities, and a parser that resolves one has
- * put an XXE inside a security tool.
- *   IT IS A `CHECK_FAIL` RATHER THAN A `DFAIL`, WHICH IS DECIDED BY WHAT A RELEASE BUILD WOULD OTHERWISE SAY.
- * A DFAIL compiles to nothing outside development, so the declaration would fall through to the arm below it
- * and be reported XML_DOCUMENT_ERR_PROLOG — "what stands before the document element matches none of [22]'s
- * constructs" — about a document that matches [22] exactly. A plausible diagnosis of the wrong thing is worse
- * than silence, and this one would send a page's author to §2.8 to check a declaration that is correct. The
- * parse has to fail in BOTH builds anyway (§Offensive-programming: a capability that is not supportable
- * outside development fails rather than fabricating an answer), so it fails once, through one mechanism, and
- * names the real reason. It is transition scaffolding whose only correct trajectory is to zero.
- *   IT IS THE PEEK, NOT ONLY THE CRASH, THAT LIVES HERE, and that is deliberate: `'<!DOCTYPE'` is written down
- * in exactly one place in this tree, so building [28] moves the delimiter and the crash together and cannot
- * leave one behind. A `<!` in the prolog that is NOT that string is a document's own mistake and not a missing
- * capability — §2.8 puts every markup declaration inside [28]'s `intSubset`, so an `<!ENTITY` standing loose
- * in the prolog matches no production of [22].
+ * WHERE [28] MAY STAND AND HOW OFTEN IS THIS COMPONENT'S RULE, WHICH IS WHY THE PEEK IS ASKED HERE AND THE
+ * PRODUCTION LIVES THERE. §2.8: "The document type declaration MUST appear before the first element in the
+ * document", and [22] writes `(doctypedecl Misc*)?` — a group with no star, so AT MOST ONE. A second
+ * `<!DOCTYPE` after the first, or one after the root element has opened, therefore matches no production of
+ * [22] and is XML_DOCUMENT_ERR_PROLOG rather than a second declaration. A `<!` in the prolog that is NOT
+ * `<!DOCTYPE` is a document's own mistake in the same way: §2.8 puts every markup declaration inside [28]'s
+ * `intSubset`, so an `<!ENTITY` standing loose in the prolog matches nothing here.
+ *
+ * §4.1's [WFC: Entity Declared] APPLIES OR DOES NOT APPLY BY A FACT ONLY THIS COMPONENT HOLDS, AND THAT IS WHY
+ * THE DECISION IS HERE. The constraint's own scope is three clauses — "In a document without any DTD, a
+ * document with only an internal DTD subset which contains no parameter entity references, or a document with
+ * `standalone='yes'`" — and §4.1's note says the rest outright: "non-validating processors are not obligated
+ * to read and process entity declarations occurring in parameter entities or in the external subset; for such
+ * documents, the rule that an entity must be declared is a well-formedness constraint only if
+ * standalone='yes'." So the answer turns on [28]'s `(S ExternalID)?` conjoined with §2.9's [32] `SDDecl`, and
+ * this walk is the only place both are known: it reads the [23] `XMLDecl` at offset zero and the [28] after
+ * it, while core/xml/xml_element.h and core/xml/xml_tag.h can see neither.
+ *   THE TWO OUTCOMES ARE NOT "STRICT" AND "LENIENT", THEY ARE "DECIDED" AND "NOT DECIDABLE HERE". With no
+ * external subset — no [28] at all, or one with no [75] `ExternalID` — every declaration that exists has been
+ * read (there are none), so an [68] `EntityRef` outside §4.6 Predefined Entities' five IS the violation those
+ * two components report and the report stands. With an external subset and `standalone='yes'`, clause three
+ * puts it back in force and the report stands again. With an external subset and no such declaration, the
+ * constraint says NOTHING about that reference: reporting it ill-formed would be a well-formed document
+ * reported ill-formed, and resolving it would mean dereferencing a system identifier, which is the XXE this
+ * engine must not have. Neither is available, so it CRASHES, naming what would decide it.
+ *   AND THE EXTERNAL SUBSET IS NEVER DEREFERENCED TO GET OUT OF THAT. §4.2.2 External Entities calls a system
+ * identifier something "meant to be converted to a URI reference ... as part of the process of dereferencing
+ * it", and dereferencing one from inside the engine is a network edge where CLAUDE.md §Architecture allows
+ * none. What HTML §14.2 "Parsing XML documents" offers instead is a table lookup rather than a fetch: for a
+ * listed set of public identifiers — the XHTML 1.0 and 1.1 DTDs among them — it names one URL whose DTD
+ * declares the entities of HTML's named-character-references section, which a user agent SHOULD use. That is
+ * a built-in entity set keyed on [12] `PubidLiteral`, and it is what closes the common case without reading
+ * anything.
  *
  * WHERE §2.8's [23] `XMLDecl` MAY STAND IS THIS COMPONENT'S RULE, WHICH core/xml/xml_decl.h STATES FROM ITS
  * OWN SIDE. [22] writes `XMLDecl?` before `Misc*`, so a declaration is at OFFSET ZERO of the document entity
@@ -45,10 +53,17 @@
  * report anywhere [23] is not permitted.
  *
  * WHAT IS AN ITEM AND WHAT IS MERELY CONSUMED IS THE DOM'S QUESTION AND THE STANDARD ANSWERS IT. [27]'s
- * `Comment` and `PI` become Document children, so each is an item; [27]'s `S` becomes nothing, because white
+ * `Comment` and `PI` become Document children, so each is an item; so does [28], which becomes DOM §4.6's
+ * `DocumentType` and is the node `document.doctype` answers with. [27]'s `S` becomes nothing, because white
  * space outside the document element is not represented in any tree an XML parser builds, and neither is [23]
  * — which is a declaration about the entity and not markup in it. The declaration is therefore held BY THE
  * WALK and asked for by name rather than delivered as an item nobody could type.
+ *   THAT IS THE LINE BETWEEN [23] AND [28] AND IT IS THE DOM'S AND NOT THE GRAMMAR'S. Both are declarations
+ * ABOUT the document rather than markup in it, and they are on opposite sides of this rule only because DOM
+ * gives one of them an interface. [28]'s own INTERNAL SUBSET is on the [23] side of the same line and more
+ * sharply: `DocumentType` has exactly three members — `name`, `publicId`, `systemId` — and no `internalSubset`
+ * among them, so a subset this build read and dropped would leave nothing in the tree to say so. Its effects
+ * are what a page sees, which is why core/xml/xml_doctype.h crashes at the `'['` instead.
  *
  * §2.1's "THERE IS EXACTLY ONE ELEMENT, CALLED THE ROOT" IS WHAT THE TRAILING STATE ENFORCES. After the root
  * element closes, [1] admits `Misc*` and nothing else, so a second `<` that opens an element is
@@ -59,8 +74,9 @@
  * EVERY ERROR IS FATAL AND IS RETURNED RATHER THAN ASSERTED, AND A FAILED CALL CONSUMES NOTHING — for
  * core/xml/xml_element.h's reasons, with its unit and its one carve-out: the reader is restored to the failing
  * ITEM's first byte, except when the character layer's §1.2 latch is set, where restoring it would put that
- * latch back to XML_CHAR_OK and silently un-report a fatal error. The [28] crash is not one of these and
- * cannot be: it is not a document's mistake, it is a capability this build does not have. */
+ * latch back to XML_CHAR_OK and silently un-report a fatal error. The [WFC: Entity Declared] crash above is
+ * not one of these and cannot be: it is not a document's mistake, it is a capability this build does not
+ * have. */
 #ifndef APICLIENT_XML_DOCUMENT_H
 #define APICLIENT_XML_DOCUMENT_H
 
@@ -69,11 +85,12 @@
 
 #include "core/xml/xml_char.h"
 #include "core/xml/xml_decl.h"
+#include "core/xml/xml_doctype.h"
 #include "core/xml/xml_element.h"
 #include "core/xml/xml_markup.h"
 
 /* WHICH SENTENCE OF THE STANDARD THIS DOCUMENT VIOLATED. One value per sentence, for core/xml/xml_ns.h's
-   reason. The three that name a LAYER carry that layer's own answer in the detail beside them rather than
+   reason. The four that name a LAYER carry that layer's own answer in the detail beside them rather than
    transcribing its sentences into this enum. Zero is OK so a caller may write `if (err)`. */
 typedef enum {
     XML_DOCUMENT_OK = 0,
@@ -81,6 +98,7 @@ typedef enum {
     XML_DOCUMENT_ERR_PROLOG,       /* [22]: what stands here matches none of its constructs */
     XML_DOCUMENT_ERR_TRAILING,     /* [1]'s `Misc*` admits [27]'s three and this is none of them */
     XML_DOCUMENT_ERR_DECL,         /* §2.8's [23] layer reported one — `detail.decl` names which */
+    XML_DOCUMENT_ERR_DOCTYPE,      /* §2.8's [28] layer reported one — `detail.doctype` names which */
     XML_DOCUMENT_ERR_MISC,         /* §2.5's/§2.6's layer reported one — `detail.misc` names which */
     XML_DOCUMENT_ERR_ELEMENT,      /* §3's [39] walk reported one — `detail.element` and `detail.within` */
     XML_DOCUMENT_ERR_CHARACTER     /* the character layer latched one — ask xml_char_error_message(r->fatal) */
@@ -98,6 +116,8 @@ const char *xml_document_error_message(XmlDocumentError err);
    sentence below that — and every link is the standard's own layering. */
 typedef struct {
     XmlDeclError     decl;
+    XmlDoctypeError  doctype;
+    XmlDoctypeDetail doctype_within;
     XmlMarkupError   misc;
     XmlElementError  element;
     XmlElementDetail within;
