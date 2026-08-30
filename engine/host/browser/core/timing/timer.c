@@ -73,7 +73,9 @@
  * canonical XSS sink took the document down on an assert against attacker input. */
 #include "check.h"
 #include "quickjs.h"
-#include "quickjs-step.h"      /* §8.7's two SETTERS are step machines: step 4 is a comparison over `timeout` */
+#include "quickjs-step.h"      /* §8.7's FOUR page-facing members are step machines: each asks a question over a
+                                 value that can be unknown external input — the setters step 4's comparison over
+                                 `timeout`, the clearers which entry of the map of IDs `id` names */
 #include "core/agent_state.h"
 #include "core/timing/timer.h"
 #include "core/timing/event_loop.h"
@@ -1548,11 +1550,151 @@ void timer_cancel(JSContext *ctx, int key)
     timer_clear(ctx, (uint32_t)key);
 }
 
-static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* THE SMALLEST IDENTIFIER AT OR ABOVE `from` THAT THIS GLOBAL'S MAP OF setTimeout AND setInterval IDs HOLDS, or
+   0 when it holds none at or above it — 0 being the answer §8.7 Timers already reserves for "names no entry",
+   since its step 2 hands out integers "greater than zero".
+   A SCAN AND NOT A COLLECTED LIST, and that is the design rather than a shortcut: a list of the live
+   identifiers would be a C allocation whose head a context switch reverts while its nodes stay reachable from
+   nothing — the leak §State-isolation names as the one the runtime's own GC walk cannot see. The map is a JS
+   Array on the realm's record, so walking it reads the RUNNING FLOW's own COW state and leaves nothing behind
+   to unwind. */
+static uint32_t timer_id_from(JSContext *ctx, uint32_t from)
 {
-    double id = 0;
+    JSValue q = timer_map(ctx);
+    uint32_t i, n = arr_len(ctx, q), best = 0;
 
-    (void)this_val; (void)magic;
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, q, i);
+
+        if (JS_IsObject(e)) {
+            uint32_t h = (uint32_t)timer_entry_num(ctx, e, TE_HANDLE);
+
+            DCHECK(h >= 1,
+                   "an entry of §8.7 Timers's map of setTimeout and setInterval IDs is filed under the "
+                   "identifier 0 — step 2 hands out integers \"greater than zero\", so 0 is the handle a page "
+                   "gets back for nothing and the one this walk reads as \"no entry at or above the cursor\"");
+            if (h >= from && (best == 0 || h < best))
+                best = h;
+        }
+        JS_FreeValue(ctx, e);
+    }
+    JS_FreeValue(ctx, q);
+    return best;
+}
+
+/* HTML §8.7 "Timers"'s clearTimeout AND clearInterval, AS ONE STEP MACHINE — because the identifier the page
+ * hands them can be unknown external input, and "which entry does it name" is a question with as many real
+ * answers as this global has entries.
+ *
+ * §8.7 STATES THE TWO MEMBERS AS ONE ALGORITHM, WHICH IS WHY THIS IS ONE BODY AND ONE OPERATION STRING: "The
+ * clearTimeout(id) and clearInterval(id) method steps are to remove this's map of setTimeout and setInterval
+ * IDs[id]", and immediately after it, "Because clearTimeout() and clearInterval() clear entries from the same
+ * map, either method can be used to clear timers created by setTimeout() or setInterval()". Those steps are
+ * PROSE and not a numbered list, so there is no step number to cite and none is written. Two names for the one
+ * question would be two constraint keys for one fact — the mistake TI_STEP4_OP and TI_STEP5_OP are kept apart
+ * to avoid, read from the other end.
+ *
+ * IT IS THE MAP OF setTimeout AND setInterval IDs AND NOT THE MAP OF ACTIVE TIMERS, which the entry enum at the
+ * top of this file already separates and which decides what the completions ARE. §8.7 gives a global both maps:
+ * the map of IDs is keyed by "a positive integer, corresponding to the return value of a setTimeout() or
+ * setInterval() call" — the number the page is holding — while the map of active timers is keyed by "a unique
+ * internal value" no page ever sees. `clearTimeout` removes from the FIRST. An entry can be in the map of IDs
+ * and out of the map of active timers (its task is in flight, `run steps after a timeout` step 4.5 having
+ * removed its expiry), and clearing exactly that is what makes a `clearInterval(id)` inside the handler stop
+ * the re-arm — substep 9.9 is the check that reads it. So an entry is a completion whether or not it is armed,
+ * and TE_WHEN says nothing here.
+ *
+ * WHAT THE COMPLETIONS ARE. Over an unknown `id` this global's map admits one world per entry it holds — that
+ * entry removed, every other left alone — plus the world in which `id` names none of them and nothing is
+ * removed. Every one of them is reachable, which is a fact about the ARGUMENT's type: §3.2.4.5 "long"'s
+ * ConvertToInt(V, 32, "signed") is TOTAL and folds modulo 2**32, so every uint32 identifier is denoted by some
+ * `long` and so is a value that names nothing (0 itself, which §8.7 hands out to nobody).
+ *
+ * AND THEY ARE ASKED ONE IDENTIFIER AT A TIME, WHICH IS WHERE THIS DIFFERS FROM EVERY OTHER N-WAY FORK IN THE
+ * ENGINE AND WHY. An N-way completion is N-1 binary decisions (solver/decide.c), and solver_outcome walks that
+ * sequence for a machine that declares `n` — but it names each completion by its INDEX, composing the
+ * constraint key out of `"%d"` of the position. A POSITION IS A FACT ABOUT THE OPERAND ONLY WHERE THE SET IS
+ * THE MACHINE'S OWN AND FIXED AT ITS DEFINITION, which §18.4.4's registered hash names are and this global's
+ * live entries are not: the page mutates the map, so index k names a different timer at two asks, and one
+ * predicate's record then decides its neighbour. That is not a hypothetical. A flow that answers "`id` is the
+ * entry at rank 0" clears it; at a second `clearTimeout(id)` the map is one shorter, the recorded "not rank 0,
+ * yes rank 1" replays against the SHIFTED enumeration, and the flow removes a timer no answer of its own ever
+ * named — silently, with every arm in range and every assert on the path satisfied.
+ * So the completion carries its NAME instead of its position: the timer's own §8.7 identifier, written into the
+ * operation string, which is half of what step_fork_run keys on. Each link is then an ordinary two-armed
+ * question — "is `id` the timer with identifier H" — over the same unknown, recorded in one boolean slot,
+ * forking ONE sibling, with the chain drawn lazily, one link per time the scheduler picks this machine up. That
+ * is the SAME elimination sequence solver_outcome walks and not a second mechanism beside it; what changes is
+ * only what names each question. It costs nothing and buys two things: every key is a fact about `id` alone and
+ * stays true for ever, and `n` is 2 at every ask, so the return protocol's ceiling (solver/decide.h's
+ * SOLVER_FORKED_BIT, 256 completions) is never approached by a page holding more live timers than that — which
+ * an animation loop or a poll-per-widget bundle does hold.
+ *
+ * THE ORDER IS ASCENDING BY IDENTIFIER, AND THE PARENT IS ON THE EXAMPLE'S ARM AT EVERY LINK. §8.7's identifiers
+ * are strictly monotone per global (timer_next_handle), so ascending order is the same sequence in a sibling's
+ * snapshot, after a park, and in a session that resumes this flow from the cold tier. The parent answers each
+ * question with what its own example says — NO at every identifier the example is not, YES at the one it is —
+ * so §Learning-from-replies' "the example marks the real arm PRIMARY" holds at every link WITHOUT the
+ * permutation solver_outcome needs to get it at one, and the forced sibling at each link is the world in which
+ * `id` is that identifier.
+ * WITH NO EXAMPLE THE PARENT WALKS THE WHOLE CHAIN AND REMOVES NOTHING, which is not a weaker answer but the
+ * same rule with nothing observed to state: the seam asks about completion 0 first when a machine says nothing,
+ * so the parent answers NO at every identifier and ends where a run with no forking policy ends, while one
+ * sibling per identifier carries the removal. Neither arm is marked forced, because nothing was contradicted.
+ *
+ * OUTCOME 0 IS "NO" AT EVERY LINK, which is step_fork_run's one numbering rule read against this predicate: a
+ * run with no forking policy — the @S candidate re-fire — answers NO all the way down and removes nothing. It
+ * must. Clearing is the one operation in this file that DELETES scheduled work, so a numbering that put a
+ * removal on the arm a re-fire takes would let the candidate cancel the very timer whose callback carries the
+ * sink it is running to reach. */
+#define CT_STAGES(X)                                                                                          \
+    X(CT_REMOVE,                                                                                              \
+      "HTML §8.7 Timers the clearTimeout(id) and clearInterval(id) method steps (remove this's map of "        \
+      "setTimeout and setInterval IDs[id])")
+enum { IDL_STEP_STAGE_BASE(CT_STAGES) CT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CT_STEPS[] = { CT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* WHAT THE MACHINE HOLDS ACROSS A LINK OF THE CHAIN, and neither field is a JSValue.
+   `next` is the smallest §8.7 identifier this flow has not yet asked about. It needs no `placed` byte beside
+   it, unlike the setter's `timeout`: §8.7's identifiers are "greater than zero" and timer_next_handle asserts
+   it, so 0 is not an identifier any entry carries and a zeroed cursor is unambiguously "before the first".
+   `op` IS THE FORK'S OPERATION STRING AND IT LIVES HERE rather than in a C local, because step_fork_run keeps a
+   BORROWED pointer to it on the header and the driver reads it AFTER this machine has returned — a stack buffer
+   would dangle exactly where the constraint key is built (core/permissions/permission_status.c says the same of
+   its own). It is rewritten at each link, which is safe for the same reason: the previous link's string was
+   read by the driver before this body was re-entered.
+   NOTHING IS OWNED, so the visit names nothing. It is declared rather than omitted because a machine with no
+   `visit` cannot be forked and is refused at registration, and forking is the whole of what this one is for. */
+typedef struct {
+    uint32_t next;
+    char     op[128];
+} ClearTimerState;
+
+static void ct_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+/* THERE IS NOTHING FOR THE COMPLETE-BEFORE-THE-FIRST-THROW RULE TO BE BROKEN BY HERE, and saying so is what
+   makes that checkable rather than assumed. The rule costs a leak: a state must hold every owned field before
+   any operation that can fail, because the failure path tears it down through a teardown that frees exactly
+   what the state holds and nothing else. This state owns nothing at all — the visit above is the whole
+   declaration, and it names no field — and no line of this body runs the page's code, so there is neither a
+   field to hand over late nor a throw to hand it over after. */
+
+static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ClearTimerState *s = state;
+    double id = 0;
+    int have;
+
+    (void)out_cb; (void)out_argc;
+    /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
+       every entry, above everything else, because it belongs to no link of the chain. */
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == CT_REMOVE,
+           "§8.7's clearTimeout/clearInterval resumed into a stage the algorithm does not have — it is ONE "
+           "step, and the chain of questions it may ask is a cursor on this machine's own state rather than a "
+           "stage apiece, so a second stage means a resume landed in another algorithm's numbering");
     /* THE COUNT IS THE DECLARATION'S, exactly as it is for the two setters above. `idl_optional_from(0)` makes
        every position optional and `idl_arg_default(0, IDL_DEFAULT_ZERO)` places §8.7's `= 0` whether or not
        the page reached it, so `clearTimeout()` arrives here with ONE argument holding that 0 — and §8.7's step
@@ -1564,24 +1706,114 @@ static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, J
            "§8.7's `clearTimeout`/`clearInterval` reached its body with an argument count its declaration does "
            "not produce — its one position is optional and carries the IDL's `= 0`, so §3.6 step 14.2 places a "
            "value at it on every call");
-    /* `handle` is a Web IDL `long`, converted by the declaration — or unknown external input crossing as
-       itself, whose number is that same §3.2.4.5 conversion run on its example. The tag test that stood here
-       asserted against attacker input for the same reason `setTimeout`'s did, and in the same member pair. */
-    if (!idl_number_of(ctx, IDL_LONG, argv[0], &id))
-        DFAIL("clearTimeout was given a `handle` that is unknown external input carrying NO EXAMPLE, so it "
-              "names no particular entry of §8.7's map of active timers. It cannot clear nothing — a handle "
-              "the domain permits is one some arm does clear — and it cannot clear every entry, which is "
-              "every arm at once. WHAT TO BUILD IS AN N-WAY FORK, which is the one thing that separates it from "
-              "step 4's, now that step 4's is built: this member becomes a step machine beside the two above "
-              "(idl_method_id_step, the same declaration, and its ask is step_fork_run rather than a plain "
-              "solver_outcome) AND the seam learns to prepare more than ONE sibling per ask — solver_outcome's "
-              "own `n == 2` DCHECK names that queue, and step_fork_run's `n` already carries the count. The "
-              "completions are one per live entry of this global's map plus the one that names none. Do the "
-              "seam first: a machine here with a two-armed ask would answer a question with N answers by "
-              "deleting all but one of them, which is the arm-deleting mistake the fork exists to prevent.");
-    timer_clear(ctx, (uint32_t)(int32_t)id);
-    return JS_UNDEFINED;
+
+    /* THE EXAMPLE IS READ ONCE PER ENTRY AND ABOVE THE CHAIN, so that every question this activation asks is
+       decided against ONE reading of it — taking it again inside the loop would be two reads of one example
+       with nothing forcing them to agree, which is the statement decide.c makes of its own. `have` is 0 for an
+       unknown carrying no example, which is a POSITIVE fact the chain reads as JS_OUTCOME_REAL_UNSTATED and
+       never as a number to fall back on. */
+    have = idl_number_of(ctx, IDL_LONG, argv[0], &id);
+
+    /* `id` IS A WEB IDL `long`, converted by the declaration — or unknown external input crossing the boundary
+       as itself, so that opacity survives the coercion. WHICH OF THE TWO IT IS decides whether there is a
+       question at all, and asking that of the value's EXAMPLE would answer a different one: an unknown that HAS
+       an example would fall into the arm below, clear one particular entry, and the fork would be gone. That is
+       the collapse §Solver-half forbids, performed silently, and it is the correction TI_TIMEOUT carries in as
+       many words. `concolic_is` is what decides. */
+    if (!concolic_is(argv[0])) {
+        DCHECK(have,
+               "§3.2.4.5's conversion produced no number for a position this arm has already established is NOT "
+               "unknown external input — idl_number_of answers 0 only for an unknown carrying no example, so a "
+               "0 here is a value that is neither a Number nor a concolic reaching a body whose declaration "
+               "converts its one numeric argument");
+        /* §3.2.4.5 "long"'s own postcondition: §3.2.4.9 Abstract operations' ConvertToInt takes the integer
+           part modulo 2**32 and folds it into range, so a `long` is ALWAYS an integer in [-2147483648,
+           2147483647] — NaN and both infinities became +0 in the conversion. */
+        DCHECK(id >= -2147483648.0 && id <= 2147483647.0 && id == (double)(int32_t)id,
+               "§3.2.4.5's `long` conversion answered something that is not a long — its result is the integer "
+               "part taken modulo 2**32 and folded into range, so a value outside it, or one with a fraction, "
+               "means this position was never converted by anything");
+        timer_clear(ctx, (uint32_t)(int32_t)id);
+        return JS_STEP_DONE;
+    }
+
+    for (;;) {
+        uint32_t h = timer_id_from(ctx, s->next);
+        int arm = 0, real, rc, wrote;
+
+        /* EVERY IDENTIFIER ELIMINATED. §8.7's removal of a key the map does not have is a no-op, so this world
+           is the one in which `id` names no entry of this global's map of setTimeout and setInterval IDs and
+           nothing is removed — the completion a run with no forking policy walks straight to. It is also the
+           whole of the answer for a global whose map is EMPTY, which is why an empty map asks no question: one
+           feasible completion is not a fork, it is the answer, and a seam asked to decide it would be handed a
+           decision this body had already made. */
+        if (h == 0)
+            return JS_STEP_DONE;
+        /* THE MACHINE'S SECOND DECLARATION — which completion this operation reaches on the operand's own
+           EXAMPLE, computed by RUNNING the comparison rather than by a rule predicting it. §3.2.4.5's
+           conversion has already been run on the example above, through the one copy of that arithmetic, and
+           the cast is the same one the known arm performs: a negative `long` denotes the identifier its two's
+           complement names, which is how identifiers at or above 2**31 stay reachable at all. */
+        real = have ? ((uint32_t)(int32_t)id == h) : JS_OUTCOME_REAL_UNSTATED;
+        wrote = snprintf(s->op, sizeof s->op,
+                         "HTML §8.7 Timers clearTimeout/clearInterval (id is the timer with identifier %u)",
+                         (unsigned)h);
+        /* A TRUNCATED OPERATION STRING MERGES TWO PREDICATES, which is the defect the whole naming scheme above
+           exists to avoid arriving through the back door: the identifier is the LAST thing in this string, so a
+           buffer one byte short would file two identifiers under one key and let one link's record decide
+           another's. snprintf reports what it WOULD have written, which is the only way to see it. */
+        DCHECK(wrote > 0 && (size_t)wrote < sizeof s->op,
+               "§8.7's elimination chain could not spell the identifier its question is about — the operation "
+               "string is half the constraint key and the identifier is its tail, so a truncated one names a "
+               "DIFFERENT timer's question and the flow answers it with this one's record");
+        rc = step_fork_run(ctx, hdr, argv[0], s->op, 2, real, &arm);
+        if (rc)
+            return rc;
+        DCHECK(arm == 0 || arm == 1,
+               "a two-armed outcome fork answered with an arm that is neither of them");
+        /* NAMED RESIDUAL — the DECISION is recorded and the value's DOMAIN is not, which is narrower than
+           §Solver's concretize-on-pin and is not wrong: an unnarrowed value keeps arms, and keeping an arm is
+           the sound direction. WHAT IS NOT COVERED: each link is an equality over `id` — the YES arm proves it
+           IS this identifier and the NO arm proves it is NOT — and neither fact reaches the value. Only the
+           decision vector holds them, and a vector answers the question it recorded and no other.
+           WHAT THE NEXT DIFF BUILDS: the two halves decide.c already takes at a bytecode equality — the pin on
+           the arm that determines the value and the exclusion on the arm that eliminates a token. It cannot be
+           the same call: decide.c reads its subject off a comparison RESULT (concolic_cmp / concolic_cmp_subject),
+           and this seam has no result to read one off, so the pin has to be taken over the OPERAND's own
+           identity and that is the piece to write.
+           HOW ITS ABSENCE SHOWS: a flow that has answered YES at some identifier and then reaches a second
+           `clearTimeout(id)` mints a sibling for every OTHER identifier this global still holds — worlds its own
+           path has already contradicted — and an @H parameter carrying this value renders with no domain beside
+           it where the run observed one. */
+        if (arm == 1) {
+            /* THIS WORLD'S ANSWER: `id` IS this identifier, so §8.7's removal names this entry. The entry was
+               found in the map by the walk at the top of this same iteration and nothing has run in between —
+               step_fork_run runs none of the page's code and the driver only clones and re-enters — so a miss
+               here is the map answering differently to two reads inside one link. */
+            DCHECK(timer_entry_index(ctx, h) >= 0,
+                   "§8.7's clearTimeout resolved `id` to an identifier this global's map of setTimeout and "
+                   "setInterval IDs no longer holds — the identifier was read out of that map one line above "
+                   "the fork, so the map has been mutated by something that ran while this flow was inside a "
+                   "single link of its own elimination chain");
+            timer_clear(ctx, h);
+            return JS_STEP_DONE;
+        }
+        /* ELIMINATED: `id` is not this identifier, so the next question is about the next one this global
+           holds. The cursor is advanced AFTER the answer and never before the ask, which is what makes the two
+           arms agree: the sibling's snapshot was taken with the cursor still at or below `h`, so it recomputes
+           the same `h` and answers the other way about the same timer. */
+        DCHECK(h < UINT32_MAX,
+               "§8.7's elimination chain answered NO at the largest identifier a uint32 can hold — advancing "
+               "the cursor past it would wrap it to 0 and re-ask the whole chain for ever, and this global has "
+               "handed out every identifier there is");
+        s->next = h + 1;
+    }
 }
+
+static const IdlStepDecl CT_DECL = {
+    js_clear_timer, sizeof(ClearTimerState), ct_visit, NULL,
+    "HTML §8.7 Timers the clearTimeout / clearInterval method steps", CT_STEPS
+};
 
 /* HTML §8.8 "Microtask queuing"'s queueMicrotask: a MICROTASK, which is the whole of what it is for — it runs inside the current
    checkpoint, ahead of every task, including a timer set for zero. */
@@ -1615,11 +1847,14 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
    PLAIN-BODY member, and these two are machines). The body's `argc == 2` assert is what fires the day it lands.
    DECLARED ONCE PER AGENT, installed per realm: a declaration builds a pool entry and a member has ONE, and
    `idl_optional_from` names the member the LAST declaration made — so it belongs beside it, here.
-   THE TWO SETTERS ARE STEP MACHINES AND THE TWO CLEARERS ARE NOT, and that is a difference in what each
-   ALGORITHM asks rather than a policy: §8.7's step 4 compares `timeout`, which can be unknown external input,
-   so a fork asked there needs the driver's snapshot to resume its sibling from; `clearTimeout`'s own unknown
-   is an N-WAY question its DFAIL names, and declaring it a machine before that fork exists would buy a resume
-   point for a question nothing can yet ask. */
+   ALL FOUR PAGE-FACING MEMBERS ARE STEP MACHINES, and that is what each ALGORITHM asks rather than a policy:
+   §8.7's step 4 compares `timeout`, and the clearers' one step indexes the map of setTimeout and setInterval
+   IDs by `id`. Both operands can be unknown external input, and a fork asked over one needs the driver's
+   snapshot to resume its sibling from — which is the one thing a plain JSCFunction, already inside its own C
+   activation, has nowhere to put. The two SETTERS share one declaration under three magics because the timer
+   initialization steps are one algorithm reached three ways; the two CLEARERS share one declaration under no
+   magic at all, because §8.7 gives them literally one set of steps and there is nothing for a magic to tell
+   apart. */
 void timer_init(JSContext *ctx)
 {
     static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
@@ -1646,10 +1881,13 @@ void timer_init(JSContext *ctx)
        focus.c its own machines. Minting it that way rather than with a hand-written JS_NewCFunction2 is what
        keeps the pool's name on it, so a parked re-arm says which algorithm it is parked in. */
     g_id_rearm = idl_method_id_step(ctx, REARM_TIMER, 3, NULL, 0, &TI_DECL, TI_MAGIC_REARM);
-    g_id_clear_timeout = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
+    /* §8.7's TWO CLEARERS, ONE DECLARATION, NO MAGIC. They are two MEMBERS, so each takes its own pool entry
+       and its own `= 0` default; they are ONE ALGORITHM, so both entries carry the same body and the same
+       stage list, and neither passes a magic because the body has nothing to ask about which member it is. */
+    g_id_clear_timeout = idl_method_id_step(ctx, CLEAR_TIMER, 1, NULL, 0, &CT_DECL, 0);
     idl_optional_from(0);
     idl_arg_default(0, IDL_DEFAULT_ZERO, NULL);
-    g_id_clear_interval = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
+    g_id_clear_interval = idl_method_id_step(ctx, CLEAR_TIMER, 1, NULL, 0, &CT_DECL, 0);
     idl_optional_from(0);
     idl_arg_default(0, IDL_DEFAULT_ZERO, NULL);
     /* §8.7 Timers's STEP 9 TASK, declared once per agent like the four members above — its definition is
