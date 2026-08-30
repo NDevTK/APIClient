@@ -429,6 +429,20 @@ static void r_visual_viewport(JSRuntime *rt) { (void)rt; visual_viewport_free();
    per-realm prototype slot. Where it does not collide, the class registers at a SPARSE id past
    `js_class_id_alloc`, which the allocator will hand out again to somebody else. */
 static void r_event(JSRuntime *rt) { event_free(rt); }
+/* HTML §8.1.4.6 Runtime script errors, the LAST hand-copied `report_exception_free(ctx);` in each of those same
+   three teardowns — the line immediately above the `event_free(ctx);` the note above describes, and the same
+   defect one row over. Its row's release column was empty, so its four slots (§8.1.4.6 step 6's private Symbol,
+   the declaration latch, §8.1.4.4 step 8's step-machine registration and step 7.3's console edge) could not be
+   declared to core/agent_state.h either, and the component's own file said so IN PROSE: "the only reason this
+   one is not declared there is that this component's row carries no release for that column to check". A
+   comment explaining why a component is exempt from a check is the check's own hole, written down.
+   ITS POSITION IS ALREADY DECIDED AND THE ROW ONLY OBEYS IT. `report_exception` is declared AFTER `error_event`
+   and `message_event`, and it DEPENDS on the first (extract_error_information mints §8.1.4.6's ErrorEvent
+   through error_event_new), so reverse declaration order releases it BEFORE the `event` row that gives that
+   family's state back — dependent first, which is what the hand-written lists got right by accident and what
+   this column decides. Nothing in its release reads any other component's state at all: it frees one Symbol
+   against the runtime and returns three statics to their pre-init values. */
+static void r_report_exception(JSRuntime *rt) { report_exception_free(rt); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
@@ -793,7 +807,7 @@ static const PlatformComponent PLATFORM[] = {
     /* Declared by the components that own the events they carry; the interface objects are this realm's. */
     { "message_event",       NULL,                  i_message_event },
     { "error_event",         NULL,                  i_error_event },
-    { "report_exception",    d_report_exception,    NULL },
+    { "report_exception",    d_report_exception,    NULL,        r_report_exception },
     { "message_port",        d_message_port,        i_message_port, r_message_port },
     { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
     /* FILE API §6 Reading Data, AFTER `xml_http_request` and not beside `blob`. Two rows decide it and

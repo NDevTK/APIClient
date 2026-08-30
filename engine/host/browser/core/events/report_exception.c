@@ -31,6 +31,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_slots.h"
 #include "core/events/error_event.h"
 #include "core/events/event_target.h"
@@ -82,8 +83,11 @@ static const char *const RX_STEPS[] = { RX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 /* §8.1.4.6 step 6's IN ERROR REPORTING MODE, which is a flag on the GLOBAL and not on this component: a report
    whose own `error` listener throws must not report that throw recursively, and "recursively" is per global.
    It hangs off the global under a private Symbol, which is also what makes it per-flow for free — a flag set by
-   one forked arm is a property write the COW delta captures. */
-static JSValue g_key;
+   one forked arm is a property write the COW delta captures.
+   THE INITIALISER IS EXPLICIT because core/agent_state.h's SLOT_VALUE pre-init is `JS_IsUndefined`, and a bare
+   static JSValue is all-zero bytes rather than JS_UNDEFINED — the declared kind and the static's actual
+   pre-init state would then disagree on a component that had been declared and never released. */
+static JSValue g_key = JS_UNDEFINED;
 static int g_ready;
 
 /* §8.1.4.6 STEP 7.3'S DEVELOPER CONSOLE, which is the HOST's and not this file's — the same shape and the same
@@ -92,9 +96,11 @@ static int g_ready;
    stream of lines prints it as it happens. Registering none is a positive statement ("this host has no
    console"), never a hole: step 7 is performed either way and the hook only decides whether anything says so.
    THE FUNCTION IS THE HOST'S AND OUTLIVES THE AGENT; THE REGISTRATION IS THE AGENT'S AND DOES NOT — which is
-   why report_exception_free gives it back and why it is not declared to core/agent_state.h: that header's
-   two-sided check requires a component that declares agent state to carry a RELEASE on the platform column,
-   and this component's row carries none (its releases are called by each host directly). */
+   why report_exception_free gives it back and why it is declared to core/agent_state.h as a POINTER slot. The
+   pointer is a link-time constant in the program's text (solver/result.c's result_page_error_value, installed
+   by solver/engine.c at the session's begin); what is agent-scoped is this static being non-null, and a
+   registration carried past the agent is what would make the next host's claim read as a SECOND, different
+   claimant to the DCHECK below. */
 static void (*g_console)(JSContext *ctx, JSValueConst exception);
 
 /* §8.1.4.4 step 8's third bullet, as a machine this runtime can be handed — see report_exception_flow. */
@@ -118,18 +124,48 @@ void report_exception_init(JSContext *ctx)
     g_key = JS_NewSymbol(ctx, "inErrorReportingMode", false);
     CHECK(!JS_IsException(g_key), "the error-reporting-mode key allocation failed");
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED. All four were given back by the release below and
+       declared to nobody — the released half of a pairing that had only one side, which is a slot
+       agent_state_check_released holds nothing to assert. `g_flow_stepid` is declared here even though
+       report_exception_flow is what SETS it: the declaration is the standing claim that this static is agent
+       state, and the question it makes askable ("is it back at -1 when the agent goes?") has an answer whether
+       or not any classic script of this agent completed abruptly. */
+    agent_state_flag("report_exception", &g_ready,
+                     "HTML §8.1.4.6 Runtime script errors' declaration latch");
+    agent_state_value("report_exception", &g_key,
+                      "the private Symbol HTML §8.1.4.6 Runtime script errors step 6's `in error reporting "
+                      "mode` flag hangs off the global by");
+    agent_state_id("report_exception", &g_flow_stepid,
+                   "HTML §8.1.4.4 Calling scripts, run a classic script step 8's third bullet, as a step "
+                   "machine registered with this runtime");
+    /* A POINTER INTO ANOTHER COMPONENT, which is what agent_state_ptr exists for — the same shape and the same
+       argument as core/html/unhandled_rejection.c's report hook, because it is the same sentence of the same
+       standard read one section apart. */
+    agent_state_ptr("report_exception", &g_console,
+                    "the host edge HTML §8.1.4.6 step 7.3's developer console is written through");
 }
 
-void report_exception_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM — core/platform.h's release column. This was a line each of the three hosts wrote
+   out by hand, AFTER platform_agent_free had already run that whole column, and they did not agree on where:
+   main.c and test_forced.c ran `realm_intrinsics_free(); report_exception_free(ctx);` while wpt_runner.c ran
+   `report_exception_free(ctx); … realm_intrinsics_free();`. Nothing was missing and the order was still three
+   answers — and out there NONE of the four slots above could be declared at all, because a row with agent
+   state and an empty release column is exactly what platform_check_agent_state fires on. What this gives back
+   is the AGENT's: a private Symbol, a step-machine registration and a host edge. */
+void report_exception_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of the
+       same list — core/platform.c's declare loop runs `d_report_exception` unconditionally — so the test could
+       never be true and what it could do was hide a release that left the latch set. */
+    DCHECK(g_ready, "HTML §8.1.4.6 Runtime script errors was released in an agent that never declared it — the "
+                    "release column is the inverse of the declare column, so reaching here without an init "
+                    "means this component was torn down by something that is not the platform's one list");
+    JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
     g_ready = 0;
     /* THE STEP DEFINITION NAMES A RUNTIME THAT IS GOING AWAY. `JS_RegisterStepDef` hands out an index into the
        runtime's own tail, so an id kept across a teardown is an index into a table the next agent has not
-       built — the stale-handle defect core/agent_state.h records four instances of, and the only reason this
-       one is not declared there is that this component's row carries no release for that column to check. */
+       built — and report_exception_flow's own `if (g_flow_stepid < 0)` is precisely what would read it. */
     g_flow_stepid = -1;
     /* …AND SO DOES THE CONSOLE. It is the HOST's function and outlives this agent, but the registration is the
        agent's: giving it back is the inverse of the claim, and a hook left standing is what would make the

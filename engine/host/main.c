@@ -65,9 +65,6 @@
 #include "browser/core/geometry/dom_rect_list.h"
 #include "browser/core/idl_args.h"
 #include "browser/core/idl_async_iter.h"
-#include "browser/core/events/error_event.h"
-#include "browser/core/events/message_event.h"
-#include "browser/core/events/report_exception.h"
 #include "browser/core/events/message_port.h"
 #include "browser/core/xhr/xml_http_request.h"
 #include "browser/core/structured_clone.h"
@@ -1226,15 +1223,17 @@ QJS_EXPORT void qjs_teardown(void)
        because the per-realm half reads no static of core/dom/document.c, which asserts as much at its own
        release. Every remaining line here is still a hand-copied teardown. */
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
-    report_exception_free(g_ctx);
-    /* AND DOM §2.2's Event WITH THE THIRTEEN SUBCLASSES core/events/event.c DECLARES BESIDE IT, which used to
-       be the line here. It is a ROW on core/platform.h's release column now, run by the platform_agent_free
-       above. All three hosts had it and none of them had it in the same place: this list and test_forced.c's
-       ran `realm_intrinsics_free(); report_exception_free(); event_free();` while wpt_runner.c ran
+    /* HTML §8.1.4.6 Runtime script errors AND DOM §2.2's Event with the thirteen subclasses
+       core/events/event.c declares beside it, which used to be the two lines here. Both are ROWS on
+       core/platform.h's release column now, run by the platform_agent_free above. All three hosts had both and
+       none of them had them in the same place: this list and test_forced.c's ran
+       `realm_intrinsics_free(); report_exception_free(); event_free();` while wpt_runner.c ran
        `report_exception_free(); event_free(); realm_intrinsics_free();` — nothing missing, three answers. And
-       out here the family's sixty-six slots could not be declared to core/agent_state.h at all, because a row
-       with agent state and no release is what platform_check_agent_state fires on: fourteen class ids were
-       carried past their own release with nothing able to say so. See core/platform.c's entry. */
+       out here NEITHER component's state could be declared to core/agent_state.h at all, because a row with
+       agent state and no release is what platform_check_agent_state fires on: the Event family's fourteen
+       class ids were carried past their own release, and §8.1.4.6's four slots — step 6's private Symbol, the
+       latch, §8.1.4.4 step 8's step-machine registration and step 7.3's console edge — were given back by a
+       line this list could not see and asserted by nothing. See core/platform.c's entries. */
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */
     url_free(g_ctx);
     usp_free(g_ctx);

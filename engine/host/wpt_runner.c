@@ -63,9 +63,6 @@
 #include "core/streams/writable_stream.h"
 #include "core/streams/transform_stream.h"
 #include "core/streams/queuing_strategy.h"
-#include "core/events/error_event.h"
-#include "core/events/message_event.h"
-#include "core/events/report_exception.h"
 #include "core/events/message_port.h"
 #include "core/xhr/xml_http_request.h"
 #include "core/events/broadcast_channel.h"
@@ -3566,14 +3563,15 @@ int main(int argc, char **argv)
        on core/platform.h's release column now, run by the platform_agent_free above; every host wrote them
        DEPENDENT-FIRST and reverse declaration order is what decides the sequence instead. See main.c's
        teardown. */
-    report_exception_free(ctx);
-    /* AND DOM §2.2's Event WITH THE THIRTEEN SUBCLASSES core/events/event.c DECLARES BESIDE IT, which used to
-       be the line here — and THIS host is the one that shows why the column and not the line: all three had
-       `event_free`, and this one ran it BEFORE realm_intrinsics_free while the other two ran it after.
-       Nothing was missing and the order was still three different answers. It is a ROW on core/platform.h's
-       release column now, run by the platform_agent_free above, and out here the family's sixty-six slots
-       could not be declared to core/agent_state.h at all — a row with agent state and no release is what
-       platform_check_agent_state fires on. See main.c's teardown and core/platform.c's entry. */
+    /* HTML §8.1.4.6 Runtime script errors AND DOM §2.2's Event with the thirteen subclasses
+       core/events/event.c declares beside it, which used to be the two lines here — and THIS host is the one
+       that shows why the column and not the line: all three had both, and this one ran them BEFORE
+       realm_intrinsics_free while the other two ran them after. Nothing was missing and the order was still
+       three different answers. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above, and out here neither component's state could be declared to
+       core/agent_state.h at all — a row with agent state and no release is what platform_check_agent_state
+       fires on: the Event family's sixty-six slots, and §8.1.4.6's own four. See main.c's teardown and
+       core/platform.c's entries. */
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);

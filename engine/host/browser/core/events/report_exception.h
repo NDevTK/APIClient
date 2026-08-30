@@ -66,9 +66,12 @@ JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const 
 void report_exception_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
                                uint32_t *pline, uint32_t *pcol);
 
-/* The private key §8.1.4.6 step 6's "in error reporting mode" flag hangs off the global by. One per AGENT. */
+/* The private key §8.1.4.6 step 6's "in error reporting mode" flag hangs off the global by. One per AGENT.
+ * THE RELEASE TAKES THE RUNTIME, because core/platform.h's release column is what runs it: what this component
+ * holds is the AGENT's, and agent state is freed against the runtime the declaration was made in. Taking a
+ * JSContext is what made it a line each of the three hosts had to remember. */
 void report_exception_init(JSContext *ctx);
-void report_exception_free(JSContext *ctx);
+void report_exception_free(JSRuntime *rt);
 
 /* §8.1.4.6 STEP 7.3 — "Otherwise, the user agent may report exception to a developer console."
  *
