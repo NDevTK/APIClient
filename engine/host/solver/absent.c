@@ -110,12 +110,46 @@ void absent_free(void)
     g_ns_n = g_ns_cap = 0;
 }
 
+/* THE KEY, READ ONCE FOR EVERY HALF OF THIS FILE, AND THE ENGINE'S GATE ASSERTED WHERE THE PATH IS COMPOSED
+   FROM IT. The channel is a server writing a RECORD OF FIELDS, so its keys are strings and array indices —
+   and the engine gates on exactly that (JS_AtomIsPublishedName) before it asks any hook. This is the other
+   side of that gate: a SYMBOL reaching here would be spelled into a provenance out of its DESCRIPTION, which
+   is neither unique nor a name (`Symbol()` twice spells one path for two keys), and a WELL-KNOWN one is the
+   engine's own protocol — a slot the interpreter is about to CALL.
+   IT IS ASSERTED RATHER THAN FILTERED BECAUSE THE FILTER ALREADY EXISTS AND HAS BEEN GONE AROUND TWICE, and
+   the two are worth keeping side by side because they are the same omission at two different altitudes.
+   FIRST: the gate arrived with the HIT arm and the MISS arm asked nothing, so for the life of that asymmetry
+   §7.1.1 ToPrimitive ( input [ , preferredType ] ) step 1.a's `? GetMethod(input, %Symbol.toPrimitive%)` — a
+   read that misses on EVERY object — was answered here with a callable unknown, and step 1.b.vi's "Throw a
+   TypeError exception" ended the document (`var b={}; 1 & b` and `1 & globalThis` both died).
+   SECOND, AND WORSE, because it produced no exception at all: the WALK that decides which records are on the
+   channel asked no key rule either, and a record reached through a key is a record PUBLISHED, not a member
+   answered. So an internal-slot record — Web IDL §3.7.3 Internal slots, which this engine holds as named
+   fields on an object hung off a private Symbol (engine/host/browser/core/idl_slots.h) — became a namespace,
+   and every one of its well-named fields then answered with an unknown through a key rule that passed. An
+   `Event` an inline script left in a `var` reported `defaultPrevented` true and `dispatch` set, so DOM §2.7
+   Interface EventTarget's dispatchEvent(event) method step 1 threw InvalidStateError on the first dispatch of
+   a freshly constructed event. THAT is why this assert covers the publication and not only the two reads: the
+   publication is where the path is composed, so it is where a key that cannot be spelled must crash. */
+static const char *ns_key_str(JSContext *ctx, JSAtom name)
+{
+    DCHECK(JS_AtomIsPublishedName(JS_GetRuntime(ctx), name),
+           "the engine asked this channel about a key it cannot NAME — the injected-state channel is a record "
+           "of string- and index-keyed fields, so a symbol here is a read or a publication that reached the "
+           "hook without going through js_absent_ask / js_present_ask / js_publish_document_namespace's key "
+           "rule. A well-known symbol answered with an unknown replaces a slot the interpreter is about to "
+           "CALL: §7.1.1 ToPrimitive ( input [ , preferredType ] ) step 1.a reads %Symbol.toPrimitive% off "
+           "every object it coerces; a record published under one turns every internal slot behind it into an "
+           "unknown, which throws nothing and is read as state");
+    return JS_AtomToCString(ctx, name);
+}
+
 void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value)
 {
     JSValue g = JS_GetGlobalObject(ctx);
     int is_root = (JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(g));
     const char *base = is_root ? NULL : ns_path_of(parent);
-    const char *n = JS_AtomToCString(ctx, name);
+    const char *n = ns_key_str(ctx, name);
     char *path;
     size_t len;
 
@@ -150,30 +184,6 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
     g_ns[g_ns_n].obj = JS_VALUE_GET_PTR(value);
     g_ns[g_ns_n].path = path;
     g_ns_n++;
-}
-
-/* THE KEY, READ ONCE FOR BOTH HALVES, AND THE ENGINE'S GATE ASSERTED WHERE THE PATH IS COMPOSED FROM IT.
-   The channel is a server writing a RECORD OF FIELDS, so its keys are strings and array indices — and the
-   engine gates on exactly that (JS_AtomIsPublishedName) before it asks either hook. This is the other side of
-   that gate: a SYMBOL reaching here would be spelled into a provenance out of its DESCRIPTION, which is
-   neither unique nor a name (`Symbol()` twice spells one path for two keys), and a WELL-KNOWN one is the
-   engine's own protocol — a slot the interpreter is about to CALL.
-   IT IS ASSERTED RATHER THAN FILTERED BECAUSE THE FILTER ALREADY EXISTS AND WAS ALREADY GONE AROUND. The gate
-   arrived with the HIT arm and the MISS arm asked nothing, so for the life of that asymmetry §7.1.1
-   ToPrimitive ( input [ , preferredType ] ) step 1.a's `? GetMethod(input, %Symbol.toPrimitive%)` — a read
-   that misses on EVERY object — was answered here with a callable unknown, and step 1.b.vi's "Throw a
-   TypeError exception" ended the document. Measured: `var b={}; 1 & b` and `1 & globalThis` both died. A
-   second filter here would have hidden that instead of ending it; an assert makes the next route that skips
-   the gate crash at the first read rather than at a coercion a thousand statements later. */
-static const char *ns_key_str(JSContext *ctx, JSAtom name)
-{
-    DCHECK(JS_AtomIsPublishedName(JS_GetRuntime(ctx), name),
-           "the engine asked this channel about a key it cannot NAME — the injected-state channel is a record "
-           "of string- and index-keyed fields, so a symbol here is a read that reached the hook without going "
-           "through js_absent_ask / js_present_ask's key rule. A well-known symbol answered with an unknown "
-           "replaces a slot the interpreter is about to CALL: §7.1.1 ToPrimitive ( input [ , preferredType ] ) "
-           "step 1.a reads %Symbol.toPrimitive% off every object it coerces");
-    return JS_AtomToCString(ctx, name);
 }
 
 /* THE ONE SPELLING of an injected member's provenance, used by both halves of this file.
