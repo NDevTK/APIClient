@@ -3625,7 +3625,7 @@ static int idl_put_forwards_body(JSContext *ctx, JSStepHdr *hdr, void *state, in
        global rather than throwing on a read of undefined. What this does NOT then do is 4.5.2-4.5.4; see the
        machine's own paragraph for the brand the pool would have to hold and what its absence looks like. */
     s->js_value = window_proxy_this_object(ctx, hdr->this_val);
-    STEP_GOTO(hdr->stage, IDL_PF_GET, &hdr->get_phase);
+    STEP_GOTO(hdr->stage, IDL_PF_GET, &hdr->get_phase, NULL);
     return JS_STEP_YIELD;
 
     STEP_ARM(IDL_PF_GET);
@@ -3643,7 +3643,7 @@ static int idl_put_forwards_body(JSContext *ctx, JSStepHdr *hdr, void *state, in
         JS_ThrowTypeError(ctx, "the attribute this assignment forwards to did not answer with an object");
         return JS_STEP_ABRUPT;
     }
-    STEP_GOTO(hdr->stage, IDL_PF_SET, &hdr->get_phase);
+    STEP_GOTO(hdr->stage, IDL_PF_SET, &hdr->get_phase, NULL);
     return JS_STEP_YIELD;
 
     STEP_ARM(IDL_PF_SET);
