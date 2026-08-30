@@ -4498,7 +4498,26 @@ self.astDispatch = async function astDispatch(msg) {
        gives an OK response with a zero-length body a perfectly ordinary empty Document, and a child navigable
        gets exactly that — but a SEEDED document with no bytes cannot be the program this run exists to
        explore, and analysing it would emit nothing and read as a page that was analysed and found clean. */
+    /* AND A SEEDED LOAD THAT LANDED ON ANOTHER ORIGIN IS NOT THIS DOCUMENT, WHICH IS THE PRICE OF TAKING THE
+       RESPONSE'S URL. §7.4.5 determines the loaded Document's origin over the RESPONSE's URL and this entry
+       adopts that answer as `sourceUrl` — but the PRINCIPAL this instance runs under is the browser's
+       `MessageSender.origin` and cannot be re-derived from an address (a sandboxed document has an ordinary
+       URL and an opaque origin, which is why nothing here parses one into a principal). So a seed whose
+       response URL is cross-origin to the address the browser reported would seat a document of origin B
+       inside a cluster keyed on origin A: two origins behind one credentialed-read principal, which is
+       exactly what engineJoin's own DCHECK refuses one algorithm along, and what SECURITY.md's
+       one-instance-per-origin-keyed-agent-cluster forbids.
+       IT IS A REPORT AND NOT AN ASSERT, because a server choosing a cross-origin 302 is the SERVER's doing and
+       not this zone's invariant broken. It is also EVIDENCE: the person's own navigation landed at the address
+       the browser reported, so a second GET of that same address arriving somewhere else is a server treating
+       this request differently — the single-use-token / bot-challenge class — and the honest answer is to say
+       so rather than to analyse whatever came back. The comparison is between two ADDRESSES and decides no
+       principal, the same way the seed's own admission check does. */
+    const _landed = originOf(loaded.url);
+    const _asked = originOf(msg.sourceUrl);
     const unavailable = loaded.unavailable !== null ? loaded.unavailable
+                      : (_landed === "" || _landed !== _asked)
+                        ? { kind: "network", detail: "cross-origin-redirect:" + (_landed || "unparseable") }
                       : loaded.bytes.length === 0 ? { kind: "empty" } : null;
     /* THE REPORT GOES BACK THE INSTANT THE LOAD SETTLES, not when the run ends. What a reader asks on opening
        the popup over an empty panel is "did this fail, or is there nothing here yet", and the analysis has
