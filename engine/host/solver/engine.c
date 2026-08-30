@@ -34,6 +34,7 @@
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/reply_decode.h" /* …and what the reply BODY itself teaches — see engine_provide */
+#include "solver/pending_index.h" /* WHICH records a reply answers, without walking the frontier to find out */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries ARE GC objects and are leaked by two hosts */
 #include "check.h"
@@ -2337,7 +2338,8 @@ int engine_host_owes(void) {
    every @H example, every branch over that body and every @S verdict downstream of it came from that. It is the
    same correction SECURITY.md §Network records for the XHR seam, made at the seam it names as still open. */
 int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value) {
-    int n = 0, matched = 0;
+    PendIndexNode *node;
+    int n = 0, matched = 0, i, m;
     DCHECK(url != NULL, "a body was provided for no URL");
     /* WHAT THE HOST SENDS BACK IS WHAT THE JOIN EMITTED, and the shape is asserted rather than assumed: an
        absent method is a host that has not been converted to the pair (the JS bridge's `Provide` carries one),
@@ -2350,78 +2352,87 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
     DCHECK(method_is_token(method),
            "a reply was provided with a METHOD that is not a token — Fetch §2.2.1 Methods, RFC 9110 §5.6.2 "
            "Tokens. A host sending the URL where the method goes has its operands shifted by one");
-    for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
-        for (int i = 0, m = pending_count(f->pending); i < m; i++) {
-            JSValue p = pending_entry(f->pending, i);
-            JSValue uv = pending_get(p, PEND_URL);
-            JSValue mv = pending_get(p, PEND_METHOD);
-            const char *u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
-            const char *pm = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
-            /* TWO QUESTIONS OF TWO DIFFERENT THINGS, and they were one predicate until a fork stopped copying
-               records. `waiting` is about the FLOW — its register names this address, so this delivery is an
-               event that can change the answer it gave the scheduler. `fill` is about the RECORD — it has no
-               answer on it yet, so this call is the one that writes one. A fork SHARES records (pending.h), so
-               ONE record is named by every arm that inherited it and `haveValue` is therefore a fact about the
-               record and not about any of them.
-               WHAT ASKING ONE QUESTION COST: the first arm reached filled the record and had its host-owed mark
-               taken off; every LATER arm naming that same record read `haveValue` as already set, fell out of
-               the `hit` branch, and was never un-marked. A marked flow is out of the pick until a host event
-               clears it (flow.h) — and no further host event is coming, because its register is fully answered
-               — so that timeline left the frontier for good with its whole exploration unrun. The stall assert
-               at the end of the slice reports the state one document later ("a member owed the host NOTHING")
-               and names the symptom rather than this line; `pin_and_shape.html` reaches it under three of the
-               solver gate's four schedules, its `/api/roles` record having been forked between the two arms of
-               the `limit > 5` branch that follows the fetch. */
-            /* THE KEY IS THE PAIR. An entry with no method is one no join could have listed, so it cannot be
-               what this reply answers whatever its URL says. */
-            int waiting = u && pm && strcmp(u, url) == 0 && strcmp(pm, method) == 0;
-            int fill = waiting && !pending_get_int(p, PEND_HAVE_VALUE);
-            matched += waiting;
-            if (u) JS_FreeCString(ctx, u);
-            if (pm) JS_FreeCString(ctx, pm);
-            JS_FreeValue(ctx, mv);
-            JS_FreeValue(ctx, uv);
-            if (fill) {
-                /* THE PRODUCER'S HALF OF THE CONTRACT THE DRAIN CHECKS, asked HERE so the two together say
-                   WHICH of two very different things went wrong. The delivery asserts that a fetch entry carries a
-                   §2.2.6 URL list at the moment it is delivered; this asserts that it carried one at the moment
-                   it was WRITTEN. One assert alone cannot separate "the host built a bad record" from "a good
-                   record was changed after it landed" — and the second is a COW/lifetime bug in this file
-                   rather than a host bug, with a different fix and a different blast radius. Two asserts, one
-                   contract, and whichever fires names the half.
-                   Only for the FETCH kind: a docscript, an injected <script src> and a module load are owed
-                   BYTES, and their deliveries read `body` off the same record without ever asking for a list. */
+    /* ONE LOOKUP WHERE THE WHOLE FRONTIER USED TO BE WALKED. This scanned EVERY flow's register and EVERY entry
+       in it, materialising that entry's URL and its method as C strings BEFORE comparing either — once per
+       reply. The set it walked does not shrink in aggregate (a flow keeps an ANSWERED entry until IT delivers,
+       and an @S candidate re-fire re-runs the document and re-issues its fetches), so the cost of answering one
+       reply was set by every request the session had ever made rather than by the ones still outstanding: 147616
+       entries over 3422 flows at one measured stall, with two thirds of the process's CPU inside this function
+       and the join beside it. The question both of them were asking is "which records are still outstanding for
+       this pair", and solver/pending_index.h is that question given a place to be answered — the frontier-wide
+       form of the sentence pending.h already makes about one register.
+       NOTHING IS DROPPED BY LOOKING IT UP INSTEAD (§NO BOUNDS): membership is the SAME predicate this loop
+       computed for itself — an entry carrying an address, not a synchronous request, with no value yet — and a
+       record leaves the set only when it is answered or when the last register naming it is gone. */
+    node = pending_index_find(method, url);
+    /* THE TWO NUMBERS THE TAIL TELLS APART, TAKEN BEFORE THE FILLS MOVE EITHER. `matched` is every record this
+       frontier has ever parked on this pair, answered or not — which is what makes "answered twice" (matched,
+       none fillable) a different report from "answered for nobody" (nothing matched at all). A fill moves a
+       record from the first term to the second, so the sum is stable across the loop and the read is taken
+       once, here, rather than accumulated inside it. */
+    m = node ? pending_index_node_count(node) : 0;
+    matched = node ? m + (int)pending_index_node_answered(node) : 0;
+    /* BOUNDED BY THE COUNT TAKEN ABOVE AND ALWAYS TAKING THE HEAD, because each fill REMOVES its own record
+       from the set (the `haveValue` write reaches pending.c, which owns every mutation of a register and tells
+       the index): the list shrinks under the loop by exactly one per iteration, so a fixed trip count over
+       index 0 visits each member once and terminates whatever the writes do. The closing assert below is what
+       says the writes did what this structure assumes. */
+    for (i = 0; i < m; i++) {
+        JSValue p = pending_index_node_member(node, 0);
+        /* THE INDEX'S HALF OF ITS OWN CONTRACT, ASKED WHERE IT IS SPENT. An indexed record is by construction
+           one with no answer on it; a fill handed an answered one would be this reply overwriting another
+           reply's body, and the flow that already resumed on the first would have read bytes the server
+           produced for the same request at a different time. It cannot fire from this loop's own structure,
+           which is exactly why it is here: what it catches is the index having kept a member the `haveValue`
+           write should have taken out. */
+        DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
+               "the frontier's outstanding set handed a reply an ALREADY-ANSWERED record — a record leaves that "
+               "set on the write that answers it, so this member outlived its own answer and the body about to "
+               "be written would replace one a flow has already resumed on");
+        /* THE PRODUCER'S HALF OF THE CONTRACT THE DRAIN CHECKS, asked HERE so the two together say
+           WHICH of two very different things went wrong. The delivery asserts that a fetch entry carries a
+           §2.2.6 URL list at the moment it is delivered; this asserts that it carried one at the moment
+           it was WRITTEN. One assert alone cannot separate "the host built a bad record" from "a good
+           record was changed after it landed" — and the second is a COW/lifetime bug in this file
+           rather than a host bug, with a different fix and a different blast radius. Two asserts, one
+           contract, and whichever fires names the half.
+           Only for the FETCH kind: a docscript, an injected <script src> and a module load are owed
+           BYTES, and their deliveries read `body` off the same record without ever asking for a list. */
 #if APICLIENT_DEV
-                if ((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(value)) {
-                    JSValue ul = JS_GetPropertyStr(ctx, value, "urlList");
+        if ((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(value)) {
+            JSValue ul = JS_GetPropertyStr(ctx, value, "urlList");
 
-                    DCHECKF(JS_IsArray(ul),
-                            "a reply with no `urlList` is being written onto a fetch entry — the HOST built "
-                            "this record, so the producer is the trusted zone's reply path and not this "
-                            "file's register. request=%s %s", method, url);
-                    JS_FreeValue(ctx, ul);
-                }
-#endif
-                pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
-                pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
-                n++;
-            }
-            /* AND EVERY FLOW WAITING ON THIS ADDRESS IS ASKABLE AGAIN — the reply it parked on is on its
-               register now, which is the event its host-owed mark was waiting for and the only kind of thing
-               that can change the answer it gave the scheduler (flow.h). Outside the fill, because the mark is
-               per FLOW and the fill is per RECORD: N arms share one record, one of them writes the answer, and
-               all N observe it.
-               A CLEAR THAT IS EARLY BY ONE STEP IS THE ONLY WAY THIS CAN BE WRONG, and it is the trade this
-               file already takes twice — engine_set_referenced clears the WHOLE frontier's marks on a fact that
-               names no flow, and the shared document-script slot inside flow_deliver_one_reply does the same. A
-               flow re-marked for some other unanswered entry between two deliveries of this address is picked
-               once, reports host-owed again and is re-marked; nothing is dropped, skipped or reordered. A mark
-               kept after the fact it rested on has gone costs the flow its entire timeline, which is the
-               failure this line exists to make impossible. */
-            if (waiting) flow_clear_host_owed(f);
-            JS_FreeValue(ctx, p);
+            DCHECKF(JS_IsArray(ul),
+                    "a reply with no `urlList` is being written onto a fetch entry — the HOST built "
+                    "this record, so the producer is the trusted zone's reply path and not this "
+                    "file's register. request=%s %s", method, url);
+            JS_FreeValue(ctx, ul);
         }
+#endif
+        pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
+        pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+        n++;
+        JS_FreeValue(ctx, p);
     }
+    DCHECK(!node || pending_index_node_count(node) == 0,
+           "a reply filled every record the frontier's outstanding set held for its request and the set still "
+           "holds one — the fill is what removes a record, so a survivor is a member whose `haveValue` write "
+           "did not reach this index, and the host would be shown this request again for ever");
+    /* AND EVERY FLOW WAITING ON THIS ADDRESS IS ASKABLE AGAIN — the reply it parked on is on its
+       register now, which is the event its host-owed mark was waiting for and the only kind of thing
+       that can change the answer it gave the scheduler (flow.h).
+       THE WHOLE FRONTIER, because the mark is per FLOW and the fill is per RECORD, and the records are all
+       this seam now holds: N arms share one record, one write answers it, and all N observe it — so the flows
+       to un-mark are exactly the ones that name a record, which is the question the index deliberately does not
+       answer (it is a set of REQUESTS, and one record is one member however many arms hold it). This file
+       already takes that trade twice for facts that name no flow — engine_set_referenced, and the shared
+       document-script slot inside flow_deliver_one_reply — and flow_clear_host_owed_all is O(1) on a generation
+       stamp, so the whole-frontier form is cheaper than the walk that used to find the waiters.
+       A CLEAR THAT IS EARLY IS THE ONLY WAY THIS CAN BE WRONG, and it is bounded: a flow re-marked for some
+       other unanswered entry is picked once, reports host-owed again and is re-marked; nothing is dropped,
+       skipped or reordered (§scheduler's razor). A mark kept after the fact it rested on has gone costs the flow
+       its entire timeline, which is the failure this line exists to make impossible. */
+    if (n) flow_clear_host_owed_all();
     /* LEARNING FROM REPLIES IS THE POINT (CLAUDE.md §Solver), and this is the one point every fetched reply
        crosses exactly once — a URL two flows parked on is answered here once — so the learning happens here
        rather than in the per-flow delivery, where it would run once per waiter. What the body says about the

@@ -1,6 +1,11 @@
 /* The flow's pending register — see pending.h. */
 #include "solver/pending.h"
 #include "solver/cow.h"   /* the register is the SCHEDULER's bookkeeping: no delta may capture a write here */
+/* THE FRONTIER'S SIDE OF THE SAME SET. Every mutation of a register runs in this file (pending.h: "one place,
+   because every mutation is in this file"), which is exactly why the frontier-wide set of OUTSTANDING records
+   is maintained from here and from nowhere else — a park site asked to remember a second call is the list
+   beside a list that PENDING_FIELDS' default column exists to abolish. */
+#include "solver/pending_index.h"
 #include "check.h"
 #include "core/loader/script_type.h"   /* PEND_SCRIPT_TYPE's "nothing yet": §4.12.1.1's null type */
 
@@ -54,6 +59,11 @@ void pending_set_ctx(JSContext *ctx) { if (!g_ctx) g_ctx = ctx; }
 void pending_free_ctx(JSContext *ctx)
 {
     int i;
+    /* AND THE FRONTIER-WIDE SET BUILT OUT OF THESE REGISTERS, released here for the atoms' reason exactly: it
+       holds a counted reference to every outstanding record, so an index left standing across a runtime
+       boundary is a handle into a freed heap that the next session's first reply would write through. Its own
+       closing assert is that nothing is left in it — see pending_index_reset. */
+    pending_index_reset(ctx);
     if (g_atoms_ready) {
         for (i = 0; i < PEND_FIELD_COUNT; i++) JS_FreeAtom(ctx, g_field[i]);
         JS_FreeAtom(ctx, g_len_atom);
@@ -291,7 +301,48 @@ JSValue pending_push(JSValue *reg, int kind)
            "that reads it `undefined`, which is a real value belonging to the request");
     JS_SetPropertyUint32(pend_ctx(), *reg, (uint32_t)pend_len(*reg), JS_DupValue(pend_ctx(), e));
     cow_engine_write_end();
+    /* AND THE FRONTIER'S SET LEARNS OF IT AT THE PUSH, WHICH IS BEFORE IT CAN BE SHARED. Tracking is what
+       carries the count of registers naming this record, so it has to begin at the ONE moment exactly one
+       does — a fork adds the rest. The synchronous request kind is refused: it is keyed by a request id and
+       not by a pair (pending.h), so a pair-keyed set has no place to put one and would answer one seam's
+       question through the other. */
+    if (kind != FLOW_PENDING_HOSTREQ) pending_index_track(e);
     return e;
+}
+
+/* WHAT THE FRONTIER'S SET MUST BE TOLD ABOUT A FIELD WRITE, IN ONE PLACE — three fields decide membership and
+   the rest decide nothing, so this is a switch and not a call at each of the twenty writes upstairs.
+   A RECORD IS BORN WITHOUT ITS IDENTITY. pending_push creates every field at its "nothing yet" and the park
+   then states the address and the method one write at a time, so a tracked record has NO PAIR until the second
+   of the two arrives; that is the record being built and not a state to default past. It is keyed on the write
+   that completes it, and it leaves for good on the write that answers it. */
+static void pend_index_sync(JSValueConst e, int field)
+{
+    JSValue uv, mv;
+
+    if (field != PEND_URL && field != PEND_METHOD && field != PEND_HAVE_VALUE) return;
+    if (!pending_index_tracked(e)) return;   /* answered, synchronous, or dropped by every register */
+    if (pending_get_int(e, PEND_HAVE_VALUE)) { pending_index_answered(e); return; }
+    /* A REQUEST'S IDENTITY IS WRITTEN ONCE, AT THE PARK, and the set is keyed on it — so a second write of
+       either half would leave this index answering for an address that is no longer on the record, and the
+       flow parked on the new one would wait for the rest of the session. Asserted here rather than trusted,
+       because the write that would break it is an ordinary-looking `pending_set` in some other file. */
+    DCHECK(!pending_index_keyed(e),
+           "a request's METHOD or ADDRESS was rewritten after the frontier's outstanding set was keyed on it — "
+           "the reply seam is keyed on the pair, so the set would go on offering the old identity to the host "
+           "and the reply for the new one would match nothing");
+    uv = pending_get(e, PEND_URL);
+    mv = pending_get(e, PEND_METHOD);
+    if (JS_IsString(uv) && JS_IsString(mv)) {
+        const char *u = JS_ToCString(pend_ctx(), uv);
+        const char *m = JS_ToCString(pend_ctx(), mv);
+        CHECK(u != NULL && m != NULL, "engine: OOM naming an outstanding request");
+        pending_index_key(e, m, u);
+        JS_FreeCString(pend_ctx(), m);
+        JS_FreeCString(pend_ctx(), u);
+    }
+    JS_FreeValue(pend_ctx(), mv);
+    JS_FreeValue(pend_ctx(), uv);
 }
 
 void pending_set(JSValueConst e, int field, JSValue v)
@@ -301,6 +352,9 @@ void pending_set(JSValueConst e, int field, JSValue v)
     cow_engine_write_begin();
     pend_put(e, field, v);
     cow_engine_write_end();
+    /* OUTSIDE THE BRACKET, because the set is not the flow's state and no delta may capture it (pending_index.h
+       states the same rule this file's own header states for the register, one step stronger). */
+    pend_index_sync(e, field);
 }
 
 void pending_set_int(JSValueConst e, int field, int64_t v)
@@ -472,8 +526,15 @@ int pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld)
 void pending_remove(JSValue *reg, int i)
 {
     int n = pend_len(*reg);
+    JSValue gone;
     DCHECK(i >= 0 && i < n, "a pending entry was removed by an index its register does not hold");
     pend_atoms();
+    /* ONE FEWER REGISTER NAMES THIS RECORD, said BEFORE the slot is overwritten — after the swap-remove below
+       the entry at `i` is a different record and this register's naming of the removed one is unrecoverable.
+       A no-op for the three states pending_index.h names (answered, synchronous, already dropped). */
+    gone = pending_entry(*reg, i);
+    pending_index_unref(gone);
+    JS_FreeValue(pend_ctx(), gone);
     cow_engine_write_begin();
     if (i != n - 1)
         JS_SetPropertyUint32(pend_ctx(), *reg, (uint32_t)i,
@@ -490,6 +551,18 @@ void pending_remove(JSValue *reg, int i)
 
 void pending_free(JSContext *ctx, JSValue *reg)
 {
+    /* THE NAMINGS GO BACK BEFORE THE REGISTER DOES, AND THAT IS THE HALF THE INDEX CANNOT DERIVE. A flow SOLD
+       to the cold tier is released while it is still owed replies (the pager credits that debt and the host
+       still sends them), so without this line the request it was parked on would stay in the set the host is
+       shown for the rest of the session, and the zone would fetch an address no flow is parked on — a real
+       outbound request nobody is waiting for. A record several arms share survives here on their namings,
+       which is why this is a count and not a delete. */
+    int n = pend_len(*reg), i;
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(*reg, i);
+        pending_index_unref(e);
+        JS_FreeValue(ctx, e);
+    }
     JS_FreeValue(ctx, *reg);
     *reg = JS_UNDEFINED;
 }
@@ -596,8 +669,15 @@ JSValue pending_fork(JSValueConst reg)
     out = JS_NewArray(pend_ctx());
     CHECK(!JS_IsException(out), "engine: OOM inheriting the pending replies at a fork");
     cow_engine_write_begin();
-    for (i = 0; i < n; i++)
-        JS_SetPropertyUint32(pend_ctx(), out, (uint32_t)i, pending_entry(reg, i));
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        /* A SECOND REGISTER NAMES THIS RECORD FROM HERE ON, and the frontier's set counts registers rather than
+           records for exactly this: ONE record is one member of the outstanding set however many arms hold it
+           (pending_index.h), so the fork adds no request to the host's list and takes none away — it adds a
+           naming, and the record leaves the set only when the last of them is given back. */
+        pending_index_ref(e);
+        JS_SetPropertyUint32(pend_ctx(), out, (uint32_t)i, e);
+    }
     cow_engine_write_end();
     return out;
 }
@@ -605,7 +685,24 @@ JSValue pending_fork(JSValueConst reg)
 JSValue pending_unshare(JSValueConst reg, int i)
 {
     JSValue src = pending_entry(reg, i);
-    JSValue dst = pend_entry_copy(src);
+    JSValue dst;
+    /* THE ONE RECORD A FORK DOES NOT SHARE IS THE SYNCHRONOUS REQUEST'S, and this file may now say so rather
+       than leave it to three call sites to keep true. The frontier's outstanding set is keyed on (method, url)
+       and HOSTREQ is keyed on a request id, so a HOSTREQ record is never in that set — which is what makes this
+       copy free of it. A record of any OTHER kind reaching here would be a second, untracked twin of a request
+       the set still names through the original: the host would answer the original, and the arm holding the
+       copy would wait for the rest of the session with nothing anywhere to say so. */
+    DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ,
+           "a pending record that is not a synchronous host request was unshared — the three callers of this "
+           "are the rendezvous id and the peer's further answers, both of which are HOSTREQ, and a fetch record "
+           "copied here would leave the copy outside the frontier's outstanding set while the original still "
+           "answers for the address");
+    dst = pend_entry_copy(src);
+    /* THIS REGISTER STOPS NAMING THE ORIGINAL, so the naming goes back exactly as it does at a remove — the
+       count is over registers and this slot has just changed which record it holds. A no-op for the kind the
+       assert above admits, and the bookkeeping is written anyway because the count's correctness is a property
+       of every naming change and not of the kinds that happen to reach one. */
+    pending_index_unref(src);
     JS_FreeValue(pend_ctx(), src);
     cow_engine_write_begin();
     JS_SetPropertyUint32(pend_ctx(), reg, (uint32_t)i, JS_DupValue(pend_ctx(), dst));
