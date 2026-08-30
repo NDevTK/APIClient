@@ -310,13 +310,19 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
   for (const [, scheme] of Object.entries(securitySchemes)) {
     if (scheme.type === "oauth2") {
       if (!doc.auth) doc.auth = { oauth2: { scopes: {} } };
-      // OAS 3.x: flows object; Swagger 2.0: single flow with scopes at top level
-      const flows =
-        scheme.flows ||
-        (isSwagger2 && scheme.scopes
-          ? { [scheme.flow || "implicit"]: { scopes: scheme.scopes } }
-          : {});
-      for (const [, flow] of Object.entries(flows)) {
+      /* OAS 3.x states an oauth2 scheme's flows as a MAP KEYED BY FLOW NAME; Swagger 2.0 states one flow,
+         with `flow` naming it and `scopes` beside it. Both are collected here as the LIST this loop actually
+         consumes, because the flow NAME is read by nothing below — only `scopes` is. Keying a synthetic map
+         by `scheme.flow || "implicit"` therefore invented an OAuth flow name for a document that named none,
+         and invented the least restrictive of the four Swagger 2.0 flows at that, in a value no consumer
+         ever looked at. A record with no reader is not a place to put a guess; it is a place to put nothing.
+         `flows` off a third-party spec is refused rather than asserted (lib/field-def.js states that split):
+         a `flows` that is not a record names no flows, which is what an empty list says. */
+      const flowRecord = fdDocRecord(scheme.flows);
+      const flowList = flowRecord !== null
+        ? Object.values(flowRecord)
+        : (isSwagger2 && scheme.scopes ? [{ scopes: scheme.scopes }] : []);
+      for (const flow of flowList) {
         if (flow?.scopes) {
           for (const [scope, desc] of Object.entries(flow.scopes)) {
             doc.auth.oauth2.scopes[scope] = {
