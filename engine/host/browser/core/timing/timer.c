@@ -118,8 +118,15 @@
    TE_REPEAT is §8.7's `repeat` and TE_TIMEOUT is its `timeout` — the two arguments substep 9.11 hands back to
    the timer initialization steps. `repeat` is a BOOLEAN and not a period-versus-sentinel, because the sentinel
    it replaces (`every < 0` for a one-shot) made "there is no period" a NUMBER, and a period that may be
-   unknown external input has no number to be distinguishable from. */
-enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_NEST, TE_SEQ, TE_FN, TE_ARG0 };
+   unknown external input has no number to be distinguishable from.
+   TE_THIS IS §8.7's STEP 1 `thisArg`, AND IT IS ON THE ENTRY BECAUSE IT SAYS WHICH ALGORITHM QUEUED THE TASK.
+   Step 1 is "Let thisArg be global if that is a WorkerGlobalScope object; otherwise let thisArg be the
+   WindowProxy that corresponds to global", and substep 9.7 invokes the handler "with callback this value set
+   to thisArg". `run steps after a timeout` is a DIFFERENT algorithm reached through this same map, and it
+   states no this value at all — so its entries carry `undefined` here, and that is a positive statement rather
+   than a hole. Deriving it at the fire from the realm instead would give the same object for §8.7's entries
+   and would silently give it to the engine's own completion steps too, which is a claim no standard makes. */
+enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_THIS, TE_NEST, TE_SEQ, TE_FN, TE_ARG0 };
 
 static int      g_slot = -1;
 static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
@@ -432,9 +439,11 @@ static uint32_t timer_next_handle(JSContext *ctx)
    substep 9.11's re-performance, which reuses the identifier the page is still holding. A re-arm therefore
    REWRITES the map-of-IDs record in place (step 14's "Set global's map of setTimeout and setInterval IDs[id]
    to uniqueHandle" is a write on a key that already exists), and a `clearInterval` between the fire and the
-   re-arm has removed that key, which is what substep 9.9 checks before this is ever reached. */
+   re-arm has removed that key, which is what substep 9.9 checks before this is ever reached.
+   `this_arg` IS STEP 1's, BORROWED — the value substep 9.7 invokes the handler with, `undefined` for a caller
+   that is not the timer initialization steps. See TE_THIS. */
 static int timer_set(JSContext *ctx, JSValueConst timeout, int repeat, int nest, uint32_t prev_id,
-                     JSValueConst fn, int argc, JSValueConst *argv)
+                     JSValueConst this_arg, JSValueConst fn, int argc, JSValueConst *argv)
 {
     JSValue q, entry;
     uint32_t handle = prev_id ? prev_id : timer_next_handle(ctx), i, slot, n;
@@ -455,6 +464,7 @@ static int timer_set(JSContext *ctx, JSValueConst timeout, int repeat, int nest,
     }
     JS_SetPropertyUint32(ctx, entry, TE_REPEAT, JS_NewBool(ctx, repeat != 0));
     JS_SetPropertyUint32(ctx, entry, TE_TIMEOUT, JS_DupValue(ctx, timeout));
+    JS_SetPropertyUint32(ctx, entry, TE_THIS, JS_DupValue(ctx, this_arg));
     DCHECK(nest >= 0,
            "§8.7 Timers's step 11 was handed a NEGATIVE timer nesting level to set on the task this entry "
            "queues — step 10 increments from a level that is 0 at worst, so every value it can produce is "
@@ -575,7 +585,7 @@ void timer_clear_map(JSContext *ctx)
  * to the re-arm off the entry because there was no published one to read; now step 3 answers it.
  *
  * 9.7's "report" IS NOT PERFORMED AT 9.7 — see the residual named at TT_TAIL. */
-enum { TT_ARG_HANDLER = 0, TT_ARG_NEST, TT_ARG_ID, TT_ARG_REPEAT, TT_ARG_TIMEOUT, TT_ARG_N };
+enum { TT_ARG_HANDLER = 0, TT_ARG_THIS, TT_ARG_NEST, TT_ARG_ID, TT_ARG_REPEAT, TT_ARG_TIMEOUT, TT_ARG_N };
 
 #define TT_STAGES(X)                                                                                          \
     X(TT_INVOKE,                                                                                              \
@@ -644,9 +654,9 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
             STEP_CB_FOREACH(s->rcb, k) s->rcb[k] = JS_UNDEFINED;
             DCHECK(s->hdr.argc == TT_ARG_N,
                    "§8.7 Timers's step 9 task was queued with an argument count timer_run_due does not "
-                   "produce — the handler, its task's timer nesting level, and the `id`, `repeat` and "
-                   "`timeout` substep 9.11 hands back are placed together at the one site that queues it, so "
-                   "a different count means a second queuer exists");
+                   "produce — the handler, step 1's `thisArg`, its task's timer nesting level, and the `id`, "
+                   "`repeat` and `timeout` substep 9.11 hands back are placed together at the one site that "
+                   "queues it, so a different count means a second queuer exists");
             /* §8.1.7.3 Processing model step 2.5: "Set the event loop's currently running task to
                oldestTask." The level rode the map entry to here (see TE_NEST) precisely so this write can be
                made from what the SET decided rather than from what is firing.
@@ -663,9 +673,17 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                    "another's steps and the inner one's level is about to be attributed to the outer");
             event_loop_set_timer_nesting(ctx, nest);
         }
-        /* §8.7 step 9.7's invocation. `argc` is 0 for the reason the buffer is two slots — see TimerTask. */
-        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), handler, JS_UNDEFINED, 0, NULL, cb_result, &out,
-                          out_cb, out_argc);
+        /* §8.7 step 9.7's invocation. `argc` is 0 for the reason the buffer is two slots — see TimerTask.
+           THE RECEIVER IS STEP 1's `thisArg`, WHICH IS NOT THE GLOBAL — "otherwise let thisArg be the
+           WindowProxy that corresponds to global" — and the difference is one a page reads. A sloppy handler
+           is non-strict, so ECMAScript §10.2.1.2 OrdinaryCallBindThis would have replaced an `undefined`
+           receiver with the realm's globalThis anyway and the two agreed by accident; a STRICT handler keeps
+           what it is given, so `setTimeout(function(){ "use strict"; return this; })` answered `undefined`
+           where a browser answers the WindowProxy. It rode the entry from step 1 rather than being derived
+           here, because which value it is depends on the ALGORITHM that queued this task and not on the realm
+           the task is running in — see TE_THIS. */
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), handler, step_arg(&s->hdr, TT_ARG_THIS), 0, NULL,
+                          cb_result, &out, out_cb, out_argc);
         if (r > 0)
             return r;   /* PARKED ON THE PAGE'S CODE: the level stays published, which is the whole point */
         if ((r < 0) || JS_IsException(out)) {
@@ -836,7 +854,7 @@ int timer_run_due(JSContext *ctx)
     double seq = 0;
     int idx = -1, nest = 0, repeat = 0;
     JSContext *docctx = timer_earliest(ctx, &idx, &whenv, &seq);
-    JSValue q, e, fn, timeout;
+    JSValue q, e, fn, timeout, this_arg;
     uint32_t n, handle;
 
     if (!docctx)
@@ -884,8 +902,8 @@ int timer_run_due(JSContext *ctx)
     n = arr_len(docctx, e);
     DCHECK(n >= TE_ARG0,
            "an entry of §8.7 Timers's map of active timers is shorter than its own fixed head — the handle, "
-           "expiry, repeat, timeout, timer nesting level, insertion order and handler are all written at the "
-           "set, and the extra arguments HTML passes the callback are what follows them");
+           "expiry, repeat, timeout, thisArg, timer nesting level, insertion order and handler are all "
+           "written at the set, and the extra arguments HTML passes the callback are what follows them");
     n -= TE_ARG0;
     /* THE EXTRA ARGUMENTS ARE NOT THERE TO TAKE, and that is the declaration's statement rather than this
        one's: timer_init does not declare §8.7's `any... arguments` tail, so a non-variadic member's argument
@@ -920,6 +938,13 @@ int timer_run_due(JSContext *ctx)
        the sibling, which a plain C function firing a timer does not have. So nothing is computed from it here
        at all: it is carried, and the machine the task calls asks the question where a machine can. */
     timeout = JS_GetPropertyUint32(docctx, e, TE_TIMEOUT);
+    /* §8.7's STEP 1 `thisArg`, decided at the SET and carried to substep 9.7's invocation — see TE_THIS. */
+    this_arg = JS_GetPropertyUint32(docctx, e, TE_THIS);
+    DCHECK(JS_IsUndefined(this_arg) || window_proxy_is(this_arg),
+           "an entry of §8.7 Timers's map holds a step 1 `thisArg` that is neither a WindowProxy nor the "
+           "`undefined` `run steps after a timeout` leaves — step 1's two arms are a WorkerGlobalScope global "
+           "and \"the WindowProxy that corresponds to global\", and this engine installs §8.7's members on no "
+           "worker global, so a third value means a writer of this map skipped timer_set");
     JS_FreeValue(docctx, e);
     JS_FreeValue(docctx, q);
 
@@ -944,6 +969,7 @@ int timer_run_due(JSContext *ctx)
         idv = JS_NewUint32(docctx, handle);
         repv = JS_NewBool(docctx, repeat != 0);
         targ[TT_ARG_HANDLER] = fn;
+        targ[TT_ARG_THIS] = this_arg;
         targ[TT_ARG_NEST] = lvl;
         targ[TT_ARG_ID] = idv;
         targ[TT_ARG_REPEAT] = repv;
@@ -959,6 +985,7 @@ int timer_run_due(JSContext *ctx)
         JS_FreeValue(docctx, repv);
     }
     JS_FreeValue(docctx, timeout);
+    JS_FreeValue(docctx, this_arg);
     JS_FreeValue(docctx, fn);
 
     /* §8.7 Timers's `run steps after a timeout` STEP 4.5 — "Remove global's map of active timers[timerKey]",
@@ -1025,6 +1052,9 @@ int timer_run_due(JSContext *ctx)
 #define TI_MAGIC_REARM     2   /* substep 9.11: repeat true, previousId given at position 2 */
 
 #define TI_STAGES(X)                                                                                          \
+    X(TI_THISARG,                                                                                             \
+      "HTML §8.7 Timers timer initialization steps step 1 (let thisArg be global if that is a "                \
+      "WorkerGlobalScope object; otherwise let thisArg be the WindowProxy that corresponds to global)")       \
     X(TI_NESTING,                                                                                             \
       "HTML §8.7 Timers timer initialization steps step 3 (if the surrounding agent's event loop's currently " \
       "running task is a task that was created by this algorithm, then let nestingLevel be the task's timer "  \
@@ -1056,9 +1086,13 @@ static const char TI_STEP5_OP[] = "HTML §8.7 timer initialization steps step 5 
 /* WHAT THE MACHINE HOLDS ACROSS THE FORK: step 4's RESULT, which is the only thing the stage below needs and
    the one thing it must not recompute — recomputing it would re-ask a question this flow has already answered.
    `placed` is the byte a machine needs and its stage cannot give it (the first stage IS the entry stage, so
-   `stage == TI_NESTING` is true before anything has run): a zeroed JSValue is the INTEGER 0, not undefined
+   `stage == TI_THISARG` is true before anything has run): a zeroed JSValue is the INTEGER 0, not undefined
    (JS_TAG_INT is 0), so a visit walking `timeout` before its stage has written it would hand the fork a real
    value the page can see.
+   `this_arg` IS STEP 1'S ANSWER AND `has_this` IS ITS OWN `placed`, for the same reason `timeout` has one: the
+   value is OWNED (document_window_proxy answers a BORROWED reference and this takes its own, so the entry
+   built four stages later cannot depend on a proxy the realm might have replaced in between), and a zeroed
+   JSValue would be an integer the visit would hand a fork.
    `nest` IS STEP 3'S ANSWER AND `nested` IS ITS OWN `placed`, for the same reason and not for a weaker one: a
    zeroed `nest` is 0, which is a LEGITIMATE level (step 3's "Otherwise"), so a stage reading it before step 3
    ran would read a real answer to a question nobody asked and step 5 would silently never clamp. The two
@@ -1066,15 +1100,19 @@ static const char TI_STEP5_OP[] = "HTML §8.7 timer initialization steps step 5 
    able to say which of them its own arm has written. */
 typedef struct {
     JSValue timeout;
+    JSValue this_arg;
     int     nest;
     uint8_t placed;
     uint8_t nested;
+    uint8_t has_this;
 } TimerInitState;
 
 static void ti_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     TimerInitState *s = st;
 
+    if (s->has_this)
+        v->val(ctx, &s->this_arg);
     if (s->placed)
         v->val(ctx, &s->timeout);
 }
@@ -1124,6 +1162,34 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
     }
 
     STEP_DISPATCH(TI_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(TI_THISARG);
+    /* §8.7 step 1: "Let thisArg be global if that is a WorkerGlobalScope object; otherwise let thisArg be the
+       WindowProxy that corresponds to global." Substep 9.7 invokes the handler "with callback this value set
+       to thisArg", and this engine invoked it with `undefined` — which agreed with a browser only by accident,
+       because a SLOPPY function's undefined receiver is replaced by ECMAScript §10.2.1.2 OrdinaryCallBindThis
+       with the realm's globalThis, and almost every timer callback is sloppy. A strict one keeps what it is
+       given, and answered `undefined` where a browser answers the WindowProxy.
+       IT IS THE WindowProxy AND NOT THE GLOBAL, which is the half of step 1 that is easy to get wrong: `this`
+       inside a timer callback is the object HTML §7.2.3 The WindowProxy exotic object defines and that `window`
+       evaluates to, never the Window the realm's [[GlobalObject]] is. document_window_proxy answers exactly
+       that for this realm and is BORROWED, so the reference this state keeps is its own.
+       THE WORKER ARM IS ABSENT AND SAYS SO. §8.7's members are installed from core/platform.c's per-document
+       column and this engine has no WorkerGlobalScope, so step 1's first clause is unreachable; the day a
+       worker global gets them, the assert below is what fires. */
+    {
+        JSValueConst proxy = document_window_proxy(ctx);
+
+        DCHECK(window_proxy_is(proxy),
+               "§8.7's step 1 asked this realm for the WindowProxy that corresponds to its global and got "
+               "something that is not one — every realm §8.7's members are installed on is a Window's, and a "
+               "WorkerGlobalScope (step 1's other arm, which would be `thisArg` itself) is a global this "
+               "engine does not build");
+        s->this_arg = JS_DupValue(ctx, proxy);
+        s->has_this = 1;
+    }
+    STEP_GOTO(hdr->stage, TI_NESTING, NULL);
+    return JS_STEP_YIELD;
 
     STEP_ARM(TI_NESTING);
     /* §8.7 step 3: "If the surrounding agent's event loop's currently running task is a task that was created
@@ -1300,10 +1366,10 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
     return JS_STEP_YIELD;
 
     STEP_ARM(TI_SCHEDULE);
-    DCHECK(s->placed && s->nested,
-           "§8.7's timer initialization steps reached step 12 with no `timeout` or no `nestingLevel` — step 4 "
-           "and step 3 are their only writers and both stages precede this one, so an unwritten value means "
-           "this machine was entered at a stage it did not leave");
+    DCHECK(s->placed && s->nested && s->has_this,
+           "§8.7's timer initialization steps reached step 12 with no `timeout`, no `nestingLevel` or no "
+           "`thisArg` — steps 4, 3 and 1 are their only writers and all three stages precede this one, so an "
+           "unwritten value means this machine was entered at a stage it did not leave");
 
     /* THE STRING FORM IS A SCRIPT — compiled and run in global scope, which is the sink `setTimeout(str)` is
        known for. It is queued as a script flow (the path an injected <script> takes), never evaluated here:
@@ -1419,7 +1485,8 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        §8.7 STEP 15 IS THE RETURN AND IT IS WHAT SUBSTEP 9.11 RELIES ON: "Return id", which for the re-arm is
        step 2's `previousId` back again, so the identifier the page is holding keeps naming this timer. The
        task's own DCHECK reads that from the other end. */
-    *presult = JS_NewInt32(ctx, timer_set(ctx, s->timeout, repeat, s->nest + 1, prev_id, argv[0], 0, NULL));
+    *presult = JS_NewInt32(ctx, timer_set(ctx, s->timeout, repeat, s->nest + 1, prev_id, s->this_arg,
+                                          argv[0], 0, NULL));
     return JS_STEP_DONE;
     /* nothing is queued: the driver asks when the clock may move */
 }
@@ -1463,8 +1530,12 @@ int timer_after(JSContext *ctx, double ms, JSValueConst steps)
     {
         JSValue msv = JS_NewFloat64(ctx, ms);
         /* `repeat` FALSE and `previousId` 0 — "§8.7 Timers's completion steps are performed once; there is no
-           interval form of this", and this algorithm has no identifier map of its own to re-key into. */
-        int key = timer_set(ctx, msv, 0, 0, 0, steps, 0, NULL);
+           interval form of this", and this algorithm has no identifier map of its own to re-key into.
+           AND `thisArg` UNDEFINED, which is this algorithm's own silence rather than a value withheld: step 1
+           belongs to the timer initialization steps, and `run steps after a timeout` states no this value for
+           the completionSteps it performs. Handing them the WindowProxy anyway would be a claim no standard
+           makes, on the engine's own algorithms, in the one place nothing would ever notice it was wrong. */
+        int key = timer_set(ctx, msv, 0, 0, 0, JS_UNDEFINED, steps, 0, NULL);
         JS_FreeValue(ctx, msv);
         return key;
     }
