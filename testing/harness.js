@@ -1257,9 +1257,25 @@ async function cmdNetDiff(args) {
                 if (!cs || !Array.isArray(cs.params) || !cs.params.length) continue;
                 const pk = _paramKey(cs.method, cs.url);
                 let pm = _fcsParams.get(pk); if (!pm) { pm = new Map(); _fcsParams.set(pk, pm); }
+                /* WHERE EACH VALUE LANDED IS THE ENGINE'S STATEMENT, AND TWO CONSUMERS OF ONE PRODUCER
+                   DISAGREED ABOUT WHETHER IT IS GUARANTEED. lib/learn.js dispatches on this field and CRASHES
+                   on a spelling outside path/query/body, citing endpoint.c's three keys; this line defaulted
+                   the same field on the same record. endpoint.c settles it twice — `kv_add` DCHECKs the
+                   location at the MINT so no producer can add a param without answering, and the @H emission
+                   DCHECKs it again beside `ep_loc_name` before writing the key — so `location` is on every
+                   param and `|| "query"` was not reading an absence the producer can have. What it produced
+                   instead was a netdiff in which every path and body param printed as a query param: the BODY
+                   keys are the moat here (the {email,password} login shape), and they were being rendered as
+                   the one thing they are not. */
                 for (const p of cs.params) {
                   if (!p || !p.name) continue;
-                  let pe = pm.get(p.name); if (!pe) { pe = { loc: p.location || "query", vals: new Set() }; pm.set(p.name, pe); }
+                  DCHECK(p.location === "path" || p.location === "query" || p.location === "body",
+                         "an @H param arrived at netdiff with the location `" + p.location + "` — endpoint.c " +
+                         "asserts one of path/query/body at the mint AND at the emission, so a fourth " +
+                         "spelling is that seam broken and every param below would print as a query param, " +
+                         "which is exactly what the `|| \"query\"` here did to the body keys this " +
+                         "diagnostic exists to show (param=" + p.name + ")");
+                  let pe = pm.get(p.name); if (!pe) { pe = { loc: p.location, vals: new Set() }; pm.set(p.name, pe); }
                   if (Array.isArray(p.validValues)) for (const v of p.validValues) if (v != null && v !== "") pe.vals.add(v);
                 }
               }
@@ -1286,7 +1302,21 @@ async function cmdNetDiff(args) {
               let pm = _fcsParams.get(pk); if (!pm) { pm = new Map(); _fcsParams.set(pk, pm); }
               const addVals = (pe, o) => { const vv = o && (o._astValidValues || (o._exampleValue != null ? [o._exampleValue] : null)); if (Array.isArray(vv)) for (const v of vv) if (v != null && v !== "") pe.vals.add(v); };
               const params = m.parameters || {};
-              for (const pn in params) { const p = params[pn]; let pe = pm.get(pn); if (!pe) { pe = { loc: (p && p.location) || "query", vals: new Set() }; pm.set(pn, pe); } addVals(pe, p); }
+              /* THE SAME FIELD ONE PRODUCER LATER, AND THE SAME GUARANTEE. A VDD parameter under
+                 `resources.learned` is written by lib/learn.js alone, on four lines, and every one of them
+                 states `location` — the @H dispatch copies endpoint.c's, and the three live-traffic arms write
+                 "path"/"query"/"path" literally. (The probed bucket writes `parameters: {}` and puts its
+                 fields in the request SCHEMA, which is why this harvest reads only the learned bucket.) */
+              for (const pn in params) {
+                const p = params[pn];
+                DCHECK(!!p && (p.location === "path" || p.location === "query" || p.location === "body"),
+                       "a VDD learned parameter carries the location `" + (p && p.location) + "` — lib/learn.js " +
+                       "states one on every parameter it writes into `resources.learned`, so its absence is " +
+                       "that producer broken and the parameter would print here as a query param regardless " +
+                       "of where the code actually put it (param=" + pn + ")");
+                let pe = pm.get(pn); if (!pe) { pe = { loc: p.location, vals: new Set() }; pm.set(pn, pe); }
+                addVals(pe, p);
+              }
               let bodyProps = null; const req = m.request;
               if (req && req.$ref && doc.schemas && doc.schemas[req.$ref]) bodyProps = doc.schemas[req.$ref].properties;
               else if (req && req.properties) bodyProps = req.properties;
