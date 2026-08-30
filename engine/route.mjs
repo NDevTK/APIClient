@@ -338,6 +338,35 @@ async function service(e) {
   if (r !== STEP_DONE && r !== STEP_YIELD && r !== STEP_STALLED)
     fail(`qjs_step answered ${r}, which is none of DONE(0)/YIELD(2)/STALLED(3) — the ABI carries three codes ` +
          'and this zone branches on all three, so a fourth is a contract that moved under this driver');
+  /* THE NOTICES ARE DRAINED FIRST, BECAUSE ONE OF THEM PROVISIONS THE INSTANCE A REQUEST IN THE SAME ROUND
+     NAMES. The three host-facing registers are all filled by the ONE `qjs_step` above and the ABI orders none
+     of them against the others, so which this zone reads first is a decision this zone makes — and it is not a
+     free one. `navigable.create` is what puts a document into `engines`; `holderOf` below answers null for a
+     `windowproxy.get` naming a document whose create notice is still sitting unread. That read is then held as
+     unroutable, `paid` stays 0, and a round in which the engine is STALLED **on that very read** is handed to
+     `pumpUntil` as "a bill this zone will not pay" — which ends the phase, one round before the round that
+     would have paid it.
+     MEASURED, AND IT MADE THIS DRIVE BIMODAL ON ONE BUILD — which is what makes it a defect in the instrument
+     rather than a rough edge. `a`'s boot flow reaches `window.open` and the `w.length` beside it, and whether
+     those land in ONE `qjs_step` or two is decided by the cooperative quantum, which this host measures on the
+     WALL CLOCK (there is no CPU clock in a single-threaded wasm instance — see the `@QUANTUM` banner). So a
+     loaded machine decides which register fills first. Reading requests first, THREE runs of ONE frozen build
+     answered: 5 routed posts / 12 reads / a 7-byte residue with `@RESUMED 1`; then 31 posts / 144 reads / a
+     42-byte residue with `@RESUMED 2`; then 5 again. Six times the drive's depth, from one binary, with
+     nothing in the log to say which mode a run was in — an unroutable read was silent, and `a emitted 0 posts`
+     reads as an engine that did nothing rather than as this zone stopping one round early. A bisect run over
+     that column attributed the two modes to two REVISIONS. That is §Testing's artifact-of-HOW defect arriving
+     through a driver instead of through a clock, and it is the reason the ordering below is not a preference.
+     Draining notices first, four runs answered identically: 32 records routed into 46 deliveries, phase 1
+     always stalling on the `/resume` it is supposed to stall on. What still moves run to run is the number of
+     peer TIMELINES a question is answered by, which is a property of how much both documents forked and is the
+     kind of number this file already refuses to assert on.
+     NOTHING IS LOST BY DRAINING FIRST, and that is what makes this an ordering fix rather than a trade. A
+     notice is one-way and this zone either acts on it or fails; a request is re-reported every step, so no
+     order can drop one. What the order decides is only whether THIS round can discharge what it was asked, and
+     a round that can, must — otherwise the pump's terminator is reporting this zone's own reading order as the
+     engine's inability to proceed. */
+  await drainNotices(e);
   /* WHAT THIS ZONE PUT INTO `e` THIS ROUND — replies delivered, operations answered, completions relayed back,
      records handed over. Counted rather than assumed, because "the engine is owed something" and "this zone
      supplied it" are two facts and the pump's stall terminator is precisely their disagreement. */
@@ -409,7 +438,18 @@ async function service(e) {
          condition — measured before the thing it is about has happened. Unheld at the END of the drive is the
          real failure, and it is derived there, from reads that were never routed. */
       const holder = holderOf(op.split('\t')[1]);
-      if (!holder) { unheldReads.set(key, op); continue; }
+      /* AND IT IS SAID OUT LOUD. "Asked, and not routable YET" and "never asked" are two facts and this branch
+         reported neither — a silent `continue`, which is the absent-versus-zero defect built into the
+         instrument. The phase that ends on such a round prints what the ENGINE emitted, so a reader has no way
+         to tell an engine that did nothing from a zone holding an operation it could not place; that is
+         precisely how `a emitted 0 posts` was read as a collapse in the engine. One line per DISTINCT key,
+         because an unanswered request is re-reported on every step and a line per step would be a step count. */
+      if (!holder) {
+        if (!unheldReads.has(key))
+          console.log(`  [${e.tag}] cross-agent read HELD — no instance holds \`${op.split('\t')[1]}\` yet: ${op}`);
+        unheldReads.set(key, op);
+        continue;
+      }
       unheldReads.delete(key);
       reads.set(key, { asker: e.tag, op, world: op.split('\t')[2], answered: false, withheld: withholdReads,
                        /* WHICH PEER TIMELINES ANSWERED IT — the list this driver could not previously write,
@@ -477,7 +517,6 @@ async function service(e) {
     e.answer(id, { url: op.slice('document.fetch\t'.length), headers: "" }, HTML_B);
     paid++;
   }
-  await drainNotices(e);
   return { step: r, paid };
 }
 
@@ -713,6 +752,31 @@ if (phase1 === PUMP_DRAINED)
   fail("`a`'s frontier reported DONE in phase 1 while every one of its arms is parked on the `/resume` this " +
        'zone has not answered — a frontier with a flow suspended on an owed reply is STALLED (engine.h), so ' +
        'DONE here is those flows dropped with their continuations and phase 3 has nothing to resume');
+/* AND A STALL IS NAMED RATHER THAN ACCEPTED. This phase's contract is that `a` runs until it is owed the
+   `/resume` this zone withholds until phase 3, and a stall on anything else is this phase failing to reach the
+   state phase 3 measures — carried forward as a SMALLER NUMBER instead of as a failure, which is the shape
+   this file's own `fail` comment forbids ("a phase that cannot reach the state the next one measures has to
+   stop there rather than carry a half-built precondition into an assertion about something else").
+   ONE SHAPE OF STALL IS UNAMBIGUOUSLY THIS ZONE'S FAULT AND IS CHECKED FOR: a stall taken in a round where the
+   zone is HOLDING a cross-agent operation it could not route. The engine said "every member is parked on
+   something only the host can supply" and the host was, at that instant, holding one of those very things. It
+   cannot fire while the notices are drained first — the create that provisions the answering instance is acted
+   on before the request naming it is read — so a fire here is that ordering having been undone, or a genuinely
+   later create, and both are worth stopping on rather than folding into a post count. */
+if (phase1 === PUMP_STALLED && unheldReads.size)
+  fail(`\`a\` STALLED in phase 1 while this zone was holding ${unheldReads.size} cross-agent read(s) it could ` +
+       `not route: ${[...unheldReads.values()].join(' ; ')}. A stall is the engine saying "a bill this zone ` +
+       'will not pay", and this is a bill this zone had not managed to PRESENT — the instance that answers a ' +
+       'cross-agent read is provisioned by a `navigable.create` notice, so a round that reads the request ' +
+       "register before the notice register reports its own reading order as the engine's inability to proceed");
+/* WHAT `a` ENDED THIS PHASE OWED, PRINTED WHATEVER THE OUTCOME. A phase whose result is a COUNT of what the
+   engine emitted says nothing about why it stopped emitting, and the two stalls this phase can take — on the
+   withheld `/resume`, which is the intended one, and on anything else, which is not — produce the same number.
+   Both registers are pure listings (engine_pending_fetches and engine_host_requests rebuild their join from
+   the live flows), so reading them here settles nothing and consumes nothing. */
+console.log(`phase 1: \`a\` ${phase1}, owed ` +
+            `${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'} / ` +
+            `${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'}`);
 console.log(`a emitted ${posts.length} posts, worlds: ${posts.map((p) => p.world).join('  ')}`);
 
 /* PHASE 2 — one at a time, each delivered before the next is routed. Written as a routine because phase 4
