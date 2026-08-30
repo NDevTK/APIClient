@@ -602,13 +602,25 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
    `unsafe-none`, which is a legal value and would be indistinguishable from an answer. */
 OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy);
 
-/* HAS THIS NAVIGABLE'S ACTIVE DOCUMENT BEEN REPLACED BY A NAVIGATION — HTML §7.4.4 step 4's "document's IS
-   INITIAL about:blank", asked of the navigable because that is what can answer it. §7.4 creates every navigable
-   with the initial about:blank Document and window_proxy_navigate above is the ONE site that replaces it, so
-   `false` here plus an `about:blank` address IS the standard's fact. Testing the address alone is wrong in this
-   tree: §7.4 step 14's load navigates to `about:blank` for real, and that document is not the initial one.
+/* THE NEGATION OF HTML §3.1.1 "The Document object"'s "is initial about:blank", asked of the navigable because
+   a navigable still showing the Document §7.4 created it with has no realm to hold a Document-side field. §7.4
+   creates every navigable with that Document, so `false` here plus an `about:blank` address IS the standard's
+   fact. Testing the address alone is wrong in this tree: §7.4 step 14's load navigates to `about:blank` for
+   real, and that document is not the initial one.
+   THE NAME IS THE FIRST WRITER'S AND THE FLAG HAS TWO — window_proxy_navigate above, which replaces the active
+   document, and window_proxy_clear_initial_about_blank below, which replaces no document at all. Read this as
+   the standard's boolean, never as "was this navigable navigated", or the second writer reads as a lie.
    PER FLOW, through the same capture every other read of this record goes through. */
 bool window_proxy_ever_navigated(JSValueConst proxy);
+
+/* HTML §8.4.1 "Opening the input stream" step 13's "Set document's is initial about:blank to false" — the ONE
+   byte, and never routed through window_proxy_navigate: §8.4.1 replaces a Document's CONTENT while keeping the
+   same Document object, so every other row of the binding a navigation moves is unchanged here. PER FLOW, so
+   an arm whose script opened the document and a sibling standing on the unwritten page get different answers
+   out of §7.4.4 "Non-fragment synchronous \"navigations\"" step 4. Called for a navigable a PEER holds this
+   CRASHES: the flag is a fact about a Document in another agent's heap, and clearing it is a routed operation
+   rather than a local write. */
+void window_proxy_clear_initial_about_blank(JSValueConst proxy);
 
 /* HTML §7.3's "IS CREATED BY WEB CONTENT" for a top-level traversable — one of the two disjuncts of §7.2.2.1's
    SCRIPT-CLOSABLE, and the one that decides whether `w = open(...); w.close()` closes a window whose session

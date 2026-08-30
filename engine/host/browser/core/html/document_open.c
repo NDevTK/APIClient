@@ -110,19 +110,26 @@ static void erase_listeners_of(JSContext *ctx, lxb_dom_node_t *n)
     if (JS_IsObject(w)) event_target_erase_all(ctx, w);
 }
 
-/* HTML §3.1.1 "The Document object"'s "is initial about:blank" — "Each Document has an is initial about:blank,
-   which is a boolean, initially false" — read the way core/frame/window_proxy.h exposes it, as whether the
-   navigable has EVER been navigated. §7.4.4 "Non-fragment synchronous \"navigations\"" is where it is CLEARED
-   and not where it is declared, which is the number this comment carried until engine/citegen.mjs read the
-   standard's own definitions and said so. Two steps of these want it and they want opposite things from it: step 5
-   must not mistake an idle `about:blank` for a document mid-parse, and step 13 has to clear it and cannot. A
-   realm whose Document has no navigable at all answers false, which is the same answer for both: there is no
-   navigable holding an initial about:blank. */
-static bool open_ever_navigated(JSContext *realm)
+/* HTML §8.4.1 "Opening the input stream" STEP 13 — "Set document's is initial about:blank to false" — over the
+   storage core/frame/window_proxy.h keeps §3.1.1 "The Document object"'s flag in: a byte on the NAVIGABLE
+   holding the flag's negation, because a navigable's initial Document has no realm to hold one until something
+   reaches through it.
+   IT IS AN UNCONDITIONAL SET AND THAT IS THE WHOLE OF THE STEP. A DCHECK stood here asserting the flag was
+   ALREADY false, which asserted the negation of the case the step is written for: §7.4 creates every navigable
+   holding an initial `about:blank`, so a `document.write` into a fresh frame — the commonest arrival at these
+   steps on the real web — reaches step 13 with the flag SET, by construction rather than by accident.
+   A DOCUMENT WITH NO NAVIGABLE NEEDS NO WRITE, and that is §3.1.1's own initial value rather than a skipped
+   step: the flag is "a boolean, initially false", only §7.4's create-a-new-navigable ever makes one true, and a
+   Document that has no navigable was never handed one. A realm-less Document is the same statement one level
+   further out — this engine keeps a Document's Window, and therefore its navigable, in the realm. */
+static void open_clear_initial_about_blank(JSContext *realm)
 {
-    JSValueConst proxy = document_window_proxy(realm);
+    JSValueConst proxy;
 
-    return window_proxy_is(proxy) && window_proxy_ever_navigated(proxy);
+    if (realm == NULL) return;
+    proxy = document_window_proxy(realm);
+    if (!window_proxy_is(proxy)) return;
+    window_proxy_clear_initial_about_blank(proxy);
 }
 
 bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom)
@@ -287,18 +294,15 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
        object, which is a fact about the running SCRIPT and not about any realm a C member can reach; the
        engine's own flow machinery is what knows which document's program is executing. */
 
-    /* STEP 13 — "Set document's is initial about:blank to false." */
-    if (realm != NULL) {
-        DCHECK(open_ever_navigated(realm),
-               "§8.4.1 step 13 — the document open steps ran on a navigable that still holds its INITIAL "
-               "about:blank, and this engine cannot clear that flag: core/frame/navigable.c owns §3.1.1 \"The "
-               "Document object\"'s \"is initial about:blank\" and window_proxy_ever_navigated is a getter "
-               "with no setter beside it. "
-               "Leaving it set makes §7.2.4's location navigate choose \"replace\" for ever after — a page that "
-               "opens a window, writes into it and then navigates it loses the history entry the navigation "
-               "should have pushed. The setter belongs beside window_proxy_navigate, which is the one site "
-               "that clears it today");
-    }
+    /* STEP 13 — "Set document's is initial about:blank to false."
+       WHAT THE FLAG DECIDES ONCE IT IS FALSE is why this step is not bookkeeping: §7.4.4 "Non-fragment
+       synchronous \"navigations\""'s URL and history update steps read it at their step 4 ("if document's is
+       initial about:blank is true, then set historyHandling to \"replace\""), so a page that opens a window,
+       writes into it and then navigates it gets the history entry the navigation should push instead of a
+       replace for ever after; and §7.5.8 "Finishing the loading process" distinguishes at its step 3 the
+       initial `about:blank` Document of a frame — whose container is still null there — from a Document a load
+       produced, which is a `load` event fired or not fired. */
+    open_clear_initial_about_blank(realm);
 
     /* STEP 14 — "If document's iframe load in progress flag is set, then set document's mute iframe load
        flag." Both flags are §4.8.5 "The iframe element"'s, raised around the iframe load event steps, and this

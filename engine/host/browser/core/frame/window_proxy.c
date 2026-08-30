@@ -229,13 +229,22 @@ typedef struct {
        Held as ONE byte those two times collapsed into the removal's, so a frame's WindowProxy reported a
        destruction that had not happened — while its Document, its queued tasks and its entangled ports were
        all still live, with nothing anywhere holding the fact that they had not been dealt with. */
-    /* HAS THIS NAVIGABLE EVER BEEN NAVIGATED — HTML §7.4.4 step 4's "document's IS INITIAL about:blank", read
-       from the navigable's side, which is the side that can answer it. §7.4 creates EVERY navigable with the
-       initial about:blank Document, and the only thing that ever replaces a navigable's active document is a
-       navigation — window_proxy_navigate below, the one site — so a navigable that has not been navigated is
-       still showing the Document §7.4 created it with. The alternative, testing the document's ADDRESS, is
-       WRONG in this tree and not merely imprecise: navigable.c's load job navigates to `about:blank` for real
-       ("the corpus does it while an initial load is still pending"), and that document is not the initial one.
+    /* THE NEGATION OF HTML §3.1.1 "The Document object"'s "is initial about:blank" — "Each Document has an is
+       initial about:blank, which is a boolean, initially false" — held on the NAVIGABLE because a navigable
+       showing its initial Document has no realm to hold a Document-side field until something reaches through
+       it. §7.4.4 "Non-fragment synchronous \"navigations\"" step 4 and §7.1.3.2's group-switch check are two of
+       its readers; both ask the spec's flag, not this field's name. (§7.1.3.2 is "Browsing context group
+       switches due to opener policy".)
+       ITS NAME STATES THE FIRST WRITER AND THE FIELD IS BIGGER THAN THE NAME. §7.4 creates EVERY navigable with
+       the initial about:blank Document, and a navigation is the only thing that ever REPLACES a navigable's
+       active document — window_proxy_navigate below — so that write was for a while the whole of the flag. It
+       is not: §8.4.1 "Opening the input stream" step 13 sets the Document's flag false without replacing any
+       document at all, which is window_proxy_clear_initial_about_blank, and a `document.write` into a fresh
+       frame is the commonest arrival at it. TWO WRITERS, ONE FLAG — reading this field as "was navigated"
+       rather than as the standard's boolean is what would make that second write look like a lie.
+       The alternative storage, testing the document's ADDRESS, is WRONG in this tree and not merely imprecise:
+       navigable.c's load job navigates to `about:blank` for real ("the corpus does it while an initial load is
+       still pending"), and that document is not the initial one.
        PER-FLOW like everything else in this record: an arm that navigated the frame and a sibling that did not
        must not share the answer, which is what the capture in proxy_of gives it for free. */
     uint8_t ever_navigated;
@@ -697,6 +706,36 @@ bool window_proxy_ever_navigated(JSValueConst proxy)
 
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether its navigable has been navigated");
     return p->ever_navigated != 0;
+}
+
+/* HTML §8.4.1 "Opening the input stream" step 13's "Set document's is initial about:blank to false" — the
+ * flag's SECOND writer, and the reason the field's comment says the name is smaller than the field.
+ *
+ * IT IS NOT A NAVIGATION AND MUST NOT BE WRITTEN AS ONE. §8.4.1 replaces the Document's CONTENT while keeping
+ * the same Document object, so every other row of the binding window_proxy_navigate moves — the realm, the
+ * Window, the document id, the address, the origin, the environment's top-level pair, the opener policy — is
+ * unchanged, and routing this through that function would hand the navigable a second realm for a document it
+ * already has. This writes the one byte §8.4.1 names and nothing else.
+ *
+ * THROUGH proxy_of, so the write lands in the RUNNING FLOW'S delta: an arm whose script opened the document
+ * and a sibling standing on the unwritten page are two worlds, and §7.4.4 "Non-fragment synchronous
+ * \"navigations\"" step 4 must answer each of them its own way. */
+void window_proxy_clear_initial_about_blank(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§8.4.1 step 13 cleared the is-initial-about:blank of something that is not a WindowProxy");
+    /* A PEER'S NAVIGABLE CANNOT BE WRITTEN FROM HERE, for the reason window_proxy_opener_policy states on the
+       read side: the flag is a fact about the ACTIVE DOCUMENT and that document is another agent's heap.
+       §8.4.1 step 4's same-origin check makes this unreachable for a cross-ORIGIN document, so what would
+       arrive here is the same origin in another browsing-context group — which is a cross-instance OPERATION
+       (core/frame/remote_op.h) and not a local byte. */
+    DCHECK(world_doc_hosted(p->doc),
+           "§8.4.1 step 13 ran against a navigable in ANOTHER WASM instance — the document open steps replace "
+           "the content of a Document this agent does not hold, so the flag they clear lives in the peer's "
+           "record. ROUTE the open: the flow suspends here, the peer runs the document open steps on its own "
+           "Document in its own scheduled turn under this flow's world, and the flow resumes");
+    p->ever_navigated = 1;
 }
 
 /* §7.3's IS CREATED BY WEB CONTENT — see the field. Read off the opaque directly rather than through proxy_of:

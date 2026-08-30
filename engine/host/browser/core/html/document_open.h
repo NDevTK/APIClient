@@ -29,11 +29,12 @@
  * parser rather than in this record, and the two answers are compared at every entry so it crashes at the
  * flow that would have written into a sibling's parser instead of silently doing it.
  *
- * WHAT §8.4.1 STILL OWES, NAMED HERE BECAUSE THE STEPS THAT OWE IT ARE HERE. Step 8's "stop loading" of a
- * navigable with an ongoing navigation, and step 13's "set document's is initial about:blank to false", are
- * both writes to state core/frame/navigable.c owns and neither has an entry to call. Step 13 is asserted at
- * its site (a document whose navigable still holds its initial about:blank cannot be opened correctly);
- * step 8 has nothing to ask, and says so. */
+ * WHAT §8.4.1 STILL OWES, NAMED HERE BECAUSE THE STEP THAT OWES IT IS HERE. Step 8's "stop loading" of a
+ * navigable with an ongoing navigation is a write to state core/frame/navigable.c owns, and there is nothing
+ * there to ask: that file exposes neither a navigable's ongoing navigation nor a stop. It is named rather than
+ * approximated, because every approximation available is about the FLOW and the question is about the
+ * NAVIGABLE — it would show as a `document.open()` racing a navigation of the same navigable, whose document
+ * then arrives on top of the one these steps just built. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_DOCUMENT_OPEN_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_DOCUMENT_OPEN_H
 
