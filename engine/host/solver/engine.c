@@ -7997,12 +7997,55 @@ void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *ty
     run_scheduler(ctx, bodies, srcs, types, els, n, 1, recipes);
 }
 
+/* WHETHER THE FRONTIER HAS ALREADY GONE DOWN IN THIS TEARDOWN. It is not agent state and is deliberately not
+   declared as any: it is zero everywhere outside the window between the two calls below, and what it exists for
+   is that the window is the one place a host can put the browser half in the wrong half of it. */
+static int g_frontier_released;
+
+/* See solver/engine.h — THE FRONTIER, AND IT GOES DOWN WHILE THE BROWSER IS STILL STANDING. */
+void solver_frontier_free(JSContext *ctx)
+{
+    DCHECK(ctx != NULL, "the frontier was released against no realm — its flows hold JSValues and its deltas "
+                        "hold the writes those flows made, so there is a realm they belong to and a release "
+                        "with none would drop them against nothing");
+    DCHECK(!g_frontier_released,
+           "the frontier was released twice in one agent — the second call walks a registry the first already "
+           "freed, and every flow it would have named is one the first call already tore down");
+    /* THE @S SEARCHES GO BACK BEFORE THE FRONTIER, AND THE ORDER IS THE WHOLE OF WHY. A search takes a
+       reference on the DECISION CHAIN at the moment its sink is detected — add_pending's decide_freeze_path,
+       the re-injection point every later candidate is seeded from — and that reference is neither a flow's nor
+       the running flow's globals'. flow_registry_free ends in decide_free, whose `g_dec_seg_live == 0` is a
+       statement that every such reference has already been given back, and solve_free is the give-back: with
+       it AFTER, any session that detected a sink while standing on a non-empty decision path aborted the
+       renderer at teardown. That is every real page, because a page that has taken one branch before its first
+       tainted sink is the ordinary case rather than the corner — measured on testing/corpus/control, which
+       forks on `window.__FLAGS.admin` before its first markup sink and hit that assert on every run, while the
+       same sink with no branch in front of it froze an EMPTY path, held no segment, and completed.
+       IT IS THE SHAPE core/platform.h STATES AND THE ONE concolic_free's OWN ASSERT RELIES ON: the claimant
+       releases at its own release, and the holder asserts that it did — so the fix is the position of the
+       give-back, never a softer assert. Nothing in the frontier's teardown reads this file's store (flow_release
+       does not call solve_flow_end; the scheduler does), so the claim can be given back before it. */
+    solve_free();
+    flow_registry_free(ctx);
+    g_frontier_released = 1;
+}
+
 /* See solver/engine.h — the solver half's release column, in reverse dependency order. */
 void solver_agent_free(JSContext *ctx)
 {
     DCHECK(ctx != NULL, "the solver's agent state was released against no realm — the frontier's flows hold "
                         "JSValues and its deltas hold the writes those flows made, so there is a realm they "
                         "belong to and a release with none would drop them against nothing");
+    /* THE FRONTIER IS ALREADY GONE, AND IT WENT WHILE THE BROWSER WAS STILL STANDING — see solver_frontier_free
+       in solver/engine.h for the whole of why, and core/platform.c's own census assert for the other end of
+       it. Reaching here with the frontier live means a host ran this column where it used to be one call: the
+       lines below release the emission tables and the source registry, and the flows that would have been torn
+       down after them are suspended INSIDE browser components this agent's platform release has already
+       finished with. */
+    DCHECK(g_frontier_released,
+           "the solver's agent state was released with the FRONTIER STILL LIVE — a suspended flow is a live "
+           "activation of the browser, so its teardown re-enters the very components platform_agent_free has "
+           "already given back; call solver_frontier_free BEFORE platform_agent_free and this after it");
     /* NOTHING OF THE BROWSER HALF IS STILL REGISTERED HERE, AND THAT IS AN ORDERING STATEMENT RATHER THAN A
        TIDINESS ONE. Each of these slots holds a C function pointer INTO a browser component, and every browser
        component was released by platform_agent_free, which runs BEFORE this call — so a slot still set is the
@@ -8032,22 +8075,6 @@ void solver_agent_free(JSContext *ctx)
            "state was released — core/html/html_link.c claimed it at html_link_declare and gives it back at "
            "html_link_free, which html_element_free calls and core/dom/element.c drives from platform.h's "
            "release column, and that column runs in full before this one");
-    /* THE @S SEARCHES GO BACK BEFORE THE FRONTIER, AND THE ORDER IS THE WHOLE OF WHY. A search takes a
-       reference on the DECISION CHAIN at the moment its sink is detected — add_pending's decide_freeze_path,
-       the re-injection point every later candidate is seeded from — and that reference is neither a flow's nor
-       the running flow's globals'. flow_registry_free ends in decide_free, whose `g_dec_seg_live == 0` is a
-       statement that every such reference has already been given back, and solve_free is the give-back: with
-       it AFTER, any session that detected a sink while standing on a non-empty decision path aborted the
-       renderer at teardown. That is every real page, because a page that has taken one branch before its first
-       tainted sink is the ordinary case rather than the corner — measured on testing/corpus/control, which
-       forks on `window.__FLAGS.admin` before its first markup sink and hit that assert on every run, while the
-       same sink with no branch in front of it froze an EMPTY path, held no segment, and completed.
-       IT IS THE SHAPE core/platform.h STATES AND THE ONE concolic_free's OWN ASSERT RELIES ON: the claimant
-       releases at its own release, and the holder asserts that it did — so the fix is the position of the
-       give-back, never a softer assert. Nothing in the frontier's teardown reads this file's store (flow_release
-       does not call solve_flow_end; the scheduler does), so the claim can be given back before it. */
-    solve_free();
-    flow_registry_free(ctx);
     /* THE ORPHAN COUNTERS AND THE GENERATION THEY LAST WALKED AT, given back with the frontier they describe.
        The ordinal names an argument's source identity ({orphan7.arg0}) and the generation is a fact about ONE
        runtime's heap, so an agent that started a second session on top of the first would mint identities that
@@ -8077,5 +8104,10 @@ void solver_agent_free(JSContext *ctx)
        assert at its first line is a checked statement about ITS CLAIMANTS rather than about this component —
        and it names the one that did not finish out of the row, which is why nothing here has to list them. */
     concolic_free();
+    /* AND THE TEARDOWN WINDOW CLOSES. A host that takes a runtime down and brings another up per file runs many
+       agents in one process, so a latch left standing would make the NEXT agent's solver_agent_free read a
+       frontier release that belonged to the previous one — which is the exact question this pair exists to
+       ask, answered with a fact about a program that has already ended. */
+    g_frontier_released = 0;
 }
 

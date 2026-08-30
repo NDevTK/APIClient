@@ -1076,7 +1076,39 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap));
  * is reached through it (flow_registry_free already cascades the world registry, the decision chain, the path
  * constraint's pins, the cold tier and the pending register — it is this column in miniature and says so at
  * each line); the taint shadow next, because a shadow exists only because some flow wrote one; the emission
- * tables last, since they are read out of the result document long before any teardown runs. */
+ * tables last, since they are read out of the result document long before any teardown runs.
+ *
+ * AND THE FRONTIER IS NOT ON THIS CALL, BECAUSE IT DOES NOT BELONG ON THIS SIDE OF THE BROWSER'S OWN COLUMN —
+ * see solver_frontier_free below. */
 void solver_agent_free(JSContext *ctx);
+
+/* THE FRONTIER, RELEASED WHILE THE BROWSER IS STILL STANDING — the FIRST thing a host's teardown does, before
+ * core/platform.h's release column and therefore before this half's own.
+ *
+ * A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER, and that one sentence is the whole of the ordering. A
+ * flow's snapshot is its COW delta plus its suspended heap-frame chain, and that chain holds the STEP MACHINES
+ * of every continuation-holding builtin and every browser algorithm it is stopped inside — a §2.9 dispatch, a
+ * custom-element reaction, an IntersectionObserver delivery, HTML §8.1.4.6 Runtime script errors' report. Tearing one down runs each machine's
+ * `fini`, which is that COMPONENT's code reading that component's agent state. So releasing the browser half
+ * first is releasing a component while activations of it are still live, and the flows are then torn down
+ * against a platform that has already been given back.
+ *
+ * IT WAS MEASURED AS ONE ABORT AND IT IS A CLASS. §8.1.4.6 step 6.1 sets the global's in error reporting mode
+ * (HTML §8.1.3.3 Realms, settings objects, and global objects gives the flag to the GLOBAL, so the engine keeps it on the global under a
+ * private Symbol the AGENT owns); a flow parked inside the `error` event's own dispatch owes that flag back,
+ * and its `fini` is what gives it. With the platform released first, the Symbol is gone by then and the give-
+ * back asks for a key that no longer exists — an abort whose message named the OTHER state that leaves that
+ * component undeclared, "before report_exception_init ran", because `!ready` had two causes and one sentence.
+ * Every other component whose step machine's `fini` touches agent state is the same defect with no assert
+ * sharp enough to have said so.
+ *
+ * WHAT STAYS ON THE OTHER SIDE, AND WHY THE TWO CALLS ARE NOT ONE. The browser half CLAIMS slots in this half —
+ * §8.1.7's timer step, §8.1.7.3's in-parallel half, §13.2.7's document-load step, the wrapper census, the
+ * source registry's per-source encode sets — and a claimant releases at its own release, which is that column.
+ * So this half's own state must go AFTER the platform and the frontier must go BEFORE it: the browser's column
+ * sits between them, and neither end of this half can be moved to join the other. Each end asserts the other
+ * ran (solver_agent_free reads a latch this sets; core/platform.c asks the runtime's own step-machine census),
+ * so a host that collapses them back into one call aborts at the teardown naming which line to move. */
+void solver_frontier_free(JSContext *ctx);
 
 #endif

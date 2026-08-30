@@ -3539,6 +3539,11 @@ int main(int argc, char **argv)
         wpt_net_free();
     }
 
+    /* THE FRONTIER FIRST, BECAUSE A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER — solver/engine.h states
+       the whole of it, and THIS host is where it was measured: a file whose classic script completed abruptly
+       parked inside §8.1.4.6 step 6.2's `error` dispatch, and the flag its step 6.1 owes back is kept under a
+       private Symbol the platform release below frees, so the give-back asked for a key that was gone. */
+    solver_frontier_free(ctx);
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
     platform_agent_free();
     /* rendering, timer, message_port and event_target are ROWS on core/platform.h's release column now,

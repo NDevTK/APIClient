@@ -11510,6 +11510,11 @@ int main(int argc, char **argv) {
         : "FAIL: a statement this document makes went unanswered — the 0 rows above name which");
 
     free(js);
+    /* THE FRONTIER FIRST, BECAUSE A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER — solver/engine.h states
+       the whole of it. A flow's heap-frame chain holds the step machines of the browser algorithms it is
+       stopped inside, and tearing one down runs that component's own `fini` against that component's agent
+       state, which the platform release below has by then given back. */
+    solver_frontier_free(ctx);
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
     platform_agent_free();
 

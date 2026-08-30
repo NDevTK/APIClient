@@ -1173,6 +1173,11 @@ QJS_EXPORT void qjs_teardown(void)
        endpoint tables, the flow registry) and so was the collection, so the shipped engine aborted at teardown
        on `list_empty(&rt->gc_obj_list)` and every finding it had produced was discarded as a crashed
        instance's. MEASURED on the live harness: a page analysed to "No findings" for that reason alone. */
+    /* THE FRONTIER FIRST, BECAUSE A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER — solver/engine.h states
+       the whole of it. Every flow's heap-frame chain holds the step machines of the browser algorithms it is
+       stopped inside, and tearing one down runs that component's own `fini`; with the platform released first
+       those `fini`s read a class id, a private Symbol or a step id that has already been given back. */
+    solver_frontier_free(g_ctx);
     /* THE PLATFORM'S OWN LIST, UNDONE — every component's agent-lifetime release, in one call, so the next one
        to hold agent state is not a fourth copy of a list that has already drifted once. */
     platform_agent_free();

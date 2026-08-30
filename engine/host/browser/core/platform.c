@@ -1210,6 +1210,27 @@ void platform_agent_free(void)
     DCHECK(g_declared_in != NULL,
            "the platform was released in an agent that never declared it — there is nothing here to undo, and a "
            "host that reaches teardown without having reached platform_agent_init did not build this browser");
+    /* NOT ONE STEP MACHINE IS STILL LIVE, AND THIS IS THE PRECONDITION OF THE WHOLE COLUMN RATHER THAN OF ANY
+       ONE ROW. A suspended builtin's state is a live ACTIVATION of the component that owns it — a §2.9
+       dispatch, a custom-element reaction, an IntersectionObserver delivery, HTML §8.1.4.6 Runtime script
+       errors' report — and tearing one down runs that component's own `fini`, which reads that component's
+       agent state. So a machine that outlives this line is torn down against a component this loop has already
+       given back, and the read it makes is of a class id, a private Symbol or a step id that no longer exists.
+       IT IS ASKED HERE AND NOT AT EACH ROW BECAUSE IT IS ONE QUESTION. Every row is exposed to it and only the
+       rows whose machines happen to touch a freed value would ever say so — §8.1.4.6 step 6.1's error-reporting
+       -mode flag hangs off a private Symbol this column frees, so its give-back aborted, and it aborted through
+       a message about the OTHER state that leaves that component undeclared. Every component without an assert
+       that sharp had the same defect and nothing to report it.
+       IT IS THE RUNTIME'S OWN CENSUS AND NOT A QUESTION FOR THE SOLVER, which is what lets the browser half ask
+       it at all: `rt->step_census_n` is a fact about this runtime, and the frontier is merely the thing that
+       owns every machine in it (solver/flow.c asserts this same count is zero the instant the frontier is
+       gone). A host reaching here with machines live has run its teardown in the order that used to be
+       written — the platform before the frontier — and the fix is a MOVE, which is what this names. */
+    DCHECK(JS_StepMachineCount(g_declared_in) == 0,
+           "the platform's agent state is about to be released while STEP MACHINES are STILL LIVE — each is a "
+           "browser algorithm some flow is suspended inside, and its teardown runs that component's own `fini` "
+           "against state this column has already given back; release the frontier (solver_frontier_free) "
+           "BEFORE this call, and this half's own agent state after it");
     /* REVERSE DECLARATION ORDER, because the forward order is dependency order: a component declared after
        another may hold a value that component minted, so it must give it up first. */
     for (i = PLATFORM_N - 1; i >= 0; i--)
