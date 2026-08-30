@@ -864,7 +864,17 @@ function formFieldsToMap(rootFields) {
   while (queue.length > 0) {
     const { fields, target } = queue.shift();
     for (const f of fields) {
-      if (f.number === null || f.number === undefined) continue;
+      /* THE NUMBER IS THIS MAP'S KEY, SO IT IS ASSERTED WHERE IT BECOMES ONE. `_collectShallow` is the only
+         producer of these records and it states the wrapper's own `data-number` text or `null`, so `undefined`
+         is not a second spelling of "not numbered" — it is that producer having stopped writing the name, and
+         `|| f.number === undefined` was the hole that would have hidden it. A number this reader cannot trust
+         is not a rendering bug: it becomes a KEY of the outgoing request's field map, which is the one place
+         a wrong value is silently a request the researcher did not compose. */
+      DCHECK(f.number === null || typeof f.number === "string",
+             "a collected form field's `number` is neither the text its wrapper carries nor `null` — " +
+             "_collectShallow reads `data-number` and states its absence as `null`, so anything else here is " +
+             "that collector broken and this line would key the outgoing request's field map on it");
+      if (f.number === null) continue;
       if (f.type === "message" && f.children) {
         const sub = {};
         target[f.number] = sub;
@@ -949,9 +959,23 @@ function collectSingleField(rootWrapper) {
 function _collectShallow(wrapper, queue) {
   const name = wrapper.dataset.name;
   const type = wrapper.dataset.type;
-  const number = wrapper.dataset.number
-    ? parseInt(wrapper.dataset.number)
-    : null;
+  /* THE NUMBER IS THE TEXT THE BUILDER WROTE, AND ITS ABSENCE IS A STATEMENT — not a value to coerce one out
+     of. `FieldDef.number` (lib/field-def.js) is a string, a number, or `null` MEANING "this field is not
+     numbered", and the STRING spelling need not be numeric: lib/openapi-import.js takes it verbatim from an
+     imported spec's `x-field-numbers`, a file the researcher was handed, and `fdDocKey` refuses only the
+     non-scalars. `_buildFieldStep` writes `data-number` only where the record stated one, so by HTML §3.2.6.6
+     "Embedding custom non-visible data with the data-* attributes" — whose `dataset` IDL attribute "provides
+     convenient accessors for all the data-* attributes on an element" — an ABSENT attribute reads back as
+     `undefined` and IS that `null`, exactly and with nothing to guess.
+     `parseInt` ANSWERED THREE DIFFERENT QUESTIONS WITH ONE COERCION, and the damage is not cosmetic because
+     formFieldsToMap uses this value as a KEY of the outgoing request's field map. `"seven"` became `NaN` and
+     then the literal key `"NaN"` — so a non-numeric field was sent under a name no document ever used, and two
+     of them collided onto one key with the second overwriting the first. `"1e3"` became `1`, colliding with
+     the field the document genuinely numbered 1. And the truthiness test read a stated `""` as absence.
+     Reading the text as ITSELF also round-trips, which the coercion did not: every other reader in this file
+     already uses the number as a string key (`renderedTop.add(String(field.number))`, `initialData[field.number]`),
+     because a property key is a string however it was spelled. */
+  const number = wrapper.dataset.number === undefined ? null : wrapper.dataset.number;
   /* THE WRAPPER IS `_buildFieldStep`'s OWN PRODUCT, so a missing `data-label` is THIS FILE broken and not a
      producer being silent — it writes the record's `label` unconditionally, which lib/field-def.js requires
      every producer to state. `|| "optional"` stood here while that write was conditional, and it answered

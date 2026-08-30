@@ -116,6 +116,38 @@ function encodeFormToJson(rootFields) {
   return root;
 }
 
+/* THE WIRE TAG A COLLECTED FIELD CARRIES, or `null` when it carries none — ONE derivation for both protobuf
+   encoders below, because `!f.number` was answering three different questions with one truthiness test and
+   every answer it gave was an accident of coercion rather than a statement.
+   WHAT ARRIVES HERE. A collected field's `number` is the TEXT its form wrapper carries, or `null` meaning the
+   field is not numbered (lib/popup-form.js `_collectShallow`), which reproduces the FieldDef's own
+   `string | number | null` (lib/field-def.js). The string spelling is a document's, not ours:
+   lib/openapi-import.js takes it verbatim from an imported spec's `x-field-numbers` and lib/discovery.js
+   writes a schema property's `id` into the same name, so it is not guaranteed to spell a number at all.
+   WHAT A WIRE TAG IS. Protobuf Language Guide (proto 3), "Assigning Field Numbers": "You must give each field
+   in your message definition a number between 1 and 536,870,911". So exactly those spellings denote a tag, and
+   every other value denotes NONE — which is not this function inventing a rule but lib/field-def.js's own law
+   ("refusing yields the declared absent value, which is the true statement about it") applied where the value
+   is finally USED instead of where it was read. It must be a refusal and not an assert for the reason that
+   file gives: these bytes are a spec file the researcher was handed, and the trusted zone does not abort on
+   somebody else's input.
+   WHAT THE TRUTHINESS TEST GOT WRONG, all of it silent: it read `0` — not a field number under the guide
+   above — as the same "absent" as `null`, by luck rather than by rule; it let a non-numeric spelling through
+   as `NaN`, which `f.number - 1` turned into the array property `"NaN"` and `num << 3` into wire tag 0, a
+   body no decoder can read; and `"1e3"` would encode as tag 1, colliding with the field the document
+   genuinely numbered 1.
+   RESIDUAL — NOT COVERED: the refusal is invisible to the researcher. A field the Send panel rendered with a
+   `#seven` badge is dropped from the encoded body and nothing says so. WHAT THE NEXT DIFF BUILDS: a refusal
+   the send path SURFACES, so composing a protobuf body out of a document that named no wire tag reports which
+   field it could not carry instead of quietly carrying fewer. HOW ITS ABSENCE SHOWS: a protobuf or JSPB body
+   with a field missing whose number badge the panel displayed beside its input. */
+function pbFieldNumber(f) {
+  const n = f.number;
+  if (n === null || n === undefined) return null;
+  const v = typeof n === "number" ? n : (/^[0-9]+$/.test(String(n)) ? Number(n) : NaN);
+  return Number.isInteger(v) && v >= 1 && v <= 536870911 ? v : null;
+}
+
 /**
  * Encode form fields as a JSPB array (indexed by field number).
  */
@@ -128,7 +160,8 @@ function encodeFormToJspb(rootFields) {
   function buildOne(fields) {
     let mx = 0;
     for (const f of fields) {
-      if (f.number > mx) mx = f.number;
+      const n = pbFieldNumber(f);
+      if (n !== null && n > mx) mx = n;
     }
     return mx === 0 ? [] : new Array(mx).fill(null);
   }
@@ -137,8 +170,10 @@ function encodeFormToJspb(rootFields) {
   while (queue.length > 0) {
     const { fields, target } = queue.shift();
     for (const f of fields) {
-      if (!f.number) continue;
-      const targetIdx = f.number - 1;
+      const num = pbFieldNumber(f);
+      // A field with no wire tag has no slot in a JSPB array — the array IS indexed by field number.
+      if (num === null) continue;
+      const targetIdx = num - 1;
       if (f.type === "message" && f.label !== "repeated") {
         const sub = buildOne(f.children || []);
         target[targetIdx] = sub;
@@ -200,7 +235,10 @@ function encodeFormToProtobuf(fields) {
     let pushedSubFrame = false;
     while (top.i < top.fields.length) {
       const f = top.fields[top.i];
-      if (!f.number) { top.i++; continue; }
+      // The wire tag, once, for every branch below — the protobuf wire format IS tag-plus-value, so a field
+      // that carries no tag carries nothing this encoder can write.
+      const num = pbFieldNumber(f);
+      if (num === null) { top.i++; continue; }
       if (f.value == null && !(f.children && f.children.length)) { top.i++; continue; }
       if (f.label === "repeated" && Array.isArray(f.value)) {
         if (PACKABLE.has(f.type)) {
@@ -209,14 +247,14 @@ function encodeFormToProtobuf(fields) {
             innerParts.push(encodeSinglePbFieldRaw(f.type, v));
           }
           const packed = concatBytes.apply(null, innerParts.length ? innerParts : [new Uint8Array(0)]);
-          top.parts.push(pbEncodeLenField(f.number, packed));
+          top.parts.push(pbEncodeLenField(num, packed));
         } else {
           // Non-packable types (string, bytes, message): individual
           // tag+value pairs. The original passed children=null here,
           // so message-typed repeated fields fell through to the
           // string-coerce default; preserving that behavior.
           for (const v of f.value) {
-            top.parts.push(encodeSinglePbField(f.number, f.type, v));
+            top.parts.push(encodeSinglePbField(num, f.type, v));
           }
         }
         top.i++;
@@ -225,13 +263,13 @@ function encodeFormToProtobuf(fields) {
       if (f.type === "message" && f.children && f.children.length) {
         // Push sub-frame for nested message; parent waits at its
         // pending field number until the child returns its bytes.
-        top.pendingNum = f.number;
+        top.pendingNum = num;
         top.i++;
         stack.push({ fields: f.children, parts: [], i: 0, pendingNum: null });
         pushedSubFrame = true;
         break;
       }
-      top.parts.push(encodeSinglePbField(f.number, f.type, f.value));
+      top.parts.push(encodeSinglePbField(num, f.type, f.value));
       top.i++;
     }
     if (pushedSubFrame) continue;
