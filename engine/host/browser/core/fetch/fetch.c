@@ -90,7 +90,7 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
            "a request was owed to the host with no address — the reply seam is keyed on (method, url), so a "
            "request with neither names nothing the host can be asked for");
     DCHECK(req->method != NULL && *req->method,
-           "a request was owed to the host without stating its METHOD — Fetch §2.2 Requests gives every "
+           "a request was owed to the host without stating its METHOD — Fetch §2.2.5 "Requests" gives every "
            "request one (`GET` unless stated otherwise), so a component that reached this seam unnamed "
            "dropped a field rather than made a request that lacks it");
     /* AND ITS DESTINATION, ASSERTED HERE AS WELL AS AT THE PARK because THIS is where the component that
@@ -672,7 +672,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
         if (!JS_IsException(deliver)) {
             FetchRequest req;
             const char *m = JS_IsUndefined(method) ? NULL : JS_ToCString(ctx, method);
-            /* `GET` IS THE REQUEST'S OWN METHOD, NOT A HOLE FILLED HERE — Fetch §2.2 Requests: "A request has an
+            /* `GET` IS THE REQUEST'S OWN METHOD, NOT A HOLE FILLED HERE — Fetch §2.2.5 "Requests": "A request has an
                associated method (a method). Unless stated otherwise it is `GET`." The park is keyed on
                (method, url) now (solver/engine.h), so this is the one place that can state it and a request that
                reached the seam unnamed would collect another request's reply. It belongs on the Request record

@@ -535,7 +535,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
     {
         JSValue uv = JS_NewString(ctx, abs);
         CHECK(!JS_IsException(uv), "§4.6.8.20: OOM naming a preload for the endpoint surface");
-        /* §4.2.4.3's create-a-link-request sets no method, so it is Fetch §2.2 "Requests"' `GET`. STATED,
+        /* §4.2.4.3's create-a-link-request sets no method, so it is Fetch §2.2.5 "Requests"' `GET`. STATED,
            because the reply seam is keyed on the (method, url) pair. */
         endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
         JS_FreeValue(ctx, uv);

@@ -680,7 +680,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         data[2] = gv;
         deliver = JS_NewCFunctionData(ctx, img_deliver, 1, 0, 3, data);
         CHECK(!JS_IsException(deliver), "§4.8.4.3.5: OOM allocating an image reply's processResponse steps");
-        /* §4.8.4.3.5 creates the request and never sets a method, so it is Fetch §2.2 "Requests"'s `GET`.
+        /* §4.8.4.3.5 creates the request and never sets a method, so it is Fetch §2.2.5 "Requests"'s `GET`.
            STATED, because the reply seam is keyed on the (method, url) pair and a park that does not say is a
            park the host's join cannot list.
            §4.8.4.3.5's "If the element USES SRCSET OR PICTURE, set request's INITIATOR to `imageset`" writes a
