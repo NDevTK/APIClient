@@ -1743,6 +1743,32 @@ function _recordProbeHit(msg, facts) {
 }
 
 
+/* THE WIRE HALF OF THE MULTIPART BODY-PART CONTRACT lib/popup-mp.js states in full. Same record, `editor`
+   flattened into `body`+`kind`; the popup asserts it on the way out and this asserts it on the way in,
+   because sendMessage is where a producer that stopped writing a field would otherwise become an envelope
+   with a plausible header in it. Each read below is a value the OPERATOR composed, so there is nothing this
+   side could substitute that would not be a request they did not make. */
+function _checkWirePart(p, index) {
+  const at = "multipart part index " + index + " of a Send-panel export";
+  DCHECK(!!p && typeof p === "object", at + " is not an object");
+  DCHECK(typeof p.contentType === "string",
+         at + " carries no contentType string — the EMPTY string is how the popup says the part declares no " +
+         "type (RFC 2046 §5.1.1 Common Syntax), so an absent field is a producer that stopped writing it");
+  DCHECK(typeof p.body === "string",
+         at + " carries no body string — the per-part editor's value IS the body, and an absent one is a " +
+         "body the operator typed that this envelope would carry none of");
+  DCHECK((p.method === null) === (p.path === null),
+         at + " has method and path disagreeing about whether it is an embedded HTTP sub-request — the popup " +
+         "writes them together or writes neither");
+  DCHECK(p.method === null || (typeof p.method === "string" && typeof p.path === "string"),
+         at + " has a non-string method/path");
+  DCHECK(p.contentId === null || typeof p.contentId === "string",
+         at + " has a contentId that is neither a string nor the null stating the part carried no Content-ID");
+  DCHECK(!!p.extraHeaders && typeof p.extraHeaders === "object",
+         at + " carries no extraHeaders object — the popup writes one for every part (empty when the part " +
+         "had nothing beyond Content-Type), so an absent one is headers this envelope would drop");
+}
+
 async function buildExportRequest(msg) {
   let parsedUrl;
   try {
@@ -1791,32 +1817,52 @@ async function buildExportRequest(msg) {
       return docEntry.doc.resources?.learned?.methods?.[mName];
     })();
 
-    if (msg.body.mode === "multipart" && Array.isArray(msg.body.parts)) {
-      // Generic multipart reassembly: N editable parts → multipart envelope
-      // with a fresh boundary. Each part carries its own Content-Type chosen
-      // by the user in the per-part editor. No data is dropped even when
-      // sub-parts use different formats (JSON, GraphQL, form-urlencoded,
-      // raw) — the contextual editor produced the body string already.
+    if (msg.body.mode === "multipart") {
+      /* Generic multipart reassembly: N editable parts → multipart envelope with a fresh boundary. Each part
+         carries its own Content-Type chosen by the operator in the per-part editor. No data is dropped even
+         when sub-parts use different formats (JSON, GraphQL, form-urlencoded, raw) — the contextual editor
+         produced the body string already.
+
+         `mode` IS THE STATEMENT AND `parts` IS NOT A SECOND ONE. `&& Array.isArray(msg.body.parts)` stood in
+         this condition, so a popup that said multipart and sent no array fell through to the arms below and
+         encoded the request as something else entirely — a body mode silently reinterpreted, which is
+         precisely the substitution these reads exist to prevent. lib/popup-mp.js's mpCollectBody writes the
+         array with the mode, so the two disagreeing is a broken producer and says so. */
+      DCHECK(Array.isArray(msg.body.parts),
+             "the Send panel declared body.mode=multipart and sent no parts array — mpCollectBody writes the " +
+             "two together, and reading their disagreement as a different body mode encodes a request the " +
+             "operator did not compose");
       const boundary = "uasr_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
-      const sections = msg.body.parts.map((p) => {
-        const h = ["Content-Type: " + (p.contentType || "application/octet-stream")];
-        if (p.contentId) h.push("Content-ID: <" + p.contentId + ">");
-        if (p.extraHeaders) {
-          for (const [hk, hv] of Object.entries(p.extraHeaders)) {
-            const lk = hk.toLowerCase();
-            if (lk === "content-type" || lk === "content-id") continue;
-            h.push(hk + ": " + hv);
-          }
+      const sections = msg.body.parts.map((p, _pi) => {
+        _checkWirePart(p, _pi);
+        /* AN EMPTY Content-Type IS THE PART DECLARING NO TYPE, AND IT IS REPRODUCED BY OMITTING THE HEADER.
+           RFC 2046 §5.1.1 Common Syntax: "If no Content-Type field is present it is assumed to be
+           `message/rfc822` in a `multipart/digest` and `text/plain` otherwise" — so `|| "application/
+           octet-stream"` did not fill a gap, it asserted the OPPOSITE of the RFC's own default onto a part
+           the page had sent with no header at all, in the one request that exists to replay what the page
+           sent. */
+        const h = [];
+        if (p.contentType !== "") h.push("Content-Type: " + p.contentType);
+        if (p.contentId !== null) h.push("Content-ID: <" + p.contentId + ">");
+        for (const [hk, hv] of Object.entries(p.extraHeaders)) {
+          const lk = hk.toLowerCase();
+          if (lk === "content-type" || lk === "content-id") continue;
+          h.push(hk + ": " + hv);
         }
         // If the part represents an embedded HTTP sub-request (Google batch
         // pattern: `application/http` parts), keep the embedded request line.
         // Otherwise the part body is raw and we just attach it.
-        let sectionBody = p.body || "";
-        if ((p.contentType || "").toLowerCase().startsWith("application/http") && p.method && p.path) {
+        let sectionBody = p.body;
+        /* `method === null` is the part stating it is not an embedded sub-request — the popup writes method
+           and path together or writes neither, so this reads one fact rather than two truthiness tests. */
+        if (p.contentType.toLowerCase().startsWith("application/http") && p.method !== null) {
           sectionBody = p.method + " " + p.path + " HTTP/1.1\r\n" +
             "Content-Type: application/json\r\n\r\n" + sectionBody;
         }
-        return h.join("\r\n") + "\r\n\r\n" + sectionBody;
+        /* A part with no headers at all is still separated from its body by the blank line RFC 2046 §5.1.1
+           requires: the boundary is "terminated by either another CRLF and the header fields for the next
+           part, or by two CRLFs, in which case there are no header fields for the next part". */
+        return h.length ? h.join("\r\n") + "\r\n\r\n" + sectionBody : "\r\n" + sectionBody;
       });
       body = "--" + boundary + "\r\n" + sections.join("\r\n--" + boundary + "\r\n") + "\r\n--" + boundary + "--";
       headers["Content-Type"] = "multipart/mixed; boundary=" + boundary;

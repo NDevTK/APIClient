@@ -15,8 +15,62 @@
 // Structure is preserved: N input parts → N output parts, each encoded per
 // its chosen editor. No information is silently lost.
 
+/* THE MULTIPART BODY-PART RECORD — ONE CONTRACT, THREE HOPS, STATED HERE AND ASSERTED AT EACH HOP.
+ *
+ * A part is minted by exactly three producers — parseMultipartBatchRequest's per-sub-request results, the
+ * generic boundary split below, and the Send panel's "+ Part" button — is then edited IN PLACE by the card's
+ * inputs, and is finally serialized by mpCollectBody into the record the offscreen's reassembly reads. Every
+ * one of those producers writes EVERY field of the shape below, so a reader that fills a hole with `||` is
+ * not tolerating an omission that happens: it is substituting for a value the OPERATOR chose, in a request
+ * whose entire purpose is to reproduce one the page made, and the substitution is invisible in the envelope
+ * that goes out. That is why the contract is asserted rather than defended against.
+ *
+ * `contentType` is the field that made this worth stating, because it is the one whose EMPTY value is a real
+ * state rather than a hole. An empty string is a POSITIVE STATEMENT — this part declares no Content-Type,
+ * either because the captured part carried no such header or because the operator cleared the box — and RFC
+ * 2046 §5.1.1 Common Syntax says exactly what that means on the wire: "If no Content-Type field is present
+ * it is assumed to be `message/rfc822` in a `multipart/digest` and `text/plain` otherwise". So the absence is
+ * REPRODUCED (the header is omitted and the receiver applies that default), never filled. Filling it with
+ * `application/octet-stream` — which both the loader and the reassembly did, independently — asserted the
+ * OPPOSITE of the RFC's own default, and did it in the one place that is meant to be a faithful replay.
+ *
+ * HOW ITS ABSENCE WOULD SHOW, had these asserts not existed: a captured part with no Content-Type header
+ * comes back from the Send panel carrying one, and a server that branches on the part type answers a request
+ * the page never made.
+ */
+function _mpCheckPart(p, where) {
+  DCHECK(!!p && typeof p === "object", "a multipart part is not an object " + where);
+  DCHECK(typeof p.partNumber === "number" && p.partNumber > 0,
+         "a multipart part reached " + where + " with no partNumber — every producer numbers its parts, and " +
+         "the number is what the card and the operator refer to the part by");
+  /* PAIRED, not independently optional: both come out of one request-line match in the batch parser, and the
+     generic split writes both null. A part with a method and no path is a parser that half-matched. */
+  DCHECK((p.method === null) === (p.path === null),
+         "a multipart part reached " + where + " with method and path disagreeing about whether it is an " +
+         "embedded HTTP sub-request — they are matched together or not at all");
+  DCHECK(p.method === null || (typeof p.method === "string" && typeof p.path === "string"),
+         "a multipart part reached " + where + " with a non-string method/path");
+  DCHECK(typeof p.contentType === "string",
+         "a multipart part reached " + where + " with no contentType string — empty IS the value when the " +
+         "part declares no type (RFC 2046 §5.1.1 Common Syntax), so an absent field is a broken producer");
+  DCHECK(!!p.extraHeaders && typeof p.extraHeaders === "object",
+         "a multipart part reached " + where + " with no extraHeaders object — every producer writes one " +
+         "(empty when the part had no headers beyond Content-Type)");
+  DCHECK(p.contentId === null || typeof p.contentId === "string",
+         "a multipart part reached " + where + " with a contentId that is neither a string nor the null that " +
+         "states the part carried no Content-ID");
+  DCHECK(!!p.editor && typeof p.editor === "object" && typeof p.editor.kind === "string" &&
+         typeof p.editor.value === "string",
+         "a multipart part reached " + where + " with no editor {kind,value} — the editor's value IS the " +
+         "part body, so an absent one is a body the operator typed and this panel would send none of");
+}
+
 function mpClassifyPartBody(ct, bodyText) {
-  const lct = (ct || "").toLowerCase();
+  /* Both operands are the part record's own fields, so both are strings by the contract above; the empty
+     Content-Type falls through to "raw", which is the right editor for a part that declares no type. */
+  DCHECK(typeof ct === "string" && typeof bodyText === "string",
+         "mpClassifyPartBody was asked to classify a part whose Content-Type or body is not a string");
+  const lct = ct.toLowerCase();
   if (lct.includes("graphql") || lct.includes("application/json")) {
     // Distinguish JSON-GraphQL from plain JSON by probing for op structure.
     if (lct.includes("graphql")) return "graphql";
@@ -52,7 +106,19 @@ function mpLoadFromCapturedRequest(req) {
   if (batchParts && batchParts.length) {
     for (let i = 0; i < batchParts.length; i++) {
       const bp = batchParts[i];
-      const partCt = bp.headers["content-type"] || "application/octet-stream";
+      /* THE PARSER'S OWN CONTRACT, ASSERTED WHERE IT IS ADOPTED. parseMultipartBatchRequest writes all five
+         names on every result it returns — `contentId` already as the string-or-null this record wants — so
+         re-stating `|| null` here was a SECOND spelling of a decision the parser had already made, and the
+         one place where a parser that stopped writing the field would have gone unnoticed. */
+      DCHECK(typeof bp.method === "string" && typeof bp.path === "string" &&
+             !!bp.headers && typeof bp.headers === "object" && typeof bp.body === "string" &&
+             (bp.contentId === null || typeof bp.contentId === "string"),
+             "parseMultipartBatchRequest returned a sub-request that is not {method,path,headers,body," +
+             "contentId} — the Send panel adopts those five names as a part and can substitute for none of them");
+      /* AN ABSENT PART Content-Type IS REPRODUCED AS ABSENT (""), never stamped. See the record contract above:
+         RFC 2046 §5.1.1 Common Syntax makes a typeless body part text/plain, and octet-stream said the
+         opposite about a part the page sent with no header at all. */
+      const partCt = "content-type" in bp.headers ? bp.headers["content-type"] : "";
       const kind = mpClassifyPartBody(partCt, bp.body);
       parts.push({
         partNumber: i + 1,
@@ -60,7 +126,7 @@ function mpLoadFromCapturedRequest(req) {
         path: bp.path,
         contentType: partCt,
         extraHeaders: { ...bp.headers },
-        contentId: bp.contentId || null,
+        contentId: bp.contentId,
         editor: { kind, value: bp.body, meta: null },
       });
     }
@@ -80,7 +146,7 @@ function mpLoadFromCapturedRequest(req) {
         const ci = line.indexOf(":");
         if (ci > 0) headers[line.slice(0, ci).trim().toLowerCase()] = line.slice(ci + 1).trim();
       }
-      const partCt = headers["content-type"] || "application/octet-stream";
+      const partCt = "content-type" in headers ? headers["content-type"] : "";   // absent stays absent — RFC 2046 §5.1.1
       const kind = mpClassifyPartBody(partCt, bodyBlock);
       parts.push({
         partNumber: ++idx,
@@ -94,6 +160,7 @@ function mpLoadFromCapturedRequest(req) {
     }
   }
 
+  for (const p of parts) _mpCheckPart(p, "out of mpLoadFromCapturedRequest");
   mpState = { boundary, parts };
   mpRenderAll();
   return parts.length > 0;
@@ -123,6 +190,7 @@ function mpRenderPart(index) {
 // delegate reads the index and invokes the renderer in a fresh task.
 function _mpBuildPartCard(index) {
   const p = mpState.parts[index];
+  _mpCheckPart(p, "at the part card for index " + index);
   const card = document.createElement("div");
   card.className = "mp-part-card";
   card.dataset.mpPartIdx = String(index);
@@ -131,7 +199,7 @@ function _mpBuildPartCard(index) {
   head.className = "mp-part-head";
   head.innerHTML =
     '<span class="mp-part-num">Part ' + esc(String(p.partNumber)) + '</span>' +
-    (p.method ? ' <span class="badge">' + esc(p.method) + ' ' + esc(p.path || "") + '</span>' : '') +
+    (p.method !== null ? ' <span class="badge">' + esc(p.method) + ' ' + esc(p.path) + '</span>' : '') +
     ' <span class="mp-part-kind">[' + esc(p.editor.kind) + ']</span>';
   const del = document.createElement("button");
   del.className = "btn-small mp-part-del";
@@ -174,11 +242,18 @@ function mpJsonEditor(part) {
   const ta = document.createElement("textarea");
   ta.className = "mp-json-editor";
   ta.rows = 6;
-  // Pretty-print on load if valid JSON.
-  try {
-    const obj = JSON.parse(part.editor.value || "null");
-    ta.value = JSON.stringify(obj, null, 2);
-  } catch (_) { ta.value = part.editor.value || ""; }
+  /* Pretty-print on load if valid JSON. AN EMPTY PART BODY IS EMPTY, not `null`: `|| "null"` here parsed the
+     empty string as the JSON literal and pretty-printed the word "null" into the box, which the first
+     keystroke then committed as the part's body — a value nothing observed, typed into a request meant to
+     reproduce one the page made. */
+  if (part.editor.value === "") {
+    ta.value = "";
+  } else {
+    try {
+      const obj = JSON.parse(part.editor.value);
+      ta.value = JSON.stringify(obj, null, 2);
+    } catch (_) { ta.value = part.editor.value; }
+  }
   const status = document.createElement("span");
   status.className = "mp-json-status";
   status.textContent = "valid JSON";
@@ -196,7 +271,9 @@ function mpGraphqlEditor(part) {
   const wrap = document.createElement("div");
   // Parse current value as GraphQL envelope to split query/variables/operationName.
   let parsed = null;
-  try { parsed = parseGraphQLRequest(part.editor.value || "{}"); }
+  /* `|| "{}"` handed the parser a fabricated empty envelope for an empty part body; an empty body simply has
+     no operations to split, which is what the `op` fallback below already says. */
+  try { parsed = part.editor.value === "" ? null : parseGraphQLRequest(part.editor.value); }
   catch (e) {
     // The body might not be a GraphQL request at all (user typing free-form
     // before structured editing kicks in) — that's expected and routes through
@@ -206,7 +283,7 @@ function mpGraphqlEditor(part) {
     // common "free-form input" case (parseGraphQLRequest returns null there).
     console.debug("[popup:gql_editor] parseGraphQLRequest threw:", e && e.message || e);
   }
-  const op = parsed?.operations?.[0] || { query: part.editor.value || "", variables: null, operationName: null };
+  const op = parsed?.operations?.[0] || { query: part.editor.value, variables: null, operationName: null };
 
   function field(label, value, rows) {
     const row = document.createElement("div");
@@ -244,7 +321,7 @@ function mpGraphqlEditor(part) {
 function mpFormUrlEncodedEditor(part) {
   const wrap = document.createElement("div");
   wrap.className = "mp-fue-editor";
-  const params = new URLSearchParams(part.editor.value || "");
+  const params = new URLSearchParams(part.editor.value);
   function serialize() {
     const out = new URLSearchParams();
     for (const row of wrap.querySelectorAll(".mp-fue-row")) {
@@ -276,31 +353,41 @@ function mpRawEditor(part) {
   const wrap = document.createElement("div");
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = "No typed editor for Content-Type " + part.contentType + "; editing as raw text.";
+  /* The typeless part gets told what it IS rather than shown a blank where a media type would be — the two
+     states reach this editor by the same route and would otherwise read as one. */
+  hint.textContent = part.contentType === ""
+    ? "This part declares no Content-Type (RFC 2046 §5.1.1 makes it text/plain); editing as raw text."
+    : "No typed editor for Content-Type " + part.contentType + "; editing as raw text.";
   const ta = document.createElement("textarea");
   ta.rows = 6;
-  ta.value = part.editor.value || "";
+  ta.value = part.editor.value;
   ta.oninput = () => { part.editor.value = ta.value; };
   wrap.appendChild(hint);
   wrap.appendChild(ta);
   return wrap;
 }
 
-// Serialize mpState into the payload buildExportRequest expects for
-// body.mode = "multipart". The background.js handler encodes the envelope
-// with a fresh boundary.
+/* Serialize mpState into the WIRE part record buildExportRequest reassembles: the editor-side record above
+   with `editor` flattened into `body`+`kind`, and NOTHING ELSE changed. This is the last place the popup can
+   state the contract before it crosses sendMessage, so it states it in full for every part — including the
+   empty `contentType` that says the part declares no type, which the reassembly reproduces by omitting the
+   header rather than by choosing one. `extraHeaders || {}` stood here and was the same substitution one hop
+   early: every producer writes the object, so the `||` could only ever have hidden one that stopped. */
 function mpCollectBody() {
   return {
     mode: "multipart",
-    parts: mpState.parts.map(p => ({
-      contentType: p.contentType,
-      method: p.method,
-      path: p.path,
-      extraHeaders: p.extraHeaders || {},
-      contentId: p.contentId,
-      body: p.editor.value,
-      kind: p.editor.kind,
-    })),
+    parts: mpState.parts.map((p, i) => {
+      _mpCheckPart(p, "on its way onto the wire (part index " + i + ")");
+      return {
+        contentType: p.contentType,
+        method: p.method,
+        path: p.path,
+        extraHeaders: p.extraHeaders,
+        contentId: p.contentId,
+        body: p.editor.value,
+        kind: p.editor.kind,
+      };
+    }),
   };
 }
 
