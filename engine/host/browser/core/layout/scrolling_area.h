@@ -24,6 +24,17 @@
  * core/layout/used_value.h answers which, per element, and crashes for the cases it does not decide, so this
  * component states the test and owns none of it.
  *
+ * A DESCENDANT'S BOX IS REACHED TWO WAYS, BECAUSE ONE OF THEM HAS NO ELEMENT. Most of "the element's
+ * descendants' boxes" are an element's principal box and are placed by core/layout/flow_position.h, one per
+ * node the walk passes. The box around a TEXT RUN is not: CSS 2.2 §9.2.2.1 "Anonymous inline boxes" generates
+ * it, so no element names it and nothing can be asked where it is. It is reached instead through the block
+ * container that establishes the inline formatting context it is flowed into (CSS 2.2 §9.4.2, classified by
+ * core/layout/block_flow.h), which core/layout/line_box.h answers for the whole context at once — the only
+ * shape the question has, since which line a run's fragments land on depends on every character before them.
+ * A TEXT RUN IS THE COMMON CASE AND NOT AN EDGE ONE, which is why it is worth two routes: `verylongword` in a
+ * narrow box is the overflow `scrollWidth > clientWidth` is usually asked about, and it contributes nothing to
+ * §10.6.3's height, so nothing else in this engine would ever have measured it.
+ *
  * WHY IT IS NOT THE PADDING EDGE'S EXTENT, which is the one wrong answer that would pass every presence test.
  * core/layout/used_value.h computes the distance between two parallel edges of ONE box and CSSOM VIEW §6's
  * `clientWidth` reports it. §2's right edge is a right-most POSITION over this box and every descendant's, so

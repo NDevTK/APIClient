@@ -99,17 +99,30 @@ bool block_flow_display_is_block_container(const char *display);
    `white-space` collapses away, which is most of the character data in a pretty-printed document — and TRUE
    is a run that generates an anonymous inline box.
    IT CLASSIFIES AND DOES NOT MEASURE, which is the contract each caller then has to satisfy for itself. Both
-   of them need something further about a run that IS a box and they need DIFFERENT things: this file's walk
-   needs the line boxes it flows into (core/layout/line_box.h, which crashes for a run naming the one metric
-   it lacks), while CSSOM VIEW §2's scrolling area needs the run's INLINE-AXIS extent and crashes for itself.
-   Folding either crash into this predicate would put one caller's missing input inside the other's
-   classification, and the classification is right for both.
+   of them go on to ask core/layout/line_box.h about the run and they ask it DIFFERENT questions: this file's
+   walk wants §10.6.3's distance down the line boxes it flows into, while CSSOM VIEW §2's scrolling area wants
+   where the boxes ON those line boxes REACH. Folding either measurement into this predicate would put one
+   caller's question inside the other's classification, and the classification is right for both.
    IT IS EXPORTED BECAUSE EVERY WALK OVER A BLOCK CONTAINER'S CHILDREN MUST ASK IT, and the scrolling area
    asks for a reason the height walk cannot cover — a box with a DECLARED height never reaches the walk at all
    (`bf_height_needs_content`), so its own text would be invisible to a caller that only measured heights, and
    a text run that overflows a declared-height box is exactly what `scrollHeight` is asked about. A second
    copy of §9.2.2.1 would be one rule with two answers about whether a page's white space is content. */
 bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *text);
+
+/* CSS 2.2 §9.4.2's OWN CONDITION over `el`'s WHOLE CHILD LIST: "an inline formatting context is established by
+   a block container box that contains no block-level boxes."
+   IT IS THE QUESTION "IS THIS ELEMENT WHERE core/layout/line_box.h's RUN IS THE WHOLE CHILD LIST", which is the
+   one shape of §9.4.2's context that has an ELEMENT to name it. §9.2.1.1's anonymous block box is the other,
+   and it is deliberately NOT reachable through this entry: a MIXED container answers FALSE here even though
+   its inline-level children do sit in inline formatting contexts, because those contexts belong to boxes the
+   element tree does not contain and a caller that wants them wants a RUN and not an element.
+   IT IS EXPORTED BECAUSE §9.2.1's ALTERNATIVE IS ASKED FROM OUTSIDE THIS WALK AS WELL AS INSIDE IT. CSSOM VIEW
+   §2's scrolling area needs the boxes on this context's line boxes PLACED, and reaching them means knowing
+   which element establishes the context they are on — the same classification this file's own walk makes to
+   choose between §9.4.1 and §9.4.2, and a second copy of it would be one document with two box trees, free to
+   disagree about whether a run of white space is content (§9.2.2.1, the predicate above). */
+bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
 
 /* CSS 2.1 §10.6.3's (and, for a box that establishes a block formatting context, §10.6.7's) CONTENT-BASED
    HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that BEHAVES AS AUTO (css-sizing-3

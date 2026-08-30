@@ -95,4 +95,60 @@
 CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
                               bool *any_line_box);
 
+/* WHERE THE BOXES ON THIS FORMATTING CONTEXT'S LINE BOXES REACH on ONE PHYSICAL AXIS — `*lo` and `*hi` receive
+ * the lowest and highest coordinates any of them occupies, as OFFSETS FROM THE ESTABLISHING BOX'S CONTENT BOX
+ * ORIGIN on that axis (its left edge for the horizontal one, its top edge for the vertical one). The three
+ * arguments before them are `line_box_content_height`'s three and mean exactly what they mean there.
+ *
+ * IT IS A SECOND REDUCTION OVER ONE FILL, NOT A SECOND LAYOUT. §9.4.2's distribution is run once by the same
+ * static both entries go through, for the reason core/layout/text_run.h gives about its own three partitions:
+ * two collections of one formatting context are two chances to disagree about where this run may break, and a
+ * height and a span that disagreed about which line a box is on would be two documents.
+ *
+ * WHY IT EXISTS BESIDE THE HEIGHT, WHICH IS NOT THE SAME NUMBER TWICE. CSSOM VIEW §2 "Terminology"'s SCROLLING
+ * AREA takes an extreme over "the … margin edge of all of the element's descendants' boxes", and the box
+ * holding a text run is the ANONYMOUS INLINE BOX CSS 2.2 §9.2.2.1 "Anonymous inline boxes" generates — the one
+ * box in the tree with no element to reach it through, so core/layout/flow_position.h cannot be asked where it
+ * is. It is also the box a `scrollWidth` is usually ASKING about: a run wider than its container overflows on
+ * the inline axis while contributing nothing to §10.6.3's height, and a container with a DECLARED height never
+ * reaches the height walk at all (core/layout/block_flow.c's `bf_height_needs_content`) while its text still
+ * overflows it. Neither fact is visible in a height.
+ *
+ * THE INLINE AXIS IS EXACT WITHOUT A PER-ITEM POSITION, AND THAT IS A THEOREM WITH TWO HALVES rather than an
+ * approximation this entry settles for. §9.4.2 gives the LINE BOX the containing block's width — "in general,
+ * the left edge of a line box touches the left edge of its containing block and the right edge touches the
+ * right edge of its containing block" — and css-text-4 §7.1 "Text Alignment: the text-align shorthand" says
+ * where the content sits inside it: "if (after justification, if any) the inline contents of a line box are
+ * too long to fit within it, then the contents are START-ALIGNED: any content that doesn't fit overflows the
+ * line box's end edge."
+ *   A LINE THAT OVERFLOWS is therefore start-aligned by §7.1, so its boxes begin at the content box's own start
+ *   edge and reach exactly `TextRunLine.size` from it. Nothing is read for this and nothing could be: §7.1
+ *   leaves the alignment no say in it.
+ *   A LINE THAT FITS is distributed by `text-align` (§9.4.2: "when the total width of the inline-level boxes on
+ *   a line is LESS than the width of the line box containing them, their horizontal distribution within the
+ *   line box is determined by the 'text-align' property"), and WHEREVER that puts it, it is inside the line
+ *   box, which is inside the content box, which is inside the padding box. So the edge reported for it — the
+ *   content box's own — is a coordinate the CALLER'S extreme absorbs, because CSSOM VIEW §2's other operand is
+ *   that same element's padding edge. The number is therefore not a per-fragment position and MUST NOT BE READ
+ *   AS ONE: this entry answers where the boxes reach OUTSIDE the content box, and inside it answers the content
+ *   box. CSSOM VIEW §6's `getClientRects()` wants the position and is not this entry's caller — that is the
+ *   per-item offset along the line core/layout/flow_position.c crashes for, and it needs `text-align`, which
+ *   core/css/css_computed_value.c derives no computed value for.
+ *
+ * THE BLOCK AXIS IS A MAXIMUM OVER THE BOXES AND DELIBERATELY NOT THE STACK'S OWN BOTTOM, which is the one
+ * place this entry and `line_box_content_height` are answering different questions about the same lines. CSS
+ * 2.2 §10.8 makes each line box as tall as "the distance between the uppermost box top and the lowermost box
+ * bottom" INCLUDING the STRUT — "exactly as if each line box starts with a zero-width inline box with the
+ * element's font and line height properties. We call that imaginary box a 'strut'" — and an imaginary box is
+ * not one of "the element's descendants' boxes". `<div style="line-height:100px"><span
+ * style="line-height:10px">x</span></div>` has a line box far taller than anything in it, and reporting the
+ * stack's bottom would be an overflow no box makes.
+ *
+ * IT REPORTS THE CONTENT BOX'S OWN BEGINNING CORNER FOR A CONTEXT WITH NOTHING ON ITS LINES, rather than
+ * leaving either output unwritten. That corner is inside the padding box on both axes (CSS 2 §8.1 nests them
+ * and a padding is non-negative), so it is invisible to CSSOM VIEW §2's extreme — the same property that makes
+ * the fitting-line answer above harmless, stated once for the degenerate case too. */
+void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
+                           bool vertical, CssPx *lo, CssPx *hi);
+
 #endif

@@ -12,6 +12,7 @@
 #include "core/dom/element_view.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/line_box.h"
 #include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 
@@ -97,6 +98,44 @@ static CssPx sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending
                       used_value_px(d, vertical ? "margin-bottom" : "margin-right"));
 }
 
+/* CSS 2 §8.1's CONTENT BOX ORIGIN on one axis — the placed padding box moved inward by the leading padding.
+   It is the rectangle CSS 2.2 §9.4.2 gives a block container's LINE BOXES ("the width of a line box is
+   determined by a containing block", and §10.1's second case makes that the CONTENT edge), so it is the origin
+   core/layout/line_box.h's span is measured from and the one place the two components have to agree. */
+static CssPx sa_content_origin(lxb_dom_element_t *b, bool vertical)
+{
+    FlowPoint o = flow_padding_box_origin(b);
+
+    return css_px_add(vertical ? o.y : o.x, used_value_px(b, vertical ? "padding-top" : "padding-left"));
+}
+
+/* ONE BLOCK CONTAINER'S INLINE FORMATTING CONTEXT folded into the running extreme — the boxes CSS 2.2 §9.2.2.1
+   "Anonymous inline boxes" generates for its text runs, which are §2's "descendants' boxes" with no element of
+   their own to be placed through.
+   IT IS ASKED OF THE ELEMENT THAT ESTABLISHES THE CONTEXT AND NOT OF EACH TEXT NODE, because §9.4.2's
+   distribution is a fact about the WHOLE context — "when several inline-level boxes cannot fit horizontally
+   within a single line box, they are distributed among two or more vertically-stacked line boxes" — so which
+   line a run's fragments land on is a function of every character before them, and a per-node question could
+   not be answered at all. core/layout/block_flow.h owns which elements those are.
+   BOTH EDGES ARE ASKED FOR AND THE RIGHT ONE IS TAKEN, because the context's own `direction` decides which end
+   of its lines the content grows from and `el`'s decides which end of the SCROLLING AREA is the ending one:
+   a `rtl` block inside a `ltr` scroller overflows toward the LOWER coordinate, which is `el`'s BEGINNING edge.
+   §2's two rows are then one expression rather than a case per combination. */
+static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx best)
+{
+    CssPx origin, lo, hi;
+
+    if (!block_flow_establishes_inline_context(b)) return best;
+    origin = sa_content_origin(b, vertical);
+    line_box_content_span(b, lxb_dom_interface_node(b)->first_child, NULL, vertical, &lo, &hi);
+    DCHECK(css_px_sub(hi, lo).px >= 0.0,
+           "CSS 2.2 §9.4.2's line boxes reported a span whose ENDING edge is before its BEGINNING edge. The "
+           "two are a maximum and a minimum over the same set of boxes seeded at the same corner, so an "
+           "inverted pair is the two edges having been derived from different lines");
+    if (ending_at_hi) return css_px_max(best, css_px_add(origin, hi));
+    return css_px_min(best, css_px_add(origin, lo));
+}
+
 /* THE EXTREME OVER EVERY DESCENDANT'S BOX, in tree order. The walk descends through an element that generates
    NO box of its own, deliberately: css-display §3.1's `display: contents` gives such an element no box while
    "its children and pseudo-elements still generate boxes and text runs as normal", and those children are
@@ -107,56 +146,78 @@ static CssPx sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending
    element's descendants' boxes" and an anonymous inline box holding a text run is one of them, so a
    `<div style="width:50px">verylongword</div>` has a scrolling area WIDER than its padding box in every user
    agent — and a walk over ELEMENTS alone would report the padding box and be wrong in the one direction that
-   matters, because `scrollWidth > clientWidth` is precisely what a page asks this to decide. The walk
-   therefore asks core/layout/block_flow.h's §9.2.2.1 rule about every text node it passes: collapsible white
-   space contributes nothing, and a real run CRASHES BELOW naming the inline-axis measurement it would need.
+   matters, because `scrollWidth > clientWidth` is precisely what a page asks this to decide.
+   THOSE BOXES ARE FOLDED PER FORMATTING CONTEXT AND NOT PER TEXT NODE, which CSS 2.2 §9.4.2 forces: its
+   distribution is stated over the whole context, so which line box a run's fragments land on is a function of
+   every character before them and a per-node question has no answer at all. The walk therefore asks
+   core/layout/line_box.h once at each element that ESTABLISHES a context — `el` included, since the anonymous
+   inline boxes in `el`'s own context hold `el`'s descendant TEXT NODES and are their boxes — and then asks
+   §9.2.2.1's rule about each text node only to check that some context has already covered it.
    THIS IS NOT THE HEIGHT WALK ASKED TWICE — that walk never sees the contents of a box with a declared height
    (core/layout/block_flow.c's `bf_height_needs_content`), and a text run overflowing a declared-height box is
    exactly the case this member exists for. */
 static CssPx sa_descendants_extreme(lxb_dom_element_t *el, bool vertical, bool ending_at_hi, CssPx seed)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(el), *n = root->first_child;
-    CssPx best = seed;
+    /* `el`'s OWN formatting context first. `el` is not one of its own descendants and this is not a special
+       case for it: the boxes folded here are the anonymous inline boxes around `el`'s child TEXT NODES, which
+       are descendants, and the element establishing the context is simply where §9.4.2 can be asked about
+       them. `el` has a box — the caller's own precondition — so there is no second existence test. */
+    CssPx best = sa_inline_context_extreme(el, vertical, ending_at_hi, seed);
 
     while (n != NULL) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *d = lxb_dom_interface_element(n);
 
-            if (element_view_has_box(n) && !sa_excluded(el, d)) {
-                CssPx e = sa_descendant_edge(d, vertical, ending_at_hi);
+            if (element_view_has_box(n)) {
+                /* THE EXCLUSION IS PER BOX AND IS NOT INHERITED BY THE SUBTREE, which is §2's own sentence:
+                   it excludes "boxes THAT HAVE an ancestor of the element as their containing block", and the
+                   containing block of a box inside an excluded one is that excluded box — not an ancestor of
+                   `el`. So a descendant of an out-of-flow box is IN the scrolling area while the box itself is
+                   out of it, and the inline formatting context an excluded box establishes is folded for the
+                   same reason: the anonymous inline boxes on its lines have IT as their containing block. */
+                if (!sa_excluded(el, d)) {
+                    CssPx e = sa_descendant_edge(d, vertical, ending_at_hi);
 
-                best = ending_at_hi ? css_px_max(best, e) : css_px_min(best, e);
+                    best = ending_at_hi ? css_px_max(best, e) : css_px_min(best, e);
+                }
+                best = sa_inline_context_extreme(d, vertical, ending_at_hi, best);
             }
         } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
+            lxb_dom_element_t *parent;
+
             DCHECK(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
                    "a TEXT node inside an element's subtree has no element parent — the walk started at an "
                    "element and descends only through its children, so a text node here belongs to one");
+            parent = lxb_dom_interface_element(n->parent);
             /* §9.2.2.1's rule answers whether the run is a box at all; collapsible white space is not and
-               contributes nothing. A run that IS a box needs its anonymous inline box's MARGIN EDGE folded
-               into `best`, and that edge is a position ALONG a line box — which is the crash below, stated
-               here rather than borrowed from the predicate, because the predicate answers a classification
-               and this member needs a coordinate. */
-            if (block_flow_text_child_generates_box(lxb_dom_interface_element(n->parent), n))
+               contributes nothing. A run that IS a box has already been folded above IF its parent is the
+               element establishing the context it is on — which is every case except the one below. */
+            if (block_flow_text_child_generates_box(parent, n) &&
+                !block_flow_establishes_inline_context(parent))
                 DFAIL("CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "
                       "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1) "
-                      "holding this text run — so this walk needs the run's own INLINE-AXIS EXTENT, which is "
-                      "the sum of its glyphs' advances, and its position on the line box §9.4.2 flowed it "
-                      "into. THE SUM IS BUILT and so is the break search over it — core/layout/text_run.h "
-                      "reports a run's whole advance and its widest unbreakable segment, over the per-glyph "
-                      "advances core/css/font_metrics.h measures — so a zero here is no longer the only "
-                      "available answer, and reporting one would still say that "
-                      "`<div style=\"width:50px\">verylongword</div>` has no overflow at all, which is the "
-                      "exact comparison `scrollWidth > clientWidth` is asked to decide. WHAT IS MISSING IS THE "
-                      "PLACEMENT and not the measurement: this member needs the fragment's own MARGIN EDGE — a "
-                      "coordinate — which is a function of which line box §9.4.2 flowed each fragment onto and "
-                      "of where along that line it starts, and neither is a size. THE FIRST HALF IS BUILT: "
-                      "`text_run_measure_fill` (core/layout/text_run.h) distributes the run across §9.4.2's "
-                      "line boxes and reports the items on each, so WHICH line a fragment is on is answered. "
-                      "The second half is a per-item running POSITION along the line, which the fill does not "
-                      "produce and which §9.4.2 hands to `text-align` — the same two numbers "
-                      "core/layout/flow_position.c crashes for when it asks where an INLINE BOX starts. BUILD "
-                      "the per-item position beside the fill, then fold each fragment's margin edge into "
-                      "`best` here");
+                      "holding this text run — but the element this run is a child of does NOT establish the "
+                      "inline formatting context the run is flowed into, so there is no element to ask "
+                      "core/layout/line_box.h about and the run has not been folded in. THE MEASUREMENT AND "
+                      "THE PLACEMENT ARE BOTH BUILT and neither is what is missing: `line_box_content_span` "
+                      "answers where a context's boxes reach on either axis, and this walk folds it at every "
+                      "element that establishes one. WHAT IS MISSING IS THE BOX THAT ESTABLISHES *THIS* "
+                      "CONTEXT, and CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" says why it has no element: "
+                      "\"if a block container box … has a block-level box inside it …, then we force it to "
+                      "have only block-level boxes inside it\", each maximal run of inline-level children "
+                      "wrapped in an ANONYMOUS BLOCK BOX. This run is inside one of those, so its context's "
+                      "line boxes are `[first, end)` of the parent's children rather than the whole child "
+                      "list — the run `block_flow.c`'s `bf_anon_run_end` delimits and hands to "
+                      "`line_box_content_height` already — and its content box's origin is the anonymous "
+                      "box's, which is a distance down §9.4.1's stack that the same walk computes and keeps "
+                      "to itself. BUILD an entry beside `block_flow_establishes_inline_context` that reports "
+                      "the anonymous block boxes of one container — each run's `[first, end)` and the offset "
+                      "of its content box from the container's own — and fold each of them here exactly as "
+                      "the whole-child-list case is folded. THE OTHER SHAPE THAT REACHES THIS LINE is a run "
+                      "whose parent is an INLINE box (`<div>a<span>b</span></div>`), and that one is already "
+                      "named one crash earlier: the `span`'s own box is placed by §9.4.2 and "
+                      "core/layout/flow_position.c aborts for it before this walk descends into its text");
         }
         if (n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;

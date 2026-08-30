@@ -207,10 +207,17 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "box containing them, their horizontal distribution within the line box is determined by the "
               "'text-align' property\" is what turns that offset into a coordinate — a property "
               "core/css/css_computed_value.c derives no computed value for. BUILD the per-item position "
-              "beside the fill, then `text-align`, then this box's origin is (1) and (2). THAT IS THE SAME "
-              "ABSENT CAPABILITY core/layout/scrolling_area.c crashes for, which asks for a TEXT FRAGMENT's "
-              "margin edge where this asks for an INLINE BOX's origin: one position, reached from two "
-              "members, so building it once closes both crashes");
+              "beside the fill, then `text-align`, then this box's origin is (1) and (2). THIS LINE USED TO "
+              "SAY core/layout/scrolling_area.c CRASHES FOR THE SAME CAPABILITY AND IT NO LONGER DOES, which "
+              "is worth stating because the two questions still LOOK identical and one of them turned out not "
+              "to need `text-align` at all. CSSOM VIEW §2's scrolling area takes an EXTREME whose other "
+              "operand is the element's own padding edge, so a line whose content FITS its line box is "
+              "absorbed wherever the alignment put it, and css-text-4 §7.1 \"Text Alignment: the text-align "
+              "shorthand\" settles the only case that is left — \"if (after justification, if any) the inline "
+              "contents of a line box are too long to fit within it, then the contents are start-aligned\". "
+              "`line_box_content_span` is that answer. THIS member is asking for a COORDINATE with nothing to "
+              "absorb it, so neither half of that derivation is available to it and it is the sole remaining "
+              "consumer of the per-item position");
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
        what the two rules below are written about. A `table` is one of them and stays on this path: §17.4
        'Tables in the visual formatting model' says the table wrapper box is block-level for `display: table`

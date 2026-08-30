@@ -418,6 +418,26 @@ static BfContent bf_content_kind(lxb_dom_element_t *el)
     return BF_CONTENT_NONE;
 }
 
+/* §9.4.2's OWN CONDITION, WHOLE — see the header for why it is exported rather than re-derived. Both conjuncts
+   are the section's own sentence: the box must be a BLOCK CONTAINER, and it must CONTAIN NO BLOCK-LEVEL BOXES.
+   The `display` half is asked FIRST and is not redundant with the classification below: `bf_content_kind` reads
+   a CHILD LIST and a `display: inline` element with only text children has one that looks exactly like a block
+   container's, so a caller that skipped it would be told that an inline box establishes the formatting context
+   its own ancestor establishes — and would then place that context's line boxes against the inline box's
+   content edge, which is not a rectangle §9.4.2 gives line boxes at all. */
+bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
+{
+    char *d;
+    bool container;
+
+    DCHECK(el != NULL, "CSS 2.2 §9.4.2's establishing condition was asked with no element");
+    d = bf_computed(el, "display");
+    container = block_flow_display_is_block_container(d);
+    free(d);
+    if (!container) return false;
+    return bf_content_kind(el) == BF_CONTENT_INLINE;
+}
+
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" -------------------------------------------------------------
    THE BOX THIS WALK ITERATES IS NOT THE ELEMENT LIST. "In a document like this: <DIV> Some text <P>More text
    </DIV> … we assume that there is an ANONYMOUS BLOCK BOX around 'Some text'", and generally "if a block
