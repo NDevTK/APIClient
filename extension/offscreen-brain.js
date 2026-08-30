@@ -1716,13 +1716,16 @@ async function buildExportRequest(msg) {
   let parsedUrl;
   try {
     parsedUrl = new URL(msg.url);
-  } catch (_) {
+  } catch (e) {
+    // Same reading as lib/send.js's: a URL the operator typed can fail to parse, and an invariant abort
+    // must not be reported back to them as that.
+    RETHROW_FATAL(e);
     return { error: "invalid URL" };
   }
 
-  const headers = { ...(msg.headers || {}) };
+  const headers = { ...msg.headers };
   if (
-    msg.contentType &&
+    msg.contentType !== "" &&
     msg.httpMethod !== "GET" &&
     msg.httpMethod !== "DELETE"
   ) {
@@ -1748,7 +1751,9 @@ async function buildExportRequest(msg) {
   if (msg.httpMethod !== "GET" && msg.httpMethod !== "DELETE" && msg.body) {
     // Check for multipart batch sub-request
     const _exportBatchMethod = (() => {
-      if (!msg.service || !msg.methodId) return null;
+      // `null` is the popup stating that no discovery method was chosen — a real state of the Send panel,
+      // and the only thing this lookup needs to distinguish.
+      if (msg.service === null || msg.methodId === null) return null;
       const docEntry = globalStore.discoveryDocs.get(msg.service);
       if (!docEntry?.doc) return null;
       const mName = msg.methodId.split(".").pop();
@@ -1832,7 +1837,7 @@ async function buildExportRequest(msg) {
         body = uint8ToBase64(encoded);
       } else if (msg.contentType === "application/json+protobuf") {
         body = JSON.stringify(encodeFormToJspb(fields));
-      } else if (msg.contentType?.startsWith("application/x-www-form-urlencoded")) {
+      } else if (msg.contentType.startsWith("application/x-www-form-urlencoded")) {
         // Standard form-urlencoded: each field is its own key=value pair.
         // The batchexecute `f.req` envelope is only correct for
         // `/batchexecute` URLs (handled above at the URL-match branch); it
@@ -1859,12 +1864,12 @@ async function buildExportRequest(msg) {
   }
 
   // GraphQL: wrap query/variables in standard envelope
-  if (isGraphQLUrl(url) && msg.body?.mode === "graphql") {
+  if (isGraphQLUrl(url) && msg.body !== null && msg.body.mode === "graphql") {
     body = encodeGraphQLBody(msg.body);
     headers["Content-Type"] = "application/json";
   }
 
-  return { url, method: msg.httpMethod || "POST", headers, body };
+  return { url, method: msg.httpMethod, headers, body };
 }
 
 const EXTENSION_ORIGIN = `chrome-extension://${chrome.runtime.id}`;

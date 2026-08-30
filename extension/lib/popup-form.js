@@ -1135,13 +1135,21 @@ async function sendRequest() {
     ? currentReplayRequest.frameId
     : currentFrameId;
 
+  /* A dataset entry an option does not carry reads as `undefined`, and the consumer branches on "did the
+     operator choose a discovery method". `undefined` is not a statement of that — `null` is, and the offscreen
+     then has a fact to test rather than a hole to survive. An option with no selection at all is the same
+     answer, so `selectedOpt` being absent is not a second case. */
+  const _svc = selectedOpt && typeof selectedOpt.dataset.svc === "string" && selectedOpt.dataset.svc !== ""
+    ? selectedOpt.dataset.svc : null;
+  const _mid = selectedOpt && typeof selectedOpt.dataset.discoveryId === "string" &&
+    selectedOpt.dataset.discoveryId !== "" ? selectedOpt.dataset.discoveryId : null;
   const msg = {
     type: "SEND_REQUEST",
     tabId: replayTabId,
     documentId: currentReplayRequest?.documentId ?? currentDocumentId(),
     endpointKey: epKey,
-    service: selectedOpt?.dataset?.svc,
-    methodId: selectedOpt?.dataset?.discoveryId,
+    service: _svc,
+    methodId: _mid,
     url,
     httpMethod,
     contentType,

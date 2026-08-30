@@ -576,12 +576,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       };
     }
 
+  /* A dataset entry an option does not carry reads as `undefined`, and the consumer branches on "did the
+     operator choose a discovery method". `undefined` is not a statement of that — `null` is, and the offscreen
+     then has a fact to test rather than a hole to survive. An option with no selection at all is the same
+     answer, so `selectedOpt` being absent is not a second case. */
+  const _svc = selectedOpt && typeof selectedOpt.dataset.svc === "string" && selectedOpt.dataset.svc !== ""
+    ? selectedOpt.dataset.svc : null;
+  const _mid = selectedOpt && typeof selectedOpt.dataset.discoveryId === "string" &&
+    selectedOpt.dataset.discoveryId !== "" ? selectedOpt.dataset.discoveryId : null;
     try {
       return await chrome.runtime.sendMessage({
         type: "BUILD_REQUEST",
         endpointKey: epKey,
-        service: selectedOpt?.dataset?.svc,
-        methodId: selectedOpt?.dataset?.discoveryId,
+        service: _svc,
+        methodId: _mid,
         url,
         httpMethod,
         contentType,
@@ -589,19 +597,49 @@ document.addEventListener("DOMContentLoaded", async () => {
         body,
         apiKeyOverride: currentKeyOverride,
       });
-    } catch (_) {
+    } catch (e) {
+      /* An invariant abort travels ON (extension/check.js RETHROW_FATAL): `null` here is the ONE state the
+         caller reads as "the background did not answer", and a broken record assertion arriving as that
+         would report a contract failure as an unreachable service worker. */
+      RETHROW_FATAL(e);
       return null;
     }
+  }
+
+  /* THE BUILT REQUEST, ASSERTED WHERE IT ARRIVES — the same shape as lib/schema.js's `_checkPageFetchReply`,
+     for the same reason. `buildExportRequest` answers with EITHER an `error` string or the four fields the
+     three formatters below turn into curl, fetch and python, and those formatters were reading all four
+     through `||`: `req.headers || {}` in four places and `req.body` inside a swallowing try. What that
+     concealed is precise — a curl command with no `-H` lines is a VALID command, and so is one with no
+     `--data`, so a build that had stopped carrying the operator's headers or their body produced a snippet
+     that runs, that they paste into a terminal, and that makes a different request than the panel showed. */
+  function _checkExportRequestReply(reply) {
+    if ("error" in reply) {
+      DCHECK(typeof reply.error === "string" && reply.error !== "",
+             "BUILD_REQUEST answered with an `error` that names nothing — the reason IS the whole of what " +
+             "that arm carries, and an empty one tells the operator their request could not be built for no " +
+             "stated cause");
+      return;
+    }
+    DCHECK(typeof reply.url === "string" && reply.url !== "" &&
+           typeof reply.method === "string" && reply.method !== "" &&
+           typeof reply.headers === "object" && reply.headers !== null &&
+           (reply.body === null || typeof reply.body === "string"),
+           "BUILD_REQUEST answered with an incomplete request record — buildExportRequest writes " +
+           "url/method/headers/body on its one success return, and a formatter that finds one missing emits " +
+           "a curl or fetch snippet that RUNS and sends something else");
   }
 
   function formatCurl(req) {
     const sq = (s) => s.replace(/'/g, "'\\''");
     const parts = [`curl -X '${sq(req.method)}'`];
-    for (const [k, v] of Object.entries(req.headers || {})) {
+    for (const [k, v] of Object.entries(req.headers)) {
       parts.push(`  -H '${sq(k)}: ${sq(v)}'`);
     }
     if (req.body) {
-      const ct = (req.headers || {})["Content-Type"] || "";
+      // The header map is always present; whether it NAMES a content type is the question this asks, and ""
+      // is the built request carrying none.
+      const ct = req.headers["Content-Type"] || "";
       if (ct.includes("protobuf") || ct.includes("grpc")) {
         // Binary body is base64-encoded — pipe through base64 decode
         parts.push(`  --data-binary @- <<< $(echo '${sq(req.body)}' | base64 -d)`);
@@ -615,7 +653,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function formatFetch(req) {
     const opts = { method: req.method };
-    if (Object.keys(req.headers || {}).length) opts.headers = req.headers;
+    if (Object.keys(req.headers).length) opts.headers = req.headers;
     if (req.body) opts.body = req.body;
     return `fetch(${JSON.stringify(req.url)}, ${JSON.stringify(opts, null, 2)});`;
   }
@@ -623,7 +661,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function formatPython(req) {
     const lines = ["import requests", ""];
     const kwargs = [];
-    const ct = (req.headers || {})["Content-Type"] || "";
+    const ct = req.headers["Content-Type"] || "";
     const isBinaryBody = ct.includes("protobuf") || ct.includes("grpc");
     const isJson = ct.includes("application/json");
     // For JSON content types, use json= with parsed object.
@@ -642,7 +680,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else if (req.body) {
       kwargs.push(`    data=${JSON.stringify(req.body)}`);
     }
-    const headers = { ...(req.headers || {}) };
+    const headers = { ...req.headers };
     // json= sets Content-Type automatically — remove to avoid conflict
     if (isJson && req.body) delete headers["Content-Type"];
     if (Object.keys(headers).length) {
@@ -668,6 +706,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function copyAsFormat(format) {
     const btn = document.getElementById(`btn-copy-${format}`);
     const req = await buildCurrentRequest();
+    if (req !== null) _checkExportRequestReply(req);
     if (!req || req.error) {
       btn.textContent = "No request";
       setTimeout(() => { btn.textContent = format === "python" ? "Python" : format; }, 1500);

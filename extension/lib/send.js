@@ -338,6 +338,50 @@ function coerceValue(value, type) {
 
 // ─── Send Request: Execute ───────────────────────────────────────────────────
 
+/* THE SEND PANEL'S REQUEST, STATED ONCE FOR THE TWO COMMANDS THAT CARRY IT.
+ *
+ * `SEND_REQUEST` (executeSendRequest, below) and `BUILD_REQUEST` (buildExportRequest, in offscreen-brain.js)
+ * are the SAME record read by two consumers — one fires it, one renders it as curl/fetch/python — and both
+ * were reading it through `||`, in two copies that had to be kept in step by hand. Every one of those
+ * defaults substituted an OPERATOR CHOICE: `msg.httpMethod || "POST"` picks a verb, `{ ...(msg.headers || {})
+ * }` drops the header rows they typed, `msg.contentType?.startsWith(…)` skips the encoding they selected. The
+ * popup holds each of those in a variable that is initialised before the panel is ever shown and reassigned,
+ * never cleared, so none of the defaults could fire — and if one ever did, it would fire in the one place
+ * where a substituted value is a request that differs from the screen the operator is reading.
+ *
+ * The producer is the popup, which is the extension's own trusted page, so this is a DCHECK and not a refusal
+ * — unlike lib/response-decode.js's arrival gate, whose sender is the page's renderer. What it asserts is
+ * that the operator's CHOICES all arrived: a replay that quietly substituted a verb, dropped the header list
+ * the operator typed, or forgot the content type they picked is a request that differs from the one on screen
+ * in a way the screen cannot show them.
+ *
+ * `service` and `methodId` are `string | null` and the null is the point — "no discovery method was chosen"
+ * is a state the Send panel is legitimately in, and the popup states it rather than omitting the field. */
+function _checkSendPanelRequest(msg, command) {
+  DCHECK(typeof msg.url === "string" && msg.url !== "",
+         command + " arrived with no URL — the popup returns early rather than sending one without it, so " +
+         "an absent URL here is that guard bypassed and the request would be built against nothing");
+  DCHECK(typeof msg.httpMethod === "string" && msg.httpMethod !== "",
+         command + " arrived with no HTTP method — it is the verb the operator selected, and substituting " +
+         "one fires a different request than the panel is showing them");
+  DCHECK(typeof msg.contentType === "string",
+         command + " arrived with no content type — the popup holds one from the moment it loads and " +
+         "replaces it from the schema or the captured request, so absence is that state broken; the empty " +
+         "string is the panel legitimately naming none");
+  DCHECK(typeof msg.headers === "object" && msg.headers !== null,
+         command + " arrived with no header map — the popup builds one from the header rows on every send, " +
+         "so `{}` is the operator having typed no headers and an absent map is those rows never read");
+  DCHECK(msg.body === null || (typeof msg.body === "object" && typeof msg.body.mode === "string"),
+         command + " arrived with a body that names no mode — every arm of the popup's body builder writes " +
+         "one (form/graphql/multipart/raw) and a GET says `null`, so a mode-less object is an editor whose " +
+         "contents no encoder will recognise");
+  DCHECK(msg.service === null || typeof msg.service === "string",
+         command + " arrived with a service that is neither a name nor a stated absence — `null` is \"no " +
+         "discovery method chosen\", which is a state the panel is legitimately in and the consumer tests");
+  DCHECK(msg.methodId === null || typeof msg.methodId === "string",
+         command + " arrived with a methodId that is neither an id nor a stated absence — see `service`");
+}
+
 /**
  * Execute a request from the Send panel.
  * Encodes form data, sends via pageContextSend, decodes response.
@@ -354,14 +398,17 @@ async function executeSendRequest(documentId, msg) {
     if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
       return { error: "blocked: invalid protocol" };
     }
-  } catch (_) {
+  } catch (e) {
+    // A URL the operator typed can legitimately fail to parse; an invariant abort inside this try would
+    // otherwise be reported to them as that, i.e. as their own typing being at fault.
+    RETHROW_FATAL(e);
     return { error: "invalid URL" };
   }
 
   // Build headers
-  const headers = { ...(msg.headers || {}) };
+  const headers = { ...msg.headers };
   if (
-    msg.contentType &&
+    msg.contentType !== "" &&
     msg.httpMethod !== "GET" &&
     msg.httpMethod !== "DELETE"
   ) {
@@ -519,7 +566,7 @@ async function executeSendRequest(documentId, msg) {
         bodyEncoding = "base64";
       } else if (msg.contentType === "application/json+protobuf") {
         body = JSON.stringify(encodeFormToJspb(fields));
-      } else if (msg.contentType?.startsWith("application/x-www-form-urlencoded")) {
+      } else if (msg.contentType.startsWith("application/x-www-form-urlencoded")) {
         // Form-urlencoded with f.req JSPB (non-batchexecute)
         const argsArray = encodeFormToJspb(fields);
         const params = new URLSearchParams();
@@ -532,7 +579,7 @@ async function executeSendRequest(documentId, msg) {
   }
 
   // GraphQL: wrap query/variables in standard envelope
-  if (isGraphQLUrl(url) && msg.body?.mode === "graphql") {
+  if (isGraphQLUrl(url) && msg.body !== null && msg.body.mode === "graphql") {
     body = encodeGraphQLBody(msg.body);
     headers["Content-Type"] = "application/json";
   }
@@ -544,7 +591,7 @@ async function executeSendRequest(documentId, msg) {
       tabId,
       url,
       {
-        method: msg.httpMethod || "POST",
+        method: msg.httpMethod,
         headers,
         body,
         bodyEncoding,

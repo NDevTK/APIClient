@@ -45,7 +45,7 @@ function _relayMessageUnserved(msg) {
   if (typeof msg.method !== "string" || msg.method === "") return "method";
   if (typeof msg.status !== "number") return "status";
   if (typeof msg.contentType !== "string") return "contentType";
-  if (!msg.responseHeaders || typeof msg.responseHeaders !== "object") return "responseHeaders";
+  if (typeof msg.responseHeaders !== "object" || msg.responseHeaders === null) return "responseHeaders";
   if (msg.body !== null && typeof msg.body !== "string") return "body";
   if (typeof msg.base64Encoded !== "boolean") return "base64Encoded";
   if (msg.transport === "fetch" || msg.transport === "xhr") {
@@ -53,7 +53,7 @@ function _relayMessageUnserved(msg) {
        is `string | null` because a GET carries none, and `callStack` is `""` where the stack walk came back
        empty — both are answers, which is why neither may arrive absent. */
     if (typeof msg.statusText !== "string") return "statusText";
-    if (!msg.requestHeaders || typeof msg.requestHeaders !== "object") return "requestHeaders";
+    if (typeof msg.requestHeaders !== "object" || msg.requestHeaders === null) return "requestHeaders";
     if (msg.requestBody !== null && typeof msg.requestBody !== "string") return "requestBody";
     if (typeof msg.requestBodyBase64 !== "boolean") return "requestBodyBase64";
     if (typeof msg.callStack !== "string") return "callStack";

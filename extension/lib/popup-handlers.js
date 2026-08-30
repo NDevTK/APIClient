@@ -357,6 +357,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "SEND_REQUEST": {
+      _checkSendPanelRequest(msg, "SEND_REQUEST");
       const _srdoc = _docFromMsg(msg);
       if (!_srdoc) { sendResponse({ error: "no document for request" }); return; }
       executeSendRequest(_srdoc.documentId, msg).then((result) => {
@@ -489,6 +490,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "BUILD_REQUEST": {
+      /* THE SAME RECORD AS SEND_REQUEST, so the same one assertion — the two commands differ only in what
+         happens to the request, not in what one is. It is asked HERE, at the one place both arrive, rather
+         than inside each consumer, so a third consumer of this record cannot be added without it. */
+      _checkSendPanelRequest(msg, "BUILD_REQUEST");
       // GLOBAL — build/export reads the cumulative store by endpointKey/service,
       // never per-tab/document.
       buildExportRequest(msg).then((result) => {
