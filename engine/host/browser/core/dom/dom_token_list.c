@@ -107,8 +107,10 @@ static lxb_dom_element_t *list_owner(JSContext *ctx, JSValueConst this_val, cons
 
 static bool is_ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 
-/* §7.1 "ordered set parser": the attribute's value split on ASCII whitespace, duplicates dropped. The caller
-   gets the value it must free and a cursor it walks with token_next. */
+/* DOM §1.2 "Ordered sets" ordered set parser: the attribute's value split on ASCII whitespace, duplicates
+   dropped. The parser is §1.2's and NOT §7.1's — §7.1 "Interface DOMTokenList" only says which string to run it
+   over — and citing the consumer for the algorithm sends a reader to a section that does not contain it. The
+   caller gets the value it must free and a cursor it walks with token_next. */
 static const char *list_value(lxb_dom_element_t *el, const char *attr, size_t *len)
 {
     const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)attr, strlen(attr), len);
@@ -138,7 +140,9 @@ static bool value_has(const char *v, size_t vlen, const char *tok, size_t tlen)
     return false;
 }
 
-/* §7.1's ORDERED SET PARSER DROPS DUPLICATES, and that is what this list IS — a token SET. `class="a a b"` is
+/* DOM §1.2 "Ordered sets"' ORDERED SET PARSER DROPS DUPLICATES — step 2 makes `tokens` an ORDERED SET and step
+   3 APPENDS to it, and appending to a set that already holds the token does nothing — and that is what this
+   list IS, a token SET. `class="a a b"` is
    TWO tokens, so `length` is 2 and `item(1)` is `b`; walking the attribute's raw tokens made both of them
    answer 3 and `a`, which is `contains` and `length` disagreeing about the very same list.
    The set's members are the FIRST occurrences, so a token is in the set exactly when it does not appear in the
@@ -163,13 +167,44 @@ static bool set_next(const char *v, const char **p, const char *end, const char 
  * this wrote `class=""` and thereby CREATED one. That is a visible difference: `hasAttribute("class")` flips,
  * the serialization grows an attribute, and every layer below sees a write that the standard says does not
  * happen — an attribute change step, a mutation record, a custom element's attributeChangedCallback, and an
- * entry in the running flow's DOM delta. */
+ * entry in the running flow's DOM delta.
+ *
+ * NAMED RESIDUAL — the write carries NO TAINT. NOT COVERED: an unknown token's provenance. `setAttribute`
+ * (element.c), `input.value =` and a `dataset` write all hand dom_cow_set_attribute the source beside the
+ * shape's bytes, so `el.setAttribute('class', x)` keeps x's identity in the (element, name) shadow map and
+ * `el.classList.add(x)` does not. NEXT DIFF: list_write takes the taint its caller holds — which for `value =`
+ * is one value and is the whole of it, and for a MUTATION is not, because the serialized attribute is composed
+ * of several tokens of which only some are unknown and dom_cow_set_attribute carries ONE JSValue for the whole
+ * attribute; so the mutation half needs a per-token key in that map before it can be honest, and half of it is
+ * worse than none. HOW ITS ABSENCE SHOWS: `classList.add(location.hash.slice(1))` followed by a sink fed from
+ * `el.className` reports concrete bytes with no source, so no @S search starts for a breakout that is real. */
 static void list_write(lxb_dom_element_t *el, const char *attr, const char *val, size_t len)
 {
     size_t have = 0;
     if (len == 0 && !lxb_dom_element_get_attribute(el, (const lxb_char_t *)attr, strlen(attr), &have))
         return;                       /* update steps, step 1 */
     dom_cow_set_attribute(el, attr, val, len, JS_UNDEFINED);
+}
+
+/* THE BYTES OF ONE TOKEN ARGUMENT, WHICH MAY BE UNKNOWN EXTERNAL INPUT — the same question `value =` and
+   `supports()` already ask, asked once so a third member cannot answer it differently.
+   IT IS NOT AN OPTIMISATION, IT IS THE DIFFERENCE BETWEEN A LIST AND A DEAD FLOW. An IDL_DOMSTRING position
+   is IDL_CONCOLIC_CROSSES, so the declaration hands an unknown to the body AS ITSELF, and a raw
+   JS_ToCStringLen on one ABORTS at the C boundary by design — js_force_tostring's DFAIL says it outright, "a
+   `const char *` cannot carry a concolic". So `classList.contains(x)` and `classList.add(x)` over external
+   input ended the document at the coercion, which is precisely the read this file exists for: its own banner
+   names `el.classList.contains('is-admin')` as how a bundle gates a whole branch of its UI.
+   An unknown denotes its SHAPE, a real string stable per source, so one source is one stable class. Anything
+   else converts with its REAL length, because a token is compared as BYTES and a NUL inside one is not a
+   terminator. OWNED either way: free with JS_FreeCString. */
+static const char *token_bytes(JSContext *ctx, JSValueConst v, size_t *len)
+{
+    const char *s;
+
+    if (!concolic_is(v)) return JS_ToCStringLen(ctx, len, v);
+    s = concolic_name_cstr(ctx, v);
+    *len = s ? strlen(s) : 0;
+    return s;
 }
 
 /* §7.1: a token must be non-empty and contain no ASCII whitespace. Both are the spec's own errors, not a
@@ -232,10 +267,11 @@ static JSValue js_tl_set_value(JSContext *ctx, JSValueConst this_val, JSValueCon
 
     (void)magic;
     if (!el) return JS_UNDEFINED;
-    /* the declaration passes UNKNOWN input through as itself; an unknown token denotes its SHAPE, so
-       `classList.add(x)` adds one stable class per source instead of ending the document at the coercion. */
-    s = concolic_name_cstr(ctx, val);
-    slen = s ? strlen(s) : 0;
+    /* the declaration passes UNKNOWN input through as itself; an unknown denotes its SHAPE, so
+       `el.classList.value = x` writes one stable value per source instead of ending the document at the
+       coercion — token_bytes, the same answer `contains`, `supports` and every mutation give. A CONCRETE value
+       arrives with its real length there, which a strlen here did not: `class` may legitimately carry a NUL. */
+    s = token_bytes(ctx, val, &slen);
     if (!s) return JS_EXCEPTION;
     list_write(el, attr, s, slen);
     JS_FreeCString(ctx, s);
@@ -269,16 +305,25 @@ static JSValue js_tl_contains(JSContext *ctx, JSValueConst this_val, int argc, J
     const char *attr, *v, *tok;
     size_t vlen = 0, tlen = 0;
     lxb_dom_element_t *el = list_owner(ctx, this_val, &attr);
+    JSValue out;
     bool has;
 
     (void)magic;
     if (!el || argc < 1) return JS_FALSE;
-    tok = JS_ToCStringLen(ctx, &tlen, argv[0]);
+    tok = token_bytes(ctx, argv[0], &tlen);
     if (!tok) return JS_EXCEPTION;
     v = list_value(el, attr, &vlen);
     has = value_has(v, vlen, tok, tlen);
     JS_FreeCString(ctx, tok);
-    return JS_NewBool(ctx, has);
+    out = JS_NewBool(ctx, has);
+    /* AN UNKNOWN TOKEN IS AN UNKNOWN ANSWER, for the reason `supports` states one member up: the membership
+       was decided against the SHAPE, which is a real string and is nobody's class, so the concrete example is
+       `false` — but the DOMAIN still permits both, and a concrete `false` here would decide
+       `if (el.classList.contains(x))` for the flow and delete the true arm. That arm is the whole point: a
+       bundle gates its admin UI on exactly this call. */
+    if (concolic_is(argv[0]))
+        out = concolic_builtin_hook(ctx, argv[0], "DOMTokenList.contains", out);
+    return out;
 }
 
 /* §7.1 `boolean supports(DOMString token)` — "Let result be the return value of validation steps called with
@@ -317,15 +362,9 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
     if (!el)
         return JS_ThrowTypeError(ctx, "supports called on a receiver that is not a DOMTokenList with an "
                                       "associated element");
-    /* An unknown token denotes its SHAPE, the same rule `value =` follows: a `supports(x)` over external input
-       must not end the document at the coercion. Anything else converts with its real length, because a
-       supported token is compared as BYTES and a NUL inside one is not a keyword's terminator. */
-    if (concolic_is(argv[0])) {
-        tok = concolic_name_cstr(ctx, argv[0]);
-        tlen = tok ? strlen(tok) : 0;
-    } else {
-        tok = JS_ToCStringLen(ctx, &tlen, argv[0]);
-    }
+    /* An unknown token denotes its SHAPE, the same rule `value =` and `contains` follow — one spelling, in
+       token_bytes, because three members answering the same question three times is three chances to differ. */
+    tok = token_bytes(ctx, argv[0], &tlen);
     if (!tok) return JS_EXCEPTION;
     /* Validation step 2: "Let lowercaseToken be token, in ASCII lowercase." */
     lower = malloc(tlen + 1);
@@ -354,35 +393,89 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
     return out;
 }
 
+/* ONE TOKEN ARGUMENT, held as the bytes the walk compares against. A list of these is what makes `add` and
+   `remove` variadic without a second mutation body. */
+typedef struct { const char *s; size_t len; } TlToken;
+
+/* Is `tok` one of the tokens THIS CALL named? §7.1 remove's step 2 is "for each token of tokens: remove token
+   from this's token set", so the walk asks the whole argument list rather than one position. */
+static bool tl_named(const TlToken *a, int na, const char *tok, size_t tlen)
+{
+    int i;
+    for (i = 0; i < na; i++)
+        if (a[i].len == tlen && memcmp(a[i].s, tok, tlen) == 0) return true;
+    return false;
+}
+
 /* THE ONE MUTATION, under four names. add/remove/toggle/replace differ only in which tokens they mean to be
    present afterwards, so they build the new value the same way: walk the existing tokens, decide each, then
    append what is newly wanted. Four bodies would be four chances to disagree about whitespace and duplicates.
-   magic 0 = add, 1 = remove, 2 = toggle, 3 = replace. */
+   magic 0 = add, 1 = remove, 2 = toggle, 3 = replace.
+ *
+ * §7.1 `add(tokens…)` AND `remove(tokens…)` ARE `DOMString... tokens`, AND THEIR THREE STEPS ARE THREE PASSES
+ * IN THAT ORDER — step 1 validates EVERY token, step 2 applies EVERY token, step 3 runs the update steps ONCE.
+ * Both halves of that order are observable and neither is what a token-at-a-time loop produces:
+ * `classList.add('a','')` must throw a "SyntaxError" DOMException having added NOTHING, and
+ * `classList.add('a','b')` must produce ONE attribute change step, one mutation record and one delta entry
+ * rather than two. So every token is collected, then every token is checked, and only then does the walk
+ * below start. toggle and replace are the same shape at a fixed token count: toggle's steps 1-2 and replace's
+ * steps 1-2 are those same two throws over the one (or two) tokens their IDL lists. */
 static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     const char *attr, *v, *p, *end, *t;
-    size_t vlen = 0, tlen;
+    size_t vlen = 0, tlen, tok_bytes = 0;
     lxb_dom_element_t *el = list_owner(ctx, this_val, &attr);
     char *out = NULL;
     size_t out_len = 0, out_cap = 0;
     JSValue result = JS_UNDEFINED;
-    const char *a[2] = { NULL, NULL };
-    size_t alen[2] = { 0, 0 };
-    int i, na = (magic == 3) ? 2 : 1;
-    bool force_given = false, force = false, present, want, replaced = false;
+    TlToken *a = NULL;
+    int i, na;
+    bool force_given = false, force = false, present = false, want;
 
-    if (!el || argc < 1) return magic == 2 ? JS_FALSE : (magic == 3 ? JS_FALSE : JS_UNDEFINED);
-    for (i = 0; i < na; i++) {
-        if (argc <= i) break;
-        a[i] = JS_ToCStringLen(ctx, &alen[i], argv[i]);
-        if (!a[i] || token_check(ctx, a[i], alen[i]) < 0) { result = JS_EXCEPTION; goto out; }
+    /* WHICH ARGUMENTS ARE TOKENS, read off the same IDL the declaration states rather than assumed. `add` and
+       `remove` are `DOMString... tokens`, so EVERY argument is a token and how many there are is the page's
+       to decide; `toggle(token, optional force)` has one token and a boolean beside it; `replace(token,
+       newToken)` has two tokens. */
+    na = (magic == 0 || magic == 1) ? argc : (magic == 3 ? 2 : 1);
+    /* Web IDL §3.6 "Overload resolution algorithm" step 5 throws the TypeError for a call that reached fewer
+       than the required positions, and it belongs to the DECLARATION — so toggle or replace arriving here with
+       fewer is a member installed without the arguments it converts, not a page doing something. add and
+       remove require NOTHING, because Web IDL §2.5.8 "Overloading"'s compute the effective overload set ends by
+       appending the empty tuple for a final variadic argument: `classList.add()` is a legal call. */
+    DCHECK(magic != 2 || argc >= 1,
+           "§7.1 `toggle(token, optional force)` ran with no token — Web IDL §3.6 \"Overload resolution "
+           "algorithm\" step 5's required-argument check belongs to the declaration and throws before this "
+           "body runs, so an empty argument list here is a member installed without the token it converts");
+    DCHECK(magic != 3 || argc >= 2,
+           "§7.1 `replace(token, newToken)` ran with fewer than two arguments — Web IDL §3.6 \"Overload "
+           "resolution algorithm\" step 5's required-argument check belongs to the declaration and throws "
+           "before this body runs, so a short argument list here is a member installed without its positions");
+    if (!el) return (magic == 2 || magic == 3) ? JS_FALSE : JS_UNDEFINED;
+    if (na) {
+        a = calloc((size_t)na, sizeof *a);
+        CHECK(a != NULL, "DOMTokenList: OOM collecting a token-list mutation's tokens");
     }
+    for (i = 0; i < na; i++) {
+        a[i].s = token_bytes(ctx, argv[i], &a[i].len);
+        if (!a[i].s) { result = JS_EXCEPTION; goto out; }
+        tok_bytes += a[i].len;
+    }
+    /* §7.1 add/remove STEP 1, and toggle's steps 1-2 / replace's steps 1-2 — a SEPARATE PASS over the whole
+       list, so a bad token in any position leaves the list untouched instead of half-mutated. */
+    for (i = 0; i < na; i++)
+        if (token_check(ctx, a[i].s, a[i].len) < 0) { result = JS_EXCEPTION; goto out; }
     if (magic == 2 && argc > 1 && !JS_IsUndefined(argv[1])) {
         force_given = true;
-        force = JS_ToBool(ctx, argv[1]);   /* a real boolean by now: the declaration converted it */
+        /* NAMED RESIDUAL — `force` is read CONCRETELY. §7.1 toggle's steps 3-5 branch on it, and an
+           IDL_BOOLEAN position is IDL_CONCOLIC_CROSSES, so `toggle(t, x)` over unknown input decides here
+           instead of forking. NOT COVERED: an unknown `force`. NEXT DIFF: fork the two arms at this read, the
+           way a predicate over unknown input forks anywhere else, so both the added and the removed document
+           are explored. HOW ITS ABSENCE SHOWS: a bundle whose `toggle(cls, flags.beta)` gates a panel yields
+           exactly one arm, and the class the other arm would have set never appears in any flow's DOM. */
+        force = JS_ToBool(ctx, argv[1]);
     }
     v = list_value(el, attr, &vlen);
-    present = value_has(v, vlen, a[0], alen[0]);
+    if (na) present = value_has(v, vlen, a[0].s, a[0].len);
     /* §7.1 toggle STEPS 3.2 AND 5 RETURN WITHOUT RUNNING THE UPDATE STEPS, and that is the whole difference
        between a no-op and a write. `toggle(t, true)` on a token that is already there answers true at step 3.2;
        `toggle(t, false)` on one that is absent answers false at step 5. Neither touches the token set, so
@@ -393,47 +486,68 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
         result = JS_NewBool(ctx, force);
         goto out;
     }
+    /* §7.1 replace STEP 3 RETURNS WITHOUT RUNNING THE UPDATE STEPS — "If this's token set does not contain
+       token, then return false" — the same shape as toggle's steps 3.2 and 5 above, and the spec says so in
+       its own words a line later ("The update steps are not always run for replace() for web compatibility").
+       Without it a replace naming an absent token re-serialised the attribute anyway, so `class="a  a"` became
+       `class="a"` and produced an attribute change step, a mutation record, a custom element's
+       attributeChangedCallback and a delta entry that a browser never produces. */
+    if (magic == 3 && !present) {
+        result = JS_FALSE;
+        goto out;
+    }
     /* §7.1 toggle's answer is whether the token is present AFTERWARDS, and with `force` it is force itself. */
     want = (magic == 0) ? true
          : (magic == 1) ? false
          : (magic == 2) ? (force_given ? force : !present)
-         : present;                       /* replace: only if the old token was there */
+         : true;                          /* replace: step 3 above already returned for an absent token */
 
-    out_cap = vlen + alen[0] + alen[1] + 4;
+    /* Every kept token costs at most its own bytes plus one separator, and the source separated it by at least
+       one byte, so the existing set fits in `vlen`; the appended (or substituted) tokens cost their bytes plus
+       one separator each. */
+    out_cap = vlen + tok_bytes + (size_t)na + 2;
     out = malloc(out_cap);
     CHECK(out != NULL, "DOMTokenList: OOM building the updated token set");
     p = v; end = v + vlen;
     while (token_next(&p, end, &t, &tlen)) {
         const char *keep = t;
         size_t keep_len = tlen;
-        if (tlen == alen[0] && memcmp(t, a[0], tlen) == 0) {
-            if (magic == 3) {
-                if (!want) continue;      /* replace with the old token absent changes nothing */
-                keep = a[1]; keep_len = alen[1]; replaced = true;
-            } else if (!want) {
-                continue;                 /* remove, or toggle to absent */
-            } else if (magic != 3) {
-                /* already present and wanted: keep it once, and the append below must not add a second */
+        if (magic == 3) {
+            if (tlen == a[0].len && memcmp(t, a[0].s, tlen) == 0) {
+                keep = a[1].s; keep_len = a[1].len;   /* §7.1 replace step 4, in place */
             }
+        } else if (!want && tl_named(a, na, t, tlen)) {
+            continue;                     /* remove (ANY of the named tokens), or toggle to absent */
         }
-        /* §7.1's set semantics: a token already emitted is not emitted twice. */
+        /* DOM §1.2 "Ordered sets"' set semantics: a token already emitted is not emitted twice. */
         if (value_has(out, out_len, keep, keep_len)) continue;
         if (out_len) out[out_len++] = ' ';
         memcpy(out + out_len, keep, keep_len);
         out_len += keep_len;
     }
-    if (want && magic != 3 && !value_has(out, out_len, a[0], alen[0])) {
-        if (out_len) out[out_len++] = ' ';
-        memcpy(out + out_len, a[0], alen[0]);
-        out_len += alen[0];
-    }
+    /* §7.1 add's step 2 (and toggle's step 4): APPEND each named token, IN THE ORDER THE PAGE WROTE THEM, to
+       a SET — so `add('a','b')` with `a` already there appends `b` alone, and `add('c','c')` appends one `c`,
+       because appending to a set that already holds the token does nothing. */
+    if (want && magic != 3)
+        for (i = 0; i < na; i++) {
+            if (value_has(out, out_len, a[i].s, a[i].len)) continue;
+            if (out_len) out[out_len++] = ' ';
+            memcpy(out + out_len, a[i].s, a[i].len);
+            out_len += a[i].len;
+        }
+    /* §7.1 add/remove STEP 3, ONCE — never once per token. It runs even for `classList.add()`, which names no
+       token at all: step 1 and step 2 iterate an empty list and step 3 still runs the update steps, so an
+       element carrying `class="a  a  b"` is re-serialised to `class="a b"`. That is the spec's own
+       normalisation and not a stray write — the update steps' step 1 is what keeps it from CREATING an
+       attribute on an element that has none. */
     list_write(el, attr, out, out_len);
     if (magic == 2)      result = JS_NewBool(ctx, want);
-    else if (magic == 3) result = JS_NewBool(ctx, replaced);
+    else if (magic == 3) result = JS_TRUE;   /* §7.1 replace step 6 — step 3 owns the absent case */
 out:
     free(out);
     for (i = 0; i < na; i++)
-        if (a[i]) JS_FreeCString(ctx, a[i]);
+        if (a[i].s) JS_FreeCString(ctx, a[i].s);
+    free(a);
     return result;
 }
 
@@ -538,10 +652,25 @@ void dom_token_list_init(JSContext *ctx)
     g_set_value_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_tl_set_value, 0);
     g_item_id = idl_method_id(ctx, (const IdlArgType[]){ IDL_LONG }, 1, js_tl_item, 0);
     g_contains_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_contains, 0);
-    /* `add` and `remove` are variadic (`DOMString... tokens`) in the IDL; one token is what this declares and
-       converts, and a second is not silently ignored — it is not yet accepted, which the audit reports. */
+    /* §7.1 `undefined add(DOMString... tokens)` and `undefined remove(DOMString... tokens)` — THE TAIL IS
+       DECLARED, so the body takes as many tokens as the page passed. It declared ONE, and Web IDL §3.6
+       "Overload resolution algorithm" step 3 makes argcount min(maxarg, n): `classList.add('a','b')` reached
+       the body with argc == 1, the second argument was never even CONVERTED, and the class was DROPPED WITH
+       NOTHING TO SAY SO — no throw, no record, and a page whose CSS selector then never matches, whose
+       `contains` answers wrong, and whose gated branch the solver takes down the wrong arm.
+       AND THE IDL AUDIT CANNOT SEE THIS, WHICH A COMMENT HERE ONCE SAID IT COULD. idlgen.mjs compares the
+       spec's member NAMES and KINDS against what a component installs, so an installed `add` reads as present
+       whatever its signature says — the interface reported "complete" for as long as the gap existed. A
+       signature is checked by READING THE IDL, and the check that survives is that the declaration states the
+       tail rather than that a comment describes it.
+       THE ARITY FOLLOWS FROM THE SAME PLACE. Web IDL §3.7.7 "Operations" builds the function with "the length
+       of the shortest argument list in the entries in S" at argument count 0, and §2.5.8 "Overloading"'s
+       compute the effective overload set ends by appending the empty tuple for a final variadic argument — so
+       `add.length` and `remove.length` are 0 and `classList.add()` is a legal call rather than a TypeError. */
     g_add_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_mutate, 0);
+    idl_variadic();
     g_remove_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_mutate, 1);
+    idl_variadic();
     g_toggle_id = idl_method_id(ctx, IDL_STR_BOOL, 2, js_tl_mutate, 2);
     idl_optional_from(1);   /* §7.1: `toggle(token, optional force)` */
     g_replace_id = idl_method_id(ctx, IDL_2STR, 2, js_tl_mutate, 3);
@@ -571,8 +700,10 @@ void dom_token_list_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "value", js_tl_value, 0, g_set_value_id);
     idl_install_method(ctx, proto, "item", 1, g_item_id);
     idl_install_method(ctx, proto, "contains", 1, g_contains_id);
-    idl_install_method(ctx, proto, "add", 1, g_add_id);
-    idl_install_method(ctx, proto, "remove", 1, g_remove_id);
+    /* 0, not 1 — §3.7.7 "Operations" takes the SHORTEST argument list in the effective overload set at
+       argument count 0, and a final variadic argument puts the empty tuple in that set. */
+    idl_install_method(ctx, proto, "add", 0, g_add_id);
+    idl_install_method(ctx, proto, "remove", 0, g_remove_id);
     idl_install_method(ctx, proto, "toggle", 1, g_toggle_id);
     idl_install_method(ctx, proto, "replace", 2, g_replace_id);
     idl_install_method(ctx, proto, "supports", 1, g_supports_id);
