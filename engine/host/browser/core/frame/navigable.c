@@ -38,6 +38,8 @@
 #include "solver/engine.h"
 #include "solver/flow.h"             /* the realm teardown's assert: what the frontier still names by HANDLE */
 #include "solver/world.h"
+#include "solver/solve.h"            /* the @S URL class's ONE detector — §7.2.2.1 step 4 is an arrival at it */
+#include "solver/concolic.h"         /* and the ONE predicate that asks whether a destination was computed */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 static RealmBuilder g_realm_builder;
@@ -3379,13 +3381,13 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     X(OPEN_CHOOSE = IDL_STEP_FIRST, \
       "HTML §7.2.2.1 Opening and closing windows — the window open steps (the features, §7.3.1.7's rules for " \
       "choosing a navigable and their windowType, step 16's navigate-and-link-the-opener arm for an existing " \
-      "navigable, and step 17's two returns)")
+      "navigable, and steps 17-19's three returns)")
 enum { OPEN_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const OPEN_STEPS[] = { OPEN_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSValue result;   /* the chosen navigable's proxy (owned) */
-    uint8_t noopener; /* §7.2.2.1 step 17 needs it after the navigable is made */
+    uint8_t noopener; /* §7.2.2.1 step 18 needs it after the navigable is made */
 } OpenState;
 
 static void open_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -3404,6 +3406,13 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     WindowType window_type;
     /* §7.2.2.1 step 3's urlRecord, as the only thing steps 15 and 16.1 ask about it. */
     bool url_is_null;
+    /* AND THE THIRD STATE OF THAT SAME RECORD, WHICH IS NOT EITHER OF ITS TWO — see the announcement below.
+       `url_is_null` is step 3's fact and answers step 16.1's own condition; this one says the record was never
+       COMPUTED. Two variables and not one, because steps 15.3 and 15.4 read them in OPPOSITE directions: "if
+       urlRecord is null, then set urlRecord to a URL record representing about:blank" is TRUE of the empty
+       string and FALSE of an address the run does not know, and a single flag would answer whichever of those
+       two questions the next reader happened to ask. */
+    bool url_is_unknown;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -3411,13 +3420,61 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            "window.open resumed, and §7.2.2.1 gives it one stage here — steps 15-16's navigate is the load "
            "job's, and it is that job that parks");
     s->result = JS_UNDEFINED;
-    url    = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    /* §7.2.2.1 STEP 4's ENCODING-PARSE IS WHERE THE PAGE'S VALUE BECOMES A DESTINATION, so the question asked
+       here is the one §7.2.4's `href` setter asks at its own step 2, and it is asked with the same two calls
+       rather than with a second mechanism beside them. What it is NOT is a second detector: solver/solve.h
+       states that the URL class has ONE context and therefore one written-down vector — "navigating executes
+       the `javascript:` scheme and nothing else does" — so `window.open` is an ARRIVAL at that class and never
+       a class of its own.
+       IT IS A SINK FOR THE SAME REASON `location.href = x` IS, and the chain is three algorithms long with no
+       branch in it that could decline: §7.2.2.1 steps 15.5 and 16.1 NAVIGATE to urlRecord; §7.4.2.2 "Beginning
+       navigation" — "if url's scheme is `javascript`: QUEUE A GLOBAL TASK on the navigation and traversal task
+       source given navigable's active window to NAVIGATE TO A javascript: URL … and return"; and §7.4.2.3.2
+       "The javascript: URL special case" step 7 — "let newDocument be the result of EVALUATING A javascript:
+       URL given targetNavigable, url, initiatorOrigin, and userInvolvement". So `window.open("javascript:X9()")`
+       runs the program, and this member had no arrival at all.
+       IT IS GATED ON STEP 4's OWN CONDITION AND ON NOTHING ELSE. "If url is not the empty string" is what makes
+       the encoding-parse happen, so `window.open()` and `window.open("")` reach no destination and are not
+       arrivals — counting them would raise solver/solve.h's `reached` for a step that does not run, which is
+       the rung whose absence and whose zero read alike. An UNKNOWN url cannot answer that condition either way,
+       and §Solver-half keeps the arm uncertainty leaves open, so it announces.
+       THE ANNOUNCEMENT IS UNCONDITIONAL ON TAINT for the same reason §7.2.4's is: solver/solve.c's URL detector
+       is BOTH the exploration-time recorder and the verification-time fire oracle, and a candidate run's value
+       is a plain String by construction — declining to announce it would leave the oracle nothing to observe.
+       Placed BEFORE the conversion below so the unknown is never asked for bytes it does not have. */
+    url_is_unknown = argc > 0 && concolic_is(argv[0]) != 0;
+    /* ASKING A CONCOLIC FOR A C STRING IS THE ToString THIS ENGINE HAS NO CONCOLIC SEMANTICS FOR — it hands
+       back a plausible concrete address with the source identity and the domain taken off the triple, which is
+       §Attacker-sources' "a source without its constraints yields PoCs that don't reproduce" performed on the
+       destination itself. The unknown is carried as a FACT instead, and every step that reads it below states
+       which of the two records it is asking about. */
+    url    = (argc > 0 && !url_is_unknown) ? JS_ToCString(ctx, argv[0]) : NULL;
+    /* §7.3.1.7's TARGET IS A NAVIGABLE NAME AND NOT A SINK, and it is exactly that difference that makes an
+       unknown one a crash here rather than an announcement: there is no class for it to arrive at, and the
+       rules for choosing a navigable compare the name for EQUALITY against every navigable in the group, which
+       a stringified unknown answers with whatever bytes the ToString invented. */
+    DCHECK(!(argc > 1 && concolic_is(argv[1])),
+           "§7.2.2.1's window open steps were given unknown external input as the TARGET — step 13 hands it to "
+           "§7.3.1.7's rules for choosing a navigable, whose steps 4-7 compare it for equality against the "
+           "keywords and against every navigable's name, and converting it to bytes here decides all of those "
+           "comparisons from a fabricated string. BUILD the name comparison over a concolic (solver/concolic.h "
+           "carries the domain the equality would narrow) so `open(u, location.hash)` forks the arm that names "
+           "an existing navigable and the arm that creates one, instead of picking one of them silently");
+    /* §7.2.2.1 step 6 TOKENIZES the features, and step 15.1's check-if-a-popup-window-is-requested and step 9's
+       noopener are both read out of the map that produces — so an unknown here decides whether the page gets a
+       popup, and whether it gets an OPENER at all, from bytes nothing computed. */
+    DCHECK(!(argc > 2 && concolic_is(argv[2])),
+           "§7.2.2.1's window open steps were given unknown external input as the FEATURES string — step 6 "
+           "tokenizes it and steps 9 and 15.1 read `noopener` and the popup decision straight out of that map, "
+           "so stringifying it here answers both from a fabricated token list. BUILD the tokenization over a "
+           "concolic (core/frame/window_features.h is where the map is made) so an unknown feature string "
+           "forks the popup and the tab rather than choosing between them");
     target = argc > 1 ? JS_ToCString(ctx, argv[1]) : NULL;
     /* §3.6: an OPTIONAL argument given `undefined` is ABSENT. `open(url, name, undefined)` is how the
        corpus spells "no features", and stringifying it produced the literal "undefined" — one token,
        a non-empty map, and therefore a popup where the spec has a tab. */
     features = (argc > 2 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
-    if (argc > 0 && !url) return JS_STEP_ABRUPT;
+    if (argc > 0 && !url_is_unknown && !url) return JS_STEP_ABRUPT;
     /* §7.2.2.1's THIRD ARGUMENT decides whether the new navigable is a POPUP — what §7.2.2.5's six BarProps
        answer from — and whether it gets an OPENER at all. */
     feat = window_features_parse(features);
@@ -3437,7 +3494,17 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        16.1 navigates an existing navigable only "if urlRecord is not null", so `open("", "_self")` chooses this
        navigable and does NOTHING to it. The IDL default for an omitted `url` IS the empty string, so an absent
        argument takes the same branch. */
-    url_is_null = (url == NULL || *url == '\0');
+    url_is_null = !url_is_unknown && (url == NULL || *url == '\0');
+    /* AND THE ARRIVAL ITSELF, at step 4's condition — see the block above the conversion. */
+    if (argc > 0 && !url_is_null) solve_url_sink(ctx, argv[0]);
+    /* THE ONE THING THIS MEMBER MUST NOT HAND ON, asserted where it is handed on. §7.3.1.7's rules for choosing
+       a navigable do not read the url at all, so an unknown destination changes nothing about WHICH navigable
+       this call answers with — what it changes is that there is no address to navigate that navigable TO, and
+       the create below must therefore be given none rather than bytes a ToString invented. */
+    DCHECK(!url_is_unknown || url == NULL,
+           "an unknown destination was converted to bytes on its way into §7.2.2.1 step 13's choose — the "
+           "address the created navigable would then carry is a fabricated string with no source identity and "
+           "no domain left on it");
     s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat, NULL, &window_type);
     if (features) JS_FreeCString(ctx, features);
     /* §7.2.2.1 step 4: "If urlRecord is failure, then throw a \"SyntaxError\" DOMException" — the PAGE's
@@ -3455,8 +3522,23 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        two steps that step 15 has no counterpart for. */
     if (window_type == WINDOW_TYPE_EXISTING_OR_NONE) {
         /* STEP 16.1: "If urlRecord is not null, then navigate targetNavigable to urlRecord using
-           sourceDocument…". The condition is step 3's, read off `url_is_null` above. */
-        if (!url_is_null) {
+           sourceDocument…". The condition is step 3's, read off `url_is_null` above.
+           AND THE SECOND CONDITION IS NOT STEP 16.1's — it is the difference between a step whose CONDITION is
+           false and a step whose condition is TRUE and which this engine cannot perform, and writing them as
+           one `if` is what would hide that. An unknown destination IS "not null", so the standard asks for a
+           navigate here; what it cannot be given is an address, and navigating on a guess is worse than not
+           navigating — it replaces the document this flow is exploring for a destination the run never
+           computed, which is the same answer core/frame/location.c gives §7.2.4's three whole-URL algorithms.
+           RESIDUAL — the code is right and NARROWER. NOT COVERED: the exploring flow never loads the document
+           at an unknown address, so the chosen navigable keeps showing what it was showing and the same is
+           true of the create arm above, which is handed no url and stays at §7.3.2.1's initial about:blank.
+           THE NEXT DIFF BUILDS a navigation whose DESTINATION is concolic — the whole-URL half of the same
+           capability core/frame/location.c's component-setter assert names by URL §4.4's url_parse_override —
+           so §7.4 step 14's load job forks over the domain instead of being skipped. HOW ITS ABSENCE SHOWS:
+           `var w = window.open(location.hash.slice(1))` leaves `w` at about:blank for ever, so a document
+           reachable ONLY through `window.open(tainted)` contributes no @H endpoints from exploration and is
+           seen only when an @S candidate run substitutes real bytes at the source. */
+        if (!url_is_null && !url_is_unknown) {
             JSValue r = navigable_navigate(ctx, s->result, url);
             JS_FreeValue(ctx, s->result);
             s->result = r;
@@ -3476,12 +3558,15 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             window_proxy_set_opener(ctx, s->result, document_window_proxy(ctx));
     }
     if (url) JS_FreeCString(ctx, url);
-    /* §7.2.2.1 STEP 17, BOTH OF ITS SENTENCES — and the second one has a clause this member did not read.
+    /* §7.2.2.1 STEPS 17 AND 18 — TWO STEPS AND NOT ONE STEP'S TWO SENTENCES, which is what this block called
+       them, and the second of them has a clause this member did not read. The window open steps run to
+       NINETEEN: 17 and 18 are the two returns of null and 19 is "return targetNavigable's active WindowProxy",
+       which is the fallthrough below.
        IT READS `target` AS THE PAGE WROTE IT, which is why the argument is still alive here: step 5's map of
        "" to "_blank" is applied at the CALL to the rules above and not to this variable, so an empty target is
        correctly not one of the three keywords.
-       "If windowType is `new with no opener`, then return null. If noopener is true AND target is not an ASCII
-       case-insensitive match for `_self`, `_parent`, or `_top`, then return null."
+       STEP 17: "If windowType is `new with no opener`, then return null." STEP 18: "If noopener is true and
+       target is not an ASCII case-insensitive match for `_self`, `_parent`, or `_top`, then return null."
        THE EXCLUSION IS THE POINT. `open(url, "_self", "noopener")` navigates THIS navigable — navigable_open's
        own comment argues that at length — and a page cannot be denied a handle it already holds, so there is
        nothing for the flag to withhold and the step says so by listing the three keywords. This member nulled
