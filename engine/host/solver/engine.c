@@ -31,6 +31,8 @@
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
 #include "core/frame/navigable.h"   /* HTML §7.3.1 Navigables: tree order over this agent's navigables */
 #include "core/frame/document_lifecycle.h"   /* HTML §7.4.6.1: what a navigation does to the Document it replaces */
+#include "core/timing/event_loop.h"   /* HTML §8.1.7.3 Processing model: the clock's second mover — the work the
+                                         running flow retired, which the interpreter reports and this file relays */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "solver/cold.h"      /* the park and the resume themselves; their CENSUS is composed in result.c */
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
@@ -6655,6 +6657,13 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
 static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply its delta + solver state */
     JS_PutParkedFlows(JS_GetRuntime(ctx), f->parked);
     f->parked = NULL;
+    /* NOTHING THE INTERPRETER HAS COUNTED SO FAR IS THIS FLOW'S, and this is the last instant at which that is
+       true by construction rather than by argument. The retired-opcode count moves the event loop's clock
+       (quickjs.h's JSFlowControlHooks.work), and what can be standing in it here is host time between two flows
+       or the residue of a flow that finished without parking — never `f`'s, which has not run an opcode yet.
+       Banked instead of discarded, it would put another timeline's duration into this flow's first
+       `performance.now()`. */
+    JS_FlowDiscardRetiredWork();
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);
@@ -6787,9 +6796,24 @@ static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op
     g_fork_snapshot_owed = 0;
     return r;
 }
+/* HTML §8.1.7.3 Processing model's SECOND MOVER OF THE CLOCK, adapted. The interpreter reports the opcodes the
+   running flow retired; the event loop's clock is what a moment on this agent's timeline means, so this is one
+   line and holds no policy of its own — the unit, the batching and the exactness are decided on either side of
+   it (quickjs.h's `work`, core/timing/event_loop.h's accumulate-exactly rule).
+   IT IS NOT GUARDED ON A RUNNING FLOW and must not become guarded on one. `event_loop_work_advance` asserts
+   that at its origin because a work advance with none writes the SHARED BASELINE, moving every sibling's
+   moment and every later flow's time origin by an amount none of their paths produced; a guard here would turn
+   that into an advance silently skipped, which is the same wrong clock with nothing to say so. The interpreter
+   asks only under a live flow base, and a case where that is not a running flow is a route to fix at the
+   route. */
+static void engine_work_hook(JSContext *ctx, uint64_t units) { event_loop_work_advance(ctx, units); }
 static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .outcome = engine_outcome_hook,
-                                               .fork = engine_fork_finalize, .preempt = preempt_hook };
-static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook };   /* candidate re-fire: no fork, still preemptible */
+                                               .fork = engine_fork_finalize, .preempt = preempt_hook,
+                                               .work = engine_work_hook };
+static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* candidate re-fire: no fork, still preemptible */
+                                               .work = engine_work_hook };   /* …and a verify's clock still runs: §@S re-fires a
+                                                                                candidate as a FLOW, and a sink that reads a
+                                                                                duration must see the one the explore run saw */
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
 /* THE WALL CLOCK, AND IT NOW TIMES NOTHING THE SCHEDULER DECIDES ON. It used to be "ONE clock for both things

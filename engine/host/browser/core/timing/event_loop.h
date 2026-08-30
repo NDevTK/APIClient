@@ -167,25 +167,29 @@ JSValue event_loop_now(JSContext *ctx);
    a timer whose expiry passes mid-task is due at the next selection and not before it. Applying advance_to's
    invariant here would assert against the spec. */
 void event_loop_work_advance(JSContext *ctx, uint64_t units);
-/* RESIDUAL — NARROWER THAN HIGH RESOLUTION TIME Level 3 §2.1 Clocks, AND NAMED SO THE NEXT DIFF IS THE THING
- * AND NOT THE SEARCH FOR IT.
- *   WHAT IS NOT COVERED: nothing counts retired opcodes yet, so this operation has no caller and the clock
- *     still moves only between tasks. The count is not something that can be read from where the clock lives:
- *     the interpreter's per-opcode attention check counts NOTHING today — `DISPATCH` loads the thread-local
- *     yield-request byte and branches, and `do_yield_poll`'s own comment says "Nothing counts and nothing is
- *     bounded here" — and no per-flow retired-work quantity is exported by quickjs.h.
- *   WHAT THE NEXT DIFF BUILDS: a retired-opcode counter incremented at `DISPATCH` beside the `sf->cur_pc`
- *     store it already makes, thread-local for the same reason the yield request is, taken to zero when the
- *     scheduler switches a flow IN (so the count handed over is always the running flow's own), and handed to
- *     this operation from `do_yield_poll` BEFORE it asks the preempt policy — so that a flow which parks there
- *     has already banked the work it did to reach that point. Batching is free of consequence by the
- *     accumulate-exactly rule above, which is what lets the hand-over sit at the poll rather than at every
- *     opcode.
- *   HOW ITS ABSENCE SHOWS: every `Event.timeStamp` read within one task is the same number and every delta
- *     between two of them is exactly 0; `performance.now()` differences inside one handler are 0; the agent's
- *     first realm's time origin is 0 until a timer or a frame fires; and
- *     `dom/events/Event-timestamp-safe-resolution.html`'s `do { … } while (delta == 0)` has no exit at any
- *     resolution. When the counter lands, all four move together. */
+/* WHO CALLS IT: the interpreter, through the one registration that also carries the preempt policy
+ * (quickjs.h's JSFlowControlHooks `work`, relayed by solver/engine.c). The count is taken at the yield poll,
+ * BEFORE the policy is asked, so a flow that parks there has already banked the work it did to reach that
+ * point; it is zeroed where the scheduler switches a flow IN (JS_FlowDiscardRetiredWork), so what arrives here
+ * is the running flow's own and never the host's time between two flows nor a finished flow's residue.
+ *
+ * RESIDUAL — NARROWER THAN HTML §8.1.7.3 Processing model, AND NAMED SO THE NEXT DIFF IS THE THING AND NOT
+ * THE SEARCH FOR IT.
+ *   WHAT IS NOT COVERED: only work a FLOW retired moves the clock. The PRE-BOOT baseline retires opcodes too —
+ *     HTML §13.2.6 Tree construction runs there, and this engine performs a document's parsed-tree walk at
+ *     baseline — and none of it moves anything, because an advance with no flow running writes the SHARED
+ *     baseline and the assert at the top of this operation refuses it. That refusal is right for every span
+ *     AFTER the first flow exists (it would move siblings by work none of their paths produced) and it is
+ *     wider than it needs to be for the span BEFORE one does, where §Boot's rule is that baseline creations
+ *     are legitimately baseline and there is no sibling yet to move.
+ *   WHAT THE NEXT DIFF BUILDS: a baseline arm for that one span — the same accumulate-exactly hand-over,
+ *     admitted only while the frontier holds no flow at all, and asserted unreachable the instant one exists,
+ *     so the narrow window cannot silently widen into the case the assert exists for.
+ *   HOW ITS ABSENCE SHOWS: every duration whose two ends bracket tree construction is exactly 0 — the agent's
+ *     first realm's HIGH RESOLUTION TIME Level 3 §4 Time Origin is 0 by construction rather than by
+ *     measurement, and a `PerformanceNavigationTiming`'s `domInteractive`/`domComplete`, which are moments on
+ *     this clock, are 0 for a one-line document and 0 for a ten-megabyte one alike. Two agents whose documents
+ *     differ by megabytes of parsing stamp the same numbers. */
 
 /* MOVE THE CLOCK to the moment a task source becomes due. `due` is the earliest moment ANOTHER source is
    already due at, or JS_UNDEFINED when none is — the caller has it, because it is what decided this move.
