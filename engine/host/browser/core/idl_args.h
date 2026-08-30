@@ -47,9 +47,14 @@ typedef enum {
        and the range check that follows then throws or misses where the spec wraps. */
     IDL_LONG,             /* `long` — 32, signed */
     IDL_UNSIGNED_LONG,    /* `unsigned long` — 32, unsigned */
-    /* `[EnforceRange] unsigned long` — §3.2.4.10, which REPLACES the modulo with a REFUSAL: a non-finite value,
-       or one whose integer part is outside the type's range, is a TypeError instead of a wrap. It is a separate
-       type and not a flag for the same reason [Clamp] is: the extended attribute IS the conversion.
+    /* `[EnforceRange] unsigned long` — §3.3.6 [EnforceRange], whose ARM of §3.2.4.9 Abstract operations'
+       ConvertToInt REPLACES the modulo with a REFUSAL: a non-finite value, or one whose IntegerPart is outside
+       the type's range, is a TypeError instead of a wrap. THE NUMBER HERE WAS §3.2.4.10, WHICH DOES NOT EXIST —
+       §3.2.4 Integer types ends at §3.2.4.9 — and it read as plausible for as long as nobody opened it, then
+       propagated into ten more sites in one diff because they took it from here. The attribute and the steps are
+       two sections and the pair is what makes the claim checkable: §3.3.6 says which types carry it, §3.2.4.9
+       says what it does. It is a separate type and not a flag for the same reason [Clamp] (§3.3.3) is: the
+       extended attribute IS the conversion.
        Indexed Database §4.9's `advance([EnforceRange] unsigned long count)` is the member that needs it, and
        the difference is the whole of what a page can observe there — `cursor.advance(-1)` is a TypeError, where
        the modulo makes it a request to advance 4294967295 records that would walk the store to its end. */

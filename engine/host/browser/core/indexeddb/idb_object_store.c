@@ -1076,7 +1076,7 @@ static int js_os_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
         JS_FreeValue(ctx, cb_result);
         if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
-        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.2.4.10's refusal precedes
+        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.3.6 [EnforceRange]'s refusal precedes
            §5.12 step 2's: `deletedStore.getAll(q, -1)` is a TypeError and not an "InvalidStateError". That is
            the DECLARATION's doing now (IDL_UNSIGNED_LONG_ENFORCE) rather than a call this body has to make in
            the right place, so what is left here is reading the number the conversion produced. */
@@ -1087,7 +1087,8 @@ static int js_os_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
                 DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
                        "§4.5's `getAll`/`getAllKeys` positional `count` reached js_os_get_all outside an "
                        "unsigned long's range — GET_ALL_ARGS declares IDL_UNSIGNED_LONG_ENFORCE, which is "
-                       "§3.2.4.10's whole conversion and refuses such a value before any body runs, so a "
+                       "§3.3.6 [EnforceRange]'s arm of §3.2.4.9 ConvertToInt and refuses such a value "
+                       "before any body runs, so a "
                        "value here it would have refused means this position lost its declared type");
                 count = (uint32_t)c;
             } else {
@@ -1762,7 +1763,8 @@ void idb_object_store_init(JSContext *ctx)
     static const IdlArgType CURSOR_ARGS[2] = { IDL_ANY, IDL_ENUM };
     /* `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned long count)`. The first position
        is `any`, which is what makes §5.12's own branch the member's step rather than a conversion. The second
-       is IDL_UNSIGNED_LONG_ENFORCE, which is §3.2.4.10 `[EnforceRange]`'s WHOLE conversion: ToNumber, then
+       is IDL_UNSIGNED_LONG_ENFORCE, which is §3.3.6 [EnforceRange]'s WHOLE arm of §3.2.4.9 Abstract
+       operations' ConvertToInt: ToNumber, then
        sign(x)·floor(abs(x)), then a TypeError for a value outside 0..2**32−1 rather than the "x modulo
        2^bitLength" §3.2.4.9 "Abstract operations"' ConvertToInt performs for a §3.2.4.6 "unsigned long"
        without the attribute — so `getAll(q, -1)` throws where a plain unsigned long asks for 4294967295

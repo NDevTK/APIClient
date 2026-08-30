@@ -374,7 +374,7 @@ static int js_ix_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
         JS_FreeValue(ctx, cb_result);
         if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
-        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.2.4.10's refusal precedes
+        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.3.6 [EnforceRange]'s refusal precedes
            §5.12 step 2's: `deletedIndex.getAll(q, -1)` is a TypeError and not an "InvalidStateError". That is
            the DECLARATION's doing now (IDL_UNSIGNED_LONG_ENFORCE) rather than a call this body has to make in
            the right place, so what is left here is reading the number the conversion produced. */
@@ -385,7 +385,8 @@ static int js_ix_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
                 DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
                        "§4.6's `getAll`/`getAllKeys` positional `count` reached js_ix_get_all outside an "
                        "unsigned long's range — GET_ALL_ARGS declares IDL_UNSIGNED_LONG_ENFORCE, which is "
-                       "§3.2.4.10's whole conversion and refuses such a value before any body runs, so a "
+                       "§3.3.6 [EnforceRange]'s arm of §3.2.4.9 ConvertToInt and refuses such a value "
+                       "before any body runs, so a "
                        "value here it would have refused means this position lost its declared type");
                 count = (uint32_t)c;
             } else {
@@ -771,7 +772,8 @@ void idb_index_handle_init(JSContext *ctx)
     /* `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned long count)` and
        `getAllRecords(optional IDBGetAllOptions options = {})` — §4.5's declarations exactly, for the same
        reasons: the first position is `any` so §5.12's own branch is the member's step, and the count is
-       IDL_UNSIGNED_LONG_ENFORCE so §3.2.4.10 `[EnforceRange]`'s whole conversion — ToNumber, truncate toward
+       IDL_UNSIGNED_LONG_ENFORCE so §3.3.6 [EnforceRange]'s arm of §3.2.4.9 Abstract operations'
+       ConvertToInt — ToNumber, truncate toward
        zero, refuse anything outside 0..2**32−1 — is the TYPE's and runs before this body is entered at all.
        The dictionary's member list is core/indexeddb/idb_get_all.h's, declared once for both interfaces. */
     static const IdlArgType GET_ALL_ARGS[2] = { IDL_ANY, IDL_UNSIGNED_LONG_ENFORCE };

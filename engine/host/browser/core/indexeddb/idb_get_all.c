@@ -102,7 +102,7 @@
 const IdlDictMember IDB_GET_ALL_OPTIONS[3] = {
     /* §3.2.17 step 4.1 reads a dictionary's own members LEXICOGRAPHICALLY, which idl_args.c asserts:
        "count" < "direction" < "query". Declared in any other order this aborts at every runtime init. */
-    /* §3.2.4.10 `[EnforceRange]` over §3.2.4.6 `unsigned long` — the refusal is the TYPE's, so it runs inside
+    /* §3.3.6 [EnforceRange] over §3.2.4.6 `unsigned long` — the refusal is the TYPE's, so it runs inside
        §3.2.17 (ES-to-IDL list) step 4.1.4.1 and therefore before "direction" and "query" are read. */
     { "count", IDL_UNSIGNED_LONG_ENFORCE },
     { "direction", IDL_ENUM, false, IDB_CURSOR_DIRECTIONS, 0, NULL, IDL_DEFAULT_STRING, "next" },
@@ -309,7 +309,7 @@ static int js_idb_get_all_operation(JSContext *ctx, void *st, JSValue cb_result,
                is not the JS_ToFloat64-on-an-argument idl_number_of exists to replace. */
             JS_ToFloat64(ctx, &c, cv);
             DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
-                   "§5.12 handed its operation a `count` that is not an unsigned long. §3.2.4.10 "
+                   "§5.12 handed its operation a `count` that is not an unsigned long. §3.3.6 "
                    "[EnforceRange] is the DECLARED TYPE of both places one arrives — §4.5's positional "
                    "argument and IDBGetAllOptions' member — so the refusal already ran at the conversion; a "
                    "value here it would have refused means this closure was minted from something other than "
@@ -529,7 +529,8 @@ static int ga_step9_reads(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w, JSVa
         if (idl_number_of(ctx, IDL_UNSIGNED_LONG_ENFORCE, cv, &c)) {
             DCHECK(c >= 0 && c <= 4294967295.0 && c == (double)(uint32_t)c,
                    "§4.5's IDBGetAllOptions `count` reached step 9.2 outside an unsigned long's range. "
-                   "IDL_UNSIGNED_LONG_ENFORCE IS §3.2.4.10's whole conversion and refuses such a value at "
+                   "IDL_UNSIGNED_LONG_ENFORCE IS §3.3.6 [EnforceRange]'s arm of §3.2.4.9 ConvertToInt and "
+                   "refuses such a value at "
                    "§3.2.17 (ES-to-IDL list) step 4.1.4.1, so a value here it would have refused means this "
                    "dictionary reached step 9 without being converted — check that both entries hand "
                    "ga_step9_reads an idlDict IDB_GET_ALL_OPTIONS declared, never the page's own object");

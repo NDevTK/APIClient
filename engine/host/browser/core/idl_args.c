@@ -146,11 +146,12 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
             return JS_ThrowTypeError(ctx, "the provided double value is non-finite");
         return JS_NewFloat64(ctx, x);
     }
-    /* §3.2.4.10's [EnforceRange], which is four of that section's own steps and not a bound this file chose:
-       "if x is NaN, +∞ or −∞, then throw a TypeError"; "let x be sign(x)·floor(abs(x))"; "if x < lowerBound or
-       x > upperBound, then throw a TypeError". The bounds are `unsigned long`'s, which is the only type in this
-       build carrying the attribute — a second one states its own here rather than sharing a width parameter,
-       because the whole point of the attribute is that the range is part of the TYPE. */
+    /* §3.3.6 [EnforceRange]'s ARM of §3.2.4.9 Abstract operations' ConvertToInt, which is four of that
+       algorithm's own steps and not a bound this file chose: "If x is NaN, +∞, or −∞, then throw a TypeError";
+       "Set x to IntegerPart(x)" (itself "floor(abs(n))", negated when n < 0); "If x < lowerBound or
+       x > upperBound, then throw a TypeError"; "Return x". The bounds are `unsigned long`'s, which is the
+       only type in this build carrying the attribute — a second one states its own here rather than sharing a
+       width parameter, because the whole point of the attribute is that the range is part of the TYPE. */
     if (t == IDL_UNSIGNED_LONG_ENFORCE) {
         if (!isfinite(x))
             return JS_ThrowTypeError(ctx, "the provided value is non-finite and its argument enforces a range");

@@ -39,11 +39,13 @@ enum { IDB_GET_ALL_VALUE = 0, IDB_GET_ALL_KEY, IDB_GET_ALL_RECORD };
  * §5.12's own note ("if count is specified and there are more than count records in range, only the first
  * count will be retrieved") is stated about a member that may be absent. IDL_DEFAULT_NONE is how §3.2.17 says
  * a member does not exist, which is a different state from existing and being 0.
- * IT IS DECLARED IDL_UNSIGNED_LONG_ENFORCE, WHICH IS §3.2.4.10 `[EnforceRange]`'s WHOLE CONVERSION and not a
- * ToNumber with a test after it: ToNumber, then "let x be sign(x)·floor(abs(x))", then a TypeError for a
- * non-finite value or one outside 0..2**32−1 — never the "x modulo 2^bitLength" §3.2.4.9 "Abstract operations"'
- * ConvertToInt performs for a §3.2.4.6 "unsigned long" WITHOUT the attribute, which is what would make
- * `getAll(q, -1)` a request for 4294967295 records.
+ * IT IS DECLARED IDL_UNSIGNED_LONG_ENFORCE, WHICH IS §3.3.6 [EnforceRange]'s WHOLE ARM of §3.2.4.9 Abstract
+ * operations' ConvertToInt and not a ToNumber with a test after it. That arm is four steps: "If x is NaN, +∞,
+ * or −∞, then throw a TypeError"; "Set x to IntegerPart(x)"; "If x < lowerBound or x > upperBound, then throw
+ * a TypeError"; "Return x" — never the "Set x to x modulo 2^bitLength" the SAME algorithm performs for a
+ * §3.2.4.6 "unsigned long" WITHOUT the attribute, which is what would make `getAll(q, -1)` a request for
+ * 4294967295 records. The attribute and the steps are two sections on purpose: §3.3.6 says which types carry
+ * it, §3.2.4.9 says what it does, and a citation naming only one of them cannot be checked against the other.
  *
  * THE REFUSAL BELONGS TO THE TYPE AND NOT TO A CONSUMER, and that is a statement about WHEN it runs rather than
  * about where the code sits. Web IDL performs it inside §3.2.17 Dictionary types (ES-to-IDL list) step 4.1.4.1's
