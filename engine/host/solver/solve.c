@@ -118,7 +118,22 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    twice. The comparator's copy of the same three observations lives on the FLOW (flow.h's `cand_surv` and
    `cand_rung`, written beside each credit below), and the two are deliberately not one number: a ledger that
    could be re-earned reorders the frontier on repetition, and a comparator that cannot be re-read cannot say
-   where anything stands. */
+   where anything stands.
+   AND THE LADDER'S BOTTOM RUNG HAS NO COUNTER HERE, WHICH IS A DECISION. FLOW_RUNG_DELIVERED is the flow-side
+   fitness that separates a candidate whose bytes never entered the program from one whose bytes a filter ate;
+   as a LEDGER quantity it would be a 0->1 crossing paid to the first candidate of the search to reach its own
+   source read and to none of the rest — §@S(ii)'s defect exactly, and the search learns nothing from the
+   second delivery that it did not learn from the first. So the comparator carries it and the ledger does not.
+   RESIDUAL — WHAT IS NARROWER THAN THE SPEC AND WHAT THE NEXT DIFF BUILDS. The REPORT still cannot tell the
+   two zeroes apart: with `reached:0` and `surv_run:0` the popup says the same thing about a search whose
+   candidates never got their bytes into the page as about one whose candidates were sanitized at the sink, and
+   §@S names those as different states taking opposite actions. The next diff adds the search-side counter of
+   candidates OBSERVED TO DELIVER (a count, not a crossing — the ledger's rungs stay unpaid) and renders it in
+   extension/lib/popup-security.js beside `survivedBy`. It is not done here because that file is the consumer
+   and a field written with no reader is the defect §Architecture names; the two halves land together or not
+   at all. ITS ABSENCE SHOWS as a search reported `tried:N, reached:0, 0 of L bytes survived` for which no
+   column anywhere says whether the substitution ever happened — the state the flow-side rung can now
+   distinguish and the report still cannot. */
 typedef struct {
     char *src; char *root; int sink; int tried; int reached; int turns; int fires;
     /* THE LEDGER'S OWN LATCH FOR THE ARRIVAL RUNG, AND IT IS SPLIT OFF `reached` BECAUSE ONE NUMBER WAS
@@ -1171,14 +1186,22 @@ static void breakout_arrived(Cand *e) {
     e->reached++;
 }
 
-/* §@S's FIRST FITNESS RUNG — "filter-survived" — AND THE ONLY ONE THAT IS OBSERVED INSIDE THE RUNWAY.
-   The other three all report at or past the sink of the candidate's OWN class, so a flow that had not got
-   there yet was worth nothing whatever it had done. This one is asked of EVERY string that reaches ANY
+/* §@S's FIRST *SINK* FITNESS RUNG — "filter-survived" — AND THE ONLY ONE OF THE THREE THAT IS CLASS-INDEPENDENT.
+   The other two report at or past the sink of the candidate's OWN class, so a flow that had not got
+   there yet was worth nothing whatever it had done at any other sink. This one is asked of EVERY string that reaches ANY
    code-execution sink during a candidate run, before the class partition, because that is what the question
    is: not "did this breakout arrive at its sink" but "how much of what the page was given is still alive".
    A candidate for the eval sink whose bytes turn up at a markup write has demonstrably survived the page's own
    filter and travelled through its code — §@S(2)'s "moved" — and until this line that observation was
    discarded by `candidate_search` returning NULL.
+   AND IT IS NO LONGER THE BOTTOM OF THE LADDER. Every rung here is measured on a STRING A SINK WAS HANDED, so
+   a candidate still on the runway stood at 0 whatever it had done — §@S(i)'s objection, applied to the rungs
+   that replaced the outcome-restating ones. FLOW_RUNG_DELIVERED is below all of them and is observed at the
+   SOURCE READ, in the component that performs the substitution (solver/concolic.c), which is the only site
+   between a source read and a sink write that can state anything about this flow's bytes without a taint
+   tracker. So the three-state zero this file's entries produce is now a genuine partition: rung 0 is a flow
+   whose bytes never entered the program, rung 1 with `cand_surv == 0` is one whose bytes entered and did not
+   survive to any sink, and a nonzero fraction is this measurement.
    THE SEARCH IS THE FLOW'S OWN, not the sink's. A flow carries one substitution for one (source, sink class),
    so the progress belongs to that search wherever the bytes surface; asking the SINK which search to credit
    would credit whichever one happens to own the write.
@@ -1209,7 +1232,13 @@ static void filter_survived(const char *out) {
        (concolic.h), and asserting it again is what makes that STRUCTURAL: a fourth sink class, or a fourth
        route into an existing one, cannot quietly re-open the door that let this rung measure the page's own
        strings. Without it the failure is silent by construction — a nonzero fraction of a real payload found
-       in a real string, which is indistinguishable from an observation. */
+       in a real string, which is indistinguishable from an observation.
+       IT IS NOW HALF OF A PAIR AND THE HALVES ARE NOT THE SAME CLAIM. This one asks the COMPONENT: are these
+       bytes in the program of the replay running right now — the answer a restart resets. flow_observe_survival
+       asserts the FLOW's ladder rung: has this flow ever been observed to deliver at all — the answer §@S
+       requires monotone. A restarted candidate makes them differ, and the sink entry's own return is what
+       keeps this one true; neither implies the other, and a reader who deletes either as a duplicate has
+       deleted the only statement of one of the two. */
     DCHECK(concolic_candidate_delivered(),
            "an @S survival fraction is about to be measured for a flow whose payload has not entered the "
            "program — the run this is about to find is the PAGE'S own bytes coinciding with the candidate's, "
@@ -1407,7 +1436,14 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
            two sibling sinks below carry the same line rather than a gate of their own.
            IT IS NOT A BOUND. Nothing is counted, aged or remembered; the same flow reaching the same sink one
            statement after its source read is measured in full, and a flow that never delivers loses only
-           readings that were never about it. */
+           readings that were never about it.
+           AND THE RUNG THIS GATE IMPLIES IS NOT WRITTEN HERE, which is the one thing to check before adding a
+           write beside this line. §@S(i) wants an observation site strictly before the thing it measures a
+           distance to, and this line stands AT a sink: a delivery rung recorded here would separate nothing
+           the sink rungs below do not already separate, and would leave "delivered, still on the runway"
+           reading exactly 0 beside "never delivered" — the pair the rung exists for. It is written where the
+           substitution is PERFORMED (solver/concolic.c), and this gate is what makes a flow that stands on the
+           rung but is replaying from the baseline again return here instead of measuring. */
         if (!concolic_candidate_delivered()) return;
         /* A NON-STRING SOURCE IS NOT A SINK, AND THAT IS A POSITIVE STATEMENT RATHER THAN A GUARD.
            ECMAScript §19.2.1.1 PerformEval ( source, strictCaller, direct ) step 2 is "If source is not a

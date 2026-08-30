@@ -201,9 +201,17 @@ void        concolic_set_candidate(const char *src, const char *payload);
    the second one makes the payload's bytes exist in the page's program.
    IT IS THE PRECONDITION OF EVERY OBSERVATION ABOUT A CANDIDATE'S BYTES — see the definition in concolic.c for
    the measurement it was being taken without, and §@S for why a rung whose zero and whose absence read alike
-   is the defect. Per flow, monotone within a flow (a payload cannot leave a program), carried by a fork, and
-   RE-EARNED across a park rather than resumed, because a resumed candidate replays the document and reaches
-   its own source read again.
+   is the defect. Per flow, carried by a fork, and RE-EARNED across a park rather than resumed, because a
+   resumed candidate replays the document and reaches its own source read again.
+   IT IS NOT MONOTONE, AND THIS LINE USED TO SAY IT WAS ("a payload cannot leave a program"). A payload cannot
+   leave the program it entered, but a flow can be given a DIFFERENT program: decide_enter clears this
+   component's per-flow state for a flow entered fresh, so a candidate RESTARTED rather than resumed reads 0
+   again and is right to — its bytes are not in the replay it is now running, and a sink entry that believed
+   otherwise would measure the page's own text for the second time this fact exists to prevent.
+   THE MONOTONE QUANTITY IS THE OTHER ONE, AND THE TWO ARE DELIBERATELY NOT COLLAPSED: §@S's ladder records the
+   same event as flow.h's FLOW_RUNG_DELIVERED, where it must NEVER be lowered, because a comparator that a
+   restart demotes lets a flow lose rank for being re-entered. One event, two quantities, opposite reset rules;
+   concolic.c's writer states the split at the site.
    A `0` IS A POSITIVE STATEMENT: nothing in this program is this flow's, so any string that resembles the
    candidate is the page's own text. */
 int         concolic_candidate_delivered(void);

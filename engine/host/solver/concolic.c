@@ -1199,17 +1199,47 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
      * recorded against `flow_running()` and would be recorded against the wrong flow if the two had drifted
      * between the switch and the read. */
     {
-        const Flow *f = flow_running();
+        Flow *f = flow_running();
         CHECK(payload != NULL,
               "concolic: an @S candidate is being delivered with no payload — the substitution is (src,payload) "
               "as one identity and solve.c refuses to seed a flow holding half of it, so a NULL here is an "
               "installation that skipped concolic_set_candidate's own pairing; delivered as the empty string "
               "it would read as a source the page composed nothing out of");
-        DCHECK(f != NULL && f->cand_payload != NULL && !strcmp(f->cand_payload, payload),
+        /* THE FLOW IS `CHECK`ED AND NOT ONLY `DCHECK`ED because it is now DEREFERENCED on this path in every
+           build: the ladder write below reads and raises a field of it, so a release build that reached here
+           with nothing running would segfault where dev names the cause. It is the same rule the assert above
+           states about `payload`, arriving one line later for the same reason. */
+        CHECK(f != NULL,
+              "concolic: an @S candidate's bytes are entering the program with no flow running — a delivery is "
+              "an observation ABOUT a flow (its ladder rung, its survival fraction, its PoC), so a delivery "
+              "belonging to nobody is a substitution installed outside the scheduler's switch");
+        DCHECK(f->cand_payload != NULL && !strcmp(f->cand_payload, payload),
                "an @S candidate's bytes are entering the program under a flow that is not carrying them — the "
                "survival and arrival rungs, and any PoC, are recorded against the RUNNING flow, so this "
                "delivery is about to be credited to a flow whose own payload is a different string");
         g_cand_delivered = 1;
+        /* AND §@S'S BOTTOM LADDER RUNG, WRITTEN HERE BECAUSE THIS IS THE SITE — not because the flow happens
+           to be in hand. §@S(i) requires every rung to have an observation site STRICTLY BEFORE the thing it
+           is a distance to, and every other rung on the ladder reports at a SINK: a candidate that has replayed
+           800 gates without reaching its own source read and one the scheduler has never served stood at the
+           same 0 and ranked identically for the whole of the runway. This is the one honest observation in
+           between, and it is honest precisely because it is not a claim about where the bytes have got to —
+           "the payload is downstream of this operand" would need a taint tracker or a recorded
+           transform-expression, both of which §Re-execution bans. It is the narrower fact that the bytes ARE
+           IN THE PROGRAM, which only the component that puts them there can state.
+           WRITING IT AT SOLVE.C'S SINK ENTRIES INSTEAD WOULD MAKE IT WORTH NOTHING, which is worth saying
+           because that is the shorter diff: a rung recorded where the candidate has already reached a sink
+           adds no separation the sink rungs do not already carry, and leaves "delivered, still on the runway"
+           reading 0 beside "never delivered" — the two states the rung exists to tell apart.
+           IT IS NOT THE SAME FACT AS `g_cand_delivered` ABOVE, AND THE TWO MAY NOT BE COLLAPSED. That flag is
+           the component's live answer to "are this flow's bytes in the program RIGHT NOW", and it is CLEARED
+           by concolic_clear_pins when a flow is entered fresh — a candidate that is RESTARTED rather than
+           resumed replays from the baseline and its bytes are genuinely not in that replay's program until it
+           delivers again, so solve.c's sink entries must see the 0. The rung is the COMPARATOR: §@S requires
+           it monotone, so a later lower sample is another look at a fixed question and never a demotion, and
+           flow_observe_rung's early return is what makes the re-delivery cost nothing. Same event, two
+           quantities with opposite reset rules — the ledger/comparator split of §@S(ii) one level down. */
+        flow_observe_rung(f, FLOW_RUNG_DELIVERED);
     }
     for (i = 0; i < g_srcs_n; i++)
         if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }
@@ -1276,7 +1306,12 @@ void concolic_set_candidate(const char *src, const char *payload) {
    in the program at all. This fact is what the classes could not answer for themselves: a locator or an X9
    partition identifies WHOSE bytes a string holds only once they are somewhere to be found.
    A `0` IS NOT "NOT YET" — it is the positive statement that nothing in this program is this flow's, so a
-   string that looks like the candidate's is the page's own. Read at the sink, never latched by a reader. */
+   string that looks like the candidate's is the page's own. Read at the sink, never latched by a reader.
+   AND IT IS NOT THE LADDER RUNG THE SAME EVENT WRITES. flow.h's FLOW_RUNG_DELIVERED is the WFQ's comparator
+   coordinate and is monotone by §@S; this is the component's live answer and is cleared for a flow entered
+   fresh, because a RESTARTED candidate's bytes are not in the replay it is now running. Anyone who reads the
+   two as one number will delete whichever they met second: see the writer in concolic_deliver for why the
+   opposite reset rules are the whole point rather than a redundancy. */
 int concolic_candidate_delivered(void) {
     DCHECK(!g_cand_delivered || g_cand_payload != NULL,
            "a flow is recorded as having delivered its @S payload while no substitution is installed — the "

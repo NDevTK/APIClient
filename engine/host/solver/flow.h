@@ -36,15 +36,35 @@ typedef struct FlowAcct FlowAcct;
 /* §@S'S LADDER, NAMED WHERE THE FITNESS TERM IS DEFINED RATHER THAN WHERE IT IS OBSERVED. The rungs are
    ORDERED stages toward a fire and the comparator is composed from them (flow_distance), so the count of them
    is arithmetic in the weight and cannot be a convention two files agree on separately.
-   THREE AND NOT FOUR. §@S names {filter-survived, sink-reached, context-escaped, handler-fires}; the fourth is
-   the OUTCOME, and §@S(i)'s whole objection to the old fitness is that rungs sitting at or past the thing they
-   are a distance to are "the outcome restated". A fire closes the search and is a finding — the LEDGER's
-   quantity — so the comparator orders the candidates that have not fired, out of one fractional rung
-   (survival) and the two booleans below it. Its range is therefore exactly 1.0, which is what prices it
-   against the optimism term so a PROMISE never outweighs a FINDING (flow.c's flow_weight). */
-#define FLOW_RUNG_ARRIVED 1   /* this flow's breakout reached the sink its own search is for */
-#define FLOW_RUNG_ESCAPED 2   /* …and stood there in a position the sink's own language executes */
-#define FLOW_RUNGS_N      3   /* the fractional rung plus the two above it — the comparator's denominator */
+   THE FIRE IS NOT ONE OF THEM. §@S names {filter-survived, sink-reached, context-escaped, handler-fires}; the
+   last is the OUTCOME, and §@S(i)'s whole objection to the old fitness is that rungs sitting at or past the
+   thing they are a distance to are "the outcome restated". A fire closes the search and is a finding — the
+   LEDGER's quantity — so the comparator orders the candidates that have NOT fired.
+   AND THE FIRST RUNG IS BELOW EVERY ONE §@S NAMES, because every one it names reports AT A SINK and a
+   candidate spends most of its life on the runway getting to one. §@S(i) asks for an observation site
+   "strictly before the thing it is a distance to", and read against the sink rungs alone that condition was
+   satisfied by nothing: `filter-survived` is measured on a string a sink was handed, so a candidate 800 gates
+   into its replay and one that has not yet reached its own SOURCE READ both stand at exactly 0 and rank
+   identically for the whole of the runway. The one honest observation available in between is the DELIVERY —
+   the substitution actually being performed, which is the moment the attacker's bytes become a value in the
+   page's own program. It is not "the page has been reached" and not "the payload is downstream of something":
+   deciding the second needs a taint tracker or a recorded transform-expression, both of which §Re-execution
+   bans, while the first is a fact the component that performs the substitution holds already.
+   SO THE LADDER IS FOUR RUNGS AND ITS SITES ARE STRICTLY ORDERED: the delivery (a source read), then the
+   survival fraction and the two sink booleans (a sink write). Its range is still exactly 1.0 — one fractional
+   rung plus three booleans over a denominator of four — which is what prices it against the optimism term so
+   a PROMISE never outweighs a FINDING (flow.c's flow_weight), and the derivation of flow.c's
+   flow_silence_us_to_sink reads FLOW_RUNGS_N rather than a literal, so it moved with this and did not have to
+   be redone.
+   THE FRACTIONAL RUNG SITS BELOW THE DELIVERY IN THE ARITHMETIC AND ABOVE IT IN TIME, AND THAT IS NOT A
+   CONTRADICTION — IT IS UNREACHABILITY, ASSERTED. `flow_distance` composes `cand_surv + cand_rung`, so a
+   nonzero fraction under rung 0 would rank a flow that has delivered nothing beside one that has. No such
+   flow exists: a survival fraction is measured only on bytes that entered the program, so the delivery is
+   already recorded when it is taken, and flow_observe_survival asserts exactly that rather than trusting it. */
+#define FLOW_RUNG_DELIVERED 1 /* this flow's payload was substituted into the page's own program — a SOURCE read */
+#define FLOW_RUNG_ARRIVED   2 /* this flow's breakout reached the sink its own search is for */
+#define FLOW_RUNG_ESCAPED   3 /* …and stood there in a position the sink's own language executes */
+#define FLOW_RUNGS_N        4 /* the fractional rung plus the three above it — the comparator's denominator */
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
@@ -239,12 +259,18 @@ typedef struct Flow {
        boolean, because "how much of what the page was given is still alive" has degrees and the other two do
        not. */
     double cand_surv;
-    /* …AND THE BOOLEAN RUNGS ABOVE IT, AS A COUNT RATHER THAN AS BITS, because they are ORDERED and a count is
-       what makes the order the arithmetic instead of a convention: 0 = nothing but survival observed,
-       FLOW_RUNG_ARRIVED = this flow's breakout reached the sink its own search is for, FLOW_RUNG_ESCAPED = and
-       it stood in an executable position there. A flow cannot hold the second without the first (every escape
-       site in solve.c runs downstream of the arrival site on the same string), and flow_observe_rung asserts
-       that rather than trusting it. */
+    /* …AND THE BOOLEAN RUNGS, AS A COUNT RATHER THAN AS BITS, because they are ORDERED and a count is what
+       makes the order the arithmetic instead of a convention: 0 = this flow's bytes are not in the program at
+       all, FLOW_RUNG_DELIVERED = the substitution has been performed at a source read, FLOW_RUNG_ARRIVED = the
+       breakout built out of it reached the sink its own search is for, FLOW_RUNG_ESCAPED = and it stood in an
+       executable position there. A flow cannot hold one without its predecessor — every escape site in solve.c
+       runs downstream of the arrival site on the same string, and every arrival site runs downstream of a
+       delivery because a candidate arm returns at the sink's door unless its substitution has happened — and
+       flow_observe_rung asserts that rather than trusting it.
+       0 IS THEREFORE A POSITIVE STATEMENT AND NOT A "NOT YET", which is the whole reason the bottom rung is
+       worth a rung: it separates a flow the ordering has never served, or that a gate killed on the runway,
+       from one whose bytes are in the program and were eaten by a filter. Those took the same number before
+       and take opposite actions — the first is a scheduling or path question, the second a breakout one. */
     int cand_rung;
 
     /* IS THIS FLOW A DRIVEN ORPHAN — a flow whose frame is a CALL of a function the page defined and nothing
@@ -1000,11 +1026,16 @@ typedef struct {
      * which is how many gates it has replayed and therefore how deep into the program it is. A candidate
      * re-runs from the BASELINE, so arriving at a sink is a distance problem before it is anything else, and
      * §@S requires the search to be DISTANCE-DIRECTED: "a fitness of {filter-survived, sink-reached,
-     * context-escaped, handler-fires} the WFQ reads". flow_weight reads the three PRE-FIRE rungs of that list
-     * (flow_distance) and none of them moves until the candidate's bytes surface somewhere, so a candidate 800
-     * gates into its runway still ranks exactly like one 3 gates in for the whole of the runway itself. This is
-     * the number that says whether THAT gap is what is costing the run — the ladder starts at the first sink
-     * the bytes reach, and nothing measures the approach to it. It separates three states that look identical
+     * context-escaped, handler-fires} the WFQ reads". flow_weight reads the PRE-FIRE rungs of that list
+     * (flow_distance), and this row exists because the runway BELOW them was once unmeasured entirely: every
+     * rung §@S names reports at a SINK, so a candidate 800 gates into its replay ranked exactly like one 3
+     * gates in for the whole of the runway itself.
+     * THE LADDER NOW STARTS ONE SITE EARLIER — at the DELIVERY, the source read that puts this flow's bytes in
+     * the program — so the first thing a candidate does on the runway is measured and this row is no longer
+     * the only witness to the approach. It is still the row that says how much runway there IS, which the
+     * ladder cannot: the rung says the bytes are in, this says how many gates the replay crossed to get there,
+     * and a candidate stuck at rung 0 with a growing `cand_dec_max` is one whose replay is diverging before
+     * its own source read rather than one nobody is serving. It separates three states that look identical
      * from outside: served and
      * progressing (distance — build the fitness), never served (starvation — the ordering), and served while
      * pinned at zero (a candidate being RESTARTED rather than resumed, which no amount of thread time fixes). */
@@ -1197,12 +1228,17 @@ double flow_distance(const Flow *f);
    and does nothing when the flow already stands further along, so the quantity is monotone per flow and an
    observation can never demote the flow that made it. Not a credit: nothing is added, nothing accumulates, and
    this may be called for the same fraction any number of times. It bumps the frontier generation exactly as an
-   emission does, because a weight that moves without one is a rank the value-yield cannot see changing. */
+   emission does, because a weight that moves without one is a rank the value-yield cannot see changing.
+   IT ASSERTS THE RUNG BELOW IT, which is the flow-side half of the precondition solve.c's three candidate-arm
+   sink entries state: a fraction is the surviving run of THIS flow's payload, so a flow whose payload is not
+   in the program has nothing for the number to be a fraction of and the run found is the page's own text. */
 void  flow_observe_survival(Flow *f, double frac);
-/* …AND THE RUNG ABOVE IT THAT THIS FLOW'S BYTES HAVE NOW REACHED — FLOW_RUNG_ARRIVED or FLOW_RUNG_ESCAPED.
+/* …AND THE RUNGS THAT THIS FLOW'S BYTES HAVE NOW REACHED — FLOW_RUNG_DELIVERED, _ARRIVED or _ESCAPED.
    SAME RULES, SECOND QUANTITY, AND IT IS A SEPARATE ENTRY POINT BECAUSE THE OBSERVATIONS ARE MADE AT SEPARATE
-   SITES AND NEITHER SITE CAN SEE THE OTHER'S ANSWER. The survival fraction is measured at every code-execution
-   sink, class-independently; a rung is measured inside the candidate's OWN class, by that class's own language.
+   SITES AND NO SITE CAN SEE ANOTHER'S ANSWER. The delivery is observed where the substitution is PERFORMED
+   (solver/concolic.c), which is a source read and is in a different component from every other site here; the
+   survival fraction is measured at every code-execution sink, class-independently; the two sink rungs are
+   measured inside the candidate's OWN class, by that class's own language.
    A single "set the distance" entry would force one of them to compose a number out of a quantity it does not
    hold, and the way that goes wrong is silent — it reads back the other rung from the composite and rounds.
    MONOTONE AND ORDERED: it raises `cand_rung` and never lowers it, and it refuses a rung whose predecessor

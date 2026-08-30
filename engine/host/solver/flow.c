@@ -245,25 +245,48 @@ void flow_observe_survival(Flow *f, double frac) {
            "a surviving fraction was recorded for a flow carrying no payload — the fraction's denominator IS "
            "the payload, so a flow with none has nothing this number could be a fraction of and would rank "
            "above every exploration flow on a measurement of nothing");
+    /* AND THE RUNG BELOW THIS ONE, WHICH IS THE ORDER OF THE LADDER ASSERTED FROM THE LADDER'S OWN SIDE. The
+       flow having a payload says the substitution was INSTALLED; it does not say the substitution has HAPPENED,
+       and the run this function is about to record is a run of the payload's bytes in a string — which is
+       found in the PAGE'S own text just as readily, because a breakout is punctuation. solve.c's three
+       candidate-arm entries ask the component that performs the substitution and return before reaching here
+       if it has not; this is the same statement one layer down, so a fourth sink class, or a fourth route into
+       an existing one, cannot re-open the door by forgetting to ask. It is also what makes flow_distance's
+       `cand_surv + cand_rung` composition sound: the fraction is arithmetically BELOW the delivery and
+       chronologically above it, and this is the assertion that the pair which would expose that — a nonzero
+       fraction standing at rung 0 — cannot exist. */
+    DCHECK(f->cand_rung >= FLOW_RUNG_DELIVERED,
+           "an @S survival fraction is being recorded for a flow that has not been observed to DELIVER its "
+           "payload — the run about to be measured is the page's own bytes coinciding with the candidate's, "
+           "so the flow's fitness, the search's ratchet and the report's surviving-byte count would every one "
+           "of them be a reading of text the attacker never supplied");
     if (frac <= f->cand_surv) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
     f->cand_surv = frac;
     frontier_rank_changed();
 }
 
-/* THE SAME QUANTITY, ONE RUNG UP — see flow.h for why the two writers are separate entry points and why the
- * ladder is three rungs rather than §@S's four. Everything flow_observe_survival says about being a reading
- * rather than a payment holds verbatim here; what this adds is the ORDER, which the fraction does not have.
+/* THE SAME QUANTITY, ONE RUNG UP — see flow.h for why the writers are separate entry points, why the ladder's
+ * bottom rung sits below every stage §@S names, and why the fire is not on it. Everything
+ * flow_observe_survival says about being a reading rather than a payment holds verbatim here; what this adds
+ * is the ORDER, which the fraction does not have.
  * WHY THE ORDER IS ASSERTED RATHER THAN ARRANGED. Each escape site in solve.c runs downstream of the arrival
- * site on the SAME string of the SAME flow, so the predecessor is always already recorded — and the one way
- * that stops being true is the one that matters: the arrival write is refused for a candidate the search's own
- * delivery table has since contradicted, and an escape recorded past a refused arrival would advance a flow
- * onto a rung the search declined to give it. That is not a rank one rung too high; it is a rank identical to
- * a candidate that arrived AND escaped, taken by one the search has measured cannot arrive at all. */
+ * site on the SAME string of the SAME flow, and both run downstream of a DELIVERY because every candidate-arm
+ * sink entry returns at its door unless this flow's substitution has been performed — so the predecessor is
+ * always already recorded, and the one way that stops being true is the one that matters: the arrival write is
+ * refused for a candidate the search's own delivery table has since contradicted, and an escape recorded past
+ * a refused arrival would advance a flow onto a rung the search declined to give it. That is not a rank one
+ * rung too high; it is a rank identical to a candidate that arrived AND escaped, taken by one the search has
+ * measured cannot arrive at all.
+ * AND A RE-DELIVERY IS NOT A DEMOTION. A candidate that is RESTARTED rather than resumed (decide_enter, which
+ * clears the component's live per-flow state) replays from the baseline and delivers again, so this is called
+ * with FLOW_RUNG_DELIVERED for a flow already standing on ARRIVED. The early return below is the whole of the
+ * handling: a lower later sample is another look at a question whose answer is fixed — this flow's payload is
+ * fixed — never a statement that it has un-delivered. §@S's monotone clause is that sentence exactly. */
 void flow_observe_rung(Flow *f, int rung) {
     DCHECK(f != NULL,
            "an @S candidate's rung was recorded against no flow — a rung is a fact about ONE flow's own bytes "
            "standing at ONE sink, so a caller with no flow observed somebody else's");
-    DCHECK(rung == FLOW_RUNG_ARRIVED || rung == FLOW_RUNG_ESCAPED,
+    DCHECK(rung == FLOW_RUNG_DELIVERED || rung == FLOW_RUNG_ARRIVED || rung == FLOW_RUNG_ESCAPED,
            "an @S rung outside the ladder was recorded — the comparator's denominator is FLOW_RUNGS_N and the "
            "rungs are its numerator, so a value outside them puts the fitness term outside [0,1] and lets a "
            "candidate outrank a flow that has emitted a finding");
@@ -1933,7 +1956,19 @@ static double flow_queue_weight(const Flow *f) {
    transform the payload — the fraction is 1.0 for all of them the instant their bytes surface — so "two flows
    standing at the same distance rank equal" would be the answer for a whole population that is emphatically
    not standing at the same distance. The rungs are what tell them apart, and flow.h's `cand_rung` says why
-   they had to move onto the flow to do it. */
+   they had to move onto the flow to do it.
+   THE DENOMINATOR IS FLOW_RUNGS_N AND NOT A LITERAL, WHICH IS WHY THE LADDER COULD GAIN A RUNG BENEATH THE
+   OTHERS WITHOUT ANY ARITHMETIC HERE OR IN flow_silence_us_to_sink MOVING. Both read the macro and both bound
+   themselves by `FLOW_RUNGS_N - 1`, so the range stays exactly 1.0 by construction rather than by a number
+   somebody re-checked. What the extra rung DOES change is what every reading is WORTH: an arrival was a third
+   of the range and is now half of it, and a flow that has delivered and nothing else — which used to read 0,
+   the same as a flow that had never run — reads a quarter. That rescale is order-preserving among candidates
+   (every one of them that has any reading at all has delivered, so every numerator gained the same 1), and the
+   ordering it newly creates is precisely the one the rung exists for. It is a comparator, held per flow and
+   never accumulated, so there is no stored reading anywhere that was written under the old denominator: the
+   parked-candidate record ('c', cold.c) carries the substitution and not the ladder, and a resumed candidate
+   re-earns every rung by replaying to its own source read. A renumbering here is therefore not a format
+   change, and it would be one the moment a rung crossed the tier. */
 double flow_distance(const Flow *f) {
     DCHECK(f != NULL, "the fitness term was asked of no flow — it is a reading OF an item, so there is no item "
                       "here for it to be a reading of");
