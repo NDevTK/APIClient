@@ -49,6 +49,12 @@ let tabData = null;
 // run record belongs to the frontier rather than to the tab whose popup is open. `null` until the first
 // GET_ENGINE_RUNS answers — a different statement from an empty array (no engine has run yet).
 let engineRuns = null;
+/* THE HOST'S LEVEL-1 READING (bridge.js `self._level1`, fetched beside the runs). THREE STATES, AND THE VIEW
+   KEEPS THEM APART BECAUSE THE PRODUCER DOES: `undefined` — this popup has not asked yet, or the reply never
+   came (asserted at the fetch); `null` — the host answered, and no scheduler round has completed in this
+   session; an object — a reading of the order taken at the end of the last round. Declared `undefined` here
+   deliberately, so "not asked yet" is not the same value as "asked, and there is no round". */
+let hostOrder;
 let currentSchema = null;
 let currentRequestUrl = "";
 let currentRequestMethod = "POST";
@@ -933,6 +939,17 @@ async function loadState() {
   DCHECK(Array.isArray(engineRuns),
          "GET_ENGINE_RUNS did not answer with an array — the offscreen slices it straight off bridge.js's " +
          "_engineLog, so anything else is that command not reaching the offscreen document at all");
+  /* AND THE ORDER THE HOST PUT THOSE RUNS IN. The records above are one document each; this is the one thing
+     no document can state — which live instance and which non-resident work item the pool ranked ahead of
+     which, at the end of the last scheduler round. `null` is bridge.js saying no round has completed;
+     `undefined` is the command not reaching the offscreen at all, which is why it is asserted rather than
+     defaulted (a `|| null` here would render "the scheduler has taken no round" for a host that is gone). */
+  hostOrder = await chrome.runtime.sendMessage({ type: "GET_HOST_ORDER" });
+  DCHECK(hostOrder === null || (hostOrder && typeof hostOrder === "object" && !Array.isArray(hostOrder)),
+         "GET_HOST_ORDER did not answer with the host's Level-1 reading or with the null that says it has " +
+         "taken no round — the offscreen answers it straight off bridge.js's `_level1`, so anything else is " +
+         "that command not reaching the offscreen document, and the ONE observable of the order ACROSS " +
+         "documents is invisible again");
   // The recorded API drift (lib/popup-discovery.js). Fetched only when it has not been read yet or an action
   // just re-fetched a document — a re-render never needs it again, and it is the whole history, not a window.
   if (discoveryChanges === null) await loadDiscoveryChanges();
@@ -1174,6 +1191,10 @@ function renderDeepStatus() {
   // record worth showing; gating the run record on `rerrs.length` would hide it for exactly the pages that
   // went well, which is most of them.
   html += renderEngineRuns();
+  // AND THE ORDER THOSE RUNS WERE PUT IN — independent of them for the same reason the two sections above are
+  // independent of each other: a pool with documents WAITING and no run yet is exactly the state whose order
+  // matters, and gating this on `engineRuns.length` would hide it there.
+  html += renderHostOrder();
   if (!html) { el.style.display = "none"; return; }
   el.innerHTML = html;
   el.style.display = "block";
@@ -1294,6 +1315,88 @@ function renderEngineRuns() {
   const live = engineRuns.filter((m) => m.run === "partial").length;
   return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked `
        + `(${engineRuns.length}${live ? `, ${live} still running` : ""})</summary>${rows}</details>`;
+}
+
+/* THE ORDER ACROSS DOCUMENTS — bridge.js's `_level1`, the reading its scheduler takes at the end of every
+   round. The census one function up is LEVEL-2 and rides the engine's own result document, which is the only
+   place it could ride: it is the order WITHIN one document's frontier. Level-1 is the other one — which live
+   instance, which waiting tab and which parked residue the host ranked ahead of which — and it can ride
+   nothing the engine emits, because it is composed in the trusted zone out of one weight per instance and one
+   per non-resident work item, and no engine can see another engine. Until this row existed nothing recorded
+   it at all, which is how BOTH Level-1 ranking defects found this session came to be found by reading the
+   code: `frontierWeight(FRONTIER_UNSERVED)` frozen at the constant 1.0 for every waiting document, and the
+   cold walk deleting the weight of every row whose address a live document held. Neither is visible in the
+   winner — the first is a SPREAD that has collapsed and the second is an ABSENCE — which is why the row that
+   matters most here is `candWMax` beside `candWMin`, and why this view says so in words when they meet.
+
+   THE ROWS ARE RENDERED GENERICALLY AND THE STATES ARE RENDERED IN WORDS, which is the same split
+   renderEngineRuns makes for `_wfq` and for the same two reasons. Generic, because a row added to the census
+   must reach a human with no edit here — a hand list at this end is the second copy that goes stale. In
+   words, because the census distinguishes its states by PRESENCE and a reader must never have to infer that
+   from a missing key: a round that never asked the non-resident order, a round that asked it and ranked
+   nothing, and a real ordering are three different facts, and all three would otherwise render as the same
+   short row of numbers. */
+function renderHostOrder() {
+  if (hostOrder === undefined) return "";   // not asked yet — a different fact from the host having no round
+  if (hostOrder === null)
+    return `<details class="deep-cross-tab"><summary>Level-1 order — across documents</summary>`
+         + `<div class="deep-row"><span class="deep-label">the host has completed no scheduler round in this `
+         + `session, so there is no order to report — this is the absence of a reading, not an order of `
+         + `zeroes</span></div></details>`;
+  DCHECK(Number.isInteger(hostOrder.round) && hostOrder.round > 0 && Number.isInteger(hostOrder.hot),
+         "the host's Level-1 reading carries no round number or no hot count — bridge.js writes both on every " +
+         "record it composes, in the `finally` of the round itself, so a reading missing one is that composer " +
+         "having changed underneath this reader and every row below it is a reading of an unknown instant");
+  for (const k of Object.keys(hostOrder))
+    DCHECK(typeof hostOrder[k] === "number" && Number.isFinite(hostOrder[k]),
+           "the host's Level-1 reading carries a non-finite `" + k + "` — every row of it is a population " +
+           "count, a 0/1 state or a weight over a non-empty population, and the one value that is legitimately " +
+           "not a number (an engine's -Infinity for a drained frontier) is carried as the `drained` COUNT, so " +
+           "a non-finite here is that rule broken or a value the message channel could not carry");
+  const n = (k) => esc(String(hostOrder[k]));
+  const rankable = hostOrder.hot - (hostOrder.drained === undefined ? 0 : hostOrder.drained);
+  const resident =
+    hostOrder.hot === 0
+      ? "resident order: no instance was rankable this round"
+      : !("wTop" in hostOrder)
+        ? `resident order: all ${n("hot")} hot instance(s) answered a DRAINED frontier — each said it holds no `
+          + `runnable flow, so there was nothing to rank`
+        : `resident order over ${esc(String(rankable))} rankable of ${n("hot")} hot: top ${n("wTop")}`
+          + ("wRunner" in hostOrder ? `, runner-up ${n("wRunner")} (the value yield floor the winner is handed)` : "")
+          + `, bottom ${n("wMin")}`
+          + (hostOrder.drained ? `; ${n("drained")} drained and therefore unranked` : "");
+  const nonres =
+    !("cands" in hostOrder)
+      ? "non-resident order: NOT ASKED this round — the round spent its one advance on a navigation, or a "
+        + "reservation in flight held admission while the working set was under the floor. This is the order "
+        + "not being taken, which is a different fact from its being taken and finding nothing"
+      : hostOrder.cands === 0
+        ? "non-resident order: asked, and it ranked nothing — no document is waiting for an instance and no "
+          + "parked residue was admissible"
+        /* "WHEN IT WAS ASKED" IS LOAD-BEARING: this half is read at the top of the round and the pool counts
+           in the raw row below are read at its end, so a waiting-document count here that is higher than
+           `waiting` there is the round having SEATED one — the difference is what an admission looks like,
+           not two rows disagreeing. */
+        : `non-resident order over ${n("cands")} work item(s) when it was asked — ${n("candDocs")} waiting document(s)`
+          + ("candDocWMax" in hostOrder ? ` (best ${n("candDocWMax")})` : "")
+          + `, ${n("candCold")} parked frontier(s)`
+          + ("candColdWMax" in hostOrder ? ` (best ${n("candColdWMax")})` : "")
+          + `: best ${n("candWMax")}, lowest ${n("candWMin")}`
+          + (hostOrder.cands > 1 && hostOrder.candWMax === hostOrder.candWMin
+              ? " — every one of them ranks IDENTICALLY, which is what a rank frozen at a constant looks like "
+                + "from outside; the order between them is then whatever the walk happened to visit first"
+              : "");
+  const excl = "cands" in hostOrder
+    ? `left the order: ${n("exclLive")} parked residue(s) whose address a live or waiting document holds `
+      + `(that weight is carried by the instance instead), ${n("exclHeld")} whose key an instance already `
+      + `holds, ${n("exclStranded")} whose re-derivation stopped answering, and ${n("exclSub")} waiting `
+      + `document(s) that are sub-frames their embedder names`
+    : "";
+  const raw = Object.keys(hostOrder).map((k) => esc(k) + " " + n(k)).join(" · ");
+  const rows = [resident, nonres, excl, raw].filter((s) => s !== "")
+    .map((s) => `<div class="deep-row"><span class="deep-label">${s}</span></div>`).join("");
+  return `<details class="deep-cross-tab"><summary>Level-1 order — across documents, as of round `
+       + `${n("round")}${hostOrder.atFloor ? " (at the RAM floor)" : ""}</summary>${rows}</details>`;
 }
 
 // ─── Data Panel ──────────────────────────────────────────────────────────────

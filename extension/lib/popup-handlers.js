@@ -323,6 +323,25 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
+    /* THE LEVEL-1 ORDER — what the host was ranking its live instances and its non-resident work items BY at
+       the end of the last scheduler round. The run records above are LEVEL-2's surface (each carries the
+       engine's own `_wfq`, the order WITHIN one document); this is the order ACROSS documents, and no result
+       document can ever carry it because Level-1 is composed entirely in bridge.js out of `engineWeight` per
+       hot instance and `frontierWeight` per waiting address and cold row — no engine can see another engine.
+       Until this command existed the only thing that had ever recorded that order was nothing at all, which
+       is how a rank frozen at the constant 1.0 for every waiting document survived being shipped.
+       IT CROSSES VERBATIM AND `null` IS AN ANSWER. bridge.js declares `_level1` at load, so `undefined` here
+       is that file not present (asserted) and `null` is the honest statement that no round has completed —
+       three facts, and a `|| {}` at either end would make all three read as an order of zeroes. */
+    case "GET_HOST_ORDER": {
+      DCHECK("_level1" in self,
+             "there is no _level1 record in this document — bridge.js declares it at load beside _engineLog " +
+             "(never on first use, deliberately), so its absence is that file not having run here, and " +
+             "answering null would report 'the scheduler has taken no round' for a host that is not present");
+      sendResponse(self._level1);
+      return;
+    }
+
     /* THE FRONTIER'S SHARE OF THIS PERSON'S DISK — read and set through the ONE entry into the host
        (`astDispatch`), never by reaching into bridge.js's own state from here. The two commands are one case
        because they are one question: setting a share answers with the share that is now in force, so a popup
