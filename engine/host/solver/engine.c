@@ -7639,72 +7639,34 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                         c.dyn_bytes) / 1024,
                        JS_StepMachineCount(JS_GetRuntime(g_sess_ctx)));
             }
-            /* AND WHAT THE ORDER ITSELF IS MADE OF (solver/flow.h's WfqCensus). @PROGRESS says how much work is
-               happening and @COLD says how much of it RETIRES, and a run in which both climb while the
-               fixture's probe table stops advancing is one whose entire frontier is doing something that emits
-               nothing — a state neither line can explain, because neither reads either term the pick is made
-               of. THE READING IS `valMax - valMin` AGAINST 1.0, the optimism term's entire range: a spread
-               wider than that is a frontier whose ends the bonus can no longer reorder, so the order is the
-               reward's and the bottom waits on the aging term alone (one point per second of unproductive
-               thread time, per member ahead of it). `valZero` names who is down there — a from-baseline flow
-               enters at reward 0, which is every candidate session and every joined document's boot flow — and
-               `selfEmit` says whether anything in the frontier has emitted since it was born at all. */
+            /* AND WHAT THE ORDER ITSELF IS MADE OF — solver/result.c's `result_wfq_json`, which is the
+               SAME BYTES the result document carries as `_wfq` and not a second rendering of the same struct.
+               @PROGRESS says how much work is happening and @COLD says how much of it RETIRES, and a run in
+               which both climb while the fixture's probe table stops advancing is one whose entire frontier is
+               doing something that emits nothing — a state neither line can explain, because neither reads any
+               term the pick is made of.
+               WHY THE COMPOSITION IS NOT HERE ANY MORE, AND IT IS THE WHOLE POINT OF THE MOVE. This printf was
+               the WfqCensus struct's only consumer, and this loop runs for exactly one host: `engine_run` is
+               called by the smoke fixture and by nothing else, while the extension's ABI drives
+               `engine_sched_step` directly and never enters this function. So the one measurement §scheduler
+               makes a claim about at both levels was emitted only where a single document can ever stand, and
+               a rank frozen at a constant across documents had no row anywhere that could have shown it. Being
+               the struct's only consumer is also how `svc_min` came to be computed on every census and printed
+               by nobody, and how `families` came to be printed and read by nobody: a struct maintained by hand
+               in flow.h and serialized by a printf here is two hand-kept lists that drift in both directions.
+               There is one composer now, it lives beside the document that ships it, and this host prints what
+               that composer produced.
+               A HOST WHOSE OUTPUT IS A STREAM OF LINES STILL PRINTS ITS OWN LINE, and that is not a second
+               reporting mechanism: it is the same rule result.h states for a page error and test_forced.c
+               states for the @S array — a host that publishes a DOCUMENT reads the census out of it, and a
+               host whose output IS lines must print it when it is taken or it is not in the output at all.
+               The bytes are identical either way, so the two can never disagree. */
             {
-                WfqCensus w;
-                flow_wfq_census(&w);
-                printf("@WFQ {\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
-                       "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,\"svcMax\":%lld,"
-                       /* …AND THE FLOOR OF THE SAME SCAN, WHICH THIS LINE COMPUTED AND DID NOT PRINT. `svc_min`
-                          has been in the census since the aging term was priced, is described in flow.h as
-                          "the only number in this struct that can answer 'is the aging term measuring this
-                          flow or the whole frontier'", and reached NO reader: this printf is the struct's only
-                          consumer. A row computed on every census and emitted nowhere is the mirror of the
-                          defaulted-field defect (§Architecture) — a value that is real, asserted about, and
-                          consumed by nothing — and it bit exactly where flow.h said it would: a frontier whose
-                          aging term was 856 points and whose entire weight spread was 0.020, with no emitted
-                          number from which those two could be told apart. */
-                       "\"svcMin\":%lld,"
-                       /* …AND THE FORK FAMILY'S OWN SERVICE BESIDE IT (solver/flow.h's svc_fam_max), which is
-                          the one reading that says whether the REWARD SCALE is what a run is stuck on: `val`
-                          is copied at every fork and the aging that cancels it is charged per arm, so
-                          svcFamMax / svcMax is the factor by which this frontier over-charges itself for one
-                          family's silence. It decides nothing — it is here so the next change to flow_weight
-                          starts from a number instead of from this paragraph. */
-                       "\"svcFamMax\":%lld,\"svcFamMin\":%lld,"
-                       /* …AND HOW MANY FAMILIES THOSE TWO ARE THE ENDS OF, which is what turns the pair into
-                          a reading (solver/flow.h). `svcFamMin == svcFamMax` is produced by a ONE-family
-                          frontier, where it is an identity of the structure and the family half can never
-                          order anything, and by a several-family frontier whose services happen to agree at
-                          this instant, where it is a term that orders and is momentarily level. Emitted
-                          because a row this census computes and nobody prints is the exact defect the
-                          `svcMin` line above records. */
-                       "\"families\":%ld,"
-                       /* …AND THE OPTIMISM TERM'S OWN COORDINATE, WHICH IS THE ROW THIS LINE HAD NO ANALOGUE OF
-                          AND NEEDED MOST. Everything else here is thread time; `visMax` is COMPLETED UNITS OF
-                          WORK, and `visMax == 0` on a frontier of thousands says that no member has reached the
-                          end of a program — so no queued job can have run, whatever `switches` and `forks` say.
-                          That state is what a busy engine with an empty API surface looks like from inside, and
-                          before this row nothing in any stream could distinguish it from healthy interleaving.
-                          Read `visMin` beside it: equal to `visMax` is turns being handed round, far below it
-                          is the order concentrating, and both at 0 is nothing finishing at all. */
-                       "\"visMin\":%lld,\"visMax\":%lld,"
-                       "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,"
-                       /* …AND §@S'S FITNESS TERM, WHICH flow_weight ADDS AND NO ROW HERE REPORTED. `cands`
-                          says how many candidates are live; `distMax` says how far the best of them has
-                          travelled, which is the quantity the WFQ actually reads. Without it a run in which
-                          the fitness orders nothing is indistinguishable from one in which it orders
-                          everything, and `cands: 0` — every sample of the smoke fixture — is only the first
-                          of the two reasons this can read zero. */
-                       "\"distMax\":%.3f,"
-                       "\"decMax\":%ld,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f}\n",
-                       w.members, w.val_min, w.val_max, w.val_top,
-                       w.val_zero, w.self_emit, w.unrun, (long long)w.svc_max,
-                       (long long)w.svc_min,
-                       (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
-                       (long long)w.vis_min, (long long)w.vis_max,
-                       w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max,
-                       w.dist_max,
-                       w.dec_max, w.w_top, w.w_min, w.cand_w_max);
+                char *w = result_wfq_json();
+                CHECK(w != NULL, "the WFQ census could not be composed — this is the only statement this host "
+                                 "makes about the order its frontier is in, and the run continues without it");
+                printf("@WFQ %s\n", w);
+                free(w);
             }
             /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose
                created-flow count climbs with the switch count is either CHURN (each flow finishes and the

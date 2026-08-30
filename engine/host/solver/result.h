@@ -23,6 +23,36 @@
  * BFS actually interleaves rather than running its flows FIFO. */
 char *result_json(JSContext *ctx);
 
+/* THE ORDER'S OWN INPUTS, COMPOSED ONCE — solver/flow.h's WfqCensus rendered as one JSON object (caller
+ * frees), which `result_json` embeds as the document's `_wfq` and which a host with a line-oriented output
+ * prints verbatim. ONE composer, because the alternative is what it replaced: a struct whose rows are added by
+ * hand in flow.h and serialized by a printf in a THIRD file that is also maintained by hand, which is how
+ * `svc_min` came to be computed on every census and printed by nobody, and how `families` came to be printed
+ * and read by nobody.
+ *
+ * IT WAS EMITTED ONLY FROM A HOST LOOP THE PRODUCTION ABI NEVER ENTERS, WHICH IS WHY IT MOVED HERE. The
+ * scheduler's ordering is the one thing §scheduler makes a claim about at BOTH levels, and the only place it
+ * was ever written was `run_scheduler` — the smoke driver's loop over `engine_sched_step`, which `qjs_step`
+ * does not call and which no extension has ever run. So every ordering number this project has quoted is a
+ * reading of one fixture, and the row that would have shown a rank frozen at a constant was emitted by
+ * nothing a person ever runs. The result document is the surface that already crosses the ABI, is already
+ * asserted field-for-field by the trusted zone, and is already published DURING a run (main.c's
+ * qjs_emit_partial, on the host's own cadence) as well as at its end — so putting the census on it is what
+ * makes the ordering observable where it matters, and §Testing's "read the result DOCUMENT rather than the
+ * log" is the same sentence one layer up.
+ *
+ * TWO STATES, AND THE SECOND IS A POSITIVE STATEMENT RATHER THAN A ROW OF ZEROES. A census is a reading of an
+ * INSTANT, and the instant `qjs_result` composes at is the one where the frontier has just drained or been
+ * parked — so `members` is 0 and there is no order to report. Emitting `valMin: 0, wTop: 0, …` there would
+ * fabricate readings of an order that does not exist, which is §@H's own rule ("never invent") performed on
+ * the engine's own diagnostics, and a reader taking the last document would then be told "no term orders this
+ * frontier" about a run that drained. So an empty frontier emits `{"members":0}` and NOTHING ELSE: the
+ * ABSENCE of the term rows IS the statement that there was no order, exactly as §Architecture requires a
+ * legitimately-omitted value to be read. The three facts a consumer must keep apart are then distinguishable:
+ * no `_wfq` at all is a BROKEN CONTRACT, `{"members":0}` is an EMPTY FRONTIER, and a full object is a
+ * READING — where before, all three would have been the same zeroes. */
+char *result_wfq_json(void);
+
 /* AN UNCAUGHT ERROR FROM ONE OF THE PAGE'S OWN SCRIPTS. A page's throw ending its script is intentional — it is
    the forcing function that names an unbuilt capability — but the name was invisible: the flow simply stopped
    and the document reported the surface it had reached, with nothing to say a script had died. Recording it

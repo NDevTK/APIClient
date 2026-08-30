@@ -1200,12 +1200,37 @@ function renderEngineRuns() {
              "an @RESULT document and is missing one is that seam having changed underneath both");
       return esc(label) + " " + esc(String(m[k]));
     });
+    /* AND WHAT THE ONE BFS WAS ORDERING ITS FLOWS BY — solver/result.c's `_wfq`, relayed whole by bridge.js.
+       Until it rode the result document the scheduler's ordering was written ONLY by the smoke driver's own
+       loop, which the extension's ABI never enters, so every ordering number this project had ever quoted was
+       a reading of one fixture and no person running this had ever seen one.
+       IT IS NOT IN `FULL`, AND THAT IS THE POINT OF BOTH LISTS. Every row of `FULL` is a TOTAL over the run
+       and is asserted BY NAME because this view names it; these are readings of ONE INSTANT and are rendered
+       GENERICALLY, from whatever rows the census carries. A hand list here would be a third copy of
+       solver/flow.h's field list — and that list's own history is a row computed and printed by nobody
+       (`svc_min`) beside a row printed and read by nobody (`families`), which is precisely what a hand-kept
+       copy at each end produces. Rendered this way, a row added to the census reaches this reader unedited.
+       AND `members: 0` IS RENDERED AS THE SENTENCE IT IS, NEVER AS AN ORDER OF ZEROES. A finalize composes its
+       document after the frontier has drained or been parked, so its census has no term rows at all — the
+       absence IS the statement, and printing "reward 0..0, spread 0" there would report "nothing orders this
+       frontier" about a run that finished. The snapshots taken while the run is live are where the order is. */
+    DCHECK(m.wfq && typeof m.wfq === "object" && Number.isInteger(m.wfq.members),
+           "an engine run record reached the popup with no WFQ census — solver/result.c composes it into " +
+           "every document it builds and bridge.js asserts its shape before relaying it whole, so a record " +
+           "that has an @RESULT document and no `wfq` is that relay broken, and the ONE observable of what " +
+           "the scheduler is ordering its flows by is invisible again");
+    const order = m.wfq.members === 0
+      ? `frontier order: no members standing when this was taken${live ? "" : " — the run drained or parked, so there was no order left to report"}`
+      : `frontier order over ${esc(String(m.wfq.members))} flows: `
+        + Object.keys(m.wfq).filter((k) => k !== "members")
+                .map((k) => esc(k) + " " + esc(String(m.wfq[k]))).join(" · ");
     // The numbers on a snapshot are real observations of a page that is STILL being analysed, so they are
     // shown — and they are labelled as a running total, which is the one thing a completed run's row is not.
     const head = live
       ? `<strong>still running</strong> — snapshot, not a total; ${esc(String(m.resumed))} resumed · so far: `
       : `run complete · ${esc(String(m.resumed))} resumed · `;
-    return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ") + `</span></div>`;
+    return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
+         + `</span><span class="deep-label">${order}</span></div>`;
   }).join("");
   const live = engineRuns.filter((m) => m.run === "partial").length;
   return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked `

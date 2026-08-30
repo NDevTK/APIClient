@@ -267,7 +267,12 @@ const causeName = (cause) => {
   return name.length > 90 ? name.slice(0, 89) + "…" : name;
 };
 
-/* THE ORDERING, MEASURED — engine.c's @WFQ line (solver/flow.h's WfqCensus).
+/* THE ORDERING, MEASURED — the @WFQ line, whose bytes are solver/result.c's `result_wfq_json` (solver/flow.h's
+   WfqCensus) and are the SAME BYTES the result document carries as `_wfq`. It is one composer with two
+   emission sites and not two renderings: this stage's host publishes lines, the extension publishes documents,
+   and until the composer moved into result.c the census existed only on the line — so it was written by a
+   driver the production ABI never enters, and every ordering number this project has quoted is a reading of
+   this one fixture.
    THE VERDICT BELOW USED TO ASSERT THIS CAUSE, which is the defect this function's own history already names
    one paragraph up: a reporter claiming which of two causes held, from evidence it did not have. "This is the
    WFQ's value ordering rather than the budget" is a statement about the two terms flow_weight is made of, and
@@ -290,7 +295,17 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        weight spread 0.020, and every number in that sentence absent from this list. A
                        discriminator that can rule a cause out and cannot name the alternative sends the reader
                        back to a census it did not read. */
-                    "svcMax", "svcMin", "svcFamMax", "svcFamMin", "visMin", "visMax", "distMax"];
+                    "svcMax", "svcMin", "svcFamMax", "svcFamMin", "visMin", "visMax", "distMax",
+                    /* AND HOW MANY FORK FAMILIES THE PAIR ABOVE ARE THE ENDS OF, which is the row that turns
+                       `svcFamMin === svcFamMax` from an ambiguity into a reading. The engine has emitted it
+                       since the census learned to count it and this list did not read it, so the verdict below
+                       was inferring which of two opposite states held from a pair of extrema that cannot
+                       distinguish them: on a ONE-family frontier the equality is an identity of the structure
+                       (every member reads one node's service through one pointer) and the family half can
+                       never order that document at all; on a several-family frontier it is one instant's
+                       coincidence that the next charge moves. "Structurally an offset" is the finding that
+                       says stop looking. The reader states it now instead of assuming it. */
+                    "families"];
 /* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. Throws on an
    absent or unparseable define, because the alternative is this reader quietly pricing a notch at a rate the
    engine stopped charging — the same class of defect as comparing an absent census field as undefined, and
@@ -310,17 +325,49 @@ function ageQuantum() {
 function wfqReading(out) {
   const s = [];
   for (const m of out.matchAll(/^@WFQ (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
-  if (!s.length) return { ordered: false, text: "no @WFQ census in this run's output" };
+  /* AND AN ABSENT CENSUS CARRIES THE SAME TWO FIELDS AS A PRESENT ONE, because the caller renders
+     `orderedBy` on every arm where `ordered` is false — this arm used to carry only `text`, so a run that
+     printed no census at all rendered "What IS ordering it is the undefined term", a sentence with the shape
+     of a verdict and a producer's hole where the answer goes. */
+  if (!s.length)
+    return { ordered: false, orderedBy: "nothing this run said — it printed no census at all",
+             text: "no @WFQ census in this run's output" };
   const w = s[s.length - 1];
+  /* AN EMPTY FRONTIER IS A DIFFERENT FACT FROM AN UNORDERED ONE, AND THE CENSUS SAYS WHICH BY OMISSION.
+     solver/result.c emits `{"members":0}` and NO term rows when the census is taken with nothing standing —
+     rendering `valMin: 0, wTop: 0` there would be readings of an order that does not exist. The field loop
+     below would then throw about a producer that is behaving correctly, and worse, the verdict computed from
+     those zeroes would read `nothing — every term reads the same at both ends of this frontier`, which is a
+     confident false statement about the ordering of a run that had simply finished. `members` is asserted
+     unconditionally because it is the row that separates the two; the terms are asked for only where the
+     producer states there was an order to report. */
+  if (typeof w.members !== "number")
+    throw new Error("[build] the @WFQ census has no numeric `members` — it is the row that says how many " +
+                    "flows the order was taken over, and solver/result.c emits it on BOTH shapes of the " +
+                    "census, so its absence is the composer having changed rather than an empty frontier.");
+  if (w.members === 0)
+    return { ordered: false, orderedBy: "nothing was standing — this census was taken over an empty frontier",
+             text: `@WFQ: 0 members. The last census of this run was taken with no flow standing, so it ` +
+                   `reports no order — which is a fact about WHEN it was taken and says nothing about how ` +
+                   `the run was ordered. Read a census from while the frontier was live.` };
   for (const f of WFQ_FIELDS)
     if (typeof w[f] !== "number")
       throw new Error(`[build] the @WFQ census has no numeric \`${f}\` — this discriminator reads ` +
-                      `${WFQ_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
-                      `field must be renamed here rather than silently compared as undefined.`);
+                      `${WFQ_FIELDS.join(", ")} and solver/result.c's result_wfq_json is what decides they ` +
+                      `exist; a renamed field must be renamed here rather than silently compared as ` +
+                      `undefined. A census with \`members: ${w.members}\` states that there WAS an order, so ` +
+                      `this is not the empty-frontier shape handled above.`);
   /* EACH TERM OF flow_weight AGAINST THE SPREAD IT COULD ORDER — the reading that says which term is deciding
      this run, rather than which one is largest. A term's magnitude and a term's RANGE take opposite actions:
-     an aging term of 856 points whose two ends are identical orders nothing at all and is a common offset, and
-     that is what a single-family frontier is (flow.h's svc_fam_min).
+     an aging term of 856 points whose two ends are identical orders nothing at all and is a common offset.
+     WHY THAT SENTENCE USED TO END `and that is what a single-family frontier is (flow.h's svc_fam_min)`, AND
+     WHY IT NO LONGER DOES. It named a cause from a reading that cannot carry one: `svcFamMax === svcFamMin` is
+     produced BOTH by a one-family frontier, where the equality is an identity of the structure and the family
+     half can never order anything, AND by a several-family frontier whose services happen to agree at this
+     instant, where the term IS ordering and is momentarily level. Those take opposite actions and the first is
+     the one that says stop looking, so inferring it was the stale-verdict shape this function's own history
+     already names one paragraph up. `families` is the row that answers it and it is read now, so the reading
+     below STATES which of the two this frontier is instead of assuming.
      THE PRICE OF A NOTCH IS READ FROM THE SOURCE THAT DEFINES IT, NEVER RESTATED HERE. flow.c's
      FLOW_AGE_QUANTUM is `ENGINE_QUANTUM_MS * 1000 / FLOW_SILENCE_US`, and a reader that hardcodes today's
      0.012 keeps reporting 0.012 after the engine is retuned — a number that is true when written and wrong
@@ -334,10 +381,20 @@ function wfqReading(out) {
   const rangeFam  = (w.svcFamMax - w.svcFamMin) * AGE_QUANTUM;
   const agingPts  = (w.svcMax + w.svcFamMax) * AGE_QUANTUM;
   const spread    = w.wTop - w.wMin;
+  /* WHICH OF THE TWO STATES THE FAMILY HALF IS IN, STATED FROM `families` RATHER THAN INFERRED FROM ITS
+     RANGE. One family is the structural case: every arm reads one node's service through one pointer, so the
+     term is a common offset that can never order that document however deep it is. More than one with a zero
+     range is the same arithmetic and the opposite finding — a term that orders, level at this instant. */
+  const fam = w.families === 1
+    ? "one fork family, so the family half is structurally a common offset and can never order this frontier"
+    : rangeFam > 0
+      ? `${w.families} fork families, spread ${rangeFam.toFixed(3)} — the family half is ordering`
+      : `${w.families} fork families whose services are level at this instant — the family half orders but is ` +
+        `not ordering here, which is not the same as the one-family case above`;
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
-                `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep`;
+                `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}`;
   return {
     ordered: w.valMax - w.valMin > 1 && w.valZero > 0,
     /* WHICH TERM THE ORDER ACTUALLY IS, named from the ranges rather than inferred. A term that cannot move
@@ -421,8 +478,10 @@ function hungCause(out) {
              : `The @WFQ census does NOT show a reward-ordered frontier — its ends are within one optimism ` +
                `bonus of each other — so the reward term is not what is holding this run. What IS ordering it ` +
                `is the ${wfq.orderedBy} term, read from the ranges above rather than from the magnitudes: a ` +
-               `term whose two ends read the same cannot separate two members however many points deep it is, ` +
-               `which is what a frontier that is ONE fork family looks like from the aging term's side.`) +
+               `term whose two ends read the same cannot separate two members however many points deep it is. ` +
+               `The census above says whether that is the ONE-FAMILY case, where the aging term's family half ` +
+               `is structurally an offset, or a level moment in a frontier it does order — this line used to ` +
+               `name the first of those without reading the row that tells them apart.`) +
            ` The rows still 0 name what nothing scheduled was working toward.`;
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
     return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}; ${wfq.text}) — flows were still ` +

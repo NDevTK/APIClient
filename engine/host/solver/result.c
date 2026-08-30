@@ -174,6 +174,61 @@ static char *errs_json_array(void) {
     return b ? b : strdup("[]");
 }
 
+/* THE ORDERING, COMPOSED — see result.h for why this lives here rather than in a host's printf, and for what
+   the two shapes below mean. This function DECIDES NOTHING: it reads flow_wfq_census and renders it.
+
+   HOW TO READ THE FULL SHAPE, kept beside the composer because a reader who has the bytes is the one who needs
+   it. `valMax - valMin` against 1.0 is the reward spread against the optimism term's ENTIRE range: wider than
+   that and the bonus can no longer reorder the frontier's ends, so the order is the reward's and the bottom
+   waits on the aging term alone. `valZero` names who is down there (a from-baseline flow enters at reward 0 —
+   every candidate session and every joined document's boot flow), `selfEmit` says whether anything has emitted
+   since it was born, `svcMin` beside `svcMax` says whether the aging term is measuring one flow or the whole
+   frontier, and `families` is what turns `svcFamMin == svcFamMax` from an ambiguity into a reading (1 is an
+   identity of the structure and the family half can never order anything; more than 1 is a term that orders
+   and is momentarily level). solver/flow.h states each row in full.
+
+   THE ARITHMETIC, DONE RATHER THAN ESTIMATED, and it is the reason the buffer is this size: the format's fixed
+   bytes are 251 without its conversion specifiers, and the twenty-three numbers' widest forms are 2512 (nine
+   longs and seven int64s at 20, three `%.1f` doubles at 312 and four `%.3f` at 314 — a double's widest decimal
+   form is 309 integer digits plus sign, point and fraction, which is what makes this buffer two orders larger
+   than the counter documents in this file). 251 + 2512 + 1 = 2764 against this 2816. RE-DO IT WHEN YOU ADD A
+   ROW; the DCHECK below catches the arithmetic being re-done wrong, and is not a substitute for doing it. */
+char *result_wfq_json(void) {
+    WfqCensus w;
+    char *out;
+    size_t n = 2816;
+    int m;
+
+    flow_wfq_census(&w);
+    out = malloc(n);
+    if (!out) return NULL;
+    /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
+       than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
+       parking and both leave no members standing. */
+    if (w.members == 0)
+        m = snprintf(out, n, "{\"members\":0}");
+    else
+        m = snprintf(out, n,
+                     "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
+                     "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
+                     "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
+                     "\"visMin\":%lld,\"visMax\":%lld,"
+                     "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
+                     "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f}",
+                     w.members, w.val_min, w.val_max, w.val_top,
+                     w.val_zero, w.self_emit, w.unrun,
+                     (long long)w.svc_max, (long long)w.svc_min,
+                     (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
+                     (long long)w.vis_min, (long long)w.vis_max,
+                     w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
+                     w.dist_max, w.w_top, w.w_min, w.cand_w_max);
+    DCHECK(m > 0 && (size_t)m < n,
+           "the WFQ census did not fit its buffer — a truncation here does not lose a digit, it loses the "
+           "closing brace, so the document that embeds it will not parse and every finding for this page is "
+           "discarded. Re-do the byte count above rather than widening it by eye");
+    return out;
+}
+
 /* The composition, and nothing else. Each surface serializes itself — endpoint.c walks its deduped endpoints,
    solve.c its fire-verified sinks — and this only decides that they are ONE document and what it is called.
    Keeping that decision in one place is the point: a second caller that wanted "just the endpoints" is how a
@@ -182,6 +237,9 @@ char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
     char *errs = errs_json_array();
+    /* THE ORDERING, ON THE ONE SURFACE THAT CROSSES THE ABI — see result.h. Composed here rather than by a
+       host, because the host that had it is a driver the production entry does not call. */
+    char *wfq = result_wfq_json();
     /* NO `probeResults` SURFACE. It carried the schemas an API's own REJECTION described, and a rejection is
        the answer to a DELIBERATELY MALFORMED REQUEST — one this engine cannot make, since its only network
        edge is the pending register and the host performs a GET through safeFetch. The reader on this side was
@@ -191,23 +249,28 @@ char *result_json(JSContext *ctx) {
     size_t n;
     char *out;
 
-    if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
+    if (!eps || !sinks || !errs || !wfq) { free(eps); free(sinks); free(errs); free(wfq); return NULL; }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 467 with its conversion specifiers
-       and 407 without them, and the nineteen counters' full-width decimals are 335 (five ints at 11, fourteen
-       longs at 20), so the worst case is 742 against this 768. It was 192 for a shape whose widest form was
+       and stated so the count can be re-done: the format's fixed bytes are 518 with its conversion specifiers
+       and 450 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
+       longs at 20), so the worst case is 826 against this 896. It was 192 for a shape whose widest form was
        already 197 — inside only because the real numbers are small — then 384 against a worst case the arrival
-       census took to 454, then 512 against 488, then 640 against the routed-delivery pair's 566; the four ends
-       of §9.3.3's delivery task are the FIFTH field to outgrow it, and the count above is it re-done rather
-       than adjusted. RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD; it is four counts off the format string and
-       there is no way to be nearly right. The DCHECK under the snprintf is
-       the second half of this, not a substitute for it: the arithmetic is what makes the buffer right, the
-       assert is what catches the arithmetic being re-done wrong. */
+       census took to 454, then 512 against 488, then 640 against the routed-delivery pair's 566, then 768.
+       THAT 768 WAS ALREADY 50 BYTES SHORT WHEN THIS COUNT WAS RE-DONE, and the prose above it was the reason
+       nobody noticed: it said "467 with its conversion specifiers and 407 without" and "nineteen counters …
+       335", against a format string that measured 508/442 with twenty-one counters at 375. Every one of those
+       five numbers was wrong in the safe-looking direction, so the stated worst case (742) sat comfortably
+       inside a buffer the real worst case (818) did not fit — an arithmetic that had been ADJUSTED to the new
+       field rather than re-done from the string, which is exactly what the sentence below tells you not to do.
+       RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD, FROM THE FORMAT STRING ITSELF; it is four counts and there is
+       no way to be nearly right. The DCHECK under the snprintf is the second half of this, not a substitute for
+       it: the arithmetic is what makes the buffer right, the assert is what catches it being re-done wrong —
+       and here it was the only thing standing between the shipped document and a lost closing brace. */
     /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 768;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(wfq) + strlen(cold_park_json()) + 896;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -269,24 +332,33 @@ char *result_json(JSContext *ctx) {
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
                              "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
                              "\"_sinkSuppressed\":%ld,"
-                             "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_park\":%s}",
+                             /* AND THE ORDER THE FRONTIER WAS IN WHEN THIS DOCUMENT WAS COMPOSED — result.h
+                                says why it rides here and what its two shapes mean. Every counter above is a
+                                TOTAL over the run; this one is a READING OF AN INSTANT, which is why it is one
+                                nested object and not twenty-three more `_`-prefixed siblings: a consumer that
+                                mixed them into the same row would be showing an instantaneous spread beside a
+                                cumulative switch count and calling both "so far". */
+                             "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_wfq\":%s,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
-                     orphansDriven, orphansAsked, cold_park_json());
-        /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
-           twenty-one, whose widest form is 375 digits beside 441 bytes of literal — inside the slack only because
-           the real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host
-           gets a document that will not parse and reports NOTHING for the page, which is the loudest possible
-           consequence arriving as the quietest possible bug. snprintf already told us; nothing was asking. */
+                     orphansDriven, orphansAsked, wfq, cold_park_json());
+        /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED, AND IT IS THE ONLY THING THAT WAS STILL RIGHT. It was
+           192 bytes for three counters and now carries twenty-one, whose widest form is 375 digits beside 450
+           bytes of literal — and the previous 768 did not cover that, which nothing noticed because the prose
+           stating the count had been adjusted instead of re-derived (see the arithmetic above). A truncation
+           here does not lose a digit, it loses the closing brace: the host gets a document that will not parse
+           and reports NOTHING for the page, which is the loudest possible consequence arriving as the quietest
+           possible bug. snprintf already told us; this is what asks. */
         DCHECK(m > 0 && (size_t)m < n, "the result document did not fit its buffer — the host would be handed "
                                        "truncated JSON and every finding for this page would be discarded");
     }
     free(eps);
     free(sinks);
     free(errs);
+    free(wfq);
     return out;
 }

@@ -150,6 +150,49 @@ function assertResultDocument(r) {
            "OBSERVABLE that the single BFS context-switches, forks and pumps jobs rather than running its " +
            "flows FIFO, and the only thing that tells an empty finding set from a run that never looked");
   }
+  /* THE ORDER THE FRONTIER WAS IN — solver/result.h's `_wfq`, and the FIRST scheduler-ordering number this
+     zone has ever been handed. It was emitted only by `run_scheduler`, the smoke driver's loop, which
+     `qjs_step` does not call: so every ordering measurement this project has quoted came from the one host
+     that can never hold more than one document, and a Level-1 rank frozen at a constant had no row anywhere
+     that could have shown it. Two of those defects were found by reading the code, which is what happens when
+     the instrument is not on the shipped path.
+     THE SHAPE IS ASSERTED AND THE NAMES ARE NOT, WHICH IS A DELIBERATE DIFFERENCE FROM THE LOOP ABOVE. That
+     loop lists twenty-one names because this zone READS each of them onto the run record one field at a time;
+     this object is relayed WHOLE (see the record below and popup.js, which renders whatever rows it carries),
+     so this zone has no name that could be broken and a hand-copied list here would be a third copy of
+     solver/flow.h's field list to keep in step — the hand-picked list §Browser-half warns about. What this
+     consumer depends on is exactly what is checked: it is an object, every value in it is a finite number, and
+     it carries `members`.
+     AND `members` IS THE ONE ROW THAT IS ALWAYS THERE, BECAUSE IT IS WHAT SEPARATES THREE FACTS THAT WOULD
+     OTHERWISE BE THE SAME ZEROES. A census over an EMPTY frontier — which is what `qjs_result` composes, since
+     a session answers DONE by draining or by parking and neither leaves members standing — carries `members: 0`
+     and NO term rows at all, because rendering `valMin: 0, wTop: 0` there would fabricate readings of an order
+     that does not exist and a reader would be told "no term orders this frontier" about a run that drained.
+     So: no `_wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER, and a full object is a READING.
+     The biconditional is asserted rather than described, because the absence of the rows is a POSITIVE
+     statement and the only thing that makes it one is that nothing may omit them for any other reason. */
+  DCHECK(r._wfq && typeof r._wfq === "object" && !Array.isArray(r._wfq),
+         "the engine's result document carries no _wfq census — solver/result.c composes the WFQ's own " +
+         "ordering (solver/flow.h's WfqCensus) into that field on every document it builds, partials " +
+         "included, and it is the ONLY observable of what the one BFS is ordering its flows BY. Its absence " +
+         "has the same two causes as a missing counter above and in the same order: check first whether the " +
+         "loaded wasm predates this reader (extension/lib/qjs/qjs.mjs.build.json's `head`), then whether " +
+         "result_json's composition changed under this seam");
+  DCHECK(Number.isInteger(r._wfq.members) && r._wfq.members >= 0,
+         "the engine's WFQ census carries no `members` count — it is the row that says how many flows the " +
+         "order was taken over, so without it an empty frontier and a frontier this census could not read " +
+         "are the same document, and every term below is a reading of an unknown population");
+  DCHECK((Object.keys(r._wfq).length > 1) === (r._wfq.members > 0),
+         "the engine's WFQ census reports " + r._wfq.members + " members with " +
+         (Object.keys(r._wfq).length - 1) + " term rows — the two must agree, because the ABSENCE of the " +
+         "terms is how an empty frontier says there was no order to report. Rows beside `members: 0` are " +
+         "readings of an order that did not exist; `members > 0` with no rows is a census that ran and said " +
+         "nothing, and both would be read as the verdict `no term orders this frontier`");
+  for (const k of Object.keys(r._wfq))
+    DCHECK(typeof r._wfq[k] === "number" && Number.isFinite(r._wfq[k]),
+           "the engine's WFQ census carries a non-finite `" + k + "` — every row of it is a count, a service " +
+           "notch or a weight, and a NaN reaching a reader makes every comparison against it false, which is " +
+           "the same silent failure §engineRecordFacts asserts one level up for the Level-1 weight");
   DCHECK(Array.isArray(r._park),
          "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
          "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
@@ -291,6 +334,19 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            asserted field-for-field above, so there is nothing to default; the crash arm carries neither,
            because a run with no result document has no surface to have found and a zero there would read as a
            page that was analysed and was clean. */
+        /* AND WHAT THE ONE BFS WAS ORDERING ITS FLOWS BY AT THE INSTANT THIS DOCUMENT WAS COMPOSED. Every
+           other field on this record is a TOTAL over the run; this one is a reading of an instant, which is
+           why it stays one nested object instead of being spread into siblings — a `switches` and a `wTop` in
+           one row would be a cumulative count and a momentary spread rendered as the same kind of number.
+           IT CROSSES WHOLE, deliberately, and it is the only field here that does: this zone reads no row of
+           it, so naming the rows would be a hand-copied copy of solver/flow.h's list living in a relay. A row
+           added to the census reaches the popup with no edit on this path, which is the property the census
+           has to have — it is the surface that failed by having a row nobody printed and a row nobody read.
+           A PARTIAL'S CENSUS IS THE VALUABLE ONE. main.c's qjs_emit_partial composes a document every
+           PARTIAL_MS while the frontier is LIVE, so those carry a real ordering; the finalize's document is
+           composed after the frontier drained or parked and carries `{members: 0}`, which is the true reading
+           of that instant and not a reading of the run. */
+        wfq: result._wfq,
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
