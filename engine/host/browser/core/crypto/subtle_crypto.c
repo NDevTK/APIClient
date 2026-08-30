@@ -339,7 +339,7 @@ static int sd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         /* §18.4.4 step 5 OVER A NAME NOBODY KNOWS. Every registered row is feasible and so is the
            NotSupportedError, so the machine declares the fork and the driver snapshots the flow for the arms
            it does not take. Deciding it here with a comparison would delete every arm but one. */
-        r = step_fork_run(ctx, hdr, s->name_v, SD_FORK_OP, SD_FORK_OUTCOMES, &arm);
+        r = step_fork_run(ctx, hdr, s->name_v, SD_FORK_OP, SD_FORK_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (r > 0) return r;
         DCHECK(arm >= 0 && arm < SD_FORK_OUTCOMES,
                "§18.4.4's registry fork answered with an outcome it did not declare");

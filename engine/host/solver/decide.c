@@ -1203,31 +1203,46 @@ int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking)
  * same question at successive POSITIONS (an iteration over an unknown collection) says so there — each position
  * is its own predicate and must not be decided by the last one's answer.
  *
- * IT PASSES `REAL_ARM_UNOBSERVED`, AND WHAT IS MISSING IS A DECLARATION AND NOT A LOOKUP. That parameter is
- * "which completion would a session carrying real values reach", and it decides TWO things at the branch seam
- * one function up: which arm the parent keeps, and whether the arm it ends on is FORCED. An outcome has no
- * condition and its arms are not booleans — they are numbered COMPLETIONS of a real operation over `over` —
+ * `real` IS THE ASKING MACHINE'S OWN STATEMENT, AND IT IS A PARAMETER FOR THE SAME REASON `nonforking` IS.
+ * It is "which completion would a session carrying real values reach", and it decides TWO things at the branch
+ * seam one function up: which arm the parent keeps, and whether the arm it ends on is FORCED. An outcome has
+ * no condition and its arms are not booleans — they are numbered COMPLETIONS of a real operation over `over` —
  * so §7.1.2 ToBoolean of the operand's example answers a different question and must not be substituted for
  * this one. Where `over` carries an example the answer exists and is computable, but only by the MACHINE:
  * `JSON.parse` over the example `"{}"` completes normally and over `"#x"` throws, and this seam holds the
  * operand and the operation's NAME, never its semantics. Deciding from the name would be the recognizer
  * §C-stack bans, and taking completion 0 because machines number their ordinary one there would be inventing
- * which completion a real session reaches.
- * SO THE THING TO BUILD IS THE SITE'S OWN STATEMENT, exactly as `nonforking` already is: the completion this
- * machine's operation reaches when run on the operand's example, or a positive "this machine cannot say". Every
- * machine then answers for itself, at its own definition, and both consequences follow at once — the ordinary
- * completion becomes the PRIMARY arm, and a forced one becomes as visible as a forced branch. Until it is
- * built, an outcome fork keeps completion 0 as the parent's (which is what a non-forking session takes, so the
- * two agree) and a request derived past a forced `JSON.parse` arm reports DERIVED, which is an under-statement
- * of its provenance and is named here so the next attempt starts from the declaration rather than from a table
- * of operation names. */
-int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
+ * which completion a real session reaches. So the machine says, at its own definition, and JS_OUTCOME_REAL_-
+ * UNSTATED is its positive "I cannot say" — mapped here onto REAL_ARM_UNOBSERVED, which is the same claim
+ * about the same fork made in this file's vocabulary, and translated rather than shared so that two seams
+ * cannot drift into meaning the number instead of the statement.
+ *
+ * NAMED RESIDUAL — THE PARAMETER EXISTS AND NO ASK SITE STATES ONE YET. Every site in the engine passes
+ * JS_OUTCOME_REAL_UNSTATED, so an outcome fork keeps completion 0 as the parent's (which is what a non-forking
+ * session takes, so the two agree) and marks no arm forced. WHAT THE NEXT DIFF BUILDS is one site's real
+ * declaration, starting with the two that can already answer: `JSON.parse` runs the real codec on the source's
+ * example through g_concolic.builtin and reports whether that completes or throws, and core/timing/timer.c's
+ * fork over HTML §8.7 Timers' timer initialization steps step 4 ("If timeout is less than 0, then set timeout
+ * to 0") runs that comparison on the example, the same shape decide_real_arm computes for a branch. HOW ITS
+ * ABSENCE SHOWS: a request derived past a FORCED outcome arm reports its provenance as DERIVED rather than
+ * FORCED, which is an under-statement of it — the one thing an outcome fork cannot yet say about a request the
+ * way a branch fork already does. */
+int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int real) {
     if (!g_running) return -1;
     DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "
                               "operation forks only where its operand's domain permits more than one completion");
     DCHECK(n == 2, "an outcome fork declaring more than two feasible completions — this prepares ONE sibling "
                    "per ask; build the N-1 sibling prepare (a queue engine_fork_finalize drains) before a "
                    "machine declares more");
+    /* THE SHAPE OF THE MACHINE'S DECLARATION, ASSERTED AT THE CONSUMER. `real` is a completion index or the
+       one sentinel; anything else is a machine answering some other question in this slot, and a value that
+       merely LOOKS like an arm is exactly what nothing downstream could catch — dec_fork_here would take it as
+       the arm to keep and decide_note_forced_arm would compare against it, so a wrong claim would arrive as a
+       plausible primacy rather than as a crash. */
+    DCHECK(real == JS_OUTCOME_REAL_UNSTATED || (real >= 0 && real < n),
+           "an outcome fork's REAL completion is neither one of the completions the machine declared nor the "
+           "positive 'this machine cannot say' — the seam cannot compute this one, so a third value is a site "
+           "spelling its declaration wrong rather than a fact this file can repair");
     {
         const char *f[2];
         char *key;
@@ -1252,7 +1267,12 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
            ordinary completion there (core/timing/timer.c says so at §8.7's step 4). So this entry cannot be
            reached in a non-forking session, and SOLVER_NO_NONFORKING_ARM is what says so: if it ever is, the
            crash names the machine's question rather than recording an arm nobody chose. */
-        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM, REAL_ARM_UNOBSERVED, &forked);
+        /* THE TRANSLATION IS EXPLICIT AND NOT A SHARED NUMBER. Both spellings are -1 and both mean "make no
+           claim", but they are two vocabularies with two owners — the machine's declaration at its ask, this
+           file's observation at a branch — and writing the translation down is what keeps a later change to
+           either from silently becoming a change to both. */
+        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM,
+                         real == JS_OUTCOME_REAL_UNSTATED ? REAL_ARM_UNOBSERVED : real, &forked);
         free(key);
         return forked ? (arm | SOLVER_FORKED_BIT) : arm;
     }

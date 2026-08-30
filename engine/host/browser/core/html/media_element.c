@@ -1102,7 +1102,7 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
            Outcome 0 is the ordinary completion — the resource IS usable — because that is the arm a run with
            no forking policy takes and the one an @S candidate re-fire must not be diverted from. */
         if (concolic_is(s->over)) {
-            rc = step_fork_run(ctx, &s->hdr, s->over, MEDIA_FETCH_OP, 2, &arm);
+            rc = step_fork_run(ctx, &s->hdr, s->over, MEDIA_FETCH_OP, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
             if (rc) { JS_FreeValue(ctx, st); return rc; }
         }
         JS_FreeValue(ctx, s->over);

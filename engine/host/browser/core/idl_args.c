@@ -2106,7 +2106,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    snapshot is taken at this return and nothing of the caller's may be live across it. */
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
-                rc = step_fork_run(ctx, &s->hdr, a, "§3.2.25 (dictionary or boolean) arm", 2, &arm);
+                rc = step_fork_run(ctx, &s->hdr, a, "§3.2.25 (dictionary or boolean) arm", 2, JS_OUTCOME_REAL_UNSTATED, &arm);
                 if (rc) return rc;
                 object_arm = (arm == 0);
             }

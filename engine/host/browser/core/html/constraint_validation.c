@@ -806,7 +806,7 @@ static int cv_field_step(JSContext *ctx, JSStepHdr *h, ConstraintValidationRun *
         /* The position is part of the predicate: two controls fed from the same source are two independent
            questions, and one answer replayed for both would delete one of the four worlds. */
         snprintf(r->fork_op, sizeof r->fork_op, "satisfies-constraints>%u", (unsigned)r->i);
-        rc = step_fork_run(ctx, h, r->value, r->fork_op, 2, &arm);
+        rc = step_fork_run(ctx, h, r->value, r->fork_op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (rc) return rc;
         /* OUTCOME 0 is the ordinary completion — the control satisfies its constraints and the submission goes
            on to record its request, which is the path an @S candidate re-fire must not be diverted from. */

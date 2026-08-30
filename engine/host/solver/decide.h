@@ -89,11 +89,18 @@ int  solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking
    is the unknown operand its completion depends on, `op` names the operation ("JSON.parse"), `n` is how many
    completions the machine declares feasible. Returns the arm this flow takes, ORed with 0x100 when a sibling
    was prepared for the other — the same protocol solver_decide uses, because it is the same fork.
+   `real` IS THE ASKING MACHINE'S DECLARATION, AND IT IS THE OUTCOME SEAM'S ANSWER TO WHAT decide_real_arm
+   COMPUTES FOR A BRANCH — "which completion does a session carrying real values reach". It is a PARAMETER for
+   the same reason `nonforking` above is: the answer belongs to the site and to no two sites alike, and this
+   seam holds the operand and the operation's NAME but never its semantics, so anything it derived would be a
+   recognizer over that name. JS_OUTCOME_REAL_UNSTATED (quickjs.h) is the machine's positive "I cannot say" and
+   is what every ask site passes until it states one; the seam maps it onto the same "nothing observed says"
+   a branch over an example-free value produces, so both arms run and neither is marked forced.
    THE FORKED BIT IS FOR THE STEP DRIVER, WHICH IS THE ONLY THING THAT CAN CONSUME IT FOR A C BUILTIN. A plain
    C body is already inside its activation when it asks and has no machine state for the other arm to be
    snapshotted at, so a fork from one crashes at the seam naming the operation — and what that names is the
    DECLARATION to build: JS_CFUNC_STEP_DEF, with the ask moved into the machine's own step_fork_run. */
-int  solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n);
+int  solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int real);
 
 /* Take the decision vector out of a fork blob (ownership transfers; blob struct freed). For the replay fork. */
 

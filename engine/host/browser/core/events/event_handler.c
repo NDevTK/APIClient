@@ -271,7 +271,8 @@ int event_handler_run(JSContext *ctx, EventHandlerWork *w, JSStepHdr *hdr, uint8
 
         cancels = eh_is_boolean(w->rv, special ? true : false);
         if (cancels < 0) {
-            r = step_fork_run(ctx, hdr, w->rv, special ? EH_OP_ERROR : EH_OP_GENERAL, 2, &arm);
+            r = step_fork_run(ctx, hdr, w->rv, special ? EH_OP_ERROR : EH_OP_GENERAL, 2,
+                              JS_OUTCOME_REAL_UNSTATED, &arm);
             if (r) {
                 JS_FreeValue(ctx, current);
                 return r;

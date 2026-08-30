@@ -135,7 +135,7 @@ static int ua_ask(JSContext *ctx, JSStepHdr *h, JSValue last, const char *op, bo
     DCHECK(concolic_is(last), "§6.4.1's fork seam was asked about a timestamp this engine knows the value of — "
                               "a known state has one feasible answer and forking it would park a sibling flow "
                               "exploring a world that cannot happen");
-    rc = step_fork_run(ctx, h, last, op, 2, &arm);
+    rc = step_fork_run(ctx, h, last, op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
     JS_FreeValue(ctx, last);
     if (rc) return rc;
     *out = (arm == 1);

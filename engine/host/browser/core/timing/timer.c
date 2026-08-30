@@ -696,7 +696,7 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                run with no forking policy (the @S candidate re-fire) takes outcome 0, and the ordinary
                completion of "is this timeout negative" is that it is not. Numbering the spec's ASSIGNMENT
                first would divert every candidate re-fire onto an arm the page's own value does not take. */
-            int arm = 0, rc = step_fork_run(ctx, hdr, argv[1], TI_STEP4_OP, 2, &arm);
+            int arm = 0, rc = step_fork_run(ctx, hdr, argv[1], TI_STEP4_OP, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
 
             if (rc)
                 return rc;

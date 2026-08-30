@@ -600,7 +600,7 @@ int permission_state_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const Per
            same value in the same invocation. step_fork_run keeps a BORROWED pointer to it on the header, which
            the driver reads after this function has returned — that stays valid on either path, because the
            g_sources record owns this source for the life of the agent. */
-        rc = step_fork_run(ctx, h, v, PS_OP_DEFAULT, 2, &arm);
+        rc = step_fork_run(ctx, h, v, PS_OP_DEFAULT, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (rc) { JS_FreeValue(ctx, v); return rc; }
         if (arm == 0) {                    /* the user has not decided: the feature's default state */
             JS_FreeValue(ctx, v);
@@ -610,7 +610,7 @@ int permission_state_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const Per
         *phase = PS_ASK_WHICH;
     }
     DCHECK(*phase == PS_ASK_WHICH, "§5.1's chain resumed in a phase it never parks in");
-    rc = step_fork_run(ctx, h, v, PS_OP_WHICH, 2, &arm);
+    rc = step_fork_run(ctx, h, v, PS_OP_WHICH, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
     JS_FreeValue(ctx, v);
     if (rc) return rc;
     *phase = PS_ASK_DEFAULT;               /* the chain is finished; the byte is ready for the next question */
@@ -686,7 +686,7 @@ int permission_request_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const P
             *out = PERMISSION_DENIED;
             return 0;
         }
-        rc = step_fork_run(ctx, h, over, PR_OP_EXPRESS, 2, &arm);
+        rc = step_fork_run(ctx, h, over, PR_OP_EXPRESS, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
         JS_FreeValue(ctx, over);
         if (rc) return rc;
         current = (arm == 0) ? PERMISSION_GRANTED : PERMISSION_DENIED;

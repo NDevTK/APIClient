@@ -6215,13 +6215,13 @@ static int engine_branch_hook(JSContext *ctx, JSValueConst cond) {
     g_fork_snapshot_owed = 0;
     return r;
 }
-static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op, int n) {
+static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op, int n, int real) {
     int r;
     DCHECK(!g_fork_snapshot_owed,
            "the step driver asked for an outcome arm while another snapshot-owning ask was still open — see "
            "engine_branch_hook");
     g_fork_snapshot_owed = 1;
-    r = solver_outcome(ctx, over, op, n);
+    r = solver_outcome(ctx, over, op, n, real);
     g_fork_snapshot_owed = 0;
     return r;
 }

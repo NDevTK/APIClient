@@ -734,7 +734,7 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
 
         JS_FreeValue(ctx, cb_result);
         if (concolic_is(s->dismissed)) {
-            rc = step_fork_run(ctx, hdr, s->dismissed, PICKER_DIALOG_OP, 2, &arm);
+            rc = step_fork_run(ctx, hdr, s->dismissed, PICKER_DIALOG_OP, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
             if (rc) return rc;
         } else {
             /* A host with no source overlay (a conformance run) gets the plain example back, so there is one

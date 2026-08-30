@@ -256,7 +256,7 @@ static int psc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
             goto done;
         snprintf(s->op, sizeof s->op,
                  "Permissions §6.3.4 (the user agent became aware of a change, %d)", gen);
-        rc = step_fork_run(ctx, &s->hdr, s->over, s->op, 2, &arm);
+        rc = step_fork_run(ctx, &s->hdr, s->over, s->op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (rc) goto out;
         if (arm == 0)                      /* nothing has changed in this world */
             goto done;
@@ -265,7 +265,7 @@ static int psc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     if (s->hdr.stage == PSC_DEFAULT) {
         snprintf(s->op, sizeof s->op,
                  "Permissions §6.3.4 (the state it changed to is this feature's default one, %d)", gen);
-        rc = step_fork_run(ctx, &s->hdr, s->over, s->op, 2, &arm);
+        rc = step_fork_run(ctx, &s->hdr, s->over, s->op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (rc) goto out;
         /* A CHANGE **TO** THE DEFAULT IS A REAL WORLD, not a contradiction: §4's permission lifetime expiry
            and §5.4's revocation both set a permission back to its default state, and the page hears about it
@@ -276,7 +276,7 @@ static int psc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     if (s->hdr.stage == PSC_OTHER) {
         snprintf(s->op, sizeof s->op,
                  "Permissions §6.3.4 (which of the two non-default states it changed to, %d)", gen);
-        rc = step_fork_run(ctx, &s->hdr, s->over, s->op, 2, &arm);
+        rc = step_fork_run(ctx, &s->hdr, s->over, s->op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (rc) goto out;
         s->state = order[1 + arm];
         s->hdr.stage = PSC_UPDATE;

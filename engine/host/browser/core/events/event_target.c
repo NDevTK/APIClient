@@ -790,7 +790,7 @@ static int ael_flag_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, const ch
         *out = JS_ToBool(ctx, v) ? 1 : 0;
         return 0;
     }
-    rc = step_fork_run(ctx, hdr, v, op, 2, &arm);
+    rc = step_fork_run(ctx, hdr, v, op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
     if (rc) return rc;
     DCHECK(arm == 0 || arm == 1,
            "§2.7's flattening of one boolean member came back on an arm that is neither of the two a boolean "
@@ -910,7 +910,7 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                last. */
             int arm = 0;
 
-            rc = step_fork_run(ctx, hdr, v, AEL_OP_SIGNAL, 3, &arm);
+            rc = step_fork_run(ctx, hdr, v, AEL_OP_SIGNAL, 3, JS_OUTCOME_REAL_UNSTATED, &arm);
             JS_FreeValue(ctx, v);
             if (rc) return rc;
             if (arm == 2) {
