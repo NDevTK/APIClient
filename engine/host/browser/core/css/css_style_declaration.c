@@ -7,23 +7,47 @@
  * `getComputedStyle(el).display === 'none'` routes differently on each side, and each side has its own
  * endpoints.
  *
- * A BLOCK IS THE FIVE THINGS §6.6 SAYS IT IS, AND THAT IS WHAT DECIDES EVERY MEMBER'S ANSWER: the COMPUTED
- * FLAG, the READONLY FLAG, the DECLARATIONS, the PARENT CSS RULE and the OWNER NODE. Three creators differ only
- * in what they set those to — §7.1's `element.style` (owner node this, no parent rule, neither flag), §7.2's
- * getComputedStyle (owner node the element, both flags) and §6.4.3's `rule.style` (NO owner node, parent rule
- * the rule, neither flag). They used to be a two-valued `mode`, which could express the first two and had no
+ * THE CITATION CONVENTION, AND IT IS A RULE THIS FILE BROKE RATHER THAN ONE IT LACKED. A bare `§N` here means
+ * CSSOM: the line above says so, and engine/citegen.mjs reads it the same way, resolving a citation that names
+ * no standard by the file's DOMINANT ANCHOR. That convention is safe only where CSSOM is the only standard this
+ * file cites that HAS an §N — and it is not. The cascade this file resolves lives in css-cascade-5, and these
+ * eight numbers are two documents each:
+ *   css-cascade-5 §6.1   Cascade Sorting Order        CSSOM §6.1   CSS Style Sheets
+ *   css-cascade-5 §6.2   Cascading Origins            CSSOM §6.2   CSS Style Sheet Collections
+ *   css-cascade-5 §6.3   Important Declarations       CSSOM §6.3   Style Sheet Association
+ *   css-cascade-5 §6.4   Cascade Layers               CSSOM §6.4   CSS Rules
+ *   css-cascade-5 §6.4.2 Layer Naming and Nesting     CSSOM §6.4.2 The CSSRule Interface
+ *   css-cascade-5 §6.4.3 Layer Ordering               CSSOM §6.4.3 The CSSStyleRule Interface
+ *   css-cascade-5 §7.1   Initial Values               CSSOM §7.1   The ElementCSSInlineStyle Mixin
+ *   css-cascade-5 §7.2   Inheritance                  CSSOM §7.2   Extensions to the Window Interface
+ * Both meanings of §6.1 and of §6.4 appear in the ONE paragraph below. So a `§` that is not CSSOM's NAMES ITS
+ * STANDARD, and names it WITHIN THE FORTY CHARACTERS BEFORE THE `§` — the window citegen reads — which means
+ * the name goes AT THE CITATION and not at the head of the sentence, and a LIST carries the name on every row
+ * rather than once above it.
+ * A SECOND CITATION IN ONE SENTENCE NEEDS ITS OWN NAME. The prose between two `§`s is exactly what pushes the
+ * first name out of the second's window, so naming the standard once per sentence leaves the second citation
+ * unanchored and the file vote answers it — which is how `css-values-4 §10.9 "Type Checking" ... §10's opening
+ * sentence`, one correct claim about one document, filed its second half under CSSOM §10 IANA Considerations
+ * inside a DCHECK message that a crash prints.
+ *
+ * A BLOCK IS THE FIVE THINGS CSSOM §6.6 SAYS IT IS, AND THAT IS WHAT DECIDES EVERY MEMBER'S ANSWER: the
+ * COMPUTED FLAG, the READONLY FLAG, the DECLARATIONS, the PARENT CSS RULE and the OWNER NODE. Three creators
+ * differ only in what they set those to — CSSOM §7.1's `element.style` (owner node this, no parent rule,
+ * neither flag), CSSOM §7.2's getComputedStyle (owner node the element, both flags) and CSSOM §6.4.3's
+ * `rule.style` (NO owner node, parent rule the rule, neither flag).
+ * They used to be a two-valued `mode`, which could express the first two and had no
  * room for the third, and whose "no element" arm answered the empty string for every member — so a block with
  * no owner node, which is exactly what a rule's is, would have read as an empty declaration block rather than
  * as the rule's own declarations.
  *
  * LEXBOR OWNS THE CSS, and that is the point of binding to it rather than hand-rolling. It has the real
- * property registry — which is CSSOM §2 Terminology's "supported CSS property" set for this engine, so §6.6.1's
- * three per-property partial interfaces are GENERATED FROM IT rather than typed here — a real declaration
+ * property registry — which is CSSOM §2 Terminology's "supported CSS property" set for this engine, so CSSOM
+ * §6.6.1's three per-property partial interfaces are GENERATED FROM IT rather than typed here — a real declaration
  * parser, real value serializers, and a real selector matcher that answers
  * for a SINGLE node. Every layer below is Lexbor doing the parsing and this file doing the cascade.
  *
- * THE DECLARATIONS ARE THE BACKING'S OWN TEXT, which is the design decision the rest follows from. §6.6 models
- * them as a list the block object holds and pushes back to the `style` attribute through "update style
+ * THE DECLARATIONS ARE THE BACKING'S OWN TEXT, which is the design decision the rest follows from. CSSOM §6.6
+ * models them as a list the block object holds and pushes back to the `style` attribute through "update style
  * attribute"; this engine keeps the BACKING authoritative and derives the list per read, because the backing is
  * what time-travels. For an element that backing is the `style` CONTENT ATTRIBUTE: lexbor can also hold parsed
  * styles on the element (an AVL keyed by property), and using that would have been faster and WRONG — it lives
@@ -33,17 +57,19 @@
  * can about an inline style. Nothing is cached in between, for the reason the cascade caches nothing.
  *
  * THE CASCADE IS RESOLVED LIVE, per read, from THE RUNNING FLOW'S OWN OBJECTS: the author rules of the CSS
- * STYLE SHEETS in §6.2's list for this element's root — the sheet objects a page holds, whose rules it inserts,
- * deletes and retargets — the element's own style attribute, css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT
- * ORIGIN (core/css/css_presentational_hints.h, which is where HTML's own markup enters the cascade and why it
- * is an origin of its own rather than a row of the UA table), and the UA default. THEY ARE COLLECTED, NOT ASKED
- * IN TURN: each contributes its declarations into ONE list and core/css/css_cascade.h sorts that list by §6.1's
- * six criteria, because the criteria are LEXICOGRAPHIC and asking the origins in sequence silently reorders
- * them (it puts §6.1's Element-Attached criterion above its Origin-and-Importance one, and it cannot express
- * §6.4's Layers criterion at all, which sits above Specificity). Nothing is cached across a read, because a
- * cache would be shared state that the flow machinery does not swap; and reading the OBJECTS rather than
- * re-parsing each `<style>` element's text is what makes the objects load-bearing instead of inert, which is
- * the whole of why §6.1, §6.2 and §6.4 exist.
+ * STYLE SHEETS in CSSOM §6.2's list for this element's root — the sheet objects a page holds, whose rules it
+ * inserts, deletes and retargets — the element's own style attribute, css-cascade-5 §6.5's AUTHOR
+ * PRESENTATIONAL HINT ORIGIN (core/css/css_presentational_hints.h, which is where HTML's own markup enters the
+ * cascade and why it is an origin of its own rather than a row of the UA table), and the UA default. THEY ARE
+ * COLLECTED, NOT ASKED IN TURN: each contributes its declarations into ONE list and core/css/css_cascade.h
+ * sorts that list by css-cascade-5 §6.1's six criteria, because the criteria are LEXICOGRAPHIC and asking the
+ * origins in sequence silently reorders them (it puts css-cascade-5 §6.1's Element-Attached criterion above its
+ * Origin-and-Importance one, and it cannot express css-cascade-5 §6.4's Layers criterion at all, which sits
+ * above Specificity). Nothing is cached across a read, because a cache would be shared state that the flow
+ * machinery does not swap; and reading the OBJECTS rather than re-parsing each `<style>` element's text is what
+ * makes the objects load-bearing instead of inert, which is the whole of why CSSOM §6.1 CSS Style Sheets,
+ * CSSOM §6.2 CSS Style Sheet Collections and CSSOM §6.4 CSS Rules exist. THE SAME TWO NUMBERS, THE OTHER
+ * DOCUMENT, THREE SENTENCES APART — which is the convention paragraph above stated as a measurement.
  *
  * AND THE CASCADE IS WHERE THIS FILE STOPS. What it produces is the SPECIFIED value — the declaration that won
  * — which is neither the computed value a spec algorithm reads nor the resolved value getComputedStyle
@@ -83,29 +109,29 @@
 #include "solver/dom_cow.h"
 
 /* TWO PRIVATE KEYS, BOTH SYMBOLS, AND THEY ARE TWO BECAUSE A SLOT IS A BRAND. `g_decl_key` hangs a block's own
-   §6.6 record off the block; `g_inline_key` hangs §7.1's [SameObject] block off the ELEMENT's wrapper. One key
+   §6.6 record off the block; `g_inline_key` hangs CSSOM §7.1's [SameObject] block off the ELEMENT's wrapper. One key
    served both, which made an element pass the block's brand check — `CSSStyleDeclaration.prototype.item.call(el,
    0)` found the declaration object where the record belongs and read a field out of it — the same defect
    style_sheet_list.c records for its own two keys. */
 static JSValue g_decl_key = JS_UNDEFINED, g_inline_key = JS_UNDEFINED;
-/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it. Every block this
-   engine builds is a §6.6.1 CSSStyleProperties (all three creators say so), so THAT is the class, and
-   CSSStyleDeclaration.prototype — the base nothing is an instance of — is a per-realm value slot beside it,
-   which is the same shape §6.1.1's StyleSheet and §6.4.2's CSSRule take. */
+/* PER REALM — Web IDL §3.7 Interfaces, and here it decides ANSWERS: a C member runs in the realm that DEFINED
+   it. Every block this engine builds is a CSSOM §6.6.1 CSSStyleProperties (all three creators say so), so THAT
+   is the class, and CSSStyleDeclaration.prototype — the base nothing is an instance of — is a per-realm value
+   slot beside it, which is the same shape CSSOM §6.1.1's StyleSheet and CSSOM §6.4.2's CSSRule take. */
 static JSClassID g_cssd_class;
 static int       g_declaration_proto_slot = -1;
 /* CSS Fonts 5 §9.1 The CSSFontFaceRule interface's CSSFontFaceDescriptors.prototype, the same way and for the
-   same reason. THE LEVEL IS PART OF THIS CITATION: Level 4 numbers the same-titled section §12.1 and declares
+   same reason. THE LEVEL IS PART OF THIS CITATION: CSS Fonts 4 numbers the same-titled section §12.1 and declares
    the interface with SIX names fewer, so a bare "CSS Fonts §12.1" sends a reader to an edition that does not
    carry what this file installs — the title is identical across both, which is exactly why the number alone
    cannot be checked. It is a THIRD
    prototype over the SAME class and the same record: an `@font-face` block's declarations are kept where
-   §6.4.3's are (the rule's own text, through core/css/css_rule.h), so what differs is only which member names
+   CSSOM §6.4.3's are (the rule's own text, through core/css/css_rule.h), so what differs is only which member names
    the interface answers to. */
 static int       g_font_face_proto_slot = -1;
 /* CSSOM §6.4.7 The CSSPageRule Interface's CSSPageDescriptors.prototype, the same way and for the same
    reason — a FOURTH prototype over
-   the one class and the one record. A `@page` rule's descriptors are kept where §6.4.3's declarations are (the
+   the one class and the one record. A `@page` rule's descriptors are kept where CSSOM §6.4.3's declarations are (the
    rule's own text, through core/css/css_rule.h), so what differs is only which member names the interface
    answers to and, through core/css/css_page.h, which declarations the block admits at all. */
 static int       g_page_proto_slot = -1;
@@ -113,7 +139,7 @@ static int       g_page_proto_slot = -1;
    attributes are GENERATED from Lexbor's property registry, so their setter ids are an array indexed the same
    way the registry is — one entry per property, declared once, installed into every realm, and SHARED by that
    property's camel-cased, webkit-cased and dashed spellings because §6.6.1 gives the three one set of setter
-   steps. A row §2 Terminology excludes holds -1, which is `no setter`: an installer reaching one would make an
+   steps. A row CSSOM §2 Terminology excludes holds -1, which is `no setter`: an installer reaching one would make an
    attribute silently read-only, so it is DCHECKed at the install rather than left to be discovered. */
 static int g_set_css_text_id = -1, g_get_prop_id = -1, g_remove_prop_id = -1, g_get_priority_id = -1,
            g_set_prop_id = -1, g_item_id = -1, g_put_forwards_id = -1;
@@ -147,8 +173,12 @@ static void css_buf_add(CssBuf *b, const char *s) { css_buf_cb((const lxb_char_t
 /* ---- §6.6's five associated properties, as the record every member reads ---------------------------------- */
 
 /* The block's own record, BRAND-CHECKED. Every member of both interfaces is on a PROTOTYPE, so a page can apply
-   one to anything at all and §3.7.5's answer is a TypeError — which a page tells apart from the empty string
-   the "no element" arm used to hand back. Returns JS_EXCEPTION with the error already thrown. OWNED. */
+   one to anything at all, and the answer is a TypeError — Web IDL §3.7.6 Attributes' "if jsValue does not
+   implement target, then ... throw a TypeError" for the accessors, Web IDL §3.7.7 Operations' for `item`,
+   `getPropertyValue` and the rest — which a page tells apart from the empty string the "no element" arm used to
+   hand back. THE NUMBER HERE WAS Web IDL §3.7.5, WHICH IS "Constants": a real section of the right standard, about
+   something else entirely, and nothing could catch it because a brand check is not a term any index files.
+   Returns JS_EXCEPTION with the error already thrown. OWNED. */
 static JSValue cssd_block(JSContext *ctx, JSValueConst v)
 {
     JSAtom k;
@@ -178,7 +208,8 @@ static bool cssd_flag(JSContext *ctx, JSValueConst block, const char *name)
     return set;
 }
 
-/* §6.6's OWNER NODE, as the element it is. NULL is a REAL state and not a failure: §6.4.3's block has none. */
+/* §6.6's OWNER NODE, as the element it is. NULL is a REAL state and not a failure: CSSOM §6.4.3's block has
+   none. */
 static lxb_dom_element_t *cssd_owner_element(JSContext *ctx, JSValueConst block)
 {
     JSValue owner = JS_GetPropertyStr(ctx, block, "ownerNode");
@@ -297,7 +328,7 @@ static char *cssd_decl_value(const lxb_css_rule_declaration_t *d)
  * §6.6's declarations are LONGHANDS, AT MOST ONE PER PROPERTY, and both halves are the spec's own words.
  * "A CSS declaration block is an ordered collection of CSS PROPERTIES with their associated values" is one
  * entry per property; §6.6's parse-a-CSS-declaration-block parses each declaration "according to the
- * appropriate CSS specifications", which for a shorthand is CSS Cascade §Shorthand Properties' "sets all of
+ * appropriate CSS specifications", which for a shorthand is css-cascade-5 §3 "Shorthand Properties"' "sets all of
  * its longhand sub-properties, exactly as if expanded in place". So `style="margin:1px"` holds FOUR
  * declarations, `length` is 4, and `item(0)` is `margin-top`. This engine's block used to hold the author's
  * shorthand unexpanded, which is why `length` crashed rather than answering 1.
@@ -432,8 +463,9 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
             ok = (prods & CSS_NUMERIC_BIT(p)) != 0 && css_math_matches(value, strlen(value), (CssMathProduction)p);
         DCHECK(ok,
                "a MATH FUNCTION is entering a declaration block under a property whose grammar names no "
-               "numeric production its css-values-4 §10.9 'Type Checking' type matches. §10's opening sentence "
-               "is the invariant — a math function \"can be used wherever such a value would be valid\", and "
+               "numeric production its css-values-4 §10.9 'Type Checking' type matches. css-values-4 §10 "
+               "'Mathematical Expressions' opens with the invariant — a math function \"can be used wherever "
+               "such a value would be valid\", and "
                "nowhere else — so this is a producer that asked the WRONG production, and the answer it "
                "produced is a plausible number rather than a dropped declaration. The productions are per "
                "property and the neighbours disagree (core/css/css_property_numeric.h): whoever validated this "
@@ -451,7 +483,7 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
 
 /* ---- css-values-4 §10's MATH FUNCTIONS AS A DECLARATION'S VALUE -------------------------------------------
  *
- * WHY THIS IS HERE AT ALL. §10 "Mathematical Expressions" opens: "A math function represents a numeric value,
+ * WHY THIS IS HERE AT ALL. css-values-4 §10 "Mathematical Expressions" opens: "A math function represents a numeric value,
  * one of: <length>, <frequency>, <angle>, <time>, <flex>, <resolution>, <percentage>, <number>, <integer>
  * ...or the <length-percentage>/etc mixed types, AND CAN BE USED WHEREVER SUCH A VALUE WOULD BE VALID." The
  * vendored parser has no math functions in it at all — `calc` appears nowhere under its css module — so every
@@ -466,14 +498,14 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
  * added in the future, user agents are required to obey the following rules" — and it closes the illegal-value
  * rule with "A user agent conforming to a future CSS specification may accept one or more of the other rules
  * as well." A math function is exactly a new value for an existing property, and this engine is exactly the
- * later user agent. So re-judging here is not a loosening of §4.2's "user agents must ignore a declaration
+ * later user agent. So re-judging here is not a loosening of CSS 2.1 §4.2's "user agents must ignore a declaration
  * with an illegal value"; it is the recognition that the value was never illegal, and that the parser deciding
  * so is one edition behind the value.
  *
  * WHAT IS NOT WIDENED. A declaration whose value carries no math function is lexbor's verdict and stands —
- * `display: bogus` is dropped here exactly as it was, and so is a math function whose §10.9 "Type Checking"
- * type does not match the production this property's grammar names. Both of those are §5.5.6's "return
- * nothing", and neither becomes a crash: a page's own invalid declaration is not an engine gap.
+ * `display: bogus` is dropped here exactly as it was, and so is a math function whose css-values-4 §10.9 "Type
+ * Checking" type does not match the production this property's grammar names. Both of those are css-syntax-3
+ * §5.5.6's "return nothing", and neither becomes a crash: a page's own invalid declaration is not an engine gap.
  * The property's production is core/css/css_property_numeric.h's, and it is PER PROPERTY because the spec is:
  * css-fonts-4 §2.5's `font-size` is a `<length-percentage [0,∞]>` and css-backgrounds-3 §3.3's `<line-width>`
  * is `<length [0,∞]> | thin | medium | thick`, so `font-size: calc(50% + 2px)` is a declaration and
@@ -482,7 +514,7 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
 /* Does `value` contain a math function at all? CSS Syntax 3 §4.3.4 "Consume an ident-like token" is the whole
    rule — a FUNCTION token is an ident sequence "immediately followed by a U+0028 LEFT PARENTHESIS" — so the
    name is the ident run ending at a `(`, and WHICH names are math functions is core/css/css_math.h's closed
-   list of §10.8 "Syntax"'s twenty-one notations rather than a second one written here.
+   list of css-values-4 §10.8 "Syntax"'s twenty-one notations rather than a second one written here.
    IT IS DELIBERATELY NOT A PARSE. The question this answers is only "is a math function why lexbor refused
    this", which decides whether to ASK the grammar at all; the grammar itself then decides validity, and a
    false yes here costs one refused `css_math_matches` rather than an accepted declaration. */
@@ -496,7 +528,7 @@ static bool cssd_has_math_function(const char *value)
 
         if (*p != '(') continue;
         start = p;
-        /* §4.3.4's ident sequence, scanned backwards from the parenthesis. `-` and `_` are ident code points
+        /* css-syntax-3 §4.3.4's ident sequence, scanned backwards from the parenthesis. `-` and `_` are ident code points
            and a digit is one after the first, which is why the run is taken by CHARACTER CLASS and not by an
            `isalpha` that would cut `atan2` in half and ask about `atan`. */
         while (start > value &&
@@ -526,25 +558,27 @@ static bool cssd_undef_is_declaration(const char *name, const char *value)
            "`__UNDEF` it converts one into (the real property id, and the raw source span of the value), so an "
            "absent one is a caller that lost it rather than a declaration that never had it");
     /* css-cascade-5 §7.3 "Explicit Defaulting": "As specified in CSS Values and Units, all CSS properties can
-       accept these values." The vendored grammar carries `initial`/`inherit`/`unset`/`revert` and predates
-       §7.3.5 "Rolling Back Cascade Origins: the revert keyword"'s companion §7.3.6 `revert-layer`, so which
-       CSS-wide keywords survive its parse depends on which properties it happens to type — a wrong answer per
-       property rather than a missing capability. */
+       accept these values." The vendored grammar carries `initial`/`inherit`/`unset` and css-cascade-5 §7.3.4
+       "Rolling Back Cascade Origins: the revert keyword"'s `revert`, and predates css-cascade-5 §7.3.5
+       "Rolling Back Cascade Layers: the revert-layer keyword" and css-cascade-5 §7.3.6 "Rolling Back Rules:
+       the revert-rule keyword", so which CSS-wide keywords survive its parse depends on which properties it
+       happens to type — a wrong answer per property rather than a missing capability. */
     if (css_wide_keyword(value)) return true;
     if (!cssd_has_math_function(value)) return false;
     shape = css_property_numeric(name, &prods);
     /* The grammar names no numeric production anywhere, so a math function is not a value of this property and
-       §5.5.6 drops the declaration. This is a real answer and not an absence — see the table. */
+       css-syntax-3 §5.5.6 drops the declaration. This is a real answer and not an absence — see the table. */
     if (shape == CSS_NUMERIC_NONE) return false;
     /* A shorthand core/css/css_shorthand.h expands: its own grammar splits the value into component values and
        validates each against the longhand it sets, which is the judgement this file cannot make. It is routed
        there whole, and a component outside its grammar drops the declaration exactly as one that carried no
        math function does. */
     if (shape == CSS_NUMERIC_COMPONENT && css_shorthand_is_shorthand(name)) return true;
-    /* §10.9's last rule asked once per production the grammar names, because a grammar spelled with `|` names
-       as many as it has numeric branches and a math function is valid there when its type matches ANY of them
-       (css-inline-3 §5.1's `line-height` is a `<number>` OR a `<length-percentage>`, and §4.3.2's algebra makes
-       those disjoint). The loop is bounded by the MASK rather than by the last enum member, so a production
+    /* css-values-4 §10.9's last rule asked once per production the grammar names, because a grammar spelled
+       with `|` names as many as it has numeric branches and a math function is valid there when its type
+       matches ANY of them (css-inline-3 §5.1's `line-height` is a `<number>` OR a `<length-percentage>`, and
+       CSS Typed OM 1 §4.3.2 "Numeric Value Typing"'s algebra — which css-values-4 §10.9 links to by name —
+       makes those disjoint). The loop is bounded by the MASK rather than by the last enum member, so a production
        added to CssMathProduction after `CSS_MATH_PROD_LENGTH_PERCENTAGE` cannot silently fall outside it. */
     for (p = 0; (prods >> p) != 0; p++)
         if ((prods & CSS_NUMERIC_BIT(p)) && css_math_matches(value, strlen(value), (CssMathProduction)p))
@@ -552,8 +586,8 @@ static bool cssd_undef_is_declaration(const char *name, const char *value)
     /* THE VALUE CARRIES A MATH FUNCTION AND IS NOT ONE THAT MATCHES, and the two reasons for that are a page's
        mistake and an engine gap — so they are told apart rather than sharing an answer.
        For a CSS_NUMERIC_WHOLE property there is only the first: its grammar makes the numeric production the
-       ENTIRE value, so a second component value, or a type §10.9 resolves to a production the property does not
-       name, is out of the grammar and §5.5.6 drops it.
+       ENTIRE value, so a second component value, or a type css-values-4 §10.9 resolves to a production the
+       property does not name, is out of the grammar and css-syntax-3 §5.5.6 drops it.
        For a CSS_NUMERIC_COMPONENT property, a value that IS one lone math function is likewise just invalid —
        `text-indent: calc(1s)` is a math function whose type is a `<time>`, and no position in that grammar
        takes one. It is only a value that is NOT a lone math function, and yet contains one, that this file
@@ -565,7 +599,8 @@ static bool cssd_undef_is_declaration(const char *name, const char *value)
           "core/css/css_shorthand.h does not expand — `text-indent: calc(2em) hanging` (css-text-3 §8.1's "
           "\"[ <length-percentage> ] && hanging? && each-line?\"), `font-style: oblique calc(10deg)` "
           "(css-fonts-4 §2.4), `flex: 1 1 calc(100% - 10px)` (css-flexbox-1 §7.1), `border-image-width: "
-          "calc(1px) 2px` (css-backgrounds-3 §6). Every one of those is VALID CSS and dropping it would be the "
+          "calc(1px) 2px` (css-backgrounds-3 §5.3 'Drawing Areas: the border-image-width property'). Every one "
+          "of those is VALID CSS and dropping it would be the "
           "same silent initial value this whole path exists to stop, so it crashes instead. WHAT IS MISSING is "
           "a split of a declaration's value into CSS Syntax 3 §5.5.8 \"Consume a component value\"'s component "
           "values, and a per-property grammar that says which production each POSITION takes — the second half "
@@ -620,7 +655,8 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
        a page property and `text-decoration-line` is a CSS 3 longhand no CSS 2.1 list can carry — so filtering
        the expansion would delete the very declaration the spec admits. It runs in the other direction too:
        `animation` is refused inside a keyframe by NAME, so none of the eight longhands it expands to is ever
-       reached — including the one `animation-timing-function` that §3 admits as a declaration of its own. */
+       reached — including the one `animation-timing-function` that css-animations-1 §3 "Declaring Keyframes"
+       admits as a declaration of its own. */
     if (!cssd_block_admits(d->context, name, important)) return;
     lh = css_shorthand_longhands(name, &n);
     if (!lh) {
@@ -671,9 +707,10 @@ static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, Cs
            without this test handed those tokens on as if they were a value: `display: bogus` won the cascade
            and `getComputedStyle(el).display` answered "bogus", a string no property's grammar admits.
            EXCEPT WHEN THOSE TOKENS ARE A CSS-WIDE KEYWORD, WHICH IS A VALID DECLARATION OF EVERY PROPERTY.
-           §7.3: "As specified in CSS Values and Units, ALL CSS PROPERTIES CAN ACCEPT THESE VALUES." Lexbor's
-           value grammar carries `initial`, `inherit`, `unset` and `revert` and predates css-cascade-5's §7.3.5
-           and §7.3.6, so `height: revert-layer` fails that grammar and arrives here as an invalid declaration
+           css-cascade-5 §7.3: "As specified in CSS Values and Units, ALL CSS PROPERTIES CAN ACCEPT THESE
+           VALUES." Lexbor's value grammar carries `initial`, `inherit`, `unset` and `revert` and predates
+           css-cascade-5 §7.3.5's `revert-layer` and css-cascade-5 §7.3.6's `revert-rule`,
+           so `height: revert-layer` fails that grammar and arrives here as an invalid declaration
            while `translate: revert-layer` — a property the grammar does not type at all — arrives as a value.
            Dropping the first would make a CSS-wide keyword mean something different depending on which
            properties the vendored parser happens to know, which is a wrong answer per property rather than a
@@ -762,7 +799,8 @@ char *cssom_declared_value(const char *text, size_t len, const char *name)
    reads are LONGHANDS whichever spelling produced them. So `border` reads back out of a block holding
    `border: 1px solid red` (all seventeen longhands answer, and consolidate to what was written) and reads back
    as the EMPTY STRING out of one holding only `border-width`/`border-style`/`border-color` (the five
-   `border-image` longhands answer nothing, and §3.4's `border` is the shorthand that resets them) — which is
+   `border-image` longhands answer nothing, and css-backgrounds-3 §3.4's `border` is the shorthand that resets
+   them) — which is
    exactly the split WPT's border-shorthand-serialization.html pins.
    OWNED, NULL when the block gives the property no value. */
 static char *cssd_property_value(const char *text, size_t len, const char *name)
@@ -824,10 +862,11 @@ static bool cssd_property_important(const char *text, size_t len, const char *na
     return all;
 }
 
-/* §6.1's ELEMENT-ATTACHED declaration for `name`, or NULL — the contents of the style attribute, which is
-   per-flow because the attribute it reads is. The CASCADE reaches it with an element and no declaration object,
-   which is why this takes one rather than a block, and it reports the IMPORTANCE because §6.1 compares that
-   first: attached-ness is the criterion BELOW origin and importance, not above it. */
+/* css-cascade-5 §6.1's ELEMENT-ATTACHED declaration for `name`, or NULL — the contents of the style attribute,
+   which is per-flow because the attribute it reads is. The CASCADE reaches it with an element and no
+   declaration object, which is why this takes one rather than a block, and it reports the IMPORTANCE because
+   css-cascade-5 §6.1 compares that first: attached-ness is the criterion BELOW origin and importance, not
+   above it. */
 static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pimportant)
 {
     size_t len = 0;
@@ -839,8 +878,8 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
 /* THE AUTHOR ORIGIN's declarations, collected from THE SHEET OBJECTS of the element's root.
  *
  * IT USED TO RE-WALK THE `<style>` ELEMENTS AND RE-PARSE THEIR TEXT, AND THAT WAS TWO MECHANISMS DESCRIBING ONE
- * FACT — the one that answered questions was not the one the page mutated. §6.1's sheets, §6.4's rules and
- * their §6.6 declaration blocks are the document's style; the elements are where they came FROM. So
+ * FACT — the one that answered questions was not the one the page mutated. CSSOM §6.1's sheets, CSSOM §6.4's
+ * rules and their §6.6 declaration blocks are the document's style; the elements are where they came FROM. So
  * `insertRule('p{color:red}')` changed `cssRules` and left `getComputedStyle` alone, `deleteRule` deleted
  * nothing anybody could see, `rule.selectorText = '#other'` retargeted a rule that still matched the old
  * selector, `rule.style.color = 'red'` was inert, and `sheet.disabled = true` disabled a sheet that went on
@@ -853,8 +892,9 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
  * is the one thing the objects cannot carry. The parse is asserted against the emission AT EVERY INDEX, so a
  * rule whose stored text does not round-trip crashes here instead of silently shifting every rule after it.
  *
- * WHAT THE TEXT CANNOT CARRY IS THE CASCADE LAYER, so the emission reports one per rule beside it. §6.1 puts
- * §6.4's Layers criterion ABOVE Specificity, which is why flattening a `@layer` block's children into the
+ * WHAT THE TEXT CANNOT CARRY IS THE CASCADE LAYER, so the emission reports one per rule beside it.
+ * css-cascade-5 §6.1 puts
+ * css-cascade-5 §6.4's Layers criterion ABOVE Specificity, which is why flattening a `@layer` block's children into the
  * sheet is a WRONG answer and not an approximate one — and why the index correspondence above is load-bearing
  * rather than a tidiness check: the layer is looked up BY the rule's position in the re-parse.
  *
@@ -867,8 +907,10 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
  * file held a second one, so "does this element match this selector" had two implementations that could
  * disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
 
-/* The sheet's serialization, rebuilt from its RULE OBJECTS, with the §6.4.3 cascade layer of every rule that
-   went into it. THE FLATTENING IS core/css/css_rule.h's, because deciding which rules apply is §6.4's business
+/* The sheet's serialization, rebuilt from its RULE OBJECTS, with the css-cascade-5 §6.4.3 "Layer Ordering"
+   cascade layer of every rule that went into it — NOT CSSOM §6.4.3, which is The CSSStyleRule Interface and is
+   what a §6.4.3 means everywhere else in this file.
+   THE FLATTENING IS core/css/css_rule.h's, because deciding which rules apply is CSSOM §6.4's business
    and not this file's: a conditional group rule contributes its children only when its condition holds, so what
    the matcher re-parses is not the sheet's top level at all — and neither is the layer a rule is in something a
    flat text could carry. */
@@ -881,11 +923,12 @@ static bool cssd_sheet_view(JSContext *ctx, JSValueConst sheet, CssLayerOrder *o
     return ok;
 }
 
-/* EVERY AUTHOR-ORIGIN DECLARATION OF `name` ON `el`, added to `cascade` — not the one that wins. §6.1's sort is
-   over the whole list at once and §7.3's roll-backs re-run it with a part removed, so a collector that kept
-   only a running best would have thrown away exactly what both need. `*pseq` is the document-order counter
-   §6.1's Order of Appearance reads, carried across the sheets so it is one sequence and not one per sheet, and
-   bumped per RULE so it also names the rule §7.3.6's `revert-rule` removes. */
+/* EVERY AUTHOR-ORIGIN DECLARATION OF `name` ON `el`, added to `cascade` — not the one that wins. css-cascade-5
+   §6.1's sort is over the whole list at once and css-cascade-5 §7.3's roll-backs re-run it with a part removed,
+   so a collector that kept only a running best would have thrown away exactly what both need. `*pseq` is the
+   document-order counter css-cascade-5 §6.1's Order of Appearance reads, carried across the sheets so it is one
+   sequence and not one per sheet, and bumped per RULE so it also names the rule css-cascade-5 §7.3.6's
+   `revert-rule` removes. */
 static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCascade *cascade,
                                 CssLayerOrder *order, uint32_t *pseq)
 {
@@ -899,7 +942,7 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCasc
 
     DCHECK(ctx != NULL,
            "the author cascade was asked to resolve for an element whose document has NO REALM RECORD — the "
-           "author layer IS §6.2's list of CSS style sheets, which lives on that document's root wrapper, so a "
+           "author layer IS CSSOM §6.2's list of CSS style sheets, which lives on that document's root wrapper, so a "
            "document nobody built a record for has no author style at all rather than an empty one. Give the "
            "caller's document a record, or establish that this element cannot reach a computed value");
     sheets = style_sheet_list_of(ctx, node_root(self));
@@ -917,11 +960,14 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCasc
         lxb_css_stylesheet_t *sst = NULL;
 
         DCHECK(css_style_sheet_is(sheet),
-               "§6.2's list holds something that is not a CSS style sheet — its add is the one thing that ever "
-               "puts one in");
-        /* §6.1.1's DISABLED FLAG, which is what it is FOR: "the disabled attribute ... whether the style sheet
-           is applied". `sheet.disabled = true` and `<style disabled>`'s forwarding both land here, and until
-           the cascade read the objects neither could do anything at all. */
+               "CSSOM §6.2's list holds something that is not a CSS style sheet — its add is the one thing "
+               "that ever puts one in");
+        /* CSSOM §6.1's DISABLED FLAG — the FLAG is CSSOM §6.1's ("Either set or unset. Unset by default"), and CSSOM
+           §6.1.1 The StyleSheet Interface is only where the `disabled` ATTRIBUTE that sets and unsets it is
+           declared. This read is of the flag, so it cites the flag's own section; the number here was CSSOM
+           §6.1.1 beside a quotation mark, and the words inside those quotation marks appear NOWHERE IN CSSOM.
+           `sheet.disabled = true` and `<style disabled>`'s forwarding both land here, and until the cascade
+           read the objects neither could do anything at all. */
         if (css_style_sheet_disabled(sheet)) { JS_FreeValue(ctx, sheet); continue; }
         if (!cssd_sheet_view(ctx, sheet, order, &view)) { JS_FreeValue(ctx, sheet); continue; }
         JS_FreeValue(ctx, sheet);
@@ -976,7 +1022,8 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCasc
                    same one an inline block is read through — expanded to longhands and collapsed to one per
                    property. A rule declaring a property twice has already been resolved by the collapse's own
                    two criteria, so what arrives here is one declaration per property — which is also why one
-                   counter can be both §6.1's order of appearance and §7.3.6's identity of the rule. */
+                   counter can be both css-cascade-5 §6.1's order of appearance and css-cascade-5 §7.3.6's
+                   identity of the rule. */
                 cssd_decls_from_list(st->declarations, &rd);
                 at = cssd_decls_index(&rd, name);
                 if (at >= 0 && rd.v[at].value)
@@ -997,7 +1044,7 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCasc
            its selectors are all allocated FROM this arena, so destroying the arena is what releases them;
            nothing here outlives it (every value this function keeps is copied out). */
         if (smem) lxb_css_memory_destroy(smem, true);
-        /* §6.1's Order of Appearance across SHEETS: "declarations from style sheets independently linked by the
+        /* css-cascade-5 §6.1's Order of Appearance across SHEETS: "declarations from style sheets independently linked by the
            originating document are treated as if they were concatenated in linking order", so the next sheet's
            first rule follows this sheet's last one rather than restarting. */
         *pseq += view.n;
@@ -1093,7 +1140,10 @@ static bool cssd_try_shorthand(const CssDecls *d, bool *done, const char *shorth
     /* "If there is any declaration in declaration block in between the first and the last longhand in current
        longhands which belongs to the same logical property group, but has a different mapping logic as any of
        the longhands in current longhands, and is not in current longhands, continue."
-       CSS Logical §2 is why: the two members of such a pair "share a computed value ... determined by
+       css-logical-1 §4 "Flow-Relative Box Model Properties" is why — the same section cssd_decls_collect's
+       own note cites for the same sentence, which is what made the css-logical-1 §2 that stood here visible:
+       the two members of such a pair "share a
+       computed value ... determined by
        cascading the declarations of both properties together as one", so which of them came LAST decides the
        answer. Writing the shorthand would move its longhands to one position and reorder them across the
        flow-relative declaration sitting between — a different cascade for the same bytes. */
@@ -1121,7 +1171,7 @@ static bool cssd_try_shorthand(const CssDecls *d, bool *done, const char *shorth
 
 /* §6.6's SERIALIZE A CSS DECLARATION BLOCK, entire. OWNED, NULL for a block with no declarations — which is
    the spec's own note ("the serialization of an empty CSS declaration block is the empty string") and which
-   §6.4's serialize-a-CSS-rule reads as its "null if there are no such declarations". */
+   CSSOM §6.4's serialize-a-CSS-rule reads as its "null if there are no such declarations". */
 static char *cssd_serialize_decls(const CssDecls *d)
 {
     CssBuf out = { 0 };
@@ -1229,7 +1279,7 @@ char *cssom_serialize_declarations(const char *text, size_t len, CssomBlockConte
    lexbor's own table lookup agrees (`lexbor_shs_entry_get_lower_static`), so `@MEDIA` arrives here as the
    table's lowercase "media" — but the `_CUSTOM` arm copies the identifier VERBATIM out of the token, so
    `@PAGE` would arrive as "PAGE" and match no builder. That was invisible while every `_CUSTOM` at-rule was
-   one this engine has no interface for and crashes on anyway; it stopped being invisible when §6.4.7's
+   one this engine has no interface for and crashes on anyway; it stopped being invisible when CSSOM §6.4.7's
    `@page`, which lexbor's table does not carry, became a rule. OWNED: the caller frees. */
 static char *cssd_at_rule_name(const lxb_css_rule_at_t *at)
 {
@@ -1304,7 +1354,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
             out.prelude_is_selectors = true;
             out.block = block ? block : "";
             out.has_block = true;
-            kids = st->child;                     /* CSS Nesting's own rules, which §6.4.5 makes `cssRules` */
+            kids = st->child;                     /* CSS Nesting's own rules, which CSSOM §6.4.5 makes `cssRules` */
             break;
         }
         /* THE SAME RULE WITH A PRELUDE LEXBOR'S SELECTOR PARSER REFUSED. It is a qualified rule and it has a
@@ -1336,7 +1386,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
             out.at_name = at_name;
             DCHECK(out.at_name != NULL,
                    "lexbor reported an at-rule whose own name table has no entry for its type — the name is "
-                   "the only thing that can say which §6.4 interface the rule wants");
+                   "the only thing that can say which CSSOM §6.4 interface the rule wants");
             if (!out.at_name) continue;
             prelude = cssd_prelude_span(text, len, at->prelude_begin, at->prelude_end);
             out.prelude = prelude;
@@ -1348,7 +1398,8 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
             out.has_block = kids != NULL;
             /* A BODY'S DECLARATIONS ARE REPORTED FOR EVERY AT-RULE THAT HAS A BODY, and its child rules are
                walked for every at-rule too, because CSS Syntax's `<declaration-rule-list>` is a body that
-               holds BOTH and §6.4.7's `@page` is exactly one: page descriptors beside §4.3's margin at-rules.
+               holds BOTH and CSSOM §6.4.7's `@page` is exactly one: page descriptors beside css-page-3 §4.3
+               "@page rule grammar"'s margin at-rules.
                This used to name `@font-face` and take the other fork for it, which was the same statement with
                a name in it — an `@font-face`'s block simply contains no rules to walk, and a `@media`'s
                contains no declarations to report, so asking both questions of both is what makes the ANSWER
@@ -1427,35 +1478,40 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  * that a page compares against is CLAUDE.md §Architecture's plausible datum, and this is where it is born.
  *
  * EVERY ROW IS TRANSCRIBED FROM HTML'S RENDERING SECTION, BY NUMBER AND TITLE, AND `display` ONLY — the rest of
- * each rule's declarations are the honest absence above. The sections are:
- *   §15.3.1  Hidden elements                    — the fourteen-element `display: none` rule
- *   §15.3.2  The page                           — `html, body { display: block }`
- *   §15.3.3  Flow content                       — the block-level flow rule, and `slot { display: contents }`
- *   §15.3.6  Sections and headings              — `article, aside, :heading, hgroup, nav, section`
- *   §15.3.7  Lists                              — `dir, dd, dl, dt, menu, ol, ul`, and `li { display: list-item }`
- *   §15.3.8  Tables                             — the nine table box types
- *   §15.3.10 Form controls                      — `input, button { display: inline-block }`
- *   §15.3.12 The fieldset and legend elements   — `fieldset { display: block }`
- *   §15.5.5  The details and summary elements   — `details, summary { display: block }`
- *   §15.5.13 The marquee element                — `marquee { display: inline-block }`
- *   §15.5.16 The select element                 — `select { display: inline-block }`, `option`, `optgroup`
- *   §15.5.17 The textarea element               — its prose, "expected to render as an 'inline-block' box"
- * §15.3.6 selects the headings with `:heading` rather than by name; the six elements that pseudo-class matches
+ * each rule's declarations are the honest absence above. The STANDARD IS WRITTEN ON EVERY ROW rather than in
+ * this lead-in, because a citation is checkable only where its standard is inside the forty characters before
+ * the `§` — see the convention at the head of this file — and a list is exactly the shape where one name at
+ * the top covers none of the numbers under it. The sections are:
+ *   HTML §15.3.1  Hidden elements                  — the fourteen-element `display: none` rule
+ *   HTML §15.3.2  The page                         — `html, body { display: block }`
+ *   HTML §15.3.3  Flow content                     — the block-level flow rule, and `slot { display: contents }`
+ *   HTML §15.3.6  Sections and headings            — `article, aside, :heading, hgroup, nav, section`
+ *   HTML §15.3.7  Lists                            — `dir, dd, dl, dt, menu, ol, ul`, and `li { display: list-item }`
+ *   HTML §15.3.8  Tables                           — the nine table box types
+ *   HTML §15.3.10 Form controls                    — `input, button { display: inline-block }`
+ *   HTML §15.3.12 The fieldset and legend elements — `fieldset { display: block }`
+ *   HTML §15.5.5  The details and summary elements — `details, summary { display: block }`
+ *   HTML §15.5.13 The marquee element              — `marquee { display: inline-block }`
+ *   HTML §15.5.16 The select element               — `select { display: inline-block }`, `option`, `optgroup`
+ *   HTML §15.5.17 The textarea element             — its prose, "expected to render as an 'inline-block' box"
+ * HTML §15.3.6 selects the headings with `:heading` rather than by name; the six elements that pseudo-class matches
  * in an HTML document are the six named here, and there is no seventh element for a row to be missing.
  *
  * WHAT A TYPE-SELECTOR TABLE CANNOT EXPRESS IS NAMED RATHER THAN APPROXIMATED, and each one is a rule whose
- * SELECTOR is not a tag: §15.5.5's `details > summary:first-of-type { display: list-item }` gives the FIRST
+ * SELECTOR is not a tag: HTML §15.5.5's `details > summary:first-of-type { display: list-item }` gives the FIRST
  * summary of a details a marker, which the row below reads as plain `block` — the two are both block-level
  * block containers and differ in the marker box alone, so the deviation is in the marker and not in the box
  * type, and closing it needs a structural selector this layer does not evaluate. `:heading(n)`'s font sizes and
- * margins, §15.3.3's margins and §15.3.7's list-style rules are the same absence stated once above.
+ * margins, HTML §15.3.3's margins and HTML §15.3.7's list-style rules are the same absence stated once above.
  *
- * AND §15.3.4's `ruby { display: ruby }` / `rt { display: ruby-text }` ARE DELIBERATELY ABSENT, which is the
- * one place adding a row would make this engine WORSE rather than more complete, and the test is the one this
+ * AND HTML §15.3.4 Phrasing content's `ruby { display: ruby }` / `rt { display: ruby-text }` ARE DELIBERATELY
+ * ABSENT, which is the one place adding a row would make this engine WORSE rather than more complete, and the
+ * test is the one this
  * whole comment is about. Every consumer of a computed `display` reads `inline` as a box it declines to
- * measure — core/dom/element_view.c's step 1 answers zero, its fragment count aborts naming §9.4.2 — while
+ * measure — core/dom/element_view.c's step 1 answers zero, its fragment count aborts naming CSS 2.1 §9.4.2 — while
  * `ruby` and `ruby-text` are box types NO consumer has an arm for: core/layout/used_value.c's `uv_box_kind`
- * would classify one as BLOCK FLOW and hand CSS 2.1 §10.3.3's constraint equation a box §10 does not describe,
+ * would classify one as BLOCK FLOW and hand CSS 2.1 §10.3.3's constraint equation a box CSS 2.1 §10 does not
+ * describe,
  * so `clientWidth` would stop being zero and start being a real number computed for the wrong box. A wrong
  * number is worse than the wrong-but-declined answer it replaces. These two rows land in the same diff that
  * gives CSS Ruby a box type in `uv_box_kind` and in `element_view_fragment_kind`.
@@ -1467,9 +1523,9 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  * the SVG UA sheet in the same diff — a namespace test alone would take `display: none` AWAY from those two
  * and generate a box for them, which is strictly worse than the divergence it removes. */
 static const struct { const char *tag; const char *prop; const char *value; } UA_DEFAULT[] = {
-    /* §15.3.2 The page */
+    /* HTML §15.3.2 The page */
     { "html", "display", "block" },  { "body", "display", "block" },
-    /* §15.3.3 Flow content: `address, blockquote, center, dialog, div, figure, figcaption, footer, form,
+    /* HTML §15.3.3 Flow content: `address, blockquote, center, dialog, div, figure, figcaption, footer, form,
        header, hr, legend, listing, main, p, plaintext, pre, search, xmp { display: block }`. `dialog` is here
        for the box it has when it is OPEN; `dialog:not([open])` is an attribute selector and is applied with
        the other attribute-conditional rules below. */
@@ -1483,30 +1539,33 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "p", "display", "block" },     { "plaintext", "display", "block" },
     { "pre", "display", "block" },   { "search", "display", "block" },
     { "xmp", "display", "block" },
-    /* §15.3.3's `slot { display: contents }` — a box type, and the one in this table that generates NO box:
-       css-display §3.1 keeps the element's children and drops its own box, which core/dom/element_view.c's one
-       box predicate and core/css/css_computed_value.c's box-parent walk both already read. */
+    /* HTML §15.3.3's `slot { display: contents }` — a box type, and the one in this table that generates NO
+       box: css-display-3 §2.5 "Box Generation: the none and contents keywords" keeps the element's children and
+       drops its own box ("the element itself does not generate any boxes, but its children ... do"), which
+       core/dom/element_view.c's one box predicate and core/css/css_computed_value.c's box-parent walk both
+       already read. The number here was css-display-3 §3.1, which is that module's "Reordering and
+       Accessibility". */
     { "slot", "display", "contents" },
-    /* §15.3.6 Sections and headings */
+    /* HTML §15.3.6 Sections and headings */
     { "article", "display", "block" }, { "aside", "display", "block" },
     { "h1", "display", "block" },    { "h2", "display", "block" },
     { "h3", "display", "block" },    { "h4", "display", "block" },
     { "h5", "display", "block" },    { "h6", "display", "block" },
     { "hgroup", "display", "block" }, { "nav", "display", "block" },
     { "section", "display", "block" },
-    /* §15.3.7 Lists */
+    /* HTML §15.3.7 Lists */
     { "dir", "display", "block" },   { "dd", "display", "block" },
     { "dl", "display", "block" },    { "dt", "display", "block" },
     { "menu", "display", "block" },  { "ol", "display", "block" },
     { "ul", "display", "block" },    { "li", "display", "list-item" },
-    /* §15.3.8 Tables — all nine box types, because a `<tbody>` reading `inline` is not a table this engine
+    /* HTML §15.3.8 Tables — all nine box types, because a `<tbody>` reading `inline` is not a table this engine
        cannot lay out, it is a box CSS 2 §9.2 says exists nowhere in a table. */
     { "table", "display", "table" }, { "caption", "display", "table-caption" },
     { "colgroup", "display", "table-column-group" }, { "col", "display", "table-column" },
     { "thead", "display", "table-header-group" }, { "tbody", "display", "table-row-group" },
     { "tfoot", "display", "table-footer-group" }, { "tr", "display", "table-row" },
     { "td", "display", "table-cell" }, { "th", "display", "table-cell" },
-    /* §15.3.10 Form controls, §15.3.12 The fieldset and legend elements, and §15.5's widget sections. An
+    /* HTML §15.3.10 Form controls, HTML §15.3.12 The fieldset and legend elements, and HTML §15.5's widget sections. An
        `<input>` is the single most measured element on the web and `input.clientWidth` was zero for every one
        of them. */
     { "input", "display", "inline-block" }, { "button", "display", "inline-block" },
@@ -1515,10 +1574,11 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "marquee", "display", "inline-block" },
     { "select", "display", "inline-block" }, { "textarea", "display", "inline-block" },
     { "option", "display", "block" }, { "optgroup", "display", "block" },
-    /* §15.3.1's FIRST RULE, entire: `area, base, basefont, datalist, head, link, meta, noembed, noframes,
+    /* HTML §15.3.1's FIRST RULE, entire: `area, base, basefont, datalist, head, link, meta, noembed, noframes,
        param, rp, script, style, template, title { display: none }`. Seven of the fourteen used to be here and
        seven were not, which is not a smaller stylesheet — it is a `<datalist>` this engine says generates a
-       box, and every §6 geometry member and HTML's `being rendered` reading that answer. */
+       box, and every CSSOM View §6 Extensions to the Element Interface geometry member and HTML's `being
+       rendered` reading that answer. */
     { "area", "display", "none" },   { "base", "display", "none" },
     { "basefont", "display", "none" }, { "datalist", "display", "none" },
     { "head", "display", "none" },   { "link", "display", "none" },
@@ -1527,7 +1587,7 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "rp", "display", "none" },     { "script", "display", "none" },
     { "style", "display", "none" },  { "template", "display", "none" },
     { "title", "display", "none" },
-    /* §15.3.1's LAST RULE, `@media (scripting) { noscript { display: none !important } }`. It is here as an
+    /* HTML §15.3.1's LAST RULE, `@media (scripting) { noscript { display: none !important } }`. It is here as an
        ordinary row and not among the conditional rules below because its condition is not about the ELEMENT:
        core/css/media_query.c answers `scripting` with `enabled`, on the ground that this engine runs the
        page's scripts in the document's own realm, so the media query is true for every document this table can
@@ -1537,11 +1597,11 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "noscript", "display", "none" },
 };
 
-/* §15.3.1's `hidden` RULES, which are ATTRIBUTE selectors and therefore outrank every type selector in the
+/* HTML §15.3.1's `hidden` RULES, which are ATTRIBUTE selectors and therefore outrank every type selector in the
    table above — so they are asked first, and they are asked HERE rather than by each component that wants to
    know whether an element generates a box. element_view.c walked the ancestor chain for the attribute itself,
    which is the same rule implemented a second time and implemented WRONG in two ways this one is not: it read
-   `hidden="until-found"` (which §15.3.1 makes `content-visibility: hidden`, a rendered element) as a removed
+   `hidden="until-found"` (which HTML §15.3.1 makes `content-visibility: hidden`, a rendered element) as a removed
    box, and it ignored `embed[hidden]`; and being outside the cascade it could not be overridden by the author
    rule that outranks it, so a page's own `[hidden] { display: block }` did nothing.
      [hidden]:not([hidden=until-found i]):not(embed) { display: none }
@@ -1576,16 +1636,16 @@ static const char *cssd_ua_hidden(lxb_dom_element_t *el, const lxb_char_t *tag, 
  * element HAS OR HAS NOT depending on a content attribute, which is why neither can be a row of the type-name
  * table above and why leaving them out is a box that should not exist rather than a value that is missing:
  *
- *   §15.3.1 Hidden elements: `input[type=hidden i] { display: none !important }`. Its IMPORTANCE is part of the
+ *   HTML §15.3.1 Hidden elements: `input[type=hidden i] { display: none !important }`. Its IMPORTANCE is part of the
  *   rule and is reported, not dropped — CSS Cascade §6.3 puts an important user-agent declaration above every
  *   author declaration, which is the whole point of writing it that way: a page's own `input { display: block }`
  *   must not give a hidden input a box. Reported through `*important` for that reason and because the value is
  *   the same `none` the normal rules produce, so the flag is the only thing that carries the difference.
  *
- *   §15.3.3 Flow content: `dialog:not([open]) { display: none }`, at NORMAL importance, which is why a page
+ *   HTML §15.3.3 Flow content: `dialog:not([open]) { display: none }`, at NORMAL importance, which is why a page
  *   CAN show a closed dialog with its own rule and is a real difference from the line above.
  *
- * WHAT IS DELIBERATELY NOT HERE: §15.3.3's `[popover]:not(:popover-open):not(dialog[open]) { display: none }`
+ * WHAT IS DELIBERATELY NOT HERE: HTML §15.3.3's `[popover]:not(:popover-open):not(dialog[open]) { display: none }`
  * and `dialog:popover-open { display: block }`. Both turn on the POPOVER VISIBILITY STATE, which is an
  * element's own state and not an attribute — there is no attribute to read it off, so a rule written from the
  * `popover` attribute alone would hide every popover that a page had shown. Build the popover state machine
@@ -1597,7 +1657,7 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
     const lxb_char_t *v;
     const char *hidden;
 
-    /* §6.3's TOP BAND FIRST — "important user agent declarations" — because these three rules can all match one
+    /* css-cascade-5 §6.3's TOP BAND FIRST — "important user agent declarations" — because these three rules can all match one
        element and the order they are asked in IS the cascade between them. `<input type=hidden hidden>` matches
        this rule AND the `[hidden]` rule below, both with the value `none`, and only the IMPORTANCE tells them
        apart: asked the other way round the answer would be a normal declaration a page's own
@@ -1606,7 +1666,7 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
         v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &vlen);
         if (cssd_attr_is_ascii_ci(v, vlen, "hidden")) { *important = true; return "none"; }
     }
-    /* Then the two NORMAL rules, in §6.1's Specificity order, which is the criterion left once the band ties:
+    /* Then the two NORMAL rules, in css-cascade-5 §6.1's Specificity order, which is the criterion left once the band ties:
        `[hidden]:not([hidden=until-found i]):not(embed)` is (0,2,1) and `dialog:not([open])` is (0,1,1). They
        agree on `none` wherever both match, so the order is not observable today — it is the order the spec
        gives, written down so that it stays right when a third rule joins them. */
@@ -1619,7 +1679,7 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
     return NULL;
 }
 
-/* THE UA DECLARATION for `name` on `el`, and its §6.3 IMPORTANCE. `*important` is written on EVERY path,
+/* THE UA DECLARATION for `name` on `el`, and its css-cascade-5 §6.3 IMPORTANCE. `*important` is written on EVERY path,
    including the ones that answer nothing, because the caller passes it straight into the cascade and a flag it
    did not write would carry whatever the last resolution left there — the failure mode being an ordinary
    `display: block` that outranks the page's own rule. */
@@ -1648,7 +1708,7 @@ static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name, bool *
     for (i = 0; i < sizeof(UA_DEFAULT) / sizeof(UA_DEFAULT[0]); i++)
         if (strlen(UA_DEFAULT[i].tag) == n && memcmp(UA_DEFAULT[i].tag, tag, n) == 0 &&
             strcmp(UA_DEFAULT[i].prop, name) == 0) {
-            /* §15.3.1's `noscript` rule is `!important` inside `@media (scripting)`; the row carries the value
+            /* HTML §15.3.1's `noscript` rule is `!important` inside `@media (scripting)`; the row carries the value
                and this carries the half of the rule a `{tag, prop, value}` triple has no column for. */
             *important = strcmp(UA_DEFAULT[i].tag, "noscript") == 0 && strcmp(name, "display") == 0;
             return UA_DEFAULT[i].value;
@@ -1691,7 +1751,7 @@ static void cssd_ua_table_check(void)
    so a property lexbor does not know still has one, and answering NULL for it is not "undeclared", it is a
    cascade that stopped a layer early. Lexbor carries the `border` and `border-<side>` SHORTHANDS and the four
    `border-*-color` longhands and nothing else of the border, so the eight below have no entry: the four widths
-   are `medium` (css-backgrounds-3 §3.3) and the four styles are `none` (§3.2), which together are why the
+   are `medium` (css-backgrounds-3 §3.3) and the four styles are `none` (css-backgrounds-3 §3.2), which together are why the
    spec's own note says "although the initial width is medium, the initial style is none; therefore the used
    initial width is 0". The registry is still asked FIRST for every property, and a name here that lexbor DOES
    carry would be one fact with two sources — asserted below rather than assumed. */
@@ -1702,27 +1762,30 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "border-bottom-style", "none" }, { "border-left-style", "none" },
     /* css-fonts-4 §2.7's RESET IMPLICITLY group, plus the `font-variant-caps` its `<font-variant-css2>` term
        sets. Lexbor's registry carries six font properties (`font-family`, `font-size`, `font-stretch`,
-       `font-style`, `font-weight`) and `line-height`, and none of these — yet §2.7 states that "all
+       `font-style`, `font-weight`) and `line-height`, and none of these — yet css-fonts-4 §2.7 states that "all
        subproperties of the font property in the Set Explicitly and Reset Implicitly groups are FIRST RESET to
        their initial values", so a `font` declaration cannot be expanded without them and answering NULL would
        make the whole declaration invalid. Each value is that property's own `Initial:` line, and each is cited
-       by section NUMBER and TITLE because the numbers are not adjacent and are not guessable:
-         §2.6  Relative sizing: the font-size-adjust property                          -> none
-         §6.3  Kerning: the font-kerning property                                      -> auto
-         §6.4  Ligatures: the font-variant-ligatures property                          -> normal
-         §6.5  Subscript and superscript forms: the font-variant-position property     -> normal
-         §6.6  Capitalization: the font-variant-caps property                          -> normal
-         §6.7  Numerical formatting: the font-variant-numeric property                 -> normal
-         §6.8  Alternates and swashes: the font-variant-alternates property            -> normal
-         §6.10 East Asian text rendering: the font-variant-east-asian property         -> normal
-         §6.12 Low-level font feature settings control: the font-feature-settings property   -> normal
-         §6.13 Font language override: the font-language-override property             -> normal
-         §8.1  Optical sizing control: the font-optical-sizing property                -> auto
-         §8.2  Low-level font variation settings control: the font-variation-settings property -> normal
-         §9.3  Selecting the text presentation style: The font-variant-emoji property  -> normal
+       by STANDARD, NUMBER AND TITLE because the numbers are not adjacent and are not guessable — and the
+       standard is on every row rather than in this lead-in, for the reason the file header states: a name
+       further back than forty characters anchors nothing, and a list is where that bites hardest.
+         css-fonts-4 §2.6  Relative sizing: the font-size-adjust property                    -> none
+         css-fonts-4 §6.3  Kerning: the font-kerning property                                -> auto
+         css-fonts-4 §6.4  Ligatures: the font-variant-ligatures property                    -> normal
+         css-fonts-4 §6.5  Subscript and superscript forms: the font-variant-position property -> normal
+         css-fonts-4 §6.6  Capitalization: the font-variant-caps property                    -> normal
+         css-fonts-4 §6.7  Numerical formatting: the font-variant-numeric property           -> normal
+         css-fonts-4 §6.8  Alternates and swashes: the font-variant-alternates property      -> normal
+         css-fonts-4 §6.10 East Asian text rendering: the font-variant-east-asian property   -> normal
+         css-fonts-4 §6.12 Low-level font feature settings control: the font-feature-settings property -> normal
+         css-fonts-4 §6.13 Font language override: the font-language-override property       -> normal
+         css-fonts-4 §8.1  Optical sizing control: the font-optical-sizing property          -> auto
+         css-fonts-4 §8.2  Low-level font variation settings control: the font-variation-settings property -> normal
+         css-fonts-4 §9.3  Selecting the text presentation style: The font-variant-emoji property -> normal
        TWO OF THE THIRTEEN ARE `auto` AND ELEVEN ARE NOT, which is the only thing about this table a reader has
-       to get right: §6.3's `font-kerning` and §8.1's `font-optical-sizing` are the two, and every other row is
-       its property's own stated word (§2.6's `none`, and `normal` for the rest). */
+       to get right: css-fonts-4 §6.3's `font-kerning` and css-fonts-4 §8.1's `font-optical-sizing` are the two,
+       and every other row is its property's own stated word (css-fonts-4 §2.6's `none`, and `normal` for the
+       rest). */
     { "font-feature-settings", "normal" }, { "font-kerning", "auto" },
     { "font-language-override", "normal" }, { "font-optical-sizing", "auto" },
     { "font-size-adjust", "none" }, { "font-variant-alternates", "normal" },
@@ -1730,10 +1793,10 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "font-variant-emoji", "normal" }, { "font-variant-ligatures", "normal" },
     { "font-variant-numeric", "normal" }, { "font-variant-position", "normal" },
     { "font-variation-settings", "normal" },
-    /* css-transforms-1 §3 "The transform Property" (§4 in the CR — the module renumbered when its ED dropped
+    /* css-transforms-1 §3 "The transform Property" (css-transforms-1 §4 in the CR — the module renumbered when its ED dropped
        the number off "Terminology"), whose `Initial:` line is `none`. THE ROW IS WHAT MAKES "NO TRANSFORM" A
        COMPUTED VALUE RATHER THAN A SILENCE, and the difference is not pedantic: lexbor's registry carries no
-       `transform` entry, so with no row here §7.1 had no initial value to fall to and the cascade answered
+       `transform` entry, so with no row here css-cascade-5 §7.1 had no initial value to fall to and the cascade answered
        NULL for every element on every page — which is not `none`, and which is why every consumer that asked
        "is this element transformed" got an answer it could not read. A DECLARED transform does reach the
        cascade already (lexbor turns a property it has no id for into a `__CUSTOM` declaration carrying the
@@ -1750,8 +1813,9 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
    css_color.c uses for the one `<color>` production it reads itself, and for the same reason: a vendored
    parser is a moving target and a silent divergence from it is worse than a crash.
    CSS Color 4 §3.2 gives `color` an `Initial:` line of `CanvasText`; lexbor answers `currentcolor`, which
-   cannot be an initial value at all — §6.4 makes currentcolor's used value the used value of `color` on the
-   same element, so on the root element, where §7.2's inherited value IS the initial value, it would be a
+   cannot be an initial value at all — CSS Color 4 §6.4 makes currentcolor's used value the used value of
+   `color` on the same element, so on the root element, where css-cascade-5 §7.2's inherited value IS the
+   initial value, it would be a
    definition of itself with no base case. */
 static const struct { const char *name; const char *initial; const char *registry; } CSSD_INITIAL_WRONG[] = {
     { "color", "canvastext", "currentcolor" },
@@ -1760,9 +1824,11 @@ static const struct { const char *name; const char *initial; const char *registr
 /* CSS Cascade §7.1's INITIAL VALUE, straight out of Lexbor's registry, which is where the spec's own initial
    values live, and out of the table above for the properties it has no entry for.
    IT IS NOT A LAYER OF THE CASCADE, which is why it is no longer the last thing `cssom_cascaded_value` tries.
-   §6 answers which DECLARATION won and §7 is a separate step over that answer — and the difference is
+   css-cascade-5 §6 Cascading answers which DECLARATION won and css-cascade-5 §7 Defaulting is a separate step
+   over that answer — and the difference is
    observable the moment a property is INHERITED: folding the initial value into the cascade makes "nobody
-   declared it" indistinguishable from "somebody declared the initial value", and §7.2 has to tell those apart
+   declared it" indistinguishable from "somebody declared the initial value", and css-cascade-5 §7.2 has to
+   tell those apart
    to know whether to ask the parent. So the cascade reports the absence and this is exported for the step that
    acts on it (core/css/css_defaulting.h). */
 char *cssom_initial_value(const char *name)
@@ -1811,7 +1877,7 @@ char *cssom_initial_value(const char *name)
 }
 
 /* THE CASCADE, in the order the spec resolves it. What comes out is the SPECIFIED value — the declaration that
-   won — which is not yet the computed value and is not yet §9's resolved value; css_computed_value.c owns both
+   won — which is not yet the computed value and is not yet CSSOM §9's resolved value; css_computed_value.c owns both
    of those steps, and this is the one entry it reads the cascade through. */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
 {
@@ -1832,20 +1898,23 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
            "answer would be the property's initial value with nothing to say the longhands that DID set it were "
            "never looked at. §6.6.1's getPropertyValue owns the shorthand step, and both paths that can be "
            "asked for one run it BEFORE reaching here — cssd_property_value over a block's declarations, and "
-           "css_resolved_value over §7.2's resolved longhands. A third caller must run it too");
-    /* EVERY ORIGIN CONTRIBUTES INTO ONE LIST, AND THE SORT DECIDES — which is §6.1 and is not what asking each
+           "css_resolved_value over CSSOM §7.2's resolved longhands. A third caller must run it too");
+    /* EVERY ORIGIN CONTRIBUTES INTO ONE LIST, AND THE SORT DECIDES — which is css-cascade-5 §6.1 and is not
+       what asking each
        origin in turn does. The four used to be asked in precedence order and the first that answered won, and
-       that is a DIFFERENT ordering: it hoists §6.1's Element-Attached criterion above its Origin-and-Importance
-       one, so `<p style="color:blue">` beat `p { color: red !important }`, which §6.1 and §6.3 both say it
+       that is a DIFFERENT ordering: it hoists css-cascade-5 §6.1's Element-Attached criterion above its
+       Origin-and-Importance
+       one, so `<p style="color:blue">` beat `p { color: red !important }`, which css-cascade-5 §6.1 and
+       css-cascade-5 §6.3 both say it
        loses to ("an important declaration takes precedence over a normal declaration", and Element-Attached is
        the criterion BELOW Origin and Importance, reached only when it ties). */
     order = css_layer_order_create();
     cascade = css_cascade_create(order);
     cssd_author_collect(el, name, cascade, order, &seq);
-    /* §6.1's ELEMENT-ATTACHED STYLES: "declarations that are attached directly to an element (such as the
+    /* css-cascade-5 §6.1's ELEMENT-ATTACHED STYLES: "declarations that are attached directly to an element (such as the
        contents of a style attribute) rather than indirectly mapped by means of a style rule selector take
        precedence over declarations the same importance that are mapped via style rule." It is in the AUTHOR
-       origin ([CSSSTYLEATTR]) and in no explicit cascade layer, and §6.1's Order of Appearance places it after
+       origin ([CSSSTYLEATTR]) and in no explicit cascade layer, and css-cascade-5 §6.1's Order of Appearance places it after
        every style sheet ("declarations from style attributes ... are all placed after any style sheets"),
        which is what the counter reaching here already is. */
     v = cssd_inline_value(el, name, &important);
@@ -1854,26 +1923,31 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
         free(v);
     }
     /* css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT ORIGIN, "between the regular user origin and the author
-       origin". It is an ORIGIN and not a row of the UA table below because that is where §6.5 puts it: an
+       origin". It is an ORIGIN and not a row of the UA table below because that is where css-cascade-5 §6.5 puts it: an
        author rule of any specificity outranks a hint, and a hint outranks the UA sheet. */
     v = css_presentational_hint(el, name);
     if (v) {
         css_cascade_add(cascade, CSS_ORIGIN_PRESENTATIONAL_HINT, false, false, NULL, 0, ++seq, v);
         free(v);
     }
-    /* §6.2's USER-AGENT ORIGIN, with §6.3's IMPORTANCE carried rather than assumed normal: two of HTML §15.3.1's
-       `display` rules are `!important`, and "important user agent declarations" is the TOP band of §6.3's list
+    /* css-cascade-5 §6.2's USER-AGENT ORIGIN, with css-cascade-5 §6.3's IMPORTANCE carried rather than assumed
+       normal: two of HTML §15.3.1's
+       `display` rules are `!important`, and "important user agent declarations" is the TOP band of
+       css-cascade-5 §6.3's list
        — above important author declarations — so a flag dropped here is a page's own rule silently giving a
        box to an element the UA sheet says has none. */
     ua = cssd_ua_value(el, name, &ua_important);
     if (ua) css_cascade_add(cascade, CSS_ORIGIN_UA, ua_important, false, NULL, 0, ++seq, ua);
-    /* §6.4.3's order is a fact about the WHOLE document's layers, so it is sealed once every sheet has been
+    /* css-cascade-5 §6.4.3 "Layer Ordering"'s order is a fact about the WHOLE document's layers, so it is sealed once every sheet has been
        walked and before the first index is read. Nothing below declares a layer. */
     css_layer_order_seal(order);
     /* NULL HERE IS "NO DECLARATION WON", which is a real answer and not a missing one — CSS Cascade §7.1 and
-       §7.2 are both written for exactly this state ("unless the cascade results in a value"), and which of them
-       applies is the property's own `Inherited:` line. §7's step is core/css/css_defaulting.h's and it runs
-       above this; §7.3's three cascade-dependent keywords are discharged BELOW it, inside the sort, because
+       css-cascade-5 §7.2 are both written for exactly this state ("unless the cascade results in a value"),
+       and which of them
+       applies is the property's own `Inherited:` line. css-cascade-5 §7's step is core/css/css_defaulting.h's
+       and it runs
+       above this; css-cascade-5 §7.3's three cascade-dependent keywords are discharged BELOW it, inside the
+       sort, because
        each is defined by a fact only the sort holds. */
     out = css_cascade_value(cascade);
     css_cascade_free(cascade);
@@ -1896,7 +1970,8 @@ static char *cssd_declarations_text(JSContext *ctx, JSValueConst block, size_t *
 
     DCHECK(!cssd_flag(ctx, block, "computed"),
            "a COMPUTED declaration block's declarations were asked for as stored text, and there are none: "
-           "§7.2 states them as the resolved value of every longhand supported CSS property, which this engine "
+           "CSSOM §7.2 states them as the resolved value of every longhand supported CSS property, which this "
+           "engine "
            "computes per read (css_computed_value.h) rather than holding. Every member that can meet a computed "
            "block answers it from the resolved value before reaching here");
     *plen = 0;
@@ -2196,10 +2271,11 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
         return cssd_readonly_throw(ctx);
     }
     DCHECK(argc >= 2, "§6.6.1's setProperty reached its body without the two arguments its IDL requires — the "
-                      "declaration's own §3.6 step 5 count is what should have refused the call");
+                      "declaration's own Web IDL §3.6 Overload resolution algorithm step 5 count is what "
+                      "should have refused the call");
     name = JS_ToCString(ctx, argv[0]);
     value = JS_ToCString(ctx, argv[1]);
-    /* §3.6's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call that stopped short of the position
+    /* Web IDL §3.6's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call that stopped short of the position
        arrives with a shorter argc, and one that reached it with `undefined` arrives with undefined in the slot —
        "if the argument is optional and its value is undefined, it is absent". This member's IDL writes
        `optional CSSOMString priority = ""`, so absent IS the empty string, which is a POSITIVE statement that
@@ -2317,9 +2393,9 @@ static JSValue js_cssd_property_set(JSContext *ctx, JSValueConst this_val, JSVal
 /* CSSOM §2 Terminology: "The term supported CSS property refers to a CSS property that the user agent
    implements, INCLUDING ANY VENDOR-PREFIXED PROPERTIES, but excluding custom properties." Lexbor's registry IS
    that set for this engine, minus its two non-property rows: `LXB_CSS_PROPERTY__UNDEF` is its "no property"
-   sentinel and `LXB_CSS_PROPERTY__CUSTOM` is the custom-property marker §2 excludes by name.
-   WHAT STOOD HERE WAS THE OPPOSITE OF §2 ON BOTH COUNTS. It skipped every name beginning with "-" — a
-   vendor-prefixed property, which §2 says IS supported and §6.6.1 gives two spellings of — and it started the
+   sentinel and `LXB_CSS_PROPERTY__CUSTOM` is the custom-property marker CSSOM §2 excludes by name.
+   WHAT STOOD HERE WAS THE OPPOSITE OF CSSOM §2 ON BOTH COUNTS. It skipped every name beginning with "-" — a
+   vendor-prefixed property, which CSSOM §2 says IS supported and CSSOM §6.6.1 gives two spellings of — and it started the
    walk at id 1, so lexbor's custom-property marker was installed as an IDL attribute literally spelled
    `#сustom` (with a Cyrillic С, and a `length` field that disagrees with its own bytes: the one row in the
    registry whose declared length is not its strlen). A member no browser has, on the prototype of every
@@ -2330,7 +2406,7 @@ static bool cssom_supported_css_property(uintptr_t id, const lxb_css_entry_data_
     if (id == LXB_CSS_PROPERTY__UNDEF || id == LXB_CSS_PROPERTY__CUSTOM)
         return false;
     DCHECK(e->name[0] != '#',
-           "a lexbor property row spells a MARKER rather than a property name — §2 Terminology's two "
+           "a lexbor property row spells a MARKER rather than a property name — CSSOM §2 Terminology's two "
            "exclusions are the ids above, and this registry has grown a third that would install as a member");
     DCHECK(e->length == strlen((const char *)e->name),
            "a lexbor property row's declared length is not its own strlen, so an IDL attribute name derived "
@@ -2461,9 +2537,12 @@ static void cssom_install_dashed_attributes(JSContext *ctx, JSValueConst proto)
  * undefined rests on, so the two lists must not be reachable as one.
  *
  * CSS Fonts Module Level 5 §9.1's `interface CSSFontFaceDescriptors : CSSStyleDeclaration`, whose forty-one
- * attributes are these twenty-one names. Level 4 §12.1 declares the same interface with SIX names fewer —
- * `font-size`, `size-adjust` and §6.10's four synthesis-position overrides — and Level 5 is the level webref
- * extracts, so this list is Level 5's. */
+ * attributes are these twenty-one names. CSS Fonts 4 §12.1 declares the same interface with SIX names fewer —
+ * `font-size`, `size-adjust` and the four descriptors of CSS Fonts 5 §4.6 "Superscript and subscript metrics
+ * overrides" — and Level 5 is the level webref extracts, so this list is Level 5's. THOSE FOUR WERE CITED AS
+ * CSS Fonts 4 §6.10, "East Asian text rendering: the font-variant-east-asian property", which is not a
+ * section CSS Fonts 5 has at all; they are descriptors of `@font-face`, not properties, which is why they are
+ * numbered in the descriptor chapter and not in the feature one. */
 static const struct { const char *dashed; const char *camel; } FONT_FACE_DESCRIPTORS[] = {
     { "src",                            "src" },
     { "font-family",                    "fontFamily" },
@@ -2522,7 +2601,7 @@ static const char *cssd_descriptor(int magic)
 /* Both halves forward exactly as §6.6.1's do — the getter is getPropertyValue and the setter is setProperty
    with no third argument — so a descriptor is read and written through the very paths a property is, and the
    block's declarations have ONE builder. There is no computed arm: a descriptor block is never a computed
-   style (§7.2's creator makes a CSSStyleProperties), which the flag asserts from the other side. */
+   style (CSSOM §7.2's creator makes a CSSStyleProperties), which the flag asserts from the other side. */
 static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const char *name = cssd_descriptor(magic);
@@ -2532,7 +2611,8 @@ static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int
 
     if (JS_IsException(block)) return block;
     DCHECK(!cssd_flag(ctx, block, "computed"),
-           "a descriptor attribute was read off a COMPUTED declaration block — §7.2's getComputedStyle is the "
+           "a descriptor attribute was read off a COMPUTED declaration block — CSSOM §7.2's getComputedStyle "
+           "is the "
            "only creator that sets that flag and it mints a CSSStyleProperties, which has no descriptor "
            "attribute for this member to have been reached through");
     text = cssd_declarations_text(ctx, block, &len);
@@ -2615,7 +2695,7 @@ static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
-/* §7.2's DECLARATIONS OF A COMPUTED BLOCK, which are not stored anywhere and are not the owner element's
+/* CSSOM §7.2's DECLARATIONS OF A COMPUTED BLOCK, which are not stored anywhere and are not the owner element's
    inline ones: "a list of CSS declarations ... with the following properties: ... declarations: the resolved
    value of every LONGHAND property that is a supported CSS property, in LEXICOGRAPHICAL ORDER, plus every
    custom property whose computed value is not the guaranteed-invalid value."
@@ -2624,13 +2704,13 @@ static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
  * one: `item(i)` names a property, `getPropertyValue` of that name must return its resolved value, and a name
  * whose resolved value this build does not derive would crash the very read the enumeration invites. So the
  * set is `css_computed_models`' — core/css/css_computed_value.h's own list, which is where the `Computed
- * value:` lines live — minus anything css_shorthand.c records as a shorthand, since §7.2 says LONGHAND.
+ * value:` lines live — minus anything css_shorthand.c records as a shorthand, since CSSOM §7.2 says LONGHAND.
  * THE NAMESPACE IS THE UNION OF TWO PLACES and both are asked, because neither alone is the engine's property
  * list: lexbor's registry, and the longhands css_shorthand.c owns the grammar of (the four `border-*-width`
  * and four `border-*-style`, which the registry does not carry at all).
  * NO CUSTOM PROPERTY IS ENUMERATED, and that is a positive statement rather than a gap: a custom property's
  * computed value comes from CSS Cascade §7's defaulting over a registration, and this engine registers none,
- * so every one of them holds the guaranteed-invalid value that §7.2's own clause excludes. */
+ * so every one of them holds the guaranteed-invalid value that CSSOM §7.2's own clause excludes. */
 static void cssd_computed_name(CssDecls *d, const char *name)
 {
     if (!css_computed_models(name) || css_shorthand_is_shorthand(name)) return;
@@ -2665,7 +2745,7 @@ static void cssd_computed_names(CssDecls *d)
         for (j = 0; border && j < nlh; j++)
             cssd_computed_name(d, border[j]);
     }
-    /* LEXICOGRAPHICAL ORDER, which §7.2 states outright and which is therefore the enumeration's contract
+    /* LEXICOGRAPHICAL ORDER, which CSSOM §7.2 states outright and which is therefore the enumeration's contract
        rather than a tidy-up: `item(i)` and `length` are the same list read two ways, and a page walking the
        indices expects the order the spec named. */
     for (i = 1; i < d->n; i++) {
@@ -2677,7 +2757,7 @@ static void cssd_computed_names(CssDecls *d)
     }
 }
 
-/* The block's declarations — §7.2's list for a computed block, and what parsing the backing's text produces for
+/* The block's declarations — CSSOM §7.2's list for a computed block, and what parsing the backing's text produces for
    the other two. Both §6.6.1 members that need them go through here. */
 static void cssd_declared_decls(JSContext *ctx, JSValueConst block, CssDecls *out)
 {
@@ -2724,7 +2804,7 @@ static JSValue js_cssd_item(JSContext *ctx, JSValueConst this_val, int argc, JSV
 }
 
 /* §6.6.1: "The parentRule attribute must return the parent CSS rule." It was a `null` DATA property on the
-   prototype — the right answer for the two element-backed blocks and a wrong one for §6.4.3's, which is the
+   prototype — the right answer for the two element-backed blocks and a wrong one for CSSOM §6.4.3's, which is the
    rule itself, and a data property is shared by every block in the realm besides. */
 static JSValue js_cssd_parent_rule(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -2769,7 +2849,8 @@ static JSValue cssd_new(JSContext *ctx, JSValueConst proto, JSValueConst owner_n
            "is where the declarations LIVE, so a block with both or with neither is a block whose declarations "
            "are kept in two places or in none");
     DCHECK(!computed || readonly,
-           "a COMPUTED declaration block was minted WRITABLE. §7.2 is the only creator that sets the computed "
+           "a COMPUTED declaration block was minted WRITABLE. CSSOM §7.2 is the only creator that sets the "
+           "computed "
            "flag and it sets the readonly flag in the same breath — a writable one would take §6.6.1's set-a-"
            "CSS-declaration path into a block whose declarations are computed per read and stored nowhere");
     obj = JS_NewObjectProto(ctx, proto);
@@ -2786,20 +2867,21 @@ static JSValue cssd_new(JSContext *ctx, JSValueConst proto, JSValueConst owner_n
     return obj;
 }
 
-/* §6.4.3: "The style attribute must return a CSSStyleProperties object for the style rule" — computed flag
+/* CSSOM §6.4.3: "The style attribute must return a CSSStyleProperties object for the style rule" — computed flag
    unset, readonly flag unset, declarations the rule's own, parent CSS rule THIS, owner node null. */
 JSValue cssom_style_properties_for_rule(JSContext *ctx, JSValueConst rule)
 {
     JSValue proto = cssd_proto(ctx), out;
 
     DCHECK(css_rule_is(rule),
-           "§6.4.3's `style` was asked to back a declaration block with something that is not a CSS rule");
+           "CSSOM §6.4.3's `style` was asked to back a declaration block with something that is not a CSS "
+           "rule");
     out = cssd_new(ctx, proto, JS_NULL, rule, false, false);
     JS_FreeValue(ctx, proto);
     return out;
 }
 
-/* CSS Fonts 5 §9.1's `style` — see the header. The block's PROPERTIES are §6.4.3's exactly (computed flag unset,
+/* CSS Fonts 5 §9.1's `style` — see the header. The block's PROPERTIES are CSSOM §6.4.3's exactly (computed flag unset,
    readonly flag unset, declarations the rule's own, parent CSS rule the rule, owner node null); only the
    prototype differs, which is what makes the descriptors reachable and the properties not. */
 JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
@@ -2814,7 +2896,7 @@ JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
     return out;
 }
 
-/* CSSOM §6.4.7's `style` — see the header. The block's PROPERTIES are §6.4.3's exactly (computed flag unset,
+/* CSSOM §6.4.7's `style` — see the header. The block's PROPERTIES are CSSOM §6.4.3's exactly (computed flag unset,
    readonly flag unset, declarations "the declared descriptors in the rule, in specified order", parent CSS
    rule the rule, owner node null); only the prototype differs. */
 JSValue cssom_page_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
@@ -2822,13 +2904,14 @@ JSValue cssom_page_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
     JSValue proto = realm_value_get(ctx, g_page_proto_slot), out;
 
     DCHECK(css_rule_is(rule),
-           "§6.4.7's `style` was asked to back a descriptor block with something that is not a CSS rule");
+           "CSSOM §6.4.7's `style` was asked to back a descriptor block with something that is not a CSS "
+           "rule");
     out = cssd_new(ctx, proto, JS_NULL, rule, false, false);
     JS_FreeValue(ctx, proto);
     return out;
 }
 
-/* §7.1's ElementCSSInlineStyle: "The style attribute must return a CSSStyleProperties object whose readonly
+/* CSSOM §7.1's ElementCSSInlineStyle: "The style attribute must return a CSSStyleProperties object whose readonly
    flag is unset, whose parent CSS rule is null, and whose owner node is this." [SameObject] is why the block is
    remembered on the element rather than rebuilt: a page holds `el.style` and compares it, and a fresh object
    per read makes every such comparison false — the same rule node identity follows. It is stored as an own
@@ -2840,8 +2923,12 @@ static JSValue js_el_get_style(JSContext *ctx, JSValueConst this_val, int magic)
     JSValue cur;
 
     (void)magic;
-    /* Web IDL §3.7.5's brand check, and a THROW rather than an assert: the member is on a prototype and a page
-       reaches an accessor off one with `.call` on anything at all. Without it the block below would be minted
+    /* Web IDL §3.7.6 Attributes' brand check — "if jsValue does not implement target ... throw a TypeError",
+       in the steps that create an attribute getter — and a THROW rather than an assert: the member is on a
+       prototype and a page
+       reaches an accessor off one with `.call` on anything at all. Web IDL §3.7.5 is "Constants", which is
+       what this cited, and a page cannot tell a citation apart from a recollection.
+       Without it the block below would be minted
        over an owner node that is not a node, and the first read of its declarations would crash on an engine
        invariant that the page, not the engine, had broken. */
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT)
@@ -2862,7 +2949,7 @@ static JSValue js_el_get_style(JSContext *ctx, JSValueConst this_val, int magic)
     return cur;
 }
 
-/* §7.2's getComputedStyle(elt, pseudoElt) — "return a live CSSStyleProperties object" with the computed flag
+/* CSSOM §7.2's getComputedStyle(elt, pseudoElt) — "return a live CSSStyleProperties object" with the computed flag
    SET, the readonly flag SET, the parent CSS rule null and the owner node the element. The pseudo-element
    argument is converted and rejected rather than ignored: this engine has no pseudo-element boxes, and
    answering the ORIGINATING element's values for `::before` would be a wrong answer rather than a missing
@@ -2927,7 +3014,7 @@ void cssom_init(JSContext *ctx)
     {
         /* THE CLASS IS A PER-REALM PROTOTYPE HOLDER AND NOTHING ELSE — no block is ever an instance of it
            (`cssd_new` builds a plain object over the prototype it is handed), which is why a THIRD interface
-           over the same record costs a value slot and not a class. `[object …]` is §3.7.3's @@toStringTag on
+           over the same record costs a value slot and not a class. `[object …]` is Web IDL §3.7.3's @@toStringTag on
            the prototype, so CSSStyleProperties and CSS Fonts 5 §9.1's CSSFontFaceDescriptors are told apart by
            a page even though their records are identical. */
         JSClassDef d = { "CSSStyleProperties" };
@@ -2944,10 +3031,10 @@ void cssom_init(JSContext *ctx)
         static const IdlArgType THREE_STR[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
         g_set_css_text_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_set_css_text, 0);
         /* Web IDL §3.3.10's [PutForwards=cssText], which BOTH `style` attributes carry — CSSOM §7.1
-           ElementCSSInlineStyle's on an element and §6.4.3 CSSStyleRule's on a style rule — plus the CSS Fonts
-           and CSSOM page/margin descriptor blocks below. The five steps are §3.7.6 Attributes' and are
-           declared ONCE for the whole platform (idl_args.c); this component states only the pair. It had its
-           own copy, which is how it came to write §3.7.6 step 4.5.8.4's Throw flag as `true` where the
+           ElementCSSInlineStyle's on an element and CSSOM §6.4.3 CSSStyleRule's on a style rule — plus the CSS Fonts
+           and CSSOM page/margin descriptor blocks below. The five steps are Web IDL §3.7.6 Attributes' and
+           are declared ONCE for the whole platform (idl_args.c); this component states only the pair. It had
+           its own copy, which is how it came to write Web IDL §3.7.6 step 4.5.8.4's Throw flag as `true` where the
            standard writes `false`, and to reach the forwarded-to setter with a JS_SetPropertyStr from C. */
         g_put_forwards_id = idl_setter_id_put_forwards(ctx, "style", "cssText");
         g_get_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 0);
@@ -2958,8 +3045,11 @@ void cssom_init(JSContext *ctx)
         idl_optional_from(2);
         g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_cssd_item, 0);
         {
-            /* CSSOM §7.1: `getComputedStyle(elt, optional pseudoElt)`. DECLARED HERE with the rest — the
-               member lives on the WINDOW, which is per realm, and the declaration is the agent's. */
+            /* CSSOM §7.2 Extensions to the Window Interface: `getComputedStyle(elt, optional pseudoElt)`.
+               DECLARED HERE with the rest — the member lives on the WINDOW, which is per realm, and the
+               declaration is the agent's. The number here was CSSOM §7.1, which is The ElementCSSInlineStyle
+               Mixin: the sentence beside it already said WINDOW, and every other getComputedStyle citation in
+               this file already said CSSOM §7.2. */
             static const IdlArgType TWO[2] = { IDL_ANY, IDL_DOMSTRING };
             g_id_gcs = idl_method_id(ctx, TWO, 2, js_get_computed_style, 0);
             idl_optional_from(1);
@@ -2999,7 +3089,7 @@ void cssom_init(JSContext *ctx)
    one object made `CSSStyleProperties` an absent global — an honest ReferenceError for an interface every one
    of this engine's blocks IS — and made `Object.getOwnPropertyNames(CSSStyleDeclaration.prototype)` report
    three hundred property attributes a browser does not have there. Nothing is an instance of the base, so it
-   holds no class of its own, exactly as §6.1.1's StyleSheet and §6.4.2's CSSRule do. */
+   holds no class of its own, exactly as CSSOM §6.1.1's StyleSheet and CSSOM §6.4.2's CSSRule do. */
 void cssom_install_proto(JSContext *ctx)
 {
     JSValue base, proto, descriptors, page, prev;
