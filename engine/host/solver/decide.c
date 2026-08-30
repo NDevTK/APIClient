@@ -104,12 +104,43 @@ static int g_c = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
 
-/* THE FORK CENSUS'S ROWS — declared here rather than beside fork_key_count because decide_free releases them
-   and stands above it, and a census whose teardown could not see it would hold one strdup per distinct
-   predicate past the session that made them. See fork_key_count for what the table is. */
+/* THE FORK CENSUS'S ROWS — TWO POPULATIONS IN TWO TABLES, and the split is the admission design rather than
+   tidiness. They are declared here rather than beside fork_key_count because decide_free releases them and
+   stands above it, and a census whose teardown could not see them would hold one strdup per distinct predicate
+   past the session that made them. See fork_key_count for the shared entry and decide.h for what a row means.
+ *
+ * ONE POPULATION IS THE PAGE'S AND THE OTHER IS THIS TREE'S, so only one of them can ever overflow. A
+ * MECHANISM row is prose written by hand at four sites (this file's `(no source identity)` and engine.c's
+ * three), so the set is enumerable where it is authored and cannot be enlarged by any document: those rows are
+ * counted EXACTLY, in a table that simply grows. There is no admission question for a population a page cannot
+ * grow, and asking one would spend slots of the scarce table on the rows that were never at risk — while
+ * leaving the heaviest of them free to evict the predicates the census exists to name, since a mechanism that
+ * fires on every orphan drive outweighs every individual branch beneath it. A CONSTRAINT key is the page's and
+ * is unbounded, so it gets the fixed table and the policy below.
+ *
+ * THE FIXED TABLE IS SPACE-SAVING (Metwally, Agrawal & El Abbadi, "Efficient Computation of Frequent and Top-k
+ * Elements in Data Streams", ICDT 2005) and the two properties that recommend it are both about what the
+ * census can still SAY, not about its constant factors.
+ *   - ITS COUNTERS SUM TO THE ARRIVALS, EXACTLY. An eviction hands the departing row's mass to the row that
+ *     displaces it, so nothing evaporates and the identity every other sentence in this file rests on — the
+ *     rows summing to the total, and through it the frontier's `created = 1 + forks + …` provenance — survives
+ *     an admission policy that first-come never needed one for.
+ *   - EACH ROW KNOWS HOW MUCH OF ITSELF IT CANNOT PROVE. `err` is the mass inherited from whatever this row
+ *     displaced, so `n - err` is a FLOOR: hits at this key and at no other, whoever was evicted. That is what
+ *     the census publishes, so a named row can only ever UNDERSTATE a site — which is §Emission's rule about
+ *     never inventing, applied to the instrument instead of to a finding.
+ * MISRA-GRIES IS THE OTHER CANDIDATE AND IS REJECTED ON THE SECOND PROPERTY. Its decrement-all shaves mass off
+ * every RESIDENT row to pay for one non-resident arrival, so the mass missing from the table afterwards is a
+ * mixture of "hits at sites the table could not hold" and "hits at sites it did hold" with nothing to separate
+ * them — two states behind one number, which is the exact defect this table exists to end, reintroduced by the
+ * fix for it. Its per-row error is also ONE global bound shared by every row, so no row is ever exact and no
+ * two rows can be told apart by it; Space-Saving's `err` is per row and is zero for every row admitted before
+ * the table filled, which is how the census can call a count exact and mean it. */
 #define DECIDE_FORK_KEYS 64
-static struct { char *key; long n; } g_fork_keys[DECIDE_FORK_KEYS];
-static long g_fork_other, g_fork_total;
+static struct { char *key; long n, err; } g_fork_keys[DECIDE_FORK_KEYS];
+static struct { char *key; long n; } *g_fork_mech;   /* grows: bounded by this tree, never by a document */
+static int  g_fork_mech_n, g_fork_mech_cap;
+static long g_fork_total;
 
 static void dec_ensure(int n) {
     if (n <= g_dec_cap) return;
@@ -409,8 +440,13 @@ void decide_free(void) {
     free(g_dec); g_dec = NULL;
     free(g_dec_k); g_dec_k = NULL;
     g_dec_cap = 0;   /* ONE capacity for both head buffers — dec_ensure grows them together or not at all */
-    for (i = 0; i < DECIDE_FORK_KEYS; i++) { free(g_fork_keys[i].key); g_fork_keys[i].key = NULL; g_fork_keys[i].n = 0; }
-    g_fork_other = g_fork_total = 0;
+    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
+        free(g_fork_keys[i].key);
+        g_fork_keys[i].key = NULL; g_fork_keys[i].n = g_fork_keys[i].err = 0;
+    }
+    for (i = 0; i < g_fork_mech_n; i++) free(g_fork_mech[i].key);
+    free(g_fork_mech); g_fork_mech = NULL; g_fork_mech_n = g_fork_mech_cap = 0;
+    g_fork_total = 0;
     /* THE CHAIN HAS TWO KINDS OF HOLDER AND THIS USED TO NAME ONE. A frozen segment is referenced by the flows
        forked below it — released by flow_registry_free's loop above — AND by every open @S SEARCH, which takes
        one at the moment its sink is detected (solve.c's add_pending freezes the path a candidate is re-injected
@@ -436,8 +472,9 @@ int decide_cursor(void) { return g_c; }
  * the last one before the sample instant is as likely to be one of the dozen. The table is small and keyed by
  * the constraint key, so two forks at one source and operation are one row however many call sites spell it,
  * and a CHAIN — a source whose operation string carries a position — shows as many rows with one hit each,
- * which is itself the answer. A key that does not fit is counted in the overflow row rather than dropped: an
- * undercount that says so is a measurement, an undercount that does not is a lie. */
+ * which is itself the answer. What a fixed table does with the key that does not fit IS the admission policy,
+ * and it is stated where the rows are declared: an undercount that says so is a measurement, an undercount
+ * that does not is a lie. */
 /* THE ROW HOLDS THE WHOLE KEY, because a census that truncates its own key merges the rows it exists to tell
    apart — the same defect the key construction itself carried, one layer up, and it would report a frontier
    growing at "one predicate" that is really two. The rows themselves are declared above decide_free.
@@ -460,10 +497,115 @@ int decide_cursor(void) { return g_c; }
    have no key" must not be able to masquerade as one that has nothing to say. So each site names which
    population it is filing into, and BOTH halves are asserted here, at the one point every row converges on. */
 typedef enum { FORK_ROW_PREDICATE, FORK_ROW_SYNTHETIC } ForkRowKind;
-static void fork_key_count(const char *key, ForkRowKind kind)
+
+/* THE CENSUS'S OWN ARITHMETIC, WALKED RATHER THAN CARRIED. A running sum kept beside the rows would be a second
+   copy of one fact, agreeing with them only for as long as somebody remembers to update both — so the check
+   that the rows account for every fork is computed FROM the rows, at every row that changes, which is where a
+   broken sum is still one operation away from its cause. Both are pure and vanish with the asserts. */
+static long fork_census_sum(void)
+{
+    long s = 0;
+    int i;
+
+    for (i = 0; i < DECIDE_FORK_KEYS; i++) s += g_fork_keys[i].n;   /* an unclaimed row holds 0 */
+    for (i = 0; i < g_fork_mech_n; i++)    s += g_fork_mech[i].n;
+    return s;
+}
+/* EVERY ROW'S OWN SHAPE. A claimed row was claimed BY AN ARRIVAL and only ever grows, so it holds at least one
+   hit — which is why a ZERO count is not a state this table can be in, and why an absent row is the only way it
+   has of saying "not seen". And `err <= n - 1` is Space-Saving's guarantee restated as a bound the publisher
+   depends on: the floor a row publishes is `n - err`, so an error that reached its count would publish a floor
+   of zero and put a site in the census that this table cannot prove took a single fork. */
+static int fork_rows_sane(void)
 {
     int i;
 
+    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
+        if (!g_fork_keys[i].key) { if (g_fork_keys[i].n || g_fork_keys[i].err) return 0; continue; }
+        if (g_fork_keys[i].n < 1 || g_fork_keys[i].err < 0 || g_fork_keys[i].err > g_fork_keys[i].n - 1)
+            return 0;
+    }
+    for (i = 0; i < g_fork_mech_n; i++)
+        if (!g_fork_mech[i].key || g_fork_mech[i].n < 1) return 0;
+    return 1;
+}
+/* The lightest claimed row's count — Space-Saving's eviction candidate, and the bound on the hits of every key
+   the table is NOT holding. -1 while a row is still unclaimed, which is the state in which nothing is evicted
+   and no key has been excluded at all. */
+static long fork_pred_min(void)
+{
+    long m = -1;
+    int i;
+
+    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
+        if (!g_fork_keys[i].key) return -1;   /* rows fill left to right: a gap means the table is not full */
+        if (m < 0 || g_fork_keys[i].n < m) m = g_fork_keys[i].n;
+    }
+    return m;
+}
+
+/* SPACE-SAVING ADMISSION — see the rows' declaration for why this algorithm and not the other. Three cases and
+   there is no fourth: the row already holding this key, a row never claimed, and a full table, where the
+   LIGHTEST row gives up its NAME and keeps its MASS. */
+static void fork_pred_count(const char *key)
+{
+    int i, light = 0;
+    long inherited;
+    char *name;
+
+    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
+        if (!g_fork_keys[i].key) {          /* never claimed: this row starts exact and stays exact */
+            g_fork_keys[i].key = strdup(key);
+            CHECK(g_fork_keys[i].key, "decide: OOM recording which predicate is growing the frontier");
+            g_fork_keys[i].n = 1;
+            g_fork_keys[i].err = 0;
+            return;
+        }
+        if (!strcmp(g_fork_keys[i].key, key)) { g_fork_keys[i].n++; return; }
+        if (g_fork_keys[i].n < g_fork_keys[light].n) light = i;
+    }
+    /* THE MASS IS INHERITED AND THE NAME IS NOT, which is the one thing an eviction must not get wrong. The
+       displaced key's hits STAY in the table, or the rows stop summing to the forks and the frontier's
+       provenance identity stops closing; and they are recorded as the new row's ERROR, or they are published
+       as forks at the key that displaced it — an evicted site's count resurrected under another site's name,
+       which is the single failure this whole column exists to make impossible. */
+    inherited = g_fork_keys[light].n;
+    DCHECK(inherited == fork_pred_min(),
+           "a fork census eviction displaced a row that is not the lightest — Space-Saving bounds a row's error "
+           "by the count of the row it displaced, so displacing anything heavier makes every floor this table "
+           "publishes larger than the algorithm can prove and the census overstates a site");
+    name = strdup(key);
+    CHECK(name, "decide: OOM recording which predicate is growing the frontier");
+    free(g_fork_keys[light].key);
+    g_fork_keys[light].key = name;
+    g_fork_keys[light].n   = inherited + 1;
+    g_fork_keys[light].err = inherited;
+}
+
+/* AND THE MECHANISM ROWS, EXACT, IN A TABLE THAT GROWS — see the declaration. There is no admission policy here
+   because there is nothing to admit against: the strings are this tree's, so the population is what the call
+   sites spell and a document cannot add one. A fixed size with an overflow arm would be a bound on a set that
+   is not a page's to enlarge, and the row it dropped would be the one a reader is most likely to be reading. */
+static void fork_mech_count(const char *key)
+{
+    int i;
+
+    for (i = 0; i < g_fork_mech_n; i++)
+        if (!strcmp(g_fork_mech[i].key, key)) { g_fork_mech[i].n++; return; }
+    if (g_fork_mech_n == g_fork_mech_cap) {
+        int nc = g_fork_mech_cap ? g_fork_mech_cap * 2 : 8;
+        void *p = realloc(g_fork_mech, (size_t)nc * sizeof *g_fork_mech);
+        CHECK(p, "decide: OOM recording which mechanism is growing the frontier");
+        g_fork_mech = p; g_fork_mech_cap = nc;
+    }
+    g_fork_mech[g_fork_mech_n].key = strdup(key);
+    CHECK(g_fork_mech[g_fork_mech_n].key, "decide: OOM recording which mechanism is growing the frontier");
+    g_fork_mech[g_fork_mech_n].n = 1;
+    g_fork_mech_n++;
+}
+
+static void fork_key_count(const char *key, ForkRowKind kind)
+{
     DCHECK(key != NULL && *key,
            "a fork census row was filed under no name at all — every row of this table is either a constraint "
            "key or a named mechanism that forks without one, and an empty name merges with nothing because it "
@@ -486,17 +628,22 @@ static void fork_key_count(const char *key, ForkRowKind kind)
            "the prose rows are told apart from constraint keys by their leading `(` and by nothing else, so a "
            "name without it is a fabricated predicate: it merges with a real key the moment one spells the "
            "same way, and until then it reports a branch the program never took");
+    /* THE POPULATION THE CALLER NAMED IS THE TABLE IT GOES INTO, which makes the two namespaces STRUCTURAL and
+       leaves the two asserts above as what they always were: a check that a site is filing into the population
+       it thinks it is. Two tables cannot collide however a key is spelled. */
     g_fork_total++;
-    for (i = 0; i < DECIDE_FORK_KEYS; i++) {
-        if (!g_fork_keys[i].n) {                       /* an empty row: claim it */
-            g_fork_keys[i].key = strdup(key);
-            CHECK(g_fork_keys[i].key, "decide: OOM recording which predicate is growing the frontier");
-            g_fork_keys[i].n = 1;
-            return;
-        }
-        if (!strcmp(g_fork_keys[i].key, key)) { g_fork_keys[i].n++; return; }
-    }
-    g_fork_other++;
+    if (kind == FORK_ROW_PREDICATE) fork_pred_count(key);
+    else                            fork_mech_count(key);
+    DCHECK(fork_rows_sane(),
+           "a fork census row is a shape this table cannot publish — every claimed row holds at least the one "
+           "arrival that claimed it, and its inherited error is strictly below its count so the floor it "
+           "publishes (`n - err`) names at least one fork. A row outside that is a census that can report a "
+           "site as having taken no forks, which is a site the reader will go and look for");
+    DCHECK(fork_census_sum() == g_fork_total,
+           "the fork census rows stopped accounting for the forks counted into them — Space-Saving conserves "
+           "mass by construction (a hit, a claim and an eviction each add exactly one), so a divergence here "
+           "is a fork counted into the total and filed into neither table, and the frontier's provenance "
+           "identity `created = 1 + forks + …` no longer closes over anything a reader can subtract");
 }
 
 /* THE CENSUS SERIALIZES ITSELF, which is the rule solver/result.c states for every surface it composes:
@@ -511,37 +658,56 @@ static void fork_key_count(const char *key, ForkRowKind kind)
    the frontier" — the first question a run whose frontier explodes asks — had never once been answerable off a
    production run. It rides the result document as `_forkAt`.
 
-   THE OVERFLOW ROW IS A ROW. An undercount that says so is a measurement; one that does not is a lie. It is
-   emitted whenever the table overflowed, under a name no constraint key can collide with because no key is
-   prose. Caller frees. */
+   WHAT A ROW PUBLISHES IS ITS FLOOR, AND THE ERRORS ARE PUBLISHED TOGETHER AS ONE ROW OF THEIR OWN — which is
+   the whole of how an approximate census stays quotable. A predicate row emits `n - err`: hits at that key and
+   at no other, whatever was evicted. The inherited mass is emitted once, summed, under a prose name no
+   constraint key can collide with because no key is prose. So the three phases below are a PARTITION of
+   Space-Saving's counters — exact mechanism rows, predicate floors, and the errors — and they therefore still
+   sum to the forks, which is the identity a reader subtracts the frontier's provenance out of.
+   AND EACH OF THE THREE SENTENCES A READER CAN BUILD FROM THAT IS TRUE RATHER THAN NEARLY TRUE. The overflow
+   row is ABSENT exactly when no eviction ever happened, so its absence is the positive statement that no site
+   was excluded. It LEADS when more mass is unattributable than the best-proven site can claim, which is the
+   table saying it has not answered. And below that it is the bound on how far any one named row understates —
+   a row's true count is at least its published floor and at most that floor plus this row — so "the named rows
+   are a floor" stops being a caution and becomes the guarantee.
+   WHAT IT CANNOT SAY IS WHICH KEYS ARE IN IT, and it must not be read as though it could. An evicted site and a
+   site this document never reached are both simply ABSENT here, and no arrangement of these rows separates
+   them; what separates them is the lightest resident count, which bounds the hits of every key the table is not
+   holding, and which is a number this object does not carry. Caller frees. */
 char *decide_fork_json(void)
 {
-    static const char OVERFLOW_KEY[] = "(more predicates than this table holds)";
+    static const char OVERFLOW_KEY[] = "(forks the named rows cannot prove are their own)";
     size_t n = 3;   /* "{}" and the NUL */
     char *out;
     size_t len = 0;
-    int i, rows = 0;
+    int i, phase, rows = 0;
+    long spill = 0, sum = 0;
 
     /* THE SIZE IS COUNTED FROM THE ROWS THEMSELVES rather than estimated, because a key is the PAGE's bytes
        and has no bound this file may assume. Every byte of a key can escape to six (`\u00XX`), a row costs the
        two quotes, the colon, the comma and a long's widest 20 digits, and the object costs its braces. */
     for (i = 0; i < DECIDE_FORK_KEYS; i++)
-        if (g_fork_keys[i].n) n += strlen(g_fork_keys[i].key) * 6 + 24;
-    if (g_fork_other) n += sizeof OVERFLOW_KEY * 6 + 24;
+        if (g_fork_keys[i].key) { n += strlen(g_fork_keys[i].key) * 6 + 24; spill += g_fork_keys[i].err; }
+    for (i = 0; i < g_fork_mech_n; i++) n += strlen(g_fork_mech[i].key) * 6 + 24;
+    if (spill) n += sizeof OVERFLOW_KEY * 6 + 24;
     out = malloc(n);
     if (!out) return NULL;
     out[len++] = '{';
-    for (i = 0; i <= DECIDE_FORK_KEYS; i++) {
+    for (phase = 0; phase < 3; phase++)
+    for (i = 0; i < (phase == 0 ? g_fork_mech_n : phase == 1 ? DECIDE_FORK_KEYS : 1); i++) {
         const char *k;
         long hits;
 
-        if (i < DECIDE_FORK_KEYS) {
-            if (!g_fork_keys[i].n) continue;
-            k = g_fork_keys[i].key; hits = g_fork_keys[i].n;
+        if (phase == 0) {                               /* the mechanisms: exact, and no error to publish */
+            k = g_fork_mech[i].key; hits = g_fork_mech[i].n;
+        } else if (phase == 1) {                        /* the predicates: the floor, never the counter */
+            if (!g_fork_keys[i].key) continue;
+            k = g_fork_keys[i].key; hits = g_fork_keys[i].n - g_fork_keys[i].err;
         } else {
-            if (!g_fork_other) break;
-            k = OVERFLOW_KEY; hits = g_fork_other;
+            if (!spill) continue;
+            k = OVERFLOW_KEY; hits = spill;
         }
+        sum += hits;
         if (rows++) out[len++] = ',';
         out[len++] = '"';
         for (; *k; k++) {
@@ -562,6 +728,13 @@ char *decide_fork_json(void)
     DCHECK(len < n, "the fork census overran its buffer at the closing brace — a truncation here does not lose "
                     "a row, it loses the brace, so the document that embeds it will not parse and every "
                     "finding for this page is discarded");
+    DCHECK(sum == g_fork_total,
+           "the fork census object's rows do not sum to the forks it counted, and the object is where that "
+           "identity is actually READ — a consumer takes the total off these rows, so a partition that leaks "
+           "hands back percentages of a denominator that is not the number of forks. The three phases are a "
+           "partition of Space-Saving's counters (a mechanism's exact count, a predicate's floor `n - err`, "
+           "and the errors summed once), so a mismatch is a phase that skipped a claimed row or double-counted "
+           "an error");
     return out;
 }
 

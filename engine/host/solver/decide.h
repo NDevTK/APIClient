@@ -148,6 +148,14 @@ int  decide_cursor(void);
    answer, a message from one arm of a sender's branch, a drive of a function the page never called are three
    different things and one row for all three describes none of them — and never a fabricated predicate key,
    which would merge with a real one the moment a predicate spelled the same way.
+   THE TWO ARE COUNTED IN SEPARATE TABLES AND RENDERED IN ONE OBJECT, because only one of them is a page's to
+   enlarge: a mechanism row is prose written at a call site in this tree, so that population is enumerable
+   where it is authored and is counted EXACTLY, while a constraint key is the document's and is what a fixed
+   census must choose among. Sharing one table would spend its scarce slots on rows that were never at risk and
+   would let the heaviest mechanism — one that fires on every orphan drive outweighs every individual branch
+   beneath it — evict the predicates the census exists to name. A consumer that wants "which PREDICATE" rather
+   than "which fork site" partitions the object by the same rule fork_key_count asserts: a constraint key opens
+   on concolic_ident_compose's decimal length prefix, a mechanism row on `(`.
    READ THE COUNTS AS ARRIVALS, NOT AS PRODUCTION. Each row is how many flows REACHED that site, and every
    fork upstream doubles what reaches everything below it, so a program with k independent gates in sequence
    produces rows in a geometric series and the LAST site in program order is always the largest. A biggest row
@@ -156,21 +164,31 @@ int  decide_cursor(void);
    worked example. It was status: it named a fixture and a revision it did not carry, so it stayed quotable
    long after it stopped being true of any tree, and the shape above is the whole of what it was teaching.)
 
-   AND THE ADMISSION POLICY AND THAT SENTENCE ARE IN TENSION, WHICH IS A PROPERTY OF THE TABLE AND NOT OF ANY
-   RUN. The rows are claimed FIRST-COME — fork_key_count fills the first free slot and every later key goes to
-   the overflow — while the paragraph above says the largest row is the LAST site in program order. Latest and
-   largest are the same end of the program, so a table that admits by arrival is structurally likeliest to
-   exclude exactly the row it exists to name, and it does so silently: the overflow row is rendered in the same
-   object under the same shape as a real key, so a consumer taking the argmax over the table can hand back a
-   NON-SITE as its answer to "which predicate is growing the frontier". The overflow row's hit count is
-   honest — an undercount that says so is a measurement — but it is one number over an unknown number of
-   sites, so "one hot predicate that fell out of the table" and "a genuine long tail" read identically, and
-   those two have opposite fixes. WHAT MAKES THE TOP ROW READABLE AT ALL is therefore the overflow row's own
-   size beside it: while the overflow leads the table, the table has not answered, and a reader who quotes the
-   argmax has quoted the bucket. Building the answer means changing WHICH keys a fixed-size census retains
-   (the established heavy-hitter algorithms — Misra-Gries, Space-Saving — are what that question is called
-   outside this file, and both trade exact counts for the guarantee that the heaviest key is resident), never
-   growing the table until a fixture stops overflowing, which fixes one document and no other.
+   AND THAT SENTENCE IS WHY ADMISSION CANNOT BE BY ARRIVAL, which is a property of the table and not of any
+   run. The largest row is the LAST site in program order; latest and largest are therefore the same end of the
+   program, so a fixed table that claims its rows FIRST-COME is structurally likeliest to exclude exactly the
+   row it exists to name — and it excludes it into a bucket rendered in the same object under the same shape as
+   a real key, so a consumer taking the argmax hands back a NON-SITE as its answer to "which predicate is
+   growing the frontier". Which keys a fixed census RETAINS is the question, and it is a known one outside this
+   file: the table is Space-Saving, the argument against Misra-Gries is at the rows' declaration, and growing
+   the table until some fixture stops overflowing is not a candidate at all because it fixes one document and
+   no other.
+   A ROW PUBLISHES A FLOOR, SO THE CENSUS UNDERSTATES AND NEVER INVENTS. A predicate row's count is the hits it
+   can prove are its own; the mass it inherited from whatever it displaced is published once, summed, as a row
+   of its own. Those still partition the counters, so the rows still sum to the total, and each of the three
+   readings a consumer can take off them is exact rather than approximate: that row ABSENT means no eviction
+   ever happened and no site was excluded; that row LEADING means more mass is unattributable than the
+   best-proven site can claim, so the table has not answered and the argmax is not worth quoting; and below
+   that, it is the bound on how far any one named row understates.
+   WHAT THE CENSUS CANNOT SAY IS WHICH KEYS ARE MISSING, AND A READER MUST NOT BE LEFT TO INFER IT. An evicted
+   site and a site the document never reached are both ABSENT from this object and no arrangement of these rows
+   tells them apart. A count of ZERO is not a third state and cannot occur: a row is claimed BY an arrival and
+   only grows, so absence is this table's only way of saying "not seen". What separates the two absences is the
+   LIGHTEST resident count — it bounds the hits of every key the table is not holding, so a key below it may
+   have been evicted while a key above it cannot have been — and that number is not in this object. A consumer
+   that wants to distinguish them needs it emitted beside the rows; a consumer that wants a TIGHT per-row bound
+   rather than the summed one needs each row's own inherited error. Neither is emitted, because neither has a
+   reader, and a field written for nobody is the same broken contract as a field read from nobody.
    It is keyed by the CONSTRAINT key rather than a file:line because that is what a predicate IS here — two
    forks at one source and operation are one predicate however many call sites spell it, and a chain (a source
    whose operation string carries a position) shows as `distinct` climbing with `total`, which distinguishes
