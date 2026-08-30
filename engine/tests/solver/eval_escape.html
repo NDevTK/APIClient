@@ -1,0 +1,90 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>eval escape</title>
+<body>
+<script>
+/* ONE PROBLEM: the @S ladder ABOVE the survival fraction, over TWO candidates of ONE search standing at
+ * DIFFERENT distances — which is the only situation §@S's comparator exists to order, and the one no document
+ * in this corpus produced.
+ *
+ * A SPELLING CONVENTION FIRST, because this comment cannot contain what it is about: a MultiLineComment
+ * terminator would end it. The two code points U+002A U+002F are written `*|/` below and the opener U+002F
+ * U+002A is written `/|*`; the bar is this comment's and is in no payload. Everything else is literal.
+ *
+ * WHY THE OTHER SINK DOCUMENTS CANNOT REACH IT, said plainly because it is the whole reason this one exists.
+ * hash_sink.html is DELIBERATELY the case where nothing is constructed: its bytes land in HTML §13.2.5.1 data
+ * state, whose only exit is U+003C (<), and URL §1.3 "Percent-encoded bytes" puts that code point in the
+ * fragment percent-encode set — so no escape is ever seeded and every rung above the fraction is unreachable
+ * by construction. url_sink.html states its two vectors at detection and one of them fires, so it has no
+ * derivation, no second live candidate and nothing to compare. Between them the corpus asserted
+ * schedule-invariance over a search that builds nothing.
+ *
+ * THE SOURCE'S OWN CONSTRAINT IS WHAT MAKES THIS A REAL PoC AND NOT A FALSE ONE. §Attacker-sources: the same
+ * candidate through the same source is a FALSE PoC in a markup context and a REAL one in a JS context, and
+ * only the delivery tells them apart. URL §1.3's fragment percent-encode set is "the C0 control
+ * percent-encode set and U+0020 SPACE, U+0022 ("), U+003C (<), U+003E (>), and U+0060 (`)" — read off the
+ * spec text rather than recalled — and it holds neither U+0027 (') nor U+002A (*) nor U+002F (/) nor
+ * U+003B (;) nor the parentheses. So every byte both escapes below are made of rides the victim's own
+ * fragment intact, and this document's PoC is one a browser really delivers.
+ *
+ * TWO §12 STATES OUT OF ONE SOURCE READ, which is what puts two candidates in one search. The page writes the
+ * variant name twice into one generated program — once into a provenance banner and once as the argument the
+ * experiment is activated with — so ECMAScript §12 "ECMAScript Language: Lexical Grammar" gives the attacker's
+ * bytes two different states in one string, and solve_js.c scans each occurrence in its own state (it is
+ * addressed by OFFSET, so nothing is renamed and the other occurrences are left in place). The banner hole is
+ * §12.4 "Comments"' MultiLineComment and the argument hole is §12.9.4 "String Literals"' SingleStringCharacters,
+ * so ONE probe run yields TWO constructed escapes and the search holds both.
+ *
+ * AND THE PAGE'S OWN FILTER DECIDES WHICH OF THEM GETS OUT. `replace(/['"]/g, "")` is the quote-stripping
+ * sanitizer every legacy generator has, and it is applied to the ARGUMENT and not to the banner — which is
+ * exactly why the two candidates end up at different rungs rather than at the same one:
+ *
+ *   `*|/;X9();/|*`  is §12.4's exit. "Multi-line comments cannot nest" is §12.4's own first paragraph, so the
+ *              page's terminator is still ahead and the escape re-opens a comment for it to close. It carries
+ *              no quote, so the filter is a no-op on it: the banner ends where the payload says, the marker
+ *              stands at the head of an input element, and §19.2.1 "eval ( source )" compiles and runs it.
+ *              SURVIVED 1.0, ARRIVED, ESCAPED, and it FIRES.
+ *   `';X9()//`  is §12.9.4's exit, with §12.10 "Automatic Semicolon Insertion" supplying nothing (the resume
+ *              is on the SAME line, so the escape writes its own U+003B) and the trailing line comment eating
+ *              what follows on it. Its bytes reach the sink INTACT — they are in the banner, which nothing
+ *              filters — so it ARRIVES. But the occurrence it was BUILT for had its U+0027 eaten on the way,
+ *              so the page's own opening quote closes against the page's own closing quote and the marker is
+ *              still inside the literal. SURVIVED 1.0, ARRIVED, NOT ESCAPED.
+ *
+ * That is §@S(2)'s character provenance deciding an outcome. The derivation is constructed from the state the
+ * bytes landed in; the filter is observed by RE-EXECUTION and by nothing else, because a static
+ * transform-expression cannot see which of two occurrences a `replace` was applied to; and the comparator is
+ * left holding two live candidates one rung apart for the rest of their lives. §@S(ii) is what makes that the
+ * point: a LEDGER cannot express it — the second candidate to travel is paid nothing and ties with a flow that
+ * never started — so a build that orders these two equal has collapsed the fitness back into the reward, and
+ * this is the document where that shows.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: a fire-verified PoC is the strongest thing this half of the
+ * tool emits and §scheduler's razor lands on it hardest — a finding reported to a person in one run and not
+ * the next. Here the fire is reached through a DERIVATION with a second live candidate beside it, so the
+ * schedule chooses which of the two runs first, whether the delivery probe narrows the table before or after
+ * the derivation reads its witness, and which flow holds the thread when the marker calls. None of that may
+ * change the entry. Both escapes avoid every byte the fragment set encodes, so neither is ever withdrawn and
+ * `payloads` is the same four entries whichever probe came back first — deliberately, because this document is
+ * about the RUNGS: a search whose payload list moved with the probe order would be measuring the seeding.
+ *
+ * WHY IT DRAINS: no loop, no recursion, no fetch, no timer. One source read, one sink, four candidate runs —
+ * the context probe, the delivery probe and the two escapes — each re-running a document with no work in it.
+ *
+ * WHAT IS WRITTEN AROUND, by name. The argument hole is a CALL argument, so §12.9.4's escape resuming with a
+ * line comment would eat the page's own `');` and leave `exp.activate(` unclosed — a Script that does not
+ * parse, which fires nothing and would put a SyntaxError in `pageErrors` for a reason that has nothing to do
+ * with the rung being measured. It does not arise HERE because the filter removes that escape's U+0027 before
+ * it reaches that hole and the surviving bytes sit inside the page's own literal; an edit that drops the
+ * filter must move that hole to statement position or it will be measuring a parse failure. The banner is a
+ * MultiLineComment and not a `//` one for the same class of reason: §12.3 "Line Terminators" gives a
+ * SingleLineComment exactly one exit, every URL component percent-encodes C0 controls, so that state has no
+ * deliverable escape at all through an address source and the search would be back to one candidate. */
+var active = "control";
+var exp = { activate: function (v) { active = v; } };
+
+var variant = location.hash.slice(1);
+eval("/* variant: " + variant + " */\n"
+   + "exp.activate('" + variant.replace(/['"]/g, "") + "');");
+</script>
+</body>

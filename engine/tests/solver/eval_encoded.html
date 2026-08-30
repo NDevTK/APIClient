@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>eval encoded</title>
+<body>
+<script>
+/* ONE PROBLEM: an @S escape that is DERIVED, DELIVERED, ARRIVES at its own sink and is eaten on the way by a
+ * spec CODEC the page itself calls — the state solve.h names as the one nothing in the record could express,
+ * and which this corpus has no document for.
+ *
+ * A SPELLING CONVENTION FIRST, for eval_escape.html's reason: this comment cannot contain a MultiLineComment
+ * terminator, so the two code points U+002A U+002F are written `*|/` and the opener U+002F U+002A is written
+ * `/|*`. The bar is this comment's and is in no payload.
+ *
+ * IT IS eval_escape.html's OPPOSITE HALF OVER THE SAME SINK CLASS, and the pair is what makes either readable.
+ * There the filter runs on ONE of two occurrences and the search still fires; here the transform runs on the
+ * only occurrence there is, so the search PARKS — and it parks for a reason no other parked entry in this
+ * corpus has. hash_sink.html parks with `probes == payloads`, which is the positive statement that the source
+ * can carry no exit from the state its bytes landed in: the derivation ran and correctly built nothing. This
+ * one parks with `payloads > probes` and a PARTIAL `survivedBy`, which is the opposite instruction — an escape
+ * exists, it was delivered, its bytes reached the sink, and the page's own code ate the part that mattered.
+ * solve.h states exactly that pair and why they must not read alike; a run in which both documents report the
+ * same shape is one fact about a search reported as two.
+ *
+ * WHY THE TRANSFORM RUNS ON THE PAYLOAD AT ALL, which is the mechanism this document is really about. A
+ * candidate is substituted where the identity that reached the sink was MINTED, so anything downstream of that
+ * point runs on the attacker's real bytes and anything upstream does not. ECMAScript §19.2.6.4
+ * "encodeURIComponent ( uriComponent )" is a spec codec, so §Solver-half models it FAITHFULLY rather than
+ * predicting it — the derived unknown carries what the real codec really produced and INHERITS its operand's
+ * source identity, which is what puts the injection point at `location.search.slice(1)` and leaves the encode
+ * downstream of it. A design that gave the codec's result an identity of its own would move the injection
+ * point past the encode, the payload would arrive unencoded, and this document would fire — silently reporting
+ * an exploit that a browser cannot reproduce.
+ *
+ * WHICH BYTES DIE IS THE SPEC'S OWN ANSWER AND NOT A GUESS. §19.2.6.5 "Encode ( string, extraUnescaped )"
+ * step 3 makes `alwaysUnescaped` "the string-concatenation of the ASCII word characters and "-.!~*'()"", and
+ * §19.2.6.4 passes the empty String as `extraUnescaped`. So of `*|/;X9();/|*` — §12.4 "Comments"' own exit,
+ * built because "Multi-line comments cannot nest" leaves the page's terminator ahead — U+002A, `X`, `9`,
+ * U+0028 and U+0029 survive as themselves while both U+002F and both U+003B are escaped. The comment
+ * therefore never closes, the marker stays inside it, and §12 "ECMAScript Language: Lexical Grammar" gives it
+ * no state to have escaped from. The longest surviving contiguous run is `X9()` — four bytes of ten — so the
+ * search reports `survivedBy` 4 against a context probe's 16, which is the "the breakout travelled and
+ * something after arrival is the problem" reading, and `escaped:0` beside `reached:1`.
+ *
+ * AND IT IS THE SECOND ADDRESS SOURCE, which nothing in this corpus reads. URL §1.3 "Percent-encoded bytes"
+ * defines the special-query percent-encode set as the query set plus U+0027 ('), which comes to the C0 control
+ * set plus U+0020 SPACE, U+0022 ("), U+0023 (#), U+003C (<), U+003E (>) and U+0027 (') — six bytes against the
+ * fragment set's five, and a DIFFERENT six, which is the whole reason the two components are declared
+ * separately. HTML §7.2.4 "The Location interface"'s search getter is "If this's url's query is either null or
+ * the empty string, return the empty string" and otherwise "Return "?", followed by this's url's query", so
+ * the component's prefix is U+003F and the envelope must say so. The delivery probe is built out of that
+ * six-byte set and this document is where its indexing is exercised at a length nothing else uses.
+ * NONE OF THOSE SIX IS IN THE ESCAPE, which is deliberate: the escape is therefore never withdrawn, it is
+ * seeded whichever probe came back first, and the payload list does not move with the probe order. What
+ * defeats it is the PAGE, measured by re-execution — never the source's declaration, which is hash_sink.html's
+ * subject and would make this document a second copy of it.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: three candidates stand at three distinct distances here — the
+ * context probe's bytes arrive whole and reach no rung, the delivery probe's arrive in fragments, and the
+ * breakout's arrive in fragments AND reach the arrival rung. §@S(ii) says a fitness is a comparator READ at
+ * the pick and a reward is a ledger PAID once, and the difference only shows where several live candidates of
+ * one search stand at once. Every one of those readings is an observation of a re-execution, so no schedule
+ * may change any of them, and the four numbers the parked entry carries (`reached`, `survived`/`survivedOf`,
+ * `escaped`, `survivedBy`) are the same under all of them or a flow was dropped, starved or reordered.
+ *
+ * WHY IT DRAINS: no loop, no recursion, no fetch, no timer. One source read, one sink, three candidate runs.
+ *
+ * WHAT IS WRITTEN AROUND, by name. The hole is a §12.4 MultiLineComment and NOT a §12.9.4 "String Literals"
+ * one, and that is forced rather than chosen: §19.2.6.5 leaves U+0027 unescaped, so a string-literal hole
+ * would close the page's own literal and then strand `%3B` — a NumericLiteral followed immediately by an
+ * IdentifierStart, which §12.9.3.1 "Static Semantics: Early Errors" makes a SyntaxError. The candidate would
+ * then be measuring a parse failure in `pageErrors` instead of the rung, which is a different subject wearing
+ * this one's name. If a later edit moves the hole into a string, it must also give the residue somewhere legal
+ * to land. */
+var channel = location.search.slice(1);
+var player = { channel: null, start: function () { this.channel = channel; } };
+
+eval("/* channel: " + encodeURIComponent(channel) + " */\nplayer.start();");
+</script>
+</body>
