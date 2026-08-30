@@ -27,16 +27,68 @@ struct XmlTreeBuild {
     XmlNsScope         *scope;
     char               *text;          /* the §2.4/§4.1 run being coalesced — see the header */
     size_t              text_len, text_cap;
+    /* HTML §14.2's SECOND TREES, innermost last — the template contents the insertion point is inside. See the
+       header on why this is not the second stack of open elements it refuses. */
+    lxb_dom_node_t    **tpl;
+    size_t              tpl_n, tpl_cap;
     bool                failed;
 };
+
+/* THE TREE THIS BUILD IS CURRENTLY APPENDING INTO — `root_parent`, or the innermost `<template>`'s template
+   contents, which HTML §14.2 makes a root of its own with no parent link back down. It is what the placement
+   below DECLARES to solver/dom_cow.h, whose private-tree family checks the declaration against the tree the
+   parent is actually in ("THE DECLARED ROOT IS THE IMMEDIATE TREE and not the whole of what the caller is
+   building"), which is the same re-declaration core/dom/node.c's §4.4 clone walk makes when it descends into
+   one. */
+static lxb_dom_node_t *xml_tree_root(const XmlTreeBuild *b)
+{
+    return b->tpl_n ? b->tpl[b->tpl_n - 1] : b->root_parent;
+}
 
 /* See the header — the one point `kind` is asked, and the reason it is one point rather than seven. */
 void xml_tree_place_created(lxb_dom_node_t *root, DomParseRootKind kind,
                             lxb_dom_node_t *parent, lxb_dom_node_t *node)
 {
+    lxb_dom_node_t *contents;
+
     DCHECK(root != NULL && parent != NULL && node != NULL,
            "an XML parse placed a node with no tree, no parent or no node — every construct this walk builds "
            "names all three, so a NULL is a caller that is not this walk");
+    /* HTML §14.2 "Parsing XML documents": "When an XML parser would append a node to a `template` element, it
+       must instead append it to the `template` element's template contents (a DocumentFragment node)." The
+       spec calls it a willful violation of XML and says why — "XML is not formally extensible in the manner
+       that is needed for template processing" — so there is no XML-side rule to reconcile it with, and this is
+       the one place an XML parse appends, which is why the sentence is discharged here and not at seven sites.
+       THE NAMESPACE CONDITION IS NOT A TEST WRITTEN HERE and must not become one: §14.2's `template` is HTML's
+       element, and DOM §4.5 "Interface Document" says "The element interface for any name and namespace is
+       Element, unless stated otherwise" — so `template` in the SVG or MathML namespace is a plain Element with
+       no template contents at all, and core/dom/node.h's `node_template_content` answers NULL for it because
+       it asks the HTML-namespace question. A namespace compare spelled out here would be a second copy of that
+       rule, one edit from disagreeing with the interface the element actually has. */
+    contents = node_template_content(parent);
+    if (contents != NULL) {
+        DCHECK(root == contents,
+               "HTML §14.2 redirected a node into a <template>'s template contents while the parse declared "
+               "some OTHER tree as the one it is building — solver/dom_cow.h's private-tree family checks the "
+               "declaration against the tree the parent is in, and a template's contents are a root with no "
+               "parent, so the caller's insertion point and its declared root have drifted apart");
+        /* §14.2's OTHER sentence, which composes with the one above: "When an XML parser creates a Node
+           object, its node document must be set to the node document of the node into which the newly created
+           node is to be inserted." It is asserted rather than performed because it is currently a no-op: this
+           build creates every node in the parse's own Document, and lexbor's template constructor stamps the
+           contents fragment with the document holding the ELEMENT.
+           NAMED RESIDUAL. NOT COVERED: the write itself. THE NEXT DIFF that makes HTML §4.12.3's "establish
+           the template contents" run at element CREATION — giving the fragment the appropriate template
+           contents owner document, which core/dom/node.c's §4.5 adopt step 3.4 is otherwise the only writer of
+           — owes this site §14.2's node-document write through that one writer. HOW ITS ABSENCE WOULD SHOW:
+           this DCHECK fires the instant the fragment stops naming the parse's Document, because a node created
+           in one document would then be appended into another. */
+        DCHECK(node->owner_document == contents->owner_document,
+               "HTML §14.2 requires a node an XML parser creates to have the node document of the node it is "
+               "inserted into, and this <template>'s contents no longer name the document this parse creates "
+               "its nodes in — route the created node through DOM §4.5 adopt's one node-document writer");
+        parent = contents;
+    }
     switch (kind) {
     case DOM_PARSE_ROOT_PRIVATE:
         /* No creation record: the ROOT owns this tree until a placement moves a node out of it through
@@ -81,6 +133,24 @@ const char *xml_tree_error_message(XmlTreeError err)
     return "";
 }
 
+/* ENTER a `<template>`'s template contents — HTML §14.2, called with the fragment the element's own interface
+   holds, so this records where the placement is ALREADY going rather than deciding it. Grows geometrically;
+   nothing is bounded, because the depth is the document's own template nesting. */
+static void xml_tree_template_push(XmlTreeBuild *b, lxb_dom_node_t *contents)
+{
+    if (b->tpl_n == b->tpl_cap) {
+        size_t want = b->tpl_cap ? b->tpl_cap * 2 : 4;
+        lxb_dom_node_t **grown = (lxb_dom_node_t **)realloc(b->tpl, want * sizeof(*grown));
+
+        CHECK(grown != NULL, "OOM recording a <template>'s template contents for HTML §14.2 — without the "
+                             "entry this parse would declare the wrong tree to the per-flow delta, which is a "
+                             "node placed into a document with no record of who frees it");
+        b->tpl = grown;
+        b->tpl_cap = want;
+    }
+    b->tpl[b->tpl_n++] = contents;
+}
+
 /* A NUL-TERMINATED COPY OF A BORROWED SLICE, because core/dom/attr_list.h's writer takes three NUL-terminated
    names while every name this walk reports is a borrowed slice of the entity. Never returns NULL for a
    non-NULL slice; NULL in is NULL out, which is how §1.4's null namespace and null prefix pass through. */
@@ -123,7 +193,7 @@ static void xml_tree_flush_text(XmlTreeBuild *b)
     if (b->text_len == 0) return;
     t = lxb_dom_document_create_text_node(b->doc, (const lxb_char_t *)b->text, b->text_len);
     CHECK(t != NULL, "OOM creating a Text node for an XML character run");
-    xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(t));
+    xml_tree_place_created(xml_tree_root(b), b->kind, b->current, lxb_dom_interface_node(t));
     b->text_len = 0;
 }
 
@@ -193,9 +263,15 @@ void xml_tree_build_destroy(XmlTreeBuild *b)
            "open is inside an element and is flushed by that element's end-tag item. A survivor means a run "
            "was opened somewhere [1] does not admit one, and the characters would be silently missing from "
            "the tree");
+    DCHECK(b->tpl_n == 0,
+           "a completed XML parse is still inside a `<template>`'s template contents — every push at a start "
+           "tag is popped at that element's end tag, and §2.1's [1] `document` cannot end with [39] `element` "
+           "unmatched, so a survivor is HTML §14.2's redirect still in force over a tree nobody is appending "
+           "to and a declared root that no longer names the document");
     xml_document_walk_destroy(b->walk);
     xml_ns_scope_destroy(b->scope);
     free(b->text);
+    free(b->tpl);
     free(b);
 }
 
@@ -205,10 +281,14 @@ void xml_tree_build_abandon(XmlTreeBuild *b)
     /* NEITHER RESIDUE IS ASSERTED HERE AND BOTH ARE EXPECTED: an unflushed run is a [14] CharData whose
        element never closed, and the open element and namespace scopes below are what stopping mid-[39]
        leaves. `text` is freed exactly as it is above — the run is this build's own buffer and no node names
-       it, so there is nothing an abandoned build leaks that a finished one does not. */
+       it, so there is nothing an abandoned build leaks that a finished one does not. HTML §14.2's record of the
+       template contents the insertion point was inside is a third such residue — stopping mid-[39] inside a
+       `<template>` leaves entries on it — and it is freed here for the same reason: it names fragments the
+       ROOT owns, never nodes of its own. */
     xml_document_walk_abandon(b->walk);
     xml_ns_scope_abandon(b->scope);
     free(b->text);
+    free(b->tpl);
     free(b);
 }
 
@@ -297,8 +377,16 @@ static XmlTreeError xml_tree_start_element(XmlTreeBuild *b, const XmlTag *tag, X
     DCHECK(el != NULL, "core/dom/element.h's element_create_ns states it never returns NULL — an allocation "
                        "failure there is fatal — so a NULL here is that contract broken and not an OOM this "
                        "site may report");
-    xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(el));
+    xml_tree_place_created(xml_tree_root(b), b->kind, b->current, lxb_dom_interface_node(el));
     b->current = lxb_dom_interface_node(el);
+    /* HTML §14.2: from here until this element's end tag, everything this parse appends goes into the
+       element's TEMPLATE CONTENTS and not under the element — so the tree the placement declares changes with
+       the insertion point, and both move at exactly this one line. `node_template_content` is NULL for every
+       element that is not an HTML-namespace `<template>`, which is the whole of the namespace condition. */
+    {
+        lxb_dom_node_t *contents = node_template_content(b->current);
+        if (contents != NULL) xml_tree_template_push(b, contents);
+    }
 
     if (tag->att_n == 0) return XML_TREE_OK;
     seen = (XmlTreeExpanded *)calloc(tag->att_n, sizeof(*seen));
@@ -425,10 +513,34 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
            no longer named by anything this build holds. */
         b->closed = b->current;
         xml_ns_pop(b->scope);
+        /* HTML §14.2: if this element is a `<template>`, everything since its start tag went into its template
+           contents and the parse is now leaving that second tree. The pop is checked against the element's OWN
+           contents rather than merely counted, which is what stops this record and the tree from drifting: a
+           mismatch is a `<template>` whose start tag pushed one fragment and whose end tag is leaving another. */
+        {
+            lxb_dom_node_t *contents = node_template_content(b->closed);
+            if (contents != NULL) {
+                DCHECK(b->tpl_n > 0 && b->tpl[b->tpl_n - 1] == contents,
+                       "an XML `<template>`'s end tag is leaving template contents this parse never entered — "
+                       "HTML §14.2's redirect and this record move at the one line where the insertion point "
+                       "does, so a disagreement means a node was appended into a tree the placement did not "
+                       "declare and the per-flow delta names the wrong root for it");
+                b->tpl_n--;
+            }
+        }
         b->current = b->current->parent;
         DCHECK(b->current != NULL,
                "closing an XML element left no insertion point — the open element IS the tree here, so a NULL "
                "parent means a node this build appended was detached from under it between two steps");
+        /* AND §14.2'S SECOND TREE HAS NO PARENT LINK OUT OF IT. A direct child of a `<template>` was appended
+           to the CONTENTS, so climbing by `parent` lands on the fragment rather than on the element that
+           contains it; DOM §4.7 "Interface DocumentFragment"'s host is the only way back, and core/dom/node.h
+           owns that round trip. Without this the next sibling would still be placed correctly and the
+           template's OWN end tag would report a DocumentFragment as the element §3's [39] just closed. */
+        {
+            lxb_dom_node_t *host = node_template_content_host(b->current);
+            if (host != NULL) b->current = host;
+        }
         return XML_TREE_OK;
 
     case XML_CONTENT_CDSECT: {
@@ -443,7 +555,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         c = lxb_dom_document_create_cdata_section(b->doc, (const lxb_char_t *)norm, need);
         free(norm);
         CHECK(c != NULL, "OOM creating a CDATASection node");
-        xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(c));
+        xml_tree_place_created(xml_tree_root(b), b->kind, b->current, lxb_dom_interface_node(c));
         return XML_TREE_OK;
     }
 
@@ -459,7 +571,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         cm = lxb_dom_document_create_comment(b->doc, (const lxb_char_t *)norm, need);
         free(norm);
         CHECK(cm != NULL, "OOM creating a Comment node");
-        xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(cm));
+        xml_tree_place_created(xml_tree_root(b), b->kind, b->current, lxb_dom_interface_node(cm));
         return XML_TREE_OK;
     }
 
@@ -477,7 +589,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
                                                            (const lxb_char_t *)norm, need);
         free(norm);
         CHECK(pi != NULL, "OOM creating a ProcessingInstruction node");
-        xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(pi));
+        xml_tree_place_created(xml_tree_root(b), b->kind, b->current, lxb_dom_interface_node(pi));
         return XML_TREE_OK;
     }
     }

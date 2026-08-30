@@ -28,6 +28,20 @@
  * the depth the tree has are the same number, which is asserted against core/xml/xml_element.h's own count on
  * every item.
  *
+ * EXCEPT THAT HTML §14.2 "Parsing XML documents" MAKES THIS PARSE BUILD MORE THAN ONE TREE, AND THE SECOND ONE
+ * HAS NO PARENT LINK. "When an XML parser would append a node to a `template` element, it must instead append
+ * it to the `template` element's template contents (a DocumentFragment node)" — a fragment whose parent is
+ * null, reached from the document only through the element. Two things follow and both are in this file rather
+ * than anywhere below it, because both are about WHERE A NODE GOES. Climbing out of that tree at an end tag is
+ * DOM §4.7 "Interface DocumentFragment"'s host — still the tree answering, still no second spelling of
+ * `node->parent`, just the one link that is not a parent. And the TREE THE PLACEMENT DECLARES changes with the
+ * insertion point, because solver/dom_cow.h's private-tree family checks a declaration against the tree the
+ * parent is actually in and a template's contents are a root of their own; that record is one entry per open
+ * `<template>` (never per open element), it holds a fact the tree cannot answer in constant time — which of
+ * the several trees this parse builds the insertion point is in — and its pop is asserted against the closing
+ * element's own contents, so a drift from the tree is a crash rather than a node placed in a tree the delta
+ * does not name.
+ *
  * WHY IT STOPS AT THE FIRST ERROR RATHER THAN ACCUMULATING. core/xml/xml_ns.h records a binding EVEN WHEN it
  * reports a constraint violation, so that resolution stays total and a document's errors are all of them
  * rather than the first plus a cascade — and that is right for THAT layer, which cannot know who is asking.
@@ -113,8 +127,19 @@ XmlTreeBuild *xml_tree_build_create(lxb_dom_document_t *doc, lxb_dom_node_t *par
  * this rule is one whose halves cannot drift without a use-after-free (solver/dom_cow.h, the private-tree
  * family).
  *
- * `root` is the node `xml_tree_build_create` was opened on — the tree this parse is building, which for all
- * three consumers is the Document itself. `parent` is where the node goes and is `root` or a descendant of it.
+ * `root` is the tree this parse is CURRENTLY building into and `parent` is `root` or a descendant of it. That
+ * is the node `xml_tree_build_create` was opened on — the Document, for every consumer — until HTML §14.2's
+ * redirect below is in force, at which point both are the innermost `<template>`'s template contents. The two
+ * are checked against each other here rather than taken on trust, because the whole of solver/dom_cow.h's
+ * private-tree declaration is that the caller states which tree it is writing.
+ *
+ * IT PERFORMS HTML §14.2's TEMPLATE REDIRECT, which is why it is one point and not seven: "When an XML parser
+ * would append a node to a `template` element, it must instead append it to the `template` element's template
+ * contents (a DocumentFragment node)". The redirect is core/dom/node.h's `node_template_content` and no test
+ * written here — DOM §4.5 "Interface Document" makes the element interface for a name and namespace `Element`
+ * "unless stated otherwise", so a `template` in the SVG or MathML namespace HAS no template contents and that
+ * function answers NULL for it. A namespace compare spelled out at this site would be a second copy of a rule
+ * the element's own interface already carries.
  *
  * PRIVATE takes the private-tree chokepoint and records NOTHING. The delta captures only SHARED baseline state
  * (CLAUDE.md §State isolation), and a tree the declaring operation created a statement ago is not that: routing

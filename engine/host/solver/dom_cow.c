@@ -719,19 +719,18 @@ static lxb_dom_node_t *dom_root_of(lxb_dom_node_t *n) {
    `<template><b>x</b></template>` puts `b` in a root whose parent is null, reachable from the document only
    through the host element. A walk that stopped there would call every template's contents a tree of its own,
    and a parse's declared root would match nothing inside one.
-   THE STEP THROUGH THE HOST IS `node_template_content`'s ROUND TRIP and not a type test, which is core/dom/
-   node.h's own reason for exporting it: a shadow root is a DocumentFragment with a host too, and a parse
-   produces none (§13.2.6.4.4's declarative conversion runs at the parse BOUNDARY over the finished fragment),
-   so one appearing under a parse is a tree that parse never built and must not be climbed out of. */
+   THE STEP THROUGH THE HOST IS core/dom/node.h's `node_template_content_host`, which is that header's round
+   trip and not a type test: a shadow root is a DocumentFragment with a host too, and a parse produces none
+   (§13.2.6.4.4's declarative conversion runs at the parse BOUNDARY over the finished fragment), so one
+   appearing under a parse is a tree that parse never built and must not be climbed out of. */
 static lxb_dom_node_t *dom_parse_root_of(lxb_dom_node_t *n) {
     for (;;) {
-        lxb_dom_element_t *host;
+        lxb_dom_node_t *host;
 
         while (dom_is_attached(n)) n = n->parent;
-        if (n->type != LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) return n;
-        host = lxb_dom_interface_document_fragment(n)->host;
-        if (host == NULL || node_template_content(lxb_dom_interface_node(host)) != n) return n;
-        n = lxb_dom_interface_node(host);
+        host = node_template_content_host(n);
+        if (host == NULL) return n;
+        n = host;
     }
 }
 

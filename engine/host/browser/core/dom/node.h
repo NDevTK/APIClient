@@ -206,9 +206,16 @@ bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
 /* HTML §4.12.3's TEMPLATE CONTENTS — a `<template>`'s content fragment, or NULL for every other node. It is
    here rather than inside one walk because a `<template>`'s markup is NOT under the element (§4.10: only the
    parser and `t.content` reach the fragment), so EVERY tree walk that means "all of this node's markup" has to
-   ask it, and a walk that forgets copies a template and none of its contents with nothing to say so. Two
-   callers ask today: §4.4's clone (node.c) and the fragment-parse copy (core/html/tree_construction.c). */
+   ask it, and a walk that forgets copies a template and none of its contents with nothing to say so. */
 lxb_dom_node_t *node_template_content(const lxb_dom_node_t *n);
+
+/* THE SAME FACT ASKED BACKWARDS — the `<template>` whose template contents `n` IS, or NULL for every other
+   node. §4.12.3's contents have no parent, so this is the ONE way out of that second tree: DOM §4.7 "Interface
+   DocumentFragment" gives a fragment "an associated host (null or an element in a different node tree)", and a
+   walk that has descended into a template's markup climbs back through it and nothing else. It is the ROUND
+   TRIP through the forward question and not a `nodeType` test — a shadow root is a DocumentFragment with a
+   host too — so the two directions cannot come to disagree about one node. */
+lxb_dom_node_t *node_template_content_host(const lxb_dom_node_t *n);
 
 /* DOM §4.4 "CLONE A NODE" — THE ALGORITHM, DELEGATABLE, so the one implementation is the one every caller runs.
  *

@@ -108,16 +108,14 @@ static lxb_dom_node_t *copy_private_root(lxb_dom_node_t *n)
 }
 
 /* Is `n` the content fragment of a `<template>` — the one tree a parse builds that is reached other than
-   through child links. A shadow root is a document fragment too in DOM's terms, which is why the test is the
-   round trip through the host rather than the node type alone: a parse produces no shadow roots (§13.2.6.4.4's
-   declarative conversion runs at the parse BOUNDARY, over the finished fragment), so one appearing here is a
-   tree this walk was never given and the caller below says so. */
+   through child links. core/dom/node.h owns the question in both directions and states why it is the round
+   trip through the host rather than the node type alone: a shadow root is a document fragment too in DOM's
+   terms, and a parse produces no shadow roots (§13.2.6.4.4's declarative conversion runs at the parse
+   BOUNDARY, over the finished fragment), so one appearing here is a tree this walk was never given and the
+   caller below says so. */
 static bool is_template_content(const lxb_dom_node_t *n)
 {
-    const lxb_dom_element_t *host;
-    if (n->type != LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) return false;
-    host = lxb_dom_interface_document_fragment(n)->host;
-    return host != NULL && node_template_content(lxb_dom_interface_node(host)) == n;
+    return node_template_content_host(n) != NULL;
 }
 
 /* ONE NODE OF THE PARTIAL TREE, COPIED — lexbor's own `clone_interface` for this document, which is the code

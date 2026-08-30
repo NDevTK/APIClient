@@ -2268,6 +2268,26 @@ lxb_dom_node_t *node_template_content(const lxb_dom_node_t *n)
     return t->content ? &t->content->node : NULL;
 }
 
+/* THE SAME QUESTION ASKED BACKWARDS — the `<template>` element whose template contents `n` IS, or NULL for
+   every other node. It is the way OUT of the one tree a parse builds that no child link reaches: §4.12.3's
+   contents are a DocumentFragment with no parent, and DOM §4.7 "Interface DocumentFragment" gives it "an
+   associated host (null or an element in a DIFFERENT node tree)" — which is the only pointer back.
+   IT IS THE ROUND TRIP THROUGH node_template_content AND NOT A TYPE TEST, because a shadow root is a
+   DocumentFragment with a host too: `n` is this template's contents only if the template says so, so the two
+   directions cannot answer differently about one node. Written here beside the forward question for the reason
+   that one is exported — THREE callers had transcribed this round trip (solver/dom_cow.c's parse-root walk,
+   core/html/tree_construction.c's partial-parse copy, and HTML §14.2's XML placement in core/xml/xml_tree.c),
+   and three spellings of one rule is two of them one edit away from stopping covering it. */
+lxb_dom_node_t *node_template_content_host(const lxb_dom_node_t *n)
+{
+    lxb_dom_element_t *host;
+
+    if (n->type != LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) return NULL;
+    host = lxb_dom_interface_document_fragment((lxb_dom_node_t *)(uintptr_t)n)->host;
+    if (host == NULL) return NULL;
+    return node_template_content(lxb_dom_interface_node(host)) == n ? lxb_dom_interface_node(host) : NULL;
+}
+
 /* THE STAGES, and why the template case forces a LEVEL rather than a stage. A `<template>` can have BOTH: the
    parser puts markup in its content fragment, and `t.appendChild(x)` appends to the ELEMENT — §4.10 is explicit
    that only the parser and `t.content` reach the fragment. So a template's copy has two child lists to fill, and
