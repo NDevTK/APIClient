@@ -41,10 +41,22 @@
  * `window.gon={}` and then the two of the twenty-three fields the bundle reads that THIS visitor is entitled
  * to. Every one of the other twenty-one missed on a present object and answered `undefined`, so
  * `if (!gon.current_user_id) return null` never forked and the logged-in surface stayed buried behind a rule
- * that was written for it. The engine decides WHICH records those are (a document-built record reachable from
- * the global — see js_publish_document_namespace); what this file owes is the PATH each one is read by,
- * because a member's identity is `gon.current_user_id` and never a bare `current_user_id` that a second
- * namespace's identically-named field would be indistinguishable from.
+ * that was written for it. The engine decides WHICH records those are and what this file owes is the PATH each
+ * one is read by, because a member's identity is `gon.current_user_id` and never a bare `current_user_id` that
+ * a second namespace's identically-named field would be indistinguishable from.
+ *
+ * AND THE ENGINE'S RULE IS WORTH STATING HERE, BECAUSE IT IS THE ONE THING THIS FILE MAY NOT SECOND-GUESS AND
+ * THE ONE THING THAT HAS BEEN WRONG TWICE. A record is on this channel iff THE DOCUMENT'S OWN BYTES WROTE ITS
+ * EXTENT — an object literal or a `JSON.parse` in an inline `<script>`, granted at the operation that writes
+ * the member list (js_document_record_grant), never inferred from how or when the object was allocated. The
+ * two halves of that are what keep the channel honest in the two directions it can fail. A record wrongly ON
+ * it answers a member that HAS a real answer with an unknown, and nothing throws: a PLATFORM OBJECT is the
+ * case, because Web IDL §3.8 "Platform objects implementing interfaces" makes its member list the INTERFACE'S
+ * and not the document's, so an `Event` an inline script leaves in a `var` must answer `undefined` for a
+ * member it does not have — and a member of an interface this engine has not BUILT yet must be honestly
+ * absent, since that absence is the forcing function naming the component to write. A record wrongly OFF it
+ * loses a fork, which is loud and recoverable. So the engine grants narrowly and this file never widens: a
+ * base it is asked about is one the engine has already decided, and every DCHECK below says so.
  *
  * THE REGISTRY HOLDS NO REFERENCE, and that is sound rather than lucky: a row is only ever consulted for an
  * object the ENGINE has marked as published, the mark is cleared at every allocation, and the only thing that
@@ -124,13 +136,20 @@ void absent_free(void)
    TypeError exception" ended the document (`var b={}; 1 & b` and `1 & globalThis` both died).
    SECOND, AND WORSE, because it produced no exception at all: the WALK that decides which records are on the
    channel asked no key rule either, and a record reached through a key is a record PUBLISHED, not a member
-   answered. So an internal-slot record — Web IDL §3.7.3 Internal slots, which this engine holds as named
-   fields on an object hung off a private Symbol (engine/host/browser/core/idl_slots.h) — became a namespace,
-   and every one of its well-named fields then answered with an unknown through a key rule that passed. An
-   `Event` an inline script left in a `var` reported `defaultPrevented` true and `dispatch` set, so DOM §2.7
-   Interface EventTarget's dispatchEvent(event) method step 1 threw InvalidStateError on the first dispatch of
-   a freshly constructed event. THAT is why this assert covers the publication and not only the two reads: the
-   publication is where the path is composed, so it is where a key that cannot be spelled must crash. */
+   answered. So an internal-slot record — ECMAScript §6.1.7.2 Object Internal Methods and Internal Slots, which
+   this engine holds as named fields on an object hung off a private Symbol
+   (engine/host/browser/core/idl_slots.h) — became a namespace, and every one of its well-named fields then
+   answered with an unknown through a key rule that passed. An `Event` an inline script left in a `var`
+   reported `defaultPrevented` true and `dispatch` set, so DOM §2.7 Interface EventTarget's dispatchEvent(event)
+   method step 1 threw InvalidStateError on the first dispatch of a freshly constructed event. THAT is why this
+   assert covers the publication and not only the two reads: the publication is where the path is composed, so
+   it is where a key that cannot be spelled must crash.
+   AND THE KEY RULE WAS NEVER THE WHOLE OF THAT SECOND DEFECT, WHICH IS WHY MEMBERSHIP MOVED TOO. It stopped
+   the SLOT RECORD being published; the `Event` itself is reachable under an ordinary string key, so it stayed
+   on the channel and a read of a member it does not hold still minted an unknown for a value Web IDL §3.8
+   defines. The rule this file's header states — extent GRANTED at the operation that wrote it — is what takes
+   a platform object off the channel, and neither rule substitutes for the other: one is about the KEY a record
+   is reached by, the other about WHOSE CHOICE its member list was. */
 static const char *ns_key_str(JSContext *ctx, JSAtom name)
 {
     DCHECK(JS_AtomIsPublishedName(JS_GetRuntime(ctx), name),
