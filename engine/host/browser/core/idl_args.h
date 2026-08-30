@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/idl_iter.h"
 
 /* A member's body, run once its declared arguments are real strings. Same shape as JS_CFUNC_generic_magic, so
    an existing body becomes one by taking a magic it may ignore. */
@@ -568,6 +569,157 @@ typedef struct IdlDictDecl {
     const IdlDictMember *members;
     int                  n;
 } IdlDictDecl;
+
+/* ---- WEB IDL §3.2.17 Dictionary types, AS AN EMBEDDABLE WALK --------------------------------------------
+ *
+ * ONE MACHINE, TWO ENTRIES — never two machines. §3.2.17 Dictionary types' ES-to-IDL conversion (the FIRST of
+ * that section's two sibling ordered lists; the second converts an IDL dictionary back to an Object, and a bare
+ * sub-number here would name a step in either) is reached two ways in this engine, and the pair is the whole
+ * reason this declaration exists rather than a second copy of the loop:
+ *
+ *   - AS A DECLARED ARGUMENT TYPE. `optional D options = {}` is an IDL_DICT position, and the argument machine
+ *     converts it at the argument boundary before the member's own algorithm starts.
+ *   - INSIDE AN ALGORITHM, where the spec converts a value it is HOLDING rather than one Web IDL handed it.
+ *     Indexed Database §5.12 creating a request to retrieve multiple items is the first: `getAll` and
+ *     `getAllKeys` declare their first argument `any`, and step 8's "is a potentially valid key range" branch is
+ *     what decides whether step 9 reads it as an IDBGetAllOptions at all — so the conversion cannot happen at
+ *     the boundary, because the boundary does not yet know it is a dictionary.
+ *
+ * A SECOND COPY IS THE DUAL SYSTEM this engine forbids by name, and the seam between two copies is where the
+ * bugs would be: a member's [[Get]] is §3.2.17 (ES-to-IDL list) step 4.1.3.1's `? Get(jsDict, key)` — a getter
+ * or a Proxy trap, so the page's code — and step 4.1.4.1's "converting jsMemberValue to an IDL value whose type
+ * is the type member is declared to be of" is the page's code AGAIN, once per member type that coerces
+ * (§3.2.4.6 unsigned long's ToNumber is a `valueOf`, §3.2.18 Enumeration types' is a ToString). An algorithm
+ * that hand-rolled a trio of step_getprop_run calls would be a dictionary machine whose required-member rule,
+ * whose §3.2.17 step 4.1.5 defaults and whose per-member coercions could each drift from this one's.
+ *
+ * SO THE WALK IS THE ARGUMENT MACHINE'S OWN CURSOR, LIFTED OUT OF IT. The argument machine embeds exactly one
+ * and drives it through the same idl_dict_walk_run an algorithm calls; there is no argument-only path left for
+ * the two to disagree across.
+ *
+ * IT NEEDS NO STAGE OF ITS OWN, which is what makes it embeddable in an algorithm at all. Every rest point it
+ * has is a REQUEST (step_getprop_run, step_tostring_run, step_todouble_run, iter_cursor_run), and a request
+ * parks and resumes AT ITS OWN CALL SITE with the hosting machine's stage unmoved — so an embedder adds a field
+ * and a re-entry, never a stage block the way core/indexeddb/idb_key_range.h's walk needs one.
+ *
+ * THE HOST'S HEADER IS A PARAMETER AND NOT A FIELD, because the walk is a sub-algorithm of whichever machine
+ * embeds it: the requests are issued through the HOST's JSStepHdr, and a walk holding one of its own would be a
+ * second machine with a second identity for the driver to assert about. */
+
+/* ONE LEVEL of a `sequence<(DOMString or D)>`: the sequence's own iterator, and the D-dictionary the element it
+ * is standing on is being converted as. A frame is pushed when a member of that dictionary is itself a sequence
+ * of the same shape, so the machine parks at the element it is on AT WHATEVER DEPTH — which a C loop over any
+ * of it could not, and which C recursion could not either, since a park has to be a RETURN. */
+typedef struct {
+    IterCursor  cur;        /* the sequence's iterator, over `src` */
+    JSValue     src;        /* the value being iterated (owned) */
+    JSValue     list;       /* the elements converted so far (owned) */
+    JSValue     esrc;       /* the element whose dictionary is being read (owned) */
+    JSValue     eout;       /* the object that element's converted members are placed on (owned) */
+    JSValue     mv;         /* one member's value between its read and its conversion (owned) */
+    const IdlDictDecl *d;   /* the element type's dictionary arm */
+    const JSAtom *atoms;    /* its member names, interned when the member was declared */
+    uint32_t    n;          /* how many elements `list` holds */
+    int         mi;         /* the member cursor */
+    uint8_t     phase;
+    uint8_t     mphase;     /* 0 = read the member, 1 = convert what was read, 2 = place it */
+} IdlConvFrame;
+
+/* §3.2.17 IN FLIGHT — the whole of what a park has to carry, and nothing the host can re-derive.
+ *
+ * THE FRAMES ARE NOT IN HERE AND THAT IS THE POINT. A deep fork BYTE-COPIES the hosting state and re-takes only
+ * what its `visit` names, so a pointer stored here into that same block would survive the copy STILL AIMED AT
+ * THE ORIGINAL — two flows converting into one frame stack, which is the defect the argument machine's own tail
+ * comment names one level up. They are passed to every entry instead, so the host re-derives them from its own
+ * layout on each re-entry and there is nothing stored to go stale. An inline array would be worse still: its
+ * size would be a CEILING on how deeply the PLATFORM's declared types may nest.
+ *
+ * `members`/`atoms`/`iface`/`narrow` are borrowed and must outlive the walk, which every caller satisfies by
+ * passing statics — a member's declaration owns its list for the life of the pool, and an algorithm's is a file
+ * static. They are re-stated on the walk rather than re-read from a declaration because an ALGORITHM's
+ * dictionary has no declaration to read from; that is the whole difference between the two entries. */
+typedef struct {
+    JSValue   src;      /* the value being converted (owned). Not an Object ⇒ every member is absent */
+    JSValue   out;      /* §3.2.17 step 2's idlDict, as the object this engine represents one by (owned) */
+    const IdlDictMember *members;
+    const JSAtom        *atoms;
+    const char *name;   /* the dictionary's IDL identifier, for a diagnostic; NULL for an anonymous one */
+    int       n;
+    /* §3.2.15 Interface types' BRAND for this dictionary's interface-typed members, and the narrowing a class id
+       cannot express — see idl_iface_brand / idl_iface_narrow. A member carrying its own (IdlDictMember::iface)
+       overrides it. Zero and NULL for a dictionary with no interface-typed member. */
+    JSClassID iface;
+    bool    (*narrow)(JSValueConst v);
+    int       mi;       /* THE RESUME POINT: the member being read */
+    uint8_t   mphase;   /* 0 = read the member, 1 = convert what was read. Both park, so a member needs two */
+    JSValue   mv;       /* the member's value between those two phases (owned) */
+    /* §3.2.21 Sequences' cursor and the list it fills, for a member whose type is one. It is ALSO what the
+       argument machine uses for a sequence at an ARGUMENT position: Web IDL converts arguments strictly left to
+       right, so an argument's sequence and a dictionary member's are never in flight at once, and one cursor is
+       what makes that structural instead of a comment two copies could drift across. */
+    IterCursor seq;
+    JSValue    seq_list;
+    uint32_t   seq_n;
+    /* 0 = NOT STARTED, 1 = pull the next element, 2 = convert the one just pulled. "Not started" is a phase of
+       its own rather than a null list, because a zeroed state's JSValue is the INTEGER 0 and not JS_UNDEFINED —
+       JS_TAG_INT is 0 — so "have I built the list yet" read off the value is always "yes". */
+    uint8_t    seq_phase;
+    /* §3.2.25 Union types' arm for a `(DOMString or sequence<DOMString>)` member or argument, which is a resume
+       point because the decision is `? GetMethod(V, %Symbol.iterator%)` — the page's code. */
+    uint8_t    uni_phase;
+    uint8_t    conv_sp;   /* how many IdlConvFrame frames are live; 0 = no nested conversion in flight */
+    uint8_t    started;   /* the walk has a `src` and an `out`; 0 = nothing in flight, so a resume may start it */
+} IdlDictWalk;
+
+/* INTERN a dictionary declaration's member names, once per runtime, and answer them. The atom must be live at
+   both the request and the answer — step_getprop_run is handed it twice with a suspension in between — so it
+   cannot be created per read, and the names are static strings, so one intern serves every conversion. It also
+   runs §3.2.17's READ-ORDER check over the declaration (see idl_args.c), which is why an algorithm's dictionary
+   goes through it rather than reaching for JS_NewAtom itself. Idempotent: a declaration already interned answers
+   with the atoms it has. Call it from the component's per-agent init. */
+const JSAtom *idl_dict_declare(JSContext *ctx, const IdlDictDecl *d);
+
+/* BEGIN §3.2.17 (ES-to-IDL list) over `src`, which the CALLER has already brought past step 1: a value that is
+ * neither an Object, undefined nor null is that step's TypeError, and the two callers throw it in two different
+ * places (the argument machine at the position, an algorithm wherever its own branch sent the value here), so it
+ * is asserted here rather than performed here.
+ *
+ * undefined and null ARE legal and are not a special case: step 4.1.2 makes every member's jsMemberValue
+ * undefined, so the same member loop runs and yields a dictionary carrying every declared default. That is why
+ * there is no second "default them all" loop — there was one, in the argument machine, and a dictionary with
+ * both would be two answers to §3.2.17 step 4.1.5.
+ *
+ * `frames`/`frames_cap` are the nested-conversion stack; a dictionary whose declared types nest needs at least
+ * idl_members_depth of them and this asserts it, so a caller that passed none for a type that needs some crashes
+ * at the start rather than at the depth. NULL/0 is right for a dictionary that declares no
+ * `sequence<(DOMString or D)>` member, which is nearly all of them.
+ * Returns 0, or -1 with a throw live (the object could not be minted). */
+int  idl_dict_walk_start(JSContext *ctx, IdlDictWalk *w, JSValueConst src,
+                         const IdlDictMember *members, int n, const JSAtom *atoms, const char *name,
+                         JSClassID iface, bool (*narrow)(JSValueConst v),
+                         IdlConvFrame *frames, int frames_cap);
+
+/* DRIVE the conversion one re-entry's worth. Returns >0 (the caller returns it — the walk is parked inside a
+   member's [[Get]] or inside one member's own coercion), 0 when every member has been read and converted, or -1
+   with a throw live. `in` is the request answer and is CONSUMED. */
+int  idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap,
+                       JSValue in, JSValue **out_cb, int *out_argc);
+
+/* TAKE step 5's idlDict, OWNED, and leave the walk empty — so a host that converts one dictionary per call may
+   start another. Asserts the walk finished: taking a half-read dictionary would hand an algorithm an object
+   whose absent members are indistinguishable from members the page did not write. */
+JSValue idl_dict_walk_take(JSContext *ctx, IdlDictWalk *w);
+
+/* WHAT THE WALK OWNS, for the hosting state's `visit` to chain into its own. The frames are visited here too —
+   ALL of them and not only the live ones, because a popped frame holds JS_UNDEFINED and a never-used one the
+   zeroed state's non-refcounted integer, so visiting all takes no reference it should not, where a loop bounded
+   by `conv_sp` would silently drop whatever a frame still held if the cursor and the frames ever disagreed. */
+void idl_dict_walk_visit(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap, JSStepVisit *v);
+
+/* RELEASE everything an ABANDONED walk holds and leave it empty — for a host whose own teardown is not the
+   `visit`-driven discharge (an algorithm that owns its state directly). A host whose `visit` names the walk
+   needs nothing here: the driver's one discharge covers it. Safe on a walk that never started. */
+void idl_dict_walk_clear(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap);
 
 /* DECLARE a member: the IDL types of its arguments, and the body to run once they are converted. Returns the
    step id, which the caller CACHES. Registration and installation are separate on purpose: Element's members

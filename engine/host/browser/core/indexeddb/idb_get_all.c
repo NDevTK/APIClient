@@ -56,17 +56,21 @@
  *
  * §5.12 step 9 reads `queryOrOptions["query"]`, `["count"]` and `["direction"]` — Web IDL dictionary-member
  * lookups on a value that, for `getAll` and `getAllKeys`, arrives as a bare `any`. So the conversion to
- * `IDBGetAllOptions` has to happen INSIDE the algorithm, after the branch, and this engine's §3.2.17
- * conversion is reachable only as a DECLARED ARGUMENT TYPE. That capability is named in the DFAIL at the
- * branch rather than hand-rolled here — a trio of step_getprop_run calls would be a second dictionary machine
- * beside the one that exists.
+ * `IDBGetAllOptions` has to happen INSIDE the algorithm, after the branch that chose this arm, and never at
+ * the argument boundary: the boundary does not yet know the value is a dictionary, because §5.12 step 8's "is
+ * a potentially valid key range" is what decides that.
  *
- * WHAT IT ACTUALLY BLOCKS IS ONE SHAPE, because three of the four ways step 9 is reached need no machinery:
- * `getAllRecords` declares the dictionary, so the args machine converted it at the argument boundary;
- * undefined and null never reach step 9 (they are potentially valid key ranges — see
- * ga_potentially_valid_key_range); and a non-object PRIMITIVE is §3.2.17 step 2's TypeError, which reads
- * nothing. So what waits on the capability is exactly `getAll(obj)` / `getAllKeys(obj)` with a real options
- * object, which is what WPT's `*-options` files pass. */
+ * THE CONVERSION IS core/idl_args.h's `idl_dict_walk_start`/`_run`/`_take` — the SAME machine the argument
+ * path drives, with the member loop lifted out of it rather than copied. It is never hand-rolled here: a trio
+ * of step_getprop_run calls would be a second dictionary machine, with its own answer to the required-member
+ * rule, to §3.2.17 (ES-to-IDL list) step 4.1.5's defaults and to each member's own coercion.
+ *
+ * WHAT IS STILL MISSING IS THE EMBEDDING AND NOT THE CAPABILITY, and the DFAIL at the branch names it
+ * exactly. Three of the four ways step 9 is reached need none of it: `getAllRecords` declares the dictionary,
+ * so the args machine converted it at the argument boundary; undefined and null never reach step 9 (they are
+ * potentially valid key ranges — see ga_potentially_valid_key_range); and a non-object PRIMITIVE is §3.2.17
+ * (ES-to-IDL list) step 1's TypeError, which reads nothing and is thrown here. So what waits is exactly
+ * `getAll(obj)` / `getAllKeys(obj)` with a real options object, which is what WPT's `*-options` files pass. */
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -510,27 +514,44 @@ int idb_get_all_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w,
     /* STEP 9. `queryOrOptions["query"]`, `["count"]` and `["direction"]` are Web IDL dictionary-member
        lookups, so what they are stated over is an IDBGetAllOptions the value has been CONVERTED to. */
     if (!options_converted) {
-        /* WEB IDL §3.2.17 STEP 2 IS O(1) AND IS THE WHOLE ANSWER FOR A PRIMITIVE: "if Type(V) is not
-           Undefined, Null, or Object, throw a TypeError". Nothing is read off a boolean, a number that got
-           here, a symbol or a bigint, so this arm needs none of the machinery the object arm below waits on —
-           and undefined and null never reach step 9 at all (see ga_potentially_valid_key_range). */
+        /* WEB IDL §3.2.17 (ES-to-IDL list) STEP 1 IS O(1) AND IS THE WHOLE ANSWER FOR A PRIMITIVE: "If jsDict
+           is not an Object and jsDict is neither undefined nor null, then throw a TypeError". Nothing is read
+           off a boolean, a number that got here, a symbol or a bigint, so this arm needs none of the machinery
+           the object arm below waits on — and undefined and null never reach step 9 at all (see
+           ga_potentially_valid_key_range). It is thrown HERE and asserted rather than repeated inside the
+           walk, which is that entry's own contract. */
         if (!JS_IsObject(query_or_options)) {
             JS_ThrowTypeError(ctx, "the first argument is neither a key nor an IDBGetAllOptions dictionary");
             return JS_STEP_ABRUPT;
         }
-        DFAIL("Indexed Database §5.12 step 9 was reached with an UNCONVERTED `queryOrOptions`. `getAll` and "
-              "`getAllKeys` declare their first argument as `any`, so the branch that reads it as an "
-              "IDBGetAllOptions has to convert one HERE — after the potentially-valid-key-range test, which "
-              "is what chose this branch. THE CAPABILITY TO BUILD IS: a step-driven Web IDL §3.2.17 "
-              "dictionary conversion, embeddable in an algorithm (an idl_dict_walk_start/_run/_take beside "
-              "core/idl_args.h's declared-argument path), SHARING the args machine's per-member conversion "
-              "rather than a second copy of it — every member read is one [[Get]] the page may have put an "
-              "accessor on, and each member's own conversion is the page's code again, so the algorithm must "
-              "rest on the member it is on. `getAllRecords` does not need it: its IDL declares the "
-              "dictionary, so the args machine converted it at the argument boundary");
-        JS_ThrowTypeError(ctx, "an IDBGetAllOptions dictionary cannot yet be converted inside an algorithm: "
-                               "this engine's Web IDL dictionary conversion is reachable only as a declared "
-                               "argument type");
+        /* THE CONVERSION EXISTS AND THIS ALGORITHM CANNOT YET HOLD IT — that is the whole of what is left, and
+           it is a RESIDUAL of this block's shape rather than a missing capability. core/idl_args.h's
+           `idl_dict_walk_start`/`_run`/`_take` is the step-driven §3.2.17 conversion, embeddable in an
+           algorithm and sharing the argument machine's own member loop; what §5.12 does not have is anywhere
+           to PARK one. `idb_get_all_walk_start` performs steps 6-9 as O(1) engine actions and hands the only
+           suspendable part to `w->rw`, so a conversion that rests on the member it is on has no field to rest
+           in and no re-entry to come back through.
+           WHAT THE NEXT DIFF BUILDS, all of it in core/indexeddb/idb_get_all.h and this file:
+             1. `IdbGetAllWalk` gains an `IdlDictWalk opts` and a byte saying which of step 9's two conversions
+                is in flight — the dictionary, then the key range it hands `queryOrOptions["query"]` to.
+             2. `idb_get_all_walk_run` drives `idl_dict_walk_run` while that byte says so and only then falls
+                through to `idb_key_range_walk_run`; step 9's three reads move behind the walk's `_take`.
+             3. `idb_get_all_walk_visit` chains `idl_dict_walk_visit`, whose frames are NULL/0 — every member
+                of IDBGetAllOptions is a flat type, so `idl_members_depth` over it is 0.
+             4. `idb_get_all_init` calls `idl_dict_declare` for an `IdlDictDecl` naming IDBGetAllOptions, which
+                is what interns the member atoms this walk is handed.
+           IT NEEDS NO STAGE BLOCK, which is why this is a field and a re-entry rather than a stage-list
+           change: every rest point the walk has is a REQUEST, and a request parks and resumes at its own call
+           site with the hosting machine's stage unmoved.
+           HOW ITS ABSENCE SHOWS: `getAll(obj)` and `getAllKeys(obj)` with a real options object abort here —
+           WPT's `*-options` files are what pass one. `getAllRecords` does not reach this: its IDL declares the
+           dictionary, so the args machine converted it at the argument boundary. */
+        DFAIL("Indexed Database §5.12 step 9 was reached with an UNCONVERTED `queryOrOptions`. The §3.2.17 "
+              "conversion this needs EXISTS — core/idl_args.h's idl_dict_walk_start/_run/_take — and what is "
+              "missing is the field to park it in: IdbGetAllWalk holds no IdlDictWalk, so steps 6-9 have "
+              "nowhere to rest on the member they are on. Build the four items listed above this DFAIL");
+        JS_ThrowTypeError(ctx, "an IDBGetAllOptions dictionary cannot yet be converted inside this algorithm: "
+                               "§5.12's walk has no field to park the conversion in");
         return JS_STEP_ABRUPT;
     }
     DCHECK(JS_IsObject(query_or_options),
