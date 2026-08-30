@@ -171,7 +171,8 @@ let instanceSerial = 0;
 async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
-                          parentNavigable = 'u', containerPolicy = 'null', ancestorOrigins = 'none') {
+                          parentNavigable = 'u', containerPolicy = 'null', ancestorOrigins = 'none',
+                          creationSandboxFlags = 'none') {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
@@ -226,7 +227,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
       inheritedCsp: inheritedCsp || '', inheritedCspSelfOrigin: inheritedCspSelf || '',
       inheritedCoep, inheritedCoepEndpoint,
       inheritedCoepReportOnly, inheritedCoepReportOnlyEndpoint,
-      parentNavigable, containerPolicy, ancestorOrigins,
+      parentNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
     }, cs);
 
     M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
@@ -549,7 +550,12 @@ async function drainNotices(e) {
          could compute, since §9.5's two arguments are that element and the child's origin), FIELD 13 IS HTML
          §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the child's Document (a THIRD
          answer over a THIRD algorithm, whose inputs include the parent Document's ORIGIN RECORD — which is
-         what a serialization drops, since §7.1.1 decides an opaque origin by IDENTITY), and FIELD 14 IS
+         what a serialization drops, since §7.1.1 decides an opaque origin by IDENTITY), FIELD 14 IS HTML
+         §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that same navigable (a FOURTH answer, and not
+         an item of the §7.1.7 container beside it — that container is five policies and a flag set is none of
+         them; §7.1.5 reads the embedder ELEMENT's iframe sandboxing flag set and that element's node
+         document's active set, neither of which crosses an instance, so the creating engine runs it and the
+         result travels), and FIELD 15 IS
          THE LIST. The policy is the record's REMAINDER (a
          raw CSP header may contain HTAB), which is why everything that is not the policy sits before it: an
          origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
@@ -561,8 +567,8 @@ async function drainNotices(e) {
          parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
          either of them into the container beside them could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(14).join('\t'),
-                                         f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]));
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(15).join('\t'),
+                                         f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a

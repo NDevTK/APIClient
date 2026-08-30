@@ -23,7 +23,7 @@
  * CSP-derived sandboxing flags". The first half is the NAVIGABLE's — an `<iframe sandbox>` attribute read in
  * the navigating flow's own delta, plus the embedder document's own set — and cannot be recovered from a
  * response; the second half is this response's. So the caller states the first and this computes the second,
- * which is also why §7.2's create-a-new-browsing-context-and-document does not come through here at all: it
+ * which is also why §7.3.2.1's create-a-new-browsing-context-and-document does not come through here at all: it
  * gives the initial about:blank the creation flags ALONE, with no CSP-derived half, and unioning one in would
  * re-sandbox exactly the popup `allow-popups-to-escape-sandbox` exists to free. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGATION_PARAMS_H

@@ -174,7 +174,8 @@ typedef struct {
        Document comes from a response and §2.4.3's about base URL is null for it). Owned. */
     char   *creator_base_url;
     /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS for this navigable, taken at CREATION for exactly the
-       reason `creator_policy` above is: §7.2 hands this set to the initial about:blank Document as its ACTIVE
+       reason `creator_policy` above is: §7.3.2.1 hands this set to the initial about:blank Document as
+       its ACTIVE
        SANDBOXING FLAG SET, that Document's realm is materialized LAZILY, and the realm that materializes it
        need not be its creator's. A creation fact like `is_popup` — no flow can re-sandbox a navigable that
        exists — and one WORD, so the byte capture in proxy_of describes it completely. */
@@ -572,8 +573,8 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            materializes an about:blank child may come from any same-origin document, and answering from `ctx`
            would give the child whichever document happened to touch it first. The same sentence as
            `creator_policy` beside it, and the same field for the same reason. */
-        /* §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT gives this Document its ACTIVE SANDBOXING FLAG
-           SET, and what it gives is `sandboxFlags` — the navigable's CREATION sandboxing flags, with NO
+        /* §7.3.2.1's CREATE A NEW BROWSING CONTEXT AND DOCUMENT gives this Document its ACTIVE SANDBOXING
+           FLAG SET, and what it gives is `sandboxFlags` — the navigable's CREATION sandboxing flags, with NO
            CSP-derived half. That absence is the spec's and it is what `allow-popups-to-escape-sandbox` is
            for: a sandboxed page's popup inherits the creator's flags only when the propagate flag survived
            the parse, and unioning the inherited policy's own CSP-derived flags in here would re-sandbox the
@@ -837,7 +838,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
    that the realm is handed over from the outside, that nobody here stated the navigable's name, and that
    §7.3.1.3's PARENT is a statement the HOST makes rather than one this mint is in a position to make. */
 JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
-                              JSValueConst parent)
+                              JSValueConst parent, SandboxFlags creation_sandbox_flags)
 {
     /* THE ORIGIN IS THE AGENT'S, and it is read from where §7.2.1's check reads it rather than passed in —
        an agent is origin-keyed, so a caller-supplied one could only ever agree or be wrong. */
@@ -882,19 +883,16 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
            "cannot say WHOSE it is. STATE "
            "§8.1.3.1's TOP-LEVEL ORIGIN beside the top-level creation URL from the zone that created this "
            "instance — it is the same statement, made by the same party, for the same reason");
-    /* §7.1.5: AN EMPTY CREATION SANDBOXING FLAG SET, and it is the spec's answer rather than a placeholder —
-       for a TOP-LEVEL root, because determine-the-creation-sandboxing-flags returns a browsing context with no
-       embedder its POPUP SANDBOXING FLAG SET, which §7.1.5 says is empty when a browsing context is created and
-       which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever populate; nothing
-       chose this one. What the ROOT document's own `Content-Security-Policy: sandbox` adds is the other half of
-       §7.4.5's union, and it is added where a Document is created rather than here.
-       FOR A ROOT THAT IS A CHILD NAVIGABLE THE ZERO IS TRUE FOR A DIFFERENT REASON, and it is one an assert
-       holds rather than one this file can argue: §7.1.5's set for a child is the union of its container
-       element's IFRAME SANDBOXING FLAG SET and its embedder document's own, which lives in the instance that
-       holds the element — and core/frame/navigable.c REFUSES to emit a create notice for a cross-instance child
-       whose creation flags are non-empty, naming the field the record still owes. So the only cross-instance
-       child that reaches this line is one whose set is empty, and the day that assert is satisfied by carrying
-       the set instead, this zero becomes a value the host states like the parent beside it. */
+    /* §7.1.5's CREATION SANDBOXING FLAG SET, STATED BY THE HOST AND NEVER ASSUMED HERE — for the parent's
+       reason one line along, and it USED TO BE A ZERO. The zero was two claims wearing one value. For a
+       TOP-LEVEL root it is the standard's own answer: determine-the-creation-sandboxing-flags gives a browsing
+       context with no embedder its POPUP SANDBOXING FLAG SET, which §7.1.5 says is empty at creation and which
+       only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever populate, and nothing chose
+       this one. For a root that is a CHILD NAVIGABLE it was not an answer at all — it held only because
+       core/frame/navigable.c REFUSED to announce a cross-instance child whose creation flags were non-empty.
+       The notice carries the set now, so both roots state it: the empty one in §7.1.5's own word for the empty
+       set, the sandboxed one as its flags. What the ROOT document's own `Content-Security-Policy: sandbox`
+       adds is the other half of §7.4.5's union, and it is added where a Document is created rather than here. */
     /* NO POLICIES TO CLONE — this navigable is the one §7.4 did not create IN THIS AGENT, so there is no
        creator here whose container to clone — but there IS a container, and CSP §2.2's SELF-ORIGIN of its CSP
        list is this agent's own: the root Document is created from the response at this instance's address,
@@ -932,7 +930,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
            "navigable as one whose parent is non-null, so the only two answers are a WindowProxy (this "
            "instance's own, or a remote one for a parent another instance holds) and JS_UNDEFINED, which is the "
            "positive statement that this navigable is a top-level traversable");
-    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, opener_policy,
+    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, creation_sandbox_flags, opener_policy,
                            serialized_policy_container(NULL, origin_serialized(origin_agent()),
                                                        serialized_embedder_policy_new()),
                            NULL, tlus, tlo, parent, JS_NULL);

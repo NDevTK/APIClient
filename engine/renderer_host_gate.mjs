@@ -630,13 +630,21 @@ try {
      loaded itself states all three, one link each. `none` is the word and not the empty string, because an
      empty field is "a host that stopped writing this" and `none` is "this document has no ancestors" — the
      distinction the mojom's own `why` draws, and the one that decides whether a peer answers
-     `location.ancestorOrigins` with an empty list or refuses. */
+     `location.ancestorOrigins` with an empty list or refuses.
+     AND ITS §7.1.5 CREATION SANDBOXING FLAG SET, `none`, WHICH IS A FOURTH MEMBER OF THAT SET AND TRUE BY A
+     DIFFERENT SENTENCE. The three above are `u`/`null`/`none` because this document has no CONTAINER; this one
+     is empty because §7.1.5 answers a navigable with no embedder element from its POPUP sandboxing flag set,
+     which is empty when a browsing context is created and which only §7.3.1.7's rules for choosing a navigable
+     ever fill — this gate loaded the document itself, so nothing chose it. `none` and not the empty string,
+     for the reason the three above give: an empty field is "a host that stopped writing this" and would be
+     read as "nothing about this document is sandboxed", which is a claim rather than a silence. */
   const initReply = await opener.renderer.init({
     document: new TextEncoder().encode(OPENER_DOC), url: OPENER_ADDR, docId: 'opener', headers: '',
     topLevelUrl: OPENER_ADDR, inheritedCsp: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
-    parentNavigable: 'u', containerPolicy: 'null', ancestorOrigins: 'none' });
+    parentNavigable: 'u', containerPolicy: 'null', ancestorOrigins: 'none',
+    creationSandboxFlags: 'none' });
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
@@ -693,7 +701,8 @@ try {
          `would have been visible to anything (drained=${drained})`);
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
      origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
-     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>ancestorOrigins<TAB>policy`, built by
+     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>ancestorOrigins<TAB>
+     creationSandboxFlags<TAB>policy`, built by
      core/frame/navigable.c. The policy is LAST
      because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
      field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
@@ -701,11 +710,13 @@ try {
      endpoint those two fields carry, a navigable identity is a one-letter tag over '.'-terminated base64,
      Permissions Policy §4.1's feature tokens and §4.2's `Enabled`/`Disabled` hold none either, and HTML
      §3.1.3's ancestor list is origin serializations joined by SPACE — URL §3.2 "Host miscellaneous" makes both
-     TAB and SPACE forbidden host code points, so neither byte can occur inside one.
+     TAB and SPACE forbidden host code points, so neither byte can occur inside one — and §7.1.5's flag set is
+     that section's own flag names joined by COMMA, which is the one field that may NOT use SPACE, because
+     those names contain spaces ("sandboxed navigation browsing context flag").
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 15)
-    fail(`the create notice carries ${create.length} field(s) where the record has fifteen — ` +
+  if (create.length < 16)
+    fail(`the create notice carries ${create.length} field(s) where the record has sixteen — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -798,8 +809,28 @@ try {
          'created the child with `window.open` — HTML §7.3.1.7 step 8 makes that an AUXILIARY navigable, ' +
          'which has no container document, so §3.1.3\'s step 3 returns the empty list and `none` is what the ' +
          'record must say. A list here would give the peer ancestors it has none of');
-  if (create.slice(14).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(14).join('\t')}\`) and this ` +
+  /* AND HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET, WHICH THIS PHASE PROVES THE EMPTY ARM OF AND
+     PROVES BY A DIFFERENT SENTENCE FROM THE THREE ABOVE. The other three are empty because an auxiliary
+     navigable has no CONTAINER; this one is empty because §7.1.5 answers a navigable with no embedder from its
+     POPUP SANDBOXING FLAG SET, and §7.1's rules for choosing a navigable fill that only "if sandboxingFlagSet's
+     sandbox propagates to auxiliary browsing contexts flag is set" — this opener is not sandboxed at all, so
+     nothing propagates. The record must say so in that section's own word for the empty set rather than by
+     leaving the field blank, for the reason the other three must: an empty field is a hole a reader defaults,
+     and the value a reader would default it to is exactly the wrong one.
+     WHAT IS NOT PROVEN HERE IS THE NON-EMPTY ARM, and this gate cannot prove it: reaching it needs an
+     `<iframe sandbox>` in the opener's markup, which makes the child's origin OPAQUE (§7.3.2.1's determine the
+     origin) and therefore its own agent cluster — a second cross-origin peer of a different shape than this
+     phase provisions. It is named rather than left implied, because a gate that only ever sees `none` on a
+     field would pass for a build that hardcoded it. */
+  if (create[14] !== 'none')
+    fail(`the create notice's §7.1.5 creation sandboxing flag set is \`${create[14]}\` and this document ` +
+         'created the child with `window.open` from an UNSANDBOXED page — §7.1.5 answers a navigable with no ' +
+         'embedder element from its POPUP sandboxing flag set, which §7.1\'s rules for choosing a navigable ' +
+         'fill only when the opener\'s own set carries the sandbox-propagates-to-auxiliary flag, and this ' +
+         'opener\'s set is empty. `none` is that grammar\'s word for the empty set; flags here would put the ' +
+         'peer\'s document under a sandbox nothing in this fixture asks for');
+  if (create.slice(15).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(15).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

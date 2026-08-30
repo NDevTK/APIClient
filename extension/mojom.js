@@ -296,6 +296,41 @@
      cross-origin frame, and nothing anywhere disagrees — the member exists precisely to report a tree the
      reading page cannot otherwise see. This zone RELAYS the bytes off the emitting renderer's
      `navigable.create` notice and reads none of them. */
+  /* HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for this document's navigable — a FOURTH
+     statement about that navigable, and the reason it is its own parameter rather than a field of the
+     container above is that §7.1.7's policy container does not contain one. That section gives a container a
+     CSP list, an embedder policy, a referrer policy and two integrity policies, and HTML §7.3.2.1 sets the
+     container and the flag set in DIFFERENT STEPS from DIFFERENT ALGORITHMS ("let sandboxFlags be the result
+     of determining the creation sandboxing flags given browsingContext and embedder" against "set document's
+     policy container to a clone of creator's policy container"). Five sites in this tree once said otherwise.
+     §7.1.5's ALGORITHM READS TWO THINGS AND THE RECEIVING RENDERER HOLDS NEITHER: "if embedder is an element,
+     then the flags set on embedder's iframe sandboxing flag set" and "…on embedder's node document's active
+     sandboxing flag set". The first is an `<iframe sandbox>` ELEMENT in the CREATING renderer's tree — and a
+     member whose value is an object does not cross an instance boundary at all — and the second is that
+     document's own set. So the algorithm runs ONCE where its arguments are and this parameter is its RESULT.
+     IT IS WHAT §7.4.2.1's SNAPSHOT ANSWERS WITH. "To snapshot target snapshot params given a navigable
+     targetNavigable, return a new target snapshot params with: sandboxing flags — the result of determining
+     the creation sandboxing flags given targetNavigable's active browsing context and targetNavigable's
+     container", and §7.4.2.2 makes finalSandboxFlags "the union of targetSnapshotParams's sandboxing flags and
+     policyContainer's CSP list's CSP-derived sandboxing flags". The receiving renderer computes the second
+     half off the response it loads; the first can only arrive here.
+     WITHOUT IT the renderer took the EMPTY set, which is not an absence but the positive claim that nothing
+     about this frame is sandboxed — so a cross-origin `<iframe sandbox>` ran its scripts, submitted its forms
+     and relaxed `document.domain`, none of which its embedder's markup permits. And the sandboxed case is not
+     a corner on this route, it IS the route: the sandboxed origin flag makes the child's origin opaque, an
+     opaque origin is same origin with nothing, so §7.1.1 puts every such child in its own agent cluster and
+     therefore in its own renderer.
+     THE MEMBERS ARE COMMA-SEPARATED AND THAT IS NOT ARBITRARY. §7.1.5's flag names CONTAIN SPACES, so the
+     SPACE that joins the ancestor origins above cannot delimit this one; the record it is relayed off splits
+     on TAB; and no flag name holds a comma. This zone RELAYS the bytes and reads none of them. */
+  var CREATION_SANDBOX_FLAGS = { name: "creationSandboxFlags", type: "string", retained: false,
+    why: "HTML §7.1.5's creation sandboxing flag set for this document's navigable, computed by the renderer " +
+         "that holds its embedder element and serialized as that section's own flag names joined by COMMA " +
+         "(the names contain SPACES, so space cannot delimit them), or `none` for a navigable with no flags. " +
+         "There is no empty spelling: a navigable either carries flags or carries none, and both are facts a " +
+         "host states. NOT retained: main.c parses it into a SandboxFlags word within the call and keeps no " +
+         "pointer into these bytes" };
+
   var ANCESTOR_ORIGINS = { name: "ancestorOrigins", type: "string", retained: false,
     why: "HTML §3.1.3's internal ancestor origin objects list for this document, composed by the renderer that " +
          "holds its ancestors and serialized as §7.1.1 origin serializations joined by SPACE (URL §3.2 \"Host " +
@@ -329,7 +364,7 @@
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
-                 CONTAINER_POLICY, ANCESTOR_ORIGINS],
+                 CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
@@ -341,7 +376,7 @@
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
-                 CONTAINER_POLICY, ANCESTOR_ORIGINS],
+                 CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +

@@ -642,6 +642,9 @@
            because a document with no container document is one §3.1.3's own steps return the empty output for.
            Each is stated in that grammar's own word for the absence rather than left empty, because "there is
            none" and "nobody said" are two different facts and only the first is true here.
+           and HTML §7.1.5's creation sandboxing flag set is `none`, because a navigable with no embedder
+           element takes its POPUP sandboxing flag set, which §7.1.5 makes empty at creation and which only
+           §7.3.1.7's rules for choosing a navigable ever fill.
            THE RECORD IS KEYED BY THE MOJOM'S OWN PARAMETER NAMES and not aligned by position, which is why
            this call is here to be read at all: it was thirteen values against a fourteen-parameter interface,
            and a positional list could only ever have reported the COUNT. `mojo.js`'s `placeParams` now refuses
@@ -651,7 +654,8 @@
           topLevelUrl: p.addr, inheritedCsp: "", inheritedCspSelfOrigin: "",
           inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
           inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
-          parentNavigable: "u", containerPolicy: "null", ancestorOrigins: "none" });
+          parentNavigable: "u", containerPolicy: "null", ancestorOrigins: "none",
+          creationSandboxFlags: "none" });
         var b = await r.renderer.getBundleId();
         var child = await r.childProcess.getMojoStats();
         rec.peers[idx] = { origin: p.origin, routingId: r.routingId, name: r.name, addr: p.addr,

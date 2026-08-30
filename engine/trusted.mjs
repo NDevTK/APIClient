@@ -372,7 +372,7 @@ async function main() {
      it and two peers may hold the same number — which is exactly the fact only the routing zone has. */
   const reads = new Map();
 
-  /* HTML §7.5.1 "Shared document creation infrastructure"'s ten remaining facts, for a document that is its
+  /* HTML §7.5.1 "Shared document creation infrastructure"'s eleven remaining facts, for a document that is its
      own TOP-LEVEL TRAVERSABLE. They are written HERE and not assumed by the child, because the party that
      knows a document is at the top of its tree is the party that seated it — and every one of them is a
      POSITIVE statement in its own grammar rather than a blank:
@@ -387,20 +387,30 @@ async function main() {
          core/frame/remote_object.h's undefined — says this navigable has none.
        · Permissions Policy §9.5 "Create a Permissions Policy for a navigable" is given "null or an element
          (container) and an origin"; `null` is that grammar's word for the first, and nothing embeds this.
-       · HTML §3.1.3 "Ancestor origins"' list is `none` by the same sentence read one algorithm along. */
+       · HTML §3.1.3 "Ancestor origins"' list is `none` by the same sentence read one algorithm along.
+       · HTML §7.1.5 "Sandboxing"'s creation sandboxing flag set is EMPTY by that sentence read one algorithm
+         further: the section fills a top-level browsing context's set from its POPUP sandboxing flag set,
+         which is empty when the context is created and which only §7.3.1.7 "Navigable target names"'s rules
+         for choosing a navigable ever populate — and nothing chose this one. `none` is that grammar's word
+         for the empty set, stated rather than left blank because a navigable either carries flags or carries
+         none and both are facts a host states. */
   const topLevelFacts = (url) =>
-    [url, b64(''), '', 'unsafe-none', '', 'unsafe-none', '', 'u', 'null', 'none'];
+    [url, b64(''), '', 'unsafe-none', '', 'unsafe-none', '', 'u', 'null', 'none', 'none'];
 
-  /* …AND THE SAME TEN FOR A PEER, TAKEN OFF THE CREATE NOTICE VERBATIM. Not one of them is derivable in the
+  /* …AND THE SAME ELEVEN FOR A PEER, TAKEN OFF THE CREATE NOTICE VERBATIM. Not one of them is derivable in the
      instance that will host the child — they are items of the CREATOR's §7.1.7 container plus three separate
      statements about the navigable's place in the creator's frame tree — which is the whole reason the notice
      carries them. The POLICY is the record's REMAINDER because a raw CSP header field value may contain HTAB
      (RFC 9110 §5.5 "Field Values"), and it crosses this channel base64'd for exactly that reason; every other
      field is an origin serialization, a §7.1.4 token, remote_object.c's tag-and-base64 identity, §4.1's
      feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
-     engine asserts as much at the writer. */
+     engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
+     rather than by SPACE, because that section's flag names CONTAIN spaces.
+     THE POLICY IS THE REMAINDER FROM FIELD 15 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
+     not fail, it silently joins the field before the policy onto the FRONT of it, which is a creator's CSP
+     arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. */
   const createFacts = (f) =>
-    [f[5], b64(f.slice(14).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]];
+    [f[5], b64(f.slice(15).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -646,14 +656,14 @@ async function main() {
     const f = record.split('\t');
 
     if (f[0] === 'navigable.create') {
-      /* FIFTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one an
+      /* SIXTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one an
          unmoved count would let arrive as `undefined`, and every one of them below is read. */
-      if (f.length < 15)
+      if (f.length < 16)
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
                         'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
                         '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s parent ' +
                         'navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ' +
-                        'ancestor origins, and the policy');
+                        'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, and the policy');
       /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
          against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
          re-announcing it under the same name. A second instance would give one document two heaps and two

@@ -2,7 +2,7 @@
  *
  * IT IS NOT PART OF THE POLICY CONTAINER, AND FIVE SITES IN THIS TREE SAID IT WAS. §7.1.7's policy container
  * holds a CSP list, an embedder policy, a referrer policy and two integrity policies — no sandboxing flag set.
- * What a Document has is its own ACTIVE SANDBOXING FLAG SET, handed to it at creation: §7.2's create a new
+ * What a Document has is its own ACTIVE SANDBOXING FLAG SET, handed to it at creation: §7.3.2.1's create a new
  * browsing context and document gives the initial about:blank the CREATION SANDBOXING FLAGS, and §7.5.1's
  * create and initialize a Document object gives a navigated document navigationParams's FINAL SANDBOXING FLAG
  * SET, which §7.4.5 builds as "the union of targetSnapshotParams's sandboxing flags and policyContainer's CSP
@@ -89,5 +89,38 @@ SandboxFlags sandbox_popup_flags(SandboxFlags source_flags);
 /* The spec's name for ONE flag — for a `@WHY` that has to say WHICH. Aborts on a value that is not a single
    flag of §7.1.5's set, because a message naming "some flags" names nothing. */
 const char *sandbox_flag_name(SandboxFlags one);
+
+/* §7.1.5's SET AS TEXT — the ONE thing a flag set has to do that a `uint32_t` cannot, which is CROSS AN
+ * INSTANCE. The header above says a set copies, parks and crosses "exactly as an integer does", and that is
+ * true of the VALUE and false of the WIRE: an integer whose meaning is this build's declaration order is a
+ * contract whose two ends agree only by accident, which is the same reason §7.1.4's three values cross as the
+ * standard's own strings rather than as an enum's members. So what crosses is the SPEC'S OWN FLAG NAMES.
+ *
+ * THE SEPARATOR IS A COMMA AND IT IS NOT A CHOICE — the obvious answer is wrong here in a way that is worth
+ * writing down, because §3.1.3's ancestor origins and §9.5's container answer both cross this same record
+ * SPACE-joined and the reflex is to match them. §7.1.5's flag names CONTAIN SPACES ("sandboxed navigation
+ * browsing context flag"), so a space-joined set does not parse at all: a reader cannot tell where one member
+ * ends. The record itself splits on TAB, so that byte is spoken for too. Every one of the sixteen names is
+ * lowercase ASCII letters, SPACE and (once) a '.', so a COMMA cannot occur inside one and is the separator
+ * that leaves the set readable. It is checked rather than assumed — the serializer asserts it per name.
+ *
+ * THE EMPTY SET IS A WORD AND NEVER AN EMPTY FIELD. An unsandboxed navigable is the ordinary case, so the
+ * field is empty far more often than not, and an empty field is exactly the hole a reader defaults past
+ * (CLAUDE.md: a value the producer can legitimately omit is a POSITIVE statement the consumer reads as one).
+ * `none` is that statement; it is not a flag name, so nothing can spell one by accident. */
+#define SANDBOX_FLAGS_SERIALIZED_NONE "none"
+
+/* Serialize `flags` into the form above. Returns an owned string, NULL on OOM — the caller CHECKs, because a
+   dropped flag set is a peer created with an EMPTY active sandboxing flag set rather than one that
+   failed. */
+char *sandbox_flags_serialize(SandboxFlags flags);
+
+/* And read one back. `false` for a token that names no §7.1.5 flag, for an empty field, and for a trailing or
+   doubled separator — every one of which is a relay that stopped writing the field rather than a set with
+   nothing in it, and the caller is the ABI entry that knows which record it came off. It answers a BOOL rather
+   than aborting here for the reason `embedder_policy_value_of_token` does: the site that can name the record,
+   the peer and the consequence is the entry, and an assert written in this file would name this file for every
+   one of them. */
+bool sandbox_flags_of_serialized(const char *text, SandboxFlags *out);
 
 #endif

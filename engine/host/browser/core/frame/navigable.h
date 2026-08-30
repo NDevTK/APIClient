@@ -113,7 +113,8 @@
    in this tree used to say it did. What the container contributes is one HALF of it, through the CSP `sandbox`
    directive alone (§7.1.5's CSP-derived sandboxing flags); the other half is the navigable's CREATION
    sandboxing flags, which come from the `<iframe sandbox>` attribute and the embedder's own set. Which of the
-   two algorithms produced the set depends on WHICH ALGORITHM IS CREATING THE DOCUMENT — §7.2's create hands
+   two algorithms produced the set depends on WHICH ALGORITHM IS CREATING THE DOCUMENT — §7.3.2.1's create
+   hands
    the initial about:blank the creation flags alone, §7.5.1's create-and-initialize hands a navigated Document
    §7.4.5's union — so the caller states the whole set and the builder never re-derives it. */
 /* THE CONTAINER'S CSP LIST CARRIES CSP §2.2's SELF-ORIGIN, which is why a builder is never asked to derive
@@ -180,7 +181,8 @@ void navigable_set_realm_builder(RealmBuilder b);
    compares and the host boundary below takes only its serialization (a host builds a realm; it does not decide
    a principal). It is asserted to be same origin with the agent's, which is what makes that split sound. */
 /* `sandbox_flags` is §7.1.5's ACTIVE SANDBOXING FLAG SET for the Document being built, stated by the caller
-   for the same reason `policy` is and answering a question the container cannot: §7.2's create gives the initial
+   for the same reason `policy` is and answering a question the container cannot: §7.3.2.1's create gives
+   the initial
    about:blank the navigable's CREATION sandboxing flags, and §7.4.5's navigation gives its Document the UNION
    of those and the response policy's CSP-derived flags. */
 /* `about_base_url` is HTML §7.4's ABOUT BASE URL for the Document this builds — `creatorBaseURL` for §7.2's
@@ -460,10 +462,20 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
  * embedder_policy.h warns against is a LOAD JOB's INITIATOR container, which is a third document the moment
  * `frames[0].location = …` runs, and no record provisions an instance for that navigation. A live read is not
  * an alternative to prefer: the container document is in another instance and §Security makes a cross-instance
- * read a SUSPEND POINT, which a rooting entry has no flow under it to suspend. */
+ * read a SUSPEND POINT, which a rooting entry has no flow under it to suspend.
+ *
+ * AND `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s SET FOR THIS SAME NAVIGABLE — a FOURTH statement
+ * the host makes about it, in the class of the parent above rather than of the container beside it. §7.1.7's
+ * policy container holds a CSP list, an embedder policy, a referrer policy and two integrity policies and no
+ * sandboxing flag set, and §7.3.2.1 sets the two from different algorithms in different steps. §7.1.5's own
+ * inputs are the embedder ELEMENT's iframe sandboxing flag set and that element's node document's active set,
+ * both in the instance that CREATED the navigable, so this instance can derive it no more than it can derive
+ * its parent — which is why the two travel together on the `navigable.create` notice. It is what §7.4.2.1's
+ * snapshot of this navigable's target snapshot params answers with at every navigation the instance performs
+ * from its own root. */
 JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
                        const char *parent_navigable, SerializedPolicyContainer inherited,
-                       const EmbedderPolicy *response_embedder);
+                       const EmbedderPolicy *response_embedder, SandboxFlags creation_sandbox_flags);
 
 /* AND HTML §7.3.1.3 "Child navigables"' OTHER LINK FOR THAT NAVIGABLE — its CONTAINER, which is the element
  * whose content navigable it is. For the navigable an instance is ROOTED in, that element is in the CREATING

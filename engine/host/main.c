@@ -519,7 +519,33 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * own word and is what a top-level document and an AUXILIARY navigable both state. WITHOUT IT this instance
  * would install the EMPTY list, which is the positive claim that this Document is at the top of its own tree —
  * a cross-origin frame answering every `location.ancestorOrigins` read wrongly, with nothing anywhere to
- * disagree; core/dom/document.c crashes on the absence instead. */
+ * disagree; core/dom/document.c crashes on the absence instead.
+ *
+ * `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for the navigable this
+ * document is rooted in — a FOURTH statement about that navigable and not an item of the container above it.
+ * §7.1.7's policy container is a CSP list, an embedder policy, a referrer policy and two integrity policies;
+ * a sandboxing flag set is none of them, and §7.3.2.1 sets the two in different steps from different
+ * algorithms (`sandboxFlags` comes from determine-the-creation-sandboxing-flags, the container from a clone).
+ * §7.1.5's algorithm reads TWO things and this process holds NEITHER for a navigable a peer created: "if
+ * embedder is an element, then the flags set on embedder's IFRAME SANDBOXING FLAG SET" and "…on embedder's
+ * node document's ACTIVE SANDBOXING FLAG SET" — an `<iframe sandbox>` element in the creating instance's
+ * tree, and that document's own set. An element does not cross an instance boundary at all, so the algorithm
+ * runs ONCE where its arguments are and this parameter is its RESULT, in §7.1.5's own flag names
+ * (core/frame/sandboxing.h). `none` is that grammar's word for the empty set, which is what a top-level
+ * traversable and an unsandboxed frame both state; there is no empty spelling, because a navigable either has
+ * flags or has none and both are facts a host states.
+ * IT IS THE §7.4.2.1 TARGET SNAPSHOT PARAMS OF EVERY NAVIGATION THIS INSTANCE'S ROOT MAKES. "To snapshot
+ * target snapshot params given a navigable targetNavigable, return a new target snapshot params with:
+ * sandboxing flags — the result of determining the creation sandboxing flags given targetNavigable's active
+ * browsing context and targetNavigable's container", and §7.4.2.2 makes finalSandboxFlags "the union of
+ * targetSnapshotParams's sandboxing flags and policyContainer's CSP list's CSP-derived sandboxing flags". The
+ * second half is this response's and navigation_params computes it; the first can only arrive here.
+ * WITHOUT IT THIS ENTRY PASSED ZERO, which was the right answer for the only document it could once be
+ * handed — a top-level traversable, whose §7.1.5 set comes from a POPUP sandboxing flag set nothing filled —
+ * and is the WRONG one for the document it exists to serve: a cross-origin `<iframe sandbox>` child is in
+ * another agent cluster BECAUSE the sandboxed origin flag made its origin opaque, so the sandboxed case is
+ * not a corner on this route, it is the route. The child then ran the scripts, submitted the forms and
+ * relaxed the `document.domain` its embedder's markup forbids, with no field anywhere to say so. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
@@ -527,8 +553,10 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
                         const char *parent_navigable, const char *container_policy,
-                        const char *ancestor_origins)
+                        const char *ancestor_origins, const char *creation_sandbox_flags)
 {
+    /* §7.1.5's SET, PARSED BEFORE ANYTHING IS BUILT FROM IT — see the read below. */
+    SandboxFlags creation_flags = 0;
     char *origin;
     HeaderList response_headers;
     /* §7.5.1's TYPE AND CONTENT TYPE for the Document this entry installs, decided by the same §7.4.5
@@ -579,15 +607,57 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
        THE SECURE-CONTEXT ANSWER IS §8.1.3.5's OVER THE TOP-LEVEL CREATION URL, asked here rather than of a
        realm because §7.1.3's and §7.1.4's obtains and §7.5.1's `requestsOAC` all run BEFORE the realm whose
        environment it is exists — the standard calls that environment the RESERVED one for exactly this reason.
-       ZERO IS THE ROOT NAVIGABLE'S TARGET SNAPSHOT SANDBOXING FLAGS, and it is the spec's answer rather than a
-       placeholder: this is the navigable the INSTANCE STARTED IN, a top-level traversable with no embedder
-       element, so §7.1.5 answers its creation flags from the POPUP sandboxing flag set — which begins empty and
-       which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever fill. Nothing
-       chose this one. The other half of
-       §7.4.5's union, this response's CSP-derived flags, is what navigation_params computes. */
+       §7.4.2.1's TARGET SNAPSHOT SANDBOXING FLAGS ARE THE CALLER'S ANSWER AND NOT A ZERO THIS ENTRY WRITES.
+       A ZERO STOOD HERE with the spec sentence that makes it right for ONE of the two navigables this entry
+       roots — "a top-level traversable has no embedder element, so §7.1.5 answers its creation flags from the
+       POPUP sandboxing flag set, which begins empty and which only §7.3.1.7's rules for choosing a navigable
+       ever fill" — and that sentence is TRUE and was being applied to a document it is not about. This entry
+       also roots a navigable a PEER CREATED, whose §7.1.5 set is its embedder's `<iframe sandbox>` attribute
+       unioned with the embedder document's own set, and for which zero is not an answer but the absence of
+       one. The two are told apart by nobody here: `parent_navigable` beside it is what says which this is, and
+       the flag set is stated for both rather than derived from it, because a top-level traversable's empty set
+       is a FACT the zone states in §7.1.5's own grammar (`none`) exactly as it states the `u` parent.
+       The other half of §7.4.5's union, this response's CSP-derived flags, is what navigation_params computes.
+       PARSED, THEN ASSERTED — never parsed inside the assert. A `DCHECK` condition is compiled out in release
+       (engine/host/check.h), so a parse performed in one is a parse that does not happen in the build that
+       ships, and every peer would be created with the empty set whatever the record said. This is the same
+       shape qjs_inherited_container states above it, for the same reason. */
+    {
+        bool ok = sandbox_flags_of_serialized(creation_sandbox_flags, &creation_flags);
+
+        (void)ok;
+        DCHECK(ok,
+               "a document arrived over this ABI with no readable §7.1.5 CREATION SANDBOXING FLAG SET — the "
+               "creating instance writes that section's own flag names comma-separated onto its "
+               "`navigable.create` notice, and `none` for the empty set, so a field that is empty or carries a "
+               "word outside those names is a relay that stopped writing it rather than a navigable with no "
+               "flags. Read as the empty set it would create a cross-origin `<iframe sandbox>` child that runs "
+               "the scripts, submits the forms and relaxes the `document.domain` its embedder's markup forbids");
+    }
+    /* AND §7.3.2.1's DETERMINE THE ORIGIN, ASKED OF THE TWO FACTS THAT HAVE JUST MET FOR THE FIRST TIME.
+       "To determine the origin, given a URL url, a sandboxing flag set sandboxFlags and an origin-or-null
+       sourceOrigin: if sandboxFlags's SANDBOXED ORIGIN browsing context flag is set, then return a new opaque
+       origin." So a navigable whose creation set carries that flag has a Document whose principal is OPAQUE —
+       same origin with NOTHING, not even another opaque one — and this instance's principal is the tuple
+       origin the trusted zone derived from the address it fetched. The two cannot both be right.
+       IT IS ASSERTED RATHER THAN CORRECTED HERE, and the difference matters. SECURITY.md makes the PRINCIPAL
+       the trusted zone's to state, because the untrusted engine may not name its own; an engine that quietly
+       demoted itself to an opaque origin would also be an engine whose SOP answers no longer match the ones
+       `safeFetch` enforces on its behalf, which is one policy in two places disagreeing rather than a fix.
+       WHAT BUILDS IT is the zone minting a per-document opaque token for a child whose announced flag set
+       carries this flag — extension/bridge.js already derives the child's principal from the URL it fetched
+       and names this as the next thing (`_senderOrigin` is the shape), and engine/trusted.mjs derives it the
+       same way one line along. Until then a sandboxed cross-origin frame would run under its server's real
+       origin: same origin with its siblings from that host, which is the whole of what `sandbox` removes. */
+    DCHECK(!(creation_flags & SANDBOX_ORIGIN) || !strcmp(origin, "null"),
+           "a document was rooted with §7.1.5's SANDBOXED ORIGIN flag set and a TUPLE origin for a principal — "
+           "§7.3.2.1's determine the origin returns a NEW OPAQUE ORIGIN for that flag, so this instance is "
+           "running a sandboxed Document as same origin with every other document of its server. The trusted "
+           "zone derives this principal from the URL it fetched and must mint a per-document opaque token when "
+           "the create notice announces this flag (extension/bridge.js, engine/trusted.mjs)");
     memset(&response_headers, 0, sizeof response_headers);
     header_list_parse_field_lines(&response_headers, headers);
-    navigation_params_from_response(&np, &response_headers, 0,
+    navigation_params_from_response(&np, &response_headers, creation_flags,
                                     secure_context_url_potentially_trustworthy(top_level_url));
     /* THE LIST IS NOT FREED HERE ANY MORE: §7.4.5 reads this response TWICE — once for the navigation params
        above, and once for the COMPUTED TYPE that decides which kind of Document its bytes load as — and the
@@ -667,7 +737,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            the zone that routed the create, never inferred from the fact that this entry is the one that roots
            an instance. navigable_root runs §7.1.4.2 over it. */
         JSValue root_proxy = navigable_root(g_ctx, world_local_doc(), NULL, np.opener.value,
-                                            parent_navigable, inherited, &np.embedder);
+                                            parent_navigable, inherited, &np.embedder, creation_flags);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* AND §7.3.1.3's OTHER LINK, BEFORE THE DOCUMENT BELOW IS INSTALLED: Permissions Policy §9.5 runs once
            per Document a navigable is given, and for a navigable rooted in a peer's frame tree it can only be
@@ -785,8 +855,11 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
                         const char *parent_navigable, const char *container_policy,
-                        const char *ancestor_origins)
+                        const char *ancestor_origins, const char *creation_sandbox_flags)
 {
+    /* §7.1.5's SET FOR THE NAVIGABLE THIS DOCUMENT IS ROOTED IN — the same statement qjs_init takes and for
+       the same reason, and this entry is where the joined document's is stated or lost. */
+    SandboxFlags creation_flags = 0;
     HeaderList response_headers;
     /* §7.5.1's TYPE AND CONTENT TYPE for the Document this entry installs, decided by the same §7.4.5
        dispatch the parse below runs and carried to the install rather than restated there. */
@@ -843,17 +916,40 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "name, and every flow of this document mints its worlds under it, so an unnamed document can take "
            "no part in cross-document time travel");
 
-    /* §7.4.6's NAVIGATION PARAMS, decided at the RESPONSE and carried — the same read qjs_init makes over the
-       same header list, in the same component, because this is the same algorithm over a second response.
-       ZERO IS THE TARGET SNAPSHOT SANDBOXING FLAG SET, and here it is a narrower statement than qjs_init's: a
-       Document carrying §7.1.5's SANDBOXED ORIGIN flag is forced into a fresh OPAQUE origin, which is same
-       origin with NOTHING — so it could not have passed the principal CHECK above, and the one flag whose
-       absence this heap depends on is the one flag that cannot be present. The rest of §7.1.5's creation set
-       is the EMBEDDER's (an `<iframe sandbox=allow-same-origin>` attribute plus the embedder document's own
-       set) and lives in the instance that holds the embedder; this entry is not told it. */
+    /* §7.4.2.1's TARGET SNAPSHOT SANDBOXING FLAGS FOR THE JOINED NAVIGABLE, WHICH THE ZONE STATES. A ZERO
+       STOOD HERE under an argument that is HALF right, and the half it got right is worth keeping as an
+       assert rather than as a reason not to carry the value: a Document carrying §7.1.5's SANDBOXED ORIGIN
+       flag is forced into a fresh OPAQUE origin, which is same origin with NOTHING, so it could not have
+       passed the principal CHECK above — that one flag really cannot be present here. The rest of §7.1.5's
+       set can: `<iframe sandbox="allow-same-origin allow-scripts" src="https://cdn/…">` in a page at another
+       origin leaves fourteen flags set, puts the child in the cdn's cluster, and is exactly the document this
+       entry exists to join. Zero deleted its whole sandbox. The set now crosses on the create notice like the
+       parent, the container answer and the ancestor list beside it.
+       PARSED, THEN ASSERTED — never parsed inside the assert, for the reason qjs_inherited_container states:
+       a DCHECK condition is compiled out in release, so a parse performed in one does not happen in the build
+       that ships and every joined document would take the empty set whatever the record said. */
+    {
+        bool ok = sandbox_flags_of_serialized(creation_sandbox_flags, &creation_flags);
+
+        (void)ok;
+        DCHECK(ok,
+               "a document joined this agent with no readable §7.1.5 CREATION SANDBOXING FLAG SET — the "
+               "creating instance writes that section's own flag names comma-separated onto its "
+               "`navigable.create` notice, and `none` for the empty set, so a field that is empty or carries a "
+               "word outside those names is a relay that stopped writing it rather than a navigable with no "
+               "flags. Read as the empty set it would join a sandboxed frame's document with its sandbox "
+               "deleted — the forms, the modals and the downloads its embedder's markup forbids");
+        DCHECK(!(creation_flags & SANDBOX_ORIGIN),
+               "a document carrying §7.1.5's SANDBOXED ORIGIN flag was JOINED to this agent — that flag makes "
+               "§7.3.2.1's determine the origin mint a fresh OPAQUE origin, which is same origin with nothing, "
+               "so such a document shares an agent cluster with NO other document and can never be a second "
+               "realm in this heap. The principal CHECK above should have refused it first, so reaching this "
+               "line means the trusted zone routed a join for a cluster key it derived without the flag set it "
+               "had just been told");
+    }
     memset(&response_headers, 0, sizeof response_headers);
     header_list_parse_field_lines(&response_headers, headers);
-    navigation_params_from_response(&np, &response_headers, 0,
+    navigation_params_from_response(&np, &response_headers, creation_flags,
                                     secure_context_url_potentially_trustworthy(top_level_url));
     /* HELD PAST THE PARSE, for the reason qjs_init states: §7.4.5 reads this one response for its navigation
        params AND for the computed type the parse dispatches on. */
@@ -895,7 +991,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            same-origin document nested through a cross-origin one belongs to this cluster and to another
            instance's frame tree at once. */
         JSValue proxy = navigable_root(cctx, doc, NULL, np.opener.value, parent_navigable, inherited,
-                                       &np.embedder);
+                                       &np.embedder, creation_flags);
 
         CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
         /* §7.3.1.3's CONTAINER, for qjs_init's reason and with the same force its parent has here: a

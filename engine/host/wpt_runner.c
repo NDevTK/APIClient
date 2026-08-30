@@ -1592,13 +1592,21 @@ static ChildDoc *wpt_child_for(const char *name)
    record is precisely what a serialization drops (§7.1.1 decides an opaque origin by IDENTITY, and every
    opaque origin serializes to `null`), which is why the steps run HERE and the answer travels. A
    `navigable.create` carries the composed list; §7.1.3.2's swap provisions a TOP-LEVEL traversable, which has
-   no container document, so it states that grammar's "there are no ancestors". */
+   no container document, so it states that grammar's "there are no ancestors".
+   AND `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s SET FOR THAT SAME NAVIGABLE, a FOURTH statement
+   about it and not an item of the container above — §7.1.7's container is five policies and a sandboxing flag
+   set is none of them, which is why §7.3.2.1 sets the two from different algorithms. §7.1.5 reads the embedder
+   ELEMENT's iframe sandboxing flag set and that element's node document's active set, both of which are in
+   THIS process, so the algorithm runs here and its answer crosses in that section's own flag names
+   (core/frame/sandboxing.h). A `navigable.create` carries the creating document's answer; §7.1.3.2's swap
+   provisions a top-level traversable, whose §7.1.5 set comes from a POPUP sandboxing flag set nothing filled,
+   and states that grammar's word for the empty set. */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
                             const char *csp_self_origin, const char *top_level_url,
                             const char *coep, const char *coep_endpoint,
                             const char *coep_report_only, const char *coep_report_only_endpoint,
                             const char *parent, const char *container_policy,
-                            const char *ancestor_origins)
+                            const char *ancestor_origins, const char *creation_sandbox_flags)
 {
     int down[2], up[2];
     pid_t pid;
@@ -1624,6 +1632,14 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
            "a child document was about to be provisioned with no §3.1.3 ANCESTOR ORIGINS — the steps return an "
            "empty list for a Document with no container document and a composed one otherwise, so an absent "
            "field is a caller that did not state which applies, and the child would report itself top-level");
+    /* §7.1.5's SET IS STATED BY EVERY CALLER FOR THAT SAME REASON, and it has no empty spelling either: a
+       navigable either carries sandboxing flags or carries none, and the section's own word for the second is
+       what a top-level traversable sends. */
+    DCHECK(creation_sandbox_flags != NULL && *creation_sandbox_flags,
+           "a child document was about to be provisioned with no §7.1.5 CREATION SANDBOXING FLAG SET — the "
+           "empty set is an ANSWER and has a word of its own, so an absent field is a caller that did not "
+           "state which applies, and the child process would run the scripts, submit the forms and relax the "
+           "`document.domain` its embedder's `sandbox` attribute forbids");
     if (wpt_child_for(name)) return;   /* already provisioned; a notice is not a request */
     CHECK(g_children_n < WPT_CHILD_MAX, "wpt: more child documents at once than this runner tracks");
     /* O_CLOEXEC, AND IT IS NOT HYGIENE. fork() copies every descriptor, so a SECOND child would inherit this
@@ -1648,7 +1664,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
               coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
-              ancestor_origins, (char *)NULL);
+              ancestor_origins, creation_sandbox_flags, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1790,7 +1806,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[15]; int nf = 0; char *q;
+    char *f[16]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -1799,9 +1815,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 15; q++)
+    for (q = line, f[nf++] = q; *q && nf < 16; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 15 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 16 && !strcmp(f[0], "navigable.create")) {
         /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
            7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
            report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
@@ -1819,8 +1835,17 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            at field 14 because the policy is the record's remainder: neither an origin's serialization, nor an
            §7.1.4 value's token, nor remote_object.h's base64 identity, nor §4.1's feature tokens with §4.2's
            two words, nor a SPACE-separated list of origin serializations (URL §3.2 "Host miscellaneous" makes
-           both TAB and SPACE forbidden host code points) can contain a tab, while a raw CSP header may. */
-        wpt_spawn_child(f[1], f[3], f[4], f[14], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13]);
+           both TAB and SPACE forbidden host code points) can contain a tab, while a raw CSP header may.
+           FIELD 14 IS HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that navigable — a FOURTH
+           statement about it rather than an item of the container, since §7.1.7's container is five policies
+           and none of them is a flag set. §7.1.5's two inputs are the embedder ELEMENT's iframe sandboxing
+           flag set and that element's node document's active set, so the algorithm runs in the instance that
+           holds the element and its RESULT crosses. It sits before the policy at FIELD 15 for the reason
+           everything else does, and its members are separated by COMMA rather than by the SPACE that joins
+           §3.1.3's list and §9.5's answer: §7.1.5's flag names CONTAIN SPACES ("sandboxed navigation browsing
+           context flag"), so a space-joined set could not be taken apart at all. */
+        wpt_spawn_child(f[1], f[3], f[4], f[15], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
+                        f[14]);
         free(whole);
         return;
     }
@@ -1850,9 +1875,14 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            AND §3.1.3's LIST IS EMPTY BY THE SENTENCE DIRECTLY ABOVE, not by this host having nothing to say:
            its steps 2-3 return an empty output for a Document with no CONTAINER DOCUMENT, and a navigable no
            element presents has none. It is stated in that grammar's own word for the reason the container is. */
+        /* AND §7.1.5's SET IS EMPTY BY THE SAME STEP 2, said in that section's own word rather than left
+           blank: a swap provisions a TOP-LEVEL browsing context, whose creation sandboxing flags are its
+           POPUP sandboxing flag set — which §7.1.5 makes empty at creation and which only §7.3.1.7's rules
+           for choosing a navigable ever populate, and no `window.open` reaches a swapped-to context. */
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
-                        DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
+                        DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
+                        SANDBOX_FLAGS_SERIALIZED_NONE);
         free(whole);
         return;
     }
@@ -2682,6 +2712,16 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
    is opaque. So the creator runs §3.1.3 once, where all three inputs are, and this is its result. The
    top-level test document passes that grammar's "there are no ancestors", which is the same fact its `u`
    parent states one link along: this runner loaded it from the corpus and nothing embeds it. */
+/* AND `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s SET FOR THAT SAME NAVIGABLE — a FOURTH statement
+   and not an item of the container above it, since §7.1.7's policy container is a CSP list, an embedder
+   policy, a referrer policy and two integrity policies and no sandboxing flag set is among them. §7.1.5's
+   inputs are the embedder ELEMENT's iframe sandboxing flag set and that element's node document's active set,
+   both in the process that CREATED this navigable, and an element crosses no process at all — so the
+   algorithm runs there and this is its RESULT, in that section's own flag names. It is what §7.4.2.1's
+   snapshot target snapshot params answers with for every navigation this process performs from its root, and
+   §7.4.2.2 unions it with the response's CSP-derived flags to get the Document's set. The top-level test
+   document passes §7.1.5's word for the EMPTY set, which is the standard's answer for a top-level traversable
+   and the same fact its `u` parent states one link along. */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n, const HeaderList *html_headers,
                                      const char *inherited_csp, const char *inherited_csp_self_origin,
@@ -2689,8 +2729,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                      const char *inherited_coep_report_only,
                                      const char *inherited_coep_report_only_endpoint,
                                      const char *parent_navigable, const char *container_policy,
-                                     const char *ancestor_origins)
+                                     const char *ancestor_origins, const char *creation_sandbox_flags)
 {
+    /* §7.1.5's SET, PARSED BEFORE ANYTHING IS BUILT FROM IT — see the read below. */
+    SandboxFlags creation_flags = 0;
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
     char *fetched = NULL;
     HeaderList response_headers;
@@ -2740,13 +2782,32 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
             response = &response_headers;
         }
     }
-    /* ZERO IS THE ROOT NAVIGABLE'S TARGET SNAPSHOT SANDBOXING FLAGS: a top-level traversable has no embedder
-       element, so §7.1.5 answers its creation flags from the POPUP sandboxing flag set, which begins empty and
-       which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever fill — nothing
-       chose this one. The other half of
-       §7.4.5's union is this response's CSP-derived flags, which navigation_params computes.
+    /* §7.4.2.1's TARGET SNAPSHOT SANDBOXING FLAGS ARE THE CALLER'S ANSWER, NOT A ZERO THIS FUNCTION WRITES.
+       A ZERO STOOD HERE with the sentence that makes it right for a TOP-LEVEL traversable — no embedder
+       element, so §7.1.5 answers from the POPUP sandboxing flag set, which begins empty and which only
+       §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever fill, and nothing chose this
+       one — and that sentence was being applied to a document it is not about: a `--document` CHILD is rooted
+       in a navigable another PROCESS created, whose §7.1.5 set is its embedder's `<iframe sandbox>` attribute
+       unioned with the embedder document's own. For that one the zero is not an answer but the absence of
+       one, and it deleted the whole sandbox. Both callers state the set now, the top-level document in
+       §7.1.5's own word for the empty set. The other half of §7.4.2.2's union is this response's CSP-derived
+       flags, which navigation_params computes.
+       PARSED, THEN ASSERTED — never parsed inside the assert, because a DCHECK's condition is compiled out in
+       release and every child would then take the empty set whatever its command line said.
        §8.1.3.5's SECURE-CONTEXT ANSWER is over the environment's TOP-LEVEL CREATION URL, which is what decides
        whether an `Origin-Agent-Cluster`, a COOP or a COEP is honoured at all. */
+    {
+        bool ok = sandbox_flags_of_serialized(creation_sandbox_flags, &creation_flags);
+
+        (void)ok;
+        DCHECK(ok,
+               "a document was built with no readable §7.1.5 CREATION SANDBOXING FLAG SET — the process that "
+               "created this navigable writes that section's own flag names comma-separated on the command "
+               "line, and its word for the empty set where there are none, so a field that is empty or "
+               "carries a word outside those names is a caller that stopped stating it rather than a "
+               "navigable with no flags. Read as the empty set it would run a sandboxed frame's document with "
+               "its sandbox deleted");
+    }
     /* THE PARAMS COME FROM THE RESPONSE THIS DOCUMENT IS CREATED FROM, whichever zone obtained it. They used to
        come from `response_headers` unconditionally, which is this function's OWN fetch — so a `--document`
        child, whose bytes and headers its caller had already fetched, was given the params of a response that
@@ -2754,7 +2815,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        for a child whose whole delivery mechanism is a `?pipe=header(...)`. An EMPTY list is what a document
        with no response gets, and that is the right answer for that one: §7.4's initial about:blank carries no
        policy of its own and inherits its creator's, which is the clone applied below. */
-    navigation_params_from_response(&np, response ? response : &response_headers, 0,
+    navigation_params_from_response(&np, response ? response : &response_headers, creation_flags,
                                     secure_context_url_potentially_trustworthy(top_level_url));
     /* HTML §7.4.5's FIRST STEP — "Let type be the computed type of navigationParams's response" — asked HERE,
        where the response is, and carried to the parse below with the bytes it is a fact about. The same
@@ -2857,7 +2918,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            the product host root a navigable through ONE algorithm, for the reason the container ordering above
            is not restated here either. AFTER the inherited container, because that check reads it. */
         JSValue root_proxy = navigable_root(ctx, world_local_doc(), "", np.opener.value, parent_navigable,
-                                            inherited, &np.embedder);
+                                            inherited, &np.embedder, creation_flags);
 
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* AND §7.3.1.3's CONTAINER, BEFORE THE INSTALL BELOW: Permissions Policy §9.5 runs once per Document a
@@ -3064,6 +3125,16 @@ static int wpt_child_main(int argc, char **argv)
        one value — and that value makes a cross-origin frame report itself as the top of its own tree to every
        `location.ancestorOrigins` read, which no page can tell from the truth. */
     const char *ancestor_origins = argc > 14 ? argv[14] : NULL;
+    /* AND HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for the navigable this process is rooted in,
+       computed by the parent process out of two things that do not exist here — the `<iframe sandbox>` ELEMENT
+       presenting the navigable, and that element's node document's own active set. APPENDED, like every field
+       above it, so every position already read keeps its meaning. NOT DEFAULTED WHEN ABSENT, and for the
+       container's reason exactly: the EMPTY set is a REAL answer a `--document` child legitimately gives (a
+       swap provisions a top-level traversable, whose popup sandboxing flag set nothing filled), so "the parent
+       did not state it" and "the parent stated no flags" would be one value — and that value runs a sandboxed
+       frame's scripts, submits its forms and relaxes its `document.domain`, which is the whole of what the
+       attribute removes. */
+    const char *creation_sandbox_flags = argc > 15 ? argv[15] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -3117,6 +3188,13 @@ static int wpt_child_main(int argc, char **argv)
           "arrives here. Without the field this process would install the EMPTY list, which is the positive "
           "claim that this Document has no ancestors — a cross-origin frame telling every "
           "`location.ancestorOrigins` read that it is the top of its own tree");
+    CHECK(creation_sandbox_flags && *creation_sandbox_flags,
+          "wpt: a child document was started with no §7.1.5 CREATION SANDBOXING FLAG SET — the section reads "
+          "the embedder ELEMENT's iframe sandboxing flag set and that element's node document's active set, "
+          "and both belong to the process that created this navigable. So §7.1.5 runs there and its ANSWER "
+          "arrives here. Without the field this process would take the EMPTY set, which is not an absence but "
+          "the positive claim that nothing about this frame is sandboxed — it would run the scripts, submit "
+          "the forms and relax the `document.domain` its embedder's markup forbids");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
     /* `about:blank` HAS NO BYTES TO FETCH — its Document is the empty one §7.4 creates, which is what makes it
        synchronous in a browser and what makes an <iframe> with no src scriptable immediately. */
@@ -3137,7 +3215,7 @@ static int wpt_child_main(int argc, char **argv)
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
                              coep_report_only_endpoint, parent_navigable, container_policy,
-                             ancestor_origins);
+                             ancestor_origins, creation_sandbox_flags);
     free(html);
     header_list_free(&html_headers);
 
@@ -3313,10 +3391,14 @@ int main(int argc, char **argv)
        AND §3.1.3's LIST IS EMPTY BY THAT SAME SENTENCE, said in that grammar's own word: a document nothing
        embeds has no container document, so step 3 returns an empty output. It is stated rather than left
        blank because an empty field would be indistinguishable from a host that stopped stating it. */
+    /* AND §7.1.5's SET IS EMPTY BY THAT SAME SENTENCE, in that section's own word: a navigable nothing
+       embeds is a top-level traversable, whose creation sandboxing flags are its POPUP sandboxing flag set,
+       which §7.1.5 makes empty at creation and which only §7.3.1.7's rules for choosing a navigable fill. */
     ctx = wpt_build_document("wpt", g_top_origin, g_base_url, NULL, 0, NULL, "", "",
                              "unsafe-none", "", "unsafe-none", "", "u",
                              PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
-                             DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
+                             DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
+                             SANDBOX_FLAGS_SERIALIZED_NONE);
     /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
        inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
        arriving before there is one is a message with nowhere to go. */

@@ -7,6 +7,7 @@
  * `allow-top-navigation` each also relax custom protocols) become special cases someone has to remember, and
  * `allow-top-navigation` silently overriding `allow-top-navigation-by-user-activation` stops being visible at
  * all. Here every clause is one line of the standard. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
@@ -122,6 +123,99 @@ SandboxFlags sandbox_popup_flags(SandboxFlags source_flags)
        sandboxing flag set". Without it the popup starts clean, which is exactly what
        `allow-popups-to-escape-sandbox` asks for. */
     return (source_flags & SANDBOX_PROPAGATES_TO_AUXILIARY) ? source_flags : 0;
+}
+
+/* §7.1.5's SET AS TEXT — see sandboxing.h for why the vocabulary is the standard's own flag names and why the
+   separator is a comma. Both directions are here, next to the list they are over, so a flag added to
+   SANDBOX_FLAG_LIST gains its wire spelling in the same edit that gives it a bit. */
+/* THE SET IS WALKED THROUGH SANDBOX_FLAG_LIST AND NEVER BY SHIFTING A BIT ALONG. Both spellings read the
+   same at sixteen flags, and only one of them still reads at thirty-two: `1u << SANDBOX_FLAG_COUNT_` is
+   undefined the day the list reaches the width of the word it is a set of, which is a bug that arrives with an
+   edit to a DIFFERENT file and shows as whatever the optimiser felt like. The X macro is also what makes the
+   pairing structural — a flag added to the list gains its bit, its name and its wire spelling in one edit,
+   with nothing here to forget. */
+char *sandbox_flags_serialize(SandboxFlags flags)
+{
+    /* THE DECLARED SET, AS ONE VALUE, so the assert below is over §7.1.5's list rather than over a count. */
+#define SANDBOX_FLAG_OR_(name, text) | (SandboxFlags)(name)
+    const SandboxFlags declared = 0 SANDBOX_FLAG_LIST(SANDBOX_FLAG_OR_);
+#undef SANDBOX_FLAG_OR_
+    size_t n = 1;   /* the NUL */
+    char *out, *q;
+
+    /* THE WHOLE WORD IS ACCOUNTED FOR, NOT ONLY THE BITS THIS BUILD DECLARES. A set carrying a bit outside
+       §7.1.5's list would serialize to a string that says LESS than the value does, and the peer would then be
+       created with only the flags this side could spell — a sandbox silently weaker than the markup asks for,
+       which is the direction that matters and the one nothing downstream could see. It cannot arise (every
+       producer is one of the three algorithms above, each an OR of declared bits), so it is an invariant, and
+       it is asserted at the one place where the value is turned into something lossy. */
+    DCHECKF((flags & ~declared) == 0,
+            "a §7.1.5 sandboxing flag set carrying bits this build does not declare (0x%x outside 0x%x) was "
+            "about to cross an instance boundary — that section's flags are the whole of the set, so a bit "
+            "outside them is a producer that ORed in something which is not one, and the peer would be created "
+            "with a WEAKER sandbox than the markup states with no field anywhere to say so",
+            (unsigned)(flags & ~declared), (unsigned)declared);
+    if (flags == 0) {
+        out = malloc(sizeof SANDBOX_FLAGS_SERIALIZED_NONE);
+        if (out) memcpy(out, SANDBOX_FLAGS_SERIALIZED_NONE, sizeof SANDBOX_FLAGS_SERIALIZED_NONE);
+        return out;
+    }
+    /* `sizeof text` IS THE NAME AND ITS SEPARATOR — the literal's length plus one — so this over-counts by
+       exactly one byte (the last member needs no separator, and `n` already carries the NUL). Over by one is
+       the safe direction and is cheaper than a second walk to get it exact. */
+#define SANDBOX_FLAG_LEN_(name, text) if (flags & (SandboxFlags)(name)) n += sizeof text;
+    SANDBOX_FLAG_LIST(SANDBOX_FLAG_LEN_)
+#undef SANDBOX_FLAG_LEN_
+    out = malloc(n);
+    if (!out) return NULL;
+    q = out;
+    /* THE SEPARATOR'S OWN INVARIANT, ASSERTED OVER THE VOCABULARY RATHER THAN ASSUMED OF IT. A name that
+       gained a comma — or a TAB, which is what the record carrying this field splits on — would make the field
+       mean something else at the far end, and this is the only place that can see it happen. */
+#define SANDBOX_FLAG_EMIT_(name, text)                                                                       \
+    if (flags & (SandboxFlags)(name)) {                                                                      \
+        DCHECKF(!strchr(text, ',') && !strchr(text, '\t'),                                                   \
+                "the §7.1.5 flag name `%s` contains the byte this set is delimited by, or the TAB the record " \
+                "that carries it is delimited by — the section's names are lowercase ASCII letters, SPACE and " \
+                "one '.', so this is that vocabulary having changed under a wire format that splits on those", \
+                text);                                                                                       \
+        if (q != out) *q++ = ',';                                                                            \
+        memcpy(q, text, sizeof text - 1);                                                                     \
+        q += sizeof text - 1;                                                                                 \
+    }
+    SANDBOX_FLAG_LIST(SANDBOX_FLAG_EMIT_)
+#undef SANDBOX_FLAG_EMIT_
+    *q = 0;
+    return out;
+}
+
+bool sandbox_flags_of_serialized(const char *text, SandboxFlags *out)
+{
+    SandboxFlags acc = 0;
+    const char *p = text;
+
+    if (!text || !*text) return false;
+    if (!strcmp(text, SANDBOX_FLAGS_SERIALIZED_NONE)) { *out = 0; return true; }
+    for (;;) {
+        const char *comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        SandboxFlags found = 0;
+
+        /* AN EMPTY MEMBER IS REFUSED RATHER THAN SKIPPED — `a,,b`, a leading separator, a trailing one. Each
+           is a writer that composed the field wrongly, and skipping it would accept a set with a flag missing
+           from it, which is the failure this whole field exists to prevent. */
+        if (len == 0) return false;
+#define SANDBOX_FLAG_MATCH_(name, text)                                                                      \
+        if (!found && len == sizeof text - 1 && !memcmp(p, text, len)) found = (SandboxFlags)(name);
+        SANDBOX_FLAG_LIST(SANDBOX_FLAG_MATCH_)
+#undef SANDBOX_FLAG_MATCH_
+        if (!found) return false;
+        acc |= found;
+        if (!comma) break;
+        p = comma + 1;
+    }
+    *out = acc;
+    return true;
 }
 
 const char *sandbox_flag_name(SandboxFlags one)

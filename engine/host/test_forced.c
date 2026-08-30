@@ -11038,7 +11038,8 @@ static void abi_stalled(void)
    THE RECORD IS `document` and then, in `qjs_init`'s own parameter order, every fact that entry takes:
    `<address><TAB><name><TAB><headers b64><TAB><document b64><TAB><top-level creation URL><TAB>
     <inherited CSP b64><TAB><CSP self-origin><TAB><COEP><TAB><COEP endpoint><TAB><COEP report-only><TAB>
-    <COEP report-only endpoint><TAB><parent navigable><TAB><container policy><TAB><ancestor origins>`,
+    <COEP report-only endpoint><TAB><parent navigable><TAB><container policy><TAB><ancestor origins><TAB>
+    <creation sandboxing flags>`,
    verb first and tab separated, which is `wpt_runner.c`'s child channel's own shape rather than a second
    grammar.
    TEN OF THOSE FIELDS USED TO BE ANSWERED HERE, WITH THE SPEC'S OWN ANSWERS FOR A TOP-LEVEL TRAVERSABLE, and
@@ -11059,6 +11060,7 @@ static int abi_main(void)
     char *rec, *p;
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
     const char *coep_ro, *coep_ro_ep, *parent, *container_policy, *ancestor_origins;
+    const char *creation_sandbox_flags;
     char *headers, *html, *csp;
     size_t headers_n = 0, html_n = 0, csp_n = 0;
     int r;
@@ -11170,6 +11172,21 @@ static int abi_main(void)
           "the document record carries no §3.1.3 ANCESTOR ORIGINS statement — the steps return an empty output "
           "for a Document with no container document and a composed one otherwise, so an absent field is a "
           "caller that did not state which applies and this document would report itself top-level");
+    /* HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that same navigable — a FOURTH statement
+       about it and not an item of the container above, since §7.1.7's container is a CSP list, an embedder
+       policy, a referrer policy and two integrity policies and no flag set is among them. §7.1.5 reads the
+       embedder ELEMENT's iframe sandboxing flag set and that element's node document's active set, neither of
+       which can cross a process, so the algorithm runs in the instance that created this navigable and the
+       ANSWER arrives here in that section's own flag names. The EMPTY set has a word of its own for the
+       reason the container's absence does: it is what a top-level traversable states, so an empty field would
+       be a zone that stopped writing it and this document would run a sandboxed frame with its sandbox
+       deleted. */
+    creation_sandbox_flags = abi_take(&p, "creation sandboxing flags");
+    CHECK(*creation_sandbox_flags != '\0',
+          "the document record carries no §7.1.5 CREATION SANDBOXING FLAG SET — the empty set is an ANSWER "
+          "with a word of its own, so an absent field is a caller that did not state which applies and this "
+          "instance would run the scripts, submit the forms and relax the `document.domain` an embedder's "
+          "`sandbox` attribute forbids");
     /* AND NOTHING AFTER IT. A record with a field this driver does not read is a writer NEWER than this reader,
        which a left-to-right walk is structurally silent about — it only ever asks for what it was told to
        expect — so the value would be computed, sent, and consumed by nothing while its author believed it
@@ -11178,12 +11195,12 @@ static int abi_main(void)
                       "wrote the record, and the trailing value crossed to a reader that never looks at it. "
                       "trailing=[%s]", p ? p : "");
 
-    /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the fifteen facts a document
+    /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the sixteen facts a document
        arrival carries — every one of them now stated by the party that HAS it. This document's OWN policy is
        not on that list at all: it arrives in the header block above, where a server put it. */
     r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, top_level_url,
                  csp, csp_self, coep, coep_ep, coep_ro, coep_ro_ep,
-                 parent, container_policy, ancestor_origins);
+                 parent, container_policy, ancestor_origins, creation_sandbox_flags);
     DCHECK(r == 0, "qjs_init refused the document this process was handed");
     /* THE POLICY BYTES ARE PARSED AND COPIED INSIDE THE ENTRY, exactly as the header block below is. */
     free(csp);
@@ -11357,8 +11374,11 @@ int main(int argc, char **argv) {
         JSValue root_proxy;
 
         embedder_policy_init(&root_embedder);
+        /* AND AN EMPTY §7.1.5 CREATION SANDBOXING FLAG SET, from the same fact one link along: a top-level
+           traversable has no embedder element, so §7.1.5 answers from its POPUP sandboxing flag set, which
+           begins empty and which only §7.3.1.7's rules for choosing a navigable ever fill. */
         root_proxy = navigable_root(ctx, world_local_doc(), "", OPENER_POLICY_UNSAFE_NONE, "u",
-                                    serialized_policy_container_none(), &root_embedder);
+                                    serialized_policy_container_none(), &root_embedder, 0);
         embedder_policy_free(&root_embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* NULL: this fixture's document is a C string literal, so it came from no response and has no

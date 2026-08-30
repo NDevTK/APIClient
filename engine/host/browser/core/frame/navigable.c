@@ -2714,8 +2714,13 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        RECORD, the container element — is in THIS heap, and the one that could not be sent even if the others
        were is the origin record, which is what §7.1.1's same origin decides step 10 by. See the notice below. */
     char *ancestor_origins = NULL;
+    /* AND §7.1.5's CREATION SANDBOXING FLAG SET FOR THAT SAME NAVIGABLE, as text, on the same arm and for the
+       same reason as the three above: both of that section's inputs — the `<iframe sandbox>` ELEMENT and this
+       document's own active set — are in this heap, and an element crosses no instance boundary. See the
+       notice below. */
+    char *sandbox_flags = NULL;
     size_t n;
-    /* HTML §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT, verbatim: "Let topLevelCreationURL be
+    /* HTML §7.3.2.1's CREATE A NEW BROWSING CONTEXT AND DOCUMENT, verbatim: "Let topLevelCreationURL be
        about:blank if embedder is null; otherwise embedder's relevant settings object's top-level creation
        URL." The embedder is the element this navigable is nested THROUGH, so `is_child` IS that condition —
        an auxiliary navigable has none and is its own top, and the about:blank it is created with is the
@@ -2861,10 +2866,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             JS_FreeValue(ctx, top);
         }
         proxy = window_proxy_new(ctx, child, "about:blank", origin_agent(), name, feat && feat->is_popup,
-                                 /* §7.1.5's creation sandboxing flags, decided above. §7.2 hands exactly this
-                                    set to the initial about:blank Document as its ACTIVE SANDBOXING FLAG SET,
-                                    and it is kept on the navigable for the same reason the policy is: that
-                                    Document's realm is materialized later, possibly by another document. */
+                                 /* §7.1.5's creation sandboxing flags, decided above. §7.3.2.1 hands
+                                    exactly this set to the initial about:blank Document as its ACTIVE
+                                    SANDBOXING FLAG SET, and it is kept on the navigable for the same reason
+                                    the policy is: that Document's realm is materialized later, possibly by
+                                    another document. */
                                  creation_flags,
                                  /* §7.3.2.1's INHERITED OPENER POLICY, decided above. It rides here for the
                                     same reason the flags and the policy do: the initial about:blank Document
@@ -2966,13 +2972,6 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            more than a JSValue does, and what the peer needs is its own principal, which its host will state
            back. A peer's opaque origin is same origin with nothing here, which is exactly right: two Documents
            sharing ONE opaque origin share an agent cluster, so they are never on two sides of this line. */
-        /* §7.1.5's SET DOES NOT CROSS THE NOTICE, AND A SANDBOXED CHILD IS ALWAYS ON THIS SIDE OF IT. That is
-           not a coincidence to note, it is the whole reason this is reachable: the SANDBOXED ORIGIN flag makes
-           the child's origin OPAQUE, an opaque origin is same origin with nothing, so §7.1.1 puts every
-           sandboxed child in another agent cluster and child_in_this_agent above sent it here. The peer would
-           then create that Document with an EMPTY active sandboxing flag set and run scripts, submit forms and
-           relax document.domain that the `sandbox` attribute forbids — a sandbox that exists in the markup and
-           nowhere in the model. */
         /* THE CLONE CROSSES AS A WHOLE CSP LIST, WHICH IS TWO FIELDS AND NOT ONE. CSP §2.2 "Policies" makes a
            CSP list "a struct consisting of policies (a list of policies) and a self-origin (an origin which is
            used when matching the 'self' keyword)", and the bytes of a serialized policy contain only the first
@@ -3004,34 +3003,37 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                "no CSP §2.2 SELF-ORIGIN — every container this engine builds has one (policy_container_new "
                "requires it), so an absent one is a creator whose container was built somewhere that did not "
                "state it, and the peer would resolve `'self'` against its own address instead");
-        /* AND §7.1.5's SET IS THE ONE THING ON THIS SIDE OF THE LINE THAT DOES NOT CROSS YET, WHICH IS WHY THE
-           ASSERT BELOW REFUSES RATHER THAN SENDING AN INCOMPLETE RECORD. Its DESTINATION already exists and is
-           not part of what has to be built: document_install, platform_document_install and the RealmBuilder
-           typedef all take a `SandboxFlags sandbox_flags` today, and it is the value §7.2's create-a-new-
-           browsing-context-and-document hands the initial Document as its ACTIVE SANDBOXING FLAG SET, which is
-           what the LOCAL arm above already carries into window_proxy_new. What is missing is the carriage ACROSS
-           AN INSTANCE and nothing else: a FIELD on this record, a text vocabulary for it, and every reader
-           taught the new position in the same diff. */
-        DCHECK(creation_flags == 0,
-               "a CROSS-INSTANCE child navigable was created with a non-empty §7.1.5 CREATION SANDBOXING FLAG "
-               "SET, and the `navigable.create` notice carries the creator's policy but not the flag set — so "
-               "the peer instance would build this Document with an EMPTY active sandboxing flag set and run "
-               "the scripts, form submissions and document.domain relaxation the `sandbox` attribute forbids. "
-               "Three things build it and no more. (1) A FIELD ON THIS RECORD, placed BEFORE the policy for the "
-               "reason every other field is: the policy is the record's REMAINDER. It is a SET and not one "
-               "word — up to SANDBOX_FLAG_COUNT_ flags — so it crosses joined by SPACE like §3.1.3's ancestor "
-               "origins and §9.5's container answer beside it, which is tab-safe for the same reason they are. "
-               "(2) A TEXT VOCABULARY, which is §7.1.5's OWN FLAG NAMES and never this build's bit numbers: "
-               "core/frame/sandboxing.h's SANDBOX_FLAG_LIST already pairs every bit with the standard's name "
-               "for it, and the reason to spell them out is the reason §7.1.4's values cross as the standard's "
-               "three strings rather than as an enum's integers — a peer reading a bit index is reading this "
-               "build's declaration order. (3) EVERY READER, IN THE SAME DIFF, because this record is POSITIONAL "
-               "and they read it by INDEX — a field inserted before the policy shifts every index past it, and "
-               "only wpt_runner.c (which spawns the child process for a peer) tests the count exactly and would "
-               "REFUSE; engine/trusted.mjs, engine/route.mjs and engine/renderer_host_gate.mjs test a MINIMUM "
-               "and would accept the longer record with the creator's policy read off the wrong field, which is "
-               "silent and is worse than the refusal. Then hand the parsed set to that instance's "
-               "document_install as its active sandboxing flag set");
+        /* AND §7.1.5's CREATION SANDBOXING FLAG SET, WHICH IS NOT AN ITEM OF THE CONTAINER BESIDE IT — §7.1.7
+           gives a policy container a CSP list, an embedder policy, a referrer policy and two integrity
+           policies, and no sandboxing flag set is among them. It is a SEPARATE statement about the same
+           navigable, in the same class as the parent, the container answer and the ancestor list: computed
+           HERE because both of §7.1.5's inputs are here — "if embedder is an element, then the flags set on
+           embedder's iframe sandboxing flag set" and "…on embedder's node document's active sandboxing flag
+           set" — and neither the `<iframe sandbox>` element nor this document's own set can cross.
+           IT IS THE PEER'S §7.4.2.1 TARGET SNAPSHOT PARAMS, NOT A CONVENIENCE. "To snapshot target snapshot
+           params given a navigable targetNavigable, return a new target snapshot params with: sandboxing flags
+           — the result of determining the creation sandboxing flags given targetNavigable's active browsing
+           context and targetNavigable's container", and §7.4.2.2 makes finalSandboxFlags "the union of
+           targetSnapshotParams's sandboxing flags and policyContainer's CSP list's CSP-derived sandboxing
+           flags". The peer computes the SECOND half from the response it loads; the first is this value and it
+           can come from nowhere else, so a peer without it takes the empty set and runs the scripts, the form
+           submissions and the `document.domain` relaxation the `sandbox` attribute forbids.
+           A SANDBOXED CHILD IS ALWAYS ON THIS SIDE OF THE LINE, which is why this field is reachable at all
+           rather than a case that never happens: the SANDBOXED ORIGIN flag makes the child's origin OPAQUE
+           (child_address runs §7.3.2.1's determine-the-origin with it), an opaque origin is same origin with
+           nothing, so §7.1.1 puts every such child in another agent cluster and child_in_this_agent sent it
+           here. `sandbox=allow-same-origin` keeps the origin and can still leave fifteen other flags set, so
+           the two arms of that keyword are the two ways this field is non-empty rather than one.
+           IT CROSSES AS §7.1.5's OWN FLAG NAMES, COMMA-SEPARATED, and the separator is the one thing here a
+           reader should not take on trust: those names CONTAIN SPACES, so the SPACE that joins §3.1.3's
+           ancestor origins and Permissions Policy §9.5's answer beside it cannot delimit this one — a
+           space-joined set does not parse. sandboxing.h states the whole rule and asserts it per name. */
+        sandbox_flags = sandbox_flags_serialize(creation_flags);
+        CHECK(sandbox_flags != NULL,
+              "navigable: OOM stating §7.1.5's creation sandboxing flag set for a peer instance");
+        /* NO TAB ASSERT BESIDE THE OTHERS, AND THAT IS NOT AN OMISSION: sandbox_flags_serialize asserts the
+           absence of a tab (and of its own separator) per FLAG NAME, at the one place that can see the
+           vocabulary, so a check here would be that invariant restated one caller along. */
         /* §7.1.4'S ITEM CROSSES THE NOTICE TOO, AND ITS FOUR FIELDS SIT WITH THE SELF-ORIGIN FOR THE SAME
            REASON: the policy is the record's REMAINDER, so everything that is not the policy comes before it.
            A `report-to` ENDPOINT IS SAFE IN A SPLIT FIELD and that is the standard's own guarantee rather than
@@ -3158,10 +3160,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             strlen(creator_policy.embedder.endpoint) +
             strlen(embedder_policy_value_token(creator_policy.embedder.report_only_value)) +
             strlen(creator_policy.embedder.report_only_endpoint) +
-            strlen(parent_id) + strlen(container_policy) + strlen(ancestor_origins) + 32;
+            strlen(parent_id) + strlen(container_policy) + strlen(ancestor_origins) +
+            strlen(sandbox_flags) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
                  world_doc_name(child),
                  world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu,
                  creator_policy.self_origin,
@@ -3172,12 +3175,14 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                  parent_id,
                  container_policy,
                  ancestor_origins,
+                 sandbox_flags,
                  creator_policy.csp ? creator_policy.csp : "");
         engine_host_notify(ctx, op);
         free(op);
         free(parent_id);
         free(container_policy);
         free(ancestor_origins);
+        free(sandbox_flags);
         /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just
            minted and nothing has named it yet, so this ask is the mint — but it is the ask that RECORDS it,
            and without the record `w.frames[0] === iframe.contentWindow` is false about the frame this line
@@ -3209,7 +3214,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
  * §7.1.4.2's step 2 is answerable here from the container the record carried. */
 JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
                        const char *parent_navigable, SerializedPolicyContainer inherited,
-                       const EmbedderPolicy *response_embedder)
+                       const EmbedderPolicy *response_embedder, SandboxFlags creation_sandbox_flags)
 {
     JSValue parent, proxy;
 
@@ -3251,7 +3256,21 @@ JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPol
                "\"navigation-failure\" — the same error Document js_nav_load_step above still owes for a child "
                "navigable of this instance, and it is one value both sites take rather than two");
     }
-    proxy = window_proxy_new_self(ctx, doc, name, opener_policy, parent);
+    /* §7.1.5's SET IS PAIRED WITH §7.3.1.3's PARENT AND THE PAIRING IS ASSERTED, exactly as this component
+       already asserts the parent against the container: determine-the-creation-sandboxing-flags reads an
+       EMBEDDER ELEMENT for a nested navigable and a POPUP SANDBOXING FLAG SET for a top-level one, and a
+       top-level traversable's popup set is filled by nothing but §7.3.1.7's rules for choosing a navigable —
+       which cannot have run for the navigable an INSTANCE was rooted in, because no `window.open` in any heap
+       reaches a document the trusted zone provisioned. So flags with no parent is a host describing a nested
+       navigable's sandbox over a navigable it also called top-level, and the two fields would then disagree
+       about what kind of navigable this is. */
+    DCHECK(creation_sandbox_flags == 0 || window_proxy_is(parent),
+           "a navigable was rooted as a TOP-LEVEL TRAVERSABLE (§7.3.1.3 parent `u`) and given a non-empty "
+           "§7.1.5 CREATION SANDBOXING FLAG SET — that section fills a top-level browsing context's set from "
+           "its POPUP sandboxing flag set alone, which only §7.3.1.7's rules for choosing a navigable ever "
+           "populate and which nothing can have populated for a navigable a host provisioned. The two fields "
+           "come off one `navigable.create` record, so this is a host that read them from different rows");
+    proxy = window_proxy_new_self(ctx, doc, name, opener_policy, parent, creation_sandbox_flags);
     JS_FreeValue(ctx, parent);
     return proxy;
 }

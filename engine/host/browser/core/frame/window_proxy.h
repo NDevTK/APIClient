@@ -56,7 +56,8 @@ void window_proxy_free(JSRuntime *rt);
    has "no serialization it can be recreated from"). Never NULL for a local proxy. */
 /* `creation_sandbox_flags` is §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS for this navigable, and it is a
    third field of the same kind as the two above: decided by the OPERATION that created the navigable, read
-   when a Document of it is finally built. §7.2's create-a-new-browsing-context-and-document hands exactly this
+   when a Document of it is finally built. §7.3.2.1's create-a-new-browsing-context-and-document hands
+   exactly this
    set to the initial about:blank Document as its ACTIVE SANDBOXING FLAG SET, and §7.4.5 makes it one half of
    the FINAL SANDBOXING FLAG SET a later navigation's Document gets — so it is read twice, by the two places a
    Document of this navigable comes into existence (window_proxy.c's materialization and navigable.c's load).
@@ -64,7 +65,7 @@ void window_proxy_free(JSRuntime *rt);
    to capture, and the per-flow answer comes from the INPUTS — an `<iframe sandbox>`'s attribute is a DOM read
    in the creating flow's own delta, and the navigable that read produced belongs to that flow. */
 /* `creator_base_url` is HTML §7.4's `creatorBaseURL` — "if creator is non-null, set creatorBaseURL to
-   creator's document base URL" — which §7.2's create-a-new-browsing-context-and-document gives the initial
+   creator's document base URL" — which §7.3.2.1's create-a-new-browsing-context-and-document gives the initial
    `about:blank` Document as its ABOUT BASE URL. NULL is the real answer for a navigable with no creator (the
    root) and for one created with an address (its Document comes from a response). It rides here for the
    reason `creator_policy` does: the initial Document is materialized lazily and by whichever same-origin
@@ -140,9 +141,19 @@ bool window_proxy_is_popup(JSValueConst proxy);
    entry (engine/host/main.c).
    IT IS A NAVIGABLE OR NOTHING — a WindowProxy, remote or local, or JS_UNDEFINED. JS_NULL is the OPENER slot's
    absence and not this one's (window_proxy.c keeps the two spellings apart because §7.2.2.4 answers `parent`
-   with the navigable itself at the top of a tree and `opener` with null). */
+   with the navigable itself at the top of a tree and `opener` with null).
+   AND `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s SET FOR THAT SAME NAVIGABLE, AN ARGUMENT FOR
+   EXACTLY THE PARENT'S REASON. §7.1.5 computes it from the embedder ELEMENT's iframe sandboxing flag set and
+   that element's node document's active set, both of which are in the instance that CREATED the navigable —
+   so this instance can no more derive it than it can derive its own parent, and the two travel together on
+   the `navigable.create` notice. A ZERO STOOD HERE, correct for a top-level traversable (whose §7.1.5 answer
+   is a popup sandboxing flag set nothing filled) and correct for a cross-instance child only for as long as
+   core/frame/navigable.c REFUSED to announce a sandboxed one; the announcement carries the set now, so the
+   zero is a value the host states like the parent beside it. It is read back by §7.4.2.1's snapshot of this
+   navigable's target snapshot params at every navigation this instance's root performs — so a peer that took
+   the zero navigated a SANDBOXED frame's own document with the sandbox deleted. */
 JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
-                              JSValueConst parent);
+                              JSValueConst parent, SandboxFlags creation_sandbox_flags);
 
 /* THE ONE WindowProxy FOR A DOCUMENT — this agent's own when it hosts it, and otherwise a proxy over a
    navigable whose active document lives in ANOTHER WASM instance, minted here on the first ask and answered
