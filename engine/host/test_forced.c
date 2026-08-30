@@ -1423,10 +1423,13 @@ static const char *HTML =
        constraint this search is solved under is the same one. */
     "var lhAttr = document.createElement('div'); document.body.appendChild(lhAttr);"
     "lhAttr.innerHTML = \"<img alt='\" + location.hash.slice(1) + \"'>\";"
-    /* THE OUTCOME FORK AT A C BUILTIN. `JSON.parse` of unknown text has two feasible completions — 25.5.1
-       step 8's value and step 2's SyntaxError — and a builtin that picks one has DELETED the arm the `catch`
-       and everything behind it lives on. BOTH endpoints below must appear in ONE run: two flows, one
-       snapshot-forked from the other AT the builtin.
+    /* THE OUTCOME FORK AT A C BUILTIN. `JSON.parse` of unknown text has two feasible completions — §25.5.2
+       JSON.parse ( text [ , reviver ] ) step 2's normal completion and the SyntaxError of §25.5.2.1 ParseJSON
+       ( text ) step 1 — and a builtin that picks one has DELETED the arm the `catch` and everything behind it
+       lives on. BOTH endpoints below must appear in ONE run: two flows, one snapshot-forked from the other AT
+       the builtin. (The numbers stood as `25.5.1 step 8` and `step 2's SyntaxError`, which name a section that
+       is now JSON.isRawJSON and a step JSON.parse's own list no longer has: the throw moved out into the
+       ParseJSON abstract operation. Read off the standard's text rather than recalled.)
        AND THE REFINEMENT, which is the negative half and the reason this is two statements and not one: the
        SAME builtin over `location.hash` ITSELF has only ONE feasible completion, because the component that
        owns that source declares what the browser delivers — the empty string or `#` followed by the fragment,
