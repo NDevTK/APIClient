@@ -1176,6 +1176,18 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     if (JS_IsException(view)) return JS_EXCEPTION;
     dst = JS_GetArrayBuffer(ctx, &whole, view);
     if (!dst) { JS_FreeValue(ctx, view); return JS_EXCEPTION; }
+    /* THE LOOP BELOW BOUNDS ITSELF BY `dlen` AND WRITES THROUGH `dst + off`, so the two numbers have to be one
+       fact about one allocation, and until this line nothing said so. They come from two different engine
+       exports — the window from JS_GetArrayBufferView, the size from JS_GetArrayBuffer — and there was a
+       length-tracking view for which they disagreed: JS_GetArrayBufferView answered with the [[ByteLength]]
+       slot, which typed_array_init writes once, so `enc.encodeInto("A".repeat(64), v)` after `rab.resize(8)`
+       wrote 64 bytes into an 8-byte allocation and reported `written: 64`. Both exports now derive the length
+       per ECMAScript §10.4.5.12 TypedArrayByteLength, so this asserts the agreement rather than creating it —
+       which is what makes it a DCHECK. It is NOT reached through §3.2.26's refusal: this destination is
+       declared IDL_ANY, so no buffer-source conversion runs on it at all. */
+    DCHECK(off <= whole && dlen <= whole - off,
+           "§7.4 encodeInto's destination window is outside its own buffer — JS_GetArrayBufferView and "
+           "JS_GetArrayBuffer disagree about one allocation, and the write below is bounded by the first");
     /* forced-exec TIME-TRAVEL: THE BYTES BELOW ARE THE PAGE'S OWN BUFFER, so they are shared state and the
        running flow's delta must hold them before the first one changes. The engine routes every typed-array
        and DataView writer of its own through cow_capture_bytes, and nothing in it can see THIS write — a host

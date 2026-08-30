@@ -1521,6 +1521,51 @@ static int idl_bytestring_check(JSContext *ctx, JSValueConst str)
     return 0;
 }
 
+/* WEB IDL § 3.2.26 Buffer source types' TWO REFUSALS, WHICH EVERY ONE OF ITS FOUR CONVERSIONS STATES AND WHICH
+ * THIS ENGINE'S TWO BUFFER-SOURCE POSITIONS BOTH OWE. Each of § 3.2.26's algorithms — for ArrayBuffer, for
+ * SharedArrayBuffer, for DataView and for the twelve typed arrays — is a brand test followed by these two and
+ * then a return, and they are asked of the buffer UNDER the value: of V for a buffer, of
+ * V.[[ViewedArrayBuffer]] for a view. The submodule's pair answers both arms, which is why this reads as one
+ * question rather than as a walk repeated per arm.
+ *   - SHARED: "If the conversion is not to an IDL type associated with the [AllowShared] extended attribute,
+ *     and IsSharedArrayBuffer(V.[[ViewedArrayBuffer]]) is true, then throw a TypeError."
+ *   - RESIZABLE: "If the conversion is not to an IDL type associated with the [AllowResizable] extended
+ *     attribute, and IsFixedLengthArrayBuffer(V.[[ViewedArrayBuffer]]) is false, then throw a TypeError."
+ * NEITHER CONDITION IS CONDITIONAL HERE. § 4.1 ArrayBufferView carries no extended attribute, and § 4.2
+ * BufferSource says in its own note that [AllowShared] "cannot be used with BufferSource as ArrayBuffer does
+ * not support it" — § 4.3 AllowSharedBufferSource is the typedef for that, and this engine declares no member
+ * with it. § 3.3.1 [AllowResizable] appears on neither. So both throws are unconditional at both positions,
+ * and a member that one day wants a resizable buffer declares a DIFFERENT type rather than relaxing this.
+ * THE REFUSAL IS NOT PEDANTRY, IT IS THE MEMORY-SAFETY BOUNDARY THIS CONVERSION EXISTS TO DRAW. A
+ * length-tracking view over a resizable buffer reports a byte length that is recomputed at every read, so a
+ * component that took its window and then let page code run — a `toString`, a getter, a promise resolution —
+ * holds a window that no longer describes the allocation. § 3.2.26 answers that by keeping such a view out of
+ * every position that has not asked for one, which is why the check belongs HERE and not at each fill site:
+ * a fill site can only assert that the window it was handed is still inside the buffer, and an assert that
+ * fires is a defect that already reached the algorithm.
+ * Returns -1 with a TypeError live, or 0. The value has already passed its position's brand test, which is the
+ * order § 3.2.26 states and is what lets the predicates below require a buffer source. */
+static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *type_name)
+{
+    if (JS_IsSharedBufferSource(v)) {
+        JS_ThrowTypeError(ctx,
+                          "§ 3.2.26 Buffer source types refuses a SharedArrayBuffer to a `%s`: the position "
+                          "carries no [AllowShared] extended attribute, and § 4.2 BufferSource cannot carry "
+                          "one at all — a member that wants a shared buffer declares AllowSharedBufferSource",
+                          type_name);
+        return -1;
+    }
+    if (!JS_IsFixedLengthBufferSource(v)) {
+        JS_ThrowTypeError(ctx,
+                          "§ 3.2.26 Buffer source types refuses a resizable buffer to a `%s`: the position "
+                          "carries no § 3.3.1 [AllowResizable] extended attribute, so IsFixedLengthArrayBuffer "
+                          "of the buffer under it must be true",
+                          type_name);
+        return -1;
+    }
+    return 0;
+}
+
 static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSIdlArgsState *s = st;
@@ -2510,6 +2555,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 JS_ThrowTypeError(ctx, "the argument is not a BufferSource");
                 return JS_STEP_ABRUPT;
             }
+            if (idl_buffer_source_refuse(ctx, a, "BufferSource")) {
+                JS_FreeValue(ctx, cb_result);
+                return JS_STEP_ABRUPT;
+            }
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             *slot = JS_DupValue(ctx, a);
@@ -2526,6 +2575,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             if (JS_GetTypedArrayType(a) < 0 && !JS_IsDataView(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the argument is not an ArrayBufferView");
+                return JS_STEP_ABRUPT;
+            }
+            if (idl_buffer_source_refuse(ctx, a, "ArrayBufferView")) {
+                JS_FreeValue(ctx, cb_result);
                 return JS_STEP_ABRUPT;
             }
             JS_FreeValue(ctx, cb_result);

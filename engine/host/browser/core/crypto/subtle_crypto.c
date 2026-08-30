@@ -173,8 +173,9 @@ static int sd_reject(JSContext *ctx, SdState *s, JSValue *presult)
     return JS_STEP_DONE;
 }
 
-/* WEB IDL's `get a copy of the bytes held by the buffer source`, whose two shapes are the two arms of
-   §3.2.25's BufferSource and whose detached case is a POSITIVE STATEMENT: "If IsDetachedBuffer(jsArrayBuffer)
+/* WEB IDL §3.2.26 Buffer source types' `get a copy of the bytes held by the buffer source`, whose two shapes
+   are the two arms of §4.2's BufferSource and whose detached case is a POSITIVE STATEMENT: "If
+   IsDetachedBuffer(jsArrayBuffer)
    is true, then return the empty byte sequence." JS_GetBufferBytes answers NULL with a zero length for exactly
    that, and cannot throw — so the empty message is hashed and no exception is invented. */
 static JSValue sd_copy_buffer_source(JSContext *ctx, JSValueConst src)
@@ -190,7 +191,7 @@ static JSValue sd_copy_buffer_source(JSContext *ctx, JSValueConst src)
         view_buf = JS_GetArrayBufferView(ctx, src, &off, &len);
         DCHECK(!JS_IsException(view_buf),
                "§14.3.5 step 4 reached a `data` that is neither an ArrayBuffer nor an ArrayBufferView — the "
-               "IDL_BUFFERSOURCE position performs §3.2.25's brand test once, so nothing else can arrive here");
+               "IDL_BUFFERSOURCE position performs §3.2.26's brand test once, so nothing else can arrive here");
         ab = view_buf;
     }
     base = JS_GetBufferBytes(ab, &whole);

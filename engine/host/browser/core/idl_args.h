@@ -382,14 +382,10 @@ typedef enum {
        Float64Array and DataView among the thirteen view types, so the conversion admits exactly what the
        algorithm then refuses. Declaring the member IDL_BUFFERSOURCE would collapse those two into one answer,
        and a feature detection distinguishes them.
-       WHAT THIS ROW DOES NOT YET PERFORM IS §3.2.26's LAST CONVERSION STEP — "If the conversion is not to an
-       IDL type associated with the [AllowResizable] extended attribute, and IsFixedLengthArrayBuffer(V
-       .[[ViewedArrayBuffer]]) is false, then throw a TypeError." Neither this row nor IDL_BUFFERSOURCE asks it,
-       because quickjs exposes no IsFixedLengthArrayBuffer; array_buffer_is_resizable is static in quickjs.c.
-       It is not cosmetic: that step is what makes a LENGTH-TRACKING view unreachable past the conversion, and
-       JS_GetArrayBufferView answers such a view with JSTypedArray.length — which quickjs does not update when
-       the buffer is resized (only p->u.array.count is). So the missing step is why the fill site in
-       core/crypto/crypto.c has to assert its window against the buffer's current size. */
+       BOTH ROWS ALSO PERFORM §3.2.26's TWO REFUSALS — a shared buffer and a resizable one, neither of which
+       §4.1 or §4.2 admits — through idl_buffer_source_refuse. That is where the byte-length hazard of a
+       length-tracking view is answered: the conversion keeps one out of every position that did not ask for
+       one, rather than each fill site asserting after the fact that the window it was handed still fits. */
     IDL_ARRAYBUFFERVIEW,
     /* AN INTERFACE TYPE — §3.2.15. `Node root`, `Range sourceRange`, `Node currentNode`: a platform object
        implementing the interface crosses as itself and ANYTHING else is a TypeError, thrown before the

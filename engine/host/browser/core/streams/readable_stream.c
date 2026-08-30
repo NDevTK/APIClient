@@ -3272,6 +3272,15 @@ static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
     }
     base = JS_GetArrayBuffer(ctx, &whole, buf);
     if (!base) { JS_FreeValue(ctx, buf); return -1; }
+    /* THE WINDOW AND THE SIZE ARE ONE FACT ABOUT ONE ALLOCATION, asserted here because the copy below reads
+       `n` bytes from `base + off`. THIS SITE HAS NO CONVERSION AHEAD OF IT: the chunk is whatever a page's
+       own ReadableStream enqueued, so Web IDL §3.2.26 Buffer source types never ran on it and the only thing
+       keeping a length-tracking view honest is that JS_GetArrayBufferView derives its length per ECMAScript
+       §10.4.5.12 TypedArrayByteLength. That is exactly why the derivation had to be fixed in the engine and
+       not only at the conversion — the conversion cannot see this chunk at all. */
+    DCHECK(off <= whole && n <= whole - off,
+           "a body stream's chunk reported a window outside its own buffer — JS_GetArrayBufferView and "
+           "JS_GetArrayBuffer disagree about one allocation, and the copy below trusts the first");
     if (dr->len + n > dr->cap) {
         size_t want = dr->cap ? dr->cap * 2 : 256;
         uint8_t *grown;

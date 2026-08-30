@@ -125,18 +125,20 @@ static JSValue js_crypto_get_random_values(JSContext *ctx, JSValueConst this_val
     }
 
     base = JS_GetArrayBuffer(ctx, &size, buf);
-    /* THE WINDOW IS ASSERTED AGAINST THE BUFFER'S CURRENT SIZE, and it is a CHECK rather than a DCHECK because
-       what it stands in front of is a WRITE through `base + off`. Web IDL §3.2.26 Buffer source types should
-       have made it unreachable — its last conversion step throws a TypeError for a view whose buffer is not
-       fixed-length unless the IDL type carries [AllowResizable], and §10's `ArrayBufferView array` carries
-       none — but core/idl_args.c cannot ask that yet, because quickjs exposes no IsFixedLengthArrayBuffer.
-       That gap is load-bearing rather than pedantic: JS_GetArrayBufferView answers a length-TRACKING view with
-       JSTypedArray.length, which a resize does not update, so a SHRUNK tracking view arrives here claiming a
-       window it no longer has. Until the conversion step exists this is what separates that from a write past
-       the allocation, and the message names the repair rather than the symptom. */
-    CHECK(off <= size && len <= size - off,
-          "§10.1.1's view window is outside its own buffer: §3.2.26's [AllowResizable] conversion step is "
-          "missing from core/idl_args.c, so a length-tracking view on a resized buffer reached the algorithm");
+    /* THE WINDOW IS ASSERTED AGAINST THE BUFFER'S CURRENT SIZE, in front of a WRITE through `base + off`.
+       IT IS A DCHECK AND IT USED TO BE A CHECK, and the reason it stopped being one is the whole of the fix
+       it is left over from. It was written when Web IDL §3.2.26 Buffer source types' [AllowResizable] refusal
+       was missing from core/idl_args.c, so a length-tracking view over a RESIZED buffer really did arrive here
+       claiming a window it no longer had, and this line was the only thing between that and a write past the
+       allocation — a live hazard, which is what a CHECK is for. Two things now stand ahead of it: the
+       conversion refuses such a view outright, and JS_GetArrayBufferView answers a length-tracking view with
+       ECMAScript §10.4.5.12 TypedArrayByteLength's derived length rather than the construction-time slot. What
+       is left to assert is that those two hold — that the window one engine export gave and the size another
+       gave are one fact — and an assertion about the engine's own logic is a DCHECK by definition. */
+    DCHECK(off <= size && len <= size - off,
+           "§10.1.1's view window is outside its own buffer: JS_GetArrayBufferView answered with a window "
+           "JS_GetArrayBuffer's size does not contain, and §3.2.26's conversion had already refused every "
+           "view whose buffer can change size under it");
 
     /* STEPS 4-6: "Let bytes be a byte sequence of length byteLength. Fill bytes with cryptographically secure
        random bytes. Write bytes into array."

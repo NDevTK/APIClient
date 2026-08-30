@@ -697,6 +697,15 @@ static int js_blob_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
                    "produces exactly a string, a Blob or a BufferSource, so nothing else can be in the list");
             base = JS_GetArrayBuffer(ctx, &whole, view_buf);
             if (!base) { JS_FreeValue(ctx, view_buf); JS_FreeValue(ctx, part); goto fail; }
+            /* THE `memcpy` BELOW READS `plen` BYTES FROM `base + off`, and those two numbers come from two
+               different engine exports — the window from JS_GetArrayBufferView, the size from
+               JS_GetArrayBuffer. They must describe one allocation, and there was a view for which they did
+               not: a length-tracking one over a resized buffer, whose window JS_GetArrayBufferView answered
+               out of the construction-time [[ByteLength]] slot, so `new Blob([v])` after `rab.resize(8)`
+               reported `size: 64` and read 56 bytes past the allocation into the Blob's own bytes. */
+            DCHECK(off <= whole && plen <= whole - off,
+                   "a Blob part's view window is outside its own buffer — JS_GetArrayBufferView and "
+                   "JS_GetArrayBuffer disagree about one allocation, and the copy below trusts the first");
             bytes = base + off;
         }
         grown = realloc(buf, total + plen + 1);
