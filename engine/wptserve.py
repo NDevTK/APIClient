@@ -20,6 +20,7 @@ file belongs to, by the `.https` flag in its name; see the third listener below 
 does not provide for that scheme.
 """
 import sys
+import logging
 import os
 import signal
 import socket
@@ -28,6 +29,33 @@ import time
 import uuid
 
 root = os.path.abspath(sys.argv[1])
+
+# WHAT THE SERVER WAS ASKED FOR, WHICH IS THE ONE FACT THIS GATE HOLDS NOWHERE ELSE.
+#
+# A test that awaits a fetch and times out puts THREE states behind ONE answer, and a search cannot be directed
+# toward a gap it reports with the same output as two other gaps: the engine never ISSUED the request, or it
+# issued one this server did not answer, or this server answered and the reply reached no parked flow. The
+# runner cannot separate them from its side — `engine_provide` returns how many registers it filled and the wpt
+# host reads that number as progress, so a reply that matched NOTHING is indistinguishable there from one that
+# was never sent — and the corpus cannot, because testharness's own timeout is what fires either way. The
+# SERVER is the only party that knows which requests arrived, so it is the only party that can split the first
+# state off from the other two.
+#
+# IT IS WPTSERVE'S OWN LOGGING AND NOT A PROBE. tools/wptserve/wptserve/server.py already logs one line per
+# request and one per response through `logger.get_logger()`, which is the ROOT `logging` logger; with no
+# handler on it those lines go nowhere, so what stood here was a server whose own access log had been silently
+# discarded. This attaches a handler when the driver names a file and changes nothing when it does not.
+#
+# TO A FILE, NEVER TO A STREAM. stdout is the READY channel engine/wpt.mjs parses with a newline-anchored
+# pattern, and stderr is the same file it polls for that line; a log line on either is a second author of the
+# driver's one input. A path that cannot be opened raises here and the server never binds, which is the honest
+# end — a run that asked for this record and did not get it must not read as a run that did.
+_access_log = os.environ.get("WPT_ACCESS_LOG")
+if _access_log:
+    _h = logging.FileHandler(_access_log)
+    _h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    logging.getLogger().addHandler(_h)
+    logging.getLogger().setLevel(logging.DEBUG)
 port = int(sys.argv[2])
 if port == 0:
     # THE PORT HAS TO BE KNOWN BEFORE THE CONFIG IS BUILT, not after the server binds. A `.sub.html` substitutes
