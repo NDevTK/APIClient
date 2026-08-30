@@ -967,11 +967,22 @@ async function loadRequestLog() {
          "GET_ALL_LOGS answered with something that is not a bucket map — lib/popup-handlers.js sends a " +
          "plain object keyed by tabId and answers this command unconditionally, so anything else is that " +
          "command not reaching the background at all");
-  for (const _tid of Object.keys(logs))
+  for (const _tid of Object.keys(logs)) {
     DCHECK(Array.isArray(logs[_tid].requestLog),
            "tab " + _tid + " came back from GET_ALL_LOGS without a requestLog array — the handler creates " +
            "the bucket with an empty one and only then pushes, so a missing array is that projection broken " +
            "and this view would report the tab as having made no requests at all");
+    /* THE TAB LABEL IS ALWAYS NAMED, WHICH IS WHY NOTHING DOWNSTREAM MAY RE-NAME IT. The handler's last act
+       before answering is `if (!result[tid].meta.title) result[tid].meta.title = "Tab " + tid`, so a title
+       is a settled fact by the time it arrives — and renderResponsePanel and _renderLogCard each carried
+       their OWN `|| ("Tab " + id)` copy of that same fallback. Three writers of one string is how the two
+       downstream ones stayed live long after the first made them unreachable, and it is why a handler that
+       stopped naming tabs would have gone on rendering perfect labels here with nothing to say so. */
+    DCHECK(!!logs[_tid].meta && typeof logs[_tid].meta.title === "string" && logs[_tid].meta.title !== "",
+           "tab " + _tid + " came back from GET_ALL_LOGS with no title — the handler names every bucket " +
+           "before it answers, so an empty one is that naming broken and the request-log cards would label " +
+           "a real tab's traffic with a tab id this popup invented");
+  }
   allTabsData = logs;
 }
 

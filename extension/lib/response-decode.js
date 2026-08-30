@@ -361,6 +361,13 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     callStack: msg.callStack || null,
   };
 
+  /* THE RECORD IS COMPLETE HERE, AND ITS FIRST CONSUMER IS NOT `_pushGlobalLog`. `learnFromRequest` reads
+     this entry four hundred lines before it is filed, so an assertion that only ran at the log push would
+     have let the one consumer that turns a captured request into a LEARNED ENDPOINT — the moat this whole
+     tool exists to build — read a hole and write it into a schema, with the crash arriving later and
+     elsewhere. An invariant is asserted where the state is BORN, not where it is next handled. */
+  _checkLogEntry(entry, "http");
+
   /* NO `lastSeen` STAMP ON A MATCHING ENDPOINT, BECAUSE THIS LOOKUP COULD NEVER MATCH ONE. It built the key
      as `method + " " + hostname + pathname` and lib/merge.js — the extension's ONLY `endpoints.set` — mints
      `"AST " + method + " " + hostname + path`. Every get() therefore missed, and the miss is invisible by

@@ -1402,7 +1402,11 @@ function learnFromResponse(documentId, interfaceName, entry) {
      leading bytes and synthesize a mimeType when the server didn't
      supply one. Real wire-format signatures (gRPC frame, protobuf
      varint tag, gzip/zlib magic) come straight from the spec.  */
-  let mimeType = entry.mimeType || "";
+  /* `_pushGlobalLog` asserts `mimeType` is a string on every record with a response half, so this is the
+     SERVER'S ANSWER and the empty string is the server having stated no type — which is exactly the case the
+     sniff below exists for. A `|| ""` here said the same thing about a record that had simply not written
+     one, and those are different facts: one is a server to sniff around, the other is a producer to fix. */
+  let mimeType = entry.mimeType;
   if (!mimeType || /^application\/octet-stream(?:$|;)/i.test(mimeType)) {
     let _sniffBytes = null;
     if (entry.responseBase64) {
@@ -1462,7 +1466,13 @@ function learnFromResponse(documentId, interfaceName, entry) {
           doc.resources.learned.methods[chunkKey] = {
             id: `${interfaceName.replace(/\//g, ".")}.${chunkKey}`,
             path: _decHoles(url.pathname.substring(1)),
-            httpMethod: entry.method || "GET",
+            /* THE VERB IS THE RECORD'S, AND THE PROOF THAT IT ALWAYS WAS IS THAT THE TWO DEFAULTS DISAGREED.
+               This read carried `|| "GET"` and its twin in the multipart-part builder below carried
+               `|| "POST"` — one field, one producer, two different substitutes, which cannot both be the
+               right answer for an absent value and is what a dead default looks like from the outside.
+               `_pushGlobalLog` asserts `method` is a non-empty string on every record it files, so the
+               discovery method now records the verb the request was actually made with. */
+            httpMethod: entry.method,
             parameters: {},
             request: null,
             response: null,
@@ -1617,7 +1627,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
               doc.resources.learned.methods[partKey] = {
                 id: `${interfaceName.replace(/\//g, ".")}.${partKey}`,
                 path: _decHoles(url.pathname.substring(1)),
-                httpMethod: entry.method || "POST",
+                httpMethod: entry.method,
                 parameters: {},
                 request: null,
                 response: null,
@@ -1718,9 +1728,9 @@ function learnFromResponse(documentId, interfaceName, entry) {
     }
   } else if (
     mimeType.includes("protobuf") ||
-    entry.contentType?.includes("protobuf") ||
+    entry.contentType.includes("protobuf") ||
     mimeType.includes("octet-stream") ||
-    entry.contentType?.includes("octet-stream")
+    entry.contentType.includes("octet-stream")
   ) {
     // Decode response protobuf heuristically
     try {

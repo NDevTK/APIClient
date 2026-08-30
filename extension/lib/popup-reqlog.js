@@ -30,7 +30,7 @@ function _renderLogCard(req, showTabLabel) {
 
   // Combined WebSocket entry — show message counts and connection status
   if (req.kind === "websocket") {
-    const msgs = req.messages || [];
+    const msgs = req.messages;
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
     const statusClass = req.wsOpen ? "ws-status-open" : "ws-status-closed";
@@ -40,7 +40,7 @@ function _renderLogCard(req, showTabLabel) {
       <span>
         <span class="badge badge-ws">WEBSOCKET</span>
         <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle || "Tab " + req._tabId)}</span>` : ""}
+        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
       </span>
       <span class="badge ${esc(statusClass)}">${esc(statusText)}</span>
     </div>
@@ -54,7 +54,7 @@ function _renderLogCard(req, showTabLabel) {
 
   // Combined postMessage entry — show origin pair and message counts
   if (req.kind === "postmessage") {
-    const msgs = req.messages || [];
+    const msgs = req.messages;
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
     const origins = _claimedOriginPair(req);
@@ -63,7 +63,7 @@ function _renderLogCard(req, showTabLabel) {
       <span>
         <span class="badge badge-pm">POSTMESSAGE</span>
         <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle || "Tab " + req._tabId)}</span>` : ""}
+        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
       </span>
       <span class="badge ws-status-open">ACTIVE</span>
     </div>
@@ -77,7 +77,7 @@ function _renderLogCard(req, showTabLabel) {
 
   // Combined MessageChannel entry — show origin pair and message counts
   if (req.kind === "msgchannel") {
-    const msgs = req.messages || [];
+    const msgs = req.messages;
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
     const origins = _claimedOriginPair(req);
@@ -86,7 +86,7 @@ function _renderLogCard(req, showTabLabel) {
       <span>
         <span class="badge badge-mc">MSGCHANNEL</span>
         <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle || "Tab " + req._tabId)}</span>` : ""}
+        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
       </span>
       <span class="badge ws-status-open">ACTIVE</span>
     </div>
@@ -103,7 +103,7 @@ function _renderLogCard(req, showTabLabel) {
       <span>
         <span class="badge ${esc(req.method)}">${esc(req.method)}</span>
         <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle || "Tab " + req._tabId)}</span>` : ""}
+        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
       </span>
       ${getStatusBadge(req.status)}
     </div>
@@ -112,11 +112,11 @@ function _renderLogCard(req, showTabLabel) {
       ${req.service ? `Service: <strong>${esc(req.service)}</strong>` : ""}
       ${hasProto ? ' <span class="badge badge-found">PROTOBUF</span>' : ""}
       ${req.url.includes("batchexecute") ? ' <span class="badge badge-batch">BATCHEXECUTE</span>' : ""}
-      ${isGrpcWeb(req.mimeType || req.contentType || "") ? ' <span class="badge badge-grpc">gRPC-WEB</span>' : ""}
-      ${isSSE(req.mimeType || "") ? ' <span class="badge badge-sse">SSE</span>' : ""}
-      ${isNDJSON(req.mimeType || "") ? ' <span class="badge badge-ndjson">NDJSON</span>' : ""}
+      ${isGrpcWeb(req.mimeType !== "" ? req.mimeType : req.contentType) ? ' <span class="badge badge-grpc">gRPC-WEB</span>' : ""}
+      ${isSSE(req.mimeType) ? ' <span class="badge badge-sse">SSE</span>' : ""}
+      ${isNDJSON(req.mimeType) ? ' <span class="badge badge-ndjson">NDJSON</span>' : ""}
       ${isGraphQLUrl(req.url) ? ' <span class="badge badge-graphql">GRAPHQL</span>' : ""}
-      ${isMultipartBatch(req.mimeType || "") ? ' <span class="badge badge-multipart">MULTIPART</span>' : ""}
+      ${isMultipartBatch(req.mimeType) ? ' <span class="badge badge-multipart">MULTIPART</span>' : ""}
       ${/\/async\//.test(req.url) ? ' <span class="badge badge-batch">ASYNC</span>' : ""}
       ${req.method === "SSE" ? ' <span class="badge badge-sse">SSE</span>' : ""}
     </div>
@@ -198,9 +198,9 @@ function renderResponsePanel() {
   if (allTabsData) {
     for (const [tidStr, data] of Object.entries(allTabsData)) {
       const tid = parseInt(tidStr, 10);
-      const meta = data.meta || {};
+      const meta = data.meta;
       for (const req of data.requestLog) {
-        entries.push({ ...req, _tabId: tid, _tabTitle: meta.title || `Tab ${tid}` });
+        entries.push({ ...req, _tabId: tid, _tabTitle: meta.title });
       }
     }
     entries.sort((a, b) => b.timestamp - a.timestamp);
@@ -213,7 +213,7 @@ function renderResponsePanel() {
         (r.method && r.method.toLowerCase().includes(logSearchQuery)) ||
         (r.service && r.service.toLowerCase().includes(logSearchQuery)) ||
         (r.mimeType && r.mimeType.toLowerCase().includes(logSearchQuery)) ||
-        (r._tabTitle && r._tabTitle.toLowerCase().includes(logSearchQuery));
+        r._tabTitle.toLowerCase().includes(logSearchQuery);
     });
   }
 

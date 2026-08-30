@@ -9,9 +9,18 @@ async function initMsgConsole(req) {
   /* For a PM reply the target is the page-claimed sourceOrigin — who the renderer says sent to us. It is
      carried VERBATIM, including the empty string the renderer sends when it stated no origin: what an absent
      one may NOT become is `"*"`, which is what sendConsoleMessage used to substitute. See the refusal there. */
-  currentTargetOrigin = req.sourceOrigin;
-  currentChannelFrameId = req.frameId ?? null;
-  currentChannelDocumentId = req.documentId ?? null;
+  /* ONLY A postMessage/MessageChannel RECORD HAS ONE. A WebSocket connection has no origin pair at all —
+     it is not a MessageEvent — and reading `sourceOrigin` off one produced `undefined`, which only ever
+     stayed harmless because the reply path consults this value in its postMessage arm alone. Asking the
+     record for a field its kind does not carry is how that stops being true silently. */
+  currentTargetOrigin = req.kind === "websocket" ? null : req.sourceOrigin;
+  /* BOTH ARE WRITTEN BY `_pushGlobalLog` ON EVERY RECORD IT FILES — the documentId under a DCHECK that it
+     is a non-empty string, the frameId defaulted to the top-level traversable exactly once, there. The `??
+     null` copies here were a SECOND answer to a question already settled: null is what these routing fields
+     mean when there is no document to send to, and reading it out of a record that always carries one would
+     have addressed a channel reply at no frame in no document with nothing to say so. */
+  currentChannelFrameId = req.frameId;
+  currentChannelDocumentId = req.documentId;
   // Bind the channel to the tab that captured it. When logFilter=="all"
   // or we're viewing a closed-tab log, `req._tabId` is set to the origin
   // tab during log flattening. Default back to currentTabId when missing
@@ -40,7 +49,7 @@ async function initMsgConsole(req) {
   // Render all messages from the combined entry
   const historyEl = document.getElementById("ws-console-history");
   historyEl.innerHTML = "";
-  const messages = req.messages || [];
+  const messages = req.messages;
   _renderConsoleMessages(historyEl, messages);
   historyEl.scrollTop = historyEl.scrollHeight;
 
