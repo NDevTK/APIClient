@@ -32,6 +32,23 @@
  * otherwise. There is one function per kind rather than one function and an enum, so the COMPILER checks that
  * the slot really is what its declaration says it is.
  *
+ * AND A CLASS ID IS GIVEN BACK LIKE EVERY OTHER SLOT — ONE POLICY, WRITTEN HERE BECAUSE TWO SELF-CONSISTENT
+ * ONES ARE WORSE THAN EITHER OF THEM. Components had been settling this per file and had settled it BOTH WAYS:
+ * some put the id back at 0 at their release, some left it set and let the `if (g_class) return;` latch their
+ * init opens with read it again. Each is coherent read alone, which is exactly why the mixture went unnoticed.
+ * It is not coherent together: JS_NewClassID draws from `rt->js_class_id_alloc`, a second agent's runtime
+ * restarts that counter at JS_CLASS_INIT_COUNT, so a zeroing component draws an id a carrying component is
+ * about to hand JS_NewClass1 — which refuses an id already taken.
+ * THE COLLISION IS NOT THE ARGUMENT, THOUGH, and that is what makes this decidable rather than a preference: a
+ * class is registered in a RUNTIME. A carried id names a class in a runtime that is gone, and because the id
+ * doubles as the latch, the next agent's `_init` RETURNS BEFORE RE-REGISTERING IT — so every object that
+ * component mints is branded with an id the live runtime never gave out, and every `JS_GetOpaque(v, id)` in it
+ * answers about whichever class did get that number. Carrying is not the cautious half of a tie; it is wrong on
+ * its own, in one agent's successor, with no second component required. So `0` in the table above is the whole
+ * of the rule, and what it costs is the paragraph at the end of this comment: a finalizer and a gc_mark run
+ * AFTER the release column, so they reach the record with JS_GetAnyOpaque — never by looking up an id their own
+ * release has already given back.
+ *
  * IT IS TWO-SIDED FROM core/platform.c, WHICH IS WHERE THE FORCING LIVES. A row with a release that declares
  * no agent state is a release column nothing can check, and a row with NO release that declares agent state is
  * a component holding what nobody frees — the exact shape of every leak that file's comments record. Both are

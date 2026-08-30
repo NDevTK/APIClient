@@ -27,6 +27,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/abstract_range.h"
 #include "core/dom/document.h"
 #include "core/dom/element_view.h"
@@ -70,18 +71,48 @@ static void range_unregister(JSValueConst obj)
           "have come apart, so a later mutation would walk a freed entry");
 }
 
+/* THE LAST FINALIZER OF A RELEASED AGENT WINDS THE LIST ALL THE WAY BACK, `g_live_closed` INCLUDED. The flag
+   says "no more registrations are coming"; once the array is gone there is nothing left for it to be true
+   ABOUT, and leaving it set is a slot no release resets — the second agent would open with its live list
+   already closed and free the array under every range it built. It cannot be given back on the release column
+   (that is the one instant it must be 1), so it is not declared to core/agent_state.h at all; range_init
+   asserts its pre-init value instead, which is the moment it is true. */
 static void range_live_drop(void)
 {
     if (g_live_n || !g_live_closed) return;
     free(g_live);
     g_live = NULL;
     g_live_cap = 0;
+    g_live_closed = 0;
 }
 
+/* THE COLLECTOR'S TWO ENTRIES READ NO STATIC THIS COMPONENT'S RELEASE RESETS — core/agent_state.h's rule, and
+ * both were written breaking it. `range_free` is reached from element_free, which is on core/platform.h's
+ * release column, and every host's teardown is `platform_agent_free()` … `JS_RunGC` … `JS_FreeRuntime` in that
+ * order — so a Range still live at teardown (every `document.createRange()`, and every Selection's own range)
+ * is finalized in a collection that runs AFTER `g_range_class` is back at 0, where `JS_GetOpaque(val, 0)`
+ * answers NULL for every one of them. The finalizer would then leak the record and, worse, never REGISTER its
+ * departure — so `range_live_drop` would be waiting on a count that no longer has anything to decrement it, and
+ * the borrowed-pointer array would outlive the runtime. The mark is the half that takes the runtime down, as
+ * agent_state.h records for dom_rect.c: an unmarked child keeps the internal reference gc_decref exists to
+ * subtract, so gc_scan reads the two node wrappers a RangeBounds holds as rooted from OUTSIDE the heap and the
+ * realm behind them is never collected at all.
+ *
+ * JS_GetAnyOpaque, because the collector dispatched here THROUGH the class — the id is a fact it already has
+ * and must not look up. It is NOT compared against `g_range_class` either: that is the guaranteed-false `@WHY`
+ * agent_state.h records for remote_object.c. `range_here` keeps the class test, because that one is Web IDL
+ * §3.7.5's BRAND and runs while the agent is live. */
 static void range_finalizer(JSRuntime *rt, JSValue val)
 {
-    RangeBounds *b = JS_GetOpaque(val, g_range_class);
-    if (!b) return;
+    JSClassID id = 0;
+    RangeBounds *b = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    /* NOT `if (!b) return;`. range_new builds the record and JS_SetOpaques it with nothing between that can
+       throw, so there is no window in which an object of this class exists without one. */
+    DCHECK(b != NULL, "a Range was finalized with no bounds record — range_new mints the object and sets its "
+                      "record with nothing in between, so an object of §5.5's class without one was built "
+                      "somewhere that is not this component's one mint");
     range_unregister(val);
     range_live_drop();
     range_bounds_release(rt, b);
@@ -90,8 +121,13 @@ static void range_finalizer(JSRuntime *rt, JSValue val)
 
 static void range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    RangeBounds *b = JS_GetOpaque(val, g_range_class);
-    if (b) range_bounds_mark(rt, b, mark_func);
+    JSClassID id = 0;
+    RangeBounds *b = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(b != NULL, "a Range was marked with no bounds record — its two node wrappers are counted references "
+                      "and an unmarked child is read by gc_scan as rooted from outside the heap");
+    range_bounds_mark(rt, b, mark_func);
 }
 
 /* The receiver, brand-checked against §5.5's own class — NOT against AbstractRange's list, because a
@@ -383,9 +419,41 @@ static int range_set_bp(JSContext *ctx, RangeBounds *b, JSValueConst nodev, uint
    `surroundContents`' step 5 is the same algorithm; both reach the one implementation further down. */
 static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *node);
 
-enum { R_SET_START = 0, R_SET_END, R_SET_START_BEFORE, R_SET_START_AFTER, R_SET_END_BEFORE, R_SET_END_AFTER,
-       R_COLLAPSE, R_SELECT_NODE, R_SELECT_CONTENTS, R_CLONE, R_DETACH,
-       R_COMPARE_BP, R_IS_POINT_IN, R_COMPARE_POINT, R_INTERSECTS, R_INSERT_NODE, R_MEMBER_N };
+/* §5.5's SIXTEEN PLAIN OPERATIONS, EACH PAIRED WITH THE SENTENCE ITS OWN POOL ENTRY IS REPORTED BY. The enum
+   below and the declaration loop in range_init are two readings of this ONE list, so a member §5.5 gains cannot
+   acquire a pool entry whose forgotten release is then named after a neighbour — which is core/agent_state.h's
+   whole complaint about one shared `what` for many slots. ORDER IS LOAD-BEARING and is §5.5's own IDL order:
+   the four relative setters are reached by js_range_member and declared by range_init as the one contiguous
+   run R_SET_START_BEFORE..R_SET_END_AFTER, so a member inserted into the middle of it would silently widen
+   both. */
+#define RANGE_OPERATIONS(X)                                                                          \
+    X(R_SET_START,        "DOM §5.5's setStart declaration")                                          \
+    X(R_SET_END,          "DOM §5.5's setEnd declaration")                                            \
+    X(R_SET_START_BEFORE, "DOM §5.5's setStartBefore declaration")                                    \
+    X(R_SET_START_AFTER,  "DOM §5.5's setStartAfter declaration")                                     \
+    X(R_SET_END_BEFORE,   "DOM §5.5's setEndBefore declaration")                                      \
+    X(R_SET_END_AFTER,    "DOM §5.5's setEndAfter declaration")                                       \
+    X(R_COLLAPSE,         "DOM §5.5's collapse declaration")                                          \
+    X(R_SELECT_NODE,      "DOM §5.5's selectNode declaration")                                        \
+    X(R_SELECT_CONTENTS,  "DOM §5.5's selectNodeContents declaration")                                \
+    X(R_CLONE,            "DOM §5.5's cloneRange declaration")                                        \
+    X(R_DETACH,           "DOM §5.5's detach declaration")                                            \
+    X(R_COMPARE_BP,       "DOM §5.5's compareBoundaryPoints declaration")                             \
+    X(R_IS_POINT_IN,      "DOM §5.5's isPointInRange declaration")                                    \
+    X(R_COMPARE_POINT,    "DOM §5.5's comparePoint declaration")                                      \
+    X(R_INTERSECTS,       "DOM §5.5's intersectsNode declaration")                                    \
+    X(R_INSERT_NODE,      "DOM §5.5's insertNode declaration")
+enum {
+#define X(m, w) m,
+    RANGE_OPERATIONS(X)
+#undef X
+    R_MEMBER_N
+};
+static const char *const R_WHAT[R_MEMBER_N] = {
+#define X(m, w) w,
+    RANGE_OPERATIONS(X)
+#undef X
+};
 
 static JSValue js_range_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -1576,6 +1644,16 @@ void range_init(JSContext *ctx)
     int k;
 
     if (g_range_class) return;   /* one AGENT, one class and one set of pool entries */
+    /* THE LIVE LIST'S OWN PRE-INIT STATE, ASSERTED HERE BECAUSE HERE IS WHERE IT IS TRUE. These four are
+       agent state that core/agent_state.h cannot hold: the array LEGITIMATELY outlives the release column (the
+       objects whose finalizers unregister are still alive when a component's `_free` runs, so the last
+       finalizer frees it), and `g_live_closed` is legitimately 1 there. A slot in that position is asserted at
+       the next `_init` instead of being declared — which is exactly what would have caught the release that
+       set the flag and never put it back. */
+    DCHECK(g_live == NULL && g_live_n == 0 && g_live_cap == 0 && !g_live_closed,
+           "§5.5's live-range list is not where a fresh process would have left it — a previous agent in this "
+           "process released this component and its last Range's finalizer never wound the list back, so this "
+           "agent opens with a list that is already closed and an array it does not own");
     abstract_range_init(ctx);
     JS_NewClassID(JS_GetRuntime(ctx), &g_range_class);
     JS_NewClass(JS_GetRuntime(ctx), g_range_class, &d);
@@ -1622,6 +1700,32 @@ void range_init(JSContext *ctx)
     g_id_client_rects = idl_method_id(ctx, NULL, 0, js_range_rects, R_CLIENT_RECTS);
     g_id_bounding_rect = idl_method_id(ctx, NULL, 0, js_range_rects, R_BOUNDING_RECT);
 
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Every one of these twenty-four
+       slots was held by a release that gave NONE of them back: `range_free` closed the live list and returned,
+       so the class this agent registered, its twenty-three pool entries and the class it claimed in §5.3's
+       walk all survived the runtime they belong to. Nothing could report it — a pool entry is an int and a
+       class id is an int, so neither of JS_FreeRuntime's two censuses has anything to say about them, and the
+       only reader of a stale one is the NEXT agent's `range_init`, which consults `g_range_class` precisely to
+       decide it need not run.
+       DECLARED UNDER `element`, BECAUSE THE NAME IS THE ROW'S AND NOT THE FILE'S. core/platform.c's list has
+       no `range` row and must not grow one: nothing releases this component but element_free, which is that
+       row's release column, so `element` is the name whose pairing this declaration is the inverse of. Beside
+       core/dom/selection.c's seventeen, which name `document` for the same reason.
+       AND THE STANDARD IS NAMED IN EACH `what`, because these are read out of a report headed `element`, where
+       a bare §5.5 would be no standard at all. */
+    agent_state_class("element", &g_range_class,
+                      "DOM §5.5's Range class, and this component's declaration latch");
+    for (k = 0; k < R_MEMBER_N; k++) agent_state_id("element", &g_id[k], R_WHAT[k]);
+    agent_state_id("element", &g_id_to_string, "DOM §5.5's stringifier step-machine declaration");
+    agent_state_id("element", &g_id_delete, "DOM §5.5's deleteContents step-machine declaration");
+    agent_state_id("element", &g_id_extract, "DOM §5.5's extractContents step-machine declaration");
+    agent_state_id("element", &g_id_clone_contents,
+                   "DOM §5.5's cloneContents step-machine declaration");
+    agent_state_id("element", &g_id_surround, "DOM §5.5's surroundContents step-machine declaration");
+    agent_state_id("element", &g_id_client_rects,
+                   "CSSOM VIEW §9 Extensions to the Range Interface's getClientRects declaration");
+    agent_state_id("element", &g_id_bounding_rect,
+                   "CSSOM VIEW §9 Extensions to the Range Interface's getBoundingClientRect declaration");
     realm_declare_intrinsic(range_install_proto);
 }
 
@@ -1692,7 +1796,20 @@ void range_install(JSContext *ctx, JSValueConst global)
    frees the array. A list that is already empty is freed at once, which is the ordinary case. */
 void range_free(JSRuntime *rt)
 {
+    int k;
+
+    DCHECK(g_range_class != 0, "§5.5's Range was released in an agent that never declared it");
     g_live_closed = 1;
     range_live_drop();
+    /* AND THE TWENTY-FOUR SLOTS, GIVEN BACK — the half this release did not have. The CLASS goes back to 0
+       because a class is registered in a RUNTIME (core/agent_state.h states the one policy): a carried id
+       would name a class in a runtime that is gone AND, being the latch above, would make the next agent's
+       `range_init` return before re-registering it. The pool entries go back to -1 because the pool they
+       index is the agent's too, and an entry the next agent's `range_install_proto` reads is an index into a
+       pool that no longer exists. */
+    for (k = 0; k < R_MEMBER_N; k++) g_id[k] = -1;
+    g_id_to_string = g_id_delete = g_id_extract = g_id_clone_contents = g_id_surround = -1;
+    g_id_client_rects = g_id_bounding_rect = -1;
+    g_range_class = 0;
     abstract_range_free(rt);
 }

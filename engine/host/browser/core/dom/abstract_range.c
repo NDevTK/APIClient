@@ -5,6 +5,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/dom/abstract_range.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
@@ -99,6 +100,14 @@ int boundary_position(lxb_dom_node_t *a, uint32_t ao, lxb_dom_node_t *b, uint32_
 #define ABSTRACT_RANGE_CLASSES 2
 static JSClassID g_bounds_classes[ABSTRACT_RANGE_CLASSES];
 static int g_bounds_class_n;
+/* ONE SENTENCE PER ENTRY, so a report from core/agent_state.h names the exact cell rather than the array. It
+   says WHICH ENTRY and not which interface, because which interface is in which entry is a fact about the
+   ORDER OF THE CLAIMS in another file — and a `what` that asserted it would be a claim this file cannot check,
+   which is the stale-DFAIL shape written into an assert message. */
+static const char *const ABSTRACT_RANGE_CLASS_WHAT[ABSTRACT_RANGE_CLASSES] = {
+    "DOM §5.3's walk, entry 0 — the class of the first §5 interface to claim it",
+    "DOM §5.3's walk, entry 1 — the class of the second §5 interface to claim it",
+};
 
 void abstract_range_claim_class(JSClassID cls)
 {
@@ -147,18 +156,36 @@ static JSValue js_abstract_range_get(JSContext *ctx, JSValueConst this_val, int 
 static JSClassID g_abstract_class, g_static_class;
 static int g_id_static_ctor = -1;
 
+/* THE COLLECTOR'S TWO ENTRIES READ NO STATIC THIS COMPONENT'S RELEASE RESETS — core/agent_state.h's rule.
+   `abstract_range_free` is reached from range_free and so from element_free, which is on core/platform.h's
+   release column, and a collection runs after that whole column: a StaticRange still live at teardown would be
+   finalized with `g_static_class` already back at 0, so `JS_GetOpaque(val, 0)` would answer NULL, the record
+   and its two counted node references would leak, and the unmarked children would be read by gc_scan as rooted
+   from outside the heap. JS_GetAnyOpaque, because the collector dispatched here THROUGH the class. */
 static void static_range_finalizer(JSRuntime *rt, JSValue val)
 {
-    RangeBounds *b = JS_GetOpaque(val, g_static_class);
-    if (!b) return;
+    JSClassID id = 0;
+    RangeBounds *b = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    /* NOT `if (!b) return;`. Both mints — static_range_new and js_static_range_ctor — allocate the record and
+       JS_SetOpaque it with nothing in between that allocates in the JS heap, so there is no window in which an
+       object of §5.4's class exists without one. */
+    DCHECK(b != NULL, "a StaticRange was finalized with no bounds record — both of §5.4's mints set the record "
+                      "with nothing in between that could collect, so this object was built somewhere else");
     range_bounds_release(rt, b);
     free(b);
 }
 
 static void static_range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    RangeBounds *b = JS_GetOpaque(val, g_static_class);
-    if (b) range_bounds_mark(rt, b, mark_func);
+    JSClassID id = 0;
+    RangeBounds *b = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(b != NULL, "a StaticRange was marked with no bounds record — its two node wrappers are counted "
+                      "references and an unmarked child is read by gc_scan as rooted from outside the heap");
+    range_bounds_mark(rt, b, mark_func);
 }
 
 JSValue static_range_new(JSContext *ctx, JSValueConst snode, uint32_t soff, JSValueConst enode, uint32_t eoff)
@@ -252,6 +279,7 @@ void abstract_range_init(JSContext *ctx)
     JSClassDef ad = { "AbstractRange" };
     JSClassDef sd = { "StaticRange", static_range_finalizer, static_range_gc_mark };
     static const IdlArgType CTOR[1] = { IDL_DICT };
+    int k;
 
     if (g_static_class) return;   /* one AGENT, one class and one set of pool entries */
     JS_NewClassID(JS_GetRuntime(ctx), &g_abstract_class);
@@ -265,6 +293,24 @@ void abstract_range_init(JSContext *ctx)
                                           js_static_range_ctor, 0);
     idl_iface_brand(node_class_id());
 
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h, and its release gave back not
+       one of these six. DECLARED UNDER `element`, BECAUSE THE NAME IS THE ROW'S AND NOT THE FILE'S: nothing
+       declares this component but range_init and nothing releases it but range_free, which element_free
+       reaches — so `element` is the row whose release column these are the inverse of, one level further down
+       than core/dom/range.c's own twenty-four.
+       §5.3's WALK IS DECLARED AS SLOTS TOO, and it is the one a reader would leave out. `g_bounds_classes` is
+       not a cache: it is where §5.4's and §5.5's classes ANSWER FROM, and a stale entry is a class id from a
+       dead runtime that abstract_range_of hands to JS_GetOpaque on every getter of the next agent — which
+       either answers NULL for a real range or answers a record out of whatever class inherited that number.
+       The count beside it is what makes a second claim of the SAME class read as a third interface. */
+    agent_state_class("element", &g_abstract_class, "DOM §5.3's AbstractRange class");
+    agent_state_class("element", &g_static_class,
+                      "DOM §5.4's StaticRange class, and this component's declaration latch");
+    agent_state_id("element", &g_id_static_ctor, "DOM §5.4's StaticRange constructor declaration");
+    for (k = 0; k < ABSTRACT_RANGE_CLASSES; k++)
+        agent_state_class("element", &g_bounds_classes[k], ABSTRACT_RANGE_CLASS_WHAT[k]);
+    agent_state_flag("element", &g_bounds_class_n,
+                     "DOM §5.3's count of interfaces whose instances carry a RangeBounds");
     realm_declare_intrinsic(abstract_range_install_protos);
 }
 
@@ -322,5 +368,18 @@ void abstract_range_install(JSContext *ctx, JSValueConst global)
 
 void abstract_range_free(JSRuntime *rt)
 {
+    int k;
+
     (void)rt;   /* the prototypes are the REALMS' — released with their contexts */
+    DCHECK(g_static_class != 0, "§5.4's StaticRange was released in an agent that never declared it");
+    /* THE SIX SLOTS, GIVEN BACK — the whole of what this release did not do. The two CLASSES go back to 0
+       because a class is registered in a RUNTIME (core/agent_state.h's one policy), and `g_static_class` is
+       additionally this component's latch, so a carried id would make the next agent's abstract_range_init
+       return before re-registering EITHER class. §5.3's walk is emptied for the sharper reason: every entry in
+       it is an id abstract_range_of hands to JS_GetOpaque on every getter, so a surviving one is a dead
+       runtime's number asked about a live object. */
+    for (k = 0; k < ABSTRACT_RANGE_CLASSES; k++) g_bounds_classes[k] = 0;
+    g_bounds_class_n = 0;
+    g_id_static_ctor = -1;
+    g_abstract_class = g_static_class = 0;
 }
