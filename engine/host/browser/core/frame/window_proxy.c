@@ -386,9 +386,22 @@ static bool proxy_same_origin_domain(JSContext *ctx, const ProxyData *p)
     return origin_same_origin_domain(p->origin, window_proxy_origin(document_window_proxy(ctx)));
 }
 
+/* IS THIS A NAVIGABLE'S PROXY — the type test sixty-odd sites in this browser branch on, and the one place a
+   zeroed class id would be read as an ANSWER rather than as a defect. The `g_proxy_class != 0 &&` that stood
+   here made "this component is not declared" and "that object is not a WindowProxy" one value, and the two
+   became genuinely different states the moment window_proxy_free started giving the id back: after the release
+   column every live proxy in the heap would report itself as something else, silently, at every one of those
+   sites. It is a DCHECK because both states are impossible rather than rare — this test is reached only from
+   an algorithm running in a realm the declaration pass built, and no collector entry and no other component's
+   release calls it (the finalizer and the gc_mark above read their record through JS_GetAnyOpaque, which is
+   the whole reason they can run after this id is gone). */
 bool window_proxy_is(JSValueConst v)
 {
-    return g_proxy_class != 0 && JS_GetOpaque(v, g_proxy_class) != NULL;
+    DCHECK(g_wp_rt != NULL,
+           "§7.2.3's type test was asked before window_proxy_init declared the class or after "
+           "window_proxy_free gave it back — with no class there is no answer, and the guard that used to "
+           "stand here returned `not a WindowProxy` for a browser that has none and for a live proxy alike");
+    return JS_GetOpaque(v, g_proxy_class) != NULL;
 }
 
 bool window_proxy_is_window(JSContext *ctx, JSValueConst v)
