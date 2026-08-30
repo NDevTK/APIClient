@@ -477,6 +477,24 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
             funcs[1] = rd->closed_funcs[1];
             rd->closed_funcs[0] = rd->closed_funcs[1] = JS_UNDEFINED;
         }
+        /* §4.9.1's ReadableStreamError step 7 and §4.9.3's ReadableStreamReaderGenericRelease step 6, which are
+           the SAME sentence — "Set reader.[[closedPromise]].[[PromiseIsHandled]] to true" — and are therefore
+           one condition and not two cases: the standard marks the arms that REJECT, and §4.9.1's
+           ReadableStreamClose is the arm it does not because that one RESOLVES. `reject` already is that
+           question.
+           WITHOUT IT THE ENGINE REPORTED ITS OWN SPEC STEP AS THE PAGE'S UNHANDLED REJECTION. Nobody reads
+           `closed` in the normal case — Fetch §5.2's fully-read releases the reader once a body is whole, and
+           an errored stream usually has nothing awaiting it — so the TypeError §4.9.3 rejects with reached
+           solver/result.h's `pageErrors` as an uncaught page error on every run that finished reading a body,
+           with a backtrace of one native frame and no script anywhere under it. A page error the ENGINE raised
+           and no program of the document could have is the plausible-datum defect: it is indistinguishable in
+           that column from a real one.
+           IT IS SET BEFORE THE REJECTION, THOUGH THE STANDARD'S STEPS READ THE OTHER WAY. quickjs calls the
+           host's rejection tracker FROM the reject, and it consults `is_handled` there, so a mark that lands
+           after the reject has already been reported. [[PromiseIsHandled]] is not observable to the page, so
+           the two orders differ in nothing else. */
+        if (reject)
+            JS_MarkPromiseHandled(ctx, rd->closed);
         JS_FreeValue(ctx, w->func);
         w->func = funcs[reject];
         JS_FreeValue(ctx, funcs[reject ^ 1]);

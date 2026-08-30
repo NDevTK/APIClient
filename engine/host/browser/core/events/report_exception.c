@@ -250,49 +250,122 @@ void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
     report_exception_work_visit(ctx, w, JS_StepFreeVisitor());
 }
 
+/* ONE FRAME OF THE RENDERING `js_callsite_data_line` WRITES, DECODED BY THAT RENDERING'S OWN GRAMMAR — which
+   is three shapes and not one:
+       at <file>[:<line>:<col>]                       a record with no function at all (a parse error's frame)
+       at <name> (native)                             a frame that is not a script and HAS no position
+       at <name> ([<eval origin>, ]<file>[:<line>:<col>])
+   `true` only when the frame carries a SCRIPT POSITION, which is exactly the condition the renderer itself
+   writes `:<line>:<col>` under (`csd->line_num != -1`), so the two agree by construction. [*fb,*fe) is the
+   filename inside the string the caller still owns; `pline`/`pcol` are written only on a true return.
+   TWO THINGS ARE MATCHED RATHER THAN SCANNED FOR, AND BOTH USED TO BE WRONG. The location group is found by
+   MATCHING BACK from the `)` the line ends with, never by the first `(` in the line — an eval origin is
+   itself parenthesised (`eval at f (a.js:1:1)`) and is rendered INSIDE the same group, so the first `(` opens
+   the origin and the filename came out as `eval at f (a.js:1:1), b.js`. And the origin is stripped at the
+   LAST `, ` at paren depth zero, which is the separator `js_callsite_data_line` joins the two with.
+   A LINE THIS CANNOT READ IS NOT A FRAME AND IS SKIPPED, never asserted on: `JS_GetErrorStackString` answers a
+   non-Error from its own `stack` property, and `throw {stack:"anything"}` is a page's to write. */
+static bool frame_site(const char *b, const char *e, const char **fb, const char **fe,
+                       uint32_t *pline, uint32_t *pcol)
+{
+    const char *gb, *ge, *p, *q, *cn, *ln_end;
+    int depth;
+
+    while (b < e && (*b == ' ' || *b == '\t')) b++;
+    while (e > b && (e[-1] == '\r' || e[-1] == ' ')) e--;
+    if ((size_t)(e - b) < 3 || strncmp(b, "at ", 3) != 0)
+        return false;
+    b += 3;
+
+    if (e > b && e[-1] == ')') {
+        depth = 0;
+        for (q = e - 1;; q--) {
+            if (*q == ')') depth++;
+            else if (*q == '(' && --depth == 0) break;
+            if (q == b) return false;          /* unbalanced: not this rendering's line */
+        }
+        gb = q + 1; ge = e - 1;
+    } else {
+        gb = b; ge = e;
+    }
+
+    /* `:<line>:<col>` sits at the very END of the location and nowhere else, so it is read from the right.
+       `native` has neither, which is how a native frame falls out here rather than at a name comparison. */
+    p = ge;
+    while (p > gb && p[-1] >= '0' && p[-1] <= '9') p--;
+    if (p == ge || p == gb || p[-1] != ':') return false;
+    cn = p;
+    p--;
+    ln_end = p;
+    while (p > gb && p[-1] >= '0' && p[-1] <= '9') p--;
+    if (p == ln_end || p == gb || p[-1] != ':') return false;
+
+    *fb = gb;
+    *fe = p - 1;
+    depth = 0;
+    for (q = gb; q + 1 < *fe; q++) {
+        if (*q == '(') depth++;
+        else if (*q == ')') { if (depth > 0) depth--; }
+        else if (depth == 0 && q[0] == ',' && q[1] == ' ') *fb = q + 2;
+    }
+    *pline = (uint32_t)strtoul(p, NULL, 10);
+    *pcol  = (uint32_t)strtoul(cn, NULL, 10);
+    return true;
+}
+
 /* THE THROW SITE, OUT OF THE BACKTRACE THE ENGINE ALREADY RECORDED — the other three of step 2's
    implementation-defined values. They were zero and an empty string, which is a conforming answer and is also
    a worse one than the engine can give: an Error carries a CallSite per frame with its line and its column,
    and JS_GetErrorStackString renders them WITHOUT running any of the page's code (which is the same reason the
-   message goes through JS_DiagCString). The rendered top frame is the throw site, and everything before its
-   last two colons is the file. A value with no backtrace — every non-Error a page can throw — leaves all three
-   at their defaults rather than being guessed at.
+   message goes through JS_DiagCString). A value with no backtrace — every non-Error a page can throw — leaves
+   all three at their defaults rather than being guessed at.
    WPT reads all three off the event (`lineno` and `colno` are asserted to be greater than zero in six of
    dom/observable's subtests alone), so a fabricated number would be a wrong answer dressed as a right one and
-   a zero is a right answer that loses information the engine has. */
+   a zero is a right answer that loses information the engine has.
+   IT IS THE FIRST *ADDRESSED* FRAME AND NOT THE TOP ONE, WHICH IS WHAT THESE THREE VALUES MEAN. §8.1.4.6's
+   extract derives all three together and they name ONE site; a site is a place in a SCRIPT, and a builtin has
+   none — `CustomElementRegistry.define` throwing §4.13.4's SyntaxError renders `at CustomElementRegistry.define
+   (native)` on top of the page frame that called it, and reading the top frame answered "no throw site" with
+   the address one line below it. That is not a smaller answer, it is a WRONG one: the address is what a reader
+   partitions a run's errors by, so a staged error and a real one became one population. Every engine that
+   reports a position does this walk (V8 computes its message location from the first frame that HAS a script,
+   which is why Chrome's `onerror` for `JSON.parse('{')` names the calling script and not the parser), and it
+   is not a heuristic here either — the renderer emits a position for exactly the frames that have one.
+   AND A TRACE WITH NO ADDRESSED FRAME AT ALL ANSWERS `""`, WHICH IS A STATEMENT AND NOT A HOLE. §8.1.4.6's own
+   muted-errors branch sets errorInfo[filename] to the empty string, so that is the standard's vocabulary for
+   "no filename", and it is the honest answer for an exception raised entirely inside the engine: a
+   `releaseLock()` rejection has one native frame and no script anywhere under it. The hosts print it as its own
+   population rather than folding it into an absent field. */
 void report_exception_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
                                uint32_t *pline, uint32_t *pcol)
 {
+    JSValue stack;
+    const char *s, *b, *e, *fb = NULL, *fe = NULL;
+    uint32_t line = 0, col = 0;
+    size_t n;
+
     DCHECK(file != NULL && file_cap > 0 && pline != NULL && pcol != NULL,
            "§8.1.4.6's throw site was asked for into no buffer — the three values are derived together and a "
            "caller that wants one of them still owns storage for all three");
     *file = '\0'; *pline = 0; *pcol = 0;
-    JSValue stack = JS_GetErrorStackString(ctx, exception);
-    const char *s, *nl, *p, *colon2, *colon1, *open;
-    size_t n;
-
+    stack = JS_GetErrorStackString(ctx, exception);
     if (!JS_IsString(stack)) { JS_FreeValue(ctx, stack); return; }
     s = JS_ToCString(ctx, stack);
     JS_FreeValue(ctx, stack);
     if (!s) return;
-    nl = strchr(s, '\n');
-    if (!nl) nl = s + strlen(s);
-    /* the LAST two `:` of the frame line — a filename contains one (`https://x/y`), a line number may not */
-    colon2 = colon1 = NULL;
-    for (p = s; p < nl; p++)
-        if (*p == ':') { colon1 = colon2; colon2 = p; }
-    if (colon1 && colon2 && colon2[1] >= '0' && colon2[1] <= '9' && colon1[1] >= '0' && colon1[1] <= '9') {
-        *pline = (uint32_t)strtoul(colon1 + 1, NULL, 10);
-        *pcol  = (uint32_t)strtoul(colon2 + 1, NULL, 10);
-        open = memchr(s, '(', (size_t)(colon1 - s));
-        p = open ? open + 1 : s;
-        while (p < colon1 && *p == ' ') p++;
-        /* an anonymous frame renders as `    at <file>:l:c`, so the leading "at " is skipped too */
-        if (!open && (size_t)(colon1 - p) > 3 && !strncmp(p, "at ", 3)) p += 3;
-        n = (size_t)(colon1 - p);
+    /* THE THREE ARE PUBLISHED TOGETHER OR NOT AT ALL — they are ONE site, so a frame that yields a position and
+       no name must not leave its line behind for the next frame's answer to be read beside. */
+    for (b = s; *b; b = (*e == '\n') ? e + 1 : e) {
+        e = b + strcspn(b, "\n");
+        if (!frame_site(b, e, &fb, &fe, &line, &col) || fe == fb)
+            continue;
+        n = (size_t)(fe - fb);
         if (n >= file_cap) n = file_cap - 1;
-        memcpy(file, p, n);
+        memcpy(file, fb, n);
         file[n] = '\0';
+        *pline = line;
+        *pcol = col;
+        break;
     }
     JS_FreeCString(ctx, s);
 }
