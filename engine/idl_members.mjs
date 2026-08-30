@@ -16,6 +16,16 @@
  * misses members that are not — in both directions, which is the false-COMPLETE this whole family of gates
  * exists to remove.
  *
+ * AND IT CARRIES THE DICTIONARIES, WHICH ARE THE HALF OF THE PLATFORM MADE ENTIRELY OF THE THING A MEMBER-NAME
+ * INDEX LOOKS AT. An interface is a name with members hanging off it, so an index that collects the name and
+ * skips a member reports a gap; a DICTIONARY is nothing BUT its member list, so an index that does not collect
+ * the kind at all reports nothing in either direction — the surface is invisible rather than incomplete, which
+ * is the excluded-check shape one level above the members. It matters because a dictionary is how a page hands
+ * the platform its instructions (`{once: true}`, `{signal}`, `{credentials: "include"}`), so a member nothing
+ * reads is a page instruction SILENTLY IGNORED: nothing is absent, no stub is there to point at, and the page's
+ * own behaviour diverges with nothing to say so. §3.2.17 makes the same absence a CONVERSION that never ran —
+ * a getter with a side effect the page expected, a `toString` that should have thrown.
+ *
  * THE DECLARATIONS ARE HANDED BACK RAW as well as merged, because the two answer different questions and the
  * merged map cannot answer the second. `byName` keeps the FIRST node seen for a name and folds later members
  * into it, so an interface first met as a `partial` (which carries no extended attributes) loses the real
@@ -62,7 +72,30 @@ export async function loadIdl() {
   const byName = new Map();
   const inheritanceOf = new Map();
   const includes = [];
+  /* WEB IDL §2.7 Dictionaries — KEPT IN THEIR OWN MAP, never folded into `byName`. A dictionary is not an
+     interface and the two questions this index answers about a name are different in kind: an interface has an
+     interface object and a prototype a component INSTALLS members on, and a dictionary has neither — §2.7
+     defines one as "an ordered map data type with a fixed, ordered set of entries" and an operation taking one
+     "will perform a one-time conversion from the given JavaScript value", so there is no object for
+     `instanceof` to test and nothing for the install audit to diff against. Sharing one map would make that
+     confusion silent in the worst direction: `byName.has(x)` is what idlgen asks to decide whether an
+     interface tag names something the corpus declares, so a tag misspelt as a dictionary's name would read as
+     KNOWN, and `members()` — which collects `attribute`/`operation`/`const` and never `field` — would answer
+     the EMPTY list for it, which is a false COMPLETE minted by this index. */
+  const dictByName = new Map();
+  const dictInheritanceOf = new Map();
   for (const n of declarations) {
+    if (n.type === "dictionary" && n.name) {
+      /* §2.7: "the IDL for dictionaries can be split into multiple parts by using partial dictionary
+         definitions … All of the members that appear on each of the partial dictionary definitions are
+         considered to be members of the dictionary itself." Merged the same way an interface's partials are,
+         and for the same reason: a consumer diffing against one declaration reports members that are present. */
+      if (n.inheritance) dictInheritanceOf.set(n.name, n.inheritance);
+      const prev = dictByName.get(n.name);
+      if (prev) prev.members.push(...n.members);
+      else dictByName.set(n.name, n);
+      continue;
+    }
     /* A CALLBACK INTERFACE IS COLLECTED. Web IDL §3.7.1 gives one a callback interface OBJECT carrying its
        constants — `NodeFilter.SHOW_ELEMENT` is a real property of a real object a page reads.
        A NAMESPACE IS COLLECTED. §3.13 gives a namespace a real object on the global whose properties are its
@@ -107,7 +140,63 @@ export async function loadIdl() {
     return out;
   }
 
-  return { declarations, byName, inheritanceOf, flatten, members };
+  /* §2.7's inherited dictionaries, LEAST DERIVED FIRST — "the set includes the dictionary E that D inherits
+     from and all of E's inherited dictionaries", which §3.2.17 step 3 then orders "from least to most
+     derived". `seen` is not defensive tidiness: §2.7 says a dictionary "must not be declared such that its
+     inheritance hierarchy has a cycle", and the corpus is a thousand declarations from a hundred specs, so an
+     index that loops on a malformed one hangs the gate instead of reporting it. */
+  function dictChain(name) {
+    const out = [], seen = new Set();
+    for (let n = name; n && !seen.has(n); n = dictInheritanceOf.get(n)) { seen.add(n); out.unshift(n); }
+    return out;
+  }
+
+  /* A DICTIONARY'S MEMBERS IN §3.2.17's READ ORDER, WHICH IS THE ORDER A PAGE OBSERVES. This is not a
+     presentation detail and it is not a sorted name list: §3.2.17 Dictionary types' ES-to-IDL conversion reads
+     each member with `? Get(jsDict, key)`, so a page with a getter on two members sees which one ran first, and
+     §2.7 fixes that order as "inherited dictionary members are ordered before non-inherited members, and the
+     dictionary members on the one dictionary definition (including any partial dictionary definitions) are
+     ordered lexicographically by the Unicode codepoints that comprise their identifiers".
+     JS compares strings by UTF-16 code unit and §2.7 says code POINT; Web IDL identifiers are ASCII
+     (`[_-]?[A-Za-z][0-9A-Z_a-z-]*`), so the two orders coincide and there is nothing to keep in step — the same
+     argument idlgen.mjs already makes for handing a sorted table to bsearch.
+     `level` is which dictionary in the chain declares the member, 0 for the least-derived — the same number
+     core/idl_args.h's IdlDictMember declares, so the two sides of a dictionary audit state one fact.
+     A member's DEFAULT is carried as `hasDefault` and never as the value: §3.2.17 step 4.1.5 makes a defaulted
+     member EXIST on the converted dictionary even where the page wrote nothing, which is a THIRD state beside
+     present and absent, and whether the engine spells that default correctly is a question about the value that
+     a name list cannot hold — it belongs to whoever compares the two, not to this index. */
+  function dictMembers(name) {
+    const out = [];
+    const chain = dictChain(name);
+    for (let level = 0; level < chain.length; level++) {
+      const node = dictByName.get(chain[level]);
+      if (!node) continue;
+      const own = node.members.filter((m) => m.type === "field" && m.name);
+      own.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const m of own)
+        out.push({ name: m.name, required: !!m.required, hasDefault: m.default != null,
+                   level, declaredBy: chain[level], idlType: m.idlType });
+    }
+    return out;
+  }
+
+  /* EVERY DICTIONARY A DECLARED TYPE CAN REACH. The type an operation declares for an argument is where a
+     dictionary is NAMED and the only place it is: §2.7's conversion has no interface object and no prototype,
+     so nothing about the value says which dictionary it is. A dictionary therefore hides one level down as
+     often as it appears at the top — `(AddEventListenerOptions or boolean)` is a union, `optional D options`
+     is nullable-free but `sequence<(DOMString or SanitizerElementNamespace)>` puts one inside a sequence
+     inside a union — and a walk that reads only `idlType.idlType` finds the first and misses the rest, which
+     is a false COMPLETE for every member whose options bag is spelled that way. */
+  function dictionaryTypesIn(t, out = new Set()) {
+    if (!t) return out;
+    if (Array.isArray(t)) { for (const x of t) dictionaryTypesIn(x, out); return out; }
+    if (typeof t.idlType === "string") { if (dictByName.has(t.idlType)) out.add(t.idlType); return out; }
+    return dictionaryTypesIn(t.idlType, out);
+  }
+
+  return { declarations, byName, inheritanceOf, flatten, members,
+           dictByName, dictInheritanceOf, dictChain, dictMembers, dictionaryTypesIn };
 }
 
 /* EVERY GLOBAL NAME WEB IDL EXPOSES ON WINDOW. Three sources, all spec text, and each was missing from an

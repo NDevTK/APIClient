@@ -584,6 +584,25 @@ static const char *const SR_SLOT_VALUES[] = { "manual", "named", NULL };
    an object whose members are getters or a Proxy. `mode` being required does not move it to the front. */
 static const IdlDictMember SHADOW_ROOT_INIT[] = {
     { "clonable",       IDL_BOOLEAN, false, NULL,           0 },
+    /* `CustomElementRegistry? customElementRegistry;` — DECLARED, and the body below reads it. It was READ AND
+       NEVER DECLARED, which is not a member half-built: §3.2.17 places on the converted dictionary exactly the
+       members this list names, so `idl_dict_get(init, "customElementRegistry")` answered `undefined` for every
+       call there has ever been, the override at step 2 was unreachable, and `attachShadow({mode: "open",
+       customElementRegistry: r})` silently attached with the DOCUMENT's registry — the read-with-no-writer
+       defect, one layer below a JS field, where the missing producer is the declaration itself.
+       IDL_ANY AND NOT IDL_INTERFACE_NULLABLE, the same choice core/events/event_target.c makes for
+       `AddEventListenerOptions.signal` and for the same shape of reason: a declared interface type is branded
+       by the ONE class the declaration states (idl_iface_brand), which has to be reached from another
+       component's init, and this member's brand is answered by custom_elements_is_registry — so the check is
+       performed below, at the step that owns it, and says so.
+       NAMED RESIDUAL: a declared type would throw §3.2.15's TypeError DURING the member walk, before the
+       getters of `delegatesFocus`, `mode`, `serializable` and `slotAssignment` — every one of which sorts
+       after this member — while the check below throws after all five have run. The next diff exports
+       CustomElementRegistry's class id and states the brand at the declaration, which needs custom_elements'
+       class to exist before this component's init and is a fact about core/platform.c's order rather than
+       about this file. ITS ABSENCE SHOWS as `attachShadow({customElementRegistry: 1, get mode(){ log(); }})`
+       running the `mode` getter before it throws, where a browser does not. */
+    { "customElementRegistry", IDL_ANY, false, NULL,        0 },
     { "delegatesFocus", IDL_BOOLEAN, false, NULL,           0 },
     { "mode",           IDL_ENUM,    true,  SR_MODE_VALUES, 0 },
     { "serializable",   IDL_BOOLEAN, false, NULL,           0 },
@@ -604,12 +623,20 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
        `init["customElementRegistry"]` when the page supplied one; step 3 throws when that one is neither
        SCOPED nor this document's own — which is the whole point of the member: a page may hand a shadow tree a
        scoped registry, or the very registry the document already uses, and nothing else.
-       THE BRAND TEST IS STEP 2's, not an extra: the declaration converts the member to an object and an object
-       that is not a CustomElementRegistry must not be associated with the root as though it were. */
+       THE BRAND TEST IS WEB IDL'S, NOT AN EXTRA STEP: the member's declared type is `CustomElementRegistry?`,
+       so §3.2.15 Interface types refuses anything else with a TypeError. It is performed here because the
+       declaration states this member IDL_ANY — see SHADOW_ROOT_INIT's note on why, and the residual it names.
+       STEP 2 ASKS WHETHER THE MEMBER EXISTS, NOT WHETHER IT IS AN OBJECT. "If init["customElementRegistry"]
+       exists, then set registry to it" — and the member is nullable, so an explicit `null` EXISTS and sets the
+       registry to null, which step 3 then passes (it asks about a non-null registry) and which "attach a
+       shadow root" takes as its "null or a CustomElementRegistry object registry". Reading the existence off
+       object-ness collapses `{customElementRegistry: null}` into the absent case and hands the shadow root the
+       document's registry — the opposite of what the page asked for. §3.2.17 makes `undefined` the absence,
+       because this member declares no default value. */
     reg_v = idl_dict_get(ctx, init, "customElementRegistry");
     registry = custom_elements_document_registry(ctx);                                   /* step 1 */
-    if (JS_IsObject(reg_v)) {
-        if (!custom_elements_is_registry(reg_v)) {
+    if (!JS_IsUndefined(reg_v)) {
+        if (!JS_IsNull(reg_v) && !custom_elements_is_registry(reg_v)) {
             JS_FreeValue(ctx, registry);
             JS_FreeValue(ctx, reg_v);
             return JS_ThrowTypeError(ctx, "ShadowRootInit's customElementRegistry is not a "

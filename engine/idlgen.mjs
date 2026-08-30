@@ -556,7 +556,7 @@ const INTERFACES = {
    that needs to know what the platform provides, so "is `redirected` a member of Response" and "which members
    of Response does the engine still owe" cannot come back as two different answers. */
 const idl = await loadIdl();
-const { byName, inheritanceOf, flatten, members } = idl;
+const { byName, inheritanceOf, flatten, members, dictByName, dictMembers, dictionaryTypesIn } = idl;
 
 /* The install constructs of the WHOLE engine, read once. Whole-engine and not per-row because which objects are
    install targets is a fact about the program (a prototype handed from the file that tags it to the file that
@@ -1069,6 +1069,273 @@ for (const c of env.tagChecks)
 for (const c of env.recordContradictions)
   console.log(`[idl-audit] ${c.file.replace(BROWSER + "/", "")}:${c.line}  CONTRADICTED OBJECT KIND — ` +
               `${c.form}(… ${c.obj} …) installs on an object built with NO PROTOTYPE, which no page can reach`);
+
+/* ---------------------------------------------------------------------------------------------------------
+ * WEB IDL §2.7 Dictionaries — WHAT A PAGE MAY HAND THE PLATFORM, AGAINST WHAT THE ENGINE DECLARES IT READS.
+ *
+ * EVERY CATEGORY ABOVE ASKS WHETHER A MEMBER IS THERE. This asks what a member ACCEPTS, and it is the half the
+ * audit was structurally unable to see: a dictionary has no interface object, no prototype and no installed
+ * member, so nothing about it reaches the install scan — a spec type made ENTIRELY of the thing this file looks
+ * at was invisible to it, in both directions at once. The cost is not coverage for its own sake. A dictionary
+ * is how a page hands the platform an instruction — `{once: true}`, `{signal}`, `{credentials: "include"}`,
+ * `{window: null}` — so a member the engine never reads is an instruction SILENTLY IGNORED: nothing is absent,
+ * there is no js_noop stub to point at, and the page's own behaviour diverges with nothing to say so. That is
+ * §NO STUBS' failure with no stub in it. §3.2.17 Dictionary types makes the same absence a CONVERSION THAT
+ * NEVER RAN — its ES-to-IDL list reads each member with `? Get(jsDict, key)` and converts what it got by the
+ * member's own type, both of which are the page's code, so an unread member is also a getter that did not fire
+ * and a `toString` that did not throw.
+ *
+ * WHAT THE RIGHT-HAND SIDE IS, AND WHY IT IS NOT THE INSTALL SCAN. There is nothing installed to diff against;
+ * what the engine states about a dictionary is core/idl_args.h's `IdlDictMember` list — the member's name, its
+ * type, whether it is `required`, and which level of the inheritance chain declares it. That declaration IS the
+ * engine's answer to "what does this operation accept", so the diff is against it and against nothing else.
+ *
+ * WHICH DICTIONARIES ARE AUDITED IS DERIVED, exactly as the interface set is: the corpus declares 900-odd and
+ * this engine can never receive most of them, so a gap in one is not a gap — it is an unimplemented API, which
+ * the ABSENT ledger above already reports as the missing MEMBER that would have taken it. The audited set is
+ * therefore the dictionaries reachable from the arguments of the members this engine actually installs, walked
+ * through unions, sequences, records and nullables because that is where a dictionary hides: an options bag
+ * spelled `(AddEventListenerOptions or boolean)` is one level down, and reading only the top of the type would
+ * report every such member COMPLETE.
+ *
+ * HOW A C DECLARATION IS MATCHED TO A DICTIONARY, AND THE ONE THING THAT IS BELIEVED. An `IdlDictDecl` NAMES
+ * its dictionary, so those are matched exactly and checked in full — membership both ways, `required`, and
+ * §3.2.17's READ ORDER, which is observable through a getter and which the engine's own init asserts. A bare
+ * `IdlDictMember` array (the form a declared ARGUMENT position takes) names nothing, and this audit does not
+ * guess which dictionary it is: it uses the one thing that is TRUE of every candidate — an array can only be a
+ * declaration of a dictionary that CONTAINS ALL OF ITS MEMBERS — and credits a dictionary with the names of
+ * every array that could be its declaration. That direction never sends anyone to build a member that is
+ * already there. It can under-report, and the residual says exactly how.
+ *
+ * NAMED RESIDUAL — THE ARRAY IS NOT PAIRED WITH ITS DICTIONARY, ONLY CONSTRAINED BY IT. Two dictionaries whose
+ * member sets nest (`EventListenerOptions` inside `AddEventListenerOptions`) each get credited with the smaller
+ * array, so a member missing from the LARGER one's declaration reads as covered when some other array supplies
+ * the name. The next diff pairs an array with its dictionary through the site that USES it — the
+ * `idl_method_id_dict` / `idl_method_id_step` call, whose member's own IDL argument list is where the
+ * dictionary type is stated and the only place it is stated — which turns every subset credit into an identity
+ * and lets the `required`, order and level checks run on the bare form too. ITS ABSENCE SHOWS as a dictionary
+ * reported complete whose component declares no array of its own: the credit came from a neighbour. */
+const dictHave = new Map();          /* dictionary name -> the member names some C declaration could give it */
+const dictNamed = new Map();         /* dictionary name -> the named IdlDictDecl that states it */
+const dictArrays = [];               /* every IdlDictMember array this run could read */
+const dictUnreadable = [];           /* and every one it could not */
+const dictUnknownName = [];
+
+/* The 1-based line an offset falls on, so a finding names a site rather than a file — the same address rule
+   §Offensive-programming states for an assert, applied to a report. */
+const lineAt = (src, off) => {
+  let n = 1;
+  for (let i = 0; i < off && i < src.length; i++) if (src[i] === "\n") n++;
+  return n;
+};
+/* The `}` closing the `{` at `i`, or -1. Over MASKED source, so a brace inside a comment or a string cannot
+   move the count — which is why this reads env.sources' masked text and never the file. */
+const closeBrace = (s, i) => {
+  let d = 0;
+  for (let j = i; j < s.length; j++) {
+    const c = s[j];
+    if (c === "{") d++;
+    else if (c === "}" && !--d) return j;
+  }
+  return -1;
+};
+/* Top-level commas of one initialiser body. */
+const splitTopLevel = (s) => {
+  const out = [];
+  let d = 0, st = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "(" || c === "[" || c === "{") d++;
+    else if (c === ")" || c === "]" || c === "}") d--;
+    else if (c === "," && !d) { out.push(s.slice(st, i)); st = i + 1; }
+  }
+  out.push(s.slice(st));
+  return out;
+};
+const STRING_LIT = /^"((?:[^"\\]|\\.)*)"$/;
+
+/* ONE `IdlDictMember` INITIALISER LIST, READ OR REFUSED — never partially read. A member list this cannot read
+   is not a list with fewer members, it is a list of unknown length, and crediting the entries it did manage is
+   the false COMPLETE minted by the reader rather than by the engine. An entry that is a bare identifier is
+   resolved through the macros idl_installed.mjs already collected — core/events/ui_event.h states the seven
+   members UIEvent contributes as one object-like macro and four components expand it, so refusing that
+   construct would put four event dictionaries beyond the audit for a spelling. */
+function readDictMembers(body, macros, depth = 0) {
+  const out = [];
+  for (const raw of splitTopLevel(body)) {
+    const e = raw.trim();
+    if (!e) continue;
+    if (!e.startsWith("{")) {
+      const def = /^[A-Za-z_]\w*$/.test(e) && macros.get(e);
+      if (!def || def.params || depth > 4) return { why: e.replace(/\s+/g, " ").slice(0, 60) };
+      const nested = readDictMembers(def.body, macros, depth + 1);
+      if (nested.why) return nested;
+      out.push(...nested.members);
+      continue;
+    }
+    const fields = splitTopLevel(e.slice(1, e.lastIndexOf("}")));
+    const lit = (fields[0] || "").trim().match(STRING_LIT);
+    if (!lit) return { why: (fields[0] || "").trim().replace(/\s+/g, " ").slice(0, 60) };
+    /* Field 2 is `required` and field 4 is §3.2.17's level; both are omitted by the short form, and C then
+       zero-fills them — which is the IDL's own default for both (a member with no `required` written is
+       optional, and a dictionary that inherits nothing has one level). A field that is not a literal is not
+       assumed either way: it is left undeclared and the checks that need it skip that member and say so. */
+    const req = (fields[2] || "").trim(), lvl = (fields[4] || "").trim();
+    out.push({ name: lit[1],
+               required: req === "" ? false : req === "true" ? true : req === "false" ? false : null,
+               level: lvl === "" ? 0 : /^\d+$/.test(lvl) ? Number(lvl) : null });
+  }
+  return { members: out };
+}
+
+const ARRAY_DECL = /\bIdlDictMember\s+([A-Za-z_]\w*)\s*\[[^\]]*\]\s*=\s*\{/g;
+const NAMED_DECL = /\bIdlDictDecl\s+([A-Za-z_]\w*)\s*=\s*\{/g;
+const bySymbol = new Map();
+for (const [path, { masked, orig }] of env.sources) {
+  ARRAY_DECL.lastIndex = 0;
+  for (let m; (m = ARRAY_DECL.exec(masked)); ) {
+    const open = m.index + m[0].length - 1, close = closeBrace(masked, open);
+    const at = { file: path, line: lineAt(orig, m.index), sym: m[1] };
+    if (close < 0) { dictUnreadable.push({ ...at, why: "the initialiser's braces do not balance" }); continue; }
+    const r = readDictMembers(masked.slice(open + 1, close), env.macros);
+    if (r.why) { dictUnreadable.push({ ...at, why: `an entry this reader cannot resolve: ${r.why}` }); continue; }
+    const rec = { ...at, members: r.members };
+    dictArrays.push(rec);
+    bySymbol.set(`${path} ${m[1]}`, rec);
+    if (!bySymbol.has(m[1])) bySymbol.set(m[1], rec);
+  }
+}
+for (const [path, { masked, orig }] of env.sources) {
+  NAMED_DECL.lastIndex = 0;
+  for (let m; (m = NAMED_DECL.exec(masked)); ) {
+    const open = m.index + m[0].length - 1, close = closeBrace(masked, open);
+    if (close < 0) continue;
+    const fields = splitTopLevel(masked.slice(open + 1, close));
+    const lit = (fields[0] || "").trim().match(STRING_LIT), sym = (fields[1] || "").trim();
+    const line = lineAt(orig, m.index);
+    if (!lit) { dictUnreadable.push({ file: path, line, sym: m[1], why: "its dictionary identifier is not a string literal" }); continue; }
+    const arr = bySymbol.get(`${path} ${sym}`) || bySymbol.get(sym);
+    if (!arr) { dictUnreadable.push({ file: path, line, sym: m[1], why: `its member list \`${sym}\` was not read` }); continue; }
+    if (!dictByName.has(lit[1])) { dictUnknownName.push({ file: path, line, name: lit[1] }); continue; }
+    dictNamed.set(lit[1], { ...arr, decl: m[1], file: path, line });
+  }
+}
+/* THE SUBSET CREDIT, stated once: an array can only be the declaration of a dictionary that has every member it
+   names, so its names are what SOME declaration of that dictionary would contribute. Computed over the audited
+   set only, so an array is never weighed against a dictionary the engine can never be handed. */
+const creditSubsets = (name) => {
+  const spec = new Set(dictMembers(name).map((m) => m.name));
+  const have = new Set();
+  for (const a of dictArrays)
+    if (a.members.length && a.members.every((m) => spec.has(m.name)))
+      for (const m of a.members) have.add(m.name);
+  return have;
+};
+
+/* THE AUDITED SET — every dictionary an installed member's IDL can hand this engine. A record names the member
+   and the interface its target is, which is what the whole audit above already established; the IDL then states
+   what that member ACCEPTS. A record whose NAME is itself an interface is an interface object install, and
+   §3.7.1's interface object is what a page calls `new` on, so its constructor's arguments count too — that is
+   how every `FooEventInit` in the platform is reached, since no operation anywhere takes one. */
+const opsOf = new Map();
+const memberOps = (iface) => {
+  if (opsOf.has(iface)) return opsOf.get(iface);
+  const m = new Map();
+  for (const x of flatten(iface)) {
+    if ((x.type !== "operation" && x.type !== "constructor") || (x.type === "operation" && !x.name)) continue;
+    const key = x.type === "constructor" ? " ctor" : x.name;
+    if (!m.has(key)) m.set(key, []);
+    m.get(key).push(x);
+  }
+  opsOf.set(iface, m);
+  return m;
+};
+const dictSites = new Map();
+const noteSite = (d, site) => {
+  if (!dictSites.has(d)) dictSites.set(d, []);
+  const list = dictSites.get(d);
+  if (!list.some((s) => s.what === site.what)) list.push(site);
+};
+for (const r of world.records) {
+  if (r.nonInterface) continue;
+  const asks = [];
+  for (const iface of r.ifaces || []) {
+    const ops = memberOps(iface).get(r.name);
+    if (ops) asks.push([`${iface}.${r.name}`, ops]);
+  }
+  if (byName.has(r.name)) {
+    const ctors = memberOps(r.name).get(" ctor");
+    if (ctors) asks.push([`new ${r.name}`, ctors]);
+  }
+  for (const [what, ops] of asks)
+    for (const op of ops)
+      for (const a of op.arguments || [])
+        for (const d of dictionaryTypesIn(a.idlType))
+          noteSite(d, { what, file: r.file, line: r.line });
+}
+
+const dictUndeclared = [], dictStranger = [], dictRequired = [], dictOrder = [];
+for (const [d, sites] of [...dictSites].sort()) {
+  const spec = dictMembers(d);
+  if (!spec.length) continue;                  /* a dictionary with no members states nothing to read */
+  const named = dictNamed.get(d);
+  const have = named ? new Set(named.members.map((m) => m.name)) : creditSubsets(d);
+  dictHave.set(d, have);
+  const missing = spec.filter((m) => !have.has(m.name));
+  if (missing.length) dictUndeclared.push({ d, sites, missing, spec, named: !!named });
+  if (!named) continue;
+  /* THE NAMED FORM IS CHECKED IN FULL, because its dictionary is stated rather than inferred. */
+  const specByName = new Map(spec.map((m) => [m.name, m]));
+  for (const m of named.members)
+    if (!specByName.has(m.name)) dictStranger.push({ d, named, name: m.name });
+  for (const m of named.members) {
+    const s = specByName.get(m.name);
+    if (s && m.required !== null && m.required !== s.required) dictRequired.push({ d, named, name: m.name, want: s.required });
+  }
+  const order = named.members.map((m) => m.name).filter((n) => specByName.has(n));
+  const want = spec.map((m) => m.name).filter((n) => have.has(n));
+  if (order.join(",") !== want.join(",")) dictOrder.push({ d, named, order, want });
+}
+
+defect("dictionary members the platform declares that no IdlDictMember declaration names", dictUndeclared.length);
+defect("IdlDictMember entries naming a member the dictionary the declaration names does not have", dictStranger.length);
+defect("dictionary members whose declared `required` contradicts the IDL", dictRequired.length);
+defect("named dictionary declarations whose member order is not §3.2.17's", dictOrder.length);
+defect("IdlDictDecl identifiers naming a dictionary no spec in @webref/idl defines", dictUnknownName.length);
+defect("IdlDictMember declarations this audit could not read", dictUnreadable.length);
+console.log(`[idl-audit] ── Web IDL §2.7 dictionaries ── ${dictSites.size} reachable from the members this ` +
+            `engine installs; ${dictArrays.length} IdlDictMember declaration(s) read, ${dictNamed.size} of ` +
+            `them naming their dictionary`);
+for (const u of dictUndeclared)
+  console.log(`[idl-audit]   ${u.d}: ${u.missing.length} of ${u.spec.length} member(s) UNDECLARED — ` +
+              `${u.missing.map((m) => m.name + (m.required ? " (required)" : "")).join(", ")}. Reached by ` +
+              `${u.sites.map((s) => `${s.what} at ${s.file.replace(BROWSER + "/", "")}:${s.line}`).join(", ")}. ` +
+              `No IdlDictMember declaration in this engine ${u.named ? "of this dictionary " : "that could be " +
+              "this dictionary's "}names ${u.missing.length > 1 ? "them" : "it"}, so §3.2.17's conversion never ` +
+              `reads ${u.missing.length > 1 ? "them" : "it"} — either the option is silently ignored, or a ` +
+              `component reads it with a dictionary walk of its own, which is the second copy of §3.2.17 ` +
+              `core/idl_args.h's own header forbids. Both are the same fix: declare the member.`);
+for (const s of dictStranger)
+  console.log(`[idl-audit]   ${s.named.file.replace(BROWSER + "/", "")}:${s.named.line}  ${s.named.decl} declares ` +
+              `\`${s.name}\`, which ${s.d} does not have — a member no page can pass, so the [[Get]] §3.2.17 ` +
+              `step 4.1.3.1 runs for it is a property read the spec never performs`);
+for (const s of dictRequired)
+  console.log(`[idl-audit]   ${s.named.file.replace(BROWSER + "/", "")}:${s.named.line}  ${s.d}.${s.name} is ` +
+              `${s.want ? "required" : "optional"} in the IDL and declared ${s.want ? "optional" : "required"} — ` +
+              `§3.2.17 step 4.1.6 throws a TypeError for an absent required member, so this ` +
+              `${s.want ? "accepts a call the spec rejects" : "rejects a call the spec accepts"}`);
+for (const s of dictOrder)
+  console.log(`[idl-audit]   ${s.named.file.replace(BROWSER + "/", "")}:${s.named.line}  ${s.d} is declared in the ` +
+              `order ${s.order.join(", ")} and §3.2.17 steps 3 and 4.1 read it ${s.want.join(", ")} — inherited ` +
+              `dictionaries least-derived first, each level lexicographic. The order is OBSERVABLE: every ` +
+              `member is a [[Get]] on the page's object, so two getters see which ran first`);
+for (const s of dictUnknownName)
+  console.log(`[idl-audit]   ${s.file.replace(BROWSER + "/", "")}:${s.line}  IdlDictDecl names "${s.name}", which ` +
+              `no spec in @webref/idl declares — either the identifier is misspelt, or the spec is one webref ` +
+              `does not ship and the declaration cannot be checked against anything`);
+for (const s of dictUnreadable)
+  console.log(`[idl-audit]   ${s.file.replace(BROWSER + "/", "")}:${s.line}  ${s.sym}: ${s.why} — the list is ` +
+              `neither credited nor counted, because a member list read in part is a list of unknown length`);
 
 /* ---------------------------------------------------------------------------------------------------------
  * THE PLATFORM SURFACE — every global name a browser exposes on Window, straight out of the IDL.
