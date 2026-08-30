@@ -349,6 +349,55 @@ char *result_swap_json(void) {
    while it replays and every arm is the same drive of the same body, so met-minus-claims is not a loss.
    Unmet is the loss, exactly — on a document whose bytes did not change between two sessions it is ZERO.
 
+   AND ZERO IS ALSO WHAT A SESSION THAT NEVER RESUMED WROTE THERE, WHICH MADE THE VERDICT UNREADABLE. All three
+   are derived from a rebuild: `cold_resumed` reports the LAST one and its record is memset at the top of
+   `cold_resume`, and the claim counters are reset with the session — so a session handed NO RESIDUE AT ALL
+   reports the identical 0/0/0 as a resume that rebuilt a frontier and lost nothing. Two states, one number, on
+   the row this comment calls THE VERDICT: a reader taking `orphanClaimsUnmet: 0` for a pass was reading a pass
+   out of a session that never resumed. §Testing — an absent count and a zero count are DIFFERENT facts and
+   must never be averaged — and the defaulted-field rule, one hop earlier: here the producer emitted the hole
+   itself, so no consumer had to fill one.
+
+   `resumed` IS THE POSITIVE STATEMENT AND IT IS ALWAYS PRESENT, WHICH IS THE WHOLE OF WHY IT IS A ROW OF ITS
+   OWN RATHER THAN A SHAPE A READER INFERS. `resumed: 0` says THIS SESSION WAS HANDED NO RESIDUE, so the three
+   zeroes beside it are not a verdict at all; `resumed: 1` says a rebuild ran, and only under it is
+   `orphanClaimsUnmet: 0` the pass this comment claims. It is answerable from the record because `cold_resume`
+   ends by asserting it landed at least one flow (`DCHECK(flows > 0)`) and memsets its census on entry, so
+   `flows + cands == 0` is producible only by a session that never called it — a READING, not an inference, and
+   the DCHECK at the composition below is what keeps it one. It is not a count and cannot be averaged with one,
+   and there is no absent value for a consumer to fill: the two states are two values of one always-emitted
+   number, which is the shape the defaulted-field rule asks for and the shape a nested object or an omitted row
+   would each have missed — the first because this census's readers assert every row is a finite number
+   (extension/bridge.js) and render it generically (extension/popup.js), the second because an absent number is
+   exactly what `|| 0` turns back into a zero.
+
+   AND THE DECOMPOSITION RIDES BESIDE IT — `resumedSegs`/`resumedFlows`/`resumedCands`/`resumedWorlds`, which
+   cold.h calls "the observable that says which ARMS of the grammar ran". A residue of nothing but 'f' records
+   exercised neither park_unhex nor solve_resume_candidate nor the foreign-world rebuild, and `@RESUMED 4`
+   looks identical either way, so this is what tells an EXERCISED round trip from an unexercised one — the
+   difference between a rebuild that proved the read half of the cold tier and one that proved a quarter of it.
+   ALWAYS PRESENT, ZEROES INCLUDED, and that is not the defect this row exists to fix — it is the reason
+   `resumed` is a row of its own. result.h's contract for these three censuses is that EVERY ROW IS ALWAYS
+   PRESENT because they read subsystems that exist at every instant a document can be composed at, so omitting
+   four of them under one condition would trade a two-states-one-number defect for a broken shape contract, and
+   an omitted number is in any case exactly what `|| 0` turns back into a zero. Under `resumed: 0` the four
+   zeroes are the true decomposition of a rebuild that did not happen; under `resumed: 1` they are a reading.
+   One row says which, and it cannot be absent.
+   THIS WAS READABLE AT THE POPUP ALONE AND NOWHERE ELSE. The JS half of this round trip rides the per-run LOG
+   ROW, which happens to carry `cold` beside it; the ANALYSIS DOCUMENT — what test_forced.c, the ABI entry and
+   every other in-process host holds — carried no statement of the kind at all, so every consumer but one read
+   a resumed session and a session that never resumed as the same three zeroes.
+   `resumedOrphans` IS NOT A ROW: `orphanClaims` IS that number, and two spellings of one number in one
+   document is the drift the record-field contract exists to catch — the same sentence the paragraph below
+   makes about `_orphansDriven`.
+   A NAMED RESIDUAL, BECAUSE `COLD_FIELDS` DOES NOT YET NAME THESE FIVE. engine/build.mjs's list is the guard
+   that a row this composer stops emitting or renames fails the build instead of being compared as `undefined`,
+   and all five are numbers at every census, so all five belong in it. WHAT IS NOT COVERED: this composer could
+   drop any of the five and that file would not fail — the verdict would go back to being unreadable with the
+   build green. WHAT THE NEXT DIFF BUILDS: the five names appended to `COLD_FIELDS`, landed together with the
+   build that first emits them, since that list throws against any artifact predating a name it holds. HOW ITS
+   ABSENCE SHOWS: a @COLD census that has quietly stopped saying whether the session resumed, with nothing red.
+
    NO `orphans` ROW: the count of drives this session STARTED is `_orphansDriven` on the document already, and
    two spellings of one number in one document is the drift the record-field contract exists to catch.
 
@@ -357,25 +406,71 @@ char *result_swap_json(void) {
    unblock nothing. They were being added into `hostAnswered`, which made a peer holding four timelines read as
    four payments for one ask and inverted the census's own `answered <= asked`.
 
-   THE ARITHMETIC, from the format string: fixed bytes 503 without the conversion specifiers, and the
-   thirty-nine numbers' widest forms are 753 (thirty-six longs at 20 and three ints at 11).
-   503 + 753 + 1 = 1257 against this 1280. RE-DO IT WHEN YOU ADD A ROW. */
+   THE ARITHMETIC IS THE EXPRESSION THAT SIZES THE BUFFER AND NOT A SENTENCE BESIDE IT, because the sentence
+   beside it was WRONG and the buffer it justified was TOO SMALL. It read "fixed bytes 503 … the thirty-nine
+   numbers' widest forms are 753 … 503 + 753 + 1 = 1257 against this 1280", and the format string it described
+   measured 521 fixed bytes over FORTY numbers — thirty-seven longs and three ints, whose widest forms are
+   773 — so the honest sum was 521 + 773 + 1 = 1295 against a 1280 buffer that was ALREADY 15 BYTES SHORT of
+   its own worst case. Every one of those figures was wrong in the safe-looking direction, which is the exact
+   history `result_document`'s comment records fifty lines down: an arithmetic ADJUSTED to a new row rather
+   than re-derived from the string. So the counts stop being prose. They are still hand-derived — there is no
+   portable way to ask a format string its widest expansion — but they are now TERMS THE COMPILER ADDS, so the
+   stated sum and the allocated size cannot disagree with each other, and the way a forgotten row surfaces is
+   the DCHECK under the snprintf rather than a paragraph nobody re-checks.
+   WHERE IT IS STILL FRAGILE, SAID PLAINLY. The counts are a HAND CENSUS of one string — that part did not go
+   away, it only stopped being able to disagree with the malloc. The widths are `long` at 20 and `int` at 11,
+   which is the 64-bit host's `long`; on WASM32 A `long` IS 32 BITS and every long term is generous by nine
+   bytes, so the assert cannot fire on the shipping host FIRST — a miscount is found where the numbers are
+   widest, which is not where this runs in production. There is also NO SLACK by construction: the terms ARE
+   the worst case, so the widest possible census fills the buffer exactly and any miscount at all is a
+   truncation rather than a near miss. That is the intent. RE-DO THE COUNTS WHEN YOU ADD A ROW: they are three
+   integers and there is no way to be nearly right. */
 char *result_cold_json(void) {
+    /* The format string's widest expansion, as terms rather than as a sum somebody typed. `COLD_LITERAL` is the
+       string with every conversion specifier removed. */
+    enum { COLD_LITERAL = 596, COLD_LONGS = 41, COLD_INTS = 4 };
     ColdCensus c;
     ColdResumed resumed;
     EngineFrontierCensus e;
-    size_t n = 1280;
+    size_t n = COLD_LITERAL + COLD_LONGS * 20 + COLD_INTS * 11 + 1;
     char *out;
+    int ran;
     int m;
 
     cold_census(&c);
     cold_resumed(&resumed);
     engine_frontier_census(&e);
+    ran = resumed.flows + resumed.cands > 0;
+    /* A REBUILD IS ALL OF ITSELF OR NONE OF IT, asserted here because `resumed: 0` is a POSITIVE claim that this
+       session was handed no residue and this is the one place both halves of that claim are in one hand.
+       cold_resume ends with `DCHECK(flows > 0)` and memsets its census on entry, so `flows + cands == 0` can
+       only be the never-called state — unless a census arrives holding segments, foreign worlds or orphan
+       locators under no flow at all, which is neither state and would publish as the claim that nothing came
+       back. */
+    DCHECK(ran || (resumed.segs == 0 && resumed.worlds == 0 && resumed.orphans == 0),
+           "the cold tier reported a rebuild that landed no flow and yet rebuilt segments, foreign worlds or "
+           "orphan locators — `resumed` is about to be emitted as 0, which STATES that this session was handed "
+           "no residue, and that would be a lie about a residue that was read back. cold_resume's own "
+           "`flows > 0` is the other side of this pair");
+    /* AND A CLAIM IS EVIDENCE OF A DRIVE THAT WAS INHERITED, never of one this session started. `orphan_want` is
+       written at exactly one site (cold.c's 'o' record) and spreads only by fork, so met-or-lost claims under a
+       zero `resumed.orphans` mean the two counters have stopped describing one population and the round trip's
+       verdict is being read off the wrong session. The comparison is legitimate at all only because
+       engine_sched_begin calls cold_resume AT MOST ONCE per session — `cold_resumed` describes the last rebuild
+       while the claim totals describe the whole session — so a second call site is precisely what this fires
+       on, and it should. Met and unmet may both EXCEED `orphans` (a waiting drive forks arms and every arm is
+       the same drive), which is why the implication runs one way only. */
+    DCHECK(resumed.orphans > 0 || (e.claims_met == 0 && e.claims_unmet == 0),
+           "an inherited-drive claim was met or lost in a session whose rebuild carried no orphan locator — the "
+           "three orphanClaims rows are about to describe a round trip that this document also says did not "
+           "happen");
     out = malloc(n);
     if (!out) return NULL;
     m = snprintf(out, n,
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                  "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"sold\":%ld,\"forks\":%ld,"
+                 "\"resumed\":%d,\"resumedSegs\":%ld,\"resumedFlows\":%ld,\"resumedCands\":%ld,"
+                 "\"resumedWorlds\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,\"pagedReqs\":%ld,"
@@ -387,6 +482,7 @@ char *result_cold_json(void) {
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.deepest, e.completed, e.sold, e.forks,
+                 ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  e.paged_reqs,
