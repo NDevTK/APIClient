@@ -1922,16 +1922,29 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
      * document whose script ran, which is `ctx`, and window_proxy_same_origin_domain_of is §7.1.1's other
      * algorithm asked of the TARGET from the asking realm — the same comparison `iframe.contentDocument` is
      * filtered by, and the reason `document.domain` participates.
-     * STEPS 5-7 ARE A COMPUTED "Allowed" RATHER THAN AN OMISSION. CSP §4.2.4 "Should navigation request of
-     * type be blocked by Content Security Policy?" runs each directive's PRE-NAVIGATION CHECK, and `form-action`
-     * (CSP §6.4.1.1 "form-action Pre-Navigation Check") is the only directive that defines one — its first
-     * step past the assert is "if navigation type is `form-submission`", and §7.4.2.2 step 1 makes
-     * cspNavigationType "other" for every navigation with no form data entry list. A navigation reached
-     * through this function has none (core/html/html_form.c submits through its own path), so no policy of any
-     * document can block it and the answer is "Allowed" for the reason the standard gives rather than for want
-     * of the check.
-     * STEP 8 IS THE EVALUATION, and steps 9-17's new Document is where the completion value goes — which is
+     * STEPS 5-6 ARE A COMPUTED "Allowed" RATHER THAN AN OMISSION, and they are ONE test in two steps: step 5's
+     * request exists only to be handed to step 6, which the standard says in its own note ("this is a synthetic
+     * request solely for plumbing into the next step. It will never hit the network"). Step 6 is CSP §4.2.4
+     * "Should navigation request of type be blocked by Content Security Policy?", which runs each directive's
+     * PRE-NAVIGATION CHECK, and `form-action` (CSP §6.4.1.1 "form-action Pre-Navigation Check") is the only
+     * directive that defines one — its first step past the assert is "if navigation type is `form-submission`",
+     * and §7.4.2.2 step 1 makes cspNavigationType "other" for every navigation with no form data entry list. A
+     * navigation reached through this function has none (core/html/html_form.c submits through its own path),
+     * so no policy of any document can block it and the answer is "Allowed" for the reason the standard gives
+     * rather than for want of the check.
+     * STEP 7 IS THE EVALUATION, and steps 9-14's new Document is where the completion value goes — which is
      * the ONE place that value exists, so the string arm crashes by name in solver/engine.c rather than here.
+     * STEP 8 IS THE ARM EVERY PROGRAM WITH A NON-STRING COMPLETION VALUE TAKES, and its INNER step is the one
+     * thing this function cannot answer: "if initialInsertion is true and targetNavigable's active document's
+     * is initial about:blank is true, then run the iframe load event steps given targetNavigable's container".
+     * `initialInsertion` is an optional boolean of §7.4.2.2's navigate that nothing below it carries, and the
+     * only caller that passes true is §4.8.5's post-connection steps ("process the iframe attributes for
+     * insertedNode, with initialInsertion set to true") — an `<iframe>` or `<frame>` whose `src` is already a
+     * `javascript:` URL at the moment it is inserted, which navigable_create refuses outright by the same fold
+     * that residual names. So the branch is
+     * unreachable behind an existing crash rather than skipped, and the diff that unfolds the create owes this
+     * function the parameter in the same breath: without it a markup `javascript:` frame would run its program
+     * and never fire its `load` event, which is a frame whose `onload` never runs and nothing to say why.
      *
      * IT IS WRITTEN ABOVE STEP 11'S ASSERTION AND THE TWO ARMS ARE DISJOINT, which is why the order here does
      * not restate the standard's. Step 11's third conjunct is "url equals navigable's ACTIVE SESSION HISTORY
@@ -1939,8 +1952,11 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
      * §7.4.2.3.2's own note again — so a destination cannot satisfy both tests and neither arm can hide the
      * other.
      *
-     * IT RUNS IN THE TARGET NAVIGABLE'S REALM, which §7.4.2.3.2 step 5 states outright ("let settings be
-     * targetNavigable's active document's relevant settings object") and which is not always `ctx`: an
+     * IT RUNS IN THE TARGET NAVIGABLE'S REALM, which step 7's OWN algorithm states outright — "evaluate a
+     * `javascript:` URL" is defined inside §7.4.2.3.2 and numbered from one of its own, and its step 4 is "let
+     * settings be targetNavigable's active document's relevant settings object". The two step lists are not
+     * interchangeable and reading them as one is how this block came to cite §7.4.2.3.2's step 5 (a synthetic
+     * request) for a sentence about a settings object. It is not always `ctx`: an
      * `<a href="javascript:x=1" target="frame">` writes `x` into the FRAME's global, where a later script of
      * that document reads it. The proxy is asserted local above, so the realm is this heap's. */
     if (is_javascript) {
@@ -1950,17 +1966,30 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
             free(addr);
             return JS_DupValue(ctx, proxy);              /* §7.4.2.3.2 step 4's return */
         }
-        DCHECK(window_proxy_materialized(proxy),
-               "§7.4.2.3.2 was reached for a navigable this instance has not materialized — step 5 takes the "
-               "settings object and API base URL of the TARGET navigable's ACTIVE DOCUMENT, and an "
-               "unmaterialized navigable is holding the initial about:blank §7.3.2.1 created it with, whose "
-               "realm has not been built. Materialize it here (navigable_realm, with no response) so the "
-               "program runs in the document the standard names");
+        /* THE TARGET'S ACTIVE DOCUMENT IS MATERIALIZED BY THE ASK, WHICH IS WHY NOTHING HERE DEMANDS IT WAS
+           ALREADY. "Evaluate a `javascript:` URL" step 4 wants the settings object of the target navigable's
+           ACTIVE DOCUMENT, and a navigable nothing has read through yet HAS one — the initial about:blank
+           §7.3.2.1 created it with. What it does not have is a REALM, because this engine builds that lazily on
+           the first read that reaches through the navigable (navigable.h states which navigable is materialized
+           WHEN), and window_proxy_realm IS such a read: window_proxy.c's proxy_realm builds this Document from
+           no response, which is the same Document and the same absence of a fetch a property read through the
+           same proxy would produce.
+           A DCHECK STOOD HERE REQUIRING THE NAVIGABLE TO BE MATERIALIZED ALREADY, and it was wrong twice. It
+           was a precondition on its own successor — the line below is what establishes it — and its message
+           instructed the next reader to materialize "here (navigable_realm, with no response)", which is the
+           call proxy_realm already makes and would have made this the SECOND caller of a function that has
+           exactly one. `iframe.src = "javascript:…"` on a frame inserted without one is the ordinary spelling
+           that took it: §4.8.5's attribute change steps reach §7.4.2.2 with the frame still holding the
+           about:blank its insertion created, which is precisely the document the standard names. */
         target = window_proxy_realm(ctx, proxy);
-        DCHECK(target != NULL, "a materialized navigable answered with no realm — window_proxy_materialized is "
-                               "what says one is there to answer with");
-        /* `addr` AND NOT `url`, because §7.4.2.3.2 step 1 is "let urlString be the result of running the URL
-           SERIALIZER on url" and step 2 removes a leading `javascript:` from THAT — core/html/hyperlink.c
+        DCHECK(target != NULL,
+               "materializing the target navigable's active document answered no realm — nav_create_finish "
+               "CHECKs that the host's realm builder produced one, so a null here is that guarantee having "
+               "come apart between the build and this read");
+        /* `addr` AND NOT `url`, because "evaluate a `javascript:` URL" step 1 is "let urlString be the result
+           of running the URL SERIALIZER on url" and its step 2 removes a leading `javascript:` from THAT
+           (§7.4.2.3.2's own steps 1-2 are the historyHandling assert and the ongoing-navigation test, and this
+           block cited them for this sentence until the two lists were told apart) — core/html/hyperlink.c
            hands this function a raw `href` attribute value, so `<a href="JavaScript:x()">` reaches here with a
            prefix step 2 would not find and the whole URL would run as the program. */
         navigable_evaluate_javascript_url(target, addr);
