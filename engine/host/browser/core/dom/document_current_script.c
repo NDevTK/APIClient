@@ -135,7 +135,7 @@ bool document_current_script_is_null(JSContext *ctx)
     return null;
 }
 
-void document_current_script_set(JSContext *ctx, lxb_dom_element_t *el)
+JSValue document_current_script_set(JSContext *ctx, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n;
     JSValue prev;
@@ -146,18 +146,11 @@ void document_current_script_set(JSContext *ctx, lxb_dom_element_t *el)
                        "which is §3.1.7's own answer for a document that is not executing a script element");
     n = lxb_dom_interface_node(el);
     /* STEP 1: "Let oldCurrentScript be the value to which document's currentScript object was most recently
-       set." It is provably NULL in this engine — see the header — so it is asserted rather than carried across
-       the work item the program is. A non-null value here is the C-bracket bug arriving: either the previous
-       program's restore did not run, or two flows' writes have leaked across the COW delta and this flow is
-       standing in a timeline that is not its own. */
+       set." IT IS RETURNED AND NOT ASSERTED NULL — see the header: §4.12.1.1 step 36 runs a program while the
+       program that inserted the element is mid-statement, so a nested run's old value is the causing script's
+       element and there is nothing here to prove. The caller whose premise still holds asserts it on what it
+       is handed back, which is where the premise can be stated. */
     prev = cs_get(ctx);
-    DCHECK(JS_IsNull(prev),
-           "a classic script element began executing while this document's currentScript was still set — "
-           "§4.12.1.1's oldCurrentScript is null here because a flow holds at most one live program frame, so "
-           "this is two script executions sharing one document's slot: either the restore at the program's "
-           "completion was skipped, or the write is not riding the running flow's COW delta and a sibling's "
-           "element is being read as this one's");
-    JS_FreeValue(ctx, prev);
     /* STEP 2: "If el's root is not a shadow root, then set document's currentScript attribute to el. Otherwise,
        set it to null."
        AND THE STANDARD'S OWN NOTE ON WHY IT IS THE ROOT AND NOT THE TREE: "This does not use the in a document
@@ -165,9 +158,10 @@ void document_current_script_set(JSContext *ctx, lxb_dom_element_t *el)
        currentScript still needs to point to it." So a page that inserts a `<script>` and removes it again before
        the program runs still reads the element back, and nothing here may test connectedness. */
     cs_set(ctx, shadow_root_is(node_root(n)) ? JS_NULL : node_wrap(ctx, n));
+    return prev;
 }
 
-void document_current_script_restore(JSContext *ctx, lxb_dom_element_t *el)
+void document_current_script_restore(JSContext *ctx, lxb_dom_element_t *el, JSValue old)
 {
     lxb_dom_node_t *n;
     JSValue cur;
@@ -189,7 +183,7 @@ void document_current_script_restore(JSContext *ctx, lxb_dom_element_t *el)
            "started without its restore having run");
     JS_FreeValue(ctx, cur);
     /* STEP 4: "Set document's currentScript attribute to oldCurrentScript." */
-    cs_set(ctx, JS_NULL);
+    cs_set(ctx, old);
 }
 
 /* §3.1.7's GETTER, whose whole text is "return the value to which it was most recently set". */

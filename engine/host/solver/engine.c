@@ -6283,7 +6283,25 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    ONLY IF THE PROGRAM STARTED: a compile that failed runs no script, which is what
                    §4.12.1.1's own "if el's result is null, then fire an event named error at el, and return"
                    says one step earlier — so there is nothing to bracket and the restore below is not owed. */
-                if (started && flow_dyn_el(f)) document_current_script_set(prog_ctx, flow_dyn_el(f));
+                if (started && flow_dyn_el(f)) {
+                    /* …AND STEP 1'S oldCurrentScript IS NULL FOR A ROW OF THIS SEQUENCE, asserted HERE because
+                       this is the one caller whose premise supports it: a flow holds at most ONE live program
+                       frame (the compile above runs only under `!f->frame`), so the previous row's restore has
+                       already run by the time this one starts. A non-null value is the C-bracket bug arriving —
+                       a restore that was skipped, or two flows' writes leaking across the COW delta so a
+                       sibling's element is being read as this one's. §4.12.1.1 step 36's NESTED run is the
+                       caller that cannot make this claim, and it carries the value instead
+                       (core/html/html_script.c). */
+                    JSValue old = document_current_script_set(prog_ctx, flow_dyn_el(f));
+
+                    DCHECK(JS_IsNull(old),
+                           "a classic script element began executing while this document's currentScript was "
+                           "still set — a program of the flow's own sequence cannot nest, because the flow "
+                           "holds one program frame, so this is two script executions sharing one document's "
+                           "slot: either the restore at the previous program's completion was skipped, or the "
+                           "write is not riding the running flow's COW delta");
+                    JS_FreeValue(prog_ctx, old);
+                }
             }
             if (!started) {
                 /* WHAT ACTUALLY FAILED, read before anything is decided from it. A compile can fail two ways
@@ -6541,7 +6559,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                program has not started. `f->reporting` is what tells the ONE call frame that IS this row's
                remaining work from the one that is somebody else's — see flow.h. */
             if (!report && (f->reporting || !is_call) && flow_dyn_el(f))
-                document_current_script_restore(doc_realm(flow_dyn_doc(f)), flow_dyn_el(f));
+                document_current_script_restore(doc_realm(flow_dyn_doc(f)), flow_dyn_el(f), JS_NULL);
         }
         JS_FlowFree(ctx, (JSValue *)f->frame);
         /* §8.1.4.4 STEP 8.3.1 TAKES THE SLOT STEP 8'S PROGRAM JUST VACATED, and the cursor does NOT move: the

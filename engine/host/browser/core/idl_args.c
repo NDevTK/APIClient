@@ -1693,7 +1693,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
        Web IDL propagates) has no other answer to give. Re-entering the conversion loop with it would run the
        page's getter a second time, which is the failure that turns a throwing `toString` into an infinite
        re-ask. */
-    if (JS_IsException(cb_result) && !(m->step && m->step->catches_abrupt)) return JS_STEP_ABRUPT;
+    /* …AND THE §4.2.3 WALK IS ONE OF THE ALGORITHMS THAT DECLARED IT, WHICH IS WHY `s->tree` IS ASKED FIRST.
+       HTML §8.1.4.4 "Calling scripts"'s run a classic script step 8's third bullet REPORTS an abrupt completion
+       rather than rethrowing it — §4.12.1.1 "Processing model"'s "execute the script element" invokes it with
+       `rethrow errors` false — and that same algorithm's step 6 then restores this document's currentScript. So
+       an injected script's throw is the WALK's own value: re-raised here it would tear down the member that
+       performed the insertion, `body.appendChild(s)` would throw whatever the injected program threw (a
+       completion no browser produces), and §3.1.7's slot would keep the element for the rest of the session
+       because the bracket's other half never ran. The drain below owns `in` on both arms, which is the same
+       sentence this file already makes about the normal completion. */
+    if (JS_IsException(cb_result) && !s->tree && !(m->step && m->step->catches_abrupt)) return JS_STEP_ABRUPT;
 
     /* THE DRAIN COMES FIRST ON EVERY RE-ENTRY, before the conversion loop or the body, because the steps the
        previous step recorded must finish before anything else this member does.
@@ -3034,6 +3043,14 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
        declaration names it and the discharge the driver runs after this cannot give it back; leaving it set
        would put the global in error reporting mode forever and silently swallow every later report. */
     custom_elements_queue_unlock(ctx, &s->ce);
+    /* …AND THE SAME FLAG, IF THE §4.2.3 WALK WAS ABANDONED HOLDING IT. The walk parks on the page's code at
+       insert step 12 (HTML §4.12.1.1 "Processing model" step 36's nested program, and the report its throw
+       owes), so it is the second algorithm on this state that can be dropped mid-report. The buffer's own
+       `release` runs on the walk's normal 0 edge and cannot answer for this one. */
+    if (s->tree) {
+        DCHECK(g_tree != NULL, "an IDL member holds a tree-steps buffer with no DOM layer registered");
+        g_tree->unlock(ctx, s->tree);
+    }
 
     /* AND THE ONE LIST IS DISCHARGED BY THE DRIVER, after this returns — tramp_step_state_free_1 reads
        js_idl_args_visit exactly as it reads every other machine's, so this function neither restates it nor

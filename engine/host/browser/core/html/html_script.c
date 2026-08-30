@@ -14,7 +14,10 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "core/dom/node.h"
+#include "core/dom/element.h"    /* §4.12.1.1's children changed steps are RECORDED for the ONE drain that can run them */
 #include "core/dom/document.h"   /* which DOCUMENT this program belongs to: the realm it is compiled in */
+#include "core/dom/document_current_script.h"   /* "execute the script element" step 6's classic arm, steps 1-2 and 4 */
+#include "core/events/report_exception.h"       /* §8.1.4.4 "Calling scripts" step 8's third bullet */
 #include "core/idl_args.h"       /* the `async` attribute's setter, declared like every other IDL member's */
 #include "core/url/url.h"        /* §4.12.1's "encoding-parsing a URL given src, relative to el's node document" */
 #include "core/loader/document_scripts.h"   /* §4.12.1's type-string steps, asked ONCE for both halves */
@@ -241,25 +244,60 @@ void html_script_install(JSContext *ctx, JSValueConst proto)
  * reach. Parser-inserted is step 1's own question and the answer here is structurally NO: a parser-inserted
  * script is prepared by html_script_parsed on the document scan, and an element reaching either of the two
  * callers below was mutated by script after the parse. */
-static void script_post_connection(JSContext *ctx, lxb_dom_element_t *el)
+/* `imm` IS THE CALLER'S, for the reason html_script.h gives: step 36's nested run belongs to whoever is
+   standing on a step machine, and this file's remaining caller of it — §4.12.1.1's attribute change steps —
+   stands nowhere near one. The children changed steps below no longer come through here at all: they record. */
+static void script_post_connection(JSContext *ctx, lxb_dom_element_t *el, ScriptImmediate *imm)
 {
+    imm->text = NULL; imm->text_n = 0; imm->el = NULL;
     /* "The HTML element post-connection steps only run when the inserted element is still CONNECTED" — a
        script mutated while detached prepares when it is inserted, through the insertion half, and preparing it
        here as well would run one element's code twice. */
     if (!node_is_connected(lxb_dom_interface_node(el))) return;
+    /* THE ELEMENT'S OWN DOCUMENT'S REALM, never the realm that performed the write. §4.12.1 step 32 is "let
+       settings object be el's NODE DOCUMENT's relevant settings object" and step 34's base URL is that
+       document's, and two same-origin documents are ONE agent — so `frame.contentDocument.body.appendChild(s)`
+       reaches these steps from the parent's realm about a child's element. core/dom/element.c's own walk made
+       exactly this correction for insert step 12; the attribute change steps had not. */
+    ctx = document_realm_of(lxb_dom_interface_node(el));
+    DCHECK(ctx != NULL,
+           "§4.12.1.1's post-connection steps reached a connected `script` element in a document no realm was "
+           "installed for — a document that can hold a connected node is a document a flow can run steps in, "
+           "so build its realm rather than borrowing whichever one performed the write");
     /* NOT PARSER-INSERTED, and step 1 of these very steps is why: "If insertedNode is parser-inserted, then
        return" — so an element that reaches the post-connection steps at all has a null parser document. */
-    html_script_prepare(ctx, el, /*parser_inserted*/false);
+    html_script_prepare(ctx, el, /*parser_inserted*/false, imm);
 }
 
 /* §4.12.1.1: "The script CHILDREN CHANGED STEPS given changedNode are: 1. If the script element is not
-   connected, then return. 2. Run the script HTML element post-connection steps, given changedNode."
-   The hook is handed the PARENT whose child list changed, which for this family IS changedNode — the script
-   element whose text was written. */
+ * connected, then return. 2. Run the script HTML element post-connection steps, given changedNode."
+ * The hook is handed the PARENT whose child list changed, which for this family IS changedNode — the script
+ * element whose text was written.
+ *
+ * IT RECORDS AND DOES NOT RUN, WHICH IS WHAT MAKES THIS DOOR CONVERGE. Step 2's post-connection steps end at
+ * §4.12.1.1 step 36's "immediately execute the script element", and this hook is called from inside the DOM
+ * mutation chokepoint (core/dom/node.c's node_children_changed, on DOM §4.2.3's `insert`, its `remove` and
+ * §4.10's `replace data`) — a C body with no flow base under it, where a nested program would be the
+ * drive-to-completion this engine aborts on. So `s.textContent = code` hands the element to the SAME record
+ * insert step 12 is drained from, and the one machine that can hold the request runs both doors' elements.
+ * THE ORDER THAT MOVES IS BETWEEN §4.2.3's STEP 9 AND ITS STEP 12, AND NOTHING ELSE. `insert` runs the children
+ * changed steps at step 9 and the post-connection steps at step 12, with only step 10's declaration and step
+ * 11's collection in between — none of which runs the page's code — so an element recorded here and run there
+ * runs at the same point in the page's own timeline. What CANNOT happen is the two families interleaving,
+ * because the walk drains one list in one order.
+ * THE REALM IS NOT TAKEN HERE: node.h states that `ctx` is the MUTATING realm, and the drain resolves the
+ * node's own document's realm per entry. This hook took the mutating one and handed it to `prepare` as if it
+ * were §4.12.1 step 32's settings object. */
 static void script_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
 {
+    (void)ctx;
     if (!html_script_is(parent)) return;
-    script_post_connection(ctx, lxb_dom_interface_element(parent));
+    /* STEP 1 — "if the script element is not connected, then return". Asked HERE because it is the children
+       changed steps' own step and it is asked at their own moment; insert step 12's connectedness is a
+       SEPARATE and later read, which the drain performs per entry (an earlier entry's program may have removed
+       this one). */
+    if (!node_is_connected(parent)) return;
+    element_post_connection_record(parent);
 }
 
 void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
@@ -274,7 +312,23 @@ void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char 
        them — the step asks for a non-null value — so a page that clears the attribute loads nothing, which is
        what it does in a browser. */
     if (!strcmp(local, "src")) {
-        if (val) script_post_connection(ctx, el);
+        if (val) {
+            ScriptImmediate imm;
+
+            script_post_connection(ctx, el, &imm);
+            /* AND IT CANNOT OWE A NESTED RUN, WHICH IS WHY THIS DOOR NEEDS NO MACHINE UNDER IT. §4.12.1.1
+               reaches step 36 only for what falls PAST step 35's "if el's type is `classic` and el has a src
+               attribute, or el's type is `module`", and this door is entered only when the `src` attribute
+               change steps saw a non-null value — which is the attribute already written, since §4.9's
+               attribute change steps run after the write. So an element standing at step 36 here would be one
+               that arrived without the attribute it was told about. */
+            DCHECK(imm.text == NULL,
+                   "§4.12.1.1's `src` attribute change steps prepared a script that owes step 36's immediate "
+                   "execution — step 36 is reached only past step 35's \"el has a src attribute\", and this "
+                   "door is entered only when that attribute was just set, so the element and the attribute "
+                   "change that named it disagree");
+            html_script_immediate_free(&imm);
+        }
         return;
     }
     if (strcmp(local, "async")) return;   /* the `async` CONTENT attribute, null namespace */
@@ -371,7 +425,7 @@ void html_script_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *cop
  * the caller is either §13.2.6 tree construction, which is the thing that sets it, or page code, which cannot.
  * It was a hardcoded `false` with a paragraph arguing that everything reaching here was page-inserted, and that
  * paragraph is gone with the second caller it did not anticipate. */
-void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inserted)
+void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inserted, ScriptImmediate *imm)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
     size_t n_len = 0;
@@ -384,6 +438,13 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     ScriptType st;
     JSValue t;
 
+    /* THE REPORT IS EMPTIED FIRST AND ON EVERY PATH, which is what lets a caller read it as a POSITIVE
+       statement rather than as a field it must remember whether anything wrote. `prepare` has fifteen returns
+       and every one of them means "no nested run is owed"; only the arm at the very bottom fills it. */
+    DCHECK(imm != NULL, "§4.12.1 was prepared with nowhere to report step 36 — the record is mandatory because "
+                        "the one destination it names is a nested run, and a caller with nowhere to put it is "
+                        "a caller that would silently drop the page's own code");
+    imm->text = NULL; imm->text_n = 0; imm->el = NULL;
     if (!html_script_is(n)) return;
     /* STEP 1: "If el's already started is true, then return." This is the whole of what makes §13.4's fragment
        parse inert — the parsed script is in the tree, is queryable, serialises back out, and does not run. */
@@ -396,7 +457,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        that the assignment can prepare it again — the second of the two lazy-loader shapes the post-connection
        steps exist for. Setting the flag before this test would make that element permanently inert and the
        chunk would never run, which is the exact defect those steps were built to end.
-       THE LENGTH IS THE DOM's AND NOT A `strlen` — see the queue call below for why this element's text is the
+       THE LENGTH IS THE DOM's AND NOT A `strlen` — see the report at the bottom for why this element's text is the
        one inline source that can hold a U+0000. */
     has_src = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"src", 3);
     {
@@ -567,68 +628,30 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                 if (st == SCRIPT_TYPE_MODULE) {
                     engine_queue_element_script(document_doc(ctx), (const char *)txt, n_len, st, el);
                 } else {
-                    /* AND THIS IS THE ONE ROW WHOSE POSITION IS A DEVIATION RATHER THAN A MODEL OF ONE, so it
-                       crashes here instead of being described. Every OTHER destination §4.12.1 has is a
-                       POSITION IN A SEQUENCE — a list, a set, a pending slot — and a row expresses each of them
-                       exactly. `immediately execute` is not a position in any sequence: it is a nested run
-                       INSIDE the operation that reached these steps, and the flow's one program sequence has no
-                       way to say that, so the queue's nearest expression of it (the slot after the running
-                       program) puts the rest of the causing program in front of it. That is a timeline no
-                       browser produces, and it was invisible for exactly as long as the prose above it claimed
-                       the slot WAS the step. */
-                    DFAIL("HTML §4.12.1.1 \"Processing model\" step 36 is \"Otherwise, immediately execute the "
-                          "script element el, even if other scripts are already executing\", and this engine "
-                          "cannot perform it: the program is queued at the slot AFTER the program that "
-                          "inserted the element, so `body.appendChild(s); f()` runs f() before s's code where "
-                          "a browser runs it after — and so does `s.textContent = code; f()` through the "
-                          "children changed steps, and a `document.write` of an inline classic script through "
-                          "the parser. DOM §4.2.3 \"Mutation algorithms\"'s insert step 12 is \"for "
-                          "each node of staticNodeList: if node is connected, then run the post-connection "
-                          "steps with node\", so the causing program is mid-statement while the script runs. "
-                          "WHAT THE NEXT DIFF BUILDS: this call becomes a program sub-sequence on the "
-                          "tree-steps drain, which is already a step machine holding a JSStepHdr "
-                          "(core/dom/element.c's element_tree_steps_step) — the same shape ECMAScript "
-                          "§19.2.1.1 PerformEval already has in the fork (step_program_run), where the program "
-                          "is compiled, its closure handed to the trampoline and the machine parked until the "
-                          "value comes back. "
-                          "ITS SUBPROBLEM — THE ORDER — IS BUILT, AND THIS CALL IS REACHED FROM IT: "
-                          "core/dom/element.c drains §4.2.3's insertion steps (insert step 7.7) and its "
-                          "post-connection steps (step 12) as TWO phases over one batch, and this element's "
-                          "preparation is HTML §4.12.1.1's own \"script HTML element post-connection steps\", "
-                          "so it runs in the second phase over the staticNodeList step 10 collects up front. "
-                          "Step 12's connectedness is re-read per entry there, which is what makes "
-                          "§4.12.1.1's worked example — `body.append(script1, script2)` where script1's body "
-                          "removes script2 prints nothing — come out right the moment the program above "
-                          "actually runs. "
-                          "AND TWO NAMED THINGS STILL STAND BETWEEN THIS DFAIL AND THAT RUN, each checked "
-                          "rather than recalled; a reader who writes the request without them finds there is "
-                          "nowhere to put it and no way to compile what it would carry. "
-                          "(1) THE COMPILE. There is no entry that turns a classic script's source text into a "
-                          "trampolinable closure. JS_EVAL_FLAG_TRAMP_CLOSURE is the flag that produces one, and "
-                          "JS_EvalInternal DCHECKs that a compile carrying it passed the @S EVAL-sink seam "
-                          "(js_eval_program_source) — which is right for the two algorithms that set it today, "
-                          "ECMAScript §19.2.1.1 PerformEval and §20.2.1.1.1 CreateDynamicFunction, and WRONG "
-                          "for this element: a `<script>`'s program is HTML §8.1.4.4 \"Calling scripts\"'s run "
-                          "a classic script and is not a code-execution sink, so announcing it would report "
-                          "every page script as one. The assert must key on the eval TYPE that makes an "
-                          "algorithm a sink (DIRECT / INDIRECT), never on the flag that only says who "
-                          "trampolines the body. "
-                          "(2) THE OTHER TWO DOORS. This arm is reached from THREE positions and only the "
-                          "post-connection steps stand on a step machine. §4.12.1.1's children changed steps "
-                          "run at DOM §4.2.3 insert step 9 through core/dom/node.c's node_children_changed — a "
-                          "plain hook list called inside the mutation, which is where `s.textContent = code` "
-                          "arrives — and the parser's own end-tag step runs inside a lexbor parse, which is the "
-                          "parser-suspension capability core/html/html_parse.h already owes. So a seam built at "
-                          "the drain alone would leave engine_queue_script_immediate standing as the fallback "
-                          "for the other two, which is the one thing it may not be: the children changed steps "
-                          "become a recorded-and-drained family exactly as the tree steps are, so every door "
-                          "into `execute the script element` converges on the ONE machine that can carry the "
-                          "request, and the queue entry is DELETED in that diff rather than kept behind an if. "
-                          "HOW ITS ABSENCE SHOWS: web-platform-tests "
-                          "domparsing/createContextualFragment.html's \"<script>s should be run when appended "
-                          "to the document (but not before)\" fails at its LAST assertion and passes the two "
-                          "before it, which only require that nothing ran too EARLY");
-                    engine_queue_script_immediate(document_doc(ctx), (const char *)txt, n_len, el);
+                    /* STEP 36'S LAST SUB-STEP — "Otherwise, immediately execute the script element el, even if
+                       other scripts are already executing" — REPORTED. Every OTHER destination §4.12.1 has is a
+                       POSITION IN A SEQUENCE (a list, a set, a pending slot) and a row in the flow's program
+                       sequence expresses each of them exactly; this one is a NESTED RUN inside the operation
+                       that reached these steps, which no position can say. The queue's nearest expression of it
+                       — the slot after the running program — put the REST OF THE CAUSING PROGRAM in front of
+                       it, so `body.appendChild(s); f()` ran `f()` before `s`'s code where a browser runs it
+                       after. See html_script.h for why the report leaves this algorithm rather than being
+                       performed in it: this body is reached from inside a DOM mutation, from inside an
+                       attribute change and from inside a parse, and running the page's code needs a flow base
+                       under it that none of those three has.
+                       THE COPY IS THE NUL, AND IT IS NOT A CONVENIENCE. lexbor allocates `length + 1` for an
+                       ELEMENT's text content and its concatenating walk never writes the last byte, while every
+                       compiler entry in this engine requires `input[input_len] == '\0'`. Compiled off that
+                       buffer, a program would end in whatever the document arena last held there. */
+                    imm->text = malloc(n_len + 1);
+                    CHECK(imm->text != NULL,
+                          "§4.12.1.1 step 36's source text could not be copied — dropping it means an injected "
+                          "inline script silently never runs, which is the whole surface this engine exists to "
+                          "reach");
+                    memcpy(imm->text, txt, n_len);
+                    imm->text[n_len] = '\0';
+                    imm->text_n = n_len;
+                    imm->el = el;
                 }
             }
             lxb_dom_document_destroy_text(n->owner_document, txt);
@@ -685,13 +708,252 @@ void html_script_parser_inserted(lxb_dom_node_t *script)
        See html_script.h for why that makes this route the one that reaches a written script and nothing else. */
     ctx = document_active_realm_of(lxb_dom_interface_node(script->owner_document));
     if (!ctx) return;
+    {
+    ScriptImmediate imm;
     /* "PREPARE THE SCRIPT ELEMENT SCRIPT", and it is PARSER-INSERTED — §13.2.6.4.4 'The "in head" insertion
        mode' set this element's parser document when it created it, which is the fact steps 4 and 14 turn on and
        which decides whether a `<script src>` with no `async` attribute is a parser-blocking script or a member
        of the in-order ASAP list. HTML §14.2 "Parsing XML documents" states the same of ITS parser in the same
        breath as the end tag — "it must have its parser document set and its force async set to false" — so the
        XML caller passes true here for the standard's own reason and not by analogy with this one. */
-    html_script_prepare(ctx, lxb_dom_interface_element(script), /*parser_inserted*/true);
+    html_script_prepare(ctx, lxb_dom_interface_element(script), /*parser_inserted*/true, &imm);
+    /* …AND STEP 36, WHICH THIS DOOR CANNOT YET PERFORM AND WHICH IS THEREFORE THE ONE PLACE LEFT WHERE A ROW
+       STANDS IN FOR A NESTED RUN.
+       WHAT IS NOT COVERED, EXACTLY: a `document.write`n inline classic script takes the slot AFTER the program
+       that wrote it instead of running INSIDE the `document.write` call, so a write of a `script` element whose
+       body calls `a()`, followed by a call to `b()`, runs `b()` before `a()` where a browser runs it after. The two DOM doors no longer do this — insert
+       step 12 and §4.12.1.1's children changed steps both reach core/dom/element.c's tree-steps machine, which
+       makes the request — and this one cannot join them because §13.2.6.4.8 'The "text" insertion mode' runs
+       inside lexbor's tokenizer: a C loop with no step machine and no flow base under it, so there is nothing
+       here to park.
+       WHAT THE NEXT DIFF BUILDS: the parser-suspension capability core/html/html_parse.h already owes by name —
+       §13.2.3.5's insertion point held across the run, the tokenizer stopped at the end tag and resumed at the
+       program's completion. With it this call site becomes the same html_script_exec_run request the drain
+       makes, and this row and engine_queue_script_immediate go together.
+       HOW ITS ABSENCE SHOWS: a document that writes a `<script>` and then reads back what that script defined,
+       in the SAME written chunk or in the writing program's next statement, sees it undefined — and §8.4.3's
+       own permission ("user agents are explicitly allowed to avoid executing script elements inserted via this
+       method") is why nothing else in this tree reports it. */
+    if (imm.text) {
+        engine_queue_script_immediate(document_doc(ctx), imm.text, imm.text_n, imm.el);
+        html_script_immediate_free(&imm);
+    }
+    }
+}
+
+/* ---- HTML §4.12.1.1's STEP 36, AND THE "execute the script element" IT REACHES ------------------------------
+ *
+ * See html_script.h for why `prepare` reports this rather than performing it, and for what each field of the
+ * report means. */
+void html_script_immediate_free(ScriptImmediate *imm)
+{
+    DCHECK(imm != NULL, "a §4.12.1.1 step 36 report was released through a null record");
+    free(imm->text);
+    imm->text = NULL;
+    imm->text_n = 0;
+    imm->el = NULL;
+}
+
+/* WHICH STEP OF "execute the script element" THE STATE IS AT. Declared rather than numbered ad hoc, because a
+   cross-session resume reads this byte and a private numbering says nothing about the algorithm. */
+enum {
+    SX_IDLE = 0,   /* nothing owed — the state a driving machine's buffer is built in and returns to */
+    SX_RUN,        /* step 6's classic arm: the program is compiled, the bracket is open, the run is in flight */
+    SX_REPORT      /* §8.1.4.4 "Calling scripts" step 8's third bullet, INSIDE the bracket step 4 will close */
+};
+
+void html_script_exec_init(ScriptExec *x)
+{
+    x->text = NULL;
+    x->text_n = 0;
+    x->el = NULL;
+    x->stage = SX_IDLE;
+    x->phase = 0;
+    x->cb[0] = JS_UNDEFINED;
+    x->cb[1] = JS_UNDEFINED;
+    x->old = JS_UNDEFINED;
+    x->exc = JS_UNDEFINED;
+    report_exception_work_start(&x->rx);
+}
+
+bool html_script_exec_owed(const ScriptExec *x) { return x->stage != SX_IDLE; }
+
+void html_script_exec_begin(ScriptExec *x, ScriptImmediate *imm)
+{
+    DCHECK(x->stage == SX_IDLE,
+           "a second §4.12.1.1 step 36 run was begun on a state that is still executing one — a machine holds "
+           "one nested program at a time, and adopting another would drop whichever of the two the state stops "
+           "naming, with §3.1.7's currentScript left holding its element");
+    DCHECK(imm->text != NULL && imm->el != NULL,
+           "§4.12.1.1 step 36's run was begun on an EMPTY report — an empty record is the positive statement "
+           "that this preparation owed no nested run, so beginning one means the caller did not look");
+    x->text = imm->text;
+    x->text_n = imm->text_n;
+    x->el = imm->el;
+    imm->text = NULL; imm->text_n = 0; imm->el = NULL;
+    x->stage = SX_RUN;
+}
+
+void html_script_exec_visit(JSContext *ctx, ScriptExec *x, JSStepVisit *v)
+{
+    /* THE SOURCE TEXT IS NOT ON THIS LIST AND MUST NOT BE. It is a plain C allocation, and every visit
+       operation this engine has copies through the JS allocator — so a fork would leave one buffer named by two
+       arms and the second free would be a double free. It never has to be on the list, because the FIRST leg of
+       the run below compiles it and releases it without returning: there is no rest point at which this state
+       holds one. */
+    DCHECK(x->text == NULL,
+           "a §4.12.1.1 step 36 state was visited still holding its source text — the compile releases it in "
+           "the same leg it reads it, so a buffer alive here has crossed a rest point that would hand one "
+           "allocation to two forked arms");
+    v->val(ctx, &x->cb[0]);
+    v->val(ctx, &x->cb[1]);
+    v->val(ctx, &x->old);
+    v->val(ctx, &x->exc);
+    report_exception_work_visit(ctx, &x->rx, v);
+}
+
+void html_script_exec_release(JSContext *ctx, ScriptExec *x)
+{
+    /* §8.1.4.6 step 6.1's ERROR REPORTING MODE, given back — a FLAG and not a reference, which is exactly what
+       a `release` may touch and what no declaration can carry. Left set it would put the global in error
+       reporting mode for the rest of the session and silently swallow every later report. */
+    report_exception_work_unlock(ctx, &x->rx);
+    DCHECK(x->text == NULL,
+           "a §4.12.1.1 step 36 state was released still holding its source text — see the visit");
+}
+
+/* §4.12.1.1's "execute the script element" step 6's CLASSIC ARM STEP 4 — "set document's currentScript
+   attribute to oldCurrentScript" — and the end of the algorithm. Reached from the normal completion and from
+   the report of an abrupt one alike, because §8.1.4.4 "Calling scripts" step 8's third bullet is INSIDE "run
+   the classic script", which is step 6's third sub-step: the report happens while the bracket is still open. */
+static void script_exec_finish(JSContext *ctx, ScriptExec *x)
+{
+    document_current_script_restore(ctx, x->el, x->old);
+    x->old = JS_UNDEFINED;
+    x->el = NULL;
+    x->stage = SX_IDLE;
+}
+
+int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **out_cb, int *out_argc)
+{
+    int r;
+
+    DCHECK(x->stage != SX_IDLE,
+           "\"execute the script element\" was stepped with nothing to execute — html_script_exec_owed is the "
+           "question, and a machine that steps this without asking it delivers a completion to an algorithm "
+           "that made no request");
+    DCHECK(x->el != NULL,
+           "\"execute the script element\" is a switch on EL and this state has none — step 6's classic arm "
+           "sets this document's §3.1.7 currentScript to it, so a run without one could not open its bracket");
+
+    if (x->stage == SX_RUN) {
+        JSValue out = JS_UNDEFINED;
+
+        if (x->phase == 0) {
+            JSValue prog, global;
+
+            DCHECK(JS_IsUndefined(in),
+                   "\"execute the script element\" was entered carrying a completion before it had asked for "
+                   "anything — the compile below is its first act, so a value here is another algorithm's "
+                   "answer routed into this one");
+            JS_FreeValue(ctx, in);
+            DCHECK(x->text != NULL, "step 36's run reached its compile with no source text");
+            /* §4.12.1.1 STEP 34's CLASSIC ARM — "let script be the result of creating a classic script using
+               source text, settings object, base URL, and options" — performed HERE rather than where the step
+               is numbered, which is unobservable and is what lets the report cross from `prepare` as BYTES:
+               nothing between step 34 and step 36 runs the page's code, and step 35's four arms are the ones
+               this element did not take.
+               JS_EVAL_FLAG_TRAMP_CLOSURE hands the program back AS A CLOSURE so its body runs on the calling
+               flow's own trampoline chain — preemptible per opcode, parkable at any loop back-edge or `await`,
+               forkable at a concolic branch inside it. Without it the body would run in its own activation off
+               the chain, which is the drive-to-completion this engine aborts on, and a loop inside an injected
+               script could not park for the scheduler at all. It is NOT a claim that this is an eval —
+               quickjs.h says so at the flag, and the @S string-to-code seam keys on the eval TYPE (DIRECT /
+               INDIRECT), which a `<script>`'s JS_EVAL_TYPE_GLOBAL program is neither of.
+               THE NAME IS THE DOCUMENT'S ADDRESS, which is step 34's "let base URL be el's node document's
+               document base URL" for a script with no `src` — the base a relative `import('./chunk.js')` inside
+               it resolves against.
+               JS_EVAL_FLAG_INLINE_SCRIPT for the reason solver/engine.c stamps it on an address-less
+               page-script row: this program's source text arrived in the document rather than in a subresource
+               bundle served identically to everybody. */
+            {
+                const char *base = document_base_url(ctx);
+
+                DCHECK(base != NULL,
+                       "§4.12.1.1 step 34's base URL is \"el's node document's document base URL\" and this "
+                       "document has none — HTML §2.4.3 \"Document base URLs\" ends its fallback base URL at "
+                       "\"return document's URL\", so every Document has one, and an absent one is a document "
+                       "built somewhere that never set its URL");
+                prog = JS_Eval(ctx, x->text, x->text_n, base,
+                               JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE | JS_EVAL_FLAG_INLINE_SCRIPT);
+            }
+            free(x->text);
+            x->text = NULL;
+            x->text_n = 0;
+            /* STEP 6's CLASSIC ARM, STEPS 1-2 — "let oldCurrentScript be the value to which document's
+               currentScript object was most recently set" and "if el's root is not a shadow root, then set
+               document's currentScript attribute to el; otherwise, set it to null". OPENED BEFORE THE COMPILE'S
+               ANSWER IS READ, because a parse error does not skip the arm: §4.12.1.1 step 4 returns only when
+               el's RESULT IS NULL, and "creating a classic script" over source text that does not parse returns
+               a script whose `error to rethrow` is set rather than null. So the throw is reported from INSIDE
+               this bracket, exactly as an evaluation's would be.
+               oldCurrentScript IS CARRIED AND NOT ASSERTED NULL, and step 36 is the case that made that
+               necessary: the program that inserted this element is still live, with its own element in the
+               slot. */
+            x->old = document_current_script_set(ctx, x->el);
+            if (!JS_IsException(prog)) {
+                /* "RUN THE CLASSIC SCRIPT GIVEN BY EL'S RESULT" — the receiver is the GLOBAL OBJECT: a classic
+                   script's program is global scope whatever its strictness, so a `"use strict"` prologue must
+                   still see the global and not undefined. */
+                global = JS_GetGlobalObject(ctx);
+                r = step_call_run(ctx, &x->phase, x->cb, SCRIPT_EXEC_CB_SLOTS, prog, global, 0, NULL,
+                                  JS_UNDEFINED, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, global);
+                JS_FreeValue(ctx, prog);
+                DCHECK(r == JS_STEP_CALL,
+                       "§4.12.1.1 step 36's nested program answered without parking — the request is a CALL of "
+                       "the page's own code and there is no arm of it that completes in place");
+                return r;
+            }
+            /* §8.1.4.4 step 6 — "if script's error to rethrow is not null, then set evaluationStatus to
+               ThrowCompletion(script's error to rethrow)" — and then step 8's third bullet below. */
+            x->exc = JS_GetException(ctx);
+            x->stage = SX_REPORT;
+            in = JS_UNDEFINED;
+        } else {
+            r = step_call_run(ctx, &x->phase, x->cb, SCRIPT_EXEC_CB_SLOTS, JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
+                              in, &out, out_cb, out_argc);
+            DCHECK(r == 0,
+                   "§4.12.1.1 step 36's nested program re-parked on the same request — a call request has two "
+                   "legs and the second one collects");
+            in = JS_UNDEFINED;   /* step_call_run moved it into `out` */
+            if (!JS_IsException(out)) {
+                /* A `<script>`'s completion value is not observable to the page — only an eval API surfaces
+                   one — so it is taken and released here rather than discarded by the engine. */
+                JS_FreeValue(ctx, out);
+                script_exec_finish(ctx, x);
+                return 0;
+            }
+            x->exc = JS_GetException(ctx);
+            x->stage = SX_REPORT;
+        }
+    }
+
+    /* HTML §8.1.4.4 "Calling scripts" STEP 8's THIRD BULLET — "otherwise, rethrow errors is false. Perform the
+       following steps: report an exception given by evaluationStatus.[[Value]] for script's settings object's
+       global object; clean up after running script with settings; return evaluationStatus."
+       IT IS `rethrow errors` FALSE HERE, AND THAT IS §4.12.1.1'S CHOICE RATHER THAN A DEFAULT: "execute the
+       script element" invokes "run the classic script given by el's result" with no rethrow argument. A page's
+       injected script that throws must therefore NOT complete the mutation that inserted it — `appendChild`
+       does not throw what the injected program threw — and the `error` listeners this report fires are the
+       page's own code, which is why it is a request and not a call. */
+    DCHECK(x->stage == SX_REPORT, "\"execute the script element\" is standing in a stage it has no steps for");
+    r = report_exception_run(ctx, &x->rx, x->exc, in, out_cb, out_argc);
+    if (r) return r;
+    JS_FreeValue(ctx, x->exc);
+    x->exc = JS_UNDEFINED;
+    script_exec_finish(ctx, x);
+    return 0;
 }
 
 /* HTML §4.12.1.1 Processing model — see html_script.h, which is where this step is now stated once for every

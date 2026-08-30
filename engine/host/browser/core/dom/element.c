@@ -1536,6 +1536,15 @@ typedef struct {
     lxb_dom_node_t *root;     /* the subtree the steps run over */
     lxb_dom_node_t *cursor;   /* how far the walk has got — the resume point */
     uint8_t         inserted;
+    /* HTML §4.12.1.1 "Processing model"'s CHILDREN CHANGED STEPS, which are the OTHER family that ends at the
+       post-connection steps: "The script children changed steps given changedNode are: 1. If the script
+       element is not connected, then return. 2. Run the script HTML element post-connection steps, given
+       changedNode." An entry recorded by them is ONE NODE and has no insertion steps to run — the tree did not
+       change under it, its TEXT did — so the first phase contributes it to staticNodeList and does nothing
+       else, and the second phase treats it exactly like a node insert step 11 collected.
+       IT IS AN ENTRY RATHER THAN A SECOND LIST because insert step 12 is where both families' work happens, and
+       one list drained in one order is what makes them impossible to interleave. */
+    uint8_t         pc_only;
 } TreeStepEntry;
 
 /* WHERE THE WALK IS INSIDE THE NODE IT IS STANDING ON — the resume point a fork needs, one level finer than the
@@ -1591,6 +1600,15 @@ enum {
     TS_PHASE_POST_CONNECTION      /* insert step 12, over staticNodeList */
 };
 
+/* WHERE THE SECOND PHASE IS INSIDE ONE ENTRY. The post-connection steps are the phase that MAY run the page's
+   code — HTML §4.12.1.1 "Processing model" step 36's "immediately execute the script element el, even if other
+   scripts are already executing" is one of them — so unlike the first phase they have a rest point INSIDE an
+   entry, and it is the whole of that program's execution. */
+enum {
+    TS_PC_STEPS = 0,   /* the entry's own post-connection steps: the navigable, the preparation */
+    TS_PC_EXECUTE      /* §4.12.1.1's "execute the script element", parked on the program or on its report */
+};
+
 /* The buffer a machine takes ownership of. Per-machine and not global, because the drain YIELDS: a global list
    would be appended to by whichever flow ran during the suspension, and the resuming one would then run another
    flow's insertion steps over another flow's nodes.
@@ -1610,10 +1628,15 @@ typedef struct {
     /* §6.4.1's two CHAINED questions (sticky, then "and recently"), each of which forks: the byte says which
        one an answer is owed to, so it belongs to the walk and not to a C local that a park would forget. */
     uint8_t  ua_phase;
+    uint8_t  pcphase;    /* TS_PC_* — where the second phase is inside e's current staticNodeList entry */
     /* §4.2.3 insert step 10's staticNodeList. Bare Lexbor pointers and no connectedness bit: step 12 has to
        ASK, and a remembered answer is the one defect this list exists to make unrepresentable. */
     lxb_dom_node_t **list;
     int              list_n, list_cap;
+    /* HTML §4.12.1.1's "execute the script element", in flight. It holds JSValues and a §8.1.4.6 flag, so it is
+       named by this buffer's own `visit` and given back by its `release` — the two halves quickjs-step.h keeps
+       apart, and the reason the block below stopped being a plain byte copy across a fork. */
+    ScriptExec       exec;
     TreeStepEntry    e[];
 } TreeStepBuf;
 
@@ -1719,6 +1742,40 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
     }
     g_ts[g_ts_n].root = g_ts[g_ts_n].cursor = root;
     g_ts[g_ts_n].inserted = (uint8_t)(inserted != 0);
+    g_ts[g_ts_n].pc_only = 0;
+    g_ts_n++;
+}
+
+/* HTML §4.12.1.1 "Processing model"'s CHILDREN CHANGED STEPS, RECORDED FOR THE ONE DRAIN THAT CAN RUN THEM.
+ *
+ * Their step 2 is "run the script HTML element post-connection steps, given changedNode", and those steps end
+ * at §4.12.1.1 step 36's "immediately execute the script element el" — the page's own code. The hook that
+ * carries them (core/dom/node.c's children-changed list) is called from INSIDE the DOM mutation chokepoint, a
+ * C body with no flow base under it, so the steps cannot be run where they are reached. They are recorded here
+ * instead and drained by the machine every declared member converges on, which is the same machine insert step
+ * 12 is drained from and therefore the same ORDER: the two families cannot interleave, because one list is
+ * drained once.
+ *
+ * IT DOES NOT GROW `g_ts` ITSELF. The list is the chokepoint's scratch and this is one more entry on it, which
+ * is what makes a member that both inserts a subtree and rewrites a script's text produce ONE batch rather than
+ * two records nothing orders. */
+void element_post_connection_record(lxb_dom_node_t *n)
+{
+    DCHECK(n != NULL, "the children changed steps recorded nothing");
+    DCHECK(node_is_connected(n),
+           "§4.12.1.1's children changed steps recorded a node that is not connected — their step 1 is \"if "
+           "the script element is not connected, then return\", so the test belongs to the caller and a "
+           "disconnected node here means it was not made");
+    if (g_ts_n == g_ts_cap) {
+        int want = g_ts_cap ? g_ts_cap * 2 : 8;
+        TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
+        CHECK(a != NULL, "the pending tree-steps list could not grow — dropping one means a script whose text "
+                         "was just written never runs, silently");
+        g_ts = a; g_ts_cap = want;
+    }
+    g_ts[g_ts_n].root = g_ts[g_ts_n].cursor = n;
+    g_ts[g_ts_n].inserted = 1;   /* it contributes to staticNodeList; see TreeStepEntry::pc_only */
+    g_ts[g_ts_n].pc_only = 1;
     g_ts_n++;
 }
 
@@ -1759,6 +1816,8 @@ static void *element_tree_steps_take(JSContext *ctx)
     b->phase = TS_PHASE_INSERTION;
     b->nphase = TS_NODE_EFFECTS;
     b->ua_phase = 0;
+    b->pcphase = TS_PC_STEPS;
+    html_script_exec_init(&b->exec);
     /* §4.2.3 insert step 10 — "let staticNodeList be a list of nodes, initially « »". It is EMPTY here and
        filled by step 11 from step 7.7's own walk, which is why it is not sized with the block. */
     b->list = NULL;
@@ -1776,6 +1835,21 @@ static bool element_tree_steps_recorded(void) { return g_ts_n != 0; }
    node set in the identical order, and §4.2.3 forbids the insertion steps to "modify the node tree that
    insertedNode participates in", so a second traversal would visit exactly these nodes again. The DCHECK below
    is what turns that forbidding into something this engine notices rather than assumes. */
+/* The push itself, shared by insert step 11's walk above and by the children-changed entry, which reaches
+   staticNodeList without step 11's two guarantees and must not borrow their assertions. */
+static void tree_steps_list_push(JSContext *ctx, TreeStepBuf *b, lxb_dom_node_t *n)
+{
+    if (b->list_n == b->list_cap) {
+        int want = b->list_cap ? b->list_cap * 2 : 8;
+        lxb_dom_node_t **a = js_realloc(ctx, b->list, sizeof *a * (size_t)want);
+        CHECK(a != NULL, "§4.2.3 insert step 10's staticNodeList could not grow — dropping an entry means an "
+                         "inserted <script> is never prepared and an <iframe> never gets its child navigable, "
+                         "silently");
+        b->list = a; b->list_cap = want;
+    }
+    b->list[b->list_n++] = n;
+}
+
 static void tree_steps_list_append(JSContext *ctx, TreeStepBuf *b, lxb_dom_node_t *n)
 {
     DCHECK(!element_tree_steps_recorded(),
@@ -1788,24 +1862,23 @@ static void tree_steps_list_append(JSContext *ctx, TreeStepBuf *b, lxb_dom_node_
            "§4.2.3 insert step 11 reached a node that is not connected — element_tree_changed records only "
            "connected roots and step 7.7's walk stays inside one, so a disconnected node here means the tree "
            "moved under the walk");
-    if (b->list_n == b->list_cap) {
-        int want = b->list_cap ? b->list_cap * 2 : 8;
-        lxb_dom_node_t **a = js_realloc(ctx, b->list, sizeof *a * (size_t)want);
-        CHECK(a != NULL, "§4.2.3 insert step 10's staticNodeList could not grow — dropping an entry means an "
-                         "inserted <script> is never prepared and an <iframe> never gets its child navigable, "
-                         "silently");
-        b->list = a; b->list_cap = want;
-    }
-    b->list[b->list_n++] = n;
+    tree_steps_list_push(ctx, b, n);
 }
 
 /* §4.2.3 INSERT STEP 12 — "for each node of staticNodeList: if node is CONNECTED, then run the post-connection
    steps with node". ONE ENTRY per call, so the second phase yields exactly as the first does.
-   IT TAKES NO REALM. Every step here runs in the NODE'S document's realm and the mutating member's is never
-   the answer, so the parameter that could carry the wrong one is not on the signature to be used by mistake. */
-static int tree_steps_post_connection(TreeStepBuf *b)
+   IT TAKES `ctx` FOR THE REQUEST AND FOR NOTHING ELSE. Every STEP here runs in the NODE'S document's realm,
+   which this function resolves per entry and which the mutating member's realm is never the answer to — the
+   parameter that could carry the wrong one is still not on the signature. What `ctx` is used for is the
+   completion the walk's own request comes back with: releasing a value and dupping into a request buffer are
+   runtime-level operations, and the machine's completion has to be freed by SOMEONE.
+   `in` IS THE ANSWER TO THE REQUEST THIS WALK MADE, and it is JS_UNDEFINED at every entry that made none. */
+static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in,
+                                      JSValue **out_cb, int *out_argc)
 {
     lxb_dom_node_t *n;
+    ScriptImmediate imm;
+    int r;
 
     DCHECK(b->k < b->list_n, "§4.2.3 insert step 12 was stepped past staticNodeList's end");
     DCHECK(b->list != NULL,
@@ -1821,10 +1894,39 @@ static int tree_steps_post_connection(TreeStepBuf *b)
            "runs every node's insertion steps before any node's post-connection steps, which is why step 10 "
            "collects staticNodeList up front");
     DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
-           "§4.2.3 insert step 12 was entered carrying a per-node phase from step 7.7 — the post-connection "
-           "steps built here ask nothing, so there is no rest point inside one of them for a phase to belong "
-           "to, and a phase that survived means step 7.7's walk returned mid-node");
-    n = b->list[b->k++];
+           "§4.2.3 insert step 12 was entered carrying a per-node phase from step 7.7 — the per-node phase "
+           "belongs to the FIRST phase's walk, whose steps §4.2.3 forbids to run the page's code; the second "
+           "phase's own rest point is TS_PC_*, so a step-7.7 phase surviving here means that walk returned "
+           "mid-node");
+    /* THE ENTRY IS NOT CONSUMED UNTIL ITS STEPS ARE OVER. `k` used to advance on the way in, which was right
+       while nothing here could park; a nested program parks in the MIDDLE of an entry, and a cursor already
+       past it would resume the walk one node further on with the run it had abandoned unaccounted for. */
+    n = b->list[b->k];
+    /* A RESUME INSIDE §4.12.1.1's "execute the script element" GOES STRAIGHT BACK TO IT and re-runs none of
+       this entry's other steps: the navigable is created, the preparation is done, and what is outstanding is
+       the program. */
+    if (b->pcphase == TS_PC_EXECUTE) {
+        JSContext *dctx = document_realm_of(n);
+
+        DCHECK(dctx != NULL,
+               "§4.12.1.1's nested program resumed in a document that has lost its realm — the realm is the "
+               "one the program was compiled in and closed over, so answering with another is running the "
+               "page's code against the wrong Window");
+        r = html_script_exec_run(dctx, &b->exec, in, out_cb, out_argc);
+        if (r) return r;
+        b->pcphase = TS_PC_STEPS;
+        b->k++;
+        return b->k < b->list_n ? JS_STEP_YIELD : 0;
+    }
+    DCHECK(JS_IsUndefined(in),
+           "§4.2.3 insert step 12 was entered carrying a completion it never asked for — the only request this "
+           "phase makes is §4.12.1.1's nested program, and it is standing in TS_PC_STEPS, so this value is "
+           "some other algorithm's answer routed into the walk");
+    JS_FreeValue(ctx, in);
+    DCHECK(!html_script_exec_owed(&b->exec),
+           "§4.2.3 insert step 12 began a new entry while a nested program was still owed — the run is the "
+           "entry's last step and TS_PC_EXECUTE is where the walk waits for it, so an owed run here is one "
+           "whose completion nothing will collect and whose §3.1.7 bracket nothing will close");
     /* CONNECTEDNESS IS RE-READ HERE AND NEVER REMEMBERED, and the list carries no bit for it to be remembered
        IN. The list is STATIC — step 10's note: "the post-connection steps can modify the tree's structure,
        making live traversal unsafe" — but the TEST is per entry at that entry's own turn, because an EARLIER
@@ -1873,8 +1975,28 @@ static int tree_steps_post_connection(TreeStepBuf *b)
         /* NOT PARSER-INSERTED: the step above is "if insertedNode is parser-inserted, then return", so a node
            that reaches this walk has a null parser document. A parser's own `<script>` is prepared at its end
            tag instead (html_script_parser_inserted). */
-        html_script_prepare(dctx, el, /*parser_inserted*/false);
+        /* AND STEP 36'S NESTED RUN, WHICH IS THIS SEAM'S WHOLE REASON FOR EXISTING. `prepare` REPORTS "execute
+           the script element" rather than performing it (html_script.h says why), and this walk is the party
+           that can perform it: it stands on a step machine, so it makes the program a REQUEST and the caller
+           returns it. The element inserted by `body.appendChild(s)` therefore runs its code BEFORE the next
+           statement of the program that inserted it — which is what "even if other scripts are already
+           executing" means — and it runs as a first-class flow: preemptible per opcode, parkable at any loop
+           back-edge, riding this flow's COW delta.
+           A CHILDREN-CHANGED ENTRY ARRIVES HERE TOO. `s.textContent = code` records the element through
+           element_post_connection_record above, so both DOM doors into §4.12.1.1's post-connection steps end
+           at this one call and neither can run the page's code anywhere else. */
+        html_script_prepare(dctx, el, /*parser_inserted*/false, &imm);
+        if (imm.text) {
+            html_script_exec_begin(&b->exec, &imm);
+            b->pcphase = TS_PC_EXECUTE;
+            r = html_script_exec_run(dctx, &b->exec, JS_UNDEFINED, out_cb, out_argc);
+            if (r) return r;
+            /* THE ONLY WAY HERE IS A PROGRAM THAT FINISHED WITHOUT PARKING ONCE, which a compile that produced
+               no closure and a report that ran no listener can both do. The entry is finished either way. */
+            b->pcphase = TS_PC_STEPS;
+        }
     }
+    b->k++;
     return b->k < b->list_n ? JS_STEP_YIELD : 0;
 }
 
@@ -1902,18 +2024,19 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
        post-connection steps can modify the tree's structure, making live traversal unsafe", and HTML §4.12.1.1
        "Processing model" step 36 — "Otherwise, immediately execute the script element el, even if other scripts
        are already executing" — is reached from those steps and IS the page's code.
-       ASSERTED ON THE INCOMING HALF, which is the half that exists today: this walk makes no request yet, so a
-       completion arriving here is an answer to a question it never asked, and it would be silently dropped by
-       the free below. When step 36's run is built, the outgoing half is asserted beside the request it makes;
-       both halves are the assertion, because a check that only ever sees JS_UNDEFINED proves nothing about a
-       walk that has started asking. */
+       BOTH HALVES ARE THE ASSERTION AND BOTH ARE NOW LIVE. The FIRST phase asks nothing, so it asserts the
+       completion it is handed is JS_UNDEFINED — a value there is the driving machine's own request routed into
+       the drain. The SECOND phase does ask, so its own entry asserts the mirror: a completion is accepted only
+       while the walk is standing in TS_PC_EXECUTE, and JS_UNDEFINED is required everywhere else. A check that
+       only ever sees JS_UNDEFINED would prove nothing about a walk that has started asking. */
+    if (b->phase == TS_PHASE_POST_CONNECTION) return tree_steps_post_connection(ctx, b, in, out_cb, out_argc);
     DCHECK(JS_IsUndefined(in),
-           "§4.2.3's tree-steps walk was re-entered carrying a completion it never asked for — this walk makes "
-           "no request, so the only value it can be handed is JS_UNDEFINED, and anything else means the "
-           "driving machine's own request was routed into the drain instead of into the member's stage");
+           "§4.2.3's tree-steps walk was re-entered carrying a completion its FIRST phase never asked for — "
+           "§4.2.3 forbids the insertion steps to execute JavaScript, so this phase makes no request and the "
+           "only value it can be handed is JS_UNDEFINED; anything else means the driving machine's own request "
+           "was routed into the drain instead of into the member's stage");
     JS_FreeValue(ctx, in);
     (void)out_cb; (void)out_argc;
-    if (b->phase == TS_PHASE_POST_CONNECTION) return tree_steps_post_connection(b);
     DCHECK(b->phase == TS_PHASE_INSERTION, "the tree-steps drain is standing in a phase §4.2.3 does not have");
     DCHECK(b->i < b->n, "the tree-steps drain was stepped past its end");
     e = &b->e[b->i];
@@ -1927,6 +2050,26 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
            "a tree write reached §4.2.3's steps in a document no realm was installed for — a document that can "
            "hold a connected node is a document a flow can run steps in, so build its realm rather than "
            "borrowing whichever one performed the write");
+    /* HTML §4.12.1.1's CHILDREN CHANGED STEPS CONTRIBUTE THEIR ONE NODE AND NOTHING ELSE. There are no
+       insertion steps to run for them — the tree did not change under this element, its TEXT did — so the
+       entry's whole business in the first phase is to take its place in staticNodeList, and the second phase
+       then treats it exactly like a node insert step 11 collected, connectedness re-read and all.
+       IT DOES NOT GO THROUGH tree_steps_list_append, whose two assertions are step 11's own: this node is not
+       reached by a walk from a recorded root, and its connectedness was tested by the children changed steps'
+       step 1 at the moment the standard tests it rather than by element_tree_changed at the write. */
+    if (e->pc_only) {
+        DCHECK(n == e->root && b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
+               "a children-changed entry was resumed mid-node — it has no per-node steps to park inside, so "
+               "its cursor is its root and its phase is the walk's initial one for the whole of its life");
+        DCHECK(e->inserted, "a children-changed entry is not marked as contributing to staticNodeList — "
+                            "step 12 is the only phase it has, so an entry that skips the collection has "
+                            "no phase left to run in");
+        tree_steps_list_push(ctx, b, n);
+        e->cursor = NULL;
+        if (++b->i < b->n) return JS_STEP_YIELD;
+        b->phase = TS_PHASE_POST_CONNECTION;
+        return b->list_n ? JS_STEP_YIELD : 0;
+    }
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
@@ -2080,6 +2223,16 @@ static void element_tree_steps_free(JSContext *ctx, void *vb)
     TreeStepBuf *b = vb;
 
     if (!b) return;
+    /* §4.12.1.1's execution state, and this is its `release` half — the §8.1.4.6 flag, which no declaration can
+       carry. Its REFERENCES are the visit's, and there are none left to discharge here: this entry point is
+       reached only when the walk finished (the drain's 0 edge), and a finished walk has closed every bracket it
+       opened. That is asserted rather than assumed, because the alternative failure is silent: a value alive
+       here is one nothing frees, since the visit-driven discharge runs only for a walk that was ABANDONED. */
+    DCHECK(!html_script_exec_owed(&b->exec),
+           "§4.2.3's tree-steps walk finished with §4.12.1.1's \"execute the script element\" still owed — the "
+           "walk ends only when every staticNodeList entry's steps are over, so an outstanding nested program "
+           "here is one whose §3.1.7 currentScript bracket was never closed");
+    html_script_exec_release(ctx, &b->exec);
     js_free(ctx, b->list);   /* §4.2.3 insert step 10's staticNodeList — see the visit for why it is separate */
     js_free(ctx, b);
 }
@@ -2098,11 +2251,16 @@ static void tree_steps_block_elem(JSContext *ctx, void *elem, JSStepVisit *v)
     TreeStepBuf *b = elem;
 
     v->array(ctx, (void **)&b->list, sizeof *b->list, b->list_n, b->list_cap, tree_steps_list_elem);
+    /* …AND THE NESTED PROGRAM'S OWN STATE, which is why this block stopped being a plain byte copy: a fork
+       inside an injected script leaves both arms standing on §4.12.1.1's "execute the script element", each
+       with its own request buffer, its own oldCurrentScript and its own report. */
+    html_script_exec_visit(ctx, &b->exec, v);
 }
 
-/* THE BUFFER ACROSS A FORK. Nothing in it holds a reference — an entry names two Lexbor nodes and the list
-   names one each, and the tree those name is the flow's own through the DOM COW delta — so a plain copy IS the
-   whole contract, and each arm walks on with its own cursors, its own list and its own per-node phase.
+/* THE BUFFER ACROSS A FORK. The ENTRIES and the LIST hold no reference — each names Lexbor nodes, and the tree
+   those name is the flow's own through the DOM COW delta — so for them a plain copy IS the whole contract, and
+   each arm walks on with its own cursors, its own list and its own per-node phase. What the block DOES hold is
+   §4.12.1.1's execution state, visited by the element visit below.
    IT IS TWO ALLOCATIONS AND THEREFORE NOT TWO `buf` CALLS. `buf` re-points its slot in place, so a nested pair
    would have to run outer-first for the clone (the inner pointer must be re-pointed on the COPY) and
    inner-first for the teardown (the outer free NULLs the slot the inner pointer was reachable through, and the
@@ -2118,9 +2276,20 @@ static void element_tree_steps_visit(JSContext *ctx, void **slot, JSStepVisit *v
     v->array(ctx, slot, sizeof *b + sizeof *b->e * (size_t)b->n, 1, 1, tree_steps_block_elem);
 }
 
+/* THE ABANDONED WALK'S OTHER HALF — §8.1.4.6 step 6.1's error-reporting-mode flag, given back. See
+   IdlTreeSteps::unlock: the driver's discharge covers every REFERENCE this buffer owns and cannot cover a flag,
+   and `element_tree_steps_free` above runs only on the walk's normal 0 edge. */
+static void element_tree_steps_unlock(JSContext *ctx, void *vb)
+{
+    TreeStepBuf *b = vb;
+
+    if (!b) return;
+    html_script_exec_release(ctx, &b->exec);
+}
+
 static const IdlTreeSteps ELEMENT_TREE_STEPS = {
     element_tree_steps_take, element_tree_steps_step, element_tree_steps_free, element_tree_steps_recorded,
-    element_tree_steps_visit
+    element_tree_steps_visit, element_tree_steps_unlock
 };
 
 /* §4.9 `[SameObject] readonly attribute NamedNodeMap attributes`. [SameObject] is an identity the IDL states,

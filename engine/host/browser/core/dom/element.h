@@ -122,6 +122,15 @@ void    element_attr_set_value(JSContext *ctx, JSValueConst el, const char *name
 char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name);
 void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value);
 
+/* HTML §4.12.1.1 "Processing model"'s CHILDREN CHANGED STEPS, RECORDED FOR THE ONE DRAIN THAT CAN RUN THEM —
+   see element.c. Their step 2 runs the post-connection steps, which end at step 36's "immediately execute the
+   script element el", and the hook that carries them is called from inside the DOM mutation chokepoint, where
+   there is no flow base to run the page's code on. So the node joins the record insert step 12 is drained
+   from, and BOTH doors into §4.12.1.1's post-connection steps reach the page's code at one place.
+   THE CONNECTEDNESS TEST IS THE CALLER'S — it is the children changed steps' own step 1 and is asked at the
+   moment the standard asks it; insert step 12's is a separate and later read the drain performs per entry. */
+void element_post_connection_record(lxb_dom_node_t *n);
+
 /* The element behind a wrapper, or NULL when the value is not one. */
 lxb_dom_element_t *element_of_value(JSValueConst v);
 /* WEB IDL §3.2.15's "V implements Element" — the narrowing an `Element` argument brands with, since every node

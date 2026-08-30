@@ -933,6 +933,17 @@ typedef struct {
        machine visits its own owned storage, and the DOM layer performs it because only that layer knows how
        the buffer is laid out. */
     void  (*visit)(JSContext *ctx, void **buf, JSStepVisit *v);
+    /* THE HALF THE `visit` CANNOT CARRY, for a walk ABANDONED mid-request. The visit is the one list of what
+       the buffer OWNS, and the driver's teardown discharges it — but a walk that parked on the page's code can
+       also be HOLDING something that is not a reference, and nothing discharges that. HTML §8.1.4.6 "Runtime
+       script errors" step 6.1's ERROR REPORTING MODE is the one: a nested program's report takes it off the
+       global and gives it back at its own end, and a flow dropped in between would leave the global in
+       reporting mode for the rest of the session, silently swallowing every later report.
+       It is the exact pair `custom_elements_queue_unlock` already is for the reaction queue, which is why it is
+       called from the same place in the teardown and not folded into `release`: `release` runs on the walk's
+       NORMAL 0 edge, and this runs on the abandoned one. Freeing a reference here would be the second list that
+       teardown's fingerprint check exists to catch. */
+    void  (*unlock)(JSContext *ctx, void *buf);
 } IdlTreeSteps;
 void idl_set_tree_steps(const IdlTreeSteps *ops);
 

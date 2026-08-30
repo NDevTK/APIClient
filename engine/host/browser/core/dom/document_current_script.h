@@ -45,12 +45,16 @@
  * a baseline object needs none of that: the capture is the one the delta already performs, and there is no
  * second statement of what the record owns to fall out of step with the first.
  *
- * WHAT `oldCurrentScript` IS HERE. A flow holds at most ONE live program frame (solver/flow.h's `frame`, and
- * solver/engine.c compiles only under `!f->frame`), so §4.12.1.1's classic arm can never be re-entered on one
- * flow's timeline: the restore of the previous script has already run by the time the next one starts. That
- * makes oldCurrentScript provably null rather than a value to carry across the work item — and it is ASSERTED
- * rather than assumed, at the set, because a non-null value there is precisely the symptom of the C-bracket bug
- * this file exists to not have: either a restore was skipped, or two flows' writes have leaked across the delta.
+ * WHAT `oldCurrentScript` IS HERE, AND WHY IT IS CARRIED RATHER THAN PROVED NULL. This file used to prove it
+ * null, from "a flow holds at most ONE live program frame" (solver/flow.h's `frame`, and solver/engine.c
+ * compiles only under `!f->frame`), and asserted it at the set. §4.12.1.1's OWN step 36 is the case that
+ * falsifies the premise: "immediately execute the script element el, EVEN IF OTHER SCRIPTS ARE ALREADY
+ * EXECUTING" runs a program while the program that inserted the element is mid-statement, with that program's
+ * own element in this slot. So the set RETURNS the previous value and the restore CONSUMES it, which is what
+ * the standard's four lines say and what nesting requires.
+ * THE ASSERTION DID NOT GO, IT MOVED TO WHERE ITS PREMISE HOLDS. A program of the flow's own SEQUENCE — the
+ * scheduler's rows — still cannot nest, because the flow holds one frame, so solver/engine.c asserts null on
+ * what it is handed back. The nested run has nowhere to make that claim and does not.
  *
  * A DOCUMENT WITH NO BROWSING CONTEXT ANSWERS NULL, and that is §3.1.7's initialization value rather than a
  * fallback: `createHTMLDocument`, a DOMParser parse and XHR's `responseXML` each build a Document that never
@@ -74,15 +78,19 @@ void document_current_script_install(JSContext *ctx, JSValueConst proto);
 /* Given back by document_agent_free, in the reverse of the declaration order. */
 void document_current_script_free(void);
 
-/* §4.12.1.1's classic arm, steps 1-2: assert oldCurrentScript is null (see the header comment) and set the slot
-   to `el`, or to null when el's root IS a shadow root. `ctx` is the realm of the document whose program is
-   about to run — the document §4.12.1.1 calls `el's node document`, which is the realm the program compiles in.
-   Called by solver/engine.c at the one place a classic script's frame is created. */
-void document_current_script_set(JSContext *ctx, lxb_dom_element_t *el);
-/* …and step 4, "Set document's currentScript attribute to oldCurrentScript", which is null here. `el` is the
-   element step 2 was given, and it is passed back so the restore can ASSERT that what it is clearing is what
-   this program set: anything else is another flow's element in this flow's slot. */
-void document_current_script_restore(JSContext *ctx, lxb_dom_element_t *el);
+/* §4.12.1.1's classic arm, steps 1-2: RETURN step 1's oldCurrentScript (OWNED — hand it back to the restore
+   below) and set the slot to `el`, or to null when el's root IS a shadow root. `ctx` is the realm of the
+   document whose program is about to run — the document §4.12.1.1 calls `el's node document`, which is the
+   realm the program compiles in.
+   TWO CALLERS AND THEY ARE TWO ALGORITHMS, not one with a flag: solver/engine.c opens the bracket where a
+   classic script's frame is created (a row of the flow's own sequence, whose old value it asserts null), and
+   core/html/html_script.c opens it around step 36's NESTED run, whose old value is the causing program's
+   element. */
+JSValue document_current_script_set(JSContext *ctx, lxb_dom_element_t *el);
+/* …and step 4, "Set document's currentScript attribute to oldCurrentScript". `old` is CONSUMED and is what the
+   set returned. `el` is the element step 2 was given, and it is passed back so the restore can ASSERT that
+   what it is clearing is what this program set: anything else is another flow's element in this flow's slot. */
+void document_current_script_restore(JSContext *ctx, lxb_dom_element_t *el, JSValue old);
 /* Is this realm's slot null? The standard's own assertion in §4.12.1.1's MODULE arm, asked where that arm runs. */
 bool document_current_script_is_null(JSContext *ctx);
 /* Is the classic script this realm is executing one whose source came FROM AN EXTERNAL FILE — §4.12.1.1's own

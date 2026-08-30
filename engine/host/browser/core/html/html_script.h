@@ -55,9 +55,13 @@
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_SCRIPT_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
+#include "quickjs-step.h"
+#include "core/events/report_exception.h"   /* §8.1.4.4 step 8's report — see "execute the script element" below */
 
 /* IS THIS NODE A `script` ELEMENT? The INTERNED TAG ID and the pair of namespaces a `script` can be in —
    HTML's `script` and SVG's are both script elements, and lexbor's own `lxb_html_tree_node_is` answers only
@@ -89,6 +93,117 @@ void html_script_free(JSRuntime *rt);
    `script` element between the start tag that created it and the end of the parse that produced it. */
 void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert);
 
+/* ---- HTML §4.12.1.1 "Processing model" STEP 36 — REPORTED BY `prepare`, PERFORMED BY A STEP MACHINE --------
+ *
+ * Step 36 is the LAST of "prepare the script element"'s thirty-six steps and it ends: "Otherwise, immediately
+ * execute the script element el, EVEN IF OTHER SCRIPTS ARE ALREADY EXECUTING." It is the one destination
+ * §4.12.1 has that is NOT A POSITION IN A SEQUENCE — the other four are a list, a set, a pending slot and the
+ * parser's own resumption, and a row in the flow's program sequence expresses each of them exactly — because it
+ * is a NESTED RUN inside the operation that reached these steps. Expressed as the nearest slot the sequence
+ * has (the one after the running program) it puts the REST OF THE CAUSING PROGRAM IN FRONT of it, so
+ * `body.appendChild(s); f()` ran `f()` before `s`'s code where a browser runs it after — a timeline no browser
+ * produces, on every page that injects an inline script.
+ *
+ * SO `prepare` REPORTS IT AND NEVER PERFORMS IT, and that is a statement about where `prepare` is CALLED FROM
+ * rather than a division of labour. Performing step 36 is running the page's code, and this algorithm is
+ * reached from inside a DOM mutation, from inside an attribute change and from inside a parse — three C bodies
+ * with no flow base under them, where a nested run is the drive-to-completion this engine aborts on. The party
+ * that can perform it is the one standing on a STEP MACHINE, so the report travels OUT to that party and the
+ * machine makes the request. A caller with no machine under it therefore cannot silently do the wrong thing:
+ * it is holding a record it has to answer for.
+ *
+ * `text` IS STEP 5'S SOURCE TEXT, NUL-TERMINATED AND OWNED (`free`, or hand the record to
+ * html_script_immediate_free). It is a COPY and not lexbor's own buffer, because lexbor's element form
+ * allocates `length + 1` and its concatenating walk never writes the last byte, while every compiler entry in
+ * this engine requires `input[input_len] == '\0'` — a program compiled off that buffer would end in whatever
+ * the arena last held there.
+ * `text_n` IS THE LENGTH AND NOT A `strlen`: this element's text is the one inline source that can hold a
+ * U+0000, because it was ASSIGNED by page code (`s.textContent = …`) and so never went through HTML §13.2.5.4
+ * "Script data state", whose U+0000 NULL row emits a U+FFFD REPLACEMENT CHARACTER. ECMAScript §11.1 "Source
+ * Text" admits every code point from U+0000 up.
+ * `el` IS THE ELEMENT "execute the script element" is given — its step 6 classic arm sets this document's
+ * §3.1.7 `currentScript` to it for the run.
+ * AN EMPTY RECORD IS A POSITIVE STATEMENT AND IS THE COMMON ONE: every other destination has taken the element
+ * by the time `prepare` returns, so `text == NULL` says "this preparation owes no nested run", never "the
+ * report was not filled in". `text` and `el` are null together and there is no third state. */
+typedef struct {
+    char              *text;
+    size_t             text_n;
+    lxb_dom_element_t *el;
+} ScriptImmediate;
+
+/* Release what a report owns and leave it empty. Idempotent, so a caller that has already handed the text to
+   the execution below may still call it. */
+void html_script_immediate_free(ScriptImmediate *imm);
+
+/* ---- §4.12.1.1's "execute the script element", DRIVEN --------------------------------------------------------
+ *
+ * The algorithm is eight steps and step 6 is a switch on el's type; its CLASSIC arm is four:
+ *
+ *     Let oldCurrentScript be the value to which document's currentScript object was most recently set.
+ *     If el's root is not a shadow root, then set document's currentScript attribute to el. Otherwise, set it
+ *       to null.
+ *     Run the classic script given by el's result.
+ *     Set document's currentScript attribute to oldCurrentScript.
+ *
+ * and "run the classic script" is HTML §8.1.4.4 "Calling scripts"'s eleven-step algorithm, whose step 8 —
+ * reached with `rethrow errors` false, which is what §4.12.1.1 invokes it with — REPORTS an abrupt completion
+ * rather than propagating it. That is why the state below holds a ReportExceptionWork: a nested program's throw
+ * is not the mutating member's completion and must never become one, or `body.appendChild(s)` would throw
+ * whatever the injected script threw AND leave §3.1.7's slot pointing at the element for the rest of the
+ * session.
+ *
+ * IT IS A REQUEST AND THE PROGRAM IS A FIRST-CLASS FLOW. The compile asks for a TRAMPOLINABLE CLOSURE
+ * (JS_EVAL_FLAG_TRAMP_CLOSURE) and the run is `step_call_run`, so the nested program's body executes on the
+ * calling flow's own trampoline chain: preemptible per opcode, parkable at any loop back-edge or `await`,
+ * riding the flow's COW delta, and forkable at a concolic branch inside it. A `JS_Call` from here would be the
+ * drive-to-completion the engine aborts on, and `JS_FlowNew` would be a SECOND program frame on a flow that
+ * already holds one.
+ *
+ * `oldCurrentScript` IS CARRIED AND NOT ASSERTED NULL. document_current_script.h used to prove it null from "a
+ * flow holds at most one live program frame", and step 36 is exactly the case that falsifies it: the causing
+ * program's frame is live, and its own element is in the slot, while the nested one runs.
+ *
+ * THE STATE IS THE DRIVING MACHINE'S, exactly as focus.h's `phase`/`cb` and abort.h's work record are: the
+ * machine declares it in its own `visit` so a fork copies it, and calls the release below for the half no
+ * declaration can carry (§8.1.4.6 step 6.1's error-reporting-mode flag). */
+#define SCRIPT_EXEC_CB_SLOTS (2 + 0)   /* step_call_run's [this, program] — a program takes no arguments */
+
+typedef struct {
+    /* The report, ADOPTED. `text` is consumed by the compile in the FIRST leg and is NULL at every rest point
+       this state has — which is why no visit operation names it: a plain C allocation crossing a fork would be
+       one buffer named by two arms and the second free would be a double free. `el` OUTLIVES the compile
+       because step 6's bracket needs it at both ends, and it is a bare node pointer named by the flow's own
+       tree through the DOM COW delta, exactly as the walk's staticNodeList entries are. */
+    char               *text;
+    size_t              text_n;
+    lxb_dom_element_t  *el;
+    uint8_t             stage;   /* SX_* in html_script.c — which step of "execute the script element" */
+    uint8_t             phase;   /* step_call_run's own cursor */
+    JSValue             cb[SCRIPT_EXEC_CB_SLOTS];
+    JSValue             old;     /* step 6's oldCurrentScript, held across the run */
+    JSValue             exc;     /* §8.1.4.4 step 8's evaluationStatus.[[Value]], held across the report */
+    ReportExceptionWork rx;      /* §8.1.4.6, which fires `error` at the global and so parks on the page's code */
+} ScriptExec;
+
+/* An idle state: nothing owed, nothing owned. Called where the driving machine's buffer is built. */
+void html_script_exec_init(ScriptExec *x);
+/* Is a nested run in flight — i.e. must the driving machine keep stepping this before it moves on? */
+bool html_script_exec_owed(const ScriptExec *x);
+/* Adopt a non-empty report. `imm` is MOVED (left empty); the state is asserted idle, because two nested runs on
+   one machine at one time is one of them being dropped. */
+void html_script_exec_begin(ScriptExec *x, ScriptImmediate *imm);
+/* The ONE list of what this state owns, forwarded from the driving machine's own `visit`. */
+void html_script_exec_visit(JSContext *ctx, ScriptExec *x, JSStepVisit *v);
+/* The half the list cannot carry: §8.1.4.6 step 6.1's flag, given back if the run was abandoned holding it.
+   Frees nothing the visit names — see quickjs-step.h on why that split is folded to a number and checked. */
+void html_script_exec_release(JSContext *ctx, ScriptExec *x);
+/* THE ALGORITHM, DRIVEN. `ctx` is `el`'s node document's realm — §4.12.1.1 step 32's settings object, step 34's
+   base URL and the global the program closes over, and never whichever realm performed the mutation.
+     JS_STEP_CALL = return it (the run has parked on the page's code, or on the `error` listeners of the report
+   its throw owes), 0 = "execute the script element" has finished. */
+int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **out_cb, int *out_argc);
+
 /* HTML §4.12.1 "The script element"'s "prepare the script element", reached from DOM §4.2.3's insertion steps
    and from §4.12.1.1's post-connection and attribute change steps. `el` is any inserted element; one that is
    not a `script` returns having done nothing, because the caller is a walk over every node of an inserted
@@ -98,8 +213,11 @@ void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert);
    party that can answer: it is either §13.2.6 tree construction, which is the thing that sets it, or page code,
    which cannot. It decides steps 4 and 14's `force async` round trip and, through it, which of §4.12.1's five
    destinations the element takes — so it was not a formality while it was hardcoded false, it was a parsed
-   `<script src>` being filed in a list it does not belong to. */
-void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inserted);
+   `<script src>` being filed in a list it does not belong to.
+   `imm` IS STEP 36'S ANSWER AND IT IS MANDATORY — see the record below. It is written on EVERY path and is
+   empty on all but one, so no caller can forget to look and no caller can decide for itself what to do with
+   the one destination §4.12.1.1 has that is not a position in a sequence. */
+void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inserted, ScriptImmediate *imm);
 
 /* A PARSER REACHED A `script` ELEMENT'S END TAG — the one action TWO sections state, which is why this is one
  * body with two callers rather than two bodies that must not disagree.
