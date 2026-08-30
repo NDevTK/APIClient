@@ -1,5 +1,7 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
+#include "core/fetch/scheme_fetch.h"   /* Fetch §4.3 Scheme fetch: who answers a park's address — this agent
+                                          or the host — asked once, at the one place a park takes one */
 #include "solver/engine.h"
 #include "quickjs-step.h"   /* a host answer is TAKEN by a step machine, and a throw ends it JS_STEP_ABRUPT */
 #include "core/html/unhandled_rejection.h"   /* HTML §8.1.4.7 Unhandled promise rejections: what the browser
@@ -63,6 +65,103 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
 }
 
 
+/* WHAT A PARK'S ADDRESS IS, WRITTEN ONTO THE RECORD IN ONE PLACE — AND FETCH §4.3 Scheme fetch ASKED ON THE
+ * WAY IN.
+ *
+ * WHY THE TWO ARE ONE FUNCTION. §4.3 switches on "request's current URL's scheme" and answers `about`, `blob`
+ * and `data` INSIDE this agent — Fetch §2.1 URL's "A local scheme is `about`, `blob`, or `data`" — while only
+ * its "HTTP(S) scheme" row reaches HTTP fetch. The register this writes into is read by ONE party that can act
+ * on an address, and that party is the trusted zone, which fetches nothing but an HTTP(S) scheme. So an address
+ * and the question "who answers it" are not two facts a park states in two places: writing the first without
+ * asking the second is what parks a flow on an answer that can only ever be a refusal, and the page then sees a
+ * load failure for bytes that were already in this address space.
+ *
+ * WHAT THAT COST, AND WHY IT IS ONE DOOR AND NOT FOUR. Four entries reach this register with an address — a
+ * `fetch()`/`fetch_owe` request, a document's own external `<script src>`, an injected or `as soon as possible`
+ * one, and a dynamic `import()` — and §4.3 was asked at ONE of them, because that one has a `deliver` closure
+ * to run the answer's processResponse steps through and the other three have none. A question some entries ask
+ * and others do not is one missing capability wearing two names: `<script src="data:text/javascript,…">` and
+ * `import("data:text/javascript,…")` were not requests that failed, they were entries that never ran §4.3 at
+ * all. The three doors without a closure do not need one — §4.3's answer IS the reply record their delivery
+ * already reads off this register (flow_deliver_one_reply), so the answer is placed ON THE ENTRY, `haveValue`
+ * and all, exactly as engine_provide places the host's, and the same delivery runs for both.
+ *
+ * THE SWITCH IS NOT RESTATED HERE. This runs core/fetch/scheme_fetch.h's own algorithm over the request, so an
+ * arm added there is answered at every park at the same instant, and this file holds no opinion about schemes.
+ * §4.3's network error crosses as JS_NULL, which is what core/fetch/fetch.h documents a network error as and
+ * what every delivery on this register already reads: a script that did not load runs nothing.
+ *
+ * AND THE FIELDS STILL GO ON THE RECORD FIRST, LOCAL ANSWER OR NOT. Fetch §2.2.5 Requests' DESTINATION and the
+ * park's provenance belong to the REQUEST rather than to its transport — a `data:` URL script IS a code load —
+ * so the record states them whether or not anything outside this agent will ever read them, and a record whose
+ * fields depended on who answered it would be two shapes wearing one name. */
+static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
+{
+    JSValue reply = JS_UNDEFINED;
+
+    /* THE METHOD AND THE URL ARE THE REQUEST'S IDENTITY, and both are what this park is keyed on: the join
+       lists the PAIR and engine_provide delivers against it (engine.h). Fetch §2.2.5 Requests: "A request has an
+       associated method (a method). Unless stated otherwise it is `GET`" — so every request HAS one, and a
+       producer that reaches a park without stating it is a component that dropped a field, not a request that
+       lacks one. Answering "assume GET" would file a POST's park under a GET and collect the GET's body. */
+    DCHECK(req != NULL && req->url != NULL && *req->url,
+           "a park was given an address that is not one — every caller of this door resolved a URL before it "
+           "reached here, and an entry with no address is one the join can neither list nor answer");
+    DCHECK(req->method != NULL && *req->method,
+           "a request parked on an ADDRESS without stating its METHOD — the reply seam is keyed on the pair "
+           "(engine.h), so an unnamed method would park this request under another one's identity and settle "
+           "it with that request's body. Name the method at the component that built the request");
+    /* AND THE DESTINATION, WHICH A PARK CANNOT DERIVE AND MUST BE TOLD. A `fetch()` and a
+       `<link rel=preload as=script>` are the same KIND of park and opposite answers to "may this reply be
+       ingested as code", so the kind cannot say it and the request record does (Fetch §2.2.5 Requests). The
+       empty string is a real destination and a real answer; a NULL is a producer that stated none. */
+    DCHECK(req->destination != NULL,
+           "a request parked on an ADDRESS without stating its DESTINATION — Fetch §2.2.5 Requests gives every "
+           "request one (\"unless stated otherwise it is the empty string\"), and the trusted zone reads it to "
+           "decide whether the reply may be ingested as CODE. A park that does not say would have its reply "
+           "classified by whichever arm the zone happens to write first, which is how a cross-origin HTML body "
+           "gets compiled. Name the destination at the component that built the request");
+    pending_set(e, PEND_URL, JS_NewString(ctx, req->url));
+    pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
+    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
+    if (req->headers && req->headers->n > 0) {
+        JSValue hl = pending_list_new();
+        int hi;
+        for (hi = 0; hi < req->headers->n; hi++)
+            pending_list_add_pair(hl, req->headers->e[hi].name, req->headers->e[hi].value);
+        pending_set(e, PEND_HEADERS, hl);
+    }
+    if (req->body) pending_set_bytes(e, PEND_BODY, req->body, req->body_len);
+
+    /* FETCH §4.3 Scheme fetch. §5.4's CAPTURED blob URL entry is JS_UNDEFINED because no standard but the
+       Request constructor has one to have captured, and a Request never reaches a park — it reaches
+       `fetch_owe`, which runs §4.3 with its own captured entry and a `deliver` closure before this register is
+       ever touched (core/fetch/scheme_fetch.h). */
+    switch (scheme_fetch(ctx, req, JS_UNDEFINED, &reply)) {
+    /* §4.3's "HTTP(S) scheme" row — "Return the result of running HTTP fetch given fetchParams". This is the
+       ONE outcome the host is shown, and the entry stays outstanding until engine_provide answers it. */
+    case SCHEME_FETCH_NETWORK:
+        return;
+    /* §4.3 built the whole response inside this agent. It is the same reply record a host delivers, so it goes
+       where a host's goes and the delivery cannot tell them apart — which is right, because the standard does
+       not either: `data:text/javascript,…` is a 200 whose body is the URL's own bytes. */
+    case SCHEME_FETCH_RESPONSE:
+        pending_set(e, PEND_VALUE, reply);
+        break;
+    /* §4.3's network error — a `data:` URL §6 refuses, a `blob:` the store does not name, `about:config`, a
+       `file:` URL, and every scheme its switch does not list. JS_NULL is what core/fetch/fetch.h documents a
+       network error as, and it is the same value the trusted zone delivers for one. */
+    case SCHEME_FETCH_NETWORK_ERROR:
+        pending_set(e, PEND_VALUE, JS_NULL);
+        break;
+    }
+    /* LAST, AND THAT ORDER IS THE FRONTIER'S OUTSTANDING SET. `haveValue` is the write that takes a record OUT
+       of that set (solver/pending.c's pend_index_sync), so the address and the method must already be on the
+       record when it lands — otherwise the set is keyed after it was answered and the host is offered a
+       request nobody is waiting for. */
+    pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
+}
+
 /* FETCH-AWAIT parking: a host fetch registers its resolve capability on THE RUNNING FLOW. A flow that awaits it
    suspends its async body; the flow's own pending register is delivered from when the reply arrives — each awaiting
    async body's reaction enqueues as a job in that flow's queue — and it resumes. Per-flow (not global) so one
@@ -110,38 +209,15 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
-    if (url) pending_set(e, PEND_URL, JS_NewString(ctx, url));
-    /* AND THE METHOD IS NOT OPTIONAL WHERE THERE IS AN ADDRESS. Fetch §2.2 Requests: "A request has an
-       associated method (a method). Unless stated otherwise it is `GET`" — so every request HAS one, and a
-       producer that reaches this park without stating it is a component that dropped a field, not a request
-       that lacks one. Answering "assume GET" here is exactly the wrong answer this seam was keyed on the pair
-       to stop: it would file a POST's park under a GET and collect the GET's body. */
-    DCHECK(!url || (req && req->method && *req->method),
-           "a fetch parked on an ADDRESS without stating its METHOD — the reply seam is keyed on the pair "
-           "(engine.h), so an unnamed method would park this request under another one's identity and settle "
-           "it with that request's body. Name the method at the component that built the request");
-    if (req && req->method) pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
-    /* AND THE DESTINATION, WHICH THIS PARK CANNOT DERIVE AND MUST BE TOLD. Every entry of this kind is a
-       `fetch()` to one component and a `<link rel=preload as=script>` or an `<img>` to another, and those are
-       the same PARK with different answers to "may this reply be ingested as code" — so the KIND cannot say
-       it and the request record does (Fetch §2.2.5 "Requests"). The empty string is a real destination and a
-       real answer; a NULL is a producer that stated none, which the join refuses to list. */
-    DCHECK(!url || (req && req->destination),
-           "a request parked on an ADDRESS without stating its DESTINATION — Fetch §2.2.5 Requests gives every "
-           "request one (\"unless stated otherwise it is the empty string\"), and the trusted zone reads it to "
-           "decide whether the reply may be ingested as CODE. A park that does not say would have its reply "
-           "classified by whichever arm the zone happens to write first, which is how a cross-origin HTML body "
-           "gets compiled. Name the destination at the component that built the request");
-    if (req && req->destination) pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
-    if (req && req->headers && req->headers->n > 0) {
-        JSValue hl = pending_list_new();
-        int hi;
-        for (hi = 0; hi < req->headers->n; hi++)
-            pending_list_add_pair(hl, req->headers->e[hi].name, req->headers->e[hi].value);
-        pending_set(e, PEND_HEADERS, hl);
-    }
-    if (req && req->body) pending_set_bytes(e, PEND_BODY, req->body, req->body_len);
-    if (!url) pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
+    /* THE ADDRESS AND EVERYTHING THAT TRAVELS WITH IT GO ON THROUGH THE ONE DOOR, which is also where §4.3
+       Scheme fetch is asked. It answers NETWORK for every request that reaches HERE — `fetch_owe` and
+       `fetch()` run §4.3 with their own `deliver` closure and return before touching this register when it
+       answers locally — so a local answer landing on this entry is not a case this park has to handle
+       differently, it is a case that means one of those two seams stopped asking. */
+    if (url) pending_park_request(ctx, e, req);
+    /* NO ADDRESS AT ALL is the one park that is answered by its own caller: it carries the value up front and
+       owes the host nothing. It is not §4.3's business — there is no URL to switch on. */
+    else pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
     JS_FreeValue(ctx, e);
 }
 
@@ -150,20 +226,23 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
    `fetch()` becomes a Response from. */
 void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char *url) {
     Flow *f = flow_running();
-    JSValue e;
-    DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
-    DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
-    e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f));
-    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
-    pending_set(e, PEND_URL, JS_NewString(ctx, url));
-    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));   /* a chunk load states its own method */
     /* …AND ITS DESTINATION IS `script`, WHICH IS WHAT MAKES A CHUNK A CODE LOAD AT THE CHOKEPOINT. HTML
        §8.1.6.7.3 HostLoadImportedModule: "Let destination be `script`" — and for a dynamic `import()` nothing
        overrides it (loadState is undefined outside a worklet or service worker), so this is the destination
        the fetch carries. It is STATED on the record rather than reported through a register of specifiers
        beside it: a side list one producer fills answers for that producer and is silently absent for every
-       other, which is how a document's own `<script src>` reached the trusted zone with no load class at all. */
-    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, PENDING_DESTINATION_SCRIPT));
+       other, which is how a document's own `<script src>` reached the trusted zone with no load class at all.
+       The METHOD is `GET`: a chunk load states its own. */
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0 };
+    JSValue e;
+    DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
+    DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
+    e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f));
+    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
+    /* AND §4.3 Scheme fetch WITH IT — `import("data:text/javascript,export default 1")` is a load this agent
+       answers out of the specifier's own bytes, and the promise this park settles is the one
+       JS_ModuleLoadPending is about to be handed. */
+    pending_park_request(ctx, e, &req);
     JS_FreeValue(ctx, e);
 }
 
@@ -171,6 +250,16 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char 
    every scheduler pass while it waits, and a second registration would make the host owe the same URL twice. */
 void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
     Flow *f = flow_running();
+    /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
+       a method, so it is Fetch §2.2.5 Requests' `GET`. STATED, because the seam is keyed on the pair and a
+       park that does not say is a park the join cannot list.
+       …AND THE DESTINATION THAT SAME ALGORITHM SETS, which is the field this park was missing and the reason a
+       shipped extension compiled cross-origin data. "Fetch a classic script" is "Let request be the result of
+       creating a potential-CORS request given url, `script`, and corsSetting", and HTML §2.5.1 Terminology's
+       create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
+       so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
+       list only the module loader wrote, which named dynamic imports and never this. */
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0 };
     JSValue e;
     DCHECK(f != NULL, "an external document script was awaited outside a running flow");
     DCHECK(url != NULL && *url, "an external document script entry carries no URL");
@@ -182,19 +271,11 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
         if (dup) return;
     }
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
-    pending_set(e, PEND_URL, JS_NewString(ctx, url));
-    /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
-       a method, so it is Fetch §2.2's `GET`. STATED, because the seam is keyed on the pair and a park that does
-       not say is a park the join cannot list. */
-    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
-    /* …AND THE DESTINATION THAT SAME ALGORITHM SETS, which is the field this park was missing and the reason a
-       shipped extension compiled cross-origin data. "Fetch a classic script" is "Let request be the result of
-       creating a potential-CORS request given url, `script`, and corsSetting", and §2.5.1 "Fetching resources"'
-       create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
-       so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
-       list only the module loader wrote, which named dynamic imports and never this. */
-    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, PENDING_DESTINATION_SCRIPT));
     pending_set_int(e, PEND_SCRIPT_I, script_i);
+    /* AND §4.3 Scheme fetch WITH THE ADDRESS. A document's own `<script src="data:text/javascript,…">` is
+       answered here and the flow's next step delivers it into this slot — see the caller in flow_step, which
+       reports host-owed only when this door left the entry outstanding. */
+    pending_park_request(ctx, e, &req);
     JS_FreeValue(ctx, e);
 }
 
@@ -220,6 +301,14 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
    crosses as the node's WRAPPER (solver/pending.h's `scriptEl`), because this record is made of JS values. */
 void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el) {
     Flow *f = flow_running();
+    /* §8.1.4.2's fetch, whose decode and whose evaluation entry the TYPE decides — and whose method is Fetch
+       §2.2.5 Requests' `GET`.
+       …AND ITS DESTINATION IS `script` FOR BOTH TYPES THE PARK CARRIES. A classic external script is "fetch a
+       classic script", whose request is created with `script`; a `<script type=module src>` is "fetch an
+       external module script graph", which fetches a single module script with the destination `script` too.
+       So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
+       reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
+    FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0 };
     JSValue e;
     DCHECK(f != NULL, "a <script src> was parked on outside a running flow");
     DCHECK(url != NULL && *url, "a <script src> was parked on with no URL");
@@ -228,16 +317,7 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
            "event at an `importmap` or `speculationrules` element with a `src` and returns without fetching, "
            "so no such element ever reaches a park");
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f));
-    pending_set(e, PEND_URL, JS_NewString(ctx, url));
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
-    /* §8.1.4.2's fetch, whose decode and whose evaluation entry the type above decides. */
-    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
-    /* …AND ITS DESTINATION IS `script` FOR BOTH TYPES THE PARK CARRIES. A classic external script is "fetch a
-       classic script", whose request is created with `script`; a `<script type=module src>` is "fetch an
-       external module script graph", which fetches a single module script with the destination `script` too.
-       So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
-       reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
-    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, PENDING_DESTINATION_SCRIPT));
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
        chokepoint was entered with is that tree's document — the reply is compiled there rather than in
        whichever realm the session happens to be rooted at. */
@@ -248,6 +328,11 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
                        "from `prepare the script element`, whose whole subject is EL, and a row without one "
                        "would run the fetched program with this document's currentScript left null");
     pending_set(e, PEND_SCRIPT_EL, node_wrap(ctx, lxb_dom_interface_node(el)));
+    /* AND THE ADDRESS LAST, THROUGH THE ONE DOOR, which is where §4.3 Scheme fetch is asked. Every field above
+       belongs to the ELEMENT and is on the record before the answer can be, so an injected
+       `<script src="data:text/javascript,…">` that §4.3 answers on this line is delivered into a record that
+       already knows its type, its document and its element. */
+    pending_park_request(ctx, e, &req);
     JS_FreeValue(ctx, e);
 }
 
@@ -2481,7 +2566,7 @@ const char *engine_pending_fetches(void) {
                 DCHECK(m != NULL,
                        "an outstanding request carries an ADDRESS and no METHOD — the reply seam is keyed on the "
                        "pair, so this entry cannot be listed at all. The park that created it must state its "
-                       "method (Fetch §2.2 Requests: unless stated otherwise it is `GET`)");
+                       "method (Fetch §2.2.5 Requests: unless stated otherwise it is `GET`)");
                 /* AND THE GRAMMAR HOLDS BY CONSTRUCTION, WHICH IS WHY IT IS CHECKED. URL Standard §4.4 URL
                    parsing removes all ASCII tab or newline from its input, so a serialized URL has neither; a
                    method is a token and RFC 9110 §5.6.2 Tokens excludes both. An entry that breaks that is a URL
@@ -2508,6 +2593,25 @@ const char *engine_pending_fetches(void) {
                        "consumer decides the CORB class by asking whether this value is SCRIPT-LIKE, so a "
                        "value outside the enumeration is read as `not code` by default and a script's reply is "
                        "ingested as data");
+                /* FETCH §4.3 Scheme fetch's CLOSURE, AND THIS IS THE CONSUMER IT BELONGS AT. Everything this
+                   loop writes is handed to the trusted zone, which can fetch NOTHING but an HTTP(S) scheme
+                   (Fetch §2.1 URL) and answers a refusal the page cannot tell from a network failure — so a
+                   URL §4.3 answers INSIDE this agent reaching this line is not a request that will fail, it is
+                   a park that never ran §4.3 at all, and the flow is owed an answer that can only ever be
+                   `blocked`. It used to be asked at each entry that BUILT a request, which is a list to keep
+                   in step with; asked here it is asked once, of everything, so a park added later FIRES
+                   instead of silently widening the old wrong answer. `pending_park_request` is where the
+                   answer is placed (this file) and core/fetch/fetch.c's `fetch_owe` is where a request with a
+                   `deliver` closure gets its own. */
+                DCHECK(scheme_fetch_is_network(pending_ctx(), u),
+                       "a request whose URL's scheme Fetch §4.3 Scheme fetch answers INSIDE this agent is "
+                       "about to be handed to the HOST'S network. The trusted zone fetches nothing but an "
+                       "HTTP(S) scheme (Fetch §2.1 URL) and its refusal is indistinguishable from a network "
+                       "failure, so this flow would park for the rest of the session on an answer that can "
+                       "only be `blocked`. The park that created this entry did not run §4.3 — route it "
+                       "through pending_park_request (this file), which places §4.3's own response on the "
+                       "record as PEND_VALUE + haveValue and the delivery reads it exactly as it reads the "
+                       "host's");
                 while (q < stop) {
                     char *e = memchr(q, '\n', (size_t)(stop - q));
                     char *lend = e ? e : stop;
@@ -5848,6 +5952,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
                         return 0;
                     }
                     engine_pending_docscript(ctx, body, f->script_i);
+                    /* …AND THE PARK MAY HAVE ANSWERED ITSELF. Fetch §4.3 Scheme fetch runs at the park, and
+                       for `data:`, `blob:` and `about:` the response is built inside this agent — so the entry
+                       this line just created can already carry its reply, and reporting HOST-OWED over it
+                       would be a claim about the host that is false: a marked flow leaves the pick until a
+                       HOST EVENT clears it, and no host event is coming for a request the host was never
+                       shown. The scheduler asserts exactly that at the mark (`pending_outstanding`), which is
+                       why this is a re-read of the register and not an `if` on which scheme it was. Progress
+                       instead, and the next pass takes the arm above and delivers. */
+                    if (flow_pending_ready(f)) { g_step_unit = "scheme-fetch-answered"; return 0; }
                     return FLOW_STEP_OWED;
                 }
                 /* AND A ROW THAT REACHES THE COMPILE HOLDS A PROGRAM, not an address. The branch above is what

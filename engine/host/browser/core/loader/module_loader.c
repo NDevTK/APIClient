@@ -27,7 +27,6 @@
 #include "quickjs.h"
 #include "solver/engine.h"
 #include "core/agent_state.h"          /* the hook this component installs is what it holds for the agent */
-#include "core/fetch/scheme_fetch.h"   /* Fetch §4.3, which decides who answers a module load's fetch */
 #include "core/loader/module_loader.h"
 
 static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *opaque)
@@ -46,13 +45,13 @@ static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *o
        a host delivered a bare body string, and stopped being so the moment a reply became the record
        `fetch()` builds a Response out of — JS_ModuleLoadPending would have been handed that record to compile.
        Its own kind settles this promise with the reply's body. */
-    /* FETCH §4.3 SCHEME FETCH, ASKED OF THIS ENTRY AS IT IS ASKED OF EVERY OTHER. §16.2.1.10
-       HostLoadImportedModule ends in HTML's "fetch a single module script", which is the same Fetch algorithm
-       `fetch()` runs — so §4.3's switch on the URL's scheme decides who answers `import("data:text/javascript,
-       export default 1")`, and the answer is a 200 built out of bytes already in this address space. The park
-       below reaches a trusted zone that can fetch nothing but an HTTP(S) scheme, and §4.3's local answer has no
-       delivery on THIS park yet, so this CRASHES naming what to build (core/fetch/scheme_fetch.h). */
-    scheme_fetch_require_network(ctx, module_name);
+    /* FETCH §4.3 SCHEME FETCH IS ASKED BY THE PARK ITSELF, WHICH IS WHY THIS LINE IS NOT A CALL. §16.2.1.10
+       HostLoadImportedModule ends in HTML's "fetch a single module script", the same Fetch algorithm `fetch()`
+       runs — so §4.3's switch on the URL's scheme decides who answers `import("data:text/javascript,export
+       default 1")`, and the answer is a 200 built out of bytes already in this address space. This entry has
+       no `deliver` closure to run that answer through and needs none: §4.3's response is placed ON the pending
+       record and the flow's own delivery settles this promise from it, exactly as it settles from the trusted
+       zone's reply (solver/engine.c's pending_park_request). */
     engine_pending_module_url(ctx, resolving[0], module_name);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);

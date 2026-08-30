@@ -18,7 +18,6 @@
 #include "core/idl_args.h"       /* the `async` attribute's setter, declared like every other IDL member's */
 #include "core/url/url.h"        /* §4.12.1's "encoding-parsing a URL given src, relative to el's node document" */
 #include "core/loader/document_scripts.h"   /* §4.12.1's type-string steps, asked ONCE for both halves */
-#include "core/fetch/scheme_fetch.h"  /* Fetch §4.3, which decides who answers §8.1.4.2's fetch */
 #include "core/html/html_script.h"
 
 /* §4.12.1's `already started`, on the element's wrapper under a Symbol this file minted and never published —
@@ -475,14 +474,14 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
            not parse — "return", so the element runs no script. */
         u = script_src_absolute(ctx, (const char *)src, n_len);
         if (!u) return;
-        /* FETCH §4.3 SCHEME FETCH, ASKED OF THIS ENTRY AS IT IS ASKED OF EVERY OTHER. §8.1.4.2 "Fetching
-           scripts"' fetch is the same algorithm `fetch()` runs, so §4.3's switch decides who answers these
-           bytes here too — and both destinations below hand the URL to the flow's pending register, whose only
-           reader is a trusted zone that can fetch nothing but an HTTP(S) scheme. A `<script
-           src="data:text/javascript,…">` therefore came back refused, which the page sees as a load failure a
-           browser never shows it. This does not YET deliver §4.3's local answer, so it CRASHES naming what to
-           build rather than parking on a refusal — see core/fetch/scheme_fetch.h. */
-        scheme_fetch_require_network(ctx, u);
+        /* FETCH §4.3 SCHEME FETCH IS ASKED BY WHICHEVER PARK THIS URL REACHES, AND NEITHER DESTINATION BELOW
+           NEEDS A LINE HERE. §8.1.4.2 "Fetching scripts"' fetch is the same algorithm `fetch()` runs, so §4.3's
+           switch decides who answers `<script src="data:text/javascript,…">` — a 200 built out of bytes already
+           in this address space — and both destinations below hand the URL to the flow's pending register,
+           where solver/engine.c's pending_park_request runs §4.3 and places its response on the record. The
+           delivery then reads that response exactly as it reads the trusted zone's, so an element loaded from
+           a local scheme takes the same position, the same decode and the same `currentScript` bracket as one
+           the host fetched. */
         /* WHICH OF THE TWO ASAP DESTINATIONS, and the difference is a POSITION. The `set of scripts that will
            execute as soon as possible` has none — §13.2.7 waits for that set only before the load event — so it
            parks and its reply becomes a program whenever it drains. The `list of scripts that will execute in

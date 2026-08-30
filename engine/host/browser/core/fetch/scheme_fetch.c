@@ -21,8 +21,14 @@
  * second answer to the one question this file exists to answer once. The two copies this replaces are exactly
  * that: each parsed, each switched, and they disagreed about `blob:`.
  *
- * AND THE CLOSURE IS AT THE CONSUMER: `scheme_fetch_require_network` (scheme_fetch.h) is what an entry with no
- * local delivery runs, so a route added later CRASHES instead of silently widening the old wrong answer.
+ * AND THE CLOSURE IS AT THE CONSUMER, WHICH IS WHERE AN ADDRESS IS HANDED TO SOMEBODY WHO CAN ONLY FETCH
+ * HTTP(S). Two seams answer §4.3 for the two shapes an entry can have — `scheme_fetch_answer` for a caller
+ * that owns a `deliver` closure (core/fetch/fetch.c's `fetch_owe`), and the flow's pending register for the
+ * entries that own none, whose answer is placed ON the record and read by the same delivery that reads the
+ * host's (solver/engine.c's `pending_park_request`). Neither of those is a list to keep in step with, because
+ * the CLOSURE is asked once, of everything, at the join that hands the trusted zone its addresses: it asks
+ * `scheme_fetch_is_network` below and crashes on an address §4.3 would have answered here. A park added later
+ * therefore FIRES instead of silently widening the old wrong answer.
  *
  * WHAT IS NOT HERE. §4.1 "Main fetch"'s step 7 — bad port, mixed content, Content Security Policy — is a
  * different step of a different algorithm and stays with its callers; §4.3 runs after it. §6's `data:` URL
@@ -272,32 +278,18 @@ bool scheme_fetch_answer(JSContext *ctx, JSValueConst deliver, const FetchReques
     return true;
 }
 
-void scheme_fetch_require_network(JSContext *ctx, const char *url)
+bool scheme_fetch_is_network(JSContext *ctx, const char *url)
 {
-#if APICLIENT_DEV
     UrlRecord rec;
-    SchemeArm arm;
+    bool network;
 
-    DCHECK(url != NULL && *url, "an entry required a network scheme of no URL at all");
+    DCHECK(url != NULL && *url, "§4.3's switch was asked about no URL at all — every caller is handing an "
+                                "ADDRESS somewhere, and an absent one is a producer that dropped a field");
     url_record_init(&rec);
-    /* A string the parser REFUSES names no scheme and is not §4.3's business — a concolic's display shape parks
-       here and it is not a URL (core/fetch/fetch.c's projection). It passes; what does not is a real URL whose
-       real scheme §4.3 answers inside this agent. */
-    if (fetch_parse_url(ctx, &rec, url, strlen(url))) {
-        arm = scheme_fetch_arm(&rec);
-        DCHECK(arm == ARM_HTTP,
-               "a request whose URL's scheme Fetch §4.3 Scheme fetch answers INSIDE this agent was parked on "
-               "the HOST'S network instead. The trusted zone can fetch nothing but an HTTP(S) scheme "
-               "(Fetch §2.1 URL) and answers a refusal the page cannot tell from a network failure, so this "
-               "flow is parked on an answer that can only ever be `blocked`. Run scheme_fetch at the entry "
-               "that built this request and DELIVER its response: the parks that cannot yet are the ones with "
-               "no `deliver` closure — an external <script src>, a document script's slot and a dynamic "
-               "import() — whose local answer is a reply record placed on the pending entry itself "
-               "(solver/pending.h's PEND_VALUE with haveValue, which the scheduler delivers without ever "
-               "showing the host a request)");
-    }
+    /* A string the parser REFUSES names no scheme and is not §4.3's business — a concolic's display shape is
+       carried as an address and it is not a URL (core/fetch/fetch.c's projection). It answers TRUE; what does
+       not is a real URL whose real scheme §4.3 answers inside this agent. */
+    network = !fetch_parse_url(ctx, &rec, url, strlen(url)) || scheme_fetch_arm(&rec) == ARM_HTTP;
     url_record_free(&rec);
-#else
-    (void)ctx; (void)url;
-#endif
+    return network;
 }

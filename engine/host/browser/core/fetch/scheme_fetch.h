@@ -41,17 +41,21 @@ SchemeFetchOutcome scheme_fetch(JSContext *ctx, const FetchRequest *req, JSValue
    the caller then owes to the host. */
 bool scheme_fetch_answer(JSContext *ctx, JSValueConst deliver, const FetchRequest *req, JSValueConst blob_entry);
 
-/* THE CLOSURE §4.3 OWES THE ENTRIES THAT CANNOT YET DELIVER ONE OF ITS LOCAL ANSWERS.
+/* §4.3's SWITCH ASKED AS A QUESTION: does §4.3 hand a request for this URL to HTTP fetch, or does it answer
+ * inside this agent?
  *
- * A request-building entry with no `deliver` closure — an external `<script src>`, a document script's slot, a
- * dynamic `import()` — hands its URL straight to the flow's pending register, and the trusted zone that
- * eventually reads that register can fetch NOTHING but an HTTP(S) scheme (Fetch §2.1 "URL"; the chokepoint's
- * answer for anything else is a refusal indistinguishable from a network failure). So a URL §4.3 answers
- * inside this agent reaching that register is not a request that will fail — it is an entry that never ran
- * §4.3 at all, and the page sees a load failure a browser never shows it.
- * IT IS ASKED OF THE SAME COMPONENT AND NOT RE-DERIVED: this runs `scheme_fetch`'s own switch, so an arm added
- * there closes this at the same instant. A URL that names no scheme at all is not this component's business
- * and passes — a concolic's DISPLAY SHAPE parks here (core/fetch/fetch.c's projection), and it is not a URL. */
-void scheme_fetch_require_network(JSContext *ctx, const char *url);
+ * IT IS THE PREDICATE AND NOT THE ASSERT, and that split is the whole point of it. What this answers is needed
+ * at exactly one kind of place — the moment an address is handed to a party that can fetch NOTHING but an
+ * HTTP(S) scheme (Fetch §2.1 "URL") — and a URL §4.3 answers locally reaching such a party is a park that
+ * never ran §4.3, whose flow is then owed an answer that can only ever be a refusal. A shared function that
+ * ASSERTED that would stamp its own file and line for every caller, so the crash would name a remedy and no
+ * site; the assert therefore lives at the consumer that is handing the address over, and this answers the one
+ * question that consumer cannot answer for itself.
+ * IT IS THE SAME COMPONENT'S OWN SWITCH AND NOT A RE-DERIVATION: an arm added to `scheme_fetch` changes this
+ * answer at the same instant, which is why "who answers these bytes" stays one fact with one owner.
+ * A URL THAT NAMES NO SCHEME AT ALL answers TRUE — it is not §4.3's business. A concolic's DISPLAY SHAPE parks
+ * as an address (core/fetch/fetch.c's projection) and it is not a URL, so the parser refuses it and this
+ * passes it through to whatever the consumer does with an address it cannot fetch. */
+bool scheme_fetch_is_network(JSContext *ctx, const char *url);
 
 #endif
