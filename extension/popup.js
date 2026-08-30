@@ -689,31 +689,29 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function exportHar() {
-    // Collect the currently visible entries from the virtual scroll state
-    const entries = _vs.entries;
-    if (!entries || entries.length === 0) {
-      alert("No requests to export.");
+    /* A HAR IS A LOG OF HTTP ROUND TRIPS, AND HALF THIS LOG IS NOT ONE. HAR §4.2.6 entries defines the array
+       as "all exported HTTP requests", so a WebSocket connection, a postMessage stream and a MessageChannel
+       stream have no representation in it — and they were being exported as HTTP entries anyway, every field
+       of them supplied by a default: method "WEBSOCKET", status 0, statusText "", no headers, no content. A
+       reviewer opening that file read a round trip that never happened. Those records are the network view's,
+       and the console is where they are read; the export takes the kind the format is for. */
+    const entries = _vs.entries.filter((e) => e.kind === "http");
+    if (entries.length === 0) {
+      alert("No HTTP requests to export.");
       return;
     }
 
     const harEntries = entries.map((r) => {
-      const reqHeaders = [];
-      if (r.requestHeaders) {
-        for (const [k, v] of Object.entries(r.requestHeaders)) {
-          reqHeaders.push({ name: k, value: v });
-        }
-      }
-
-      const respHeaders = [];
-      if (r.responseHeaders) {
-        for (const [k, v] of Object.entries(r.responseHeaders)) {
-          respHeaders.push({ name: k, value: v });
-        }
-      }
+      /* NO `if (r.requestHeaders)` / `if (r.responseHeaders)` GUARD. Both are written as objects on every
+         record of this kind and `_pushGlobalLog` asserts it, so the empty object is a request that carried no
+         headers — which is what an EventSource GET and a GET form both truthfully have — and the guard made
+         that indistinguishable from a producer that had stopped writing the list at all. */
+      const reqHeaders = Object.entries(r.requestHeaders).map(([k, v]) => ({ name: k, value: v }));
+      const respHeaders = Object.entries(r.responseHeaders).map(([k, v]) => ({ name: k, value: v }));
 
       const request = {
-        method: r.method || "GET",
-        url: r.url || "",
+        method: r.method,
+        url: r.url,
         httpVersion: "HTTP/1.1",
         cookies: [],
         headers: reqHeaders,
@@ -738,21 +736,32 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Request body
       if (r.rawBodyB64) {
         request.postData = {
-          mimeType: r.contentType || "application/octet-stream",
+          /* HAR §4.2.12 postData's `mimeType` is the type of the POSTED DATA, so the request's own content
+             type is the only value that answers it and "" is the request having stated none. It read
+             `|| "application/octet-stream"`, which names a type the request did not send. */
+          mimeType: r.contentType,
           text: r.rawBodyB64,
           encoding: "base64",
         };
       }
 
       const response = {
-        status: r.status || 0,
-        statusText: r.statusText || (r.status === 200 ? "OK" : ""),
+        status: r.status,
+        /* HAR §4.2.8 response's `statusText` is the "Response status description" — the SERVER'S. It was
+           `r.statusText || (r.status === 200 ? "OK" : "")` against a field no producer of this record had
+           ever written (cb0061b0 carries it end to end now), so every entry this export has ever produced
+           stated a reason phrase nothing observed, in the one field of a HAR a reader takes as verbatim. */
+        statusText: r.statusText,
         httpVersion: "HTTP/1.1",
         cookies: [],
         headers: respHeaders,
         content: {
           size: r.responseBody ? r.responseBody.length : 0,
-          mimeType: r.mimeType || r.contentType || "",
+          /* THE RESPONSE'S OWN TYPE AND NOT THE REQUEST'S. HAR §4.2.14 content's `mimeType` is the type of
+             the response text, so `|| r.contentType` answered it with the Content-Type the CLIENT sent —
+             right by accident for gRPC-Web, where both ends carry the same string, and a fabrication
+             everywhere else. "" is the server having stated no type, which is the fact this field has. */
+          mimeType: r.mimeType,
         },
         redirectURL: "",
         headersSize: -1,
@@ -768,7 +777,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       return {
-        startedDateTime: new Date(r.timestamp || Date.now()).toISOString(),
+        startedDateTime: new Date(r.timestamp).toISOString(),
         time: 0,
         request,
         response,
@@ -1858,6 +1867,7 @@ async function replayRequest(reqId, sourceTabId) {
               break;
             }
           } catch (e) {
+            RETHROW_FATAL(e);
             console.warn("[Replay] URL path resolution failed:", e);
           }
         }
@@ -1903,6 +1913,7 @@ async function replayRequest(reqId, sourceTabId) {
             }
           }
         } catch (e) {
+          RETHROW_FATAL(e);
           // f.req JSPB extraction failed — expected for non-Google bodies.
           // Falls through to plain-JSON attempt below; debug-log so a real
           // serialization-shape bug is visible without spamming.
@@ -1918,6 +1929,7 @@ async function replayRequest(reqId, sourceTabId) {
               initialData = json;
             }
           } catch (e) {
+            RETHROW_FATAL(e);
             // Plain JSON parse failed — body might be form-encoded or binary.
             // The fallthrough `initialData = {}` below is the correct empty
             // form state for "couldn't parse anything meaningful."
@@ -1942,6 +1954,7 @@ async function replayRequest(reqId, sourceTabId) {
           }
         });
       } catch (e) {
+        RETHROW_FATAL(e);
         console.warn("[Replay] Failed to extract URL parameters:", e);
       }
 
@@ -1968,7 +1981,10 @@ async function replayRequest(reqId, sourceTabId) {
   // Multipart has precedence when the captured body's content-type is
   // multipart/*. Each sub-part gets its own contextual editor; the flat
   // form builder can only express one part so we must bypass it.
-  const reqCt = req.contentType || req.mimeType || "";
+  /* THE REQUEST'S OWN CONTENT TYPE, and the response's only where the request stated none. Both are
+     asserted strings on this record, so `""` is a positive statement — the request sent no Content-Type —
+     and the choice between them is a real one rather than a hole being filled twice over. */
+  const reqCt = req.contentType !== "" ? req.contentType : req.mimeType;
   if (reqCt.toLowerCase().startsWith("multipart/") && req.rawBodyB64) {
     if (mpLoadFromCapturedRequest(req)) {
       mpDetected = true;
@@ -1988,6 +2004,7 @@ async function replayRequest(reqId, sourceTabId) {
         gqlLoadOperations(gqlReq.operations, gqlReq.batched);
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       // isGraphQLUrl heuristically matched (often false-positive for
       // /graphql-shaped URLs that aren't real GraphQL), so the body might
       // not be a GraphQL envelope. parseGraphQLRequest returning null is the
@@ -2018,6 +2035,7 @@ async function replayRequest(reqId, sourceTabId) {
       const bytes = base64ToUint8(req.rawBodyB64);
       document.getElementById("send-raw-body").value = new TextDecoder().decode(bytes);
     } catch (e) {
+      RETHROW_FATAL(e);
       // base64 decode or UTF-8 decode failed — the rawBodyB64 is malformed.
       // The textarea stays empty (correct fallback for "can't display") but
       // surface so a binary/corrupt body capture is diagnosable.
@@ -2025,7 +2043,11 @@ async function replayRequest(reqId, sourceTabId) {
     }
   }
   // Populate historical response if available
-  if (req.responseBody || req.status) {
+  /* "THIS RECORD SAW AN ANSWER", stated against the two fields that carry one. `responseBody` is
+     `string | null` and `status` is a number, both written on every record of this kind, so the test is
+     about the CAPTURE and not about whether the producer wrote the fields: a form submission whose
+     navigation this log never saw the end of has null and 0, and says so. */
+  if (req.responseBody !== null || req.status !== 0) {
     const historicalResult = {
       ok: parseInt(req.status) < 400,
       status: req.status,
@@ -2037,7 +2059,7 @@ async function replayRequest(reqId, sourceTabId) {
     };
 
     if (req.responseBody) {
-      const mimeType = req.mimeType || "";
+      const mimeType = req.mimeType;
       const isBinaryProtobuf =
         (mimeType.includes("protobuf") && !mimeType.includes("json")) ||
         (req.requestHeaders &&
@@ -2056,6 +2078,7 @@ async function replayRequest(reqId, sourceTabId) {
           const bytes = base64ToUint8(req.responseBody);
           bodyText = new TextDecoder().decode(bytes);
         } catch (e) {
+          RETHROW_FATAL(e);
           // base64 / UTF-8 decode of historical body failed — bodyText stays
           // as the raw base64 string. Downstream format parsing will likely
           // also fail (and log), but surface here for traceability.
@@ -2083,6 +2106,7 @@ async function replayRequest(reqId, sourceTabId) {
             size: bytes.length,
           };
         } catch (e) {
+          RETHROW_FATAL(e);
           // gRPC-Web frame extraction threw — surface so a corrupt captured
           // body that the MIME type promised but couldn't deliver is visible.
           console.debug("[popup:historical] gRPC-Web parse failed:", e && e.message || e);
@@ -2101,6 +2125,7 @@ async function replayRequest(reqId, sourceTabId) {
             };
           }
         } catch (e) {
+          RETHROW_FATAL(e);
           console.debug("[popup:historical] JSPB parse failed:", e && e.message || e);
         }
       } else if (isBinaryProtobuf) {
@@ -2115,6 +2140,7 @@ async function replayRequest(reqId, sourceTabId) {
             size: bytes.length,
           };
         } catch (e) {
+          RETHROW_FATAL(e);
           console.debug("[popup:historical] binary protobuf parse failed:", e && e.message || e);
         }
       } else if (mimeType.includes("json") || mimeType.includes("text/plain") || mimeType.includes("javascript")) {
