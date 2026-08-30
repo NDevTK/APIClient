@@ -4482,8 +4482,9 @@ static int g_id_host_read, g_id_append_child;   /* declared once per agent — a
  * error that is NOT a should-never-happen: a forced-exec flow THROWING on opaque or attacker input is the
  * exploration surface, and this document is run under forced multi-path execution where arms a browser would
  * never take are taken on purpose. This document also STAGES uncaught errors on purpose — a chunk whose top
- * level throws §4.13.1's SyntaxError, and a `Promise.reject` nobody handles — and a DCHECK here would abort on
- * the fixture's own claims. What was wrong was never that the error happened; it was that nothing said so. */
+ * level throws §4.13.4 "The CustomElementRegistry interface" step 2's SyntaxError for a name §4.13.3 "Core
+ * concepts" refuses, and a `Promise.reject` nobody handles — and a DCHECK here would abort on the fixture's
+ * own claims. What was wrong was never that the error happened; it was that nothing said so. */
 /* AND IT NAMES *WHICH PROGRAM*, which is the half that made this line carry no information in the state it
  * spends every run in. This document STAGES uncaught errors on purpose, so the count is never zero — and a
  * reader with a message and a count alone cannot separate `staged only`, `staged plus a real one` and `a real

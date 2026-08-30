@@ -1,8 +1,8 @@
-/* DOM §1.4 — WHICH STRINGS MAY BE AN ELEMENT'S LOCAL NAME.
+/* DOM §1.4 "Name validation" — WHICH STRINGS MAY BE AN ELEMENT'S LOCAL NAME.
  *
  * ITS OWN FILE BECAUSE IT IS ASKED FROM TWO STANDARDS. `createElement` throws InvalidCharacterError by it and
- * HTML §4.13.1's "valid custom element name" is it plus four further requirements, so a copy inside either one
- * is a copy that drifts: the custom-element registry's was "the first byte is a-z and there is a hyphen
+ * HTML §4.13.3 "Core concepts"'s "valid custom element name" is it plus four further requirements, so a copy
+ * inside either one is a copy that drifts: the custom-element registry's was "the first byte is a-z and a hyphen
  * somewhere", which accepted `a-A`, accepted `annotation-xml`, and accepted every name whose later code points
  * the DOM forbids — 1704 subtests of one WPT file disagreeing with one four-line function.
  *

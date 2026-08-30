@@ -1079,8 +1079,8 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
 
     dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
     DCHECK(el != NULL, "HTML §4.13.2 step 7 produced no element for a definition's local name — the definition "
-                       "was made from a name §4.13.1 already accepted, so Lexbor refusing it is a disagreement "
-                       "about what a name is");
+                       "was made from a name §4.13.3 \"Core concepts\" already accepted, so Lexbor refusing it "
+                       "is a disagreement about what a name is");
     return element_wrap(ctx, el);
 }
 

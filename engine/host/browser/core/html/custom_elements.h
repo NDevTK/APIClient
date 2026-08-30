@@ -20,7 +20,8 @@
    a second time. "precustomized" is the window between step 8.2 and the constructor returning, which is what
    DOM §4.9 step 5.1.4's assert distinguishes an element that reached `super()` by. */
 typedef enum {
-    CE_STATE_UNCUSTOMIZED = 0,   /* a local name §4.13.1 could never accept — the default for most elements */
+    /* a local name §4.13.3 "Core concepts" could never accept — the default for most elements */
+    CE_STATE_UNCUSTOMIZED = 0,
     CE_STATE_UNDEFINED,          /* a valid custom element name with no definition committed for it yet */
     CE_STATE_FAILED,
     CE_STATE_PRECUSTOMIZED,

@@ -423,9 +423,10 @@ static JSAtom  g_atom_def = JS_ATOM_NULL;
    field beside the definition and not a reading of it, because three of the five values coexist with a
    non-null definition ("failed", "precustomized", "custom") and the algorithms that branch on them cannot ask
    the definition which one it is. Absent means "the element has never been told", which is not a fourth
-   answer: DOM §4.9 gives a freshly created element "undefined" exactly when its local name is one §4.13.1
-   would accept and "uncustomized" otherwise, so the absent case is DERIVED from the name rather than written
-   at every creation site — one of which is the HTML parser, which creates elements this component never sees. */
+   answer: DOM §4.9 "Interface Element" gives a freshly created element "undefined" exactly when its local name
+   is one §4.13.3 "Core concepts" would accept and "uncustomized" otherwise, so the absent case is DERIVED from
+   the name rather than written at every creation site — one of which is the HTML parser, which creates
+   elements this component never sees. */
 static JSValue g_state_key = JS_UNDEFINED;
 static JSAtom  g_atom_state = JS_ATOM_NULL;
 
