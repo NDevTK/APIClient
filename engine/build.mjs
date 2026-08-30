@@ -173,8 +173,17 @@ const loadNow = () => {
    later. A census whose consumer names a subset is a census whose next row joins the unchecked half by
    default. So the list is solver/result.c's `result_cold_json` format string, in full, and adding a row there
    is a change in two places on purpose. */
+/* AND `finished`/`sold` EACH ARRIVE WITH THE TWO POPULATIONS THEY ARE THE SUM OF, which is the row every
+   reading in this file that turns on retirement was missing. The frontier holds exploration flows and @S
+   candidate sessions, and on a real document the second are the great majority of it — so `retiring` was true,
+   and "flows retired steadily" meant "the search discarded candidates" with nothing in the census able to say
+   which. The two take opposite work: coverage gained versus a derived payload that ran and did not fire.
+   BOTH ARMS ARE NAMED HERE AND THE SUM IS CHECKED, never one arm and a subtraction. `finished - finishedCands`
+   is a number for every pair of inputs including the pair where one of them stopped being written, so a
+   derived half is a half that cannot fail; `coldPartition` below is what makes it fail. */
 const COLD_FIELDS = ["live", "framed", "blocked", "owed",
-                     "finished", "deepest", "completed", "sold", "forks",
+                     "finished", "finishedFlows", "finishedCands",
+                     "deepest", "completed", "sold", "soldFlows", "soldCands", "forks",
                      /* `resumed` IS THE POSITIVE STATEMENT the three orphanClaims rows below need, and it is
                         listed for the reason this list exists rather than as decoration: those three read 0
                         both when no residue was handed to the session and when a rebuild carried no drives,
@@ -191,6 +200,115 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                      "miscKiB", "perFlowKiB",
                      "segKiB", "domSegKiB", "pinSegs", "pinSegEntries", "pinSegKiB",
                      "decSegs", "decSegEntries", "decSegKiB", "dynBodies", "dynKiB", "sharedKiB"];
+/* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
+   `stepUnitReading` checks its histogram against `live`: two rows that are supposed to be the whole of a third
+   are two numbers that can drift, and drifted they are WORSE than the one number they replaced, because each
+   half still looks like a measurement. The engine asserts the same identity at engine_frontier_census, where
+   all three are in one hand; a difference visible HERE and not there is a row lost between the census and this
+   document, which is exactly what a renamed field does. Every reading below that quotes an arm goes through
+   this first, so no verdict is composed from a census that is not internally true. */
+function coldPartition(c, total, parts, where) {
+  const sum = parts.reduce((t, p) => t + c[p], 0);
+  if (sum !== c[total])
+    throw new Error(`[build] the @COLD census's \`${total}\` is ${c[total]} while ${parts.join(" + ")} sums ` +
+                    `to ${sum} — those rows are a PARTITION of it (every member is on exactly one side of ` +
+                    `\`Flow.cand_src\` for the whole of its life), so a difference means the two sides have ` +
+                    `stopped describing one population and no reading composed from either is about the run ` +
+                    `that happened. solver/engine.c asserts the same identity at ${where}; a disagreement ` +
+                    `visible here and not there is a row lost between the census and this document.`);
+}
+/* WHAT RETIRED, AND WHICH POPULATION IT WAS — the reading `finished` alone could never be, and a NAMED
+   function for `stepUnitReading`'s reason: a reading that is a sentence spliced into the middle of a composer
+   can only be exercised by running the whole build, so it is written where one census object is the whole of
+   its input and it can be handed a line off a log.
+   A frontier holds exploration flows and @S candidate sessions, and on a document that finds anything the
+   second are the great majority of the members — so a retirement total is dominated by the search's own
+   discards. An exploration flow that ran to its end is coverage this document GAINED; a candidate session that
+   ran to its end is one derived payload that ran and did NOT fire, which is the search spending itself and
+   buys coverage nothing. Stated at EVERY outcome, pass included, because the two are one number and take
+   opposite work.
+   THE PARTITION IS CHECKED HERE AND NOT ONLY AT THE VERDICT, because this is the reading that quotes the arms:
+   a sentence composed from rows that do not sum to their total is a sentence about a frontier that was not
+   there, and it would be printed at every outcome including the passes.
+   THE ZERO ARM IS THE LOUD ONE and is named rather than left to be noticed in a pair of digits: a run whose
+   entire retirement is candidates has retired no exploration at all, and that is the sentence a reader acts
+   on. It is a reading of the counters and not a threshold — nothing here is compared against a proportion. */
+function retiredReading(c) {
+  coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
+  coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
+  return `retired: ${c.finished} (${c.finishedFlows} exploration flow(s), ` +
+         `${c.finishedCands} @S candidate session(s))` +
+         (c.finished === 0
+           ? ` — nothing has retired in this run at all`
+           : c.finishedFlows === 0
+             ? ` — EVERY retirement in this run was a candidate session, so what this document has done is ` +
+               `discard derived payloads that did not fire; not one exploration flow has reached its end and ` +
+               `no coverage was gained by any of it`
+             : c.finishedCands === 0
+               ? ` — all of it exploration, so no @S candidate has finished a re-fire in this run`
+               : ``) +
+         (c.sold > 0
+           ? `; sold ${c.sold} (${c.soldFlows} exploration, ${c.soldCands} candidate)` +
+             (c.soldCands > 0
+               ? ` — a paged candidate comes back WITHOUT its ladder (solver/flow.h: \`cand_surv\` and ` +
+                 `\`cand_rung\` are readings of a re-execution and do not cross the cold tier), so those ` +
+                 `${c.soldCands} cost the search a measured distance the exploration sales did not`
+               : ``)
+           : ``);
+}
+/* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
+   chain of gates produces rows in a geometric series and the last site in program order is always the biggest
+   — so a list of every row is a list, and the one row plus how much of all forking it is, is the reading.
+   `{}` is the positive statement that nothing forked, which on a bundle that should have branched on opaque
+   input is the loudest thing in this sentence and must not render as a blank.
+   AND THE OVERFLOW ROW IS NOT A PREDICATE, WHICH THIS READER STATED THAT IT WAS. decide.c's table is
+   FIXED-SIZE and claimed FIRST-COME, and everything past it lands in one prose-named row the composer renders
+   in the same object under the same shape as a real key — deliberately, because "an undercount that says so is
+   a measurement". Taking the argmax over the object therefore hands back a NON-SITE as the answer to "which
+   predicate is growing the frontier", and counts the prose row among the `predicate(s)`. solver/decide.h says
+   exactly this and says what follows from it: "while the overflow leads the table, the table has not answered,
+   and a reader who quotes the argmax has quoted the bucket". It had no reader that honoured it, and on a real
+   document the bucket has LED the table by a wide margin — so the one line anybody reads named a bucket as the
+   hot predicate, with a percentage beside it.
+   THE THREE STATES ARE SEPARATED RATHER THAN AVERAGED. The bucket LEADS (the table has not answered, and what
+   to build is named in decide.h — heavy-hitter admission, Misra-Gries or Space-Saving, never a bigger table,
+   which fixes one document and no other); the bucket is PRESENT but not largest (the top row is a real site
+   and the reading is honest, with the undercount stated beside it); the bucket is ABSENT (the table held
+   everything). An absent bucket and a zero one are the same fact here and ONLY here — decide.c omits the row
+   entirely unless it overflowed, so its absence is that composer's positive statement that nothing was
+   excluded, which is why this is not the defaulted-field defect.
+   THE KEY IS READ FROM decide.c, NEVER SPELLED HERE, for `hostDefine`'s reason: a second copy of a producer's
+   string goes stale in silence, and a reader that stopped recognising the bucket would quietly return to
+   reporting it as a predicate — the exact defect, restored by a rename.
+   IT TAKES THE TABLE AND NOT THE LOG for `retiredReading`'s reason: one object is the whole of its input, so
+   it can be handed a line off a log and exercised without a build. */
+function forkReading(t) {
+  const keys = Object.keys(t);
+  if (!keys.length) return `forks: NONE — not one predicate of this document ever split a flow`;
+  const over = forkOverflowKey();
+  const total = keys.reduce((n, k) => n + t[k], 0);
+  const sites = keys.filter((k) => k !== over);
+  const spill = Object.prototype.hasOwnProperty.call(t, over) ? t[over] : 0;
+  const pct = (v) => Math.round(100 * v / total);
+  const top = sites.length ? sites.reduce((x, k) => (t[k] > t[x] ? k : x), sites[0]) : null;
+  return top === null
+    ? `forks: ${total} and EVERY ONE of them in the row decide.c's table could not hold, so the table named ` +
+      `no predicate at all — solver/decide.h calls this the admission policy excluding exactly the row it ` +
+      `exists to name, and the fix it names is heavy-hitter admission rather than a bigger table`
+    : `forks: ${total} across ${sites.length} named predicate(s)` +
+      (spill === 0
+        ? `, the largest ${pct(t[top])}% at ${JSON.stringify(top)}; decide.c's table did not overflow, so no ` +
+          `site was excluded from it`
+        : spill > t[top]
+          ? `, and the table HAS NOT ANSWERED: ${pct(spill)}% of forks are in rows it could not hold, which ` +
+            `is more than the largest named site (${pct(t[top])}% at ${JSON.stringify(top)}). That one bucket ` +
+            `is an unknown number of sites, so "one hot predicate that fell out of the table" and "a genuine ` +
+            `long tail" read identically here and have opposite fixes — see solver/decide.h for the ` +
+            `admission policy that decides which keys a fixed-size census retains`
+          : `, the largest ${pct(t[top])}% at ${JSON.stringify(top)}, with ${pct(spill)}% of forks in rows ` +
+            `the table could not hold — so that share is an undercount spread over an unknown number of ` +
+            `excluded sites and the named rows are a floor`);
+}
 function probeFlips(out) {
   const rows = [];
   for (const m of out.matchAll(/^@H (.*)$/gm)) {
@@ -353,6 +471,28 @@ function hostDefine(file, name, why) {
   if (!m) throw new Error(`[build] cannot read \`${name}\` from engine/host/${file} — ${why}, and it will not ` +
                           `substitute a remembered value for one it cannot find.`);
   return Number(m[1]);
+}
+/* THE SAME RULE FOR A STRING — decide.c's `OVERFLOW_KEY`, which is the name the fork table gives the row it
+   could not hold. The reader that has to tell a bucket from a predicate needs the exact bytes, and a copy of
+   them here would be a second spelling that goes stale in silence: a rename in decide.c would leave this file
+   quietly reporting the bucket as the hot predicate again, which is the defect the reader exists to end and is
+   invisible from either side. So it is read, and an unreadable one throws rather than being guessed past.
+   IT REFUSES AN ESCAPED LITERAL RATHER THAN HALF-DECODING ONE. There is no C string unescaper here, and a key
+   containing `\n` or `\x41` would be matched against the JSON's decoded bytes as the two characters it is
+   written with — a comparison that silently never matches, which is exactly the same silence. decide.c's own
+   note says the row is named "under a name no constraint key can collide with because no key is prose", so a
+   backslash appearing in it is a change of kind and this is where it stops. */
+function forkOverflowKey() {
+  const file = "solver/decide.c";
+  const m = readFileSync(join(HOST, file), "utf8")
+    .match(/static\s+const\s+char\s+OVERFLOW_KEY\s*\[\s*\]\s*=\s*"([^"\\]*)"\s*;/);
+  if (!m)
+    throw new Error(`[build] cannot read \`OVERFLOW_KEY\` from engine/host/${file} as an unescaped literal — ` +
+                    `the @FORKAT reader tells decide.c's overflow BUCKET from a real predicate by that exact ` +
+                    `name, and without it the largest row of that table is reported as the hot predicate even ` +
+                    `when it is the row the table could not hold. It will not substitute a remembered spelling ` +
+                    `for one it cannot find, and it will not half-decode an escaped one.`);
+  return m[1];
 }
 /* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. */
 const ageQuantum = () =>
@@ -734,6 +874,7 @@ function censusReading(out) {
                `(${w.b.heapSegEntries} entries) + ${w.b.domSegs} DOM (${w.b.domSegEntries})` +
                (w.b.heapSegs > w.a.heapSegs ? ` and still growing` : ``));
   if (c) {
+    parts.push(retiredReading(c.b));
     /* WHAT THE PARKED FRONTIER WEIGHS AND WHICH HALF OF IT — the pager's own trade, and the reason
        result_cold_json splits per-flow from shared: the first multiplies by the frontier's size and the second
        does not, so a frontier that is expensive because it is BIG and one that is expensive because its shared
@@ -833,23 +974,9 @@ function censusReading(out) {
                      dark.map((a) => `${a[0]} (${a[2]})`).join("; ")));
     }
   }
-  /* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
-     chain of gates produces rows in a geometric series and the last site in program order is always the
-     biggest — so a list of every row is a list, and the one row plus how much of all forking it is, is the
-     reading. `{}` is the positive statement that nothing forked, which on a bundle that should have branched
-     on opaque input is the loudest thing in this sentence and must not render as a blank. */
   const f = [];
   for (const m of out.matchAll(/^@FORKAT (\{.*\})$/gm)) { try { f.push(JSON.parse(m[1])); } catch { /* tail */ } }
-  if (f.length) {
-    const t = f[f.length - 1], keys = Object.keys(t);
-    if (!keys.length) parts.push(`forks: NONE — not one predicate of this document ever split a flow`);
-    else {
-      const total = keys.reduce((n, k) => n + t[k], 0);
-      const top = keys.reduce((x, k) => (t[k] > t[x] ? k : x), keys[0]);
-      parts.push(`forks: ${total} across ${keys.length} predicate(s), the largest ` +
-                 `${Math.round(100 * t[top] / total)}% at ${JSON.stringify(top)}`);
-    }
-  }
+  if (f.length) parts.push(forkReading(f[f.length - 1]));
   /* AND WHAT THE @S HALF MET, WHICH IS THE ONE THING AN EMPTY SECURITY SURFACE CANNOT SAY ABOUT ITSELF. The
      probe rows above say whether a sink FIRED; `@S []` has four readings that take opposite work — the page
      never read an attacker source, a source was read but no sink RAN, a sink ran and only the page's own
@@ -1021,6 +1148,13 @@ function hungCauseCensus(out) {
       throw new Error(`[build] the @COLD census has no numeric \`${f}\` — this discriminator reads ` +
                       `${COLD_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
                       `field must be renamed here rather than silently compared as undefined.`);
+  /* AND THE PARTITIONS HOLD AT BOTH ENDS OF THE WINDOW, checked before anything is composed out of either.
+     Every arm below reads a DIFFERENCE across the window, so a census whose parts do not sum is one whose
+     difference is a difference of nothing. */
+  for (const c of [a, b]) {
+    coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
+    coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
+  }
   /* WHERE THE MONOTONE COUNTERS LAST MOVED, OVER THE WHOLE RUN — the numbers that make two runs comparable and
      which nothing here has ever computed. `finished` and `sold` only ever climb, so "the last census at which
      this one climbed" is a fact about the run's TRAJECTORY rather than about the instant it stopped: two runs of
@@ -1032,6 +1166,11 @@ function hungCauseCensus(out) {
      number the one line anybody reads does not carry. */
   const lastRise = (key) => { let i = -1; for (let k = 1; k < n; k++) if (s[k][key] > s[k - 1][key]) i = k; return i; };
   const lastRetire = lastRise("finished"), lastSale = lastRise("sold");
+  /* AND THE SAME LANDMARK PER POPULATION, which is the one the total structurally cannot carry. A frontier
+     whose members are mostly @S candidate sessions has `finished` climbing for the whole run while not one
+     exploration flow has ever reached its end — so `retire never` is unreachable on such a document and the
+     total's landmark says nothing about coverage. These two say which half moved and when. */
+  const lastRetireFlow = lastRise("finishedFlows"), lastRetireCand = lastRise("finishedCands");
   const mark = (i, tot) => (i < 0 ? "never" : `${i}/${tot}`);
 
   /* THE FIXTURE'S OWN PROGRESS, over a window of the SAME absolute shape — its own stream and its own cadence
@@ -1046,12 +1185,20 @@ function hungCauseCensus(out) {
     if (Object.keys(h[k]).some((x) => h[k][x] && !h[k - 1][x])) lastFlip = k;
   /* THE COMPACT FORM THAT SURVIVES INTO THE STAGE TABLE. Semicolon-and-comma only: `causeName` ends a name at
      the first " (" or " — ", so these separators are chosen to be neither. */
-  const landmarks = `; retire ${mark(lastRetire, n)}, flip ${mark(lastFlip, h.length)}`;
+  /* THE RETIRE LANDMARK IS THE SPLIT ONE AND NOT THE TOTAL'S, which is the whole of what this row is for: on a
+     frontier that is mostly candidate sessions the total's landmark moves every census whatever the
+     exploration is doing, so it reads healthy for a run that has retired no exploration flow at all. The
+     total's own landmark stays in `span` beside the counts it belongs to. */
+  const landmarks = `; retire ${mark(lastRetireFlow, n)} flow, ${mark(lastRetireCand, n)} cand, ` +
+                    `flip ${mark(lastFlip, h.length)}`;
   const span = `over the last ${width} of ${n} censuses — an ABSOLUTE window of ${width * PROGRESS_EVERY} ` +
                `units of engine_work_done, not a fraction of the run: ` +
-               `finished ${a.finished}→${b.finished}, live ${a.live}→${b.live}, ` +
-               `sold ${a.sold}→${b.sold}, blocked ${b.blocked}, owed ${b.owed}. ` +
-               `Over the WHOLE run, finished last rose at census ${mark(lastRetire, n)} and sold at ` +
+               `finished ${a.finished}→${b.finished} (exploration ${a.finishedFlows}→${b.finishedFlows}, ` +
+               `@S candidate sessions ${a.finishedCands}→${b.finishedCands}), live ${a.live}→${b.live}, ` +
+               `sold ${a.sold}→${b.sold} (exploration ${a.soldFlows}→${b.soldFlows}, candidate ` +
+               `${a.soldCands}→${b.soldCands}), blocked ${b.blocked}, owed ${b.owed}. ` +
+               `Over the WHOLE run, finished last rose at census ${mark(lastRetire, n)} — its exploration half ` +
+               `at ${mark(lastRetireFlow, n)} and its candidate half at ${mark(lastRetireCand, n)} — and sold at ` +
                `${mark(lastSale, n)}` +
                (h.length ? `, and the probe table last flipped a row at sample ${mark(lastFlip, h.length)}` : ``) +
                ` — those are the landmarks two runs of one revision are compared on, and `+
@@ -1100,8 +1247,32 @@ function hungCauseCensus(out) {
      counters disagreeing and is worth saying rather than inferring past. And `blocked`/`owed` get an arm of
      their OWN — a frontier parked on the host is a cause this function could see and had no word for. */
   const retiring = b.finished > a.finished;
+  /* AND WHICH POPULATION RETIRED, WHICH IS WHAT BOTH ARMS BELOW USED TO ASSERT WITHOUT HAVING. They said
+     "flows retired steadily" and "flows were still finishing" off a counter that sums exploration flows and @S
+     candidate sessions — and on a frontier that is mostly candidates, both sentences were true of a run in
+     which not one exploration flow had ever reached its end. Those are opposite findings: a retiring
+     exploration frontier is gaining coverage and legitimately wants more budget, while a frontier retiring
+     only candidates is the SEARCH discarding derived payloads that did not fire, which buys coverage nothing
+     and which more budget buys more of.
+     IT RIDES THE VERDICT'S NAME IN THE CANDIDATE-ONLY CASE, with a comma rather than " — " or " (" because
+     `causeName` ends a name at either of those and the one line anybody reads is the name. Calling that run
+     "a HEALTHY FRONTIER" without the qualifier is the headline the split exists to stop. The ROUTING is
+     unchanged: retiring candidates IS retiring work, so the arms are the same arms and it is the claim they
+     make that got narrower. */
+  const retFlows = b.finishedFlows - a.finishedFlows, retCands = b.finishedCands - a.finishedCands;
+  const whoRetired =
+    retFlows === 0
+      ? `every one of the ${retCands} retirement(s) across this window was an @S CANDIDATE SESSION and not ` +
+        `one exploration flow reached its end, so what moved is the search discarding derived payloads that ` +
+        `did not fire — that gains this document no coverage, and more budget buys more discards`
+      : retCands === 0
+        ? `all ${retFlows} of them were exploration flows, so no candidate re-fire finished in this window`
+        : `${retFlows} exploration flow(s) and ${retCands} @S candidate session(s) — coverage gained and ` +
+          `search spent, which are different things and are worth different budget`;
+  const candOnly = retiring && retFlows === 0 ? `, @S CANDIDATE DISCARD ONLY` : ``;
   if (retiring && h.length >= 2 && flipped.length === 0)
-    return `WORK THAT ADVANCES NO STATEMENT${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows retired steadily and not ` +
+    return `WORK THAT ADVANCES NO STATEMENT${candOnly}${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — members retired steadily ` +
+           `(${whoRetired}) and not ` +
            `one probe row reached 1 across the window, so more time buys more of the same. ` +
            (wfq.ordered
              ? `The reward spread is wider than the optimism term's whole range, so the ORDER is the reward's ` +
@@ -1117,8 +1288,9 @@ function hungCauseCensus(out) {
                `name the first of those without reading the row that tells them apart.`) +
            ` The rows still 0 name what nothing scheduled was working toward.`;
   if (retiring)
-    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows were still ` +
-           `finishing when the budget ran out, ${b.blocked} flow(s) were blocked and ${b.owed} reply(s) owed at ` +
+    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET${candOnly}${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — members were still ` +
+           `retiring when the budget ran out (${whoRetired}), ${b.blocked} flow(s) were blocked and ` +
+           `${b.owed} reply(s) owed at ` +
            `the last census, and ${flipped.length} row(s) ` +
            `reached 1 across the window. ` +
            (neverOne.length
@@ -1151,10 +1323,22 @@ function hungCauseCensus(out) {
      until the cold census carried it: it was a @PROGRESS name, and @PROGRESS was printed by an unreachable
      loop. Both arms used to ALSO require `live` to have risen, which is a gauge comparison — see above. */
   if (b.sold > a.sold)
-    return `a FRONTIER BEING PAGED OUT${landmarks} (${span}; ${hspan}; ${cs}) — no flow finished across the ` +
-           `window, but ${b.sold - a.sold} flow(s) were SOLD to ` +
-           `the cold tier in it. That is the RAM floor doing its job, so the question is what ` +
-           `the working set is made of rather than why nothing retires.`;
+    return `a FRONTIER BEING PAGED OUT${landmarks} (${span}; ${hspan}; ${cs}) — no member finished across the ` +
+           `window, but ${b.sold - a.sold} member(s) were SOLD to ` +
+           `the cold tier in it — ${b.soldFlows - a.soldFlows} exploration flow(s) and ` +
+           `${b.soldCands - a.soldCands} @S candidate session(s). That is the RAM floor doing its job, so the ` +
+           `question is what the working set is made of rather than why nothing retires` +
+           /* AND THE ONE ASYMMETRY BETWEEN THE TWO HALVES OF THAT SALE, which is why the split is worth having
+              here rather than only in the total: an exploration flow's snapshot is a recipe and comes back as
+              itself, while a candidate comes back WITHOUT the ladder it stood on — solver/flow.h keeps
+              `cand_surv` and `cand_rung` off the cold tier deliberately, because a distance is an observation
+              of a re-execution and a resumed session has not made it. So the same sale costs the two
+              populations different things, and a pager reading one number cannot see which it just spent. */
+           (b.soldCands > a.soldCands
+             ? `. The candidate half of that sale costs the SEARCH a measured distance: a parked candidate is ` +
+               `written out with its substitution and not its ladder (solver/flow.h), so those ` +
+               `${b.soldCands - a.soldCands} re-enter the frontier having to re-earn the rungs they had.`
+             : `.`);
   if (b.live >= a.live)
     return `a STALL${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — no flow finished across the window, ` +
            `nothing was paged out and nothing was waiting on the host, so work is being admitted and not ` +
