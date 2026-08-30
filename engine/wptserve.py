@@ -12,7 +12,9 @@ is written to be served — including the rewrites (/resources/WebIDLParser.js i
 historical name) that engine/wpt.mjs previously carried as a hand-copied table.
 
 Usage:  python3 engine/wptserve.py <wpt-root> <port>
-It prints `READY <port>` on stdout once bound, and serves until killed.
+It prints `READY <port> <origin>` on stdout once bound, and serves until killed — the port is where a client
+CONNECTS, and the origin is what the corpus is SERVED AS (`{{host}}:{{ports[http][0]}}`, the authority every
+`.sub` document asserts its own URLs against). Those are two different facts and both are decided here.
 """
 import sys
 import os
@@ -148,7 +150,26 @@ with stash.StashServer(_stash_addr, authkey=str(uuid.uuid4())), _cfg as cfg:
                                  rewrites=rewrites,
                                  config=cfg, use_ssl=False, key_file=None, certificate=None)
     httpd2.start()
-    sys.stdout.write("READY %d\n" % httpd.port)
+    # THE ORIGIN THE CORPUS IS SERVED *AS*, WHICH THE ADDRESS ABOVE DOES NOT STATE. A client connects to a
+    # loopback socket; a `.sub` document asserts its own URLs against `{{host}}:{{ports[http][0]}}`, and
+    # tools/wptserve/wptserve/pipes.py reads BOTH of those off the config object below — `{{host}}` is
+    # `config["browser_host"]` and `{{ports[http][0]}}` is `config["ports"]`. So the authority every such test
+    # measures the engine against is decided HERE, and it is composed out of `cfg` — the object the `sub` pipe
+    # substitutes from — rather than out of the arguments that built it, which is one copy further from the
+    # answer and free to disagree with it.
+    # IT IS PRINTED BECAUSE A SECOND AUTHOR OF IT CAN ONLY BE RIGHT BY ACCIDENT. engine/host/wpt_runner.c held
+    # `#define WPT_TOP_ORIGIN "http://web-platform.test"` — a fact that varies per run, stated as a constant —
+    # so every `.sub` test that asserts a RESOLVED URL compared this server's real authority against a
+    # port-less one and reported the ENGINE as wrong: 32 failures in domparsing/innerhtml-mxss.sub.html alone,
+    # in a file whose 30 `innerHTML` subtests pass. The port cannot be a literal anywhere: it is EPHEMERAL,
+    # reserved at the top of this file, and different every run.
+    if httpd.port != cfg.ports["http"][0]:
+        # A SOCKET THAT BOUND SOMETHING OTHER THAN WHAT THE CONFIG SUBSTITUTES IS TWO SERVERS WEARING ONE NAME:
+        # every `.sub` document would name one port and every fetch would reach another, and whichever number
+        # a runner were told, it would be lied to about the other. There is nothing to serve after that.
+        sys.exit("wptserve: bound port %d but the config substitutes %d into every .sub document"
+                 % (httpd.port, cfg.ports["http"][0]))
+    sys.stdout.write("READY %d http://%s:%d\n" % (httpd.port, cfg.browser_host, cfg.ports["http"][0]))
     sys.stdout.flush()
 # WebTestHttpd.start() runs the server on its own thread and returns, so this one blocks until it is killed.
 # There is no join to call — `start`, `get_url` and `stop` are the whole of its surface.

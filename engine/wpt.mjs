@@ -1102,15 +1102,25 @@ writeFileSync(SERVER_LOG, "");
 const serverLogFd = openSync(SERVER_LOG, "a");
 const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"],
                      { stdio: ["ignore", serverLogFd, serverLogFd] });
-const serverAddr = await new Promise((resolve, reject) => {
+/* THE READY LINE CARRIES TWO FACTS AND THIS DRIVER RELAYS BOTH. Where a client CONNECTS is a loopback socket;
+   what the corpus is SERVED AS is `{{host}}:{{ports[http][0]}}` — the authority every `.sub` document asserts
+   its own URLs against, which wptserve substitutes out of its own config. The runner used to compose the second
+   one itself, as a literal `http://web-platform.test` with no port, so every `.sub` test asserting a RESOLVED
+   URL compared the real authority against a port-less one and reported the ENGINE as wrong (32 failures in
+   domparsing/innerhtml-mxss.sub.html alone). The port is EPHEMERAL — reserved by the server per run — so it
+   cannot be a literal anywhere and the server is the only thing that can state it.
+   THE NEWLINE IS PART OF THE MATCH: this reads a file another process is appending to, and a pattern that can
+   match a half-written line would resolve with the port and no origin. */
+const ready = await new Promise((resolve, reject) => {
   const fail = setTimeout(() => reject(new Error("wptserve did not report READY within 60s")), 60_000);
   const poll = setInterval(() => {
-    const m = /READY (\d+)/.exec(readFileSync(SERVER_LOG, "utf8"));
-    if (m) { clearTimeout(fail); clearInterval(poll); resolve("127.0.0.1:" + m[1]); }
+    const m = /READY (\d+) (\S+)\n/.exec(readFileSync(SERVER_LOG, "utf8"));
+    if (m) { clearTimeout(fail); clearInterval(poll); resolve({ addr: "127.0.0.1:" + m[1], origin: m[2] }); }
   }, 50);
   server.on("exit", (c) => { clearTimeout(fail); clearInterval(poll); reject(new Error("wptserve exited with " + c)); });
 }).catch((e) => { console.error("[wpt] " + e.message); process.exit(1); });
-console.log(`[wpt] wptserve on ${serverAddr}; its log: ${SERVER_LOG}`);
+const serverAddr = ready.addr, serverOrigin = ready.origin;
+console.log(`[wpt] wptserve on ${serverAddr}, serving the corpus as ${serverOrigin}; its log: ${SERVER_LOG}`);
 process.on("exit", () => server.kill());
 
 /* WPT's server does not serve every path from a file of that name. This is its rewrite table (tools/serve's
@@ -1385,7 +1395,11 @@ for (const { file: f, kind, variant } of runs) {
                          ...(kind === "document" ? ["--test-document"] : []),
                          ...(variant ? ["--variant", variant] : []), HARNESS, ...deps, f],
                         { encoding: "utf8", maxBuffer: 1 << 28, timeout: WALL_BACKSTOP_MS,
-                          env: { ...process.env, WPT_SERVER: serverAddr } });
+                          env: { ...process.env, WPT_SERVER: serverAddr,
+                                 /* WHERE TO CONNECT AND WHAT THE BYTES ARE SERVED AS — two facts, both the
+                                    server's, neither derivable from the other. The runner asserts they name
+                                    one port (wpt_derive_addresses) and has no literal to fall back to. */
+                                 WPT_TOP_ORIGIN: serverOrigin } });
     const cpuUsed = childCpu() - cpu0;
     const out = (r.stdout || "") + (r.stderr || "");
     /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half

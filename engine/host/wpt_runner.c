@@ -442,6 +442,21 @@ static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, co
  * deletes. The Host header carries the URL's own authority while the socket goes to the loopback port, which is
  * exactly what a hosts-file mapping does for a real browser. */
 static char g_server[64];   /* "127.0.0.1:PORT", from the driver */
+/* AND WHAT THE CORPUS IS SERVED *AS*, which is a DIFFERENT fact from the address above and arrives separately.
+   This host's top-level document is installed with this origin, and this host STAMPS it on a message it routes
+   out of that document, so it is also the authority every test resolves its own URLs against.
+   IT CANNOT BE A LITERAL, AND IT WAS ONE: `#define WPT_TOP_ORIGIN "http://web-platform.test"`, which states a
+   fact that VARIES PER RUN as a constant. engine/wptserve.py reserves an EPHEMERAL port and substitutes it into
+   every `.sub` document it serves — wptserve's `sub` pipe reads `{{host}}` and `{{ports[http][0]}}` off the
+   server's own config — so a document written against `{{host}}:{{ports[http][0]}}` asserted its resolved URLs
+   against an authority carrying a port while this runner believed it was at one carrying none. Measured:
+   domparsing/innerhtml-mxss.sub.html reported 32 failures, every one of the form `expected
+   "http://web-platform.test:42795/…" but got "http://web-platform.test/…"`, in a file whose 30 `innerHTML`
+   subtests all pass — a number about HOW the run was configured, reported as a defect in WHAT ran, in every
+   area holding a `.sub` document that asserts a URL. So the origin comes FROM THE SERVER that served the
+   documents (WPT_TOP_ORIGIN in the environment, beside WPT_SERVER), and a run that cannot establish it has no
+   literal to fall back to — a fallback here is precisely what let a wrong number stand across every area. */
+static char g_top_origin[128];
 
 static void wpt_send_all(int fd, const char *p, size_t n)
 {
@@ -1481,9 +1496,6 @@ static int wpt_issue_pending(void)
  * is a number and a page compares it with `===` — an answer that arrived as the string "0" would satisfy a
  * loose check and prove only that bytes moved. */
 #define WPT_CHILD_MAX 32
-/* THE TOP-LEVEL DOCUMENT'S ORIGIN, named once because it is now TWO facts: the origin its own document is
-   installed with, and the origin this host STAMPS on a message it routes out of that document. */
-#define WPT_TOP_ORIGIN "http://web-platform.test"
 
 typedef struct { char *name; char *origin; int to, from; pid_t pid; } ChildDoc;
 static ChildDoc g_children[WPT_CHILD_MAX];
@@ -1874,6 +1886,16 @@ static void wpt_drain_notices(JSContext *ctx)
 {
     const char *p;
 
+    /* THE ORIGIN STAMPED BELOW IS THIS PROCESS'S, AND ONLY THE PARENT PROCESS HAS ONE. SECURITY.md puts the
+       origin stamp in the zone rather than in the engine, so a notice leaves here carrying the origin of the
+       document that emitted it — established by wpt_derive_addresses, which only the top-level runner runs. A
+       `--document` child takes its origin from its command line instead, so routing a notice from one would
+       stamp the empty string on it: a forgeable-looking origin that every `event.origin` check in the corpus
+       reads as a real one. Asserted at the consumer so the day a child routes notices the crash names this. */
+    DCHECK(g_top_origin[0] != 0,
+           "a host notice is being stamped with an origin this process never established — wpt_derive_addresses "
+           "sets it and a `--document` child does not run it, so this notice would leave under the empty origin");
+
     /* A document announced but not yet provisioned is one a read would arrive for before its instance exists,
        which is why these are drained ahead of the requests. */
     for (p = engine_host_notices(); *p; ) {
@@ -1889,7 +1911,7 @@ static void wpt_drain_notices(JSContext *ctx)
         line = malloc(n + 1);
         CHECK(line != NULL, "wpt: OOM reading a host notice");
         memcpy(line, p, n); line[n] = 0;
-        wpt_route_notice(ctx, line, WPT_TOP_ORIGIN);
+        wpt_route_notice(ctx, line, g_top_origin);
         free(line);
         p = end + 1;
     }
@@ -2284,8 +2306,6 @@ static void wpt_derive_addresses(int argc, char **argv)
        it away and the test was then read off disk, which is how a `.sub.` script test came to run with its
        `{{host}}` placeholders intact. */
     CHECK(!strncmp(test, g_wpt_root, n), "wpt: a test outside the corpus root has no server address");
-    snprintf(g_test_url, sizeof g_test_url, "http://web-platform.test%s%s", test + n, g_variant);
-    snprintf(g_base_url, sizeof g_base_url, "%s", g_test_url);
     {
         /* WHERE THE CORPUS IS SERVED FROM. The driver starts wptserve and names its loopback port here; the
            runner speaks HTTP to it and sends the URL's own authority as the Host header, which is what a
@@ -2297,6 +2317,47 @@ static void wpt_derive_addresses(int argc, char **argv)
         CHECK(strlen(sv) < sizeof g_server, "wpt: WPT_SERVER is longer than this runner holds");
         snprintf(g_server, sizeof g_server, "%s", sv);
     }
+    {
+        /* AND WHAT IT IS SERVED AS — the authority the corpus's own documents are written against, which the
+           server states because the server is what decides it: engine/wptserve.py composes this out of the very
+           config object wptserve's `sub` pipe substitutes `{{host}}` and `{{ports[http][0]}}` from. It is not
+           derivable here and must not be composed here, because the port half is EPHEMERAL — reserved by the
+           server at startup and different every run — so a second author of this string is an author who can
+           only be right by accident. NO DEFAULT: a run whose origin is not established would resolve every
+           test's URLs against an authority nothing served them from, which is a wrong number in every area at
+           once rather than a missing one in this run. */
+        const char *og = getenv("WPT_TOP_ORIGIN");
+        const char *colon = strchr(g_server, ':');
+        int server_port = colon ? atoi(colon + 1) : -1;
+        UrlRecord o;
+        int parsed;
+
+        CHECK(og && *og, "wpt: WPT_TOP_ORIGIN names no origin — the driver must read the authority off "
+                         "engine/wptserve.py's READY line and pass it, and this runner has no literal to use "
+                         "instead: the port in it is bound per run");
+        CHECK(strlen(og) < sizeof g_top_origin, "wpt: WPT_TOP_ORIGIN is longer than this runner holds");
+        snprintf(g_top_origin, sizeof g_top_origin, "%s", og);
+        /* AND IT AGREES WITH THE SOCKET THE DOCUMENTS COME OFF. The two facts arrive on two environment
+           variables and they are one server: wptserve binds `ports[http][0]` and substitutes that same number
+           into every `.sub` document. A port here that is not the port this runner dials is a document
+           asserting one authority against bytes fetched from another — the exact shape of the wrong number the
+           literal produced, with a stale value instead of an absent one.
+           PARSED, NOT SCANNED: the port is a URL component and WHATWG URL §4.4 "URL parsing" is what decides
+           where it begins; `port` is -1 for the spec's null port, which is what a port-less origin gives and
+           what this assert exists to catch. */
+        url_record_init(&o);
+        parsed = url_parse(&o, g_top_origin, strlen(g_top_origin), NULL);
+        DCHECK(parsed, "wpt: WPT_TOP_ORIGIN is not a URL, so the authority every test in this run resolves "
+                       "against is a string the URL parser rejects");
+        DCHECKF(o.port == server_port,
+                "wpt: the corpus is served AS `%s` and fetched FROM `%s` — those name two different ports, so "
+                "every test that asserts a resolved URL would compare an authority against bytes that came "
+                "from another one. The driver reads both off the same READY line; one of them is stale",
+                g_top_origin, g_server);
+        url_record_free(&o);
+    }
+    snprintf(g_test_url, sizeof g_test_url, "%s%s%s", g_top_origin, test + n, g_variant);
+    snprintf(g_base_url, sizeof g_base_url, "%s", g_test_url);
 }
 
 static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
@@ -3136,7 +3197,7 @@ int main(int argc, char **argv)
        AND §3.1.3's LIST IS EMPTY BY THAT SAME SENTENCE, said in that grammar's own word: a document nothing
        embeds has no container document, so step 3 returns an empty output. It is stated rather than left
        blank because an empty field would be indistinguishable from a host that stopped stating it. */
-    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0, NULL, "", "",
+    ctx = wpt_build_document("wpt", g_top_origin, g_base_url, NULL, 0, NULL, "", "",
                              "unsafe-none", "", "unsafe-none", "", "u",
                              PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                              DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
