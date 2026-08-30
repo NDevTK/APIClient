@@ -685,7 +685,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       try {
         const parsed = JSON.parse(req.body);
         kwargs.push(`    json=${JSON.stringify(parsed)}`);
-      } catch (_) {
+      } catch (e) {
+        /* THIS CATCH HAS A REAL JOB, WHICH IS EXACTLY WHY IT NEEDS THE FIRST LINE. A body whose Content-Type
+           says JSON and whose bytes are not is a real state — servers misreport content types constantly —
+           and `data=` is the right export for it. But on this side an assertion is a THROW (extension/
+           check.js), so every legitimate catch is also a place an invariant abort becomes a plausible answer:
+           without this line a broken record contract reaching the request builder would have been exported as
+           a Python snippet posting the raw string, which is the concealment shape wearing a legitimate
+           purpose. RETHROW_FATAL is not a second assertion mechanism — it is what stops the one mechanism
+           being locally disabled. */
+        RETHROW_FATAL(e);
         kwargs.push(`    data=${JSON.stringify(req.body)}`);
       }
     } else if (req.body) {
@@ -732,7 +741,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       await navigator.clipboard.writeText(text);
       btn.textContent = "Copied!";
-    } catch (_) {
+    } catch (e) {
+      // A clipboard write CAN legitimately reject (no permission, no user gesture, a headless profile), and
+      // "Failed" on the button is what that state looks like. An invariant abort travels ON through it: a
+      // formatter that asserted its way out of building `text` must not be reported to the user as the
+      // clipboard having refused a snippet that was never built.
+      RETHROW_FATAL(e);
       btn.textContent = "Failed";
     }
     setTimeout(() => { btn.textContent = format === "python" ? "Python" : format; }, 1500);
@@ -2425,7 +2439,10 @@ async function replayRequest(reqId, sourceTabId) {
         } catch (e) {
           // JSON parse failure on a body the MIME type tagged as JSON/text/JS
           // — common (servers misreport content-type), surface at debug so it's
-          // diagnosable without spamming on every misreported body.
+          // diagnosable without spamming on every misreported body. An invariant abort is not that state and
+          // travels ON: the six sibling catches in this same historical-body path all open with this line, and
+          // the one that did not was where a broken record would have been logged as a misreported server.
+          RETHROW_FATAL(e);
           console.debug("[popup:historical] JSON parse failed for %s body: %s", mimeType, e && e.message || e);
         }
       }
