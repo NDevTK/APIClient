@@ -229,7 +229,16 @@ static int dec_at(int k, uint32_t *asked) {
 /* Append one decision to the head, WITH the question it answers. The two are written by the same statement
    because a slot whose arm is recorded and whose question is not is exactly the state this column exists to
    make impossible. */
+/* AND EVERY SLOT IS A BOOLEAN ARM, WHICH IS THE INVARIANT THE WHOLE VECTOR RESTS ON AND HAD NOTHING SAYING SO.
+   A decision is TAKEN or NOT TAKEN; there is no N-way slot and there is no need for one, because an operation
+   with N feasible completions is asked as N-1 two-armed questions (solver_outcome). The check belongs here
+   because this is where an arm enters the vector, and because dec_replay normalises what it reads with `? 1 :
+   0` — so a slot written as 2 would come back as 1, a real arm in range, and the flow would stand on a
+   completion nothing chose with every assert on the path satisfied. */
 static void dec_append(int arm, uint32_t asked) {
+    DCHECK(arm == 0 || arm == 1,
+           "a decision vector slot was written with something that is not an arm — every slot is one branch "
+           "taken or not taken, and a wider value is silently narrowed by the replay's own read");
     dec_ensure(g_dec_n + 1);
     g_dec_k[g_dec_n] = asked;
     g_dec[g_dec_n++] = (signed char)arm;
@@ -354,6 +363,9 @@ static DecSeg *dec_freeze(void) {
    computes there must be the key recorded here. */
 static DecSeg *dec_seg_arm(DecSeg *base, int arm, uint32_t asked) {
     DecSeg *s = dec_seg_alloc(1);
+    DCHECK(arm == 0 || arm == 1,
+           "a sibling's one recorded slot was written with something that is not an arm — see dec_append: the "
+           "vector is boolean throughout, and the replay's read narrows anything wider without saying so");
     s->e[0] = (signed char)arm;
     s->k[0] = asked;
     s->below = base ? base->below + base->n : 0;
@@ -685,13 +697,23 @@ static void *decide_fork_blob(int cursor, int arm, uint32_t asked) {
  * program asks next.
  *
  * THAT IS A DEFECT AND NOT A FALSE POSITIVE, and this file already says so one screen up, in decide.h's own
- * words: "WHAT IT CANNOT CARRY IS THE ANSWER, and that is the honest limit of a decision vector… Recording
- * that mapping is the N-way outcome slot solver_outcome's own DCHECK already names." The key column does not
- * create that limit; it is the first thing in the engine that can SEE it. Narrowing the assert to let this
- * site through would put the limit back under the floorboards and would be the silent fallback §C-stack names
- * — every narrowing condition is a case quietly handed to the broken path. So the assert stands unnarrowed,
- * this site trips it, and the trip is the work queue: an arm forked over a peer's answer needs a slot that
- * records WHICH answer, which is the same N-way slot solver_outcome's n == 2 DCHECK is already waiting for. */
+ * words: "WHAT IT CANNOT CARRY IS THE ANSWER, and that is the honest limit of a decision vector". The key
+ * column does not create that limit; it is the first thing in the engine that can SEE it. Narrowing the assert
+ * to let this site through would put the limit back under the floorboards and would be the silent fallback
+ * §C-stack names — every narrowing condition is a case quietly handed to the broken path. So the assert stands
+ * unnarrowed, this site trips it, and the trip is the work queue.
+ *
+ * WHAT IT IS NOT IS THE OUTCOME FORK'S PROBLEM, AND THIS PARAGRAPH USED TO SAY IT WAS — "the same N-way slot
+ * solver_outcome's n == 2 DCHECK is already waiting for". That was wrong twice over and the correction is
+ * recorded here because this is where the claim was made. solver_outcome has no N-way slot and never needed
+ * one: it asks N-1 two-armed questions, each keyed by the COMPLETION it is about, so its answers are ordinary
+ * boolean arms a vector already records. And the two are not the same fact even in shape — an outcome's
+ * completions are a set the MACHINE declares and NUMBERS at its own definition, so a completion index means
+ * the same thing in every session, while a peer's answers are a set only the PEER knows, regenerated from
+ * whatever timelines it has today, so there is no index for a slot to hold. What this site needs is its own
+ * column: an ANSWER recorded beside the arm, naming the peer TIMELINE the answer came from (a world, which
+ * already crosses the seam and already parks), so a replay can ask that peer for the same one instead of
+ * taking the first it is offered. Nothing in the engine records that yet. */
 void *decide_fork_same_path(const char *why) {
     DecideBlob *b;
 
@@ -1239,34 +1261,152 @@ int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking)
  * an observation with a computed writer and no reader for the fact it exists to supply, which is the mirror of
  * the field nobody writes and is just as invisible: every request behind an outcome fork would keep reporting
  * DERIVED while the machine had already said which completion was real. */
+/* N COMPLETIONS ARE N-1 BINARY DECISIONS, WHICH IS WHY THERE IS NO N-WAY SLOT AND NO SIBLING QUEUE.
+ *
+ * THE ASSERT THAT STOOD HERE NAMED THE WRONG BUILD, AND THE CORRECTION IS RECORDED AT THE SITE THAT MADE THE
+ * CLAIM because the next reader of this function is the one who would otherwise repeat it. It read "this
+ * prepares ONE sibling per ask; build the N-1 sibling prepare (a queue engine_fork_finalize drains)", and both
+ * halves of that instruction are wrong. The first premise is right — one ask can prepare exactly one sibling,
+ * because engine_prepare_fork's handoff is a single slot and the step driver takes exactly one JS_FlowClone per
+ * JS_STEP_FORK, so a second prepare inside one call overwrites the first's blobs. What does NOT follow is that
+ * the seam must therefore learn to prepare several: a queue would need N-1 FRAMES out of the driver's one
+ * clone, would have to be per-flow state that parks and resumes, and would put a QUEUE POSITION between a fork
+ * and its sibling's rank — three problems the ask does not actually have.
+ *
+ * A DECISION VECTOR ALREADY RECORDS N-WAY OUTCOMES, ONE BIT AT A TIME. "Which of N completions" is the
+ * elimination sequence "is it c0? is it c1? … " — N-1 genuine two-armed predicates, each with its own identity,
+ * each recorded in one slot, each forking ONE sibling. The parent answers YES at the first question it reaches
+ * as a NEW decision and returns; the sibling it minted carries the NO, resumes AT THE ASK (the driver takes the
+ * clone with fork_phase still FORK_PH_ASK, so the machine re-enters here rather than past its own question),
+ * replays its NO out of its own vector, reaches the NEXT question as new, and forks once itself. N flows, N-1
+ * forks, one fork per ask — and the chain is drawn LAZILY, one link per time the scheduler picks that sibling,
+ * so an N-way outcome does not build N-1 flows inside one step. That is the same argument flow_answer_fork
+ * makes for taking one arm per step ("the scheduler re-ranks between each, which is what it is for"), reached
+ * here for free instead of by a mechanism.
+ *
+ * EVERY REQUIREMENT A QUEUE WOULD HAVE HAD TO MEET IS MET BY CONSTRUCTION.
+ *   - RANK-NEUTRALITY: each sibling is an ordinary dec_fork_here → engine_prepare_fork → engine_fork_finalize
+ *     fork, minted at the instant of its OWN branch from a parent standing exactly there, so flow.c's
+ *     whole-weight equality holds for it exactly as it holds for a bytecode branch. There is no queue position
+ *     that could become a rank difference, because there is no queue.
+ *   - PARKING: the chain's entire state IS the decision vector, which already freezes, parks to the cold tier
+ *     and replays. Nothing new crosses a suspend, and in particular there is no malloc'd list whose head/tail
+ *     pointers a context switch would revert while its nodes stayed reachable from nothing.
+ *   - NO BOUNDS: N is whatever the machine declares and nothing here caps it. A flow ending on the last
+ *     candidate carries N-1 slots, which is linear and is work, not truncation.
+ *   - EXCLUSIVE AND EXHAUSTIVE: the questions partition [0, n). Every completion is the endpoint of exactly one
+ *     path, and two paths differ in at least one recorded arm, so no timeline is fabricated and none is lost.
+ *
+ * THE KEY IS THE OPERAND'S IDENTITY, THE OPERATION, AND THE COMPLETION — three fields where it was two, and the
+ * third is what makes the questions distinguishable facts rather than one question asked N-1 times. "Is this
+ * operation's completion over this operand exactly c" is its own predicate for each c, exactly as decide_key's
+ * own note says `x < 700` and `x < 300` are two facts about one source; keying the chain by POSITION instead
+ * would be the defect that note describes, because position means a different completion the moment the order
+ * changes and a replay would file one question's answer under another's.
+ *
+ * THE ORDER ASKS ABOUT `real` FIRST, AND THAT IS FORCED RATHER THAN CHOSEN. The parent must answer YES at the
+ * question it asks as new, or it walks on to a second new question and prepares a second sibling into a
+ * one-occupant slot. So the completion the parent keeps has to be the FIRST one asked about — and which
+ * completion the parent keeps is not free either: §Learning-from-replies says "at a branch the example marks
+ * the real arm PRIMARY", which dec_fork_here's own history is about (it hardcoded TRUE and pushed the arm a
+ * real session takes into a sibling). Those two constraints have exactly one solution: ask about `real` first.
+ * The rest follow in ascending order, skipping it.
+ *
+ * AND `real` IS DROPPED AFTER THE FIRST QUESTION, WHICH IS NOT A CONVENIENCE — IT IS THE SECOND CLAUSE OF THE
+ * SAME SENTENCE. A flow standing at question 1 recorded NO at question 0, so its own path has already
+ * contradicted the operand's example; §Learning-from-replies: "the forced sibling DROPS the contradicted
+ * example". From there on nothing observed distinguishes the remaining candidates, so every later question is
+ * asked with REAL_ARM_UNOBSERVED — which is also what keeps the one-fork-per-ask invariant true for a SIBLING:
+ * dec_fork_here takes arm 1 for an unobserved real, so a new question always terminates the walk. The flow was
+ * already marked FORCED at question 0, so nothing is lost by the later questions marking nothing.
+ *
+ * ONE BEHAVIOUR CHANGES FOR n == 2 AND IT IS A FIX. With `real` UNSTATED the old code kept completion 1 (take
+ * = 1 meant the arm, and for an outcome the arm WAS the completion), while a session that does not fork takes
+ * completion 0 — the driver's own `harm = 0` arm, which is why every machine numbers its ordinary completion
+ * there. So the exploring primary and the @S candidate re-fire walked DIFFERENT completions of the same
+ * unstated outcome, and the re-fire that must reproduce the primary's path did not. Asking about completion 0
+ * first makes the two agree. */
+/* THE ELIMINATION ORDER — the i-th completion asked about, as a permutation of [0, n).
+ *
+ * A FUNCTION AND NOT AN ARRAY because it is read on every ask of every replaying sibling and there is nothing
+ * to own; a bijection, asserted by its caller, so that "the questions partition the completions" is checked
+ * rather than believed. `real` is the machine's declaration or JS_OUTCOME_REAL_UNSTATED, and the unstated case
+ * is plain ascending — which is the identity permutation, so a machine that states nothing pays nothing. */
+static int outcome_nth(int i, int n, int real) {
+    int c;
+
+    DCHECK(i >= 0 && i < n, "the elimination order was asked for a position outside the completions the "
+                            "machine declared — a position past the end names no completion, and the walk "
+                            "that reads it would answer with one the machine has no algorithm for");
+    if (real == JS_OUTCOME_REAL_UNSTATED) c = i;
+    else if (i == 0) c = real;
+    else c = (i - 1 < real) ? (i - 1) : i;   /* ascending over the others: shift past the hole `real` left */
+    /* THE ORDER'S RANGE, ASSERTED AT ITS ORIGIN rather than at the one caller, because the value leaves here
+       as the seam's RETURN and lands in the step driver's `h->fork_arm` — where a completion outside the
+       declared set is a real arm the machine will switch on and has no algorithm for. */
+    DCHECK(c >= 0 && c < n,
+           "the elimination order named a completion outside the ones the machine declared — the walk would "
+           "hand the step driver an arm no branch of that machine answers");
+    return c;
+}
+
 int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int real) {
+    int i, forked = 0;
+
     if (!g_running) return -1;
     DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "
                               "operation forks only where its operand's domain permits more than one completion");
-    DCHECK(n == 2, "an outcome fork declaring more than two feasible completions — this prepares ONE sibling "
-                   "per ask; build the N-1 sibling prepare (a queue engine_fork_finalize drains) before a "
-                   "machine declares more");
+    DCHECK(n >= 2, "an outcome fork declaring fewer than two feasible completions — one completion is not a "
+                   "fork, it is the answer, and a machine that reached this seam with one has handed the flow "
+                   "a decision it had already made itself");
+    /* THE ONLY LIMIT ON N, AND IT IS THE RETURN PROTOCOL'S RATHER THAN A POLICY. The arm travels back to the
+       step driver in the low byte of one int and SOLVER_FORKED_BIT owns the next, so a completion at or above
+       that boundary would arrive at `harm &= 0xff` as a DIFFERENT completion with the fork bit set — a real
+       arm, in range, past every assert the driver has. Nothing here caps the WORK an N-way outcome is: widen
+       decide.h's SOLVER_FORKED_BIT and the driver's mask together and this moves with them. */
+    DCHECK(n <= SOLVER_FORKED_BIT,
+           "an outcome fork declared more completions than the seam's return value can name — the arm crosses "
+           "back to the step driver in the bits below SOLVER_FORKED_BIT, so a completion at or above it would "
+           "be delivered as another completion carrying the fork bit");
     /* THE SHAPE OF THE MACHINE'S DECLARATION, ASSERTED AT THE CONSUMER. `real` is a completion index or the
        one sentinel; anything else is a machine answering some other question in this slot, and a value that
-       merely LOOKS like an arm is exactly what nothing downstream could catch — dec_fork_here would take it as
-       the arm to keep and decide_note_forced_arm would compare against it, so a wrong claim would arrive as a
-       plausible primacy rather than as a crash. */
+       merely LOOKS like an arm is exactly what nothing downstream could catch — it would order the walk below
+       and decide_note_forced_arm would compare against it, so a wrong claim would arrive as a plausible
+       primacy rather than as a crash. */
     DCHECK(real == JS_OUTCOME_REAL_UNSTATED || (real >= 0 && real < n),
            "an outcome fork's REAL completion is neither one of the completions the machine declared nor the "
            "positive 'this machine cannot say' — the seam cannot compute this one, so a third value is a site "
            "spelling its declaration wrong rather than a fact this file can repair");
-    {
-        const char *f[2];
+    DCHECK(concolic_src_c(over) != NULL,
+           "an unknown operand with no source identity reached the outcome seam — its completions cannot "
+           "be constrained, so two asks about it would be one fact");
+    DCHECK(op != NULL,
+           "a native operation asked the outcome seam to decide a completion without naming ITSELF — the "
+           "operation is half the predicate, and two operations over one operand would be one fact");
+    for (i = 0; i < n - 1; i++) {
+        int c = outcome_nth(i, n, real);
+        /* THE MACHINE'S DECLARATION IS READ AT THE QUESTION IT IS ABOUT AND NOWHERE ELSE — see the note above.
+           At i == 0 the question IS "is the completion `real`", so the observed arm is 1; past it this flow has
+           already recorded that it is not, and an example its own path contradicts states nothing about which
+           of the rest it is. */
+        int real_arm = (i == 0 && real != JS_OUTCOME_REAL_UNSTATED) ? 1 : REAL_ARM_UNOBSERVED;
+        char which[16];
+        const char *f[3];
         char *key;
-        int forked = 0, arm, real_arm;
-        DCHECK(concolic_src_c(over) != NULL,
-               "an unknown operand with no source identity reached the outcome seam — its completions cannot "
-               "be constrained, so two asks about it would be one fact");
-        DCHECK(op != NULL,
-               "a native operation asked the outcome seam to decide a completion without naming ITSELF — the "
-               "operation is half the predicate, and two operations over one operand would be one fact");
-        f[0] = concolic_ident_c(over); f[1] = op;
-        key = concolic_ident_compose("outcome", f, 2);
+        int arm;
+
+        /* THE ORDER IS A PERMUTATION, ASSERTED AT THE ONE PLACE IT COULD STOP BEING ONE. `real` is asked about
+           at position 0 and skipped by every later position, so meeting it again means the skip is wrong for
+           this (i, n, real) — and the cost of that is silent: one completion would be asked about twice and
+           another never, so a flow would end on a completion no question eliminated while every arm it
+           recorded stayed in range. */
+        DCHECK(i == 0 || real == JS_OUTCOME_REAL_UNSTATED || c != real,
+               "the elimination order asked about the machine's REAL completion a second time — the order must "
+               "be a permutation of the completions, and a repeat leaves one of them with no question and one "
+               "flow standing on a completion nothing eliminated");
+        snprintf(which, sizeof which, "%d", c);
+        f[0] = concolic_ident_c(over); f[1] = op; f[2] = which;
+        key = concolic_ident_compose("outcome", f, 3);
         DCHECK(key != NULL, "an operand whose identity this engine cannot spell reached the outcome seam — "
                             "with no key its completions are re-forked at every ask rather than replayed, "
                             "which is sound and is not what a machine declaring a fork expects");
@@ -1279,19 +1419,31 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
            ordinary completion there (core/timing/timer.c says so at §8.7's step 4). So this entry cannot be
            reached in a non-forking session, and SOLVER_NO_NONFORKING_ARM is what says so: if it ever is, the
            crash names the machine's question rather than recording an arm nobody chose. */
-        /* THE TRANSLATION IS EXPLICIT AND NOT A SHARED NUMBER. Both spellings are -1 and both mean "make no
-           claim", but they are two vocabularies with two owners — the machine's declaration at its ask, this
-           file's observation at a branch — and writing the translation down is what keeps a later change to
-           either from silently becoming a change to both. It is done ONCE, above both readers, for the reason
-           decide_branch computes its own observation once: two translations of one declaration is two answers
-           to one question with nothing forcing them to agree. */
-        real_arm = real == JS_OUTCOME_REAL_UNSTATED ? REAL_ARM_UNOBSERVED : real;
         arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked);
         free(key);
         /* THE ARM THIS FLOW ENDS ON, AGAINST THE MACHINE'S DECLARATION — the same statement decide_branch
            makes one screen up, made here BEFORE the forked bit is composed because the bit is a message to the
-           driver about snapshotting and is not part of the arm. */
+           driver about snapshotting and is not part of the arm. It fires at most once per walk, at i == 0,
+           which is the only question `real` says anything about. */
         decide_note_forced_arm(over, real_arm, arm);
-        return forked ? (arm | SOLVER_FORKED_BIT) : arm;
+        if (arm == 1)
+            return forked ? (c | SOLVER_FORKED_BIT) : c;
+        /* THE ONE-FORK-PER-ASK INVARIANT, ASSERTED WHERE IT WOULD BREAK. dec_fork_here keeps `real_arm` when
+           one is stated and arm 1 otherwise, and the two values this walk ever passes are 1 and UNOBSERVED —
+           so a NEW question always answers 1 and always returns above. Reaching here with a sibling prepared
+           means this flow is about to ask a SECOND new question in one call, and engine_prepare_fork's slot
+           holds one occupant: the second prepare would drop the first sibling's decision and pin blobs on the
+           floor, with the frozen prefix chain under them alive and named by nothing. */
+        DCHECK(!forked,
+               "an outcome question that ELIMINATED a completion still minted a sibling — the walk is about to "
+               "ask a second new question inside one ask, and the step driver takes exactly ONE clone per "
+               "JS_STEP_FORK, so the sibling prepared here has no frame coming and the next prepare overwrites "
+               "its blobs");
     }
+    /* THE LAST CANDIDATE NEEDS NO QUESTION, AND THE FALL-THROUGH THEREFORE MINTS NOTHING. N-1 answers
+       eliminate N-1 completions, so the remaining one is determined — asking about it would record a slot
+       whose answer its own path already implies, and a replay could then diverge on a question it had settled.
+       The loop runs at least once (n >= 2), and its last statement is the assert above, so `forked` is 0 here
+       by that assert rather than by a second copy of it. */
+    return outcome_nth(n - 1, n, real);
 }

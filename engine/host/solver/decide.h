@@ -87,8 +87,14 @@ int  solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking
 
 /* JSFlowControlHooks.outcome — the same decision, asked by a C BUILTIN that has no OP_if to ask it at. `over`
    is the unknown operand its completion depends on, `op` names the operation ("JSON.parse"), `n` is how many
-   completions the machine declares feasible. Returns the arm this flow takes, ORed with 0x100 when a sibling
-   was prepared for the other — the same protocol solver_decide uses, because it is the same fork.
+   completions the machine declares feasible. Returns the COMPLETION this flow takes, ORed with 0x100 when a
+   sibling was prepared to carry the rest — the same protocol solver_decide uses, because it is the same fork.
+   N IS NOT TWO, AND IT COSTS NOTHING TO SAY SO. "Which of N completions" is asked as the elimination sequence
+   "is it c0? is it c1? …" — N-1 two-armed questions, each keyed by the COMPLETION it is about, each recorded
+   as one ordinary boolean slot, each forking ONE sibling. So an N-way outcome needs no N-way vector slot, no
+   sibling queue and no second frame from the step driver's one clone; the chain is drawn lazily, one link per
+   time the scheduler picks the sibling that carries the remainder. The walk is at solver_outcome and states
+   why the order it asks in is forced rather than chosen.
    `real` IS THE ASKING MACHINE'S DECLARATION, AND IT IS THE OUTCOME SEAM'S ANSWER TO WHAT decide_real_arm
    COMPUTES FOR A BRANCH — "which completion does a session carrying real values reach". It is a PARAMETER for
    the same reason `nonforking` above is: the answer belongs to the site and to no two sites alike, and this
@@ -171,8 +177,13 @@ long  decide_fork_total(void);
  * WHAT IT CANNOT CARRY IS THE ANSWER, and that is the honest limit of a decision vector: the arms are what the
  * flow DECIDED, and which of a peer's timelines answered it is not one of them. A parked arm therefore resumes
  * by re-running, re-asking, and taking the first answer of whatever the peer's timelines say today — so the SET
- * of arms is regenerated while the mapping from arm to peer timeline is not. Recording that mapping is the
- * N-way outcome slot solver_outcome's own DCHECK already names.
+ * of arms is regenerated while the mapping from arm to peer timeline is not. Recording it needs a column of
+ * its own — an ANSWER beside the arm, naming the peer WORLD the answer came from — and nothing records that
+ * yet. This line used to point at solver_outcome's `n == 2` DCHECK as the same missing slot, which was wrong
+ * in both directions and is corrected at decide_fork_same_path's own site: an outcome's completions are
+ * NUMBERED by the machine at its definition, so they mean the same thing in every session and are recorded as
+ * N-1 ordinary boolean arms; a peer's answers are a set only the peer knows, so they have no index a slot
+ * could hold.
  *
  * `why` NAMES WHAT ARRIVED, AND IT IS A PARAMETER BECAUSE THE ANSWER FORK IS NOT THE ONLY CALLER. The census
  * row this mints is the frontier's PROVENANCE (decide_fork_at), and it stood as one fixed string — "a peer's
