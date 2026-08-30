@@ -23,7 +23,8 @@
 #include "core/fetch/fetch.h"
 #include "core/fetch/port_blocking.h"
 #include "core/frame/policy_container.h"
-#include "core/css/media_query.h"   /* §4.2.4.1's "matches the environment", which is HTML §2.3.10's predicate */
+#include "core/css/media_query.h"   /* HTML §2.3.10 "Media queries"' "matches the environment", which
+                                       §4.2.4.1 "Processing the media attribute" makes prescriptive */
 #include "solver/dom_cow.h"      /* the taint an `href` composed out of unknown input carries */
 #include "solver/flow.h"         /* §4.2.4.3 ends in a FETCH, and a fetch parks on a flow — see link_trigger */
 #include "solver/engine.h"       /* …so the PARSER's own elements are served as a work item — see below */
@@ -91,10 +92,12 @@ static bool rel_has(const char *rel, size_t rel_n, const char *kw)
     return false;
 }
 
-/* WHICH OF §4.2.4's STATES THIS ELEMENT IS IN. Four answers and not two, because "there is no external resource
-   link here" and "there is one whose steps this engine has not built" are different facts about the document
-   and a reader that cannot tell them apart cannot tell an ordinary page from an unreachable capability. See
-   html_link.h for why the last two are not fallbacks and not debt against the first. */
+/* WHICH OF §4.2.4 "The link element"'s TWO CATEGORIES THIS ELEMENT IS IN — "two categories of links can be
+   created using the link element: links to external resources and hyperlinks". Four answers and not two,
+   because "there is no external resource link here" and "there is one whose steps this engine has not built"
+   are different facts about the document and a reader that cannot tell them apart cannot tell an ordinary page
+   from an unreachable capability. See html_link.h for why the last two are not fallbacks and not debt against
+   the first. */
 typedef enum {
     LINK_EXT_NONE = 0,        /* no keyword in `rel` creates an external resource link */
     LINK_EXT_PRELOAD,         /* §4.6.8.20 — the steps this component runs */
@@ -141,9 +144,11 @@ bool html_link_rel_supported(const char *token, size_t len)
            "caller resolves the candidate string before asking, so a null here is a caller that asked "
            "without one");
     /* §4.2.4 "The link element" makes the filter a MUST: "rel's supported tokens must only include the tokens
-       from this list that the user agent implements the processing model for." So the answer is NOT §4.2.4's
-       thirteen possible keywords — it is the subset this component runs steps for, which is exactly the state
-       the classifier above calls LINK_EXT_PRELOAD (§4.6.8.20 Link type "preload"). Reporting `stylesheet` or
+       from this list that the user agent implements the processing model for." So the answer is not that
+       section's thirteen possible tokens (`alternate`, `dns-prefetch`, `expect`, `icon`, `manifest`,
+       `modulepreload`, `next`, `pingback`, `preconnect`, `prefetch`, `preload`, `search`, `stylesheet`) — it is
+       the subset this component runs steps for, which is exactly the state the classifier above calls
+       LINK_EXT_PRELOAD (§4.6.8.20 Link type "preload"). Reporting `stylesheet` or
        `modulepreload` would state a processing model that is named-and-unbuilt right here, and a page that
        feature-detects one takes the branch behind it. */
     return link_rel_external_type(token, len) == LINK_EXT_PRELOAD;
@@ -169,9 +174,10 @@ static bool link_times_registered(lxb_dom_element_t *el)
    the environment" — so the prose distinguishes the REASON a fetch did not happen. It does not need to be
    stored, because every reason that is not the named one re-declines on its own at the re-run: a link not
    obtained because `as` was absent still translates to a null destination and returns, and one not obtained
-   because its media still does not match still fails §4.2.4.1. So triggering on any `type`/`media` change of a
-   NOT-YET-OBTAINED link fetches in exactly the cases the three-reason version does, and the single flag is the
-   whole state. The one place they could diverge — `as` set, then `type` changed — is covered because the `as`
+   because its media still does not match still fails §4.2.4.1 "Processing the media attribute". So triggering
+   on any `type`/`media` change of a NOT-YET-OBTAINED link fetches in exactly the cases the three-reason version
+   does, and the single flag is the whole state.
+   The one place they could diverge — `as` set, then `type` changed — is covered because the `as`
    change is itself an appropriate time and obtains the link before the `type` change is asked.
    IT IS AN ORDINARY PROPERTY ON A SLOTS OBJECT, so the write is captured by the running flow's COW delta and
    two arms that each reach this element hold their own answer — core/html/html_image.c's rule for a record a
@@ -180,11 +186,13 @@ static JSValue link_state(JSContext *ctx, JSValueConst el)
 {
     JSValue st;
 
-    DCHECK(g_ready, "a link element's state was reached before §4.2.4 was declared");
+    DCHECK(g_ready, "a link element's processing state was reached before html_link_declare interned its key — "
+                    "HTML §4.6.8.20 Link type \"preload\"'s conditional appropriate times are what read it");
     if (JS_GetOwnSlot(ctx, &st, el, g_atom_state) > 0) return st;
 
     st = idl_slots_new(ctx);
-    CHECK(!JS_IsException(st), "§4.2.4: OOM building a link element's processing state");
+    CHECK(!JS_IsException(st),
+          "HTML §4.6.8.20 Link type \"preload\": OOM building a link element's processing state");
     JS_SetPropertyStr(ctx, st, "obtained", JS_FALSE);
     JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_state, JS_DupValue(ctx, st),
                            JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
@@ -197,8 +205,9 @@ static bool link_obtained(JSContext *ctx, JSValueConst el)
     JSValue v = JS_GetPropertyStr(ctx, st, "obtained");
     bool b;
 
-    DCHECK(JS_IsBool(v), "§4.2.4's link state answered `obtained` with something that is not a boolean — the "
-                         "field is written by this file and by nothing else");
+    DCHECK(JS_IsBool(v),
+           "the state HTML §4.6.8.20 Link type \"preload\"'s \"previously not obtained\" times read answered "
+           "`obtained` with something that is not a boolean — the field is written by this file and nothing else");
     b = JS_ToBool(ctx, v) != 0;
     JS_FreeValue(ctx, v);
     JS_FreeValue(ctx, st);
@@ -229,7 +238,7 @@ typedef struct {
     uint8_t     fphase;    /* the dispatch's own phase, held across a suspension */
     uint8_t     started;
     JSValue     ev;        /* the Event being dispatched (owned) */
-    EventFireCb cb;        /* §2.9's dispatch request buffer, whose width travels with its type */
+    EventFireCb cb;        /* DOM §2.9 "Dispatching events"' request buffer, width travelling with its type */
 } LinkTask;
 
 static void link_task_visit(JSContext *ctx, void *stp, JSStepVisit *v)
@@ -294,9 +303,14 @@ static void link_queue_fire(JSContext *ctx, JSValueConst el, const char *name)
     JSValueConst argv[2];
     JSValue fn, nm;
 
-    DCHECK(g_task_stepid >= 0, "a link element task was queued before §4.2.4 registered its machine");
-    /* THE CALLEE IS MINTED IN THE ENQUEUING REALM: a C function runs in the realm that DEFINED it (§3.7), and
-       this one fires an event at an element of THIS document. */
+    DCHECK(g_task_stepid >= 0,
+           "a link element task was queued before html_link_declare registered its step machine — the task "
+           "fires HTML §4.6.8.20 Link type \"preload\"'s `load` or `error`, so a queue with no machine is a "
+           "component whose events have nothing to run them");
+    /* THE CALLEE IS MINTED IN THE ENQUEUING REALM: a C function runs in the realm that DEFINED it, and Web IDL
+       §3.7 "Interfaces" gives each realm its own objects for that reason ("the interface object for a given
+       interface I with identifier id and in realm realm is created as follows") — and this one fires an event
+       at an element of THIS document. */
     fn = JS_NewCFunction2(ctx, NULL, "linkElementTask", 2, JS_CFUNC_step, g_task_stepid);
     CHECK(!JS_IsException(fn), "§4.6.8.20: the queued link task's callee could not be allocated");
     nm = JS_NewString(ctx, name);
@@ -432,7 +446,7 @@ static bool link_media_matches(JSContext *ctx, lxb_dom_element_t *el)
 
     if (!media) return true;   /* "The default, if the media attribute is omitted, is `all`" */
     text = malloc(media_n + 1);
-    CHECK(text, "§4.2.4.1: OOM copying a link element's `media` attribute");
+    CHECK(text, "HTML §4.2.4.1 \"Processing the media attribute\": OOM copying a link element's `media` value");
     memcpy(text, media, media_n);
     text[media_n] = 0;
     set = media_query_parse(text);
@@ -508,11 +522,11 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        destination, then return." */
     if (!type_matches_preload_destination(el, destination)) return;
 
-    /* §4.2.4.1's prescriptive `media`. It is not a numbered step of §4.6.8.20 because §4.2.4.1 states it over
-       every external resource link at once — "the user agent must apply the external resource WHEN the media
-       attribute's value matches the environment and the other relevant conditions apply, and MUST NOT apply it
-       otherwise" — and §4.6.8.20's appropriate-times list names a media change as a re-trigger precisely
-       because this check can decline. */
+    /* §4.2.4.1 "Processing the media attribute"'s prescriptive `media` — stated there over every external
+       resource link at once ("the user agent must apply the external resource WHEN the media attribute's value
+       matches the environment and the other relevant conditions apply, and MUST NOT apply it otherwise") rather
+       than as a numbered step of §4.6.8.20, whose appropriate-times list names a media change as a re-trigger
+       precisely because this check can decline. */
     if (!link_media_matches(ctx, el)) return;
 
     /* AN `href` COMPOSED OUT OF UNKNOWN EXTERNAL INPUT IS STILL A REQUEST THE PAGE MAKES, and it reaches the
@@ -534,7 +548,8 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
 
     /* "Assert: options's href is not the empty string, or options's source set is not null." With no source
        set (above), the href carries the whole of it — and a `<link rel=preload as=script>` with no `href` at
-       all is the element §4.2.4's own note describes as not representing a link. */
+       all is the element §4.2.4 "The link element" states outright: "if both the href and imagesrcset
+       attributes are absent, then the element does not define a link". */
     href = link_attr(el, "href", &href_n);
     if (!href || href_n == 0) return;
 
@@ -647,7 +662,8 @@ static void link_fetch_and_process(JSContext *ctx, lxb_dom_element_t *el)
               "so the triggers below must ask before they call and one of them did not");
         return;
     }
-    DFAIL("§4.2.4's link type classifier answered with a state this dispatch has no arm for");
+    DFAIL("HTML §4.2.4 \"The link element\"'s link-category classifier answered with a state this dispatch has "
+          "no arm for");
 }
 
 /* ---- §4.6.8.20's "appropriate times to fetch and process the linked resource" ----------------------------- */
@@ -747,9 +763,10 @@ static int link_rec_int(JSContext *ctx, JSValueConst rec, const char *field)
     int32_t i = 0;
 
     DCHECK(JS_IsNumber(v),
-           "§4.2.4's parsed-document record answered a counter with something that is not a number — every "
-           "field of this record is written by this file at the one site that creates it, so a non-number here "
-           "is a read of a field that was never written rather than a value to interpret");
+           "the parsed-document record serving HTML §4.6.8.20 Link type \"preload\"'s browsing-context-connected "
+           "time answered a counter with something that is not a number — every field of this record is written "
+           "by this file at the one site that creates it, so a non-number here is a read of a field that was "
+           "never written rather than a value to interpret");
     JS_ToInt32(ctx, &i, v);
     JS_FreeValue(ctx, v);
     return (int)i;
@@ -795,19 +812,23 @@ void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root)
     JSValue rec;
     int n;
 
-    DCHECK(root != NULL, "§4.2.4's parsed-tree walk was given no tree to walk");
-    DCHECK(g_ready, "a parsed tree reached §4.2.4 before html_link_declare ran");
+    DCHECK(root != NULL,
+           "HTML §4.6.8.20 Link type \"preload\"'s parsed-tree walk was given no tree to walk");
+    DCHECK(g_ready,
+           "a parsed tree reached HTML §4.6.8.20 Link type \"preload\"'s inventory before html_link_declare ran");
     if (!link_parsed_nth(ctx, root, 0)) return;
     rec = idl_slots_new(ctx);
-    CHECK(!JS_IsException(rec), "§4.2.4: OOM recording a parsed document's link elements");
+    CHECK(!JS_IsException(rec),
+          "HTML §4.6.8.20 Link type \"preload\": OOM recording a parsed document's link elements");
     /* THE DOCUMENT OBJECT AND NOT ITS NODE POINTER, because this entry is read by a flow that may be many
        scheduler steps away and a raw tree pointer is not a thing a timeline can hold: node_of reads the node
        back at the service, and the reference is DROPPED there the moment the document is drained, so the list
        keeps a document alive only while it still owes a request. */
     DCHECK(JS_IsObject(document_object(ctx)),
-           "§4.2.4's parsed-tree walk ran in a realm with no Document object — the walk is reached from the "
-           "install that BUILDS one, so an entry filed here without it would name no document at the service "
-           "and every one of that document's preloads would be a request nothing could issue");
+           "HTML §4.6.8.20 Link type \"preload\"'s parsed-tree walk ran in a realm with no Document object — "
+           "the walk is reached from the install that BUILDS one, so an entry filed here without it would name "
+           "no document at the service and every one of that document's preloads would be a request nothing "
+           "could issue");
     JS_SetPropertyStr(ctx, rec, "doc", JS_DupValue(ctx, document_object(ctx)));
     link_rec_set_int(ctx, rec, "served", 0);
     n = link_rec_int(ctx, g_parsed, "n");
@@ -840,9 +861,9 @@ int html_link_connected_step(JSContext *ctx)
         int served;
 
         DCHECK(JS_IsObject(rec),
-               "§4.2.4's parsed-document list holds no entry at an index below its own length — the entry and "
-               "the length are written together at the one site that appends, so a hole here is a list whose "
-               "count outran what a flow can see of it");
+               "HTML §4.6.8.20 Link type \"preload\"'s parsed-document list holds no entry at an index below "
+               "its own length — the entry and the length are written together at the one site that appends, "
+               "so a hole here is a list whose count outran what a flow can see of it");
         served = link_rec_int(ctx, rec, "served");
         if (served >= 0) {
             JSValue docv = JS_GetPropertyStr(ctx, rec, "doc");
@@ -851,9 +872,9 @@ int html_link_connected_step(JSContext *ctx)
             lxb_dom_element_t *el;
 
             DCHECK(root != NULL,
-                   "§4.2.4's parsed-document list holds an entry whose `doc` is not a node — it is written "
-                   "from that Document's own object and from nowhere else, and it is cleared only together "
-                   "with the `served` sentinel that stops this arm being reached");
+                   "HTML §4.6.8.20 Link type \"preload\"'s parsed-document list holds an entry whose `doc` is "
+                   "not a node — it is written from that Document's own object and from nowhere else, and it "
+                   "is cleared only together with the `served` sentinel that stops this arm being reached");
             dctx = document_realm_of(root);
             /* NOT AN IMPOSSIBLE STATE — A COUPLING THAT IS NOT BUILT, which is why it crashes here naming it
                rather than skipping the entry. The entry is appended by the install that BUILDS that realm, so
@@ -863,10 +884,11 @@ int html_link_connected_step(JSContext *ctx)
                Skipping instead would leave the flow's cursor standing on a document that no longer exists and
                call the preloads served, which is a page whose whole chunk graph silently never loads. */
             DCHECK(dctx != NULL,
-                   "§4.2.4's parsed-document list holds a document with no realm — a Document was DESTROYED "
-                   "while a timeline still owed its parsed `<link>` elements §4.6.8.20's connected time. "
-                   "§7.5.10's step 7 takes that document's queued tasks off the flow and this inventory is "
-                   "not one of them: drop this timeline's entry there, beside that removal");
+                   "the parsed-document list holds a document with no realm — a Document was DESTROYED while a "
+                   "timeline still owed its parsed `<link>` elements HTML §4.6.8.20 Link type \"preload\"'s "
+                   "browsing-context-connected time. HTML §7.5.10 \"Destroying documents\"' step 7 takes that "
+                   "document's queued tasks off the flow and this inventory is not one of them: drop this "
+                   "timeline's entry there, beside that removal");
             el = link_parsed_nth(dctx, root, served);
             if (el) {
                 link_rec_set_int(ctx, rec, "served", served + 1);
@@ -894,20 +916,24 @@ void html_link_declare(JSContext *ctx)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
 
-    DCHECK(!g_ready, "html_link_declare ran twice — §4.2.4's state key and machine are declared once per "
-                     "AGENT, and a second Symbol would leave every link element that already carries its "
-                     "processing state under the first key answering as though it had none under the second");
+    DCHECK(!g_ready, "html_link_declare ran twice — HTML §4.6.8.20 Link type \"preload\"'s state key and task "
+                     "machine are declared once per AGENT, and a second Symbol would leave every link element "
+                     "that already carries its processing state under the first key answering as though it had "
+                     "none under the second");
     g_state_key = JS_NewSymbol(ctx, "linkProcessing", false);
-    CHECK(!JS_IsException(g_state_key), "§4.2.4: the link processing state key allocation failed");
+    CHECK(!JS_IsException(g_state_key),
+          "HTML §4.6.8.20 Link type \"preload\": the link processing state key allocation failed");
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
-    CHECK(g_atom_state != JS_ATOM_NULL, "§4.2.4: the link processing state key could not be interned");
+    CHECK(g_atom_state != JS_ATOM_NULL,
+          "HTML §4.6.8.20 Link type \"preload\": the link processing state key could not be interned");
     g_task_stepid = JS_RegisterStepDef(rt, &link_task_def);
     /* THE PARSED-DOCUMENT LIST IS BUILT WITH THE AGENT AND NOT ON FIRST USE, for the reason CLAUDE.md gives
        for every per-realm intrinsic: a record minted lazily is minted INSIDE whichever flow happened to touch
        it first, and every other timeline would then see a list that does not exist. This line is the pre-boot
        baseline, so the empty list is a fact every flow forks from. */
     g_parsed = idl_slots_new(ctx);
-    CHECK(!JS_IsException(g_parsed), "§4.2.4: the parsed-document list allocation failed");
+    CHECK(!JS_IsException(g_parsed),
+          "HTML §4.6.8.20 Link type \"preload\": the parsed-document list allocation failed");
     JS_SetPropertyStr(ctx, g_parsed, "n", JS_NewInt32(ctx, 0));
     JS_SetPropertyStr(ctx, g_parsed, "i", JS_NewInt32(ctx, 0));
     /* §4.6.8.20's browsing-context-connected time for the PARSER's own elements is a work item on the ONE
