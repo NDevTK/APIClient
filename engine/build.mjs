@@ -734,8 +734,52 @@ function censusReading(out) {
                  : c.b.orphanClaims
                    ? `; inherited drives ${c.b.orphanClaims} rebuilt, ${c.b.orphanClaimsMet} met, ` +
                      `${c.b.orphanClaimsUnmet} UNMET`
-                   : `; a rebuild ran (${c.b.resumedFlows} flows, ${c.b.resumedCands} candidates) and ` +
-                     `carried no inherited drives`));
+                   : `; a rebuild ran and carried no inherited drives`));
+    /* WHICH ARMS OF THE COLD GRAMMAR THE REBUILD ACTUALLY RAN — a question the drive verdict above cannot
+       answer and which had no reader at all. `resumed` says a rebuild happened; the sentence above says what
+       it did for INHERITED DRIVES; neither says how much of the READ HALF of the cold tier the residue
+       exercised. cold.c's own note: "a residue of nothing but 'f' records exercises neither park_unhex nor
+       solve_resume_candidate nor the probe" — so a rebuild that landed four thousand flows and touched no
+       segment, no candidate and no foreign world PROVED A QUARTER OF THE ROUND TRIP and read here as a whole
+       one. cold.h calls these four "the observable that says which ARMS of the grammar ran"; this is the
+       reader that makes them one.
+       THE UNEXERCISED ARMS ARE NAMED, AND THAT IS THE WHOLE POINT. `resumedSegs 0` beside three other numbers
+       is what the popup already renders generically, and a bare number under a bare field name is a number
+       nobody can act on: the actionable fact is WHICH half of cold.c this session did not show to work. So
+       every arm is stated as the WORD for what it rebuilt, and the ones that did not run are named again with
+       the record letter and the mechanism, which is where a reader has somewhere to go.
+       ONLY UNDER `resumed`. Under `resumed: 0` the four zeroes are the true decomposition of a rebuild that
+       did not happen, so reporting them as arms that failed to run would be the two-states-one-number defect
+       solver/result.c added the `resumed` row to END, rebuilt one layer up inside its reader.
+       AND THE COUNTS ARE STATED ONCE. The `carried no inherited drives` arm above used to spell `resumedFlows`
+       and `resumedCands` itself, which put two of these four numbers in this report under two names and only
+       in one of the three drive states — the drift result.c refuses `resumedOrphans` for, and a decomposition
+       that vanishes in exactly the state where `orphanClaimsUnmet` is the verdict.
+       SEGMENTS AND WORLDS ARE NOT FLOWS, so the four are listed as four arms and never summed. cold.c asserts
+       `flows + cands` IS the landed-flow count, and says of a 'w' record "IT IS NOT A FLOW and is deliberately
+       outside `flows`". */
+    if (c.b.resumed !== 0) {
+      const arms = [["segments", c.b.resumedSegs, "'s' — the shared decision prefixes every flow stands on"],
+                    ["flows", c.b.resumedFlows, "'f' — exploration flows"],
+                    ["candidates", c.b.resumedCands, "'c' — @S candidate sessions, solve_resume_candidate"],
+                    ["foreign worlds", c.b.resumedWorlds, "'w' — peer timelines rebuilt through world_segment"]];
+      /* THE PRODUCER'S OWN DERIVATION, CHECKED RATHER THAN ASSUMED. result_cold_json emits `resumed` as
+         literally `flows + cands > 0`, so a census claiming a rebuild whose two flow-producing arms are both
+         zero is that composer contradicting itself, and every arm sentence below would be describing a
+         rebuild this same document says did not land anything. It throws for the reason a renamed COLD_FIELDS
+         row throws: the alternative is a reading composed out of a census that is not internally true. */
+      if (c.b.resumedFlows + c.b.resumedCands === 0)
+        throw new Error(`[build] the @COLD census says resumed=${c.b.resumed} with resumedFlows and ` +
+                        `resumedCands both 0 — solver/result.c derives that row as \`flows + cands > 0\`, so ` +
+                        `this census contradicts its own composer and the cold round trip cannot be read ` +
+                        `off it.`);
+      const dark = arms.filter((a) => a[1] === 0);
+      parts.push(`cold arms: ` + arms.map((a) => `${a[1]} ${a[0]}`).join(", ") +
+                 (dark.length === 0
+                   ? ` — every arm of the read half ran`
+                   : ` — NOT exercised, so unproven this session: ` +
+                     dark.map((a) => `${a[0]} (${a[2]})`).join("; ")));
+    }
   }
   /* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
      chain of gates produces rows in a geometric series and the last site in program order is always the
