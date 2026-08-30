@@ -22,6 +22,34 @@ function discoveryTypeToJsonSchema(type) {
   }
 }
 
+/* A RENAME IS A PAIR, AND READING HALF OF IT IS WHY A BOOLEAN COULD BECOME A FIELD NAME.
+ *
+ * `name` on a stored schema property or discovery parameter is written by exactly one thing: the reviewer
+ * renaming it in the popup (lib/popup-handlers.js's RENAME_FIELD), which writes `name` and `customName`
+ * TOGETHER, and lib/serialize.js carries the two together across every re-derivation so an automated answer
+ * cannot clobber a manual edit. So the field is LEGITIMATELY ABSENT, and its absence is a POSITIVE
+ * STATEMENT — nobody renamed this, therefore the map KEY is the name — with `customName` as the flag that
+ * says which of the two states holds. lib/discovery.js and lib/send.js both already read it as that pair.
+ *
+ * `prop.name || prop.customName || key` read it as neither. `customName` is a BOOLEAN at every writer, so
+ * the middle operand could only ever contribute the literal `true` — an exported OpenAPI document with a
+ * property named "true" in it, produced by the one arm that fires when a rename is recorded and its name is
+ * not. It is the defaulted-read defect at its most literal: the `||` chain does not tolerate an absence, it
+ * manufactures a datum out of a flag about a different question.
+ *
+ * HOW ITS ABSENCE WOULD SHOW: a spec exported for a service whose schema was renamed carries a property the
+ * server has never heard of, and an import of that spec re-learns it as a real field.
+ */
+function _renamedTo(rec, key, where) {
+  if (rec.customName !== true) return key;                 // never renamed — the key IS the name
+  DCHECK(typeof rec.name === "string" && rec.name !== "",
+         "a rename was recorded for " + where + " with no replacement name — RENAME_FIELD writes `name` and " +
+         "`customName` in one statement and serialize.js carries them as a pair, so half a rename is a " +
+         "producer broken between them, and the name it would export is a fact about neither the server nor " +
+         "the reviewer");
+  return rec.name;
+}
+
 /**
  * Convert a Discovery schema object to OpenAPI 3.0 schema.
  * @param {object} schema - Discovery schema (id, type, properties, required)
@@ -40,7 +68,7 @@ function discoverySchemaToOpenApi(schema, allSchemas, visited) {
 
   if (schema.properties) {
     for (const [key, prop] of Object.entries(schema.properties)) {
-      const fieldName = prop.name || prop.customName || key;
+      const fieldName = _renamedTo(prop, key, "the schema property " + schema.id + "." + key);
 
       if (prop.type === "message" || prop.$ref) {
         const refName = prop.$ref || prop.messageType;
@@ -181,9 +209,18 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
           const formBodyFieldNumbers = {};
           if (method.parameters) {
             for (const [pName, pDef] of Object.entries(method.parameters)) {
-              const paramName = pDef.name || pName;
+              const paramName = _renamedTo(pDef, pName, "the parameter " + rName + "." + methodName + "." + pName);
+              /* A PARAMETER WHOSE DOCUMENT STATES NO TYPE IS A STRING PARAMETER, and that is a fact about
+                 the document rather than a hole this line fills — lib/discovery.js reaches the same "string"
+                 by the same reasoning for a property whose document says nothing else. What the `||` also
+                 did, and could not distinguish, was swallow a `type` that is not a string at all: these
+                 records mix OUR writers (lib/learn.js states a type on every parameter it mints) with a
+                 Google Discovery document FETCHED from the target's server, so a non-string here is
+                 third-party bytes and is REFUSED rather than asserted — a DCHECK on them would be the
+                 trusted zone aborting on input somebody else chose (lib/field-def.js states that split). */
+              const pType = fdDocString(pDef.type);
               const paramSchema = {
-                type: pDef.type || "string",
+                type: pType === null ? "string" : pType,
                 ...(pDef.enum ? { enum: pDef.enum } : {}),
                 ...(pDef.format ? { format: pDef.format } : {}),
                 ...(pDef._defaultValue != null ? { default: pDef._defaultValue } : {}),
@@ -243,11 +280,17 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
                 if (pDef.number) formBodyFieldNumbers[paramName] = pDef.number;
                 continue;
               }
+              /* `description` IS OPTIONAL IN THE PARAMETER OBJECT, so a parameter nothing described is
+                 exported WITHOUT the key — omission is the document making no claim, while `""` is the
+                 document claiming the description is empty, and only one of those is true. Same refusal as
+                 `type`: our own writers state a description on every parameter they mint, and a non-string
+                 one comes off a fetched Discovery document, so it is refused rather than asserted. */
+              const pDesc = fdDocString(pDef.description);
               const param = {
                 name: paramName,
                 in: loc,
                 required: !!pDef.required,
-                description: pDef.description || "",
+                ...(pDesc === null ? {} : { description: pDesc }),
                 schema: paramSchema,
               };
               if (pDef.number) param["x-field-number"] = pDef.number;
