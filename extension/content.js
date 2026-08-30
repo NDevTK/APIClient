@@ -126,6 +126,10 @@
     port.addEventListener("message", (e) => {
       try {
         let body;
+        /* `JSON.stringify` RETURNS `undefined` FOR `undefined` — it does not throw — so `port.postMessage()`
+           with no argument fell out of this with no body at all and the offscreen's `msg.body || ""` filed
+           the frame as empty. The catch below only ever covered a THROW (BigInt, a cycle); the quiet
+           undefined return needed its own arm, and it takes the same String() the catch takes. */
         try { body = JSON.stringify(e.data); }
         catch (jsonErr) {
           // structured-cloneable data may not round-trip JSON (BigInt, cycles,
@@ -135,6 +139,7 @@
           console.debug("[content:mc] JSON.stringify failed for mcId=%s: %s", mcId, jsonErr && jsonErr.message || jsonErr);
           body = String(e.data);
         }
+        if (body === undefined) body = String(e.data);
         chrome.runtime.sendMessage({
           type: "RESPONSE_BODY",
           transport: "messagechannel",
@@ -189,6 +194,8 @@
       const pmId = _pmChannels.get(from);
       if (event.source) _pmSources.set(from, event.source);
       let body;
+      // Same `JSON.stringify(undefined) === undefined` arm as the port handler above — `postMessage(undefined)`
+      // is a real message and must not reach the log as one with no body.
       try { body = JSON.stringify(event.data); }
       catch (jsonErr) {
         // Same diagnostic as _instrumentPort above — non-JSON-cloneable
@@ -196,6 +203,7 @@
         console.debug("[content:pm] JSON.stringify failed for pmId=%s: %s", pmId, jsonErr && jsonErr.message || jsonErr);
         body = String(event.data);
       }
+      if (body === undefined) body = String(event.data);
       chrome.runtime.sendMessage({
         type: "RESPONSE_BODY",
         transport: "postmessage",

@@ -1128,17 +1128,24 @@ async function cmdNetDiff(args) {
       if (typeof globalRequestLog !== "undefined" && Array.isArray(globalRequestLog)) {
         const _byTab = new Map();
         for (const r of globalRequestLog) {
-          if (!r || !r.url || !/^https?:/.test(r.url)) continue;
-          const k = (r.method || "GET") + " " + norm(r.url);
+          // url/method/service/callStack are asserted on every record `_pushGlobalLog` files, so the scheme
+          // test is the only real question here — is this an HTTP round trip we can compare against a
+          // learned endpoint — and the `|| "GET"` / `|| ""` copies were answers to a settled one.
+          if (!/^https?:/.test(r.url)) continue;
+          const k = r.method + " " + norm(r.url);
           if (seen.has(k)) continue; seen.add(k);
           if (learned.has(k) || matchedByTemplate(k)) continue;
           if (!showAssets && isAsset(r)) { assetFiltered++; continue; }
           // The bundle call-site that fired this live request (intercept.js captured
           // new Error().stack, wrapper frames stripped). A gap's FIRST frame IS the
           // function forced exec failed to drive — the actionable oracle signal.
-          const site = (r.callStack || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
-          gaps.push({ k, status: r.status, svc: r.service || "", site });
-          const _t = String(r.tab != null ? r.tab : (r.tabId != null ? r.tabId : "?"));
+          const site = r.callStack.split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+          gaps.push({ k, status: r.status, svc: r.service, site });
+          /* `r.tab` HAS NO WRITER ANYWHERE, so this read always fell through to `r.tabId` and the first arm
+             was a name nothing on this record has ever carried — concealed by a ternary rather than by a
+             `||`, which is the same defect with a longer spelling. `tabId` is `number | null`, written on
+             every record, and null is a capture with no tab to attribute it to. */
+          const _t = String(r.tabId != null ? r.tabId : "?");
           _byTab.set(_t, (_byTab.get(_t) || 0) + 1);
         }
         for (const [t, n] of _byTab) byTab.push({ tab: t, gaps: n });

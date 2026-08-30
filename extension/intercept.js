@@ -147,8 +147,14 @@
       } else if (bodySource instanceof ArrayBuffer) {
         reqBody = uint8ToBase64(new Uint8Array(bodySource));
         reqBase64 = true;
-      } else if (bodySource instanceof Uint8Array) {
-        reqBody = uint8ToBase64(bodySource);
+      } else if (ArrayBuffer.isView(bodySource)) {
+        /* Fetch §5.2 BodyInit unions admits a BufferSource, which is ANY ArrayBufferView — every typed array
+           and DataView, not just Uint8Array. The `instanceof Uint8Array` test that stood here left
+           `fetch(u, {method:"POST", body: new Int32Array(…)})` and every DataView body returning a null
+           reqBody, which the log record then reported as a POST that carried none. A view is read through its
+           own window on the buffer (byteOffset/byteLength), never the whole buffer, or a subarray would
+           capture bytes the request did not send. */
+        reqBody = uint8ToBase64(new Uint8Array(bodySource.buffer, bodySource.byteOffset, bodySource.byteLength));
         reqBase64 = true;
       } else if (typeof URLSearchParams !== "undefined" && bodySource instanceof URLSearchParams) {
         reqBody = bodySource.toString();
@@ -270,11 +276,13 @@
                deliberately emptied. An opaque cross-origin response is `""` for the same reason: the browser
                refusing to state one, travelling as itself. */
             statusText: clone.statusText,
-            // Response.type is "basic" | "cors" | "opaque" | "opaqueredirect"
-            // | "error". Opaque is a fact-level signal that the body was
-            // cross-origin-no-cors and therefore unreadable — treat as
-            // fire-and-forget, not an API response, in the classifier.
-            responseType: clone.type || null,
+            /* Fetch §2.2.6 Responses' TYPE: "basic" | "cors" | "opaque" | "opaqueredirect" | "error".
+               Opaque is a fact-level signal that the body was cross-origin-no-cors and therefore unreadable —
+               treated as fire-and-forget rather than an API response by the classifier. Every one of the five
+               is a non-empty string, so the `|| null` that stood here could not fire; what it DID do was tell
+               the reader that absence was possible, and the offscreen wrote a matching `|| null` on the far
+               side. One dead default at each end of a field that is always present. */
+            responseType: clone.type,
             contentType: ct,
             responseHeaders: headers,
             body,
@@ -422,8 +430,13 @@
           } else if (data instanceof ArrayBuffer) {
             body = uint8ToBase64(new Uint8Array(data));
             base64Encoded = true;
-          } else if (data instanceof Uint8Array) {
-            body = uint8ToBase64(data);
+          } else if (ArrayBuffer.isView(data)) {
+            /* WebSockets §3.1 Interface definition: `undefined send((BufferSource or Blob or USVString)
+               data)`, and BufferSource is any ArrayBufferView. Testing `instanceof Uint8Array` left every
+               other typed array and every DataView falling out of this chain with `body` still `undefined`,
+               which lib/response-decode.js turned into `""` — a frame the page really sent, logged as empty,
+               with the emptiness indistinguishable from a socket that sent nothing. */
+            body = uint8ToBase64(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
             base64Encoded = true;
           } else if (typeof Blob !== "undefined" && data instanceof Blob) {
             data.arrayBuffer().then(function (ab) {
@@ -432,6 +445,12 @@
                 body: uint8ToBase64(new Uint8Array(ab)), base64Encoded: true });
             }).catch(function () {});
             return _origSend(data);
+          } else {
+            /* THE UNION'S LAST MEMBER IS `USVString`, so WebIDL stringifies anything that is not a
+               BufferSource or a Blob before `send` ever sees it — `ws.send({})` transmits "[object Object]".
+               Falling out of the chain with `body` undefined logged that real frame as having no body at
+               all; the wrapper runs BEFORE the underlying send, so this conversion is ours to perform. */
+            body = String(data);
           }
           emit({ url: wsUrl, transport: "websocket", method: "WS_SEND", wsId: wsId, status: 0,
             contentType: "websocket", responseHeaders: {}, body, base64Encoded });

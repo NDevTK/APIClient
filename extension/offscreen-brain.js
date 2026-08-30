@@ -131,6 +131,15 @@ function _checkLogEntry(entry, kind) {
            "a captured HTTP record reached the global log with an incomplete request half — the Send panel " +
            "replays a request out of exactly these four fields, so a hole here is a replay that differs from " +
            "the captured request in a way the operator cannot see");
+    /* THE BUNDLE FRAME THAT FIRED IT, and "" is "no call site was captured" — which is the honest answer for
+       a form submission and for an EventSource message, neither of which a bundle function called. It is the
+       oracle signal `testing/harness.js`'s netdiff reads to name the function forced execution failed to
+       drive, so an ABSENT one there reads as a live request with no bundle behind it: exactly the state that
+       diagnostic exists to distinguish, reported by the field being missing instead of by the run. */
+    DCHECK(typeof entry.callStack === "string",
+           "a captured HTTP record reached the global log with no call-site field — netdiff names the bundle " +
+           "function that fired a [live]-only endpoint out of it, and an absent one is that endpoint " +
+           "reported as having no call site rather than one nobody captured");
   } else {
     /* A CHANNEL RECORD IS ONE CONNECTION AND ITS MESSAGES, appended to in place for the connection's whole
        life — so `messages` must be a real array from the moment the record is filed, never a hole a later
@@ -1116,6 +1125,9 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
     responseBase64: false,
     mimeType: "",
     responseHeaders: {},
+    // A form submission is the BROWSER navigating, not a bundle function calling fetch — there is no call
+    // site to have captured, and "" says that rather than leaving the field for a reader to default.
+    callStack: "",
     /* `_source: "form_submit"` is GONE: nothing in this extension has ever read it. It was the other half of
        the same contract defect — a field written so a consumer could tell this record apart, while every
        consumer went on telling records apart by `method`, which is the string this whole change exists to

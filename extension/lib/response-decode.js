@@ -19,17 +19,76 @@
  * asserted, downstream at `_pushGlobalLog`, is the shape of the record THIS FILE then builds: by then every
  * field is one of its own creators' statements, so a hole there is our logic and it crashes. */
 const _RESP_TRANSPORTS = ["fetch", "xhr", "websocket", "eventsource", "postmessage", "messagechannel"];
+
+/* THE WHOLE MESSAGE IS CHECKED ONCE, ON ARRIVAL, AND EVERY READ BELOW IS THEN PLAIN.
+ *
+ * This function is where an untrusted zone's bytes become a trusted zone's record, and it was reading
+ * twenty-eight fields off them through `||` — `msg.body || ""`, `msg.status || 200`, `msg.responseHeaders ||
+ * {}`, `msg.sourceOrigin || ""`. Each of those turns "the relay did not send this" into a value that is
+ * INDISTINGUISHABLE from one it did: an empty body is a real captured frame, `200` is a real status, `{}` is a
+ * real header list, and `""` is a real "the renderer stated no origin" that lib/popup-console.js refuses to
+ * address a reply to. So a relay that broke would not have failed — it would have produced a log of empty
+ * 200s, and there is nothing in that log to say so.
+ *
+ * IT IS A REFUSAL AND NOT AN ASSERTION, for the reason the paragraph above gives: the sender is the page's own
+ * renderer. A message that does not match what its transport promises is dropped WITH A NAME — which field,
+ * which transport, which url — so a producer that stops writing one becomes a console line about that field
+ * rather than a silently plausible log entry. The promise it is checked against is content.js's own
+ * PER_TRANSPORT paragraph: a field's absence there is a fact about WHICH WRAPPER RAN, so this reads the arms
+ * separately rather than demanding one flat shape none of the six actually has. */
+function _relayMessageUnserved(msg) {
+  if (_RESP_TRANSPORTS.indexOf(msg.transport) < 0) return "transport";
+  /* The spine every wrapper writes. `body` is `string | null` — WS_OPEN has no frame to carry and says so
+     with null — and `status` is 0 wherever the transport has no status line, which is a statement about the
+     transport and not a hole. */
+  if (typeof msg.url !== "string" || msg.url === "") return "url";
+  if (typeof msg.method !== "string" || msg.method === "") return "method";
+  if (typeof msg.status !== "number") return "status";
+  if (typeof msg.contentType !== "string") return "contentType";
+  if (!msg.responseHeaders || typeof msg.responseHeaders !== "object") return "responseHeaders";
+  if (msg.body !== null && typeof msg.body !== "string") return "body";
+  if (typeof msg.base64Encoded !== "boolean") return "base64Encoded";
+  if (msg.transport === "fetch" || msg.transport === "xhr") {
+    /* The HTTP half: a request to describe and a status line to have read a reason phrase from. `requestBody`
+       is `string | null` because a GET carries none, and `callStack` is `""` where the stack walk came back
+       empty — both are answers, which is why neither may arrive absent. */
+    if (typeof msg.statusText !== "string") return "statusText";
+    if (!msg.requestHeaders || typeof msg.requestHeaders !== "object") return "requestHeaders";
+    if (msg.requestBody !== null && typeof msg.requestBody !== "string") return "requestBody";
+    if (typeof msg.requestBodyBase64 !== "boolean") return "requestBodyBase64";
+    if (typeof msg.callStack !== "string") return "callStack";
+    // Only the fetch wrapper can produce a filtered-response kind; XHR's own spec fails a cross-origin
+    // response CORS did not allow rather than handing back an opaque one, so for XHR absence is the answer.
+    if (msg.transport === "fetch" && (typeof msg.responseType !== "string" || msg.responseType === ""))
+      return "responseType";
+  } else if (msg.transport === "websocket") {
+    if (typeof msg.wsId !== "string" || msg.wsId === "") return "wsId";
+  } else if (msg.transport === "postmessage" || msg.transport === "messagechannel") {
+    if (typeof msg.channelId !== "string" || msg.channelId === "") return "channelId";
+    /* A postMessage and an MC_OPEN carry the pair the renderer read off the MessageEvent; a PORT message does
+       not, because a port message has no origin to read — which is why the MC_RECV record states "" rather
+       than asking for one. The asymmetry is content.js's, and it is a fact about the two events. */
+    if (msg.transport === "postmessage" || msg.method === "MC_OPEN") {
+      if (typeof msg.sourceOrigin !== "string") return "sourceOrigin";
+      if (typeof msg.targetOrigin !== "string") return "targetOrigin";
+    }
+  }
+  return null;
+}
+
 async function handleResponseBody(tabId, msg, frameId, documentId) {
-  if (!msg.url) return;
-  if (_RESP_TRANSPORTS.indexOf(msg.transport) < 0) {
-    console.warn("[brain] RESPONSE_BODY names no transport this zone serves — dropped:",
-                 String(msg.transport), msg.url);
+  const _unserved = _relayMessageUnserved(msg);
+  if (_unserved !== null) {
+    console.warn("[brain] RESPONSE_BODY dropped — `" + _unserved + "` is not what transport `" +
+                 String(msg.transport) + "` promises:", String(msg.url));
     return;
   }
   await _globalStoreReady;
 
-  // Normalize channel ID from relay messages
-  const channelId = msg.channelId || msg.wsId;
+  /* ONE NAME FOR THE CHANNEL, and its two spellings are two wrappers' answers to the same question:
+     intercept.js's WebSocket wrapper mints `wsId`, content.js's port and window listeners mint `channelId`.
+     The gate above has already established that the transport this message names carries one of them. */
+  const channelId = msg.transport === "websocket" ? msg.wsId : msg.channelId;
 
   // WebSocket lifecycle: one log entry per connection, messages[] array
   if (msg.transport === "websocket") {
@@ -65,9 +124,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         entry.messages.push({
           dir: "close",
           time: Date.now(),
-          body: msg.body || "",
+          /* A close frame's body is its REASON — `ev.reason` in intercept.js, "" when the peer sent none —
+             and its status is the CLOSE CODE the peer sent. `|| 1000` named a normal closure for a socket
+             that may have died any other way, which is the one thing a close record is read for. */
+          body: msg.body,
           base64: false,
-          status: msg.status || 1000,
+          status: msg.status,
         });
         // Cap messages to prevent storage bloat
         if (entry.messages.length > 200) entry.messages.splice(0, entry.messages.length - 200);
@@ -98,8 +160,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     entry.messages.push({
       dir: msg.method === "WS_SEND" ? "sent" : "recv",
       time: Date.now(),
-      body: msg.body || "",
-      base64: msg.base64Encoded || false,
+      body: msg.body,
+      base64: msg.base64Encoded,
     });
     entry.timestamp = Date.now(); // Bump to keep it near top in sorted views
     // Cap messages to prevent storage bloat
@@ -111,6 +173,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       if (msg.base64Encoded) {
         try { textBody = new TextDecoder().decode(base64ToUint8(msg.body)); }
         catch (e) {
+          RETHROW_FATAL(e);
           /* Base64-decode or UTF-8 decode of a captured WS message failed
              — likely a binary frame (Protobuf/MessagePack/Flatbuffers)
              rather than text. Surface so key-extraction skip is observable
@@ -140,8 +203,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         timestamp: Date.now(),
         status: 0,
         channelId: channelId,
-        sourceOrigin: msg.sourceOrigin || "",
-        targetOrigin: msg.targetOrigin || "",
+        sourceOrigin: msg.sourceOrigin,
+        targetOrigin: msg.targetOrigin,
         messages: [],
       };
       _pushGlobalLog(entry, "postmessage", tabId, documentId, frameId);
@@ -150,7 +213,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     entry.messages.push({
       dir: "recv",
       time: Date.now(),
-      body: msg.body || "",
+      body: msg.body,
       base64: false,
     });
     entry.timestamp = Date.now();
@@ -177,8 +240,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         timestamp: Date.now(),
         status: 0,
         channelId: channelId,
-        sourceOrigin: msg.sourceOrigin || "",
-        targetOrigin: msg.targetOrigin || "",
+        sourceOrigin: msg.sourceOrigin,
+        targetOrigin: msg.targetOrigin,
         messages: [],
       };
       _pushGlobalLog(entry, "msgchannel", tabId, documentId, frameId);
@@ -208,7 +271,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     entry.messages.push({
       dir: "recv",
       time: Date.now(),
-      body: msg.body || "",
+      body: msg.body,
       base64: false,
     });
     entry.timestamp = Date.now();
@@ -231,7 +294,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       method: "SSE",
       service: extractInterfaceName(new URL(msg.url)),
       timestamp: Date.now(),
-      status: msg.status || 200,
+      status: msg.status,
       /* AN EventSource MESSAGE IS AN HTTP RESPONSE THIS RECORD ONLY SEES THE MIDDLE OF, AND EVERY FIELD BELOW
          SAYS WHICH KIND OF NOTHING IT HAS. The wrapper in intercept.js hooks the `message` event, not the
          request, so there is no status line to read a reason phrase from, no request headers to list and no
@@ -246,9 +309,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       contentType: "",
       rawBodyB64: null,
       responseBody: msg.body,
-      responseBase64: msg.base64Encoded || false,
-      mimeType: msg.contentType || "",
-      responseHeaders: msg.responseHeaders || {},
+      responseBase64: msg.base64Encoded,
+      mimeType: msg.contentType,
+      responseHeaders: msg.responseHeaders,
+      // No bundle frame fired an EventSource message: the wrapper hooks the `message` event, not the
+      // construction, so "" is "no call site was captured" rather than a stack that came back empty.
+      callStack: "",
     };
     _pushGlobalLog(entry, "http", tabId, documentId, frameId);
     if (msg.body) {
@@ -289,7 +355,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   let service = extractInterfaceName(url);
 
   // Build request header map from intercept.js capture
-  const headerMap = msg.requestHeaders || {};
+  const headerMap = msg.requestHeaders;
 
   // Key scanning: URL + request headers. Record the SPECIFIC header name
   // (lowercased) so on replay we can re-emit the key in the same location
@@ -341,10 +407,10 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     requestHeaders: headerMap,
     contentType: contentType || "",
     rawBodyB64: rawBodyB64,
-    responseBody: msg.body || null,
-    responseBase64: msg.base64Encoded || false,
-    mimeType: msg.contentType || "",
-    responseHeaders: msg.responseHeaders || {},
+    responseBody: msg.body,
+    responseBase64: msg.base64Encoded,
+    mimeType: msg.contentType,
+    responseHeaders: msg.responseHeaders,
     /* `frameId` IS NOT WRITTEN HERE, AND IT USED TO BE WRITTEN TWICE. This built it as `frameId ?? 0` and then
        handed the same `frameId` to `_pushGlobalLog`, whose first act is `if (entry.frameId == null)
        entry.frameId = frameId != null ? frameId : 0` — so the field had two writers with the same fallback,
@@ -358,7 +424,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     // endpoint (one the forced-execution engine didn't reach), this names the
     // exact bundle function that fired the request — diagnostic provenance
     // for the network-vs-AST diff.
-    callStack: msg.callStack || null,
+    callStack: msg.callStack,
   };
 
   /* THE RECORD IS COMPLETE HERE, AND ITS FIRST CONSUMER IS NOT `_pushGlobalLog`. `learnFromRequest` reads
@@ -393,6 +459,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     if (msg.base64Encoded) {
       try { textBody = new TextDecoder().decode(base64ToUint8(msg.body)); }
       catch (e) {
+        RETHROW_FATAL(e);
         /* Base64 / UTF-8 decode failure on a captured response body — most
            often a binary frame (Protobuf / gRPC-Web / image / gzipped) that
            the text-decoder rejects. Surface so the skipped key-extraction
@@ -449,9 +516,11 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
        for the whole life of the field, which is why this branch had never once run). The XHR path emits none
        because XHR cannot produce one — its own spec fails a cross-origin response CORS did not allow rather
        than handing back an opaque one — so absence is "not applicable", not "not sent". */
-    responseType: msg.responseType || null,
-    responseContentType: (msg.responseHeaders &&
-      (msg.responseHeaders["content-type"] || msg.responseHeaders["Content-Type"])) || null,
+    responseType: msg.transport === "fetch" ? msg.responseType : null,
+    /* The header list is always present; whether it NAMES a content type is the question, and `null` is
+       this classifier's own vocabulary for "the response declared none". */
+    responseContentType: msg.responseHeaders["content-type"] ||
+                         msg.responseHeaders["Content-Type"] || null,
   });
   const _isAsset = _assetClass.kind === "asset";
   /* AND THE LOG ENTRY CARRIES THE RULE, because it HAS a reader and the comment above got that half wrong.
@@ -498,6 +567,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
               }
             }
           } catch (e) {
+            RETHROW_FATAL(e);
             console.debug("[brain] JSPB-in-text body parse failed:", e && e.message || e, "url=" + msg.url);
           }
         } else {
@@ -520,6 +590,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
             }
           }
         } catch (e) {
+          RETHROW_FATAL(e);
           console.debug("[brain] form-urlencoded f.req decode failed:", e && e.message || e, "url=" + msg.url);
         }
       } else {
@@ -543,10 +614,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
             }
           }
         } catch (e) {
+          RETHROW_FATAL(e);
           console.debug("[brain] structural-JSON request-body parse failed:", e && e.message || e, "url=" + msg.url);
         }
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       console.debug("[brain] request-body decode outer failed:", e && e.message || e, "url=" + msg.url);
     }
   }
