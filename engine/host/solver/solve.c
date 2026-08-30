@@ -134,6 +134,19 @@ typedef struct {
        progress, and paying it is paying for ground the search already knows leads nowhere. */
     int reach_credited;
     int surv_run, surv_len; int escaped;
+    /* …AND THE SAME LATCH ONE RUNG UP, WHICH IS THE SENTENCE ABOVE READ AGAIN AT THE RUNG IT WAS NOT READ AT.
+       `escaped` is the ESCAPE rung's report counter for exactly the reason `reached` is the arrival rung's —
+       every arrival at an executable position is counted, including one by a spelling the delivery table has
+       since contradicted, because those bytes really did stand there — and it was ALSO that rung's 0->1
+       crossing, which is the pair of jobs one number cannot hold. The failure is the arrival rung's verbatim
+       and one rung more expensive: the first contradicted escape raises `escaped` to 1 without being paid
+       (the credit sits inside the deliverability gate and the count sits outside it), and the spelling that
+       CAN fire then escapes into a latch already spent, so the search is never credited for the last rung
+       before a fire. A ledger that can be spent by an observation it refused to pay for is not a ledger.
+       WHY THE COUNT STAYS OUTSIDE THE GATE. Moving it inside would make `escaped` a claim about VIABILITY
+       rather than a count of arrivals — the same wrong fix `reached` was offered — and would delete the one
+       report that says a contradicted spelling reached an executable position at all. */
+    int escape_credited;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
        sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
        so the list GROWS after seeding has already happened, and a one-shot "this sink is seeded" latch cannot
@@ -576,7 +589,9 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e->deliv_seen = 0;
     e->wit = NULL; e->nwit = e->witcap = 0;
     e->reinject = NULL;
-    e->escaped = 0;
+    /* SAME LINE AND SAME REASON AS `reach_credited`: the array is realloc'd and never zeroed, and a latch left
+       holding whatever the allocator had spends a rung this search has never been paid. */
+    e->escaped = 0; e->escape_credited = 0;
     e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0; e->nprobe = 0;
     *created = 1;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
@@ -1233,6 +1248,9 @@ static void escape_reached(Cand *e) {
        injected bytes, and the search `e` is the one its substitution resolves to. `CHECK` because both are
        dereferenced below. */
     Flow *f = flow_running();
+    /* ASKED ONCE AND HELD, so the gate below and the assertion after it are about the SAME observation rather
+       than two readings of a table that is measured while the search runs. */
+    int deliverable;
 
     DCHECK(e != NULL, "a context escape was recorded against no search — the caller resolved one to record the "
                       "arrival that must precede it");
@@ -1244,11 +1262,45 @@ static void escape_reached(Cand *e) {
            "a breakout was observed in an EXECUTABLE position at a sink its own bytes have not been recorded "
            "as ARRIVING at — every escape site runs downstream of breakout_arrived on the same string, so an "
            "escape with no arrival behind it means the two are being asked about different strings");
-    if (solve_delivered_ok(&e->deliv, f->cand_payload)) {
+    /* ONE QUESTION, TWO WRITES — breakout_arrived's split, made at the rung above it. The COMPARATOR is written
+       unconditionally inside the gate (this flow stands here, however many stood here first) and the LEDGER is
+       latched on a field of its OWN, never on the report counter below: `escaped` counts every arrival at an
+       executable position including a contradicted spelling's, and a latch read off it is spent by exactly the
+       observation the gate refused to pay for. */
+    deliverable = solve_delivered_ok(&e->deliv, f->cand_payload);
+    if (deliverable) {
         flow_observe_rung(f, FLOW_RUNG_ESCAPED);
-        if (e->escaped == 0) flow_credit_emit(1.0);
+        if (e->escape_credited == 0) {
+            /* THE LEDGER'S LADDER IS ORDERED, ASSERTED WHERE IT IS CLIMBED — the ledger's half of the invariant
+               flow_observe_rung asserts for the comparator, and the only place it can be asked. It is DERIVED
+               and not assumed: this crossing is paid only when the delivery table still holds these bytes, the
+               table only ever narrows, so they were deliverable when this same flow ARRIVED — and it did arrive,
+               because flow_observe_rung one line up refuses FLOW_RUNG_ESCAPED to a flow that has not stood on
+               FLOW_RUNG_ARRIVED. So breakout_arrived's own crossing is already paid, and anything that makes
+               that false has made the two rungs answer different questions about deliverability.
+               IT IS ALSO WHAT FORCES THE NEXT RUNG TO CARRY ITS PREDECESSOR: a fourth crossing added above this
+               one asserts the third here, exactly as this one asserts the second, so a ladder cannot grow a
+               rung whose ledger can be paid out of order. */
+            DCHECK(e->reach_credited == 1,
+                   "the @S escape crossing is about to be paid to a search whose ARRIVAL crossing never was — "
+                   "the ladder's rungs are ordered and the ledger climbs them in order, so a search standing on "
+                   "the escape rung unpaid for the arrival rung has two crossings asking different questions "
+                   "about the same delivery table, and the frontier is ranking a distance nobody travelled");
+            e->escape_credited = 1;
+            flow_credit_emit(1.0);
+        }
     }
     e->escaped++;
+    /* AND THE TWO-SIDED HALF, WHICH IS THE ONE THAT CATCHES THE LATCH BEING READ OFF THE COUNTER AGAIN. A
+       DELIVERABLE escape leaves this function with the crossing paid, always — there is no state in which the
+       search has observed one and still owes it. Written after the increment on purpose: with the latch read
+       off `escaped`, the second deliverable escape of a search whose first escape was contradicted arrives
+       here with `escape_credited` still 0, and this is the line that says so. */
+    DCHECK(!deliverable || e->escape_credited == 1,
+           "a deliverable @S breakout stood in an executable position and the search's escape crossing is "
+           "still unpaid — the ledger's latch is being read off a REPORT counter, which counts the arrivals "
+           "the ledger refuses to pay for, so the first contradicted escape spent the crossing that the "
+           "spelling which can actually fire needed");
 }
 
 static Cand *candidate_search(int sink) {
