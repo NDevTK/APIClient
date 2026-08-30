@@ -240,6 +240,37 @@ static JSValue js_link_tostring(JSContext *ctx, JSValueConst this_val, int argc,
  * THE NAVIGATION IS §7.2.2.1's, reached through navigable_open — the same §7.3.1.7 rules for choosing a
  * `window.open()` applies. `rel="noopener"` and `rel="noreferrer"` are where this caller's noopener comes
  * from instead of a features string, which is the only difference between the two callers. */
+bool hyperlink_rel_supported(const char *token, size_t len)
+{
+    size_t i;
+    /* §4.6.2 "Links created by a and area elements": "The possible supported tokens are noreferrer, noopener,
+       and opener", filtered to those that "impact the processing model, and are supported by the user agent".
+       The model is §4.6.5 "Following hyperlinks"'s get-an-element's-noopener, which this component runs — and
+       it runs that algorithm's FIRST clause only ("If element's link types include the noopener or noreferrer
+       keyword, then return true"). `opener` appears only in the SECOND ("If element's link types do not
+       include the opener keyword and target is an ASCII case-insensitive match for `_blank`, then return
+       true"), which the noopener computation below does not have, so `opener` is not a supported token here:
+       reporting it would state a processing model this engine does not run.
+       NAMED RESIDUAL. What is not covered: the `opener` keyword. What the next diff builds: the second clause
+       of get-an-element's-noopener, beside the first one below, which needs the resolved `target` the clause
+       compares against `_blank`. How its absence shows: `a.relList.supports("opener")` answers false where a
+       browser answers true, and `<a target=_blank rel=opener>` opens a window with NO opener where a browser
+       gives it one. */
+    static const char *const KEYWORDS[] = { "noopener", "noreferrer" };
+
+    DCHECK(token != NULL,
+           "HTML §4.6.2 \"Links created by a and area elements\"'s supported-token question was asked with "
+           "no keyword — the caller resolves the candidate string before asking, so a null here is a caller "
+           "that asked without one");
+    /* §7.1's validation step 2 lowercased the candidate already, so this is an exact compare and not a second
+       ASCII-case-insensitive matcher standing beside the algorithm's own. */
+    for (i = 0; i < sizeof(KEYWORDS) / sizeof(KEYWORDS[0]); i++) {
+        size_t n = strlen(KEYWORDS[i]);
+        if (len == n && memcmp(token, KEYWORDS[i], n) == 0) return true;
+    }
+    return false;
+}
+
 static bool link_has_activation(JSContext *ctx, JSValueConst el)
 {
     lxb_dom_node_t *n = node_of(el);

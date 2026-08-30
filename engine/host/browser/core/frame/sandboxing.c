@@ -94,6 +94,17 @@ SandboxFlags sandbox_parse_directive(const char *input, size_t len)
     return out;
 }
 
+bool sandbox_keyword_supported(const char *token, size_t len)
+{
+    DCHECK(token != NULL,
+           "HTML §4.8.5 \"The iframe element\"'s supported-token question was asked with no token — the "
+           "caller resolves the candidate string before asking, so a null here is a caller that asked "
+           "without one");
+    /* The empty directive is the most restrictive set there is, so ANY relaxation is a keyword the clauses
+       above name. Derived rather than listed — see the declaration for why that is the whole point. */
+    return sandbox_parse_directive(token, len) != sandbox_parse_directive(NULL, 0);
+}
+
 SandboxFlags sandbox_creation_flags(const SandboxEmbedder *embedder, SandboxFlags popup_flags)
 {
     /* "Return the UNION of the flags that are present in the following sandboxing flag sets: if embedder is

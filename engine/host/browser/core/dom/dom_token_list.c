@@ -15,10 +15,9 @@
  * el.classList` is what the IDL states, and a page that stashes the list and mutates it later must be mutating
  * the same one. The cache rides the WRAPPER, which is per-flow like the wrapper is.
  *
- * WHAT IS HONESTLY ABSENT: the INDEXED PROPERTY GETTER (`list[0]`) and `length`'s liveness as an array-like.
- * `item(i)` and `length` are real; a numeric index needs an exotic object with a [[GetOwnProperty]] that
- * consults the attribute, which is its own mechanism and not something to fake with a snapshot of properties
- * that would go stale the moment the attribute changed. */
+ * `supports(token)` IS §7.1's ALGORITHM AND NOT ITS DATA: the validation steps run here, and the token SETS
+ * come from core/html/supported_tokens.c because §7.1 says whose they are — "Specifications may define
+ * supported tokens for a DOMTokenList's element and attribute name". See js_tl_supports. */
 #include <string.h>
 #include <stdlib.h>
 
@@ -33,6 +32,7 @@
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/dom_token_list.h"
+#include "core/html/supported_tokens.h"   /* §7.1: "Specifications may define supported tokens …" — HTML's */
 
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
@@ -46,7 +46,7 @@ static const IdlArgType IDL_STR_BOOL[2] = { IDL_DOMSTRING, IDL_BOOLEAN };
 static JSClassID g_tl_class;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
 static int g_set_value_id = -1, g_item_id = -1, g_contains_id = -1, g_add_id = -1, g_remove_id = -1,
-           g_toggle_id = -1, g_replace_id = -1, g_to_string_id = -1;
+           g_toggle_id = -1, g_replace_id = -1, g_to_string_id = -1, g_supports_id = -1;
 /* §7.1'S TOKEN-LIST REFLECTIONS — ONE LIST EXPANDED THREE TIMES: the id the engine indexes by, the IDL member
    name, and the CONTENT ATTRIBUTE that member is a view over. `classList` was the only one and its attribute
    was hardcoded inside list_owner, which is a second implementation of this file waiting to be written: a
@@ -281,6 +281,79 @@ static JSValue js_tl_contains(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_NewBool(ctx, has);
 }
 
+/* §7.1 `boolean supports(DOMString token)` — "Let result be the return value of validation steps called with
+ * token. Return result." The four validation steps are here and the TOKEN SETS ARE NOT, because §7.1 says who
+ * owns them in its own sentence: "Specifications may define supported tokens for a DOMTokenList's element and
+ * attribute name." So core/html/supported_tokens.c answers which set a (element, attribute name) pair has and
+ * what is in it, and this body is step 1's throw, step 2's lowercasing and steps 3-4's answer.
+ *
+ * WHY A PAGE READS IT, AND WHY ITS ABSENCE COST MORE THAN A MEMBER. `document.createElement("link").relList
+ * .supports("modulepreload")` and `.supports("preload")` are how every modern bundler's chunk loader decides
+ * which `rel` it will emit for a lazy chunk — CLAUDE.md §What-the-tool-produces names the lazy chunk as a
+ * headline target. With the member absent the unguarded spelling threw `supports is not a function` and ended
+ * the flow, and the guarded spelling (`relList.supports && relList.supports(x)`) took the OTHER branch on a
+ * CONCRETE `undefined`, so the arm was not even forked — a whole loader path lost with nothing to say so.
+ *
+ * STEP 1 IS A TypeError AND NOT A `false`, and the difference is the whole reason the answer below is
+ * three-state: `classList.supports("x")` and `link.sizes.supports("any")` throw in a browser because no
+ * specification defines supported tokens for `class` or for `sizes`, while
+ * `link.relList.supports("stylesheet")` answers false. A single boolean would have to pick one of those and
+ * would be wrong about the other. */
+static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    const char *attr = NULL, *tok;
+    size_t tlen = 0, i;
+    lxb_dom_element_t *el = list_owner(ctx, this_val, &attr);
+    HtmlSupportedToken supported;
+    char *lower;
+    JSValue out;
+
+    (void)magic;
+    DCHECK(argc >= 1, "§7.1 `supports(token)` ran with no argument — Web IDL §3.6's arity check belongs to the "
+                      "declaration and throws a TypeError before the body runs, so an empty argument list here "
+                      "is a member installed without the declared argument it converts");
+    /* Web IDL §3.7.6: an operation on an interface whose receiver is not a platform object implementing it is a
+       TypeError. Every list this component mints carries its element, so an unresolvable owner IS that case. */
+    if (!el)
+        return JS_ThrowTypeError(ctx, "supports called on a receiver that is not a DOMTokenList with an "
+                                      "associated element");
+    /* An unknown token denotes its SHAPE, the same rule `value =` follows: a `supports(x)` over external input
+       must not end the document at the coercion. Anything else converts with its real length, because a
+       supported token is compared as BYTES and a NUL inside one is not a keyword's terminator. */
+    if (concolic_is(argv[0])) {
+        tok = concolic_name_cstr(ctx, argv[0]);
+        tlen = tok ? strlen(tok) : 0;
+    } else {
+        tok = JS_ToCStringLen(ctx, &tlen, argv[0]);
+    }
+    if (!tok) return JS_EXCEPTION;
+    /* Validation step 2: "Let lowercaseToken be token, in ASCII lowercase." */
+    lower = malloc(tlen + 1);
+    CHECK(lower != NULL, "DOMTokenList: OOM lowercasing a supports() token");
+    for (i = 0; i < tlen; i++) {
+        char c = tok[i];
+        lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+    }
+    lower[tlen] = 0;
+    JS_FreeCString(ctx, tok);
+    supported = html_supported_token(el, attr, lower, tlen);
+    free(lower);
+    /* Validation step 1. It is decided by the ELEMENT and the ATTRIBUTE NAME alone, which is why it is asked
+       after the conversion and not before it: §7.1 converts the argument first (Web IDL runs the declaration's
+       coercion, and a `toString` that throws must throw) and only then looks at the pair. */
+    if (supported == HTML_TOKENS_UNDEFINED)
+        return JS_ThrowTypeError(ctx, "no supported tokens are defined for the `%s` attribute of this element",
+                                 attr);
+    out = JS_NewBool(ctx, supported == HTML_TOKENS_PRESENT);
+    /* AN UNKNOWN TOKEN IS AN UNKNOWN ANSWER. The membership was decided against the shape, which is a real
+       string and is no keyword, so the concrete example is `false` — but the DOMAIN still permits both, and a
+       concrete `false` here would decide `if (list.supports(x))` for the flow and delete the true arm. The
+       result therefore carries the operand's source, exactly as every other builtin over unknown input does. */
+    if (concolic_is(argv[0]))
+        out = concolic_builtin_hook(ctx, argv[0], "DOMTokenList.supports", out);
+    return out;
+}
+
 /* THE ONE MUTATION, under four names. add/remove/toggle/replace differ only in which tokens they mean to be
    present afterwards, so they build the new value the same way: walk the existing tokens, decide each, then
    append what is newly wanted. Four bodies would be four chances to disagree about whitespace and duplicates.
@@ -472,6 +545,7 @@ void dom_token_list_init(JSContext *ctx)
     g_toggle_id = idl_method_id(ctx, IDL_STR_BOOL, 2, js_tl_mutate, 2);
     idl_optional_from(1);   /* §7.1: `toggle(token, optional force)` */
     g_replace_id = idl_method_id(ctx, IDL_2STR, 2, js_tl_mutate, 3);
+    g_supports_id = idl_method_id(ctx, IDL_1STR, 1, js_tl_supports, 0);   /* §7.1 `supports(token)` */
     /* §7.1's stringifier IS `value` — the same attribute under the operation's name, so it reads the same
        thing rather than formatting one. Its own body because a getter and a method have different shapes, and
        casting one to the other reads `magic` out of `argc`. */
@@ -501,6 +575,7 @@ void dom_token_list_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "remove", 1, g_remove_id);
     idl_install_method(ctx, proto, "toggle", 1, g_toggle_id);
     idl_install_method(ctx, proto, "replace", 2, g_replace_id);
+    idl_install_method(ctx, proto, "supports", 1, g_supports_id);
     idl_install_method(ctx, proto, "toString", 0, g_to_string_id);
     /* §3.7.10: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
        `for (const c of el.classList)` is ordinary code — and had nothing. */

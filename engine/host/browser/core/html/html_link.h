@@ -56,6 +56,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_HTML_LINK_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_LINK_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #include "quickjs.h"
 #include <lexbor/dom/interfaces/element.h>
 
@@ -109,5 +112,12 @@ void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root);
    host that drives its own pump owes the same step; a host that runs none of it has documents whose own
    preloads are never requested, which is a lazy-chunk graph that never loads. */
 int html_link_connected_step(JSContext *ctx);
+
+/* §4.2.4's `rel` SUPPORTED TOKENS, one keyword at a time — DOM §7.1 "Interface DOMTokenList"'s validation
+   steps, reached through core/html/supported_tokens.c. The answer is this component's own classification of
+   which of §4.2.4's states a keyword puts a link element in, because §4.2.4 makes the set "the tokens from
+   this list that the user agent implements the processing model for" and this file is where that is decided.
+   `token` is ONE keyword, already in ASCII lowercase (§7.1's validation step 2). */
+bool html_link_rel_supported(const char *token, size_t len);
 
 #endif

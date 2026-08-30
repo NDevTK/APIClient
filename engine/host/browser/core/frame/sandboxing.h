@@ -68,6 +68,17 @@ typedef uint32_t SandboxFlags;
    there is, so an empty token list yields nearly the whole set rather than nothing. */
 SandboxFlags sandbox_parse_directive(const char *input, size_t len);
 
+/* §4.8.5 "The iframe element": "The supported tokens for sandbox's DOMTokenList are the allowed values defined
+   in the sandbox attribute and supported by the user agent." BOTH HALVES ARE ANSWERED BY THE PARSE ITSELF and
+   never by a second list of keywords standing beside it: an allowed value this component supports is exactly a
+   token that RELAXES at least one flag, and a token the clauses above do not name cannot relax one. So a
+   keyword added to §7.1.5's clauses becomes a supported token with nothing else to edit, and a keyword this
+   component ignores reports itself unsupported instead of being claimed — which a hand-kept list of thirteen
+   strings could not promise in either direction.
+   `token` is ONE token, established by the caller (core/html/supported_tokens.c): a string carrying ASCII
+   whitespace relaxes flags here while being no allowed VALUE at all. */
+bool sandbox_keyword_supported(const char *token, size_t len);
+
 /* §7.1.5's EMBEDDER, for determine-the-creation-sandboxing-flags: the element a navigable is nested THROUGH,
    reduced to the two sets that algorithm reads off it. */
 typedef struct {

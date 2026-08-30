@@ -109,10 +109,13 @@ static const char *const LINK_EXT_KEYWORDS[] = {
     "stylesheet", "icon", "manifest", "prefetch", "preconnect", "dns-prefetch", "expect",
 };
 
-static LinkExternalType link_external_type_of(lxb_dom_element_t *el)
+/* THE CLASSIFICATION OVER A `rel` VALUE, taken apart from the element it was read off so the SAME question can
+   be asked about ONE keyword — which is what HTML §4.2.4 "The link element" makes `rel`'s supported tokens
+   (see html_link_rel_supported). Two spellings of "which state does this keyword put a link element in" would
+   be two answers, and the one a page reads through `relList.supports` would drift from the one the trigger
+   acts on — a feature detection saying yes to steps that never run. */
+static LinkExternalType link_rel_external_type(const char *rel, size_t rel_n)
 {
-    size_t rel_n = 0;
-    const char *rel = link_attr(el, "rel", &rel_n);
     size_t i;
 
     if (!rel) return LINK_EXT_NONE;
@@ -121,6 +124,29 @@ static LinkExternalType link_external_type_of(lxb_dom_element_t *el)
     for (i = 0; i < sizeof(LINK_EXT_KEYWORDS) / sizeof(LINK_EXT_KEYWORDS[0]); i++)
         if (rel_has(rel, rel_n, LINK_EXT_KEYWORDS[i])) return LINK_EXT_UNBUILT;
     return LINK_EXT_NONE;
+}
+
+static LinkExternalType link_external_type_of(lxb_dom_element_t *el)
+{
+    size_t rel_n = 0;
+    const char *rel = link_attr(el, "rel", &rel_n);
+
+    return link_rel_external_type(rel, rel_n);
+}
+
+bool html_link_rel_supported(const char *token, size_t len)
+{
+    DCHECK(token != NULL,
+           "HTML §4.2.4 \"The link element\"'s supported-token question was asked with no keyword — the "
+           "caller resolves the candidate string before asking, so a null here is a caller that asked "
+           "without one");
+    /* §4.2.4 "The link element" makes the filter a MUST: "rel's supported tokens must only include the tokens
+       from this list that the user agent implements the processing model for." So the answer is NOT §4.2.4's
+       thirteen possible keywords — it is the subset this component runs steps for, which is exactly the state
+       the classifier above calls LINK_EXT_PRELOAD (§4.6.8.20 Link type "preload"). Reporting `stylesheet` or
+       `modulepreload` would state a processing model that is named-and-unbuilt right here, and a page that
+       feature-detects one takes the branch behind it. */
+    return link_rel_external_type(token, len) == LINK_EXT_PRELOAD;
 }
 
 /* WHICH TYPES' APPROPRIATE TIMES THIS COMPONENT REGISTERS — ONE PREDICATE, asked by the two places that must
