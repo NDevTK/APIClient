@@ -3229,21 +3229,30 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
        because the discharge is the only thing that reads the slot. */
     if (take_result) s->result = JS_UNDEFINED;
 
-    /* THE MEMBER'S OWN RELEASE GOES FIRST, AND IT TOUCHES NO REFERENCE AT ALL. It runs first because the work
-       it does is real algorithm work that READS what this machine owns — §4.13.4 step 14's "regardless of
-       whether the above steps threw" lowers a flag off `s->registry` — and it may free only what the
+    /* THE MEMBER'S OWN RELEASE GOES FIRST, AND IT TOUCHES NO SLOT THE DECLARATION NAMES. It runs first because
+       the work it does is real algorithm work that READS what this machine owns — §4.13.4 step 14's "regardless
+       of whether the above steps threw" lowers a flag off `s->registry` — and it may free only what the
        declaration does NOT name: a lexbor handle, a foreign C allocation, a flag its algorithm took. That
        split is measured, not trusted: freeing a declared value is silent both ways it can be written
        (free-and-null leaves the discharge a no-op; free-without-null makes the discharge the second free), so
        the declaration is folded into a number on each side of the call and the two must agree.
-       WHAT THE FOLD ACTUALLY MEASURES IS THE WHOLE HEAP'S COUNT OF EVERY VALUE THE DECLARATION NAMES, and that
-       is a stronger question than the one this comment asks — a refcount records HOW MANY holders an object
-       has and never WHICH, so a `release` that drops SOMEBODY ELSE'S reference to an object a declared slot
-       also names moves the same number by the same amount as one that discharged the declaration. The two are
-       not separable by any measurement, so the rule this bracket enforces is the wider one it can actually
-       state: a `release` performs no operation that can move a reference count. That is exactly the list above
-       — a handle, an allocation, a flag — and the give-back that is NOT on it, the agent's active custom
-       element constructor map entry, is paid below instead of here.
+       WHAT THE FOLD MEASURES IS SLOT IDENTITY — the tag of every declared slot, and its payload where that is a
+       pointer — AND IT IS DELIBERATELY NOT A REFERENCE COUNT. This bracket USED to fold the heap's count of
+       every declared value and it could not mean what it said: a count records HOW MANY holders an object has
+       and never WHICH, so a `release` that gives back SOMEBODY ELSE'S reference to an object a declared slot
+       also names (§4.13.4's active custom element constructor map is keyed BY a constructor, and `C` is a
+       declared value) moved it by exactly what a `release` discharging the declaration moved it by. Every
+       completed `document.createElement` of a defined name aborted on that, and no measurement separates the
+       two. So the rule this bracket states is the one it can actually decide: a `release` leaves every slot the
+       declaration names naming the same thing. Free-and-null, replace and hand-over move the number;
+       free-WITHOUT-null does not, and reaches the discharge as the second free where the allocator answers —
+       the same trade quickjs.c's fold has always taken for a declared `buf`.
+       IT THEREFORE DOES NOT FORBID a `release` from moving reference counts elsewhere in the agent's object
+       graph. The active-ctor give-back is still paid below this bracket rather than in a `release`, and the
+       reason is now only the second one it always also had: it is one half of a PAIR whose other half
+       (custom_elements_queue_unlock, §4.13.5 "Upgrades" step 10's regardless-list) is paid there, and the two
+       must unwind in nesting order — a member's `release` runs before that unlock, so an upgrade reached from
+       inside this member's own Construct would leave the OUTER bracket first.
        AND IT NAMES THE MEMBER, because this is the ONE point every declared member's teardown converges on: an
        assert stamped with this line and a remedy phrased as "release only what the declaration does not name"
        is an instruction with no object, and finding which of the platform's members it meant is a search of
@@ -3257,14 +3266,13 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
 #if APICLIENT_DEV
         owned_after = JS_StepVisitOwnedFingerprint(ctx, m->step->visit, idl_body_state(m, st));
         DCHECKF(owned_after == owned_before,
-                "the `release` of %s (%s) moved a reference count its own `visit` names. The visit IS the one "
-                "list of what the state owns and the teardown discharges it; a second list beside it leaks "
-                "whatever the next field misses, and double-frees whatever this one did not null — and a "
-                "give-back that drops ANOTHER holder's reference to a declared value is indistinguishable from "
-                "that here, because a count says how many holders an object has and never which. Release only "
-                "what the declaration does not name AND what holds no reference: a lexbor handle, a foreign "
-                "allocation, a flag to lower. A give-back that mutates the agent's own JS object graph belongs "
-                "below this bracket, beside custom_elements_queue_unlock",
+                "the `release` of %s (%s) left a slot its own `visit` names naming something else. The visit IS "
+                "the one list of what the state owns and the teardown discharges it; a second list beside it "
+                "leaks whatever the next field misses, and double-frees whatever this one did not null. Release "
+                "only what the declaration does not name: a lexbor handle, a foreign C allocation, a flag to "
+                "lower. This fold reads slot IDENTITY and never a reference count, so it is NOT reporting that "
+                "the agent's object graph moved — one of the declaration's own slots was freed, nulled, "
+                "replaced or handed over, and that slot is the thing to stop touching",
                 m->name ? m->name : "an unnamed member",
                 m->step->algorithm ? m->step->algorithm : "no algorithm declared");
 #endif

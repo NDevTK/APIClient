@@ -849,13 +849,17 @@ typedef struct {
        It runs BEFORE the declaration is discharged, so it may READ an owned value — those flags live on one —
        and idl_args.c folds the declaration into a number on each side of the call and requires the two to
        agree. A member with nothing of that kind declares NULL.
-       THE SECOND HALF OF THAT SENTENCE IS NOT DECORATION: the fold measures the HEAP's count of every declared
-       value, and a count states how many holders an object has and never which — so a give-back that drops
-       ANOTHER holder's reference to an object a declared slot also names is not distinguishable there from a
-       `release` that discharged the declaration itself. Both are refused. A give-back that mutates the agent's
-       own JS object graph (§4.13.4's active custom element constructor map, whose entries are keyed BY a
-       constructor) is declared to the machine instead — see idl_active_ctor_owed — and performed at the
-       teardown below that bracket. */
+       WHAT THAT FOLD MEASURES IS SLOT IDENTITY — every declared slot's tag, and its payload where that is a
+       pointer — AND NEVER A REFERENCE COUNT, so read the rule as "leave every slot the declaration names naming
+       the same thing" rather than "hold still". It folded the heap's count once and could not: a count states
+       how many holders an object has and never which, so a give-back dropping ANOTHER holder's reference to an
+       object a declared slot also names was indistinguishable there from a `release` discharging the
+       declaration itself, and every completed `document.createElement` of a defined name aborted. A `release`
+       is therefore NOT forbidden to move reference counts elsewhere in the agent's object graph; it is
+       forbidden to free, null, replace or hand over one of these slots. §4.13.4's active custom element
+       constructor map give-back is still declared to the machine instead — see idl_active_ctor_owed — because
+       it is half of a PAIR that must unwind in nesting order below that bracket, which is a different reason
+       and an independent one. */
     void      (*release)(JSContext *ctx, void *state);
     /* WHICH ALGORITHM THIS MEMBER IS, AND WHICH OF ITS STEPS EACH STAGE RESTS AT — the host half of
        JSTrampStepDef's own declaration, and it lands on the same field of the same definition: the pool builds
@@ -1043,15 +1047,20 @@ int idl_step_magic(const JSStepHdr *hdr);
  *
  * WHY A MEMBER CANNOT SIMPLY DO THIS IN ITS `release`, which is where every other give-back on this machine
  * lives. Steps 5.1.5-5.1.6 must run at the exit a discarded flow takes — it is parked on the page's
- * constructor and no resume ever comes back — so the teardown is the only place they CAN run; but the map is a
- * map of constructors to registries, so giving an entry back DROPS A REFERENCE to `C`, and `C` is a value the
- * member's own `visit` names for the whole bracket. idl_args.c folds that declaration into a number on each
- * side of `release` and requires the two to agree, and a reference count states how many holders an object has
- * and never which — so a give-back that drops the MAP's reference is indistinguishable there from a `release`
- * that discharged the DECLARATION's. The rule the bracket can actually enforce is therefore the wider one: a
- * `release` performs no operation that can move a reference count. This is the door for the give-back that
- * cannot meet it, and it puts DOM §4.9's bracket exactly where §4.13.5 "Upgrades"' already was — below the
+ * constructor and no resume ever comes back — so the teardown is the only place they CAN run; and this half of
+ * the pair has to leave in NESTING ORDER with the other half, §4.13.5 "Upgrades" step 10's regardless-list,
+ * which custom_elements_queue_unlock pays below idl_args.c's `release` bracket. A member's `release` runs
+ * BEFORE that unlock, so an upgrade reached from inside this member's own Construct would leave the OUTER
+ * bracket first. This is the door that puts DOM §4.9's bracket exactly where §4.13.5's already was — below the
  * bracket, in the same teardown, unwound in nesting order.
+ *
+ * IT IS NOT THE FINGERPRINT THAT FORCES IT, THOUGH IT ONCE WAS, and the correction is recorded here because the
+ * next reader will otherwise re-derive the old reason. The map is a map of constructors to registries, so
+ * giving an entry back drops a reference to `C`, a value the member's own `visit` names for the whole bracket;
+ * idl_args.c used to fold the HEAP's count of every declared value and therefore refused this give-back and a
+ * `release` discharging the declaration alike, aborting every completed `document.createElement` of a defined
+ * name. That fold now reads slot IDENTITY and no count, so it would no longer object. The ordering above is
+ * what keeps this door, and it stands on its own.
  *
  * ONE PER INVOCATION, asserted: the pair nests one deep per declared member, because the one bracket a member
  * enters directly brackets a single Construct. */

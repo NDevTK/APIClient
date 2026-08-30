@@ -138,13 +138,16 @@ JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def)
    agent-wide, so an entry left on it answers every later `new C()` in the agent, in flows that never named
    this registry — and nothing reports it, because the entry is a live value on a live object.
    IT IS NOT AN IdlStepDecl `release`, AND THE REASON IS THAT AN ENTRY IS NOT A FLAG. That field's stated
-   purpose is what no declaration can name — a lexbor handle, a foreign allocation, a flag to lower — and
-   idl_args.c enforces the sharper form it can measure: a `release` moves no reference count. This map holds
-   CONSTRUCTORS as keys, so the leave drops a reference to `C`, which is a value the entering member's own
-   declaration names for the whole bracket. A step machine that enters therefore declares the leave with
-   core/idl_args.h's idl_active_ctor_owed, and the machine performs it at its teardown, below that bracket.
-   §4.13.5 "Upgrades"' half is given back the same way and at the same point, through
-   custom_elements_queue_unlock; the two unwind in nesting order. */
+   purpose is what no declaration can name — a lexbor handle, a foreign allocation, a flag to lower — while this
+   map holds CONSTRUCTORS as keys, so the leave mutates the agent's own object graph and drops a reference to
+   `C`. A step machine that enters therefore declares the leave with core/idl_args.h's idl_active_ctor_owed, and
+   the machine performs it at its teardown, below idl_args.c's `release` bracket. §4.13.5 "Upgrades"' half is
+   given back the same way and at the same point, through custom_elements_queue_unlock, and THAT is what makes
+   the placement load-bearing rather than tidy: the two are a nested pair and must unwind in nesting order, and
+   a member's `release` runs before that unlock. (It is no longer the fingerprint that forces it. idl_args.c
+   once folded the heap's reference count of every declared value, which refused this give-back — `C` is a
+   declared value — and aborted every completed `document.createElement` of a defined name; that fold reads slot
+   IDENTITY now and would not object.) */
 void custom_elements_active_ctor_enter(JSContext *ctx, JSValueConst ctor, JSValueConst registry);
 void custom_elements_active_ctor_leave(JSContext *ctx, JSValueConst ctor);
 /* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state
