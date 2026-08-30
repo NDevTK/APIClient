@@ -10,10 +10,17 @@
  * encoding, a surrogate encoded in three bytes, and a truncated sequence at the end of a STREAMING chunk each
  * come out as the error the standard says and not as a code point.
  *
- * WHAT IS ABSENT. The multi-byte CJK decoders (Big5, EUC-JP, EUC-KR, gb18030, ISO-2022-JP, Shift_JIS) each need
- * their own algorithm over a hundreds-of-kilobyte index. Their LABELS resolve — `new TextDecoder("shift_jis")`
- * is a known encoding and not a RangeError, which is a distinction §4.2 makes and this table keeps — and the
- * decode CRASHES naming the encoding, which is the work queue rather than a wrong answer. */
+ * THE MULTI-BYTE CJK DECODERS ARE BUILT — Big5, EUC-JP, EUC-KR, gb18030/GBK, ISO-2022-JP and Shift_JIS each
+ * run their own algorithm over the standard's index, dispatched beside the single-byte arm below. This banner
+ * used to head a paragraph naming those six as WHAT IS ABSENT, saying each "needs its own algorithm over a
+ * hundreds-of-kilobyte index" and that a decode "CRASHES naming the encoding, which is the work queue". They
+ * were built and the paragraph was not deleted, so the file's own header and the crash at the end of that
+ * dispatch had come to say opposite things: the crash reads "every one the standard names now has one, so
+ * reaching this means a NEW encoding was added to the registry and the decode was not", which is the accurate
+ * one. A reader who trusted the banner would have set out to write six decoders that are already here.
+ * THE GENERAL RULE THIS IS AN INSTANCE OF: a statement about what this tree CONTAINS is true when written and
+ * wrong soon after, so when you build a capability, delete the crash that named it AND the prose that agreed
+ * with it in the same diff — and before writing what such a note asks for, grep for the entry it names. */
 #include <stdlib.h>
 #include <string.h>
 
