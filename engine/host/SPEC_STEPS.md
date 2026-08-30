@@ -3622,9 +3622,18 @@ Step numbers are the standard's own list numbering as of that date — EXCEPT §
 were the pre-scoped-registry edition's (7.1-7.9, 8, 9, 10-14), and the section was cited throughout as
 §4.13.2, which is "Requirements for custom element constructors and reactions" — a bulleted list of authoring
 requirements carrying no numbered steps at all, and never the home of `[HTMLConstructor]` in any edition.
-Both were corrected against the live text on **2026-08-30**. §4.13.4/§4.13.5/§4.13.6's step numbers below are
-STILL the 2026-08-11 reading, and §4.13.5's have since moved (its `previousRegistry` save/set are now steps
-8-9, the construct is step 10, and the form-associated pair is step 11).
+Both were corrected against the live text on **2026-08-30**, and §4.13.4/§4.13.5/§4.13.6's step numbers were
+read off the same live text on the same date. What moved since the 2026-08-11 reading, and what §14.1 below
+now states: §4.13.5's `previousRegistry` save/set are steps **8-9**, the catching block is step **10**, the
+form-associated pair is **11** and `"custom"` is **12**; §4.13.6's `enqueue a custom element callback
+reaction` gained a step 3 (the `connectedMoveCallback` synthesis) that pushed its tail to **4-7**; and
+§4.13.4's `define` runs to **19** steps, with the two `upgrade particular elements within a document` arms as
+separate steps 17 and 18 and the when-defined resolution as 19.
+
+**§4.13.5 step 10 is ONE step holding THREE sibling `<ol>`s** and the spec restarts each at 1, so a bare
+"10.2" names three different steps. Only the first — the *run the following steps while catching any
+exceptions* list — is written `10.n` here and in the code; the other two are cited by their lead-in as the
+**regardless-list** and the **finally-list**.
 
 ### 14.0 Four things the live text says that a reasonable person would remember differently
 
@@ -3637,13 +3646,13 @@ STILL the 2026-08-11 reading, and §4.13.5's have since moved (its `previousRegi
    element" is two steps — look the definition up, then *enqueue a custom element upgrade reaction* —
    and §4.13.6's reaction queue therefore holds TWO KINDS of entry, which its invoke SWITCHES on.
    This is not bookkeeping: the insertion that triggers an upgrade happens inside a C tree walk, and
-   step 8.3 CONSTRUCTS the page's class. An upgrade performed at the insertion point would be a
+   step 10.3 CONSTRUCTS the page's class. An upgrade performed at the insertion point would be a
    `JS_CallConstructor` from C, which is the drive-to-completion this engine aborts on.
 3. **The custom element state has FIVE values and three of them coexist with a non-null definition.**
    "undefined", "uncustomized", "failed", "precustomized", "custom". §4.13.5 step 1 returns early for
    the first two and for nothing else, so an element whose upgrade THREW must never be upgraded
    again — and a boolean "does this wrapper carry a definition" cannot express that, because step 2
-   sets the definition BEFORE step 8 can fail. DOM's "create an element" gives a fresh element
+   sets the definition BEFORE step 10 can fail. DOM's "create an element" gives a fresh element
    "undefined" exactly when its local name is one §4.13.3 "Core concepts" would accept, and "uncustomized"
    otherwise, which is why an absent state is DERIVED from the name rather than written at every
    creation site (one of which is the HTML parser).
@@ -3663,26 +3672,30 @@ STILL the 2026-08-11 reading, and §4.13.5's have since moved (its `previousRegi
 5. If element is **connected**, then enqueue a custom element callback reaction with element,
    `"connectedCallback"`, and « ». —
 6. Add element to the end of definition's **construction stack**. —
-7. Let C be definition's constructor. — *(7.5-7.6's active custom element constructor map is the
-   scoped-registry mechanism; there are no scoped registries, so there is nothing to save or
-   restore. It becomes real state in the same diff that makes `customElementRegistry` a creation
-   option.)*
-8. Run the following steps **while catching any exceptions**:
-   1. disable-shadow check. — *not applicable: there is no `attachShadow`, so no element can have a
-      shadow root for the check to find. §4.13.4's `disable shadow` boolean IS collected — see §16.1.*
-   2. Set element's custom element state to "precustomized". —
-   3. Let constructResult be the result of **constructing C**, with no arguments. — **`[S]`**
-   4. If `SameValue(constructResult, element)` is false, then throw a `TypeError`. —
-9. Remove the last entry from the end of definition's construction stack. — *(regardless of whether
-   the above threw)*
-10. Form-associated half. — **built; see §16.2.** Two enqueues, no `[S]`.
-11. Set element's custom element state to "custom". —
+7. Let C be definition's constructor. —
+8. Let *previousRegistry* be the surrounding agent's **active custom element constructor map**[C] with
+   default null. —
+9. Set that map[C] to element's **custom element registry**. — *(the scoped-registry mechanism, and the
+   only way §3.2.3 step 3 can find a definition that lives in a scoped registry)*
+10. Run the following steps **while catching any exceptions**:
+    1. If definition's **disable shadow** is true and element's shadow root is non-null, throw a
+       `NotSupportedError`. — *(the spec's own note says why the check is HERE: "attachShadow() does not
+       use look up a custom element definition while attachInternals() does". It is reachable only for a
+       root attached BEFORE the definition arrived — a `<template shadowrootmode>`.)*
+    2. Set element's custom element state to "precustomized". —
+    3. Let constructResult be the result of **constructing C**, with no arguments. — **`[S]`**
+    4. If `SameValue(constructResult, element)` is false, then throw a `TypeError`. —
+    then the **regardless-list** (a sibling `<ol>` under step 10, renumbered from 1): 1. if
+    *previousRegistry* is null, remove map[C]; 2. otherwise set map[C] to *previousRegistry*; 3. remove
+    the last entry from the end of definition's construction stack. —
+    then the **finally-list** (a third sibling `<ol>`, again from 1), reached only on a throw: 1. set
+    element's custom element definition to null; 2. empty element's custom element reaction queue;
+    3. rethrow — which §4.13.6 immediately catches and REPORTS. The state stays "failed" or
+    "precustomized", which is what makes step 1 refuse the retry.
+11. Form-associated half. — **built; see §16.2.** Two enqueues, no `[S]`.
+12. Set element's custom element state to "custom". —
 
-**And if the above threw:** set the definition to null, **empty element's custom element reaction
-queue**, and rethrow — which §4.13.6 immediately catches and REPORTS. The state stays "failed" or
-"precustomized", which is what makes step 1 refuse the retry.
-
-**Step 8.3 is the only `[S]`, and it is the point of the whole section.** It is a
+**Step 10.3 is the only `[S]`, and it is the point of the whole section.** It is a
 `step_construct_run` on the drain's own `phase`/`cb`, so the flow parks inside the page's
 constructor exactly as it parks inside a lifecycle callback — the constructor may hold a loop, an
 `await` or a DOM mutation, and it suspends and resumes at any depth like any other flow.
@@ -3701,7 +3714,7 @@ in flight, which is what `custom_elements_queue_arm` reads.
    3. Repeat until reactions is empty: remove the first reaction and **switch on its type**:
       - **upgrade reaction** — **upgrade** element using the reaction's definition. If this throws,
         **catch it and report it** for the definition's constructor's realm's global. — **`[S]`**
-        (§4.13.5 step 8.3, and again inside HTML §8.1.4.6's `error` event)
+        (§4.13.5 step 10.3, and again inside HTML §8.1.4.6's `error` event)
       - **callback reaction** — invoke the reaction's callback function with its arguments and
         `"report"`, `this` = element. — **`[S]`** (the callback, and again inside the report)
 
@@ -3726,7 +3739,7 @@ keyed read the page's getter just threw from, which is an infinite re-ask, not a
 
 The `[CEReactions]` wrapper is: push a queue, run the member's steps, **pop**, invoke, rethrow. The
 pop is step 3 and the invoke is step 4, in that order — so while the drain runs, no queue is
-current, and a reaction enqueued BY the drain (§4.13.5 step 4 and step 5 are exactly that) goes to
+current, and a reaction enqueued BY the drain (§4.13.5 steps 4 and 5 are exactly that) goes to
 the **backup element queue** and its microtask.
 
 `custom_elements_reactions_invoke` carried a comment saying step 3 "already happened: the queue
@@ -3734,7 +3747,7 @@ stopped being current the moment the member's own steps returned". That is true 
 PARKS and false of one that does not: `js_idl_args_step` makes the queue current for its whole C
 activation, and the epilogue runs inside it. So the enqueues went back onto the queue being drained.
 The pop is now performed at the top of the invoke, which is also what lets a custom element
-constructor — reached from step 8.3, and itself a declared member that pushes a queue — pass
+constructor — reached from step 10.3, and itself a declared member that pushes a queue — pass
 `custom_elements_reactions_push`'s "no queue is current" assertion.
 
 The element's OWN reaction queue still receives those reactions, and step 1.3's *repeat until
@@ -3756,22 +3769,28 @@ With step 6 of §4.13.5 pushing, §3.2.3's two arms are finally both reachable:
 
 **A constructor that never calls `super()`** leaves the stack entry as the element rather than the
 marker and returns abruptly (a derived constructor that does not call `super()` throws a
-`ReferenceError` at return), so §4.13.5 step 8.4's SameValue is what reports it and step 9 pops the
-entry either way.
+`ReferenceError` at return), so §4.13.5 step 10.4's SameValue is what reports it and step 10's
+regardless-list step 3 pops the entry either way.
 
 ### 14.5 What is honestly ABSENT, by name
 
 - `adoptedCallback` — there is no adoption reaction; the callback is collected by §4.13.4 step 14
   and nothing enqueues it.
+- **§3.2.3 step 11.1's `GetFunctionRealm(NewTarget)`** — a NAMED RESIDUAL at the site, not an absent
+  feature: step 11's fallback prototype is taken from the ACTIVE FUNCTION OBJECT's realm, which the
+  spec's own note says "might not be" NewTarget's. Correct for a same-realm NewTarget, wrong for a
+  class minted in realm A and defined into realm B's registry. ECMAScript §7.3.24
+  "GetFunctionRealm ( func )" already exists in the fork as a loop over the bound/Proxy chains, but
+  `static`; the diff exports it and this becomes `html_element_proto(realm)`.
 - ~~form-associated custom elements~~ — **built; see §16.**
 - **customized built-ins** (`extends`) — §4.13.4 refuses them with a `NotSupportedError` rather than
   registering them as autonomous. That refusal is load-bearing twice over: it is what lets
   `ce_upgradable_name` answer the insertion-steps branch off the Lexbor local name alone (so
   inserting a `<div>` mints no wrapper), and it is what lets §3.2.3's autonomous/customized split be
   a `DCHECK` instead of a branch. Building customized built-ins widens all three together.
-- **scoped registries** (`CustomElementRegistry` as a constructible interface, the active custom
-  element constructor map, `Element.customElementRegistry`) — the map's save/restore in §4.13.5
-  steps 7.5-7.6 and 8.9 has nothing to save while there is one registry per window.
+- ~~**scoped registries**~~ — **built.** `CustomElementRegistry` is constructible, the active custom
+  element constructor map is real state, and §4.13.5's save/restore of it (steps 8-9 and step 10's
+  regardless-list) is what makes `super()` inside a scoped-registry class reach its own definition.
 
 ### 14.6 What running the constructors EXPOSED, by name
 
@@ -4208,18 +4227,18 @@ catches it. Step 4 was absent entirely: `define('a-x', C); define('b-x', C)` pas
 times, and answering step 4 is what the definition ORDER exists for, because a set keyed by name
 cannot be asked about a constructor.
 
-### 16.2 §4.13.5 step 10 — the upgrade's form-associated half
+### 16.2 §4.13.5 step 11 — the upgrade's form-associated half
 
-  10. If *element* is a form-associated custom element:
+  11. If *element* is a form-associated custom element:
       1. **Reset the form owner** of *element*. If *element* is associated with a `form` element,
          then **enqueue a custom element callback reaction** with *element*,
          `"formAssociatedCallback"`, and « the associated form ». —
       2. If *element* is **disabled**, then enqueue a callback reaction with `"formDisabledCallback"`
          and « true ». —
-  11. Set *element*'s custom element state to `"custom"`. —
+  12. Set *element*'s custom element state to `"custom"`. —
 
 Neither is `[S]`: both are ENQUEUES, so they run in the same drain after the constructor returns.
-The condition on 10.1's reaction is the OWNER being non-null — **not** whether the reset changed it,
+The condition on 11.1's reaction is the OWNER being non-null — **not** whether the reset changed it,
 which is what §4.13.3's own trigger reads (see 16.4) and why the two are different calls.
 
 ### 16.3 §4.13.7 `attachInternals()`
@@ -4234,7 +4253,7 @@ which is what §4.13.3's own trigger reads (see 16.4) and why the two are differ
   5. If this's **attached internals** is non-null, throw `NotSupportedError`. —
   6. If this's custom element state is not `"precustomized"` or `"custom"`, throw
      `NotSupportedError`. — *(this is what makes the call legal from INSIDE the constructor: §4.13.5
-     step 8.2 sets `"precustomized"` before it Constructs.)*
+     step 10.2 sets `"precustomized"` before it Constructs.)*
   7. Set this's attached internals to a new `ElementInternals` whose **target element** is this. —
   8. Return it. —
 
@@ -4258,10 +4277,10 @@ the page owns, so the whole algorithm is ordinary C.
 `<my-control form="nothing">` inside a `<form>` therefore keeps a NULL owner — which is also why the
 owner is STORED rather than derived at read time.
 
-**§4.13.3's trigger is separate from §4.13.5 step 10's:** "when the user agent resets the form owner
+**§4.13.3's trigger is separate from §4.13.5 step 11's:** "when the user agent resets the form owner
 of a form-associated custom element and doing so **changes** the form owner, its
 `formAssociatedCallback` is called, given the new form owner **(or null if no owner)**". The null
-argument is real, which is why this cannot be folded into step 10.1's non-null-only enqueue.
+argument is real, which is why this cannot be folded into step 11.1's non-null-only enqueue.
 
 **AND THE `form` ATTRIBUTE'S NEW VALUE IS AN ARGUMENT, NOT A READ.** DOM §4.9's "change an
 attribute" runs the attribute change steps **before** it stores the value, and the attribute write is
@@ -4271,7 +4290,7 @@ are read at the wrong time, and it is silent because the wrong value is a real v
 that element.
 
 The triggers this engine can see are the element's own insertion, its own removal, its own `form`
-write, and §4.13.5 step 10. **Named ABSENT:** the resets HTML also requires when some OTHER element's
+write, and §4.13.5 step 11. **Named ABSENT:** the resets HTML also requires when some OTHER element's
 `id` changes, or when an element with an ID enters or leaves the document — both need a
 document-level id index, which this engine does not have (`getElementById` walks), and a tree walk
 per `id` write is not that index.

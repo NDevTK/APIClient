@@ -13,12 +13,12 @@
    the null-namespace `href` it also observes, and a three-slot buffer silently drops it. */
 #define CE_MAX_REACTION_ARGS 4
 
-/* DOM §4.9's CUSTOM ELEMENT STATE — the five values, and they are five because §4.13.5 step 1 branches on
-   exactly this set. It was a BOOLEAN ("does this wrapper carry a definition?"), which cannot tell an element
-   whose upgrade THREW from one that was never tried: §4.13.5 returns early for "undefined" and "uncustomized"
-   and for nothing else, so a failed element was upgraded again on every re-insertion and its constructor ran
-   a second time. "precustomized" is the window between step 8.2 and the constructor returning, which is what
-   DOM §4.9 step 5.1.4's assert distinguishes an element that reached `super()` by. */
+/* DOM §4.9's CUSTOM ELEMENT STATE — the five values, and they are five because §4.13.5 "Upgrades" step 1
+   branches on exactly this set. It was a BOOLEAN ("does this wrapper carry a definition?"), which cannot tell
+   an element whose upgrade THREW from one that was never tried: §4.13.5 returns early for "undefined" and
+   "uncustomized" and for nothing else, so a failed element was upgraded again on every re-insertion and its
+   constructor ran a second time. "precustomized" is the window between step 10.2 and the constructor
+   returning, which is what DOM §4.9 step 5.1.4's assert distinguishes an element that reached `super()` by. */
 typedef enum {
     /* a local name §4.13.3 "Core concepts" could never accept — the default for most elements */
     CE_STATE_UNCUSTOMIZED = 0,
@@ -45,7 +45,7 @@ typedef struct {
     uint32_t i;        /* the element cursor into it */
     uint8_t  phase;    /* the call or construct request's own phase — one reaction is in flight at a time */
     /* §4.13.5's OWN CURSOR while the reaction being run is an UPGRADE. The upgrade parks on the page's class
-       (step 8.3's Construct), so it needs a resume point of its own inside the one reaction the drain is on. */
+       (step 10.3's Construct), so it needs a resume point of its own inside the one reaction the drain is on. */
     uint8_t  up_stage;
     /* §4.13.6 step 1.3.1's upgrade arm: "If this throws an exception, catch it, and report it". The throw is
        the algorithm's VALUE here, so the exception is held and HTML §8.1.4.6's report runs as a request — it
@@ -138,10 +138,13 @@ void custom_elements_install(JSContext *ctx, JSValueConst global);
 void custom_elements_install_proto(JSContext *ctx);
 
 /* §4.13.4 step 15'S THREE BOOLEAN FIELDS OF A DEFINITION, named so a reader outside this component can ask for
-   one without knowing how a definition is stored. `disable shadow` has no reader yet — §4.13.5 step 8.1 and
-   `attachShadow` are the two, and neither exists — but it is COLLECTED, because step 14.10 reads the same
-   `disabledFeatures` sequence step 14.9 does and collecting one of the two would make the definition disagree
-   with the sequence it was built from. */
+   one without knowing how a definition is stored. `disable shadow` has TWO readers and they refuse at
+   different moments, which is the whole reason the field outlives `attachShadow`'s own check: DOM's "attach a
+   shadow root" refuses only when the element's `is` value is non-null, and §4.13.5 "Upgrades" step 10.1
+   refuses an element that ALREADY carries a root when the definition arrives — the case a
+   `<template shadowrootmode>` parsed before `define()` creates. `disable internals` is collected beside it
+   because step 14.10 reads the same `disabledFeatures` sequence step 14.9 does, and collecting one of the two
+   would make the definition disagree with the sequence it was built from. */
 typedef enum {
     CE_DEF_FORM_ASSOCIATED = 0,
     CE_DEF_DISABLE_INTERNALS,

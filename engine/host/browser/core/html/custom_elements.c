@@ -6,13 +6,14 @@
  * code is shipped, reachable, and never executed, which is precisely the surface this engine exists to reach.
  * The rules say it directly: custom elements are learned by EXECUTION, through connectedCallback.
  *
- * THE UPGRADE RE-POINTS THE WRAPPER'S PROTOTYPE, and §4.13.5 does more than that: its step 10.3 CONSTRUCTS the
- * author's class and its step 10.4 requires SameValue(constructResult, element). The prototype swap is the half
- * that makes `el instanceof X` and the class's methods true on the same node a page already holds — which is
- * what makes `el === document.querySelector('app-router')` survive an upgrade — and the CONSTRUCTION is not
- * built: a class whose constructor body registers routes or fetches has that body never run. That is the
- * largest gap in this file and the one the corpus reports loudest; §4.13.5's construction stack, its
- * AlreadyConstructed marking and HTMLElement's own constructor are what it takes.
+ * THE UPGRADE RE-POINTS THE WRAPPER'S PROTOTYPE, and §4.13.5 "Upgrades" does more than that: its step 10.3
+ * CONSTRUCTS the author's class and its step 10.4 requires SameValue(constructResult, element). Those are two
+ * halves of one algorithm and neither stands alone. The prototype swap is what makes `el instanceof X` and the
+ * class's methods true on the SAME node the page already holds, which is what makes
+ * `el === document.querySelector('app-router')` survive an upgrade; the CONSTRUCTION is what runs the body
+ * that registers the routes and makes the fetches. A swap without a construct — which is what stood here — left
+ * exactly the code this engine exists to reach unrun, and the three mechanisms that join them are §4.13.5's
+ * construction stack, its already-constructed marker and §3.2.3's own `super()`.
  *
  * A REACTION IS ENQUEUED, NEVER CALLED. connectedCallback is the page's code with loops and awaits in it, and
  * the insertion that triggers it happens inside appendChild — a plain C body that cannot park. So the reaction
@@ -30,7 +31,7 @@
  * by its head pointer would revert the POINTER on a context switch and leave the nodes reachable from nothing.
  *
  * AN UPGRADE IS A REACTION, WHICH IS WHAT MAKES IT ABLE TO CONSTRUCT AT ALL. The insertion that triggers one
- * happens inside a C tree walk, and §4.13.5 step 8.3 CONSTRUCTS the page's class — so the upgrade cannot run
+ * happens inside a C tree walk, and §4.13.5 step 10.3 CONSTRUCTS the page's class — so the upgrade cannot run
  * there any more than a connectedCallback can. §4.13.6 says so directly: "try to upgrade" ENQUEUES an upgrade
  * reaction, and the drain switches on the reaction's type and runs §4.13.5 from a place that can park. That is
  * the whole of why the prototype swap that used to stand in for an upgrade is gone: the swap made
@@ -72,7 +73,7 @@
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
 
-/* ---- §4.13.4 A REGISTRY IS AN OBJECT, AND `customElements` IS ONE OF THEM --------------------------------
+/* ---- §4.13.4 "The CustomElementRegistry interface" — A REGISTRY IS AN OBJECT, AND `customElements` IS ONE --
  *
  * THIS WAS A SET OF PER-REALM SLOTS with the four members installed onto a bare `JS_NewObject`, which IS the
  * whole of what "there is one global registry" means: `new CustomElementRegistry()` did not exist, no node
@@ -122,10 +123,11 @@ static int g_html_ctor_slot = -1;
 static JSValue g_node_reg_key = JS_UNDEFINED;
 static JSAtom  g_atom_node_reg = JS_ATOM_NULL;
 
-/* CONFIGURABLE AND WRITABLE, because §4.13.5 writes the state THREE TIMES on its way through one element
-   ("failed", then "precustomized", then "custom") and the definition it writes at step 2 is DELETED again by
-   step 8.9.1. A slot defined with no flags is none of those things, and the second write is then a silent
-   no-op that leaves an element reporting the state it had two steps ago. The key is a symbol this component
+/* CONFIGURABLE AND WRITABLE, because §4.13.5 "Upgrades" writes the state THREE TIMES on its way through one
+   element ("failed", then "precustomized", then "custom") and the definition it writes at step 2 is DELETED
+   again by step 10's finally-list step 1. A slot defined with no flags is none of those things, and the second
+   write is then a silent no-op that leaves an element reporting the state it had two steps ago. The key is a
+   symbol this component
    minted and never published, so nothing outside can reach either slot however they are flagged. */
 #define CE_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
 
@@ -683,7 +685,7 @@ static void ce_array_set_len(JSContext *ctx, JSValueConst arr, uint32_t n)
  * look itself up in the document's set and throw a TypeError — the constructor would be unreachable, which
  * is the whole feature.
  *
- * IT IS A STACK, AND THAT IS THE MAP. The spec's two writers are paired — §4.13.5 steps 7.5-7.6 save
+ * IT IS A STACK, AND THAT IS THE MAP. The spec's two writers are paired — §4.13.5 "Upgrades" steps 8-9 save
  * `previousRegistry` and set the entry, and the cleanup puts the previous value back or removes the entry —
  * so a walk that finds the LAST entry for a constructor answers exactly what the map holds, and dropping the
  * last entry restores exactly what the map restores. Nesting (a constructor that constructs its own class) is
@@ -719,7 +721,7 @@ static JSValue ce_active_registry(JSContext *ctx, JSValueConst ctor)
     return JS_UNDEFINED;
 }
 
-/* §4.13.5 step 7.6 / DOM §4.9 step 5.1.3: "set map[C] to element's custom element registry". */
+/* §4.13.5 step 9 / DOM §4.9 step 5.1.3: "set map[C] to element's custom element registry". */
 static void ce_active_push(JSContext *ctx, JSValueConst ctor, JSValueConst reg)
 {
     JSValue e = JS_NewArray(ctx);
@@ -885,9 +887,17 @@ static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, JSValueConst def,
                             int argc, JSValueConst *args);
 static bool ce_observes(JSContext *ctx, JSValueConst def, const char *local);
 
-/* ---- HTML §4.13.5 UPGRADE AN ELEMENT ----------------------------------------------------------------------
+/* ---- HTML §4.13.5 "Upgrades" — UPGRADE AN ELEMENT ---------------------------------------------------------
  *
- * THE ALGORITHM THAT RUNS THE PAGE'S CLASS. Everything else in this file exists to reach step 8.3, which
+ * HOW ITS STEP 10 IS CITED HERE, because a bare "10.2" would name three different steps. Step 10 is ONE
+ * top-level step whose `<li>` holds THREE SIBLING `<ol>`s: the catching list ("run the following steps while
+ * catching any exceptions" — 10.1 the disable-shadow refusal, 10.2 "precustomized", 10.3 the Construct, 10.4
+ * the SameValue), then a "Then, perform the following steps, regardless of whether the above steps threw an
+ * exception or not" list, then a "Finally, if the above steps threw an exception" list. Only the first is
+ * written `10.n` below; the other two are cited as its REGARDLESS-LIST and its FINALLY-LIST, because the spec
+ * restarts each of them at 1 and a reader given "10.2" cannot tell which of the three was meant.
+ *
+ * THE ALGORITHM THAT RUNS THE PAGE'S CLASS. Everything else in this file exists to reach step 10.3, which
  * CONSTRUCTS the definition's constructor over the element already in the tree — so `class Router extends
  * HTMLElement { constructor(){ super(); this.routes = … } }` has its body executed on the node the parser
  * built, and `super()` hands back that same node because step 6 put it on the construction stack for
@@ -902,7 +912,12 @@ static bool ce_observes(JSContext *ctx, JSValueConst def, const char *local);
  * Returns JS_STEP_CONSTRUCT parked on the page's constructor, or 0 when the upgrade has finished — either
  * having set the element's state to "custom", or having set `q->reporting` for the throw the drain reports. */
 #define CE_UP_IDLE      0
-#define CE_UP_CONSTRUCT 1   /* §4.13.5 step 8.3, and step 8.4's SameValue on the way back */
+#define CE_UP_CONSTRUCT 1   /* §4.13.5 step 10.3, and step 10.4's SameValue on the way back */
+/* §4.13.5 step 10.1 REFUSED before the Construct. It is a stage of its own and not a `failed` local, because
+   the map push and the construction-stack pop that must still run for it live PAST the resume point: a state
+   that said only "not constructing" would send the refusal down the IDLE arm on re-entry and push a second
+   map entry for the same element. */
+#define CE_UP_SHADOW_REFUSED 2
 
 static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el, JSValueConst def,
                           JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -928,7 +943,7 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_def, JS_DupValue(ctx, def), CE_SLOT_FLAGS);  /* step 2 */
         ce_set_state(ctx, el, CE_STATE_FAILED);                                           /* step 3 */
         /* step 4: EVERY attribute, in order, as an attributeChangedCallback whose old value is null. The
-           observed-attributes filter is the enqueue's own (step 4 of "enqueue a custom element callback
+           observed-attributes filter is the enqueue's own (step 5 of "enqueue a custom element callback
            reaction"), so a class watching two attributes does not see the other fifty the parser wrote. */
         for (a = lxb_dom_element_first_attribute(lxb_dom_interface_element(node)); a;
              a = lxb_dom_element_next_attribute(a)) {
@@ -955,10 +970,10 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.3 construction stack");
         ce_array_push(ctx, stack, JS_DupValue(ctx, el));
         JS_FreeValue(ctx, stack);
-        /* steps 7.5-7.6: the agent's active custom element constructor map takes THIS ELEMENT'S registry for
+        /* steps 8-9: the agent's active custom element constructor map takes THIS ELEMENT'S registry for
            the duration of the construct, because that is the only way §3.2.3 step 3 can find a definition that
            lives in a SCOPED registry. The push is paired with the pop below, which runs whether or not the
-           construction threw — the spec's "then, perform the following steps, regardless". */
+           construction threw — step 10's regardless-list. */
         {
             JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
             JSValue reg = ce_registry_of_node(ctx, el);
@@ -967,68 +982,96 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
             JS_FreeValue(ctx, reg);
             JS_FreeValue(ctx, ctor);
         }
-        ce_set_state(ctx, el, CE_STATE_PRECUSTOMIZED);                                    /* step 8.2 */
-        q->up_stage = CE_UP_CONSTRUCT;
+        /* step 10.1: "if definition's disable shadow is true and element's shadow root is non-null, then throw
+           a NotSupportedError DOMException". REACHABLE, and only one thing makes it so: `attachShadow` refuses
+           a definition that disables shadows, so an element can only arrive here already carrying a root — a
+           `<template shadowrootmode>` the parser attached BEFORE the definition existed. The spec's own note
+           says why the check lives here rather than there ("attachShadow() does not use look up a custom
+           element definition while attachInternals() does"), so a shadow-disabling class defined after its
+           markup must fail its upgrade instead of quietly keeping the root. It throws INSIDE the catching
+           list, so the regardless-list and the finally-list below still run on it. */
+        {
+            JSValue sr = shadow_root_of_element_wrap(ctx, el);
+            bool refuse = JS_IsObject(sr)
+                          && custom_elements_definition_flag(ctx, def, CE_DEF_DISABLE_SHADOW);
+
+            JS_FreeValue(ctx, sr);
+            if (refuse) {
+                JS_ThrowDOMException(ctx, "NotSupportedError",
+                                     "this custom element's disabledFeatures contains \"shadow\" and the "
+                                     "element being upgraded already has a shadow root");
+                q->up_stage = CE_UP_SHADOW_REFUSED;
+            } else {
+                ce_set_state(ctx, el, CE_STATE_PRECUSTOMIZED);                            /* step 10.2 */
+                q->up_stage = CE_UP_CONSTRUCT;
+            }
+        }
     }
-    DCHECK(q->up_stage == CE_UP_CONSTRUCT, "HTML §4.13.5 resumed into a stage it does not have");
-    {
+    if (q->up_stage == CE_UP_CONSTRUCT) {
         JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
-        /* step 8.3: constructing C with no arguments. The page's code, so it PARKS — and a throw comes back
+        /* step 10.3: constructing C with no arguments. The page's code, so it PARKS — and a throw comes back
            here as JS_EXCEPTION because every machine that drives this drain declares catches_abrupt, which is
            what §4.13.6's "catch it, and report it" requires of them. */
         r = step_construct_run(ctx, &q->phase, q->cb, 2 + CE_MAX_REACTION_ARGS, ctor, 0, NULL,
                                cb_result, &made, out_cb, out_argc);
         JS_FreeValue(ctx, ctor);
         if (r > 0) return r;
+        /* step 10.3's own abrupt completion arrives as JS_EXCEPTION (the drivers declare catches_abrupt) or as
+           a synchronous -1; step 10.4 is SameValue(constructResult, element), which a constructor that returns
+           a different element — or one that never called `super()`, so the marker never replaced the stack
+           entry — fails. Both are "the steps threw", one condition, so both are written as one. */
+        failed = (r < 0 || JS_IsException(made));
+        if (!failed && JS_VALUE_GET_PTR(made) != JS_VALUE_GET_PTR(el)) {
+            JS_ThrowTypeError(ctx, "a custom element constructor returned an element other than the one being "
+                                   "upgraded");
+            failed = 1;
+        }
+        if (failed) { JS_FreeValue(ctx, made); made = JS_UNDEFINED; }
+    } else {
+        DCHECK(q->up_stage == CE_UP_SHADOW_REFUSED,
+               "HTML §4.13.5 resumed into a stage it does not have");
+        JS_FreeValue(ctx, cb_result);
+        failed = 1;                    /* step 10.1 threw; the catching list is over before 10.2 */
     }
-    /* step 8.3's own abrupt completion arrives as JS_EXCEPTION (the drivers declare catches_abrupt) or as a
-       synchronous -1; step 8.4 is SameValue(constructResult, element), which a constructor that returns a
-       different element — or one that never called `super()`, so the marker never replaced the stack entry —
-       fails. Both are "the steps threw", which is one condition and so is written as one. */
-    failed = (r < 0 || JS_IsException(made));
-    if (!failed && JS_VALUE_GET_PTR(made) != JS_VALUE_GET_PTR(el)) {
-        JS_ThrowTypeError(ctx, "a custom element constructor returned an element other than the one being "
-                               "upgraded");
-        failed = 1;
-    }
-    if (failed) { JS_FreeValue(ctx, made); made = JS_UNDEFINED; }
-    /* steps 8.6-8.7: previousRegistry goes back into the active custom element constructor map — the pop that
-       the push at step 7.6 is one half of, run whether or not the construction threw. */
+    /* Step 10's REGARDLESS-LIST steps 1-2: previousRegistry goes back into the active custom element
+       constructor map — the pop that the push at step 9 is one half of, run whether or not the catching list
+       threw. */
     ce_active_pop(ctx);
-    /* step 9: the last entry comes off the stack whether the construction threw or not. */
+    /* Step 10's REGARDLESS-LIST step 3: the last entry comes off the construction stack, threw or not. */
     stack = JS_GetProperty(ctx, def, g_atom_stack);
     {
         uint32_t n = ce_array_len(ctx, stack);
-        DCHECK(n > 0, "HTML §4.13.5 step 9 found an empty construction stack — step 6 pushed onto it and only "
-                      "this line pops, so an empty one is an entry some other code removed");
+        DCHECK(n > 0, "HTML §4.13.5 step 10's regardless-list step 3 found an empty construction stack — step "
+                      "6 pushed onto it and only this line pops, so an empty one is an entry some other code "
+                      "removed");
         ce_array_set_len(ctx, stack, n - 1);
     }
     JS_FreeValue(ctx, stack);
     q->up_stage = CE_UP_IDLE;
     if (failed) {
-        /* step 8's failure arm, and §4.13.6's catch. The state stays "failed" or "precustomized" — the spec
+        /* Step 10's FINALLY-LIST, and §4.13.6's catch. The state stays "failed" or "precustomized" — the spec
            says so explicitly — so a later insertion never retries this element. */
         JSValue rq;
 
-        JS_DeleteProperty(ctx, (JSValue)el, g_atom_def, 0);            /* step 8.9.1 */
-        rq = ce_reaction_queue(ctx, el, 0);                            /* step 8.9.2 */
+        JS_DeleteProperty(ctx, (JSValue)el, g_atom_def, 0);            /* finally-list step 1 */
+        rq = ce_reaction_queue(ctx, el, 0);                            /* finally-list step 2 */
         if (JS_IsObject(rq)) {
             ce_array_set_len(ctx, rq, 0);
             JS_SetProperty(ctx, rq, g_atom_rq_head, JS_NewUint32(ctx, 0));
         }
         JS_FreeValue(ctx, rq);
-        q->exc = JS_GetException(ctx);
+        q->exc = JS_GetException(ctx);                                 /* finally-list step 3's rethrow */
         q->reporting = 1;
         return 0;
     }
     JS_FreeValue(ctx, made);
-    /* Step 10: a form-associated custom element gets its form owner reset here, with a formAssociatedCallback
+    /* Step 11: a form-associated custom element gets its form owner reset here, with a formAssociatedCallback
        for the form it lands on and a formDisabledCallback when it is disabled — both ENQUEUED, so they run in
        this same drain after the constructor. The algorithm belongs to §4.13.7's component because the owner and
        the disabled question are the FORM layer's; the reaction is this one's, which is the one line joining
        them. */
     element_internals_upgrade_form_steps(ctx, el);
-    ce_set_state(ctx, el, CE_STATE_CUSTOM);   /* step 11 */
+    ce_set_state(ctx, el, CE_STATE_CUSTOM);   /* step 12 */
     return 0;
 }
 
@@ -1165,13 +1208,13 @@ int custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSVa
 /* THREE STAGES AND NOT ONE, because the drain rests at three DIFFERENT spec steps and a resume point that
    cannot say which is a resume point that means three things. §4.13.6 step 1.3.1 SWITCHES on the reaction's
    type — a callback reaction parks inside a lifecycle callback, an upgrade reaction parks inside §4.13.5 step
-   8.3's Construct — and a reaction that threw parks inside HTML §8.1.4.6's `error` event. The stage is set from
+   10.3's Construct — and a reaction that threw parks inside HTML §8.1.4.6's `error` event. The stage is set from
    custom_elements_queue_arm, so the three cannot drift from the three arms. */
 #define CE_BACKUP_STAGES(X) \
     X(CEBACKUP_CALLBACK, "HTML §4.13.6 invoke custom element reactions step 1.3.1, callback reaction (invoke " \
                          "the reaction's callback function with \"report\"), one reaction per step") \
     X(CEBACKUP_UPGRADE,  "HTML §4.13.6 invoke custom element reactions step 1.3.1, upgrade reaction — HTML " \
-                         "§4.13.5 step 8.3 (constructing the definition's constructor with no arguments)") \
+                         "§4.13.5 step 10.3 (constructing the definition's constructor with no arguments)") \
     X(CEBACKUP_REPORT,   "HTML §4.13.6 invoke custom element reactions step 1.3.1 (reporting the exception a " \
                          "reaction threw), which is HTML §8.1.4.6 report an exception")
 enum { CE_BACKUP_STAGES(JS_STEP_STAGE_ENUM) };
@@ -1567,9 +1610,33 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     }
     DCHECK(hdr->stage == HC_FINISH, "HTML §3.2.3 resumed into a stage it does not have");
     JS_FreeValue(ctx, cb_result);
-    /* step 11: a prototype that is not an Object is the interface prototype object of NewTarget's function
-       realm. HTMLElement's own is this realm's, which is what a cross-realm NewTarget makes wrong and what
-       makes that a `[S]`-free but realm-sensitive read — the same question §3.7 answers everywhere else. */
+    /* Step 11: a prototype that is not an Object is replaced by step 11.2's "the interface prototype object of
+       realm whose interface is the same as the interface of the active function object", where step 11.1's
+       `realm` is `? GetFunctionRealm(NewTarget)` — ECMAScript §7.3.24 "GetFunctionRealm ( func )", which
+       forwards through a bound function's target (its step 2) and a Proxy's target (its step 3) before falling
+       back to the current realm (its step 4).
+       `ctx` HERE IS THE ACTIVE FUNCTION OBJECT'S REALM, not the caller's: a step machine is entered through
+       `step_realm`/`js_callee_realm`, which answers `p->u.cfunc.realm` for the callee, so
+       `html_element_proto(ctx)` is HTMLElement.prototype of the realm HTMLElement was installed in. That is
+       exactly `realm` whenever NewTarget's function realm IS the active function
+       object's — and the spec's own note on step 11 says those two can differ ("The realm of the active
+       function object might not be realm, so we are using the more general concept of 'the same interface'
+       across realms").
+       NAMED RESIDUAL — CORRECT for a same-realm NewTarget, NARROWER than step 11.1.
+         NOT COVERED: a NewTarget whose function realm is not this one. Reached by defining a class minted in
+           realm A into realm B's registry (`B.customElements.define('x-r', A.R)`) and then making its
+           `prototype` a non-Object, which is the only way step 11 fires at all.
+         WHAT THE NEXT DIFF BUILDS: `JS_GetFunctionRealm` already exists and is already a LOOP over the bound
+           and Proxy chains (engine/qjs/quickjs.c), but it is `static`, and `step_proto_from_ctor_run` — which
+           is that operation composed with step 10's read — is static too and answers out of `class_proto[]`,
+           which no host interface prototype lives in. So the diff EXPORTS `JS_GetFunctionRealm` as a
+           `JS_EXTERN JSContext *` in quickjs.h and this line becomes `html_element_proto(realm)`, which needs
+           nothing else because `html_element_proto` already reads a PER-REALM `JS_GetClassProto` slot. The
+           export must land with the submodule gitlink bump and this host hunk in ONE commit.
+         HOW ITS ABSENCE SHOWS: with `A.R.prototype = 5` and `B.customElements.define('x-r', A.R)`, a real
+           browser gives the constructed element A's `HTMLElement.prototype`, so `el instanceof A.HTMLElement`
+           is true and `el instanceof B.HTMLElement` is false. This engine hands out B's, inverting BOTH — an
+           `instanceof` that answers wrong across the boundary, not a missing member. */
     if (!JS_IsObject(s->proto)) {
         JS_FreeValue(ctx, s->proto);
         s->proto = html_element_proto(ctx);
@@ -1646,16 +1713,18 @@ JSValue custom_elements_html_constructor(JSContext *ctx)
     return ctor;
 }
 
-/* §4.13.6 "enqueue a custom element callback reaction", steps 1-3 and 5-6. The callback is the one step 14.4
-   COLLECTED into this element's definition, and step 3 returns without a reaction when it is null — which is
-   why a class that declares no `disconnectedCallback` costs nothing at every removal.
-   STEP 5 ADDS IT TO THE ELEMENT'S OWN REACTION QUEUE and step 6 puts the ELEMENT on an element queue. Those are
+/* §4.13.6 "Custom element reactions"'s "enqueue a custom element callback reaction", steps 1-2 and 4-7 —
+   step 3 is the `connectedMoveCallback` synthesis and lives with the move that reaches it. The callback is the
+   one step 14.4 COLLECTED into this element's definition, and step 4 returns without a reaction when it is null
+   — which is why a class that declares no `disconnectedCallback` costs nothing at every removal.
+   STEP 6 ADDS IT TO THE ELEMENT'S OWN REACTION QUEUE and step 7 puts the ELEMENT on an element queue. Those are
    two lists and not one, and the difference is observable: §4.13.6's invoke dequeues an element and then drains
    ALL of that element's reactions, so `el.setAttribute(a,1); other.setAttribute(b,2); el.setAttribute(a,3)`
    inside one `[CEReactions]` boundary runs el's two callbacks back to back. A single flat list of reactions
    would interleave them, which is a different program order for the page. */
-/* §4.13.6's enqueue STEP 4 — "if callbackName is attributeChangedCallback and definition's observed attributes
-   does not contain attrName, return". Over the LOCAL name, which is what §4.13.4 step 14.5 collected. Its two
+/* §4.13.6's enqueue STEP 5 — "If callbackName is "attributeChangedCallback":" 5.1 "Let attributeName be the
+   first element of args", 5.2 "If definition's observed attributes does not contain attributeName, then
+   return". Over the LOCAL name, which is what §4.13.4 step 14.5 collected. Its two
    callers are the attribute write and §4.13.5 step 4's walk of the whole attribute list, and they must agree:
    a class that observes nothing must be told about nothing, whichever direction the attribute came from. */
 static bool ce_observes(JSContext *ctx, JSValueConst def, const char *local)
@@ -1698,8 +1767,8 @@ static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, JSValueConst def,
                              "make");
     fn = JS_GetPropertyUint32(ctx, cbs, (uint32_t)callback);
     JS_FreeValue(ctx, cbs);
-    if (!JS_IsFunction(ctx, fn)) { JS_FreeValue(ctx, fn); return; }   /* step 3: the entry is null */
-    if (callback == CE_CB_ATTR_CHANGED) {                             /* step 4 */
+    if (!JS_IsFunction(ctx, fn)) { JS_FreeValue(ctx, fn); return; }   /* step 4: the entry is null */
+    if (callback == CE_CB_ATTR_CHANGED) {                             /* step 5 */
         const char *nm;
         bool watched;
 
@@ -1715,10 +1784,10 @@ static void ce_enqueue_args(JSContext *ctx, JSValueConst wrap, JSValueConst def,
     JS_SetPropertyUint32(ctx, reaction, 1, fn);
     for (i = 0; i < argc; i++)
         JS_SetPropertyUint32(ctx, reaction, (uint32_t)(i + 2), JS_DupValue(ctx, args[i]));
-    rq = ce_reaction_queue(ctx, wrap, 1);   /* step 5 */
+    rq = ce_reaction_queue(ctx, wrap, 1);   /* step 6 */
     ce_array_push(ctx, rq, reaction);
     JS_FreeValue(ctx, rq);
-    ce_enqueue_element(ctx, wrap);          /* step 6 */
+    ce_enqueue_element(ctx, wrap);          /* step 7 */
 }
 
 static void ce_enqueue(JSContext *ctx, JSValueConst wrap, JSValueConst def, int callback)
@@ -1932,19 +2001,21 @@ void custom_elements_moved(JSContext *ctx, lxb_dom_element_t *el)
     if (JS_IsFunction(ctx, fn)) {
         JS_FreeValue(ctx, fn);
         JS_FreeValue(ctx, cbs);
-        /* §4.13.6 steps 5-6, through the one enqueue — "connectedMoveCallback … and « »", no arguments. This
-           is the whole point of the operation: the element is told it moved and its connected state, its
-           observers, its tab index and its internals are all untouched. */
+        /* Steps 6-7 of §4.13.6's "enqueue a custom element callback reaction", through the one enqueue —
+           "connectedMoveCallback … and « »", no arguments. This is the whole point of the operation: the
+           element is told it moved and its connected state, its observers, its tab index and its internals
+           are all untouched. */
         ce_enqueue(ctx, wrap, def, CE_CB_CONNECTED_MOVE);
         JS_FreeValue(ctx, def);
         JS_FreeValue(ctx, wrap);
         return;
     }
     JS_FreeValue(ctx, fn);
-    /* §4.13.6 ENQUEUE STEP 3 — "if callbackName is "connectedMoveCallback" and callback is null: let
-       disconnectedCallback / connectedCallback be the entries with those keys; if both are null, then return;
-       set callback to the following steps: 1. if disconnectedCallback is not null, call it; 2. if
-       connectedCallback is not null, call it."
+    /* §4.13.6 ENQUEUE STEP 3 — "If callbackName is "connectedMoveCallback" and callback is null:". Its four
+       sub-steps: 3.1 and 3.2 let disconnectedCallback and connectedCallback be the entries with those keys;
+       3.3 "If connectedCallback and disconnectedCallback are null, then return"; 3.4 sets callback to a
+       two-step body that calls disconnectedCallback then connectedCallback, each "with no arguments" and each
+       only when it is not null.
        BOTH-NULL IS A RETURN AND IT IS THE COMMON CASE — a class with none of the three costs nothing here. */
     dis = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_DISCONNECTED);
     con = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_CONNECTED);
@@ -1998,7 +2069,7 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
         ce_enqueue(ctx, wrap, def, CE_CB_CONNECTED);
         JS_FreeValue(ctx, def);
         /* §4.10.18.3: "the form owner is also reset by the HTML element insertion steps". Only for an element
-           that is ALREADY custom — one being tried for upgrade has §4.13.5 step 10 ahead of it, and resetting
+           that is ALREADY custom — one being tried for upgrade has §4.13.5 step 11 ahead of it, and resetting
            here as well would enqueue a formAssociatedCallback the upgrade is about to enqueue again. */
         element_internals_reset_form_owner(ctx, wrap, ELEMENT_INTERNALS_ATTR_UNCHANGED, 0);
     } else {
@@ -2012,7 +2083,7 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
    whose CUSTOM ELEMENT REGISTRY IS THIS ONE, which is what stops a scoped `define` from upgrading the
    document's own `<x-a>` elements — and the walk is SHADOW-INCLUDING, which is what reaches a component's own
    shadow tree, where the elements a page built before their definition arrived actually are.
-   §4.13.4 step 17: define() enqueues an upgrade reaction for every EXISTING matching element, not only the
+   §4.13.4 steps 17-18: define() enqueues an upgrade reaction for every EXISTING matching element, not only the
    ones inserted later — a definition that arrives after the parser is the ordinary case for a deferred bundle.
    The upgrades then run at define()'s own `[CEReactions]` boundary, which is what makes
    `customElements.define(…)` followed by a read of state the constructor set work on the next line. */
@@ -2040,9 +2111,10 @@ static void ce_upgrade_particular(JSContext *ctx, JSValueConst registry, lxb_dom
     }
 }
 
-/* §4.13.4 step 17's TWO ARMS. A scoped registry walks its own SCOPED DOCUMENT SET — every document one of its
-   nodes has been inserted into — and a global one walks the relevant global's associated Document, which is
-   this realm's. */
+/* §4.13.4 STEPS 17 AND 18 — the two arms, and they are two STEPS rather than one step's branches: step 17 is
+   "if this's is scoped is true, then for each document of this's scoped document set: upgrade particular
+   elements within a document", and step 18 is the "otherwise" that walks the relevant global's associated
+   Document, which is this realm's. */
 static void ce_upgrade_candidates(JSContext *ctx, JSValueConst registry, const char *name, size_t nlen,
                                   JSValueConst def)
 {
@@ -2170,8 +2242,9 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
     return promise;
 }
 
-/* §4.13.4's last step: "If this's when-defined promise map[name] exists, resolve it with constructor and remove
-   it." Reached from the commit, after the upgrade reactions the same step list enqueues — a page that awaits
+/* §4.13.4 STEP 19, `define`'s last: "If this's when-defined promise map[name] exists:" — 19.1 "Resolve this's
+   when-defined promise map[name] with constructor", 19.2 "Remove this's when-defined promise map[name]".
+   Reached from the commit, after the upgrade reactions steps 17-18 enqueue — a page that awaits
    whenDefined and then reads state its constructor set must find the constructors already run. */
 static void ce_when_defined_resolve(JSContext *ctx, JSValueConst registry, const char *name, size_t nlen,
                                     JSValueConst ctor)
@@ -2204,7 +2277,8 @@ static void ce_when_defined_resolve(JSContext *ctx, JSValueConst registry, const
 static const IdlArgType CE_DEFINE_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT };
 static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } };   /* ElementDefinitionOptions */
 
-/* §4.13.4 step 10 reads `constructor.observedAttributes` and converts it to a sequence<DOMString> — a static
+/* §4.13.4 step 14.5.1 reads `constructor.observedAttributes` and 14.5.2 converts it to a sequence<DOMString>
+   — a static
    GETTER and then an index read and a ToString per entry, all of it the page's code, all of it AFTER every
    declared argument is already a real value. So the body is a STEP: the declaration converts the arguments and
    this continues where it left off, parking on the getter and on each entry. */
@@ -2218,8 +2292,8 @@ static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } }; 
    it the page's code, and it was a JS_GetProperty from C — a C activation hosting the page's loops, which is
    the one thing this declaration surface exists to remove. */
 #define CE_DEFINE_STAGES(X) \
-    X(CE_CHECKS,    "HTML §4.13.4 steps 1-7 (IsConstructor; a valid custom element name; the name and the " \
-                    "constructor are not already defined; `extends`)") \
+    X(CE_CHECKS,    "HTML §4.13.4 steps 1-9 (IsConstructor; a valid custom element name; the name and the " \
+                    "constructor are not already defined; `extends`; raising `element definition is running`)") \
     X(CE_PROTOTYPE, "HTML §4.13.4 steps 14.1-14.2 (Get(constructor, \"prototype\"); it must be an Object)") \
     X(CE_CALLBACKS, "HTML §4.13.4 step 14.4 (Get(prototype, callbackName) for each key of lifecycleCallbacks, " \
                     "in the map's order, converting each to the Function callback type), one key per step") \
@@ -2233,8 +2307,8 @@ static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } }; 
     X(CE_FORM_CB,   "HTML §4.13.4 step 14.13 (Get(prototype, callbackName) for each of « " \
                     "formAssociatedCallback, formResetCallback, formDisabledCallback, formStateRestoreCallback " \
                     "», reached only when step 14.12 answered true), one key per step") \
-    X(CE_COMMIT,    "HTML §4.13.4 steps 15-16 and 18 (the definition, and the upgrade reaction for each " \
-                    "candidate)")
+    X(CE_COMMIT,    "HTML §4.13.4 steps 15-19 (the definition, the definition set, the upgrade reaction for " \
+                    "each candidate, and the when-defined promise)")
 enum { IDL_STEP_STAGE_BASE(CE_DEFINE_STAGES) CE_DEFINE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const CE_DEFINE_STEPS[] = { CE_DEFINE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -2331,7 +2405,7 @@ static bool ce_sequence_contains(JSContext *ctx, JSValueConst seq, const char *w
     return false;
 }
 
-/* §4.13.4 STEPS 1-7 — everything the spec decides BEFORE it touches the page's object. Its own function
+/* §4.13.4 STEPS 1-9 — everything the spec decides BEFORE it touches the page's object. Its own function
    because its own STAGE: running it after the reads, which is where it used to live, made the page's getters
    observe a call the spec had already rejected. Returns <0 having thrown. */
 static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSValueConst *argv)
@@ -2429,7 +2503,8 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
     return 0;
 }
 
-/* §4.13.4 STEPS 15-16 AND 18 — the definition, the definition set, and the upgrade reactions. Plain C, and it
+/* §4.13.4 STEPS 15-19 — the definition, the definition set, the upgrade reactions and the when-defined
+   promise. Plain C, and it
    stays that way: every value it needs is already real, and this is the part that touches only the component's
    own state. `proto` is step 14.1's answer, read as a request rather than here. */
 static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueConst *argv, JSValueConst names,
@@ -2485,8 +2560,8 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueCo
             JS_FreeValue(ctx, defs);
         }
         JS_FreeAtom(ctx, a);
-        ce_upgrade_candidates(ctx, registry, nm, nlen, def);   /* step 17 */
-        ce_when_defined_resolve(ctx, registry, nm, nlen, argv[1]);
+        ce_upgrade_candidates(ctx, registry, nm, nlen, def);   /* steps 17-18 */
+        ce_when_defined_resolve(ctx, registry, nm, nlen, argv[1]);   /* step 19 */
         JS_FreeValue(ctx, def);
     }
     JS_FreeCString(ctx, nm);

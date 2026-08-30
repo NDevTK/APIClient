@@ -37,8 +37,9 @@
  *     4-5's: the root's AVAILABLE TO ELEMENT INTERNALS field, which §4.8's record carries as a WRITE
  *     (shadow_root_mark_declarative) with no reader. A getter that skipped that check would hand a page the
  *     one shadow root §4.13.7.2 hides from it, which is a WRONG answer rather than a partial one, so the
- *     member stays ABSENT until the field is readable. §4.13.4's `disable shadow` boolean is collected anyway,
- *     because it comes off the same sequence `disable internals` does.
+ *     member stays ABSENT until the field is readable. §4.13.4's `disable shadow` boolean is a different
+ *     question and is both collected and READ — by §4.13.5 "Upgrades" step 10.1, which refuses to upgrade an
+ *     element that already carries a shadow root.
  *   - ARIAMixin's EIGHT element-reflecting members WERE on this list, on the grounds that the "explicitly set
  *     attr-element" machinery is its own mechanism. It is — and it now EXISTS, so they are built: §2.6.1 makes
  *     the reflected target a parameter of one algorithm, and this file states its four target algorithms below
@@ -894,8 +895,8 @@ static JSValue js_html_attach_internals(JSContext *ctx, JSValueConst this_val, i
     }
     JS_FreeValue(ctx, internals);
     /* Step 6: the state must be "precustomized" or "custom" — which is what makes `attachInternals` legal from
-       inside the constructor (§4.13.5 step 8.2 sets "precustomized" before it Constructs) and illegal on an
-       element whose upgrade has not started. */
+       inside the constructor (§4.13.5 "Upgrades" step 10.2 sets "precustomized" before it Constructs) and
+       illegal on an element whose upgrade has not started. */
     state = custom_elements_state_of_element(ctx, this_val);
     if (state != CE_STATE_PRECUSTOMIZED && state != CE_STATE_CUSTOM)
         return JS_ThrowDOMException(ctx, "NotSupportedError",
@@ -923,15 +924,15 @@ JSValue element_internals_submission_value(JSContext *ctx, JSValueConst wrap)
     return v;
 }
 
-/* ---- §4.13.5 step 10 and §4.10.18.3's reset ------------------------------------------------------------------ */
+/* ---- §4.13.5 "Upgrades" step 11 and §4.10.18.3's reset ------------------------------------------------------- */
 
 void element_internals_upgrade_form_steps(JSContext *ctx, JSValueConst wrap)
 {
     JSValue owner;
 
-    DCHECK(g_ready, "§4.13.5 step 10 ran before element_internals_declare");
+    DCHECK(g_ready, "§4.13.5 step 11 ran before element_internals_declare");
     if (!custom_elements_is_form_associated(ctx, wrap)) return;
-    /* Step 10.1: reset the form owner, and enqueue formAssociatedCallback when the element IS associated. The
+    /* Step 11.1: reset the form owner, and enqueue formAssociatedCallback when the element IS associated. The
        condition is the OWNER being non-null and not whether the reset changed it, which is what the step says
        and why the change-triggered reset below is a different call. */
     owner = html_form_reset_owner(ctx, wrap, NULL);
@@ -940,7 +941,7 @@ void element_internals_upgrade_form_steps(JSContext *ctx, JSValueConst wrap)
         custom_elements_enqueue_form_callback(ctx, wrap, CE_FORM_CB_ASSOCIATED, 1, &arg);
     }
     JS_FreeValue(ctx, owner);
-    /* Step 10.2. */
+    /* Step 11.2. */
     if (html_form_control_is_disabled(ctx, wrap)) {
         JSValueConst arg = JS_TRUE;
         custom_elements_enqueue_form_callback(ctx, wrap, CE_FORM_CB_DISABLED, 1, &arg);

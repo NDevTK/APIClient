@@ -17,10 +17,10 @@ void element_internals_install_html_members(JSContext *ctx, JSValueConst html_pr
 void element_internals_install(JSContext *ctx, JSValueConst global);
 void element_internals_free(JSRuntime *rt);
 
-/* §4.13.5 STEP 10's TWO REACTIONS, for the upgrade that has just made an element custom. It is here rather
-   than in custom_elements.c because step 10.1's "reset the form owner" and step 10.2's "is disabled" are this
-   component's and the form layer's questions, and the enqueue is the one line that joins them. A no-op unless
-   the element is a form-associated custom element, which is step 10's own condition. */
+/* §4.13.5 "Upgrades" STEP 11's TWO REACTIONS, for the upgrade that has just made an element custom. It is here
+   rather than in custom_elements.c because step 11.1's "reset the form owner" and step 11.2's "is disabled"
+   are this component's and the form layer's questions, and the enqueue is the one line that joins them. A
+   no-op unless the element is a form-associated custom element, which is step 11's own condition. */
 void element_internals_upgrade_form_steps(JSContext *ctx, JSValueConst wrap);
 
 /* §4.10.18.3's RESET, at the three moments this engine can see one — the element's own insertion, its own
