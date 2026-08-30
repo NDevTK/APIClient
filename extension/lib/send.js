@@ -229,21 +229,30 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                                _requiredConfidence: null, _detectedEnum: false,
                                _defaultValue: null, _defaultConfidence: null, _range: null,
                                _exampleValue: null, _exampleValueSource: null,
-                               _excludedValues: null, _bounds: null };
+                               _excludedValues: null, _bounds: null, _astValidValues: null };
       DCHECK(cur && typeof cur === "object",
              "the resolved schema declares `" + pp.name + "` as something that is not a parameter record — " +
              "resolveEndpointSchema builds this map out of parameter declarations, so a non-object here is " +
              "that build broken and a learned path value is about to be attached to it");
-      /* AND AN ABSENT `_astValidValues` IS "NOTHING HAS BEEN LEARNED FOR THIS PARAMETER YET" — exactly what
-         lib/merge.js's `_mergeParamInto` means by writing the field only where the union is non-empty. Read
-         as that statement rather than through a `||`, which says the same thing for an absent field and for
-         a producer that started writing something that is not an array. */
+      /* `null` IS "NOTHING HAS BEEN LEARNED FOR THIS PARAMETER YET", AND IT IS THE ONLY SPELLING OF IT.
+         This assert used to accept `undefined`-or-array, which is the vocabulary lib/merge.js's
+         `_mergeParamInto` speaks (it writes the field only where the union is non-empty) — but merge.js is
+         not this map's producer. BOTH producers are literals in this function, and the doc-derived one
+         normalises through `pDef._astValidValues || null`, so the value arriving here is `null` and the
+         assert REJECTED IT. That is not a theoretical arm: `ep.pathParams` lives on the ENDPOINT record and
+         the comment above says why — it survives the eviction of the per-document method schema — so a
+         parameter the endpoint learned values for, read back against a doc whose own copy has none, is
+         exactly the case this whole block exists to serve, and it aborted the Send panel in dev on it.
+         Two spellings of one fact with an assert that knew one of them is the defaulted-field defect turned
+         inside out: not a hole silently filled, but a legitimate value refused. The record now says `null`
+         from both producers, so `undefined` here means a producer stopped writing the field. */
       const priorVals = cur._astValidValues;
-      DCHECK(priorVals === undefined || Array.isArray(priorVals),
-             "a parameter's `_astValidValues` is not an array — lib/merge.js writes it as the union of the " +
-             "values the contributing documents observed, so a non-array is that union broken and the panel " +
-             "would render a learned-value list nobody observed");
-      const vals = priorVals === undefined ? [] : priorVals.slice();
+      DCHECK(priorVals === null || Array.isArray(priorVals),
+             "a parameter's `_astValidValues` is neither null nor an array — resolveEndpointSchema's two " +
+             "parameter literals both write it (null when nothing was observed, the union otherwise), so a " +
+             "third spelling is one of them broken and the panel would render a learned-value list nobody " +
+             "observed");
+      const vals = priorVals === null ? [] : priorVals.slice();
       for (const val of pp.values) if (vals.indexOf(val) < 0) vals.push(val);
       cur._astValidValues = vals;
       if ((cur._exampleValue === undefined || cur._exampleValue === null) && vals.length) { cur._exampleValue = vals[0]; cur._exampleValueSource = "ast"; }
