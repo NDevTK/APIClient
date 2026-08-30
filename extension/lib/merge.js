@@ -572,19 +572,29 @@ function mergeToGlobal(tab) {
       /* NO `method` ON THE WAY UP EITHER. No tab-side producer has ever written one (lib/learn.js,
          lib/grouping.js, lib/discovery-probe.js and lib/response-decode.js write none), so this copied
          `undefined` on every merge into a field no surface reads. */
+      /* AND `grouping` IS READ, NOT ANSWERED FOR. `v.grouping || null` stood below and was the first of FIVE
+         copies of that line — the moat merge, the IDB serialize, lib/serialize.js's two projections — none of
+         which could tell a producer that stated no rule from a producer that stated nothing. Four of the five
+         were a `||` on a fresh object literal, which is why the field gate saw one of them and the contract
+         looked one fifth as broken as it was. Every producer now states it; this hop checks the statement it
+         is about to copy, so the copier cannot be the place it goes missing. */
+      checkDiscoveryGrouping(v, "lib/merge.js merging a tab's discovery doc into the moat, service " +
+                                JSON.stringify(k));
       globalStore.discoveryDocs.set(k, {
         status: v.status,
         url: v.url,
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
         doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc, tab.documentId) || null,   // UNION, not replace: keep every page's methods
-        grouping: v.grouping || null,
+        grouping: v.grouping,
         pageUrls: _mergedPageUrls,
         frameOrigins: _mergedFrameOrigins,
         isVirtual: !!v.isVirtual,
       });
     } else if (!globalStore.discoveryDocs.has(k)) {
-      globalStore.discoveryDocs.set(k, { status: v.status });
+      // An outcome-only record: the published fetch's verdict and no method surface. No rule is recorded for
+      // this bucket, stated rather than left absent — lib/persistence.js serializes THIS object to IndexedDB.
+      globalStore.discoveryDocs.set(k, { status: v.status, grouping: null });
     }
   }
   for (const [k, v] of tab.probeResults) {

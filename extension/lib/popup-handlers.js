@@ -771,6 +771,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
             fetchedAt: Date.now(),
             doc,
             isVirtual: false,
+            /* THE ONE ENTRY WHOSE ABSENT GROUPING IS A FACT ABOUT THE WORLD RATHER THAN ABOUT THIS RECORD.
+               `svcName` above is the IMPORTED DOCUMENT's own name — `info.x-service-key`, the host of
+               `servers[0].url`, or a slugged `info.title` — so no URL-structure rule classified anything and
+               there is no rule to record. That is what `null` MEANS here, and stating it is what lets every
+               copier downstream read the absence instead of manufacturing it (lib/discovery-entry.js). */
+            grouping: null,
             pageUrls: _prevGlobalEntry?.pageUrls || new Set(),
             frameOrigins: _prevGlobalEntry?.frameOrigins || new Set(),
           };

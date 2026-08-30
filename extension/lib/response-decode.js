@@ -630,11 +630,10 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   if (!_isBoringFetch) {
     learnFromRequest(documentId, service, entry, headerMap);
 
-    // learnFromRequest may migrate the service (e.g. hostname-fallback →
-    // path-common-prefix) when observed-prefix clustering promotes the
-    // bucket. Use the post-migration name for all downstream lookups —
-    // our pre-migration `service` may now point at a bucket that was
-    // emptied and deleted during the migration.
+    // learnFromRequest may ROUTE this request into a different bucket — its
+    // cross-doc template reconcile files a concrete request under the doc whose
+    // templated method matches it. Use the name it resolved for all downstream
+    // lookups; the one we came in with is the classifier's, not the reconcile's.
     if (entry.interfaceName && entry.interfaceName !== service) {
       service = entry.interfaceName;
     }
@@ -743,7 +742,11 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       if (discoveryStatus) {
         discoveryStatus.status = "pending";
       } else {
-        tab.discoveryDocs.set(service, { status: "pending", seedUrl: msg.url });
+        /* `grouping: null` IS THE STATEMENT, not a hole. This record is minted the instant a service is named
+           and before anything has classified it — no rule is recorded for this bucket yet, and the entry says
+           so rather than leaving the field absent for five copiers to each answer with a `|| null`
+           (lib/discovery-entry.js). */
+        tab.discoveryDocs.set(service, { status: "pending", seedUrl: msg.url, grouping: null });
       }
       /* THE SEED'S METHOD TRAVELS WITH THE SEED. The tail of that call may fall back to the req2proto error
          probe, which is a POST of a deliberately-malformed body, so it may only probe a seed the page itself

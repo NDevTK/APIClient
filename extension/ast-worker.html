@@ -35,6 +35,10 @@
      extension's only `endpoints.set`) builds through it, lib/persistence.js checks what the store returns
      against it, and lib/send.js / lib/popup-handlers.js read the record instead of answering for it. -->
 <script src="lib/endpoint-record.js"></script>
+<!-- The discovery-doc entry's naming record, same rule one level up: the producer STATES which URL-structure
+     rule named a service bucket (or states that none did), and the five hops that copy the field read that
+     statement instead of each supplying the absence with its own `|| null`. -->
+<script src="lib/discovery-entry.js"></script>
 <script src="lib/protobuf.js"></script>
 <script src="lib/protocol-parsers.js"></script>
 <script src="lib/discovery.js"></script>

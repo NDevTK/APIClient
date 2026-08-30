@@ -205,26 +205,20 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // classifyResponseAsset in lib/discovery.js).
 
 
-  // Get-or-create docEntry — same prologue as learnFromRequest.
-  // When the classifier falls back to hostname, also check for observed-
-  // prefix clustering against siblings on the same host. If a shared
-  // path prefix of >=2 segments exists, promote to a prefix-based bucket
-  // AND migrate matching siblings so the service groups as one.
-  let grouping = csUrl ? classifyInterface(csUrl) : { rule: "ast-dynamic", matched: "origin is a shape: " + _addr.host };
-  if (csUrl && grouping.rule === "hostname-fallback") {
-    const refined = refineByObservedPrefix(tab, csUrl, grouping.name);
-    if (refined) {
-      migrateToCommonPrefixBucket(tab, grouping.name || interfaceName, refined, csUrl);
-      grouping = refined;
-      interfaceName = refined.name;
-    }
-  }
+  // Get-or-create docEntry — same prologue as learnFromRequest. WHICH RULE NAMED THIS BUCKET is stated on the
+  // entry (lib/discovery-entry.js): a literal origin is classifyInterface's "origin", and a call site whose
+  // address is a SHAPE has no origin to classify, so the shape itself is what named it.
+  const grouping = csUrl
+    ? classifyInterface(csUrl)
+    : { rule: "ast-dynamic", matched: "origin is a shape: " + _addr.host };
   let docEntry = tab.discoveryDocs.get(interfaceName);
   if (!docEntry || !docEntry.doc) {
     docEntry = {
       status: "found",
       isVirtual: true,
-      grouping: { rule: grouping.rule, matched: grouping.matched, firstUrl: csUrl ? csUrl.href : callSite.url },
+      grouping: makeGroupingRecord(grouping.rule, grouping.matched, csUrl ? csUrl.href : callSite.url,
+                                   "lib/learn.js minting a virtual entry for an AST call site, service " +
+                                   JSON.stringify(interfaceName)),
       doc: {
         kind: "discovery#restDescription",
         name: interfaceName,
@@ -609,8 +603,9 @@ function _matchTemplatedMethod(learnedMethods, httpMethod, pathname) {
 // Cross-doc template reconcile. Forced-exec may learn an endpoint as a
 // TEMPLATED method (e.g. {userLocale}/content-nav/site-header.json) under
 // one service grouping, while a concrete live request (en-us/content-nav/
-// site-header.json) refines (refineByObservedPrefix) to a DIFFERENT
-// same-host service — leaving the same logical endpoint split into a
+// site-header.json) lands in a DIFFERENT same-host bucket (a shape origin
+// and a literal one are named by different rules) — leaving the same
+// logical endpoint split into a
 // templated [ast] record and a concrete [live] one (observed live on
 // learn.microsoft.com: /{userLocale}/content-nav vs /en-us/content-nav).
 // `_matchTemplatedMethod` only searches one doc, so it can't bridge the
@@ -644,19 +639,8 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
 
   // Record WHICH grouping rule fired when this service was first
   // created. Grouping decisions must be traceable to the rule that
-  // produced them so reviewers can judge. When classifyInterface falls
-  // back to hostname-only, also check for shared path prefixes with
-  // siblings on the same host — observed-prefix clustering catches
-  // cases like `/svc/shreddit/*` that no keyword rule covers.
-  let grouping = classifyInterface(url);
-  if (grouping.rule === "hostname-fallback") {
-    const refined = refineByObservedPrefix(tab, url, grouping.name);
-    if (refined) {
-      migrateToCommonPrefixBucket(tab, grouping.name, refined, url);
-      grouping = refined;
-      interfaceName = refined.name;
-    }
-  }
+  // produced them so reviewers can judge (lib/discovery-entry.js).
+  const grouping = classifyInterface(url);
   // Cross-doc template reconcile: if forced-exec already learned this endpoint
   // as a templated method under a DIFFERENT same-host service grouping, route
   // this concrete request into THAT doc so the same logical endpoint isn't
@@ -669,16 +653,18 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
     interfaceName = _crossHostDoc;
   }
   // Stamp the resolved name onto the entry so callers (handleResponseBody)
-  // can use it for downstream lookups instead of their pre-migration
-  // `service` variable — the bucket they came in with may have been
-  // emptied and deleted during migration.
+  // can use it for downstream lookups instead of the `service` variable they
+  // came in with — the cross-doc template reconcile above may have routed this
+  // request into a different bucket entirely.
   entry.interfaceName = interfaceName;
   let docEntry = tab.discoveryDocs.get(interfaceName);
   if (!docEntry || !docEntry.doc) {
     docEntry = {
       status: "found",
       isVirtual: true,
-      grouping: { rule: grouping.rule, matched: grouping.matched, firstUrl: entry.url },
+      grouping: makeGroupingRecord(grouping.rule, grouping.matched, entry.url,
+                                   "lib/learn.js minting a virtual entry for a live request, service " +
+                                   JSON.stringify(interfaceName)),
       doc: {
         kind: "discovery#restDescription",
         name: interfaceName,

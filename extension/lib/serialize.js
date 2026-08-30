@@ -181,19 +181,21 @@ function serializeTabData(tab) {
              "a Set — mergeToGlobal, _deserializeIntoGlobalStore and the popup's re-fetch all build Sets, so " +
              "anything else here serializes as an empty list that reads as 'never used from any page' " +
              "(service=" + k + ")");
+      checkDiscoveryGrouping(v, "lib/serialize.js projecting the moat's discovery docs to the popup, service " +
+                                JSON.stringify(k));
       mergedDiscovery[k] = {
         status: v.status,
         url: v.url,
         apiKey: v.apiKey || null,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
-        grouping: v.grouping || null,
+        grouping: v.grouping,
         isVirtual: !!v.isVirtual,
         pageUrls: [...v.pageUrls],
         frameOrigins: [...v.frameOrigins],
       };
     } else {
-      mergedDiscovery[k] = { status: v.status };
+      mergedDiscovery[k] = { status: v.status, grouping: null };
     }
   }
   for (const [k, v] of tab.discoveryDocs) {
@@ -204,13 +206,22 @@ function serializeTabData(tab) {
       if (v.pageUrls) for (var _pu of v.pageUrls) _allPageUrls.add(_pu);
       var _allFrameOrigins = new Set(_existingMerged?.frameOrigins || []);
       if (v.frameOrigins) for (var _fo of v.frameOrigins) _allFrameOrigins.add(_fo);
+      /* THE UNION OF TWO STATEMENTS, NOT A LADDER OVER TWO ABSENCES. Both sides state `grouping`, so the
+         question this line asks is which of them NAMES a rule — the tab's classification is the fresher one,
+         and the moat's is what a bucket named in an earlier session still knows. `v.grouping || (…) || null`
+         could not ask that: an unstated field and a stated `null` both fell through it, so a producer that
+         stopped writing the field read exactly like a bucket no rule had named (lib/discovery-entry.js). */
+      checkDiscoveryGrouping(v, "lib/serialize.js projecting a tab's discovery docs to the popup, service " +
+                                JSON.stringify(k));
+      if (_existingMerged) checkDiscoveryGrouping(_existingMerged,
+        "lib/serialize.js's own moat projection, being unioned with a tab entry for service " + JSON.stringify(k));
       mergedDiscovery[k] = {
         status: v.status,
         url: v.url,
         apiKey: v.apiKey || null,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
-        grouping: v.grouping || (_existingMerged && _existingMerged.grouping) || null,
+        grouping: v.grouping !== null ? v.grouping : (_existingMerged ? _existingMerged.grouping : null),
         isVirtual: v.isVirtual || (_existingMerged && _existingMerged.isVirtual) || false,
         pageUrls: [..._allPageUrls],
         frameOrigins: [..._allFrameOrigins],
@@ -219,8 +230,10 @@ function serializeTabData(tab) {
       /* A DOC-LESS TAB ENTRY NO LONGER DELETES THE GLOBAL ONE. This arm ran `mergedDiscovery[k] = {status}`
          unconditionally, so a "pending" or "not_found" record for the document in front of you erased every
          method every OTHER page of every OTHER session had learned for that service. What a doc-less tab
-         entry states is the published fetch's outcome, which is only news where the moat has nothing. */
-      mergedDiscovery[k] = { status: v.status };
+         entry states is the published fetch's outcome, which is only news where the moat has nothing. It also
+         states that no rule is recorded for the bucket, because the popup reads `svcData.grouping` off
+         whichever record it is handed and an absent field there is the one thing it must not have to guess. */
+      mergedDiscovery[k] = { status: v.status, grouping: null };
     }
   }
   // Probe results: global base, tab overwrites

@@ -251,6 +251,16 @@ async function fetchDiscoveryForService(
             // later probe of this service possible at all.
             seedUrl: seedUrl || _prevDiscovery?.seedUrl || null,
             seedMethod: seedMethod || _prevDiscovery?.seedMethod || null,
+            /* AND SO DOES THE RULE THAT NAMED THE BUCKET, which this record used to state NOWHERE — the same
+               drop the not_found branch below has a paragraph about, one field over and with no `set` there to
+               notice it. A published document answers "what does this service publish"; it says nothing about
+               WHY the bucket has the name it has, and replacing the entry deleted lib/learn.js's answer to
+               that. The Send panel's "grouping rule:" row therefore went blank for exactly the services whose
+               documents were fetched, and the five `|| null`s downstream rendered that identically to a
+               service no rule had ever named. lib/discovery-entry.js. */
+            grouping: carriedGrouping(_prevDiscovery,
+                                      "lib/discovery-probe.js storing a fetched published document, service " +
+                                      JSON.stringify(service)),
             pageUrls: _prevDiscovery?.pageUrls || new Set(),
             frameOrigins: _prevDiscovery?.frameOrigins || new Set(),
           });
@@ -333,7 +343,9 @@ async function fetchDiscoveryForService(
          two facts, two fields, which is why every consumer now asks `.doc` for the second. */
       doc: _prevDiscoveryNF?.doc || null,
       isVirtual: _prevDiscoveryNF ? !!_prevDiscoveryNF.isVirtual : false,
-      grouping: _prevDiscoveryNF?.grouping || null,
+      grouping: carriedGrouping(_prevDiscoveryNF,
+                                "lib/discovery-probe.js recording a not_found published fetch, service " +
+                                JSON.stringify(service)),
       url: _prevDiscoveryNF?.url || null,
       apiKey: _prevDiscoveryNF?.apiKey || null,
       fetchedAt: _prevDiscoveryNF?.fetchedAt || null,
@@ -438,9 +450,15 @@ async function performProbeAndPatch(documentId, service, targetUrl, apiKey) {
         apiKey: apiKey,
         fetchedAt: Date.now(),
         isVirtual: existingDoc ? currentStatus.isVirtual || false : true,
-        // A probe does not un-publish what a fetch read, nor un-name the request that named the service.
+        // A probe does not un-publish what a fetch read, nor un-name the request that named the service, nor
+        // un-answer WHICH RULE named the bucket — an error-envelope probe learns a method surface and decides
+        // nothing about the bucket's identity, so replacing the entry without carrying the rule forward was
+        // the fetched record's drop repeated a second time (lib/discovery-entry.js).
         publishedJson: _prevProbed?.publishedJson || null,
         url: _prevProbed?.url || null,
+        grouping: carriedGrouping(_prevProbed,
+                                  "lib/discovery-probe.js storing a req2proto-probed document, service " +
+                                  JSON.stringify(service)),
         seedUrl: _prevProbed?.seedUrl || targetUrl,
         seedMethod: "POST",   // the probe IS a POST, and both call sites gate on the page having made one
         pageUrls: _prevProbed?.pageUrls || new Set(),

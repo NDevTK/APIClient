@@ -99,26 +99,33 @@ function _serializeGlobalStore() {
        producer, written into IndexedDB every save. The one writer left is the popup's OpenAPI import
        (`method: "IMPORT"`, lib/popup-handlers.js), and no surface in this extension reads it either, so it is
        not carried across a session.
-       THE FIVE REMAINING `|| null`s ARE OPTIONALITY, NOT DEFAULTS, and this is the positive statement they
-       read as: a LEARNED entry has no fetched document behind it. lib/learn.js mints a virtual `status:"found"`
+       THE REMAINING `|| null`s ARE OPTIONALITY, NOT DEFAULTS, and this is the positive statement they read
+       as: a LEARNED entry has no fetched document behind it. lib/learn.js mints a virtual `status:"found"`
        entry from a request it observed — grouping + doc only — so `url`/`apiKey`/`fetchedAt` are absent for
        exactly that entry and their absence means "this service was never fetched from an address", while a
-       FETCHED entry (lib/discovery-probe.js) writes all three. `grouping` is the mirror: present on a learned
-       entry, absent on a fetched one. */
+       FETCHED entry (lib/discovery-probe.js) writes all three.
+       `grouping` IS NO LONGER AMONG THEM, AND THE SENTENCE THAT STOOD HERE ABOUT IT WAS WRONG. It said the
+       field was "the mirror: present on a learned entry, absent on a fetched one", and that read the DROP as
+       the design: a fetched entry's bucket is named by exactly the same classifier as a learned one's
+       (lib/response-decode.js hands `extractInterfaceName`'s answer to the fetch), so what an absent field
+       there recorded was the published-document fetch REPLACING lib/learn.js's record and stating nothing in
+       its place. Every producer states it now, and this hop copies the statement (lib/discovery-entry.js). */
     discoveryDocs: Object.fromEntries(
       [...globalStore.discoveryDocs].map(([k, v]) => [
         k,
+        (checkDiscoveryGrouping(v, "lib/persistence.js writing the cumulative store to IndexedDB, service " +
+                                   JSON.stringify(k)),
         {
           status: v.status,
           url: v.url || null,
           apiKey: v.apiKey || null,
           fetchedAt: v.fetchedAt || null,
           doc: v.doc || null,
-          grouping: v.grouping || null,
+          grouping: v.grouping,
           isVirtual: !!v.isVirtual,
           pageUrls: [...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || [])],
           frameOrigins: [...(v.frameOrigins instanceof Set ? v.frameOrigins : v.frameOrigins || [])],
-        },
+        }),
       ]),
     ),
     probeResults: Object.fromEntries(globalStore.probeResults),
@@ -155,6 +162,12 @@ function _deserializeIntoGlobalStore(s) {
   }
   if (s.discoveryDocs) {
     for (const [k, v] of Object.entries(s.discoveryDocs)) {
+      /* THE SAME DOOR THE ENDPOINT RECORDS ARE CHECKED AT, for the same reason: from here a store written by
+         a build whose record shape differed is indistinguishable from an entry this session's producers
+         minted, and every surface downstream reads `grouping` off it. Checked once on the way IN rather than
+         by each surface carrying a `||` for a gap only this door can produce. */
+      checkDiscoveryGrouping(v, "lib/persistence.js restoring the cumulative store, service " +
+                                JSON.stringify(k));
       globalStore.discoveryDocs.set(k, {
         ...v,
         pageUrls: new Set(v.pageUrls || []),

@@ -26,141 +26,17 @@ function extractInterfaceName(urlObj) {
   return classifyInterface(urlObj).name;
 }
 
-// Refine a hostname-fallback classification by detecting shared path
-// prefixes with URLs already registered on the same host. This is
-// OBSERVATION-DRIVEN — when the tool sees multiple URLs under
-// /svc/shreddit/… (or any other common path root) on a host with no
-// /api/ or /v1/ keyword, it infers that prefix as a service boundary
-// rather than dumping everything under one hostname bucket.
-//
-// Returns `null` if no shared prefix of >=2 segments is found with any
-// sibling method. Otherwise returns a refined classification that
-// replaces the hostname-fallback rule with `path-common-prefix`.
-function refineByObservedPrefix(tab, urlObj, initialName) {
-  if (!tab || !tab.discoveryDocs) return null;
-  const hostname = urlObj.hostname;
-  const newSegs = urlObj.pathname.split("/").filter(Boolean);
-  if (newSegs.length < 2) return null;          // need at least 2 segs to form a prefix
-
-  // Collect already-known method paths under the same hostname, by
-  // checking each method's origin. Registered services don't always key
-  // on hostname (a probe-discovered doc may have a distinct name), so
-  // the origin check is the correct fact-based sibling test.
-  const siblingPaths = [];
-  for (const [, docEntry] of tab.discoveryDocs) {
-    if (!docEntry || !docEntry.doc) continue;
-    for (const bucket of Object.values(docEntry.doc.resources || {})) {
-      for (const m of Object.values(bucket.methods || {})) {
-        if (!m || typeof m.path !== "string" || !m.origin) continue;
-        // canParse guard — same root-cause fix as the webnav origin handler.
-        // A malformed stored m.origin yields null hostname which can't equal
-        // hostname; the `continue` below is the correct semantic.
-        const origHost = URL.canParse(m.origin) ? new URL(m.origin).hostname : null;
-        if (origHost !== hostname) continue;
-        siblingPaths.push(m.path);
-      }
-    }
-  }
-  if (!siblingPaths.length) return null;
-
-  let bestPrefixLen = 0;
-  for (const sp of siblingPaths) {
-    const segs = sp.split("/").filter(Boolean);
-    let i = 0;
-    while (i < newSegs.length && i < segs.length && newSegs[i] === segs[i]) i++;
-    // Require the match to be a STRICT prefix of both — otherwise
-    // the two URLs are identical (same method, not a common service).
-    if (i > bestPrefixLen && i < newSegs.length && i < segs.length + 1) {
-      bestPrefixLen = i;
-    }
-  }
-  if (bestPrefixLen < 2) return null;
-
-  const prefixSegs = newSegs.slice(0, bestPrefixLen);
-  // (No regex dynamic-ID trim: the engine marks genuinely-dynamic segments as {shape} from data-flow.)
-  if (prefixSegs.length < 2) return null;
-
-  const prefix = "/" + prefixSegs.join("/");
-  return {
-    name: hostname + prefix,
-    rule: "path-common-prefix",
-    matched: prefix,
-  };
-}
-
-// Migrate method entries whose path starts with the given prefix out of
-// a hostname-fallback bucket and into a new common-prefix bucket. Used
-// when refineByObservedPrefix detects a shared prefix — without this
-// the original URL stays orphaned in the hostname bucket while the new
-// URL lands in the refined bucket, producing two buckets for the same
-// service. Schemas referenced via $ref by migrating methods are copied
-// along to preserve lookups.
-function migrateToCommonPrefixBucket(tab, oldName, refinement, urlObj) {
-  const oldDoc = tab.discoveryDocs.get(oldName);
-  if (!oldDoc || !oldDoc.doc) return;
-  const newName = refinement.name;
-  if (newName === oldName) return;
-  const prefixSegs = refinement.matched.replace(/^\//, "").split("/").filter(Boolean);
-
-  // Create or fetch the new docEntry.
-  let newDoc = tab.discoveryDocs.get(newName);
-  if (!newDoc) {
-    newDoc = {
-      status: "found",
-      isVirtual: true,
-      grouping: {
-        rule: refinement.rule,
-        matched: refinement.matched,
-        firstUrl: urlObj ? urlObj.href : null,
-      },
-      doc: {
-        kind: "discovery#restDescription",
-        name: newName,
-        title: `${newName} (Learned)`,
-        rootUrl: oldDoc.doc.rootUrl,
-        baseUrl: oldDoc.doc.baseUrl,
-        resources: {},
-        schemas: {},
-      },
-    };
-    tab.discoveryDocs.set(newName, newDoc);
-  }
-
-  const oldSchemas = oldDoc.doc.schemas || {};
-  const newSchemas = newDoc.doc.schemas;
-
-  for (const [bucketKey, bucket] of Object.entries(oldDoc.doc.resources || {})) {
-    const methods = bucket.methods || {};
-    for (const methodKey of Object.keys(methods)) {
-      const m = methods[methodKey];
-      const mSegs = (m.path || "").split("/").filter(Boolean);
-      let matches = mSegs.length >= prefixSegs.length;
-      for (let i = 0; matches && i < prefixSegs.length; i++) {
-        if (mSegs[i] !== prefixSegs[i]) matches = false;
-      }
-      if (!matches) continue;
-      // Re-id to match new interface.
-      m.id = `${newName.replace(/\//g, ".")}.${methodKey}`;
-      if (!newDoc.doc.resources[bucketKey]) newDoc.doc.resources[bucketKey] = { methods: {} };
-      newDoc.doc.resources[bucketKey].methods[methodKey] = m;
-      delete methods[methodKey];
-      // Copy the schema this method references so $ref lookups still work.
-      if (m.request && m.request.$ref && oldSchemas[m.request.$ref] && !newSchemas[m.request.$ref]) {
-        newSchemas[m.request.$ref] = oldSchemas[m.request.$ref];
-      }
-      if (m.response && m.response.$ref && oldSchemas[m.response.$ref] && !newSchemas[m.response.$ref]) {
-        newSchemas[m.response.$ref] = oldSchemas[m.response.$ref];
-      }
-    }
-  }
-
-  // If the hostname bucket is now empty, remove it so it doesn't clutter.
-  let remainingMethods = 0;
-  for (const b of Object.values(oldDoc.doc.resources || {})) {
-    remainingMethods += Object.keys(b.methods || {}).length;
-  }
-  if (remainingMethods === 0) tab.discoveryDocs.delete(oldName);
-}
+/* refineByObservedPrefix + migrateToCommonPrefixBucket ARE DELETED, AND THE ONLY THING THAT MADE THEM LOOK
+   ALIVE WAS A COMPARISON AGAINST A RULE NOBODY PRODUCES. Both were reached from exactly one condition, spelled
+   twice in lib/learn.js: `grouping.rule === "hostname-fallback"`. `classifyInterface` above answers "origin"
+   and has for as long as it has been the deterministic-origin classifier; nothing in this extension has ever
+   written "hostname-fallback", so the condition was false at both sites on every request, and the clustering
+   this file's own header advertised ("origin + observed prefix") ran zero times. That also made
+   migrateToCommonPrefixBucket one of the five places `grouping` appeared to be produced from — a producer in a
+   census and in no execution — which is why the field read as better-established than it was.
+   THEY DO NOT COME BACK AS THEY WERE. Inferring a service boundary from a shared PATH PREFIX is a URL-pattern
+   guess, which is the thing the classifier above refuses by name; if finer grouping is ever wanted it comes
+   from the engine, out of what running the code determined, never from a regex over an address. */
 
 // (parseRpcPath + RPC_PATH_RE were DELETED with classifyInterface: they parsed a gRPC $rpc/ path into a guessed
 //  service name — the same banned name-regex bundler-recognition heuristic. Endpoints group by real origin now.)

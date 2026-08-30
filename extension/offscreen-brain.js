@@ -761,8 +761,8 @@ function stripJsonp(text) {
   return inner;
 }
 
-// (Endpoint identity -- classifyInterface/extractInterfaceName/refineByObservedPrefix/
-// migrateToCommonPrefixBucket/calculateMethodMetadata -- extracted to lib/grouping.js, loaded first.)
+// (Endpoint identity -- classifyInterface/extractInterfaceName/calculateMethodMetadata -- extracted to
+// lib/grouping.js, loaded first. The rule each of them names is STATED on the bucket: lib/discovery-entry.js.)
 
 // (VDD passive learning -- learnFromAstCallSite/learnFromRequest/learnFromResponse + stats + templated-
 // method matching -- extracted to lib/learn.js, loaded first. One problem per file.)

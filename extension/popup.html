@@ -224,6 +224,9 @@
          the panels here check what arrived over chrome.runtime.sendMessage against the list lib/merge.js
          BUILDS through rather than against a transcription of it. -->
     <script src="lib/endpoint-record.js"></script>
+    <!-- The discovery-doc entry's naming record: the Send panel renders the rule that named a service
+         bucket, so it checks the producer's statement rather than reading `svcData.grouping` as truthy. -->
+    <script src="lib/discovery-entry.js"></script>
     <script src="lib/protobuf.js"></script>
     <script src="lib/protocol-parsers.js"></script>
     <script src="lib/discovery.js"></script>

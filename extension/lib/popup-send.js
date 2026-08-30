@@ -64,13 +64,24 @@ function _renderServiceGrouping() {
   if (!svcData) { el.textContent = ""; el.className = "service-grouping"; return; }
   el.className = "service-grouping";
 
-  // Grouping rule line.
+  /* THE RULE LINE, READ AS THE PRODUCER'S STATEMENT. `if (g)` was a truthiness test over a field five copiers
+     each supplied with their own `|| null`, so this row rendered nothing for three different situations it
+     could not tell apart: a bucket no rule named (the OpenAPI import), a bucket whose rule the published-
+     document fetch had DROPPED on the way through, and a producer that had stopped stating the field at all.
+     `null` is now the one spelling of the first, asserted here, and the row says so out loud rather than
+     leaving the reviewer with a blank where a classification they are supposed to judge belongs.
+     `matched` and `firstUrl` are stated on every record (lib/discovery-entry.js), so the ternaries that stood
+     on them are gone with the same defect one level down. */
   let html = "";
+  checkDiscoveryGrouping(svcData, "the Send panel's service-grouping row, service " + JSON.stringify(name));
   const g = svcData.grouping;
-  if (g) {
+  if (g === null) {
+    html += '<span class="grouping-label">grouping rule:</span> <code>none recorded</code>'
+      + ' <span class="grouping-matched">(this bucket was not named by a URL-structure rule)</span>';
+  } else {
     html += '<span class="grouping-label">grouping rule:</span> <code>' + esc(g.rule) + '</code>'
-      + (g.matched ? ' <span class="grouping-matched">matched: <code>' + esc(g.matched) + '</code></span>' : '')
-      + (g.firstUrl ? '<div class="grouping-first">first request: <code>' + esc(g.firstUrl) + '</code></div>' : '');
+      + ' <span class="grouping-matched">matched: <code>' + esc(g.matched) + '</code></span>'
+      + '<div class="grouping-first">first request: <code>' + esc(g.firstUrl) + '</code></div>';
   }
 
   // Bucket quality: count methods by origin. THE UNUSED BUCKET IS THE PRODUCT — "what the bundle CAN do but
