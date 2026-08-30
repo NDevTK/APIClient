@@ -63,7 +63,9 @@
    a claim the next reader can check; a range that names a step the body does not contain is the one kind of
    citation that cannot be checked at all, because it reads as coverage.
    `proxy` is the child navigable's WindowProxy. Calling it for a navigable whose active document has already
-   been destroyed is a no-op, which is §7.5.10's own answer for a document that is not fully active. */
+   been destroyed is a no-op, and that is an invariant of THIS engine and not a step of §7.5.10 — the reason is
+   written where the skip is, together with the citation it used to carry, which named a real step whose answer
+   is something else entirely. */
 void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy);
 
 /* §7.2.2.1's ("Opening and closing windows") `close()` METHOD STEPS — THE ONE CLOSE PATH, and both spellings

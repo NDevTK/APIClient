@@ -56,6 +56,10 @@ enum {
 static void descend_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after);
 static void self_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after);
 static void destroy_a_top_level_traversable(JSContext *ctx, JSValueConst proxy);
+/* §7.5.9's UNLOADING DOCUMENT CLEANUP STEPS — declared here because it has TWO ENTRIES, in two different
+   algorithms: §7.5.9's unload a Document step 18, and §7.5.10's destroy a Document step 6. It is defined beside
+   the salvageable state its own branch reads. */
+static void unloading_document_cleanup_steps(JSContext *cctx);
 
 /* THE OPERATION'S CONTINUATION, AND IT TRAVELS WITH THE JOB. §7.5.9's afterAllUnloads is an INPUT of "unload a
    document and its descendants", so it rides every job of that operation — down into each child, and back up
@@ -127,6 +131,16 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
                "BUILD IT: the port list has to become PER FLOW before the disentangle can run, which is the "
                "same sentence as the port's own message queue being a JS Array — a list held as a JS value "
                "forks and parks with the flow that created the port, and then the walk is that flow's");
+        /* STEP 6 — the UNLOADING DOCUMENT CLEANUP STEPS, the same body §7.5.9's unload runs at ITS step 18.
+           IT WAS RUN ON ONE OF ITS TWO PATHS, and the one it was missing is the one a page reaches by removing
+           an `<iframe>`: destroy-a-child-navigable goes straight to destroy-a-document-and-its-descendants and
+           never unloads at all, so a removed frame's map of active timers was never cleared by any step. That it
+           was not OBSERVABLE is an accident of a different component — core/frame/navigable.c's tree-order walk
+           filters out a navigable with no realm, so a destroyed document's timers simply never came up for
+           selection, and the map died with the realm the destruction had just released. A step performed by
+           somebody else's filter is a step that stops being performed when that filter changes its mind, and
+           nothing here would have said so. */
+        unloading_document_cleanup_steps(cctx);
         /* STEP 7 — the tasks of this document, removed WITHOUT running. A task queued by a document that no
            longer exists must not run: it would script a destroyed Document, and every one of those is a
            use-after-destroy a page can trigger by removing a frame that queued work.
@@ -157,12 +171,40 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
  * the document rather than a cache holding it.) So intendToKeepInBfcache is FALSE for every document, and
  * salvageable is FALSE by the time any step reads it.
  *
- * SO THERE IS NO FIELD. A `salvageable` byte on the Document would be written once and read three times with
- * the same answer every time, which is a field nothing can ever read differently — and its three readers say
+ * SO THERE IS NO FIELD. A `salvageable` byte on the Document would be written once and read four times with
+ * the same answer every time, which is a field nothing can ever read differently — and its four readers say
  * something worth reading instead: `pagehide`'s `persisted` is FALSE (this document is not being kept), the
- * `unload` event DOES fire, and step 20 DOES destroy the document. The day a bfcache exists it is
- * intendToKeepInBfcache that has to be computed, and this is the one place that computes it. */
+ * `unload` event DOES fire, step 20 DOES destroy the document, and the cleanup steps below DO clear the timers.
+ * The day a bfcache exists it is intendToKeepInBfcache that has to be computed, and this is the one place that
+ * computes it. §7.5.10's destroy a Document writes the same false at ITS step 3, over a Document that reached it
+ * either through the unload above (which set it at step 9) or through a destruction that never unloads — and
+ * either way it is the value this constant already is, which is why that step has no site of its own. */
 #define UNLOAD_SALVAGEABLE false
+
+/* §7.5.9's UNLOADING DOCUMENT CLEANUP STEPS — ONE BODY, TWO ENTRIES, which is why it is a function and not two
+ * lines. §7.5.9's unload a Document reaches it at step 18 and §7.5.10's destroy a Document at step 6, and a
+ * Document can arrive by either route ALONE: a navigation unloads and then destroys, while a removed `<iframe>`
+ * is destroyed with no unload anywhere in its history. Written inline at one of them it is not a shared
+ * algorithm at all, it is that algorithm's private line — which is exactly what it had become, and the entry it
+ * was missing is the one every frame removal takes.
+ *
+ * FOUR SETS, THREE OF THEM EMPTY BY CONSTRUCTION. The WebSocket, WebTransport and EventSource loops iterate over
+ * interfaces this engine does not have, so "for each" runs zero times, exactly as §7.5.10's worker and worklet
+ * loops do. What remains is the salvageable-false branch's second half: "clear window's map of active timers",
+ * and it is THIS window's — §8.7 Timers gives every global its own map and core/timing/timer.c keeps one per
+ * realm, so clearing it takes nothing from a same-origin popup this document opened.
+ *
+ * THE BRANCH IS THE STANDARD'S AND IS READ THROUGH THE CONSTANT ABOVE rather than assumed away: the EventSource
+ * close and the timer clear are both inside "if document's salvageable state is false", and writing them
+ * unconditionally would be right for every Document this build has and wrong on the first day one is kept. */
+static void unloading_document_cleanup_steps(JSContext *cctx)
+{
+    DCHECK(cctx != NULL,
+           "the unloading document cleanup steps were run for a navigable with no active document — both of "
+           "their entries read the realm before calling and neither has one to hand over");
+    if (!UNLOAD_SALVAGEABLE)
+        timer_clear_map(cctx);
+}
 
 /* ---- §7.4.2.4's FIRE BEFOREUNLOAD, one document -------------------------------------------------------------
  *
@@ -565,15 +607,10 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
     }
     DCHECK(s->hdr.stage == UNLOAD_DESTROY, "§7.5.9's unload task resumed at a stage it does not have");
     JS_FreeValue(ctx, cb_result);
-    if (cctx) {
-        /* STEP 18's UNLOADING DOCUMENT CLEANUP STEPS. The WebSocket, WebTransport and EventSource loops iterate
-           sets that are EMPTY BY CONSTRUCTION — this engine has none of those three interfaces, so "for each"
-           runs zero times, exactly as §7.5.10's worker loops do. What remains is the salvageable-false branch's
-           second half: "clear window's map of active timers", and it is THIS window's — §8.7 Timers gives every
-           global its own map, and core/timing/timer.c now keeps one per realm, so clearing it takes nothing
-           from a same-origin popup this document opened. */
-        timer_clear_map(cctx);
-    }
+    /* STEP 18's UNLOADING DOCUMENT CLEANUP STEPS — the shared body, which §7.5.10's destroy reaches at its own
+       step 6. What it does and why three of its four sets are empty is stated there, once. */
+    if (cctx)
+        unloading_document_cleanup_steps(cctx);
     /* STEP 20: salvageable is false, so the document is destroyed. The DESCENDANTS are already gone — each one
        ran this same body and destroyed itself at its own step 20 — so this is §7.5.10's single-document form
        and not its descendant form. */
@@ -766,11 +803,17 @@ static void enqueue_job(JSContext *ctx, JSValueConst proxy, const JSTrampStepDef
 static void descend_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after)
 {
     DCHECK(op >= 0 && op < LC_OP_N, "a subtree operation this file does not name was started");
-    /* A NAVIGABLE WHOSE DOCUMENT IS ALREADY DESTROYED IS NOT OPERATED ON AGAIN — §7.5.10's descendant form
-       opens by asking whether the document is fully active, and a destroyed one is not; §7.4.2.4 and §7.5.9
-       have no active document to fire at or unload. Without this, removing an ancestor of an already-removed
-       frame would queue a second walk of the same subtree, and the second one's report would decrement a count
-       the first had already emptied. */
+    /* A NAVIGABLE WHOSE DOCUMENT IS ALREADY DESTROYED IS NOT OPERATED ON AGAIN, AND THAT IS THIS ENGINE'S
+       INVARIANT RATHER THAN A STEP OF ANY STANDARD. Removing an ancestor of an already-removed frame would queue
+       a second walk of the same subtree, and the second walk's report would decrement a count the first had
+       already emptied — which runs a parent's body while siblings are still live. §7.4.2.4 and §7.5.9 also have
+       no active document here to fire at or to unload.
+       IT USED TO CITE §7.5.10 FOR IT, and that citation was worse than none: "§7.5.10's descendant form opens by
+       asking whether the document is fully active" is TRUE, and its answer for a document that is not is step
+       1's three substeps — pick a blocking reason, make the document unsalvageable, build not restored reasons —
+       after which the algorithm CONTINUES into the child walk and the destruction. There is no return there to
+       be the one taken here. A number that names a real step which says something else reads as authority and
+       sends the next reader to check the wrong thing. */
     if (window_proxy_destroyed(proxy)) return;
     /* A NAVIGABLE WHOSE ACTIVE DOCUMENT LIVES IN ANOTHER INSTANCE cannot be unloaded or destroyed from here:
        its listeners, its ports and its child navigables are all in the peer's heap, and this side would walk an
