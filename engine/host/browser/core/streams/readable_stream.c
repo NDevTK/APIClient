@@ -477,14 +477,14 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
             funcs[1] = rd->closed_funcs[1];
             rd->closed_funcs[0] = rd->closed_funcs[1] = JS_UNDEFINED;
         }
-        /* §4.9.1's ReadableStreamError step 7 and §4.9.3's ReadableStreamReaderGenericRelease step 6, which are
-           the SAME sentence — "Set reader.[[closedPromise]].[[PromiseIsHandled]] to true" — and are therefore
-           one condition and not two cases: the standard marks the arms that REJECT, and §4.9.1's
-           ReadableStreamClose is the arm it does not because that one RESOLVES. `reject` already is that
-           question.
+        /* §4.9.2 Interfacing with controllers' ReadableStreamError step 7 and §4.9.3 Readers'
+           ReadableStreamReaderGenericRelease step 6, which are the SAME sentence — "Set
+           reader.[[closedPromise]].[[PromiseIsHandled]] to true" — and are therefore one condition and not two
+           cases: the standard marks the arms that REJECT, and §4.9.2's ReadableStreamClose is the arm it does
+           not because that one RESOLVES. `reject` already is that question.
            WITHOUT IT THE ENGINE REPORTED ITS OWN SPEC STEP AS THE PAGE'S UNHANDLED REJECTION. Nobody reads
            `closed` in the normal case — Fetch §5.2's fully-read releases the reader once a body is whole, and
-           an errored stream usually has nothing awaiting it — so the TypeError §4.9.3 rejects with reached
+           an errored stream usually has nothing awaiting it — so the TypeError §4.9.3's release rejects with reached
            solver/result.h's `pageErrors` as an uncaught page error on every run that finished reading a body,
            with a backtrace of one native frame and no script anywhere under it. A page error the ENGINE raised
            and no program of the document could have is the plausible-datum defect: it is indistinguishable in
@@ -1281,6 +1281,16 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         s->w.func = rd->closed_funcs[d->state == RS_ERRORED];
         JS_FreeValue(ctx, rd->closed_funcs[d->state == RS_ERRORED ? 0 : 1]);
         rd->closed_funcs[0] = rd->closed_funcs[1] = JS_UNDEFINED;
+        /* §4.9.3 Readers' ReadableStreamReaderGenericInitialize step 5.3 — the THIRD arm only. Steps 3 and 4
+           mint a pending `closed` and one resolved with undefined, and neither is marked; step 5's is "a
+           promise rejected with stream.[[storedError]]", and the sentence after it is "Set
+           reader.[[closedPromise]].[[PromiseIsHandled]] to true". So this is the same one condition the
+           settle path asks — the arm that REJECTS — reached here because acquiring a reader over a stream that
+           has ALREADY errored rejects `closed` in the set-up rather than through §4.9.2's error.
+           Without it, `new ReadableStreamDefaultReader(erroredStream)` reported the stream's own stored error
+           as the page's unhandled rejection, which is a page error no program of the document raised.
+           BEFORE the rejection, for the reason stated at reader_closed_run's mark. */
+        if (d->state == RS_ERRORED) JS_MarkPromiseHandled(ctx, rd->closed);
         s->w.value = d->state == RS_ERRORED ? JS_DupValue(ctx, d->stored_error) : JS_UNDEFINED;
         STEP_GOTO(hdr->stage, GRS_SETTLE, &s->w.phase, NULL);
     }

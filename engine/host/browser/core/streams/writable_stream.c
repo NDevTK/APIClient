@@ -436,8 +436,7 @@ enum {
    quiet direction: a stream with no backpressure has already FULFILLED `ready`, so a sink whose `close` threw
    rejected `close()` and left `ready` fulfilled forever. Two names for one operation is what made a difference
    that does not exist look deliberate, so there is one.
-   The replacement is marked HANDLED because the spec's third step says so: the promise is the stream's
-   bookkeeping and a writer that is never read again must not be reported as an unhandled rejection. */
+   Its third step — [[PromiseIsHandled]] — is performed on BOTH arms, for the reason stated at the mark. */
 static int wr_settle_run(JSContext *ctx, StreamWork *w, WsWriterData *wr, int which, int reject,
                          JSValueConst value, JSValue in, JSValue **out_cb, int *out_argc)
 {
@@ -461,7 +460,6 @@ static int wr_settle_run(JSContext *ctx, StreamWork *w, WsWriterData *wr, int wh
             DCHECK(reject, "a §5.3 promise was resolved a second time");
             p = JS_NewPromiseCapability(ctx, pair);
             if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
-            JS_MarkPromiseHandled(ctx, p);
             wr_set(ctx, wr, which ? &wr->ready : &wr->closed, p);
         } else {
             *settled = 1;
@@ -469,6 +467,29 @@ static int wr_settle_run(JSContext *ctx, StreamWork *w, WsWriterData *wr, int wh
             pair[1] = funcs[1];
             funcs[0] = funcs[1] = JS_UNDEFINED;
         }
+        /* THE MARK BELONGS TO THE REJECTION AND NOT TO THE REPLACEMENT, which is the whole of what the two
+           Ensure operations say. Streams §5.5.3 Writers'
+           WritableStreamDefaultWriterEnsureClosedPromiseRejected is three steps — reject the promise IF it is
+           pending, OTHERWISE replace it with one rejected at birth, and THEN "Set
+           writer.[[closedPromise]].[[PromiseIsHandled]] to true" — and that third step sits OUTSIDE the
+           if/otherwise, so it is performed on both arms; …EnsureReadyPromiseRejected is the same three steps
+           over `ready`. Marking only the replacement was the pending arm reporting the STREAM'S OWN
+           bookkeeping as the page's unhandled rejection: `ready` and `closed` start pending, so the pending
+           arm is the COMMON one — every §5.5.2 WritableStreamRejectCloseAndClosedPromiseIfNeeded on a writer
+           acquired before the failure took it, and so did §5.5.1 Working with writable streams'
+           SetUpWritableStreamDefaultWriter, whose "erroring" and "errored" arms mint a capability and reject it
+           on the next line.  A page that never reads `closed` — which is every page that only writes — then
+           carried an engine-raised error in solver/result.h's `pageErrors` that no program of the document
+           could have produced, and a fabricated finding is indistinguishable in that column from a real one.
+           ONE CONDITION AND NOT SIX CASES: every §5 site that rejects one of these reaches this operation (see
+           the paragraph above), and the standard marks exactly the arms that REJECT — the resolutions,
+           FinishInFlightClose's `closed` and UpdateBackpressure's `ready`, are the arms it does not.
+           IT IS SET BEFORE THE REJECTION, though the standard's steps read the other way: quickjs calls the
+           host's rejection tracker FROM the reject and consults `is_handled` there, so a mark that lands after
+           it arrives after the rejection has already been reported. [[PromiseIsHandled]] is not observable to
+           the page, so the two orders differ in nothing else and a real `.catch` still runs. */
+        if (reject)
+            JS_MarkPromiseHandled(ctx, which ? wr->ready : wr->closed);
         JS_FreeValue(ctx, w->func);
         w->func = pair[reject];
         JS_FreeValue(ctx, pair[reject ^ 1]);
