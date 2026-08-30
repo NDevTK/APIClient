@@ -3638,7 +3638,7 @@ Step numbers are the standard's own list numbering as of that date.
    the first two and for nothing else, so an element whose upgrade THREW must never be upgraded
    again — and a boolean "does this wrapper carry a definition" cannot express that, because step 2
    sets the definition BEFORE step 8 can fail. DOM's "create an element" gives a fresh element
-   "undefined" exactly when its local name is one §4.13.1 would accept, and "uncustomized"
+   "undefined" exactly when its local name is one §4.13.3 "Core concepts" would accept, and "uncustomized"
    otherwise, which is why an absent state is DERIVED from the name rather than written at every
    creation site (one of which is the HTML parser).
 4. **DOM's insertion steps are a BRANCH, not two calls.** "If inclusiveDescendant is custom, then
