@@ -1554,10 +1554,12 @@ enum { DISPATCH_ARG = 0, CLICK_SYNTH = 1, DISPATCH_PAIR = 2 };
    It can suspend at three points: while WALKING the tree that makes the path (a page-sized walk, so it yields
    between parents), inside a listener, and inside the activation behaviour. */
 #define DISPATCH_STAGES(X) \
-    X(DISPATCH_INIT, "DOM §2.9 dispatch steps 1-6.8 (the dispatch flag, the target override, the relatedTarget " \
-                     "retargeted against the target and the step 6 condition it decides, the target's own path " \
-                     "item, whether the target is the activation target, whether it is an assigned slottable, " \
-                     "and the first get the parent)") \
+    X(DISPATCH_INIT, "Web IDL §3.2.15 Interface types' conversion of the `Event event` argument, DOM §2.7 " \
+                     "Interface EventTarget's dispatchEvent(event) method steps 1-2 (its two-condition " \
+                     "InvalidStateError, and isTrusted), then DOM §2.9 dispatch steps 1-6.8 (the dispatch " \
+                     "flag, the target override, the relatedTarget retargeted against the target and the " \
+                     "step 6 condition it decides, the target's own path item, whether the target is the " \
+                     "activation target, whether it is an assigned slottable, and the first get the parent)") \
     X(DISPATCH_PATH, "DOM §2.9 dispatch steps 6.9-6.11 (walk get the parent, appending an event path ITEM per " \
                      "ancestor — retargeting the target, the relatedTarget and the touch targets at each " \
                      "shadow boundary and recording the closed-tree flags — one parent per yield, because the " \
@@ -1923,28 +1925,41 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->ev = (s->hdr.arg == CLICK_SYNTH)
                     ? event_new_untrusted(ctx, "click", /*bubbles*/ true, /*cancelable*/ true)
                     : JS_DupValue(ctx, step_arg(&s->hdr, s->hdr.arg == DISPATCH_PAIR ? 1 : 0));
-        /* §2.9 step 1: the argument must BE an Event. The slot record is the brand — a page cannot forge the
-           symbol it hangs off, so an object shaped like an event is still not one. */
+        /* NOT A DOM STEP AT ALL, WHICH IS WHY IT IS FIRST: DOM §2.7 Interface EventTarget declares
+           `boolean dispatchEvent(Event event)`, so the argument is converted by Web IDL §3.2.15 Interface
+           types — step 1 "If V implements I, then return the IDL interface type value…", step 2 "Throw a
+           TypeError" — before any method step runs. The slot record is the brand a page cannot forge, so an
+           object shaped like an event is still not one. */
         if (!event_is(ctx, s->ev)) {
             JS_ThrowTypeError(ctx, "dispatchEvent requires an Event");
             return JS_STEP_ABRUPT;
         }
-        /* §2.9 step 2: an event already being dispatched cannot be dispatched again. */
+        /* DOM §2.7 Interface EventTarget, the `dispatchEvent(event)` method steps, STEP 1: "If event's
+           dispatch flag is set, OR if its initialized flag is not set, then throw an `InvalidStateError`
+           DOMException." NOT a §2.9 step — §2.9's own step 1 is "Set event's dispatch flag", which is what
+           the write below performs; a reader sent to §2.9 for this throw finds targetOverride.
+           ONE SPEC STEP, TWO THROWS, DELIBERATELY. The step's two conditions are one sentence and one
+           exception type, and splitting them costs nothing observable while the MESSAGE is the whole
+           diagnostic value: which of the two conditions held is exactly what a reader needs, and a shared
+           message would have described the second condition for a defect that was the first. */
         if (event_dispatch_flag(ctx, s->ev)) {
             JS_ThrowDOMException(ctx, "InvalidStateError", "the event is already being dispatched");
             return JS_STEP_ABRUPT;
         }
-        /* §2.7 dispatchEvent's OTHER early throw, and it is the same step: an event whose INITIALIZED FLAG is
-           unset cannot be dispatched. Only §4.5's createEvent makes one, and the two-call shape it exists for
-           — `createEvent` then `initEvent` — is only meaningful because dispatching between them throws. */
+        /* The same step's other condition: an event whose INITIALIZED FLAG is unset cannot be dispatched.
+           Only §4.5's createEvent makes one, and the two-call shape it exists for — `createEvent` then
+           `initEvent` — is only meaningful because dispatching between them throws. */
         if (!event_initialized(ctx, s->ev)) {
             JS_ThrowDOMException(ctx, "InvalidStateError",
                                  "the event was created by createEvent and never initialised");
             return JS_STEP_ABRUPT;
         }
+        /* §2.9 dispatch step 1: "Set event's dispatch flag." */
         event_set_dispatch_flag(ctx, s->ev, true);
-        /* §2.9 step 3: an event the PAGE dispatches is untrusted, whatever it was when constructed. One the
-           ENGINE fires keeps the flag it was built with, which is the whole difference between them. */
+        /* §2.7's dispatchEvent(event) method step 2: "Initialize event's `isTrusted` attribute to false" —
+           an event the PAGE dispatches is untrusted, whatever it was when constructed. One the ENGINE fires
+           keeps the flag it was built with, which is the whole difference between them. (§2.9 step 3 is
+           "Let activationTarget be null", which is `s->act`'s initialisation below.) */
         if (s->hdr.arg != DISPATCH_PAIR)
             event_set_trusted(ctx, s->ev, false);
         s->type = event_type(ctx, s->ev);
