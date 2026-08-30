@@ -42,6 +42,7 @@
 #include "core/html/dom_string_list.h"   /* §3.1.3's ancestor origins list IS a DOMStringList */
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/html_base_element.h"   /* §4.2.3's frozen base URL, whose two facts this record holds */
+#include "core/html/html_meta_csp.h"       /* §4.2.5.3's pragma: what one `<meta>` delivers to this container */
 #include "core/url/url.h"                  /* §2.4.3's fallback base URL asks whether an address matches about: */
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
@@ -2877,7 +2878,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     style_sheet_list_install_mixin(ctx, proto);
 }
 
-/* HTML §7.2.6's container for THIS document, from BOTH halves of the policy list.
+/* HTML §7.1.7 "Policy containers"' container for THIS document, from BOTH halves of the policy list.
    `csp` IS WHAT THE DOCUMENT WAS CREATED WITH — the response's `Content-Security-Policy` header, or §7.4's
    clone of the creator's for a document that came from no response — and it used to arrive nowhere: the
    trusted zone captured the header, handed it to the engine, and the engine's entry point cast it to `(void)`.
@@ -2885,7 +2886,19 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
    kills was reported as a working exploit — the exact false PoC §@S exists to never emit.
    The meta half is a REAL LEXBOR WALK, not a regex over the source: a `content` attribute is parsed markup by
    the time it is here, so entity decoding and quoting are the parser's answer rather than a second one — the
-   same reason the bundle id is a `<script>` scan. */
+   same reason the bundle id is a `<script>` scan.
+   WHAT A `<meta>` DELIVERS IS §4.2.5.3's ANSWER AND NOT THIS WALK'S. The walk used to read `http-equiv` and
+   `content` itself and merge the raw attribute value, which is not HTML §4.2.5.3 "Pragma directives"' content
+   security policy state: that algorithm REFUSES a `meta` outside `head` (step 1) and REMOVES `report-uri`,
+   `frame-ancestors` and `sandbox` from what is left (step 4). Both refusals make a browser enforce LESS than
+   the markup says, so performing neither judged pages under policies no browser applies — and for this engine
+   that suppresses REAL findings, since §@S measures every breakout against the document's policy. It is
+   core/html/html_meta_csp.h's now, asked once per node.
+   AND THIS WALK IS THE INVERSION, NAMED. §7.5.1 "Shared document creation infrastructure" creates the
+   Document and §7.5.2 "Loading HTML documents" then feeds a parser into it, so in the standard step 5's
+   "enforce the policy" appends to a list that already exists; this engine parses first and builds the record
+   afterwards, so the append is this batch instead. The question each `<meta>` is asked is identical either
+   way, which is why only the CALLER moves when the record is created before the parse. */
 PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
                                      SerializedEmbedderPolicy embedder)
 {
@@ -2904,52 +2917,48 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
     }
 
     /* No guard for a missing tree: document_install has already asserted there is one, and a second, softer
-       answer here would be the defensive branch that hides the case the assert exists to catch. */
+       answer here would be the defensive branch that hides the case the assert exists to catch.
+       EVERY NODE IS ASKED AND NONE IS FILTERED HERE, because §4.2.5.3's selection — is this a `meta`, is it in
+       the content security policy state, is it a child of `head` — IS the algorithm's own first three acts and
+       a filter here would be a second reading of them. */
     for (cur = lxb_dom_interface_node(dom)->first_child; cur; ) {
-        if (cur->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            size_t qn = 0;
-            const lxb_char_t *q = lxb_dom_element_qualified_name((lxb_dom_element_t *)cur, &qn);
-            if (q && qn == 4 && !memcmp(q, "meta", 4)) {
-                size_t hl = 0, cl = 0;
-                const lxb_char_t *he = lxb_dom_element_get_attribute((lxb_dom_element_t *)cur,
-                                                                     (const lxb_char_t *)"http-equiv", 10, &hl);
-                /* The equivalence is ASCII case-insensitive, which is how every real page spells it. */
-                if (he && hl == 23 && !strncasecmp((const char *)he, "content-security-policy", 23)) {
-                    const lxb_char_t *cv = lxb_dom_element_get_attribute((lxb_dom_element_t *)cur,
-                                                                         (const lxb_char_t *)"content", 7, &cl);
-                    if (cv && cl) {
-                        /* CSP §3.3 MAKES `sandbox` MEANINGLESS IN A `<meta>`, and this container carries no
-                           per-policy SOURCE that could tell a meta policy from a header one — so a meta
-                           `sandbox` merged here would be read by §7.1.5's CSP-derived sandboxing flags as if
-                           the server had sent it, and would sandbox a document the server did not sandbox.
-                           Asked with the same function that would go on to misread it, so the question and
-                           the answer cannot drift: give a Policy its CSP §2.2 SOURCE (`header`/`meta`) and
-                           have the derivation skip the meta ones, then this assert is the line to delete. */
-                        DCHECK(policy_csp_derived_sandboxing_flags((const char *)cv, cl) == 0,
-                               "a `<meta http-equiv=Content-Security-Policy>` declares a `sandbox` directive, "
-                               "which CSP §3.3 IGNORES for a meta-delivered policy — this container has no "
-                               "per-policy SOURCE, so merging it would let §7.1.5's CSP-derived sandboxing "
-                               "flags read it as a header policy and sandbox a Document the response did not");
-                        /* SEVERAL META POLICIES ALL APPLY, and they are joined with a COMMA because that is
-                           CSP §2.2's serialization of a policy LIST. A ';' join would have made them one
-                           policy, where a repeated directive is ignored and `script-src` overrides
-                           `default-src` — so the narrowing second policy would have silently vanished. */
-                        size_t add = cl + (acc_len ? 1 : 0);
-                        char *g = realloc(acc, acc_len + add + 1);
-                        CHECK(g != NULL, "document: OOM collecting a policy");
-                        acc = g;
-                        if (acc_len) acc[acc_len++] = ',';
-                        memcpy(acc + acc_len, cv, cl);
-                        acc_len += cl;
-                        acc[acc_len] = 0;
-                    }
-                }
-            }
+        char *delivered = html_meta_csp_policy(cur);
+
+        if (delivered) {
+            /* §4.2.5.3 STEP 5, "enforce the policy policy" — which for a Document whose list is a serialized
+               one is an append to that text.
+               SEVERAL META POLICIES ALL APPLY, and they are joined with a COMMA because that is CSP §2.2's
+               serialization of a policy LIST. A ';' join would have made them one policy, where a repeated
+               directive is ignored and `script-src` overrides `default-src` — so the narrowing second policy
+               would have silently vanished. */
+            size_t dl = strlen(delivered);
+            size_t add = dl + (acc_len ? 1 : 0);
+            char *g = realloc(acc, acc_len + add + 1);
+            CHECK(g != NULL, "document: OOM collecting a policy");
+            acc = g;
+            if (acc_len) acc[acc_len++] = ',';
+            memcpy(acc + acc_len, delivered, dl);
+            acc_len += dl;
+            acc[acc_len] = 0;
+            free(delivered);
         }
         if (cur->first_child) { cur = cur->first_child; continue; }
         while (cur && !cur->next) cur = cur->parent;
         if (cur) cur = cur->next;
     }
+    /* AND THE `sandbox` INVARIANT §7.1.5 RESTS ON IS NOW ESTABLISHED RATHER THAN DETECTED. A DCHECK stood at
+       the merge above saying a meta-delivered policy must declare no `sandbox` directive — true, and it was a
+       report of a gap rather than the fix: CSP §3.3 "The <meta> element" makes `sandbox` meaningless there,
+       this container carries no per-policy source that could tell a meta policy from a header one, and
+       §7.1.5's CSP-derived sandboxing flags would therefore have read it as the server's. §4.2.5.3 step 4
+       REMOVES it, so the state that assert existed to catch cannot arise; the check that survives is over the
+       WHOLE merged list and is the one that would fire if it ever did. */
+    DCHECK(!acc || policy_csp_derived_sandboxing_flags(acc, acc_len) ==
+                   (csp && *csp ? policy_csp_derived_sandboxing_flags(csp, strlen(csp)) : 0),
+           "merging this document's `<meta>` policies changed §7.1.5's CSP-derived sandboxing flags — only a "
+           "`sandbox` directive can do that and HTML §4.2.5.3 \"Pragma directives\" step 4 removes it from "
+           "every meta-delivered policy, so a difference here is a policy that reached this list without "
+           "going through that step");
     {
         /* THE MERGED LIST TAKES ONE SELF-ORIGIN, and it is the created-with policy's rather than a second one
            derived for the `<meta>` half. CSP §3.3 delivers a meta policy INSIDE the response this document

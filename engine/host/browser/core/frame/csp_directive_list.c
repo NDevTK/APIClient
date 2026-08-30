@@ -110,9 +110,16 @@ static void csp_policy_append(CspPolicy *policy, CspToken name, CspToken value_t
 }
 
 /* §2.2.1 over ONE serialized policy. */
-static void csp_policy_parse(CspPolicy *out, const char *text, size_t len)
+void csp_policy_parse(CspPolicy *out, const char *text, size_t len)
 {
     size_t pos = 0;
+
+    DCHECK(out != NULL, "a CSP policy was parsed into nothing");
+    DCHECK(out->directives == NULL && out->n_directives == 0,
+           "a CSP policy was parsed over one that already holds directives — csp_policy_free frees exactly "
+           "what ONE parse allocated, so the earlier parse's value arrays would be unreachable and unfreed");
+    DCHECK(len == 0 || text != NULL, "a CSP policy parse was given a length with no bytes");
+    if (!text || !len) return;
 
     /* "For each token returned by STRICTLY SPLITTING serialized on U+003B SEMICOLON" — strictly, so an empty
        token between two semicolons is produced and then discarded by step 3.2 rather than skipped silently. */
@@ -209,6 +216,74 @@ void csp_list_free(CspList *list)
     free(list->policies);
     list->policies = NULL;
     list->n_policies = 0;
+}
+
+void csp_policy_free(CspPolicy *policy)
+{
+    size_t i;
+
+    if (!policy) return;
+    for (i = 0; i < policy->n_directives; i++)
+        free(policy->directives[i].value);
+    free(policy->directives);
+    policy->directives = NULL;
+    policy->n_directives = 0;
+}
+
+void csp_policy_remove_directive(CspPolicy *policy, const char *name)
+{
+    size_t i = 0;
+
+    DCHECK(policy != NULL, "a directive was removed from a policy that does not exist");
+    DCHECK(name != NULL && csp_is_ascii_lowercase(name),
+           "a directive was removed by a name that is not ASCII lowercase — the comparison is against the "
+           "KEY and a capital in it would match nothing, so the directive would silently survive a removal "
+           "HTML §4.2.5.3 \"Pragma directives\" performs precisely so that it cannot take effect");
+    while (i < policy->n_directives) {
+        if (csp_token_is(policy->directives[i].name, name)) {
+            free(policy->directives[i].value);
+            memmove(&policy->directives[i], &policy->directives[i + 1],
+                    (policy->n_directives - i - 1) * sizeof *policy->directives);
+            policy->n_directives--;
+            continue;   /* the shift moved a not-yet-tested directive into `i` */
+        }
+        i++;
+    }
+}
+
+char *csp_policy_serialize(const CspPolicy *policy)
+{
+    size_t i, len = 0, at = 0;
+    char *out;
+
+    DCHECK(policy != NULL, "a policy that does not exist was serialized");
+    if (!policy->n_directives) return NULL;
+    for (i = 0; i < policy->n_directives; i++) {
+        DCHECK(policy->directives[i].name.n != 0,
+               "a policy holds a directive with an EMPTY name — §2.3 makes a directive name \"a non-empty "
+               "string\" and §2.2.1 step 3.3 collects at least one code point, so a zero-length name is a "
+               "directive set nothing this file parsed produced, and serializing it would emit a bare "
+               "separator that re-parses as a different policy");
+        if (i) len += 2;                                     /* "; " */
+        len += policy->directives[i].name.n;
+        if (policy->directives[i].value_text.n)
+            len += 1 + policy->directives[i].value_text.n;    /* " " + value */
+    }
+    out = malloc(len + 1);
+    CHECK(out != NULL, "CSP: OOM serializing a policy");
+    for (i = 0; i < policy->n_directives; i++) {
+        if (i) { out[at++] = ';'; out[at++] = ' '; }
+        memcpy(out + at, policy->directives[i].name.p, policy->directives[i].name.n);
+        at += policy->directives[i].name.n;
+        if (policy->directives[i].value_text.n) {
+            out[at++] = ' ';
+            memcpy(out + at, policy->directives[i].value_text.p, policy->directives[i].value_text.n);
+            at += policy->directives[i].value_text.n;
+        }
+    }
+    DCHECK(at == len, "a policy serialization wrote a different number of bytes than it measured");
+    out[at] = 0;
+    return out;
 }
 
 const CspDirective *csp_policy_directive(const CspPolicy *policy, const char *name)

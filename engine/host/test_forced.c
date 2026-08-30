@@ -3665,6 +3665,60 @@ static void document_policy_selftest(void)
         policy_container_free(both);
     }
 
+    {
+        /* HTML §4.2.5.3 "Pragma directives"' TWO REFUSALS, which are the two ways a browser enforces LESS than
+           the markup says — and therefore the two ways an engine that skips them SUPPRESSES a real finding.
+           Step 1 returns for a `meta` that is not a CHILD OF A `head`, which is exactly the shape an HTML
+           injection produces; step 4 removes `report-uri`, `frame-ancestors` and `sandbox` before the policy
+           is enforced, and `sandbox` is the one this engine could previously only assert about. */
+        static const char *BODY_META =
+            "<html><head></head><body>"
+            "<meta http-equiv='Content-Security-Policy' content=\"script-src 'none'\">"
+            "</body></html>";
+        /* `sandbox` FIRST so that a build which merged it would carry it into the list's LAST sandbox
+           directive, which is the one §7.1.5 reads; `frame-ancestors` and `report-uri` beside it because step
+           4 names all three and a removal written for one of them would pass a fixture that tests one. */
+        static const char *HEAD_STRIPPED =
+            "<html><head>"
+            "<meta http-equiv='Content-Security-Policy' "
+            "content=\"sandbox allow-scripts; frame-ancestors 'none'; report-uri /r; script-src 'self'\">"
+            "</head><body></body></html>";
+        lxb_html_document_t *body_dom = dom_document_create();
+        lxb_html_document_t *strip_dom = dom_document_create();
+        PolicyContainer *body_p, *strip_p;
+        const char *strip_text;
+
+        html_parse_document(body_dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
+                            (const lxb_char_t *)BODY_META, strlen(BODY_META));
+        body_p = document_policy_new(body_dom, NULL, self_origin, serialized_embedder_policy_new());
+        CHECK(policy_container_csp(body_p) == NULL,
+              "a `<meta http-equiv=Content-Security-Policy>` in the BODY delivered a policy — §4.2.5.3 step 1 "
+              "returns for a meta that is not a child of a head, so enforcing it judges the page under a "
+              "policy no browser applies and drops every breakout that policy would have killed");
+        CHECK(csp_ok(body_p, CSP_INLINE_SCRIPT_ATTRIBUTE),
+              "a body-placed meta policy blocked an inline handler that every browser runs");
+
+        html_parse_document(strip_dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
+                            (const lxb_char_t *)HEAD_STRIPPED, strlen(HEAD_STRIPPED));
+        strip_p = document_policy_new(strip_dom, NULL, self_origin, serialized_embedder_policy_new());
+        strip_text = policy_container_csp(strip_p);
+        CHECK(strip_text != NULL, "the surviving directive of a stripped meta policy delivered nothing at all");
+        CHECK(strstr(strip_text, "sandbox") == NULL && strstr(strip_text, "frame-ancestors") == NULL &&
+              strstr(strip_text, "report-uri") == NULL,
+              "§4.2.5.3 step 4's three directives survived into a document's CSP list — `sandbox` there is "
+              "read by §7.1.5's CSP-derived sandboxing flags as if the server had sent it");
+        CHECK(policy_csp_derived_sandboxing_flags(strip_text, strlen(strip_text)) == 0,
+              "a `<meta>`-delivered `sandbox` sandboxed a Document whose response did not");
+        CHECK(!csp_ok(strip_p, CSP_INLINE_SCRIPT_ATTRIBUTE),
+              "the directives step 4 does NOT remove must still be enforced — a removal that took the whole "
+              "policy would report every gated sink on such a page as unblocked");
+
+        policy_container_free(body_p);
+        policy_container_free(strip_p);
+        dom_document_destroy(body_dom);
+        dom_document_destroy(strip_dom);
+    }
+
     policy_container_free(p);
     policy_container_free(empty);
     dom_document_destroy(dom);

@@ -111,6 +111,41 @@ void csp_list_parse(CspList *out, const char *serialized, size_t len, const Orig
 /* Frees exactly what csp_list_parse allocated — the directive and value arrays — and never the text. */
 void csp_list_free(CspList *list);
 
+/* §2.2.1 "parse a serialized CSP" OVER ONE SERIALIZED POLICY — the algorithm §2.2.2 runs per comma-delimited
+   member above, and the one HTML §4.2.5.3 "Pragma directives" invokes BY NAME on a `<meta>` element's
+   `content` attribute ("let policy be the result of executing Content Security Policy's parse a serialized
+   Content Security Policy algorithm on the meta element's content attribute's value").
+   IT IS ONE POLICY AND NOT A LIST, and the difference is not pedantic: §2.2 makes U+002C the LIST delimiter
+   and §2.2.1 gives it no meaning at all, so a comma inside a `<meta>` policy is part of a directive value.
+   A caller that reached for csp_list_parse would be reading a policy the standard does not split as two.
+   `out` must be zeroed; `text` is BORROWED and must outlive `out` (this parse copies nothing — see the file
+   header). A policy whose directive set comes out empty is a policy that says nothing, which §2.2.2's own
+   step drops rather than appends; that judgement is the caller's here, because this entry parses ONE policy
+   and has no list to append it to. */
+void csp_policy_parse(CspPolicy *out, const char *text, size_t len);
+
+/* Frees exactly what ONE csp_policy_parse allocated — the directive array and each directive's value array —
+   and never the text. csp_list_free does this for every member of a list; a policy parsed on its own has no
+   list to be freed through. */
+void csp_policy_free(CspPolicy *policy);
+
+/* HTML §4.2.5.3 "Pragma directives"' step 4 — "remove all occurrences of the report-uri, frame-ancestors, and
+   sandbox directives from policy" — as the one operation it is: a directive is taken OUT of a policy's
+   directive set. `name` must be ASCII lowercase (csp_policy_directive's rule, asserted the same way) and the
+   match is ASCII case-insensitive, so the page's own spelling is what is compared and never rewritten.
+   ALL OCCURRENCES, not the first: §2.2.1 step 3.4 already makes a name unique within a policy IT parsed, so
+   this loops for a policy assembled any other way rather than resting on that parse's property. */
+void csp_policy_remove_directive(CspPolicy *policy, const char *name);
+
+/* §2.2's SERIALIZATION OF ONE POLICY — the inverse of csp_policy_parse, and the form a policy travels in
+   through this build (policy_container.h: "a flat parse over one owned string", so a container serializes to
+   its text and reconstitutes by parsing it again). Directives in delivery order, joined by "; "; a directive
+   whose value is empty serializes as its bare name, which is what `upgrade-insecure-requests` is.
+   NULL FOR A POLICY WITH NO DIRECTIVES, which is a positive statement and the same one §2.2.2 makes when it
+   refuses to append such a policy: a policy that says nothing is not a policy that permits everything.
+   The result is a NUL-terminated string the CALLER FREES. */
+char *csp_policy_serialize(const CspPolicy *policy);
+
 /* An ASCII case-insensitive compare of a token against a literal that MUST already be ASCII lowercase, which
    is asserted: CSP compares keywords, directive names and scheme parts this way throughout, and a literal with
    a capital in it would match nothing while looking like it should. */
