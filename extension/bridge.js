@@ -1314,6 +1314,12 @@ function _bestCandidate(idx) {
   const waitingAddrs = new Set();
   for (const job of _waiting)
     if (!(job.msg.frameId && _isRealOrigin(job.msg.origin))) waitingAddrs.add(job.msg.sourceUrl);
+  /* AND EVERY ADDRESS AN APPLICATION HAS DECLARED IS A PAGE OF ITSELF, which asks this index a question of its
+     own: does this profile ALREADY hold a parked frontier at that address? A declared route with a residue is
+     already a work item — the residue's own admission fetches that document back and resumes its flows against
+     today's server — so the aggregate below is what lets the seed walk leave it to that item instead of
+     spending a second fetch on one address. Same set, same one pass, different question. */
+  for (const addr of _seeds.keys()) waitingAddrs.add(addr);
   const byAddress = new Map();
   if (waitingAddrs.size) for (const row of idx.values()) {
     if (!waitingAddrs.has(row.sourceUrl)) continue;
@@ -1329,8 +1335,9 @@ function _bestCandidate(idx) {
   /* THE READING, ACCUMULATED BY THE SAME WALK THAT PICKS. Every `w` below is counted into it exactly once and
      at the point it is computed, so a candidate the pick considers and the census does not is not a shape this
      function can be in. */
-  const cen = { cands: 0, candDocs: 0, candCold: 0, exclSub: 0, exclLive: 0, exclHeld: 0, exclStranded: 0 };
-  let wMax = 0, wMin = 0, docMax = 0, coldMax = 0;
+  const cen = { cands: 0, candDocs: 0, candSeeds: 0, candCold: 0,
+                exclSub: 0, exclSeedLive: 0, exclSeedParked: 0, exclLive: 0, exclHeld: 0, exclStranded: 0 };
+  let wMax = 0, wMin = 0, docMax = 0, seedMax = 0, coldMax = 0;
   for (const job of _waiting) {
     /* A SUB-FRAME NEVER ROOTS A CLUSTER — its embedder names it (see admit), so it is not admissible and is
        therefore not a candidate. It keeps its place in `_waiting` and is answered by the instance that
@@ -1349,6 +1356,40 @@ function _bestCandidate(idx) {
     if (cen.cands === 0 || w < wMin) wMin = w;
     cen.candDocs++; cen.cands++;
     if (!best || w > best.w) best = { kind: "doc", job, w };
+  }
+  /* AND THE ADDRESSES AN APPLICATION DECLARED ARE PAGES OF ITSELF — the third kind of work item, ranked by the
+     SAME weight over the SAME index as the two beside it, which is what "Cold-tail resume is the SAME admission
+     step" means read one kind wider. It carries no bytes; what it costs is one fetch, and that cost is already
+     priced by the weight's own divisor (`visits` counts the fetches spent at this address, so a route that has
+     been explored and demonstrated nothing falls beneath an address nobody has opened after exactly as many
+     admissions as it has shown findings).
+     AN ADDRESS A LIVE OR WAITING DOCUMENT ALREADY HOLDS LEAVES THE ORDER, and it is the same sentence the cold
+     arm below is excluded by: that document IS the exploration of this address, and seating a second instance
+     for it would explore one page twice while the order believed it had spent one fetch. It is COUNTED rather
+     than skipped, because "no route was declared" and "every declared route is already being explored" are two
+     different states and a single zero cannot say which. NOTHING IS DROPPED — the entry stays in `_seeds` and
+     is offered again the moment that document is gone. */
+  for (const addr of _seeds.keys()) {
+    if (live.has(addr)) { cen.exclSeedLive++; continue; }
+    /* AND AN ADDRESS THIS PROFILE ALREADY HOLDS A PARKED FRONTIER FOR LEAVES IT TOO, for the same sentence one
+       tier down. That residue's own admission IS a visit to this address — it is rehydrated by the arm below,
+       its document is fetched back, and §Time-travel-resume requires the flows it resumes to "re-derive
+       example VALUES from CURRENT sources" — so a seed ranked beside it is one address fetched twice for one
+       exploration, and the two would then divide the address's own history between them. It is NOT a
+       same-URL check in §NO BOUNDS' sense: nothing is refused and nothing is dropped, the entry keeps its
+       place, and the moment that residue drains (`frontierPut` DELETES an entry whose recipes are empty) this
+       address has no row, no live holder and no exploration — and it is admitted and re-fetched. */
+    if (byAddress.get(addr) !== undefined) { cen.exclSeedParked++; continue; }
+    /* WHAT IS LEFT IS AN ADDRESS THIS PROFILE HAS NEVER SERVED — no live holder, no waiting document and no
+       row in the store — so `FRONTIER_UNSERVED` is the POSITIVE statement about it rather than a hole a `||`
+       fills, and it is the one legitimate zero-visit input this weight takes. That is the same reading the
+       waiting arm above gives an address with no rows, reached here by exclusion instead of by lookup. */
+    const w = frontierWeight(FRONTIER_UNSERVED);
+    if (cen.candSeeds === 0 || w > seedMax) seedMax = w;
+    if (cen.cands === 0 || w > wMax) wMax = w;
+    if (cen.cands === 0 || w < wMin) wMin = w;
+    cen.candSeeds++; cen.cands++;
+    if (!best || w > best.w) best = { kind: "seed", addr, w };
   }
   for (const row of idx.values()) {
     if (live.has(row.sourceUrl)) {
@@ -1385,11 +1426,12 @@ function _bestCandidate(idx) {
     if (!best || w > best.w) best = { kind: "cold", row, w };
   }
   /* THE EXTREMA, ATTACHED ONLY WHERE THERE IS A POPULATION TO HAVE THEM — see the rule above this function.
-     `candDocWMax` and `candColdWMax` are kept apart deliberately: the Level-1 question §scheduler asks is
-     whether a WAITING DOCUMENT or a PARKED FRONTIER is worth the next instance, and one merged extremum states
-     the answer while erasing the comparison that produced it. */
+     `candDocWMax`, `candSeedWMax` and `candColdWMax` are kept apart deliberately: the Level-1 question
+     §scheduler asks is whether a WAITING DOCUMENT, a DECLARED ROUTE or a PARKED FRONTIER is worth the next
+     instance, and one merged extremum states the answer while erasing the comparison that produced it. */
   if (cen.cands > 0) { cen.candWMax = wMax; cen.candWMin = wMin; }
   if (cen.candDocs > 0) cen.candDocWMax = docMax;
+  if (cen.candSeeds > 0) cen.candSeedWMax = seedMax;
   if (cen.candCold > 0) cen.candColdWMax = coldMax;
   /* A WALK THAT RANKED MEMBERS AND PICKED NOTHING IS A COMPARISON THAT NEVER HAPPENED, and it is asserted here
      rather than left to the caller: `best` is the whole output of this order, so the two disagreeing means the
@@ -2797,6 +2839,23 @@ let _nextRemoteToken = 1;
    rendezvous token above is — a group id decides which documents share a heap, and an untrusted instance that
    could name an existing group could put its own document behind another origin's principal. */
 let _nextSwapGroup = 1;
+/* AND §7.3.2.3's SAME SENTENCE FOR A DECLARED ROUTE, which is a top-level traversable in a group of its own for
+   the reason a swap's is: it is not nested in the declaring document and it may not share that document's heap.
+   A SEPARATE COUNTER FROM THE SWAP'S, because they are two different acts and a shared counter would make a
+   log line about one unreadable as the other; the only property either needs is that no other group has its id,
+   and `seed:` prefixes it for the same reason the cold tier's `cold:` prefixes its own — a group id is compared
+   against a browser tab id, and two namespaces that can collide are one namespace. */
+let _nextSeedGroup = 1;
+
+/* THE ROUTE DECLARATION'S WIRE VOCABULARY, spelled here because both halves of it are read below and a string
+   literal at a branch is a vocabulary with no name. The verb is solver/route_seed.h's `ROUTE_SEED_NOTICE`; the
+   two provenance words are solver/engine.h's `PENDING_PROVENANCE_*`, which is the SAME vocabulary that header
+   declares for every outbound request rather than a second one for this record — a request is a request
+   whether it becomes a fetch or a NAVIGATION, and the zone's firing policy has to read one set of words. `observed` is deliberately absent: no load of anything produces a declaration, so
+   the token is unreachable on this record and a value carrying it is a field read at the wrong offset. */
+const ROUTE_SEED_NOTICE = "document.seed";
+const PROVENANCE_DERIVED = "derived";
+const PROVENANCE_FORCED = "forced";
 
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
@@ -3090,6 +3149,81 @@ async function hostNotice(eng, line) {
        the response came from and not where the swap pointed. */
     await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, true, null, "u", "null",
                        "none")._readyP;
+    return;
+  }
+  /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, reached
+     when forced execution ran the bundle's own `history.pushState`/`replaceState` (solver/route_seed.h states
+     what a declaration is and why running a routing member is not the string-matching §RUN-DON'T-MATCH bans).
+     THIS BRANCH SPENDS NO NETWORK, and that is the whole of its design. Every other provisioning notice above
+     names a navigable a page already holds a WindowProxy for, so its document has to exist now; a declared
+     route is a WORK ITEM and its fetch is an external effect the Level-1 order carries like any other cost.
+     So this RECORDS and `admit` loads — see `_seeds`. */
+  if (f[0] === ROUTE_SEED_NOTICE) {
+    DCHECK(f.length >= 3 && !!f[1] && !!f[2],
+           "a route declaration was short of its fields — the engine writes the ADDRESS and the PROVENANCE, " +
+           "and a record missing either is a writer this zone no longer shares a grammar with: an absent " +
+           "address is a page nothing can load, and an absent provenance is the one field the decision to " +
+           "load it at all is made from");
+    /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE, enumerated rather than defaulted. `observed` is
+       UNREACHABLE for a declaration and is therefore not one of the two words: §7.4.4 is reached only by
+       running the page's code, so no load of anything produces one, and a record carrying it would be a field
+       read at the wrong offset rather than a claim this zone should act on. */
+    DCHECK(f[2] === PROVENANCE_DERIVED || f[2] === PROVENANCE_FORCED,
+           "a route declaration carries the provenance `" + f[2] + "`, which is neither `derived` nor " +
+           "`forced` — those are the only two a declaration can have, so this is either the field split at " +
+           "the wrong tab or an engine speaking a vocabulary this zone does not");
+    /* A FORCED ADDRESS IS REFUSED, AND THE REFUSAL IS THE POLICY'S OWN DEFAULT RATHER THAN A GAP IN IT.
+       CLAUDE.md §Attacker-sources: firing what a bundle merely NAMES is "CONFIGURABLE AND PER-ORIGIN … Default
+       conservative, widened deliberately per origin, never inferred from a site looking like a test." So an
+       origin nobody has widened answers NO at every future state of that setting, which is what this arm is —
+       not a placeholder for one. A widened origin is a PERSON'S SENTENCE and enters through the same door
+       every other risk decision does (`engine/trusted.mjs` is where the native host reads it, as `--explore
+       <origin>`); it is never inferred here from the address, which is exactly the inference that rule bans.
+       WHY IT MATTERS FOR A NAVIGATION SPECIFICALLY: the address IS the whole of the safety. There is no
+       partition, no interception and no second policy point behind it, and a navigation of one of the custom
+       browser's own tabs CARRIES THE PERSON'S SESSION — so a credentialed load of an address that exists only
+       because a gate was forced is a reply about a request no client makes, delivered under the person's own
+       name. It is not merely unhelpful: §@H makes such a reply's values FORCED for ever, because one invented
+       field is the example that shapes the next endpoint.
+       REPORTED RATHER THAN ASSERTED, because nothing is broken: the engine did exactly what it should — it
+       derived the address and STATED how it got there — and this zone did exactly what it should, which is to
+       decline. A derived-and-unfired address is not a gap in the report; §Attacker-sources says it IS the
+       report. */
+    if (f[2] === PROVENANCE_FORCED) {
+      console.warn("[bridge] a route declaration for `" + f[1] + "` stood on a FORCED arm and its origin is " +
+                   "not widened for exploration — the address is derived and reported, and it is not loaded");
+      return;
+    }
+    /* AND IT IS A ROUTE OF *THIS* DOCUMENT, ESTABLISHED FROM THE TWO ADDRESSES. HTML §7.2.5 "The History
+       interface"' can-have-its-URL-rewritten refuses a rewrite whose target differs "in their scheme,
+       username, password, host, or port components", so the engine has already refused a cross-origin one —
+       and this zone establishes the same thing from the facts it holds rather than trusting that, exactly as
+       the ambient seed's admission does one entry along. The comparison is between two ADDRESSES and decides
+       no principal: the principal this load reads under is `eng.origin`, which is browser-stated and is never
+       derived from a URL.
+       IT IS A REPORT-SHAPED REFUSAL AND NOT AN ASSERT for the address half, because the engine is UNTRUSTED —
+       a record it wrote naming another origin is a thing this zone must simply not act on, never a proof that
+       its own invariant broke. */
+    if (originOf(f[1]) !== originOf(eng.msg.sourceUrl)) {
+      console.warn("[bridge] a route declaration named an address outside the declaring document's origin (" +
+                   f[1] + " vs " + eng.msg.sourceUrl + ") — HTML §7.2.5's can-have-its-URL-rewritten permits " +
+                   "no such rewrite, so this is not a page of that application and it is not seeded");
+      return;
+    }
+    /* THE PRIVATE-NETWORK PRINCIPAL AND THE CREDENTIALED-READ PRINCIPAL ARE TAKEN NOW AND CARRIED WITH THE
+       WORK ITEM — §scheduler's "an operation that becomes a work item takes its inputs with it". They belong
+       to the DECLARING document and not to the declared address: `safeFetch` classifies the SSRF host relative
+       to `principalUrl`, so an address that supplied itself would self-authorize into the person's intranet,
+       and the credentialed-read principal is the browser's `MessageSender.origin` for the document whose
+       router declared this route. Reading either off the pool at admission time would read whatever that
+       engine had become by then — including gone. */
+    if (!_seeds.has(f[1]))
+      _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin });
+    /* AND NOTHING IS KICKED. A `_hostKick()` here would be a call that cannot do anything: this router runs
+       inside `serviceFetch`, which runs inside the ONE scheduling loop, so `_hostDriving` is true and the kick
+       returns on its first line — a computed call with no effect, which is the read-with-no-writer defect
+       facing the other way. The round that delivered this notice is a round of that loop and `admit` is asked
+       at the top of the next one, which is where this entry is ranked. */
     return;
   }
   if (f[0] === "windowproxy.post") {
@@ -3931,7 +4065,7 @@ let _hostDriving = false;
    browsing is working at all: this used to be the abort that killed the scheduler, so a session with several
    tab navigations and a zero here is one where every one of them went somewhere else. */
 const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedRooted: 0, peakBooting: 0,
-                        evicted: 0, rehydrated: 0, navigated: 0 };
+                        evicted: 0, rehydrated: 0, navigated: 0, seeded: 0 };
 /* WHICH LIVE DOCUMENTS THESE FINDINGS BELONG TO. The merge in the trusted zone used to be handed a sourceUrl
    and nothing else, so it had no document to merge INTO and built a throwaway view instead — a producer whose
    consumer was an object discarded on return, which is exactly the shape `_emptyDocView`'s own comment
@@ -4325,11 +4459,87 @@ const _hostOps = {
     const pick = _admissionHasHeadroom() ? _bestCandidate(_coldRanking) : null;
     const cand = pick ? pick.best : null;
     if (cand) {
-      DCHECK(cand.kind === "doc" || cand.kind === "cold",
+      DCHECK(cand.kind === "doc" || cand.kind === "seed" || cand.kind === "cold",
              "the admission order produced a candidate of a kind this zone has no way to build (`" +
-             cand.kind + "`) — every work item that is not resident is either a document waiting for an " +
-             "instance or a parked frontier, and a third would be silently skipped by whichever of the two " +
-             "arms below happened to be the fallback");
+             cand.kind + "`) — every work item that is not resident is a document waiting for an instance, an " +
+             "address an application declared is a page of itself, or a parked frontier, and a fourth would " +
+             "be silently skipped by whichever of the three arms below happened to be the fallback");
+      /* AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF — HTML §7.4.4's URL and history update steps
+         ran in some engine and it announced the route (solver/route_seed.h). This is where its ONE fetch is
+         spent, and spending it HERE rather than at the notice is the whole reason the register exists: the
+         order decided this address was worth a request ahead of every other work item, which is what
+         §A-SELF-SEEDED-DOCUMENT means by an outbound request being a cost the WFQ carries.
+         IT LEAVES THE REGISTER FIRST AND UNCONDITIONALLY. A load that fails has still spent the fetch, so
+         re-offering the entry would spend one per round on an address that has already said no; and the entry
+         is never LOST by leaving, because the declaring document's residue replays its router and declares the
+         route again — which is the re-derivable tier's own exchange, storage traded for recomputation. */
+      if (cand.kind === "seed") {
+        const seed = _seeds.get(cand.addr);
+        DCHECK(seed !== undefined,
+               "the admission order picked a declared route that is no longer declared — `_seeds` is written " +
+               "by the notice router and spliced only here, so a pick with no entry is the order and the " +
+               "register having parted, and the address about to be loaded would be one nothing named");
+        _seeds.delete(cand.addr);
+        if (!seed) return pick.census;
+        /* THE SEED'S OWN §7.4 NAVIGATION, THROUGH THE ONE CHOKEPOINT — the same call a live document's seed and
+           a peer's child navigable both make. The PRIVATE-NETWORK principal and the CREDENTIALED-READ principal
+           are the DECLARING document's, taken when the route was declared and carried on the work item, because
+           §scheduler's "an operation that becomes a work item takes its inputs with it" is exactly the rule a
+           read of the pool here would break: the engine that declared this route may be gone by now. */
+        const loaded = await navigationLoad(seed.url, seed.principalUrl, seed.principalUrl, seed.principalOrigin);
+        /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, in the same order and for the
+           same reasons stated at the live seed: the chokepoint's own `unavailable`; a response that landed on
+           ANOTHER ORIGIN (which is a Document of origin B about to be seated in a cluster keyed on origin A,
+           and is also evidence that this server answers this request differently from the one the person's own
+           navigation made); and an EMPTY body, which is a perfectly ordinary Document under §7.4.5 and cannot
+           be the bundle this run exists to explore. Each costs the one fetch and nothing more. */
+        const _landed = originOf(loaded.url);
+        if (loaded.unavailable !== null || _landed === "" || _landed !== originOf(seed.principalUrl) ||
+            loaded.bytes.length === 0) {
+          console.warn("[bridge] a declared route could not be seeded: " + seed.url + " — " +
+                       (loaded.unavailable !== null ? JSON.stringify(loaded.unavailable)
+                        : _landed !== originOf(seed.principalUrl) ? "landed cross-origin at " + (_landed || "an unparseable URL")
+                        : "the response carried no bytes"));
+          return pick.census;
+        }
+        /* A CLUSTER OF ONE, WHICH IS THE TRUTH ABOUT IT RATHER THAN A CONVENIENCE. The declared page is not
+           nested in the document that declared it and shares no heap with it: nothing holds a WindowProxy for
+           it, no element presents it, and it is reached the way a person reaches a route — by navigating a tab
+           of the custom browser's own. So it is a TOP-LEVEL TRAVERSABLE in a browsing-context group this zone
+           mints, which is §7.3.2.3's own sentence read for a navigation nobody's opener survives.
+           THE PRINCIPAL IS THE DECLARING DOCUMENT'S AND IS NEVER RE-DERIVED FROM THIS ADDRESS. It is the
+           browser's `MessageSender.origin` for the document whose router declared the route, carried on the
+           work item, and SECURITY.md's credentialed-read principal is exactly that and never `originOf(url)` —
+           a sandboxed document has an ordinary address and an OPAQUE origin, so parsing the address would hand
+           its declared route same-origin access to authenticated bytes the browser refused it. The two
+           ADDRESSES were compared above (which is what HTML §7.2.5's can-have-its-URL-rewritten guarantees and
+           what a redirect could still break); this is the other question and it takes the other fact.
+           `credentialed` IS THEREFORE COMPUTED FROM THAT SAME PRINCIPAL — the identical predicate
+           `navigationLoad` used to decide whether to ask for cookies, so the field STATES the load that
+           happened rather than re-deciding it from the address that came back.
+           `topLevelUrl` IS ITS OWN ADDRESS because a top-level traversable's environment is its own top
+           (§8.1.3.1), and it is `loaded.url` rather than the requested address for §7.5.1's `creationURL`
+           reason: after a redirect the Document is AT where the response came from. */
+        const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
+                      groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
+                      topLevelUrl: loaded.url,
+                      credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
+                      persist: true };
+        DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
+               "a declared route minted a browsing-context group this pool already runs an instance for — the " +
+               "group id is a fresh counter, so a hit means two seeds were given one id and the second would " +
+               "JOIN the heap the first built, which is two documents behind one agent");
+        _reserveStats.seeded++;
+        /* NULL: a declared route has NO CREATOR — nothing embedded it and nothing opened it, so HTML §7.1.7 has
+           no container to clone and this Document is judged against its own response alone. `u`/`null`/`none`:
+           §7.3.1.3 gives it no parent and no container element, and §3.1.3's steps 2-3 return the empty list
+           for a Document with no container document — three statements of one fact about a top-level page.
+           `cold: true` — it has no caller. Nothing awaited this document, so its findings MERGE to the moat
+           rather than being returned to a requester, which is the same arm a rehydrated recipe takes. */
+        await engineCreate("", loaded.bytes, msg, true, null, loaded.url, true, null, "u", "null",
+                           "none")._readyP;
+        return pick.census;
+      }
       if (cand.kind === "doc") {
         const job = cand.job;
         const key = clusterKeyOf(job.msg);
@@ -4773,7 +4983,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
            reservations: { made: _reserveStats.made, rooted: _reserveStats.rooted, failed: _reserveStats.failed,
                            booting: booting, inFlight: inFlight, peakBooting: _reserveStats.peakBooting,
                            joinedBooting: _reserveStats.joinedBooting, joinedRooted: _reserveStats.joinedRooted,
-                           navigated: _reserveStats.navigated,
+                           navigated: _reserveStats.navigated, seeded: _reserveStats.seeded,
                            evicted: _reserveStats.evicted, rehydrated: _reserveStats.rehydrated },
            coldRows: _frontierIndexBuilt ? _frontierIndex.size : null,   // null = the ranking view has not been asked for yet
            /* THE STORE'S DECISIONS, WHICH ARE THE ONLY THING ABOUT QUOTA THAT CAN BE OBSERVED FROM OUTSIDE. A
@@ -4813,6 +5023,13 @@ async function frontierClear() {
 }
 async function hostClear() {
   const waiting = _waiting.splice(0);
+  /* AND THE ROUTES DECLARED IN THIS SESSION GO WITH THE FRONTIER THEY WERE WORK ITEMS ON. A Clear empties the
+     cold tier and drops every live engine; a declared address that survived it would be the one member of the
+     one frontier that a wipe did not reach, and the next idle kick would fetch a page of an origin the person
+     has just asked this tool to forget. There is nobody to reject: a declaration has no caller by construction
+     (see the notice router — it is a work item, not a request), which is the same reason its instance is
+     created `cold`. */
+  _seeds.clear();
   const dropped = _pool.splice(0);
   for (const job of waiting) job.reject(new Error("cleared"));
   for (const eng of dropped) { for (const w of eng._resolvers) w.reject(new Error("cleared")); eng._resolvers.length = 0; }

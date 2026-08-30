@@ -208,6 +208,19 @@ const UNSTATED_PROVENANCE =
  * of the other two conjuncts are false at every setting of this flag, including its widest. */
 const NAVIGATION_WIDENING = new Set();
 
+/* WHY A NAVIGATION TO A *FORCED* ADDRESS IS REFUSED AT AN UNWIDENED ORIGIN — a different sentence from
+   UNWIDENED_NAVIGATION because it is a different fact: there the provenance could not be established at all,
+   here it is established and it is the one the widening exists to gate. */
+const FORCED_NAVIGATION =
+  'a DOCUMENT LOAD at an address that exists only because a GATE WAS FORCED. CLAUDE.md §Attacker-sources ' +
+  'makes exactly this the per-origin widening — "default conservative, widened deliberately per origin, never ' +
+  'inferred from a site looking like a test" — so the refusal is this policy\'s ANSWER for an origin nobody ' +
+  'has widened rather than a capability that is missing. Pass `--explore <origin>` to widen it, and note what ' +
+  'that then obliges: §@H makes the reply to a forced request evidence about what a server says to a request ' +
+  'no client makes, so its values are carried as FORCED and never merged into the observed pool. Until then ' +
+  'the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap in the report ' +
+  'but IS the report'
+
 /* WHY A NAVIGATION AT AN UNWIDENED ORIGIN IS REFUSED, in the zone's own words — the same shape as
    UNSTATED_PROVENANCE and a different sentence, because it is a different decision over a different record. */
 const UNWIDENED_NAVIGATION =
@@ -290,6 +303,14 @@ async function main() {
   const holderOf = (doc) => instances.find((i) => i.live && i.docId === doc) ?? null;
   const loops = [];
   let serial = 0;
+  /* THE ADDRESSES THIS SESSION HAS ALREADY PROVISIONED AN INSTANCE FOR OUT OF A ROUTE DECLARATION, and the
+     serial that names them. Every flow that reaches a `pushState` declares, so one route arrives many times;
+     a second PROCESS for one address would run one page twice under two heaps, which is the state
+     SECURITY.md's one-instance-per-cluster rule exists to prevent. It is not §NO BOUNDS' visited-set: this
+     driver is ONE PASS over one document, with no frontier, no value order and no re-visit — the extension's
+     zone is where an address is ranked and legitimately fetched again, and it holds no set at all. */
+  const seededRoutes = new Set();
+  let seedSerial = 0;
 
   /* A FAILED PIECE OF WORK IS RAISED WHERE IT CAN BE READ AND NOT SWALLOWED WHERE IT HAPPENS. The work is
      started when the bill is announced and awaited a round or more later, so a rejection would otherwise sit
@@ -404,11 +425,26 @@ async function main() {
      empty byte sequence is the `about:blank`-shaped one the engine's own child_document builds. The ADDRESS
      is then the one that was asked for, because a refusal has no response URL to have been redirected to, and
      saying so is a fact about this zone's own network rather than a field filled to satisfy a reader. */
-  async function navigate(url, fromDocUrl, what) {
+  async function navigate(url, fromDocUrl, what, provenance) {
     const abs = new URL(url, fromDocUrl).href;
 
-    if (!NAVIGATION_WIDENING.has(new URL(abs).origin))
-      return { declined: `${what} ${abs} — ${UNWIDENED_NAVIGATION}` };
+    /* THE PROVENANCE IS THE WHOLE DECISION AND IT IS STATED BY THE CALLER, never derived here. §Attacker-
+       sources: "an OBSERVED or DERIVED address is navigated freely, a FORCED one is the deliberate per-origin
+       widening", and one whose provenance is NOT ESTABLISHED crashes at the decision rather than proceeding.
+       `null` IS "THE RECORD DOES NOT STATE IT" AND IS A POSITIVE ANSWER, not a caller that forgot: a
+       `navigable.create` carries the child's name, address, origin, top-level creation URL, policy container,
+       §7.3.1.3 links and §3.1.3 ancestors and says nothing about WHO NAMED THE ADDRESS, while a
+       `document.seed` states it as its second field. Two records, two answers, and the difference decides
+       whether the widening is what stands between this zone and a fetch.
+       AN UNKNOWN WORD STOPS IT rather than falling to whichever arm is written as the else — the same reader
+       contract `workFetch` keeps over the same vocabulary, applied to the decision that spends the network. */
+    if (provenance !== null && provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
+      throw new Error(`a document load was asked for with the provenance \`${provenance}\`, which is neither ` +
+                      'null (the record does not state it) nor one of the three tokens solver/engine.h ' +
+                      'declares — this zone decides whether to spend the network on that field');
+    const established = provenance === 'observed' || provenance === 'derived';
+    if (!established && !NAVIGATION_WIDENING.has(new URL(abs).origin))
+      return { declined: `${what} ${abs} — ${provenance === 'forced' ? FORCED_NAVIGATION : UNWIDENED_NAVIGATION}` };
     const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, credentialed: false }),
                             `${what} ${abs}`);
     /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
@@ -543,7 +579,7 @@ async function main() {
          object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent and
          which nothing downstream could tell from the routing. */
       if (holderOf(f[1])) return;
-      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`);
+      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, null);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
@@ -565,9 +601,51 @@ async function main() {
       if (f.length < 4 || !f[1] || !f[2])
         throw new Error(`a navigable.swap notice was short of its fields: ${record}`);
       if (holderOf(f[1])) return;
-      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`);
+      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`, null);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
+                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url) });
+      return;
+    }
+    /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
+       HTML §7.4.4 "Non-fragment synchronous \"navigations\""' URL and history update steps (which is where
+       every client-side router's `history.pushState` ends up). It is the one document this zone provisions
+       that nothing NAVIGATED to: the bundle merely NAMED the route, which is precisely the surface
+       §What-the-tool-produces exists for and the one forced execution alone could never reach, because the
+       code walks nowhere.
+       IT IS THE ONE RECORD THAT STATES ITS OWN PROVENANCE, and that is what lets it be navigated without the
+       per-origin widening a `navigable.create` needs: the create says nothing about who named the address, and
+       this says `derived` or `forced` outright (solver/route_seed.h — `observed` is unreachable for it,
+       because no load of anything produces a declaration).
+       THE DOCUMENT IS NAMED BY THIS ZONE, unlike a child navigable's. The engine mints a name for a navigable
+       it CREATED because a page already holds a WindowProxy for it and a delivery has to route there; nothing
+       holds a proxy for a declared route — it is a top-level traversable in a browsing-context group of its
+       own — so the name is this zone's to mint, which is also SECURITY.md's rule for anything that is not
+       merely a name the untrusted side already handed the page.
+       ONE PER ADDRESS, WHICH IS NOT A VISITED-SET. Every flow that reaches the statement declares, and a
+       router in a loop declares many times; provisioning a second PROCESS for an address this session is
+       already exploring would run one page twice under two heaps. Nothing is refused — the address keeps its
+       instance, and this driver's session is one pass over one document rather than a frontier that re-visits. */
+    if (f[0] === 'document.seed') {
+      if (f.length < 3 || !f[1] || !f[2])
+        throw new Error(`a document.seed notice was short of its fields: ${record} — solver/route_seed.c ` +
+                        'writes the ADDRESS and the PROVENANCE with one snprintf, and the second is the ' +
+                        'whole of what this zone decides whether to load it from');
+      if (f[2] !== 'derived' && f[2] !== 'forced')
+        throw new Error(`a document.seed notice states the provenance \`${f[2]}\`, which is neither ` +
+                        '`derived` nor `forced` — a declaration is made by RUNNING the page\'s code and no ' +
+                        'load of anything produces one, so `observed` is unreachable on this record and any ' +
+                        'other word is a field read at the wrong tab');
+      const seedAbs = new URL(f[1], e.docUrl).href;
+      if (seededRoutes.has(seedAbs)) return;
+      seededRoutes.add(seedAbs);
+      const loaded = await navigate(seedAbs, e.docUrl, `document.seed ${seedAbs}`, f[2]);
+      if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      /* A TOP-LEVEL TRAVERSABLE WITH NO CREATOR — nothing embedded this document and nothing opened it, so
+         §7.1.7 has no container to clone, §7.3.1.3 gives it no parent and no container element, and §3.1.3's
+         steps 2-3 return the empty list. `topLevelFacts` is those ten statements, and the address it is given
+         is the RESPONSE's, because §7.5.1's creationURL is where the bytes came from. */
+      await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url) });
       return;
     }

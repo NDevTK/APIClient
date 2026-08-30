@@ -19,6 +19,7 @@
 #include "core/realm.h"
 #include "core/structured_clone.h"
 #include "core/url/url.h"
+#include "solver/route_seed.h"   /* §7.4.4 step 8 is where an application declares one of its own pages */
 
 static int g_slot = -1;
 
@@ -1366,7 +1367,19 @@ void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w
     if (serialized) sh_restore_history_object_state(ctx, w->new_entry);
     /* STEP 8: "set the URL given document to newURL". The standard's note is why nothing is fired here —
        "since this is neither a navigation nor a history traversal, it does not cause a hashchange event to be
-       fired". */
+       fired".
+       AND IT IS THE ONE PLACE AN APPLICATION SAYS "THIS ADDRESS IS A PAGE OF MINE". §7.4.4's own opening
+       sentence is why the observation belongs to this algorithm rather than to §7.2.5's members: "session
+       history entries can be pushed or replaced via one more mechanism, the URL and history update steps. The
+       most well-known callers of these steps are the history.replaceState() and history.pushState() APIs, but
+       various other parts of the standard also need to perform updates to the active history entry, and they
+       use these steps to do so." So a caller added later declares its route through this same line, and there
+       is no second site for the question to go unasked at. solver/route_seed.h holds what a declaration IS,
+       why running the page's own call to a routing member is not the string-matching §RUN-DON'T-MATCH forbids,
+       and why the address leaves as a one-way notice rather than as a park.
+       BEFORE THE SET, because the declaration is that the address CHANGED and the comparison needs both sides
+       — the same "an operation takes its inputs with it" the loader's own job already turns on. */
+    route_seed_declare(ctx, document_url(ctx), new_url);
     document_set_url(ctx, new_url);
     /* STEPS 9 AND 10 — the Document's latest entry and the NAVIGABLE's active session history entry. Both are
        set before the finalize below, which is what makes its step 2 hold. */

@@ -91,6 +91,7 @@
 #include "solver/flow.h"
 #include "solver/engine.h"
 #include "solver/result.h"   /* who prints a page error while the programs are the scheduler's */
+#include "solver/route_seed.h"   /* a document declaring one of its own pages — routed to a refusal here */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -1837,6 +1838,32 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                "for and a residue nothing will resume. `world.gone` is NOT this case and is not asserted "
                "against: solver/flow.c's release announces one whenever a flow leaves the frontier, which is "
                "ordinary traffic");
+        free(whole);
+        return;
+    }
+    /* `document.seed <address> <provenance>` — an address the DOCUMENT UNDER TEST declared is a page of its own
+       application (solver/route_seed.h), reached whenever a test calls `history.pushState` with a URL, which
+       `html/browsers/browsing-the-web/history-*` and half of `navigation-api` do on purpose.
+       THIS HOST'S ANSWER IS A REFUSAL AND IT IS A POSITIVE ONE, in the same shape as the two records below it:
+       a WPT run is the CONFORMANCE ORACLE FOR ONE DOCUMENT — the file carries its own oracle (`assert.*` and
+       `negative:` metadata) and its verdict is about that file's own subtests — so there is no frontier here
+       for a work item to be ON, no value order to rank an address in, and nothing that would ever spend a
+       fetch on one. Seeding it would also make a conformance run reach out to an address the test merely named,
+       which is a network effect no oracle asked for. The refusal is stated rather than silent because a notice
+       this host drops without saying so is a capability that is invisible at the emitting end, which is what
+       the DFAIL below exists to prevent.
+       THE GRAMMAR IS STILL ASSERTED. A record that arrives malformed is a WRITER that has changed, and that is
+       a defect whatever this host would then do with it — so the fields are checked here even though the
+       record is discarded, rather than the check living only in the zone that acts on one. */
+    if (nf == 3 && !strcmp(f[0], ROUTE_SEED_NOTICE)) {
+        DCHECK(*f[1] != '\0',
+               "a route declaration named no address — solver/route_seed.c refuses an empty one at the "
+               "emitting end, so a record that arrives with one is a writer this host no longer shares a "
+               "grammar with and the field it read as an address is somebody else's");
+        DCHECK(!strcmp(f[2], PENDING_PROVENANCE_DERIVED) || !strcmp(f[2], PENDING_PROVENANCE_FORCED),
+               "a route declaration carries a provenance token that is neither `derived` nor `forced` — a "
+               "declaration is made by RUNNING the page's code and no load of anything produces one, so "
+               "`observed` is unreachable for it and any other word is a field read at the wrong offset");
         free(whole);
         return;
     }

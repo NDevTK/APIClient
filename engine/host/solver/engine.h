@@ -715,6 +715,30 @@ void engine_unload_document(uint32_t doc);
 #define PENDING_INITIATOR_PARSER "parser"   /* HTML §4.12.1's parser-inserted script of the loaded document */
 #define PENDING_INITIATOR_SCRIPT "script"   /* a park made by running code: fetch(), import(), an injected src */
 
+/* WHAT AN OUTBOUND REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names, as the
+ * words that cross to the trusted zone. THE ENGINE STATES AND THE ZONE DECIDES, which is the same split the
+ * flag above is governed by: "the engine holds no network policy by construction, so `safeFetch` decides, from
+ * the provenance the request declares beside its method and credential state". A branch here that refused to
+ * STATE one would be that policy inside the engine.
+ *   OBSERVED — a real load of this document makes exactly this request.
+ *   DERIVED  — the page's own code computed it from real inputs. No session sent it; it is still a fact about
+ *              the app, and it is the surface forced execution exists to find.
+ *   FORCED   — the path took an arm its own concrete example contradicts, so a value in it exists only because
+ *              a gate was forced. A reply to one is evidence about what a server says to a request no client
+ *              makes, and §@H forbids it ever being reported as OBSERVED — the danger is that it is PLAUSIBLE,
+ *              since one invented field is the example that shapes the next endpoint.
+ * THEY LIVE HERE AND NOT BESIDE THE ONE RECORD THAT USES THEM, because a request is a request whether it
+ * becomes a fetch or a NAVIGATION. solver/route_seed.h's `document.seed` states one of these words for an
+ * address an application declared is a page of itself; the pending line beside it states one for every park.
+ * Two spellings of one vocabulary would be a zone reading two sets of words for one decision, which is the
+ * defect this file's initiator pair is already written against one rule up.
+ * WHICH OF THE THREE A RECORD CAN CARRY IS THE RECORD'S OWN QUESTION and is answered where that record is
+ * written: a declaration can never be `observed` (no load of anything produces a pushState), and its reader
+ * asserts exactly that rather than accepting the whole vocabulary from every producer. */
+#define PENDING_PROVENANCE_OBSERVED "observed" /* a real load of this document makes exactly this request */
+#define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
+#define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
+
 /* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>INITIATOR<TAB>URL` line per
  * outstanding request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
  *

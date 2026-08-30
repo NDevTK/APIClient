@@ -1379,6 +1379,14 @@ function renderHostOrder() {
            not two rows disagreeing. */
         : `non-resident order over ${n("cands")} work item(s) when it was asked — ${n("candDocs")} waiting document(s)`
           + ("candDocWMax" in hostOrder ? ` (best ${n("candDocWMax")})` : "")
+          /* AND THE ROUTES THE APPLICATIONS THEMSELVES DECLARED — the third kind of work item, rendered as its
+             own column for the reason the other two are: what this view exists to show is WHICH kind the order
+             thought was worth the next instance, and a count folded into a neighbour states the total while
+             erasing the comparison. This is also the one column that is entirely this tool's own contribution:
+             a waiting document is a page the person opened and a parked frontier is one it opened before, while
+             a declared route is an address a bundle NAMED and no link exposes. */
+          + `, ${n("candSeeds")} declared route(s)`
+          + ("candSeedWMax" in hostOrder ? ` (best ${n("candSeedWMax")})` : "")
           + `, ${n("candCold")} parked frontier(s)`
           + ("candColdWMax" in hostOrder ? ` (best ${n("candColdWMax")})` : "")
           + `: best ${n("candWMax")}, lowest ${n("candWMin")}`
@@ -1389,8 +1397,10 @@ function renderHostOrder() {
   const excl = "cands" in hostOrder
     ? `left the order: ${n("exclLive")} parked residue(s) whose address a live or waiting document holds `
       + `(that weight is carried by the instance instead), ${n("exclHeld")} whose key an instance already `
-      + `holds, ${n("exclStranded")} whose re-derivation stopped answering, and ${n("exclSub")} waiting `
-      + `document(s) that are sub-frames their embedder names`
+      + `holds, ${n("exclStranded")} whose re-derivation stopped answering, ${n("exclSub")} waiting `
+      + `document(s) that are sub-frames their embedder names, and ${n("exclSeedLive")} + `
+      + `${n("exclSeedParked")} declared route(s) whose address a live document already holds or a parked `
+      + `frontier already carries`
     : "";
   const raw = Object.keys(hostOrder).map((k) => esc(k) + " " + n(k)).join(" · ");
   const rows = [resident, nonres, excl, raw].filter((s) => s !== "")

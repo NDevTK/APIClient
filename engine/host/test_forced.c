@@ -101,6 +101,7 @@
 #include "solver/cold.h"      /* the cross-session tier: this host's residue, and what a resume rebuilt */
 #include "solver/dom_cow.h"   /* dom_attr_capture — the DOM write host-edge records into the per-flow DOM delta */
 #include "solver/attr_shadow.h"   /* the (element, slot) taint shadow — freed with the frontier at teardown */
+#include "solver/route_seed.h"    /* the `document.seed` record — an address this bundle declared is its page */
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
 #include <math.h>     /* css-values-4 §10.9.2's signed zero and infinity, which only `signbit`/`isinf` can see */
@@ -2083,6 +2084,33 @@ static const char *HTML =
        pre-existing answer for every through-read on a closed navigable and not a value this probe chose. */
     "_ifok = _ifok && _cw.document === undefined;"
     "fetch('/api/iframenav?v=' + (_ifok ? 'ifnav' : 'wrong'));"
+
+    /* HTML §7.4.4 "Non-fragment synchronous \"navigations\""' URL AND HISTORY UPDATE STEPS, reached the way
+       every client-side router reaches them: §7.2.5 "The History interface"'s `pushState` with a url. THIS IS
+       THE ONE STATEMENT IN THIS FIXTURE THAT MAKES A DOCUMENT NOTHING NAVIGATES TO. Everything else here that
+       produces a second document does so because the page NAVIGATED — `open()`, an inserted `<iframe>` — and
+       forced execution follows those because the code walks there. A router that merely SAYS "this address is
+       a page of mine" walks nowhere, and until solver/route_seed.c that address became an @H finding and never
+       a Document anything explored.
+       THE ROUTE IS COMPUTED OUT OF A REPLY AND EXISTS IN NO SOURCE TEXT, which is what makes the row a test of
+       §RUN-DON'T-MATCH rather than of a string: `us-west-2` is a field of the JSON this fixture's own host
+       SERVES, so `/routes/us-west-2/admin` appears nowhere in this file's program and nothing that matched
+       source could ever produce it. The engine has it because it RAN the concatenation.
+       BOTH ENDS ARE READ, and they are different facts. `location.pathname` is §7.4.4 STEP 8 having moved THIS
+       Document's address to the computed route — which is what makes the declaration a fact about a page
+       rather than an argument that was passed — and the C side reads the NOTICE the same run emitted and
+       checks the ADDRESS it carries and the PROVENANCE it states (see `g_seed_route_derived`).
+       AND IT PUTS THE ADDRESS BACK, with §7.2.5's other caller of the same steps. That is not tidying: this
+       document's §4.4 API base URL is its address, so a route left in place would resolve every later
+       reference in this flow against `/routes/us-west-2/`, and a probe that failed for that reason would be
+       reporting this statement's side effect as its own defect. The replace declares the original address in
+       its turn, which is correct and costs nothing — that address is the document the frontier is already
+       exploring, and the trusted zone's order excludes an address a live instance holds. */
+    "(async function(){ var _rr = (await (await fetch('/api/config')).json()).region;"
+    " var _route = '/routes/' + _rr + '/admin';"
+    " history.pushState(null, '', _route);"
+    " fetch('/api/routeseed?v=' + (location.pathname === _route ? 'seeded' : 'wrong'));"
+    " history.replaceState(null, '', '/p'); })();"
 
     /* WHAT IS NOT PROBED HERE, AND WHY IT IS NOT A CHOICE: an iframe with a REAL `src`. It would exercise the
        whole of §7.4 step 14 — the load job asks the host for the address, PARKS, resumes with the response and
@@ -4082,6 +4110,22 @@ static const IdlStepDecl HOSTREQ_DECL = { hostreq_step, sizeof(HostReqState), ho
                                           "a cross-instance read that blocks on the host",
                                           HOSTREQ_STEPS };
 
+/* THE ROUTE THIS RUN'S BUNDLE DECLARED IS A PAGE OF ITSELF, AS READ OFF THE WIRE. The `route-seed` row cannot
+   be proved from the result document alone: `location.pathname` says §7.4.4 step 8 moved the address, and it
+   says nothing about whether the ADDRESS AND ITS PROVENANCE left this instance — which is the whole of what
+   the trusted zone's Level-1 order is given to work with. So the notice is READ here, at the one place this
+   fixture drains them, and the row reads this.
+   IT RECORDS A MATCH RATHER THAN THE LAST RECORD, because every flow that reaches the statement declares, and
+   the statement declares TWICE per flow (the route, then the address it puts back). "Some declaration named the
+   computed route and stated `derived`" is the fact the row is about; "the last one did" would be a fact about
+   the interleaving. */
+static int g_seed_route_derived;
+static int g_seed_declarations;
+/* The address the fixture's own statement composes out of the region its own host serves — see the statement.
+   Stated here as the whole serialized URL because that is what the notice carries: §7.2.5 step 5's
+   encoding-parse resolves the argument against the document's address before §7.4.4 ever sees it. */
+#define FIXTURE_DECLARED_ROUTE "https://x.test/routes/us-west-2/admin"
+
 /* THE HOST'S SIDE, driven from the fixture's step loop: answer everything outstanding. A real host routes each
    record to the instance holding that document; here the answer is the request text turned back, which is
    enough to prove the value reaches the call site that asked. */
@@ -4090,12 +4134,64 @@ static int hostreq_answer_all(JSContext *ctx)
 {
     const char *reqs = engine_host_requests();
     const char *p = reqs;
+    const char *nz;
     int n = 0;
 
     /* NOTICES ARE ONE-WAY. `navigable.create` announces a document the engine named itself, so there is nothing
        to answer; draining it is the whole of this fixture's obligation, and a read that needs the child's
-       ACTIVE DOCUMENT still comes through as a request above. */
-    (void)engine_host_notices();
+       ACTIVE DOCUMENT still comes through as a request above.
+       ONE OF THEM IS READ, AND THE READ IS ALSO A GRAMMAR CHECK. `document.seed` is the record a `route-seed`
+       row is about, and the same walk asserts what every reader of this record asserts — an address, and a
+       provenance that is one of the two words a declaration can carry. A host that merely counted them would
+       be the reader that cannot tell a shifted field from a real one. */
+    for (nz = engine_host_notices(); *nz; ) {
+        const char *end = strchr(nz, '\n');
+        size_t len = end ? (size_t)(end - nz) : strlen(nz);
+
+        if (len > sizeof(ROUTE_SEED_NOTICE) &&
+            !memcmp(nz, ROUTE_SEED_NOTICE "\t", sizeof(ROUTE_SEED_NOTICE))) {
+            const char *addr = nz + sizeof(ROUTE_SEED_NOTICE);
+            const char *tab = memchr(addr, '\t', len - sizeof(ROUTE_SEED_NOTICE));
+            size_t alen;
+            size_t plen;
+
+            DCHECK(tab != NULL,
+                   "a route declaration carried no PROVENANCE after its address — solver/route_seed.c writes "
+                   "both fields with one snprintf, so a record with one of them is that writer and this reader "
+                   "having parted, and the field this host would read as an address is the whole record");
+            if (!tab) { nz = end ? end + 1 : nz + len; continue; }
+            alen = (size_t)(tab - addr);
+            plen = len - (size_t)(tab + 1 - nz);
+            DCHECK(alen > 0, "a route declaration named no address — the emitter refuses an empty one, so an "
+                             "empty field here is a record split at the wrong tab");
+            /* TWO RUNGS, because they are two different failures. The first is the one this record can be
+               WRONG about while looking right: `observed` is a real member of the vocabulary and means "a real
+               load of this document makes exactly this request", which is false of every declaration by
+               construction — §7.4.4 is reached only by running the page's code — so a declaration carrying it
+               would be navigated freely by a zone that had no reason to doubt it. The second is the ordinary
+               grammar check, which a field read at the wrong offset fails. */
+            DCHECK(plen != strlen(PENDING_PROVENANCE_OBSERVED) ||
+                   memcmp(tab + 1, PENDING_PROVENANCE_OBSERVED, plen) != 0,
+                   "a route declaration stated `observed`, which no declaration can be: a real load of this "
+                   "document makes no pushState, so nothing it names is a request a real client makes, and a "
+                   "zone reading that word would navigate a derived address as though a session had asked for "
+                   "it");
+            DCHECK((plen == strlen(PENDING_PROVENANCE_DERIVED) &&
+                    !memcmp(tab + 1, PENDING_PROVENANCE_DERIVED, plen)) ||
+                   (plen == strlen(PENDING_PROVENANCE_FORCED) &&
+                    !memcmp(tab + 1, PENDING_PROVENANCE_FORCED, plen)),
+                   "a route declaration stated a provenance that is neither `derived` nor `forced` — the only "
+                   "two words a declaration can carry, so any other is a field read at the wrong offset");
+            g_seed_declarations++;
+            if (alen == strlen(FIXTURE_DECLARED_ROUTE) &&
+                !memcmp(addr, FIXTURE_DECLARED_ROUTE, alen) &&
+                plen == strlen(PENDING_PROVENANCE_DERIVED) &&
+                !memcmp(tab + 1, PENDING_PROVENANCE_DERIVED, plen))
+                g_seed_route_derived = 1;
+        }
+        if (!end) break;
+        nz = end + 1;
+    }
 
     while (*p) {
         const char *tab = strchr(p, '\t');
@@ -5617,6 +5713,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
     int ifnav_tt = (strstr(js, "\"/api/iframenav\"") && strstr(js, "ifnav"));
+    /* §7.4.4 step 8 moved this Document's address to a route the run COMPUTED out of a reply, and the notice
+       that carries that address off this instance said `derived`. FOUR CONDITIONS AND NOT ONE, folded so the
+       row NAMES the one that failed: they fail for four different reasons, three of them in different
+       components, and a single marker would report all four as one silence.
+       THE LAST TWO ARE THE HALF NO RESULT DOCUMENT CAN SPEAK FOR. `location.pathname` proves the address moved
+       inside this instance; whether the ADDRESS and its PROVENANCE reached the WIRE is a fact about the notice,
+       and those two fields are the whole of what the trusted zone's decision to load the page is made from. A
+       declaration count of zero and a declaration that named the wrong address are also two different defects —
+       one is §7.4.4 never reaching solver/route_seed.c, the other is it reaching it with the wrong string — so
+       they are two rungs. */
+    int routeseed_tt = 1;
+    const char *routeseed_why = NULL;
+    fold_row(&routeseed_tt, &routeseed_why, !!strstr(js, "\"/api/routeseed\""),
+             "the fixture's §7.2.5 pushState statement did not run at all");
+    fold_row(&routeseed_tt, &routeseed_why, !!strstr(js, "seeded"),
+             "§7.4.4 step 8 did not move this Document's address to the computed route");
+    fold_row(&routeseed_tt, &routeseed_why, g_seed_declarations > 0,
+             "§7.4.4 ran and NO route declaration reached the wire — the address moved and nothing told the "
+             "zone that decides whether to explore it");
+    fold_row(&routeseed_tt, &routeseed_why, g_seed_route_derived,
+             "a route was declared, and none of the declarations carried the computed address with the "
+             "provenance `derived`");
     /* §5.1's open through to `success`, §2.7 + §2.8's request inside it, and §2.5's LIST key path over the
        store the same upgrade creates — the marker's own sentence-by-sentence account is beside the statement
        that builds it.
@@ -6381,6 +6499,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE },
         { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE },
+        { "route-seed", routeseed_tt, "/api/routeseed", SESS_EXPLORE, routeseed_why },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },

@@ -738,6 +738,30 @@ async function drainNotices(e) {
       if (f.length < 2 || !f[1]) fail(`a world.parked notice carried no vector: ${n}`);
       worldsParked.push(f[1]);
     }
+    /* `document.seed <address> <provenance>` — an address a document declared is a page of its own application
+       (engine/host/solver/route_seed.h), reached whenever a fixture here calls `history.pushState` with a URL.
+       THIS DRIVER REFUSES IT, AND THE REFUSAL IS ABOUT WHAT THIS DRIVER IS. It provisions the peer instances a
+       CROSS-INSTANCE fixture needs — a create, a swap, a routed post — from records that name the document
+       and everything only the creating engine could compute. A declared route names none of that: it is a work
+       item on the ONE frontier, ranked against every other by what an admission of that address has been
+       worth, and there is no frontier here for it to be on and no value order to rank it in. `extension/
+       bridge.js` is the zone that holds both; a fixture that wants a route seeded belongs there.
+       THE GRAMMAR IS STILL CHECKED, because a malformed record is a WRITER that changed and that is a defect
+       whichever host reads it. */
+    else if (f[0] === 'document.seed') {
+      if (f.length < 3 || !f[1] || !f[2])
+        fail(`a document.seed notice was short of its fields — every declaration names the ADDRESS and the ` +
+             `PROVENANCE the trusted zone decides whether to load it from: ${n}`);
+      if (f[2] !== 'derived' && f[2] !== 'forced')
+        fail(`a document.seed notice carries the provenance \`${f[2]}\`, which is neither \`derived\` nor ` +
+             `\`forced\` — a declaration is made by RUNNING the page's code and no load produces one, so ` +
+             `\`observed\` is unreachable for it and any other word is a field read at the wrong tab`);
+      fail(`a document at \`${f[1]}\` was declared a page of its own application, and this driver holds no ` +
+           `frontier to make it a work item on. It provisions PEERS for a cross-instance fixture (a create, ` +
+           `a swap, a routed post) out of records that carry what only the creating engine could compute; a ` +
+           `route declaration carries an address and a provenance and is ranked by value against every other ` +
+           `work item, which is extension/bridge.js's Level-1 order and nothing this process has`);
+    }
     else throw new Error('a notice this host does not act on: ' + f[0]);
   }
 }
