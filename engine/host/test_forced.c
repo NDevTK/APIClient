@@ -2496,6 +2496,44 @@ static const char *HTML =
        If this carries one, the premise (2b) rests on is false and (2b) is mine to fix rather than the engine's.
        It costs no fork of its own: the ternary is decided inside each arm that already exists. */
     " fetch('/api/getbase?v=' + (cfg.admin ? 'gbADMIN' : 'gbPUBLIC'));"
+
+    /* (2d) THE DISPOSE ARM NO CORPUS RUNS, appended at the end for the reason (2c) was: a statement added
+       here shifts no column, so every statement above keeps the coordinates it was measured at.
+       27.5.4.7.1 PromiseResolve is reached two ways from DisposeResources' async chain and they are DIFFERENT
+       WALKS. A dispose method that returns a PROMISE takes step 1's `constructor` read; one that returns a
+       THENABLE skips step 1 entirely, builds the capability at step 2, and reaches 27.5.1.3 step 2.f's
+       `then` read through the resolving function. test262 runs the first and NOT the second: nothing under
+       built-ins/AsyncDisposableStack/ or language/statements/await-using/ returns a non-promise thenable
+       from a dispose method, and `grep -rln thenable` over both finds no file. So a whole-corpus 0 is SILENT
+       about the walk these three statements are the only exercise of.
+       THE FIRST ROW IS `tdreach` AND IT IS WHY THE OTHER THREE MEAN ANYTHING. Without it a 0 on any row
+       below is three states wearing one number — the arm ran and settled wrong, the arm ran and never
+       settled, or this engine has no AsyncDisposableStack and the statement never began. The catch names the
+       third and `tdreach` names the difference between the other two. */
+    " try {"
+    "  fetch('/api/tdreach?d=ok');"
+    /* A -- step 2's build path: a NON-async method, so the value is not a promise and step 1 is skipped. */
+    "  var _tdA = new AsyncDisposableStack();"
+    "  _tdA.use({ [Symbol.asyncDispose]: function () { return { then: function (r) { r(1); } }; } });"
+    "  _tdA.disposeAsync().then(function () { fetch('/api/tdplain?d=ok'); },"
+    "                           function () { fetch('/api/tdplain?d=no'); });"
+    /* B -- THE SAME ARM WITH `then` BEHIND AN ACCESSOR, which is the case the deleted selector detected by
+       name: the C entry refused this rather than reading it, so it must now park on the flow and settle. */
+    "  var _tdT = {};"
+    "  Object.defineProperty(_tdT, 'then', { get: function () { return function (r) { r(2); }; } });"
+    "  var _tdB = new AsyncDisposableStack();"
+    "  _tdB.use({ [Symbol.asyncDispose]: function () { return _tdT; } });"
+    "  _tdB.disposeAsync().then(function () { fetch('/api/tdacc?d=ok'); },"
+    "                           function () { fetch('/api/tdacc?d=no'); });"
+    /* C -- the chain link's OWN PromiseResolve, which only runs when a link already carries an error. LIFO
+       disposes the last use() first, so the throw below is what puts every link under it on that arm with a
+       thenable value. The stack must still reject, and with the FIRST error. */
+    "  var _tdC = new AsyncDisposableStack();"
+    "  _tdC.use({ [Symbol.asyncDispose]: function () { return { then: function (r) { r(3); } }; } });"
+    "  _tdC.use({ [Symbol.asyncDispose]: function () { throw new Error('tdboom'); } });"
+    "  _tdC.disposeAsync().then(function () { fetch('/api/tdprev?d=no'); },"
+    "                          function () { fetch('/api/tdprev?d=rej'); });"
+    " } catch (_tde) { fetch('/api/tdreach?d=no'); }"
     "</script>"
     "</body></html>";
 
@@ -6420,6 +6458,27 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        shaped half of it. */
     int con_shape = param_value_only(js, "/api/conshape", "s", "12");
 
+    /* (2d)'s FOUR ROWS, AND THE FIRST IS THE ONE THAT MAKES THE OTHER THREE READABLE. `td_reach` is emitted
+       by the statement's own first line, so it separates "the arm ran and answered wrongly" from "the
+       statement never began" — which for these three is a live possibility rather than a formality, since a
+       document reaches them only if this engine has AsyncDisposableStack at all. `td_reach` at 0 says the
+       fixture is what needs fixing; at 1 it says every 0 below is the engine's.
+       EACH ROW IS `param_value_only` AND NOT `_has`, because each of these three settlements is DETERMINED —
+       the dispose methods run no unknown and take no gate, so a param carrying two values means the flow
+       forked where this statement says it cannot, which is a finding rather than a match. `_has` would also
+       be the wrong instrument for a second reason: it is a SUBSTRING test, so an `ok` row would be satisfied
+       by the failure spelling of a value that contained it. */
+    int td_reach = param_value_only(js, "/api/tdreach", "d", "ok");
+    /* 27.5.4.7.1 step 2's build path with a plain thenable, then 27.5.1.3 step 2.f's `then` read. */
+    int td_plain = param_value_only(js, "/api/tdplain", "d", "ok");
+    /* THE SAME WALK WITH `then` BEHIND AN ACCESSOR — the page code a C activation has no flow base for, and
+       the exact shape the deleted selector refused. */
+    int td_acc = param_value_only(js, "/api/tdacc", "d", "ok");
+    /* AND THE CHAIN LINK'S OWN PromiseResolve, reached only under a previous error: `rej` rather than `ok`
+       because the stack must still reject once a dispose method has thrown. A row asserting `ok` here would
+       be asserting the bug. */
+    int td_prev = param_value_only(js, "/api/tdprev", "d", "rej");
+
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
@@ -6440,6 +6499,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "dom-node", dom_node, "/api/kid", SESS_EXPLORE },
         { "dom-tt", dom_tt, "/api/whoami", SESS_EXPLORE },
         { "accessor", accessor_tt, "/api/flag", SESS_EXPLORE },
+        /* (2d)'s four. THE KEY IS A SUBSTRING OF THE PROGRAM, so it is the statement's own spelling rather
+           than the endpoint it reaches — `asyncDispose` is what a reader greps for to find the statement
+           these rows are about. `td-reach` first, because it is the row that says whether the other three
+           are about the engine or about the fixture. */
+        { "td-reach", td_reach, "Symbol.asyncDispose", SESS_EXPLORE },
+        { "td-plain", td_plain, "Symbol.asyncDispose", SESS_EXPLORE },
+        { "td-accessor", td_acc, "Object.defineProperty(_tdT", SESS_EXPLORE },
+        { "td-preverr", td_prev, "tdboom", SESS_EXPLORE },
         { "async", async_tt, "/api/then", SESS_EXPLORE },
         { "await", await_tt, "/api/await", SESS_EXPLORE },
         { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE },
