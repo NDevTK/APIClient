@@ -39,15 +39,19 @@ enum { IDB_GET_ALL_VALUE = 0, IDB_GET_ALL_KEY, IDB_GET_ALL_RECORD };
  * §5.12's own note ("if count is specified and there are more than count records in range, only the first
  * count will be retrieved") is stated about a member that may be absent. IDL_DEFAULT_NONE is how §3.2.17 says
  * a member does not exist, which is a different state from existing and being 0.
- * It is declared IDL_UNRESTRICTED_DOUBLE and not IDL_UNSIGNED_LONG because `[EnforceRange]` REPLACES §3.2.4.7's
- * modulo with a refusal — the same composition core/indexeddb/indexed_db.c states for `open`'s version and
+ * It is declared IDL_UNRESTRICTED_DOUBLE and not IDL_UNSIGNED_LONG because `[EnforceRange]` REPLACES the
+ * MODULO with a refusal: §3.2.4.6 "unsigned long" is ConvertToInt(V, 32, "unsigned"), and §3.2.4.9 "Abstract
+ * operations"' ConvertToInt is where BOTH arms live — with `[EnforceRange]` an out-of-range value is a
+ * TypeError, without it x is set to "x modulo 2^bitLength". It is the same composition
+ * core/indexeddb/indexed_db.c states for `open`'s version and
  * core/streams/readable_stream.c for `autoAllocateChunkSize`: the DECLARATION performs ToNumber (the page's
  * `valueOf`, which has to be a request) and the CONSUMER performs the range test, through
  * idb_get_all_count_enforce_range below so there is one copy of it. */
 extern const IdlDictMember IDB_GET_ALL_OPTIONS[3];
 
-/* WEB IDL §3.2.4.7's `[EnforceRange] unsigned long` RANGE, over the double a declaration's ToNumber already
- * produced. A fractional, negative, non-finite or too-large value is a TypeError, never a clamp and never a
+/* WEB IDL §3.2.4.6 "unsigned long"'s `[EnforceRange]` RANGE, which is the TypeError arm of §3.2.4.9 "Abstract
+ * operations"' ConvertToInt(V, 32, "unsigned"), over the double a declaration's ToNumber already produced.
+ * A fractional, negative, non-finite or too-large value is a TypeError, never a clamp and never a
  * modulo — `store.getAll(query, -1)` throws where an unsigned-long conversion would ask for 4294967295 records.
  *
  * BOTH PLACES `count` ARRIVES SHARE IT: §4.5's positional `optional [EnforceRange] unsigned long count`, and
@@ -62,7 +66,7 @@ int idb_get_all_count_enforce_range(JSContext *ctx, JSValueConst v, uint32_t *pc
  * and step 9's "converting a value to a key range" is §7.4 underneath, whose ARRAY ARM runs the page's own
  * code, so §5.12 has that algorithm's rest points inside its own and cannot be a call. A member declares this
  * block in its stage list, embeds an IdbGetAllWalk, chains idb_get_all_walk_visit into its `visit`, hands `run`
- * the base of the block, and performs steps 10-11 with `take` at its own stage.
+ * the base of the block, and performs steps 10-13 with `take` at its own stage.
  *
  * §5.12 STEPS 1-5 ARE THE MEMBER'S, not this block's, and that is not a shortcut: they are "let source be an
  * index or an object store FROM sourceHandle", the two "has been deleted" refusals and the transaction's state
@@ -155,8 +159,14 @@ int  idb_get_all_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w, JSVa
 
 void idb_get_all_walk_visit(JSContext *ctx, IdbGetAllWalk *w, JSStepVisit *v);
 
-/* §5.12 STEPS 10-11 AT THE CALLER'S OWN STAGE: the conversion's "DataError" is reported, the operation is
-   minted over what steps 6-9 decided, and the request is the result of asynchronously executing it.
+/* §5.12 STEPS 10-13 AT THE CALLER'S OWN STAGE: the conversion's "DataError" is reported, the operation is
+   minted over what steps 6-9 decided (step 10), and the request is step 13's "return the result (an
+   IDBRequest) of running asynchronously execute a request with sourceHandle and operation".
+
+   STEPS 11 AND 12 ARE INSIDE THE MINT, not beside it: the standard picks the operation per source kind — an
+   index takes §6.3's retrieve multiple items from an index, an object store §6.2's from an object store — and
+   this hands the closure `is_index` instead, so the one step machine answers for both. That is why ONE mint
+   covers three steps, and it is the reason the source kind is a data slot rather than a branch at the mint.
    `source_handle` is §2.8's source object — the IDBObjectStore or IDBIndex whose member ran, which is what
    `request.source` answers with. Returns the IDBRequest OWNED, or JS_EXCEPTION with the DataError live. */
 JSValue idb_get_all_walk_take(JSContext *ctx, IdbGetAllWalk *w, JSValueConst source_handle);

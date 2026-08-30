@@ -1038,15 +1038,17 @@ static const IdlStepDecl GET_STEP = {
  * takes both WITH it (a work item takes its inputs with it) and the walk is what carries them. */
 #define OSGA_STAGES(X) \
     X(OSGA_BEGIN, "Indexed Database §4.5 getAll / getAllKeys / getAllRecords, which is §5.12 steps 1-5 — ONE " \
-                  "O(1) engine action: Web IDL §3.2.4.7's [EnforceRange] range test on the positional count " \
+                  "O(1) engine action: Web IDL §3.2.4.6 \"unsigned long\"'s [EnforceRange] range test — the " \
+                  "TypeError arm of §3.2.4.9 \"Abstract operations\"' ConvertToInt — on the positional count " \
                   "(which precedes the member's own steps, because an argument is converted first), then " \
                   "source and transaction are this's, a deleted store is an InvalidStateError and an inactive " \
                   "transaction is a TransactionInactiveError — and §5.12 steps 6-9 begin") \
     IDB_GET_ALL_ALGO_STAGES(X, OSGA_R, "Indexed Database §4.5 getAll / getAllKeys / getAllRecords") \
-    X(OSGA_REQUEST, "Indexed Database §5.12 steps 10-11, after the O(1) tail steps 8-9's conversion ends in — " \
+    X(OSGA_REQUEST, "Indexed Database §5.12 steps 10-13, after the O(1) tail steps 8-9's conversion ends in — " \
                     "ONE O(1) engine action: an invalid key is that conversion's DataError, the operation is " \
-                    "an algorithm to run retrieve multiple items from an object store, and the request is the " \
-                    "result of asynchronously executing it")
+                    "an algorithm to run retrieve multiple items from an object store (step 10's mint, which " \
+                    "carries step 12's choice of source kind as a slot), and step 13 returns the request as " \
+                    "the result of asynchronously executing it")
 enum { IDL_STEP_STAGE_BASE(OSGA_STAGES) OSGA_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const OSGA_STEPS[] = { OSGA_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -1102,7 +1104,7 @@ static int js_os_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
     STEP_ARM(OSGA_REQUEST);
         JS_FreeValue(ctx, cb_result);
-        *presult = idb_get_all_walk_take(ctx, w, hdr->this_val);                     /* §5.12 STEPS 10-11 */
+        *presult = idb_get_all_walk_take(ctx, w, hdr->this_val);                     /* §5.12 STEPS 10-13 */
         return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
 }
 
@@ -1743,8 +1745,9 @@ void idb_object_store_init(JSContext *ctx)
     static const IdlArgType CURSOR_ARGS[2] = { IDL_ANY, IDL_ENUM };
     /* `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned long count)`. The first position
        is `any`, which is what makes §5.12's own branch the member's step rather than a conversion. The second
-       is IDL_UNRESTRICTED_DOUBLE and NOT IDL_UNSIGNED_LONG: `[EnforceRange]` REPLACES §3.2.4.7's modulo with a
-       refusal, so the declaration performs §3.2.7's ToNumber (the page's `valueOf`, which has to be a request)
+       is IDL_UNRESTRICTED_DOUBLE and NOT IDL_UNSIGNED_LONG: `[EnforceRange]` REPLACES the modulo §3.2.4.9
+       "Abstract operations"' ConvertToInt performs for §3.2.4.6 "unsigned long" with a refusal, so the
+       declaration performs §3.2.7's ToNumber (the page's `valueOf`, which has to be a request)
        and the body performs the RANGE — the composition core/indexeddb/indexed_db.c states for `open`'s
        version. Declared as a plain unsigned long, `getAll(q, -1)` would ask for 4294967295 records where
        every browser throws. */

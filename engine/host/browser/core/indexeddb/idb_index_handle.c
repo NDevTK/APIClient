@@ -327,8 +327,8 @@ static const IdlStepDecl IX_GET_STEP = {
  * MULTIPLE ITEMS with the current Realm record, this, "value", queryOrOptions, and count if given. Rethrow any
  * exceptions." §4.6 states the three exactly as §4.5 does, so this is §4.5's body with two operands changed:
  * the refusals are `ix_check`'s (which ALSO refuses when the index's referenced object store was deleted —
- * §4.6 states that and §4.5 does not), and the source is an INDEX, which is what sends §5.12 step 10 to §6.3's
- * retrieve-multiple rather than §6.2's.
+ * §4.6 states that and §4.5 does not), and the source is an INDEX, which is what takes §5.12 step 11 ("if
+ * source is an index, set operation to retrieve multiple items from an index") rather than step 12's else.
  *
  * The two files hold two bodies and not one shared one for the reason every other member pair here does: the
  * refusal set is the interface's, and a body that took a "which handle am I" flag would be a recognizer
@@ -336,16 +336,18 @@ static const IdlStepDecl IX_GET_STEP = {
  * core/indexeddb/idb_get_all.h's block — the algorithm the standard writes once. */
 #define IXGA_STAGES(X) \
     X(IXGA_BEGIN, "Indexed Database §4.6 getAll / getAllKeys / getAllRecords, which is §5.12 steps 1-5 — ONE " \
-                  "O(1) engine action: Web IDL §3.2.4.7's [EnforceRange] range test on the positional count " \
+                  "O(1) engine action: Web IDL §3.2.4.6 \"unsigned long\"'s [EnforceRange] range test — the " \
+                  "TypeError arm of §3.2.4.9 \"Abstract operations\"' ConvertToInt — on the positional count " \
                   "(which precedes the member's own steps, because an argument is converted first), then " \
                   "source and transaction are this's, a deleted index or object store is an " \
                   "InvalidStateError and an inactive transaction is a TransactionInactiveError — and §5.12 " \
                   "steps 6-9 begin") \
     IDB_GET_ALL_ALGO_STAGES(X, IXGA_R, "Indexed Database §4.6 getAll / getAllKeys / getAllRecords") \
-    X(IXGA_REQUEST, "Indexed Database §5.12 steps 10-11, after the O(1) tail steps 8-9's conversion ends in — " \
+    X(IXGA_REQUEST, "Indexed Database §5.12 steps 10-13, after the O(1) tail steps 8-9's conversion ends in — " \
                     "ONE O(1) engine action: an invalid key is that conversion's DataError, the operation is " \
-                    "an algorithm to run retrieve multiple items from an index, and the request is the result " \
-                    "of asynchronously executing it")
+                    "an algorithm to run retrieve multiple items from an index (step 10's mint, which carries " \
+                    "step 11's choice of source kind as a slot), and step 13 returns the request as the " \
+                    "result of asynchronously executing it")
 enum { IDL_STEP_STAGE_BASE(IXGA_STAGES) IXGA_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const IXGA_STEPS[] = { IXGA_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -396,7 +398,7 @@ static int js_ix_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 
     STEP_ARM(IXGA_REQUEST);
         JS_FreeValue(ctx, cb_result);
-        *presult = idb_get_all_walk_take(ctx, w, hdr->this_val);                     /* §5.12 STEPS 10-11 */
+        *presult = idb_get_all_walk_take(ctx, w, hdr->this_val);                     /* §5.12 STEPS 10-13 */
         return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
 }
 

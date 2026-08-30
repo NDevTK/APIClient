@@ -128,8 +128,10 @@ int idb_get_all_count_enforce_range(JSContext *ctx, JSValueConst v, uint32_t *pc
                    "to a number — the declaration is what performs §3.2.7's ToNumber, because that is the "
                    "page's `valueOf` and has to be a request");
     (void)r;
-    /* [EnforceRange] REPLACES §3.2.4.7's modulo with a refusal. `getAll(q, -1)` is a TypeError, where the
-       plain `unsigned long` conversion would ask for 4294967295 records. */
+    /* [EnforceRange] REPLACES THE MODULO WITH A REFUSAL: §3.2.4.6 "unsigned long" is ConvertToInt(V, 32,
+       "unsigned"), and §3.2.4.9 "Abstract operations"' ConvertToInt throws a TypeError when the attribute is
+       present and sets x to "x modulo 2^bitLength" when it is not. `getAll(q, -1)` is that TypeError, where
+       the plain `unsigned long` conversion would ask for 4294967295 records. */
     if (!isfinite(x) || x != trunc(x) || x < 0 || x > 4294967295.0) {
         JS_ThrowTypeError(ctx, "the count is outside the range of an unsigned long");
         return -1;
@@ -687,13 +689,16 @@ JSValue idb_get_all_walk_take(JSContext *ctx, IdbGetAllWalk *w, JSValueConst sou
     data[OP_GA_DIR] = JS_NewInt32(ctx, w->direction);
     data[OP_GA_COUNT] = w->has_count ? JS_NewUint32(ctx, w->count) : JS_UNDEFINED;
     data[OP_GA_IS_INDEX] = JS_NewBool(ctx, w->is_index);
-    op = JS_NewStepClosure(ctx, g_get_all_stepid, 0, 6, data);                /* STEP 10 */
+    /* STEPS 10-12: step 10 mints the operation, and steps 11 and 12 — "if source is an index, set operation
+       to retrieve multiple items from an INDEX", "else ... from an OBJECT STORE" — are the OP_GA_IS_INDEX
+       slot rather than a branch here, so one step machine answers as both §6.3's and §6.2's. */
+    op = JS_NewStepClosure(ctx, g_get_all_stepid, 0, 6, data);                /* STEPS 10-12 */
     JS_FreeValue(ctx, range);
     CHECK(!JS_IsException(op), "IndexedDB: §5.12 step 10's operation could not be minted");
     /* "Return the result (an IDBRequest) of running asynchronously execute a request with SOURCEHANDLE and
        operation." The handle and not the source: `request.source` is the IDBObjectStore or IDBIndex the page
        called the member on. */
-    req = idb_request_execute(ctx, source_handle, w->tx, op);                 /* STEP 11 */
+    req = idb_request_execute(ctx, source_handle, w->tx, op);                 /* STEP 13 */
     JS_FreeValue(ctx, op);
     return req;
 }
