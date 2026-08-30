@@ -3046,7 +3046,7 @@ const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return do
  * attribute on an `<object>`; core/html/html_iframe.c owns §7.1.6 now and this asks it, so the two questions
  * ("which state" and "does it mask") are answered in the two places the standard answers them.
  *
- * THE MASKED SAME-ORIGIN COMPARISON ASKS THE PARENT'S ORIGIN RECORD, NOT ITS TEXT. Step 10's condition is
+ * THE MASKED SAME-ORIGIN COMPARISON ASKS THE PARENT'S ORIGIN RECORD, NOT ITS TEXT. Step 12.1's condition is
  * "ancestorOrigin is same origin with parentDoc's origin", and §7.1.1's same origin is FALSE for two opaque
  * origins — while both serialize to the same three bytes `null`. Comparing the stored text alone would
  * therefore mask an entry that is not the parent's whenever the parent is itself opaque, so the text
@@ -3067,8 +3067,8 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
     CHECK(!JS_IsException(out), "§3.1.3's ancestor origins list could not be allocated");
     DCHECK(window_proxy_is(parent_nav) && !window_proxy_is_remote(parent_nav),
            "§3.1.3's internal ancestor origin objects list creation steps were run against a parent navigable "
-           "this instance does not hold — step 5 reads the parent Document's own list and step 9 reads its "
-           "ORIGIN RECORD, and neither exists in this heap for a peer's navigable. The composition belongs in "
+           "this instance does not hold — step 5 reads the parent Document's own list and steps 9, 11 and 12.1 read "
+           "its ORIGIN RECORD, and neither exists in this heap for a peer's navigable. The composition belongs in "
            "the instance that holds the ancestors and its RESULT crosses as text");
     /* STEP 5: "let ancestorOrigins be parentDoc's internal ancestor origin objects list." */
     prealm = window_proxy_realm(ctx, parent_nav);
@@ -3078,30 +3078,31 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
            "Document of this agent is given one by this same function at its creation, so a parent without one "
            "was installed past it and this child's list would silently start from nothing");
     porigin = window_proxy_origin(pd->proxy);
-    DCHECK(porigin != NULL, "§3.1.3's step 9 needs the parent Document's origin and its navigable has none");
+    DCHECK(porigin != NULL, "§3.1.3's step 11 needs the parent Document's origin and its navigable has none");
     popaque = origin_is_opaque(porigin);
     pser = origin_serialized(porigin);
-    /* STEPS 6-8: the container element and the referrer policy snapshot. The keyword §7.1.6 returns is already
+    /* STEPS 6-9: the container element, `masked`, and the referrer policy's two masking arms. The keyword §7.1.6 returns is already
        canonical, so the two comparisons below are against the standard's own spellings and are exact by
        construction — the case-insensitivity lives once, inside §2.3.3's match, and not at every consumer. */
     rp = iframe_element_referrer_policy(container);
     DCHECK(rp != NULL, "§7.1.6 answered with no keyword — its two arms both return one (a state's corresponding "
                        "keyword, or the empty string), so a NULL is an arm that returned nothing at all and "
-                       "step 8 would read it as 'no policy' rather than crashing");
+                       "steps 8-9 would read it as 'no policy' rather than crashing");
     if (!strcmp(rp, "no-referrer")) {
-        masked = true;                                                              /* STEP 8, first arm */
-    } else if (!strcmp(rp, "same-origin")) {                                        /* STEP 8, second arm */
+        masked = true;                                                              /* STEP 8 */
+    } else if (!strcmp(rp, "same-origin")) {                                        /* STEP 9 */
         DCHECK(child_origin != NULL,
-               "§3.1.3's step 8 compares this Document's origin against its parent's and the navigable being "
+               "§3.1.3's step 9 compares this Document's origin against its parent's and the navigable being "
                "created has none — every navigable is created with the origin its Document will have, so an "
                "absent one is a create that had not computed it yet rather than a Document without one");
         masked = !origin_same(porigin, child_origin);
     }
-    /* STEP 9: "if masked is true, then append a new opaque origin to output; otherwise, append parentDoc's
-       origin to output." */
+    /* STEPS 10-11: "if masked is true, then append a new opaque origin to output"; "otherwise, append
+       parentDoc's origin to output." Two numbered steps in the standard and one statement here, because
+       exactly one of them runs. */
     JS_SetPropertyUint32(ctx, out, nout++,
                          JS_NewString(ctx, masked ? "null" : (pser ? pser : "null")));
-    /* STEP 10: the parent's own ancestors, each masked when it is the parent's origin again. */
+    /* STEP 12: the parent's own ancestors, each masked when it is the parent's origin again (its step 12.1). */
     len = JS_GetPropertyStr(ctx, pd->ancestor_origin_strings, "length");
     JS_ToUint32(ctx, &n, len);
     JS_FreeValue(ctx, len);
@@ -3124,11 +3125,11 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
         JS_FreeCString(ctx, s);
         JS_FreeValue(ctx, a);
     }
-    /* STEP 9 APPENDED ONE BEFORE THE LOOP COULD APPEND NONE, so a list composed for a navigable that HAS a
+    /* STEPS 10-11 APPENDED ONE BEFORE THE LOOP COULD APPEND NONE, so a list composed for a navigable that HAS a
        parent is never empty. That is the invariant the record crossing an instance boundary is checked
        against at both ends: the empty list means "no container document", which means "no parent". */
-    DCHECK(nout >= 1, "§3.1.3's steps returned an EMPTY list for a navigable that has a parent — step 9 "
-                      "appends unconditionally, so an empty output is these steps having skipped it and the "
+    DCHECK(nout >= 1, "§3.1.3's steps returned an EMPTY list for a navigable that has a parent — steps 10-11 "
+                      "append unconditionally (exactly one of the two runs), so an empty output is these steps having skipped it and the "
                       "child would report itself top-level");
     return out;
 }
@@ -3141,7 +3142,7 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
  * answer is one the creating instance already composed and put on the record that provisioned this instance.
  * It is read back here rather than recomputed, for the reason document_create_permissions_policy states one
  * function along: shipping the INPUTS would be a second site running one algorithm, and here it would be a
- * second site running it WRONG — step 10's same-origin comparison needs the parent's origin RECORD, which is
+ * second site running it WRONG — step 12.1's same-origin comparison needs the parent's origin RECORD, which is
  * exactly the thing a serialization cannot carry. */
 static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueConst nav_proxy)
 {

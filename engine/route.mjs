@@ -162,7 +162,7 @@ let instanceSerial = 0;
    §3.1.3's steps read the PARENT DOCUMENT's own recorded list, that Document's ORIGIN RECORD and the CONTAINER
    ELEMENT: the parent field names a navigable and carries no ancestry, and the origin RECORD is exactly what a
    serialization drops — §7.1.1 decides an opaque origin by IDENTITY while every opaque origin is the three
-   bytes `null`, so an instance re-running step 10 over relayed text would mask an ancestor that is not the
+   bytes `null`, so an instance re-running step 12.1 over relayed text would mask an ancestor that is not the
    parent's whenever the parent is opaque. The creating instance runs the steps once and this relays the
    result. `none` is that grammar's word for "there are no ancestors", which is what this driver's own root
    documents state — nothing embeds them — and is the same fact `u` and `null` state one link along. Without

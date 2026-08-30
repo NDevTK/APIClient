@@ -124,11 +124,11 @@ JSValue document_ancestor_origins(JSContext *ctx);
  * already held as §7.1.1 serializations of origins for its two in-heap consumers.
  *
  * WHAT CROSSES IS THE CHILD'S FINISHED LIST, COMPOSED IN THE CREATOR — never the creator's own list with the
- * steps left to run at the far end. §3.1.3's step 10 asks whether an ancestor "is same origin with parentDoc's
- * origin", and §7.1.1's same origin compares an opaque origin by IDENTITY while every opaque origin serializes
- * to the same three bytes `null`. A peer given the text alone would therefore mask an entry that is not the
+ * steps left to run at the far end. §3.1.3's step 12.1 asks whether an ancestor "is same origin with
+ * parentDoc's origin", and §7.1.1's same origin compares an opaque origin by IDENTITY while every opaque
+ * origin serializes to the same three bytes `null`. A peer given the text alone would therefore mask an entry that is not the
  * parent's whenever the parent is itself opaque — a wrong list, silently, in exactly the `data:`-iframe case
- * that made this crossing necessary. Steps 6-8 are no better placed there: the container element is in the
+ * that made this crossing necessary. Steps 6-9 are no better placed there: the container element is in the
  * CREATOR's tree and an element does not cross at all. So the creator runs §3.1.3 ONCE, with all three of its
  * inputs in one heap, and its RESULT travels — the identical division Permissions Policy §9.5's answer makes
  * on the same record, for the identical reason.
