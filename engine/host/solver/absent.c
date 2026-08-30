@@ -152,6 +152,8 @@ void absent_free(void)
    is reached by, the other about WHOSE CHOICE its member list was. */
 static const char *ns_key_str(JSContext *ctx, JSAtom name)
 {
+    const char *s;
+
     DCHECK(JS_AtomIsPublishedName(JS_GetRuntime(ctx), name),
            "the engine asked this channel about a key it cannot NAME — the injected-state channel is a record "
            "of string- and index-keyed fields, so a symbol here is a read or a publication that reached the "
@@ -160,7 +162,27 @@ static const char *ns_key_str(JSContext *ctx, JSAtom name)
            "CALL: §7.1.1 ToPrimitive ( input [ , preferredType ] ) step 1.a reads %Symbol.toPrimitive% off "
            "every object it coerces; a record published under one turns every internal slot behind it into an "
            "unknown, which throws nothing and is read as state");
-    return JS_AtomToCString(ctx, name);
+    s = JS_AtomToCString(ctx, name);
+    /* ONE ALLOCATION FAILURE, ONE ANSWER, AND IT IS THE FATAL ONE — because what the other answer produces is
+       not a degraded report but a FABRICATED one, and a fabricated answer to exactly these two reads is what
+       this whole file exists to prevent. Every caller's only other return is JS_UNINITIALIZED, which the
+       engine reads as the positive statement "this read is not on the channel" (js_absent_ask /
+       js_present_ask): the MISS arm then completes §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ) step
+       2.b's `undefined`, and the HIT arm hands back the slot's own bytes. So a failed malloc answers
+       `if (__FLAGS.admin)` concretely, the gate stops forking, and the logged-in surface this tool is for is
+       buried — silently, with a smaller result set reported as a clean one, which is the defaulted-field
+       defect reached through the allocator instead of through a `||`. The publication half of this same file
+       has always spelled that failure `CHECK` (CLAUDE.md §Offensive programming names OOM as CHECK's own
+       example: "a dropped flow corrupts the frontier"), and one function cannot hold two answers to one
+       failure.
+       AND ALLOCATION IS THE ONLY FAILURE IT HAS, which is what makes this a CHECK rather than a judgement
+       call: the DCHECK above establishes the atom is a published name, and JS_AtomIsPublishedName defines
+       that as a tagged integer or a JS_ATOM_TYPE_STRING atom — neither of which can drive JS_AtomToString
+       down its exception path for any reason but a failed allocation. */
+    CHECK(s != NULL, "absent: OOM spelling a key of the document's injected-state namespace — the alternative "
+                     "to failing here is answering a server-injected read concretely, which decides its gate "
+                     "for the whole program and buries the surface behind it with nothing to say so");
+    return s;
 }
 
 void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value)
@@ -183,7 +205,6 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
            "parent before descending into it, so a missing parent path means the two disagree about what the "
            "published graph is, and every member read off this record would be reported under a name the "
            "document never published it at");
-    CHECK(n != NULL, "absent: OOM spelling the name a document published a record under");
     len = (base ? strlen(base) + 1 : 0) + strlen(n) + 1;
     path = (char *)malloc(len);
     CHECK(path != NULL, "absent: OOM composing the path a document published a record at");
@@ -241,8 +262,6 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
     char *shape = NULL, *src = NULL;
     JSValue r = JS_UNINITIALIZED;
 
-    if (!s)
-        return JS_UNINITIALIZED;
     DCHECK(JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT,
            "the engine asked about an OBJECT-valued member of a published record. A record hanging off a "
            "published record is published in its OWN right by the same walk, and its address is this file's "
@@ -277,8 +296,6 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
     char *shape = NULL, *src = NULL;
 
     JS_FreeValue(ctx, g);
-    if (!s)
-        return JS_UNINITIALIZED;
     if (is_global) {
         /* A name the platform owns is a component this engine owes; leave the read alone so its throw names
            it. Asked ONLY of the global, because the platform's names live there: `gon.Node` is a field of an
