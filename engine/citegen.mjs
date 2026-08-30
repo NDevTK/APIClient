@@ -819,7 +819,7 @@ function lineIndex(src) {
   };
 }
 
-function audit(argv) {
+function audit(argv, opts = {}) {
   const idx = new Map();
   for (const s of SPECS) {
     const f = indexFileOf(s.key);
@@ -865,7 +865,8 @@ function audit(argv) {
 
   const targets = argv.filter((a) => !a.startsWith("--"));
   let files;
-  if (targets.length) files = targets.map((t) => (statSync(t).isDirectory() ? walk(t) : [t])).flat();
+  if (opts.files) files = opts.files;
+  else if (targets.length) files = targets.map((t) => (statSync(t).isDirectory() ? walk(t) : [t])).flat();
   else {
     /* The default is what this project WROTE: the host, plus the fork's own two quickjs translation units.
      * The rest of engine/qjs is upstream and its citations are not this tree's to answer for — but quickjs.c
@@ -939,7 +940,7 @@ function audit(argv) {
   };
 
   for (const file of files) {
-    const src = readFileSync(file, "utf8");
+    const src = opts.srcOf ? opts.srcOf(file) : readFileSync(file, "utf8");
     const lineOf = lineIndex(src);
     const spans = proseSpans(src);
 
@@ -1168,6 +1169,7 @@ function audit(argv) {
     t.set(name, (t.get(name) || 0) + 1);
   }
   const suspects = undecided.filter((u) => wrong.has(u.file + "\u0000" + u.groupNo));
+  if (opts.quiet) return findings;
   /* WHAT THE OTHER SITES ON THIS NUMBER RESOLVED TO IS THE ONE THING THE READER NEEDS AND THE ONE THING THIS
    * CAN PROVE. A file writing `7.4.9 IteratorClose` six times and `7.4.9 IteratorStepValue` four times has
    * §the numbering of an older edition — and it is ALSO a file in which that one number means TWO different
@@ -1228,6 +1230,63 @@ function audit(argv) {
   console.log(`\n${findings.length} finding(s), ${suspects.length} undecided beside them. This auditor REPORTS; it exits 0 by design — see the header.`);
 }
 
+/* ---- --since: what THIS diff introduced ------------------------------------------------------------------ */
+
+/* A DELTA IS THE RIGHT MEASUREMENT AND A DELTA GATE IS STILL THE WRONG MECHANISM, and the two halves of that
+ * are worth stating apart because the first is what this builds and the second is what it refuses to build.
+ *
+ * THE MEASUREMENT. Five hundred standing findings is a number nobody reads, so "run it on what you write" —
+ * which CLAUDE.md §Browser half now requires — is an instruction that costs a lane more attention than it has.
+ * What a lane actually needs is the handful its own diff ADDED, and that is computable exactly: audit the
+ * files the diff touches with their WORKING-TREE bytes, audit the SAME files with the bytes at <ref>, and
+ * report the difference. Both runs read the same committed indexes and the same resolver, so an upstream
+ * edition cannot move the answer and neither can a peer's commit to a file this diff does not touch.
+ *
+ * IT IS KEYED BY (file, phrase, number), NEVER BY LINE, because a diff moves lines and a line-keyed delta
+ * would report every citation below an inserted paragraph as introduced. A file that does not exist at <ref>
+ * is read as empty, so a new file's findings are all its own.
+ *
+ * AND IT EXITS 0, LIKE EVERY OTHER MODE HERE. The delta form defeats the noise floor, which is the objection
+ * it was proposed against, and it does NOT defeat the two that decide this: a citation is PROSE, so a build
+ * that fails on one is a build in which no lane can land a spelling fix; and a finding appearing in a file
+ * your diff touched is not evidence your diff caused it — this file's own history is the proof, since
+ * indexing eight standards moved 35 findings to confirmations and revealed 84 more without a single C file
+ * changing, and a resolver edit moved findings between files nobody had edited. A gate that fails a lane for
+ * a finding it did not introduce gets muted exactly as fast as one that fails it for five hundred it did not
+ * introduce. So this prints, and the human decides. */
+function since(ref, argv) {
+  const changed = execFileSync("git", ["diff", "--name-only", ref, "--", "*.c", "*.h"],
+    { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean);
+  const files = changed.map((r) => join(ROOT, r)).filter((p) => existsSync(p));
+  if (!files.length) { console.log(`no .c/.h file differs from ${ref} — nothing for this mode to compare`); return; }
+
+  const baseSrc = new Map();
+  for (const p of files) {
+    const rel = relative(ROOT, p);
+    try { baseSrc.set(p, execFileSync("git", ["show", `${ref}:${rel}`], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })); }
+    catch { baseSrc.set(p, ""); }        /* absent at ref — a new file owns every finding in it */
+  }
+  const key = (f) => `${f.file} ${f.kind} ${f.no} ${f.msg}`.replace(/:\d+/g, "");
+  const tip = audit(argv, { files, quiet: true });
+  const base = audit(argv, { files, quiet: true, srcOf: (p) => baseSrc.get(p) });
+  const had = new Set(base.map(key));
+  const added = tip.filter((f) => !had.has(key(f)));
+  const gone = base.filter((f) => !new Set(tip.map(key)).has(key(f)));
+
+  console.log(`spec-citation delta against ${ref}: ${files.length} changed .c/.h file(s), ` +
+    `${base.length} finding(s) before, ${tip.length} after`);
+  console.log(`\nINTRODUCED BY THIS DIFF: ${added.length}`);
+  for (const f of added) { console.log(`  ${f.file}:${f.line}  ${f.kind}  ${f.msg}`); console.log(`      ${f.text.trim()}`); }
+  console.log(`\nRETIRED BY THIS DIFF: ${gone.length}`);
+  for (const f of gone) console.log(`  ${f.file}  ${f.kind}  ${f.msg}`);
+  console.log(`\nThis mode REPORTS; it exits 0 by design — see the comment above it.`);
+}
+
 const argv = process.argv.slice(2);
-if (argv.includes("--regen")) regen(argv.filter((a) => !a.startsWith("--")));
+const sinceAt = argv.indexOf("--since");
+if (sinceAt >= 0) {
+  const ref = argv[sinceAt + 1] && !argv[sinceAt + 1].startsWith("--") ? argv[sinceAt + 1] : "origin/main";
+  since(ref, argv.filter((a) => a !== "--since" && a !== ref));
+}
+else if (argv.includes("--regen")) regen(argv.filter((a) => !a.startsWith("--")));
 else audit(argv);
