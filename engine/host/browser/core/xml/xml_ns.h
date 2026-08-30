@@ -83,10 +83,10 @@
  * OWN stack, and a byte copy is specifically the wrong answer: a binding's `prefix` and `ns` are interior
  * pointers into THIS stack's arena, so a copied binding names the original arm's bytes — the self-reference
  * class JSStepVisit::reexec exists to re-point. The owed work is therefore a visit declaration for this state
- * in whatever step machine holds it, and element.c's `frag_unforkable` is the precedent for what stands in
+ * in whatever step machine holds it, and element.c's `fragment_parse_unforkable` is the precedent for what stands in
  * until then: the fork ABORTS naming what to build rather than two arms sharing one structure.
  *   SO THE CLAIM IS CHECKED, NOT ASSERTED IN PROSE. The stack records the flow that created it and every
- * operation DCHECKs that the running flow is still that one — one level below frag_unforkable and
+ * operation DCHECKs that the running flow is still that one — one level below fragment_parse_unforkable and
  * unconditional, so it fires for any second flow however it got here, a fork that forgot to copy or a resume
  * that came back from a cold tier with the C memory gone. Building the parkable representation before there is
  * a step machine to park it in would be plumbing added to dodge plumbing; the assert is what makes its absence

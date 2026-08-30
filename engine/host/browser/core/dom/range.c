@@ -35,10 +35,14 @@
 #include "core/dom/range.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
+#include "core/html/fragment_parser.h"   /* HTML §13.4's parse — §8.5.7 is a sixth declaration over it */
+#include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/dom_cow.h"
+#include "solver/solve.h"
 
 static JSClassID g_range_class;
 
@@ -1474,6 +1478,173 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, NULL,
                                             "DOM §5.5 Range.surroundContents(newParent)", RS_STEPS };
 
+/* ---- HTML §8.5.7 "The createContextualFragment() method" -------------------------------------------------
+ *
+ * `partial interface Range { [CEReactions, NewObject] DocumentFragment
+ *  createContextualFragment((TrustedHTML or DOMString) string); };` — HTML §8.5.7, NOT "DOM Parsing and
+ * Serialization". That specification has been merged into HTML and survives only as a stub with an issue
+ * tracker, which §8.5.7's own first paragraph is the link to; a reader holding it is holding a document that
+ * no longer defines this member.
+ *
+ * WHAT MAKES IT "CONTEXTUAL" is steps 2-6, and they are the whole of what this file adds to the shared §13.4
+ * machine: the markup is parsed in the tree-building context of the RANGE'S START NODE, so `<tr>` inside a
+ * `<table>` context survives and the same string parsed bare does not. Dropping the context — parsing against
+ * `body` always, or against the document element — is the one implementation mistake that leaves every other
+ * assertion in the WPT file passing, so the context is resolved here and handed to fragment_parse_begin as
+ * `context`, which is the same argument §8.5.4's innerHTML setter hands it.
+ *
+ * ITS SCRIPTS RUN, AND THAT IS THE MEMBER'S DEFINING PROPERTY rather than a detail. §13.2.4.5 "Other parsing
+ * state flags" names this member BY NAME as the user of the FRAGMENT parser scripting mode — "Scripts are
+ * executed as soon as they are inserted into the document as part of a the HTML fragment parsing algorithm,
+ * ignoring async and defer attributes. This mode is used by createContextualFragment()." — and step 7 passes
+ * `Fragment` outright. So a `<script>` in the markup is NOT marked already started, does not run while the
+ * fragment is detached (§4.12.1 step 7, "If el is not connected, then return"), and runs the moment the page
+ * appends the fragment to a document. That is a SOLVER-VISIBLE difference and not only a fidelity one: a
+ * bundle that builds DOM this way ships code whose execution the engine would otherwise never reach.
+ *
+ * THE SINK IS REAL AND IS REPORTED AS ONE. §8.5.7's own note is "This method performs no sanitization to
+ * remove potentially-dangerous elements and attributes like script or event handler content attributes", so
+ * this joins innerHTML and insertAdjacentHTML on solve_html_sink — and it is the STRONGEST of the three,
+ * because the breakout does not need an `onerror` to fire: a `<script>` in the markup executes on insertion.
+ *
+ * IT PLACES INTO A DocumentFragment INSTEAD OF A TREE, which is the only structural difference from the five
+ * members that came before it, and it needs no new placement kind: §13.4 step 15 creates the fragment the
+ * algorithm returns, and FRAG_INTO_CHILDREN with that fragment as the anchor reaches the identical loop.
+ * Nothing in it is connected, so §4.2.3's insertion steps reach no `<script>` preparation — which is exactly
+ * what "not yet added to document, should not have run" means. */
+static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    FragmentParse *s = st;
+    int r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+
+    if (hdr->stage == FRAG_TRUSTED) {
+        /* STEP 1 — "Let compliantString be the result of invoking the get trusted type compliant string
+           algorithm with TrustedHTML, this's relevant global object, string, "Range createContextualFragment",
+           and "script"." The sink NAME is the standard's own and is what a Trusted Types violation report
+           carries, which is what keeps this member distinguishable from `Element innerHTML` in one report. */
+        s->compliant = trusted_types_compliant_string(ctx, TRUSTED_TYPE_HTML, argc > 0 ? argv[0] : JS_UNDEFINED,
+                                                      "Range createContextualFragment");
+        if (JS_IsException(s->compliant)) { s->compliant = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        hdr->stage = FRAG_START;
+    }
+    if (hdr->stage == FRAG_START) {
+        RangeBounds *b = range_here(ctx, hdr->this_val);
+        lxb_dom_element_t *el = NULL;
+        lxb_dom_document_fragment_t *out;
+        lxb_dom_document_t *doc;
+        lxb_dom_node_t *node;
+        const char *html;
+
+        if (!b) return JS_STEP_ABRUPT;                                  /* the receiver is not a Range */
+        node = bounds_start(b);                                         /* STEP 2 */
+        DCHECK(node != NULL,
+               "§8.5.7 step 2 read a Range's start node and found none — §5.5 gives every live range two "
+               "boundary points at construction and every setter replaces rather than clears one, so a null "
+               "here is a range this engine built and DOM §5.5 cannot describe");
+        doc = node->owner_document;
+        /* STEPS 3, 4 AND 5. `element` starts null; an Element start node IS the context, and a Text or a
+           Comment contributes its PARENT ELEMENT — DOM §4.4's "parent element" is the parent if it is an
+           element and null otherwise, which is why a Comment sitting in a DocumentFragment falls through to
+           step 6 rather than taking the fragment as a context.
+           CDATASection IS a Text — DOM §4.11 declares `interface CDATASection : Text` — so step 4's "node
+           implements Text" is true of one, and a node-type test that listed only LXB_DOM_NODE_TYPE_TEXT would
+           answer a narrower question than the step asks. */
+        if (node->type == LXB_DOM_NODE_TYPE_ELEMENT)
+            el = lxb_dom_interface_element(node);
+        else if (node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION ||
+                 node->type == LXB_DOM_NODE_TYPE_COMMENT)
+            el = (node->parent != NULL && node->parent->type == LXB_DOM_NODE_TYPE_ELEMENT)
+               ? lxb_dom_interface_element(node->parent) : NULL;
+        /* STEP 6 — "If element is null or all of the following are true: element's node document is an HTML
+           document; element's local name is "html"; and element's namespace is the HTML namespace, then set
+           element to the result of creating an element given this's node document, "body", and the HTML
+           namespace."
+           ALL THREE CONJUNCTS, and the namespace one is not a formality: `createElementNS("http://fake-ns",
+           "html")` has the local name and not the namespace, so it stays its own context and the markup parses
+           against it exactly as it would against a `<div>`. DOM §4.5's "A document is said to be an XML
+           document if its type is `xml`; otherwise an HTML document" is what the first conjunct asks, which is
+           why it is the NEGATION of document_is_xml_of and not a content-type string.
+           WHY THE STANDARD DOES THIS AT ALL: parsing against `<html>` would put the markup through
+           §13.2.6.4.5 'The "before head" insertion mode' and materialise a `<head>` and a `<body>` around it,
+           which is the compat bug the WPT file cites (Mozilla 585819) — so `<span>Hello</span>` selected over
+           `document.documentElement` must come back as one `<span>` and not as a document skeleton.
+           The `body` is in NO TREE and nothing else will ever free it, so the machine owns it: it goes on
+           `own_context`, which fragment_parse_release destroys on the completed path and the throw path
+           alike — the same field, and the same reason, as §8.5.5 step 5's. */
+        if (el == NULL ||
+            (!document_is_xml_of(lxb_dom_interface_node(el)->owner_document) &&
+             lxb_dom_interface_node(el)->ns == LXB_NS_HTML &&
+             lxb_html_tree_node_is(lxb_dom_interface_node(el), LXB_TAG_HTML))) {
+            s->own_context = lxb_dom_document_create_element(doc, (const lxb_char_t *)"body", 4, NULL);
+            CHECK(s->own_context != NULL,
+                  "§8.5.7 step 6's `body` element could not be created — createContextualFragment would then "
+                  "parse against a context the algorithm does not have");
+            el = s->own_context;
+        }
+        DCHECK(lxb_dom_interface_node(el)->owner_document == doc,
+               "§8.5.7's context element belongs to a document other than the range's — steps 4 and 5 take the "
+               "start node or its parent and step 6 creates in this's node document, so all three are one "
+               "document, and §13.4 step 15 creates the returned fragment in it");
+        /* HTML §13.4 "Parsing HTML fragments" STEP 15 — "Let fragment be the result of creating a document
+           fragment given target's node document" — hoisted ahead of the parse because it is what this member
+           RETURNS and because the placement needs it as its anchor. THIS FLOW MADE IT, so the delta owns it
+           and destroys it if the flow is discarded: a fragment comes out of the DOCUMENT's lexbor arena and is
+           reachable from no tree, so without the creation entry every one ever built would sit in that arena
+           with no owner and invisible to the runtime's gc_obj_list walk, which only sees GC objects. */
+        out = lxb_dom_document_fragment_interface_create(doc);
+        CHECK(out != NULL, "§13.4 step 15's DocumentFragment could not be created — handing back a null the "
+                           "page cannot tell from a fragment it never asked for is not an option");
+        dom_cow_note_created(lxb_dom_interface_node(out));
+        /* THE SINK, BEFORE THE PARSE and whatever the value turns out to be — see the header above. */
+        solve_html_sink(ctx, s->compliant);
+        if (concolic_is(s->compliant)) {
+            /* A concolic value has no bytes to parse and the sink report IS what this call means. The member
+               still RETURNS a DocumentFragment, because its IDL return type is one and a page that reads
+               `.childNodes` off it must find an empty list rather than a TypeError on undefined. */
+            *presult = node_wrap(ctx, lxb_dom_interface_node(out));
+            return JS_STEP_DONE;
+        }
+        DCHECK(JS_IsString(s->compliant),
+               "§8.5.7 reached its body with an unconverted argument — the IDL declaration is what converts "
+               "it, and running the page's toString from here is the drive-to-completion the flow machinery "
+               "exists to avoid");
+        html = JS_ToCString(ctx, s->compliant);
+        if (!html) return JS_STEP_ABRUPT;
+        /* STEP 7 — "Return the result of invoking the fragment parsing algorithm steps with element,
+           compliantString, and Fragment." THREE arguments, and the third is the one this member exists to
+           pass. `allowDeclarativeShadowRoots` is not among them, so HTML §8.5.4's fragment parsing algorithm
+           steps hand §13.4 the literal `false`: a `<template shadowrootmode>` in this markup stays a template,
+           exactly as it does through innerHTML. */
+        fragment_parse_begin(ctx, s, el, lxb_dom_interface_node(out), FRAG_INTO_CHILDREN, html,
+                             /*clear_first*/ false, /*allow_declarative*/ false, FRAG_SCRIPTING_FRAGMENT);
+        JS_FreeCString(ctx, html);
+        hdr->stage = FRAG_FEED;
+        return JS_STEP_YIELD;
+    }
+    r = fragment_parse_step(ctx, hdr, s);
+    /* STEP 7's RETURN, taken at the machine's terminal: `anchor` is §13.4 step 15's fragment and the placement
+       has just emptied §13.4 step 12's `root` into it. It is read off the state rather than remembered in a
+       local because every stage between here and FRAG_START is a rest point a park can happen at. */
+    if (r == 0) *presult = node_wrap(ctx, s->anchor);
+    return r;
+}
+
+static const char *const RANGE_CONTEXTUAL_FRAGMENT_STEPS[] = { FRAG_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* FOUR STAGES: this member never replaces a target's children, so FRAG_CLEAR is past the end of what it
+   declares and the driver says so if the shared machine ever reaches it from here. It never filters either,
+   so §8.6.4's sanitizer stages are past the end as well. */
+static const IdlStepDecl RANGE_CONTEXTUAL_FRAGMENT = {
+    js_range_contextual_fragment, sizeof(FragmentParse), fragment_parse_visit, fragment_parse_release,
+    "HTML §8.5.7 Range.createContextualFragment(string)", RANGE_CONTEXTUAL_FRAGMENT_STEPS,
+    .unforkable = fragment_parse_unforkable
+};
+
 /* ---- CSSOM VIEW §9 "Extensions to the Range Interface" ---------------------------------------------------
  * `partial interface Range { DOMRectList getClientRects(); [NewObject] DOMRect getBoundingClientRect(); }`.
  *
@@ -1632,7 +1803,8 @@ static const JSCFunctionListEntry js_range_consts[] = {
 };
 
 static int g_id[R_MEMBER_N], g_id_to_string = -1, g_id_delete = -1, g_id_extract = -1,
-           g_id_clone_contents = -1, g_id_surround = -1, g_id_client_rects = -1, g_id_bounding_rect = -1;
+           g_id_clone_contents = -1, g_id_surround = -1, g_id_client_rects = -1, g_id_bounding_rect = -1,
+           g_id_contextual_fragment = -1;
 
 void range_init(JSContext *ctx)
 {
@@ -1641,6 +1813,7 @@ void range_init(JSContext *ctx)
     static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
     static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
     static const IdlArgType HOW_RANGE[2] = { IDL_UNSIGNED_SHORT, IDL_INTERFACE };
+    static const IdlArgType ONE_HTML[1] = { IDL_DOMSTRING };
     int k;
 
     if (g_range_class) return;   /* one AGENT, one class and one set of pool entries */
@@ -1696,6 +1869,19 @@ void range_init(JSContext *ctx)
     g_id_clone_contents = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_EXTRACT, RX_CLONE_CONTENTS);
     g_id_surround = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &RANGE_SURROUND, 0);
     idl_iface_brand(node_class_id());
+    /* HTML §8.5.7's `partial interface Range` — `[CEReactions, NewObject] DocumentFragment
+       createContextualFragment((TrustedHTML or DOMString) string)`. ONE REQUIRED argument, so no
+       idl_optional_from: Web IDL §3.6 throws a TypeError before any conversion when a call passes fewer
+       arguments than a member has required ones, which is what makes `range.createContextualFragment()` a
+       TypeError rather than a parse of nothing.
+       IDL_DOMSTRING FOR THE UNION, because TrustedHTML is Trusted Types §2's interface and this platform has
+       none — so every value takes the DOMString arm, and there is NO [LegacyNullToEmptyString] on it (unlike
+       §8.5.4 innerHTML's), which is why `createContextualFragment(null)` parses the four characters `null`
+       and `(undefined)` the nine characters `undefined`.
+       `[CEReactions]` needs no statement here: core/idl_args.c wraps EVERY member in HTML §4.13.6's element
+       queue, so a custom element the placement upgrades runs its reactions at this member's epilogue like
+       any other. */
+    g_id_contextual_fragment = idl_method_id_step(ctx, ONE_HTML, 1, NULL, 0, &RANGE_CONTEXTUAL_FRAGMENT, 0);
     /* CSSOM VIEW §9's `partial interface Range` — neither member takes an argument. */
     g_id_client_rects = idl_method_id(ctx, NULL, 0, js_range_rects, R_CLIENT_RECTS);
     g_id_bounding_rect = idl_method_id(ctx, NULL, 0, js_range_rects, R_BOUNDING_RECT);
@@ -1726,6 +1912,8 @@ void range_init(JSContext *ctx)
                    "CSSOM VIEW §9 Extensions to the Range Interface's getClientRects declaration");
     agent_state_id("element", &g_id_bounding_rect,
                    "CSSOM VIEW §9 Extensions to the Range Interface's getBoundingClientRect declaration");
+    agent_state_id("element", &g_id_contextual_fragment,
+                   "HTML §8.5.7 The createContextualFragment() method's step-machine declaration");
     realm_declare_intrinsic(range_install_proto);
 }
 
@@ -1767,6 +1955,7 @@ void range_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "insertNode", 1, g_id[R_INSERT_NODE]);
     idl_install_method(ctx, proto, "surroundContents", 1, g_id_surround);
     idl_install_method(ctx, proto, "toString", 0, g_id_to_string);
+    idl_install_method(ctx, proto, "createContextualFragment", 1, g_id_contextual_fragment);
     idl_install_method(ctx, proto, "getClientRects", 0, g_id_client_rects);
     idl_install_method(ctx, proto, "getBoundingClientRect", 0, g_id_bounding_rect);
     JS_SetClassProto(ctx, g_range_class, proto);
@@ -1809,7 +1998,7 @@ void range_free(JSRuntime *rt)
        pool that no longer exists. */
     for (k = 0; k < R_MEMBER_N; k++) g_id[k] = -1;
     g_id_to_string = g_id_delete = g_id_extract = g_id_clone_contents = g_id_surround = -1;
-    g_id_client_rects = g_id_bounding_rect = -1;
+    g_id_client_rects = g_id_bounding_rect = g_id_contextual_fragment = -1;
     g_range_class = 0;
     abstract_range_free(rt);
 }

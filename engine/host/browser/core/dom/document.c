@@ -560,7 +560,7 @@ enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
  * (see the header above), and it would justify a span of any size. Splitting it means feeding the CSS
  * tokenizer through lxb_css_syntax_tokenizer_next_chunk and holding it across the rests — which puts a live
  * lexbor tokenizer back into this machine's state and makes it unforkable again. So the two are ONE
- * subproblem, and it is the one frag_unforkable names: a lexbor tokenizer that can be COPIED. Until that
+ * subproblem, and it is the one fragment_parse_unforkable names: a lexbor tokenizer that can be COPIED. Until that
  * exists, a parkable compile and a forkable walk cannot both be had, and this machine keeps the forkable
  * walk. */
 #define QS_STAGES(X) \

@@ -1691,7 +1691,7 @@ static JSValue js_nav_load_fini(JSContext *ctx, void *st, bool take_result)
 }
 
 /* WHY THIS MACHINE MUST NOT BE FORKED WHILE IT IS CREATING A DOCUMENT — core/dom/element.c's fragment parse
-   states the whole argument at frag_unforkable and this is the same object: between two items of §7.5.2's
+   states the whole argument at fragment_parse_unforkable and this is the same object: between two items of §7.5.2's
    fill, the machine holds an lxb_html_parser_t standing at a position with an open-element stack and an
    insertion mode behind it, and lexbor exposes no copy of one; it also holds the half-built Document itself,
    which JSStepVisit has no operation for, so a sibling arm would share ONE tree with the original and both
@@ -1708,7 +1708,7 @@ static const char *js_nav_load_unforkable(const void *st)
            "js_nav_load_visit declares none of them, because JSStepVisit has no operation for a PRIVATE DOM "
            "TREE and none for a lexbor parser, so the sibling arm would share one Document with the original: "
            "two arms filling one tree and two teardowns destroying it. WHAT TO BUILD IS core/dom/element.c's "
-           "frag_unforkable list, unchanged and already ordered — the `v->tree` operation whose clone deep-"
+           "fragment_parse_unforkable list, unchanged and already ordered — the `v->tree` operation whose clone deep-"
            "copies a subtree through a node->node map (core/html/tree_construction.c's copy_subtree), and "
            "then HTML §13.2.5's tokenizer as an engine component whose state is a spec-named enum rather than "
            "a raw code pointer into lexbor's 182 static state functions. Both halves serve that machine and "

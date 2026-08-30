@@ -6,7 +6,7 @@
  * cold-tier eviction, a cross-session resume. A fork hands each arm its OWN state, and the piece of that state
  * lexbor owns is an lxb_html_tree_t standing at an insertion mode with a stack of open elements under it. Two
  * arms sharing one of those is two parses writing one stack, which is precisely the corruption per-flow
- * isolation exists to prevent, so element.c's frag_unforkable ABORTS the fork rather than allow it. This file
+ * isolation exists to prevent, so core/html/fragment_parser.c's fragment_parse_unforkable ABORTS the fork rather than allow it. This file
  * is the first of the two halves that sentence names, and it is written first for the reason it gives: this
  * half needs nothing lexbor does not already expose.
  *
@@ -33,7 +33,7 @@
  * onto the copy; nothing about it has to park, which is why it is a stack-lifetime artifact and not a field of
  * anything. Every entry is a pointer into the real document's arena on both sides.
  *
- * WHAT IS NOT HERE: §13.2.5's tokenizer. It is the caller's `tkz` argument, and element.c's frag_unforkable
+ * WHAT IS NOT HERE: §13.2.5's tokenizer. It is the caller's `tkz` argument, and core/html/fragment_parser.c's fragment_parse_unforkable
  * states what building it costs and why it buys the FORK and not the cold tier. */
 #include <stdbool.h>
 #include <stdint.h>
@@ -318,7 +318,7 @@ void html_tree_construction_copy(const lxb_html_tree_t *src, lxb_dom_node_t *src
     CHECK(copy != NULL, "the fragment-parse copy could not create its tree builder");
     /* AND THIS IS WHERE THE TWO HALVES BIND. lxb_html_tree_init takes the tokenizer's REFERENCE (tkz_ref) and
        points its token-done callback at this tree — which is why `tkz` must be the copy's own tokenizer and
-       why element.c's frag_unforkable says the two halves cannot be cloned separately. It also allocates the
+       why core/html/fragment_parser.c's fragment_parse_unforkable says the two halves cannot be cloned separately. It also allocates the
        four arrays and the parse-error list, which is why every field below is a copy INTO them rather than a
        pointer taken FROM the source. */
     CHECK(lxb_html_tree_init(copy, tkz) == LXB_STATUS_OK,
@@ -429,7 +429,7 @@ void html_tree_construction_copy(const lxb_html_tree_t *src, lxb_dom_node_t *src
     copy->before_append_attr = src->before_append_attr;
     /* §13.2.6.1's foster parenting flag and §13.2.4's frameset-ok and scripting flags, and lexbor's own running
        status. THAT IS EVERY FIELD OF lxb_html_tree, and the count is the point: seventeen, of which twelve are
-       what element.c's frag_unforkable names (the two modes, the three stacks, the pending table, the parse
+       what core/html/fragment_parser.c's fragment_parse_unforkable names (the two modes, the three stacks, the pending table, the parse
        errors, the form and context pointers, and the three flags), `document` and `tkz_ref` are the two halves
        this operation binds, `before_append_attr` and `status` are here, and `ref_count` is the one field
        deliberately NOT copied — see the DCHECK above. A field added to lexbor's struct and not to this list is

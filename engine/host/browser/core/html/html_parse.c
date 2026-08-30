@@ -279,27 +279,28 @@ static lxb_html_token_t *html_parse_token_done(lxb_html_tokenizer_t *tkz, lxb_ht
      * SPEC-LEGAL, which is exactly why nothing in this tree could ever have reported it: no crash, no failing
      * subtest, no column. A written script is conditionally-loaded JS in its purest form — code that exists
      * only if a branch reached the write — and it is the solver half that the silence costs. */
-    /* AN INERT PARSE MARKS ITS SCRIPTS AT THE PARSE BOUNDARY AND NOT HERE, WHICH IS WHY THE TEST IS AT THE
-       CALL AND NOT INSIDE EITHER ENTRY. §13.2.4.5 "Other parsing state flags"' parser scripting mode INERT is
-       "Scripts are enabled, however they are marked as already started, essentially preventing them from
-       executing. THIS IS THE DEFAULT MODE OF THE HTML FRAGMENT PARSING ALGORITHM" — §13.4 "Parsing HTML
-       fragments" gives its `scriptingMode` argument that default, and every one of this engine's five markup
-       members (innerHTML, outerHTML, insertAdjacentHTML, setHTML, setHTMLUnsafe) reaches §13.4 without passing
-       one, so `lxb_html_tree_is_fragment` IS the question. The STAMP those scripts need is
-       `html_script_parsed`'s, applied to the finished tree — one writer, and it reaches the SVG `script`
-       elements §13.2.6.5 puts outside this line's namespace as well. What this test buys is the only thing the
-       stamp's timing could not: that the two entries below never run for a tree §13.4 is required to keep
-       inert, and so cannot prepare a fragment's script in the window before that walk.
-       The remaining mode, FRAGMENT ("scripts are executed as soon as they are inserted"), belongs to EXACTLY
-       ONE call site in the platform and this sentence used to name the wrong one. It said
-       `createContextualFragment`, and HTML §8.5.7 "The createContextualFragment() method"'s last step is
-       "Return the result of invoking the fragment parsing algorithm steps with element and compliantString" —
-       no scriptingMode argument at all, so §13.4 "Parsing HTML fragments"' own default INERT applies to it
-       exactly as it does to the five members above. The site that really passes Fragment is §8.6.4
-       "Sanitization algorithms"' set and filter HTML step 5: "Let scriptingMode be Inert. If
-       options["runScripts"] is true: Assert: safe is false. Set scriptingMode to Fragment." — which is the
-       DFAIL core/dom/element.c already carries. A wrong section behind a right-sounding sentence is worse than
-       no citation, because the next reader looks up §8.5.7 and builds a mode it does not ask for. */
+    /* A FRAGMENT PARSE MARKS ITS SCRIPTS AT THE PARSE BOUNDARY AND NOT HERE, WHICH IS WHY THE TEST IS AT THE
+       CALL AND NOT INSIDE EITHER ENTRY. Whatever §13.2.4.5 "Other parsing state flags"' parser scripting mode
+       is, a §13.4 fragment parse's `script` elements are stamped by `html_script_parsed` over the FINISHED
+       tree — one writer, which is also what reaches the SVG `script` elements §13.2.6.5 puts outside this
+       line's namespace. What this test buys is the only thing that stamp's timing could not: that the two
+       entries below never run for a §13.4 tree at all, and so cannot prepare a fragment's script in the window
+       before that walk. It is `lxb_html_tree_is_fragment` and not a scripting-mode test, and that is the
+       point — the mode decides WHAT the stamp is, never WHO applies it.
+       WHICH MODE A FRAGMENT PARSE TAKES IS THE MEMBER'S TO SAY, AND TWO OF THEM SAY FRAGMENT. This comment
+       used to claim there was exactly one such site and that `createContextualFragment` was not it, quoting a
+       last step — "the fragment parsing algorithm steps with element and compliantString" — that the standard
+       no longer has. HTML §8.5.7 "The createContextualFragment() method" step 7 reads "Return the result of
+       invoking the fragment parsing algorithm steps with element, compliantString, and Fragment", and
+       §13.2.4.5 names the member outright in its own definition of the mode: "Fragment — Scripts are executed
+       as soon as they are inserted into the document as part of a the HTML fragment parsing algorithm,
+       ignoring async and defer attributes. THIS MODE IS USED BY createContextualFragment()." The second site
+       is §8.6.4 "Sanitization algorithms"' set and filter HTML steps 5-6 ("Let scriptingMode be Inert. If
+       options["runScripts"] is true: 1. Assert: safe is false. 2. Set scriptingMode to Fragment"). Both are
+       carried as `scripting` on core/html/fragment_parser.h's FragmentParse, stated by the member.
+       THE LESSON THAT SURVIVES IS THE ONE THE OLD TEXT DREW AND THEN FELL TO: a cited step quoted from
+       recollection reads as authoritative and is worse than no citation. Verify against the section's own
+       text, which is why every quotation here is verbatim. */
     /* AND NOT AT ALL IF TREE CONSTRUCTION FAILED. `lxb_html_tree_token_callback` answers NULL and sets
        `tkz->status` on an allocation failure, which leaves the element's place in the tree unfinished — the
        caller CHECKs that status and aborts, so what this test buys is that the abort happens with nothing

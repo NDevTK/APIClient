@@ -2,10 +2,10 @@
  * inside §13.4's fragment parsing algorithm. See tree_construction.c for what each field of the copy is.
  *
  * THE OTHER HALF IS §13.2.5's TOKENIZER, and the two are named together on purpose: element.c's
- * frag_unforkable is the one sentence that owns the ORDER, and it names this half first because this half needs
+ * fragment_parse_unforkable is the one sentence that owns the ORDER, and it names this half first because this half needs
  * nothing lexbor does not already expose. A caller reaches this component with a tokenizer already copied — the
  * `tkz` argument — because lxb_html_tree_init BINDS the two (it takes the tokenizer's reference and points its
- * token-done callback at the tree), which is exactly why frag_unforkable says the two halves cannot be cloned
+ * token-done callback at the tree), which is exactly why fragment_parse_unforkable says the two halves cannot be cloned
  * separately. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_TREE_CONSTRUCTION_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_TREE_CONSTRUCTION_H
