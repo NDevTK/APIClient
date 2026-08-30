@@ -198,12 +198,15 @@ const INTERFACES = {
      randomness mean for a solver whose flows resume byte-identically" have that answer now; it is argued in
      core/crypto/crypto.h rather than restated here, because a reason a reader can check belongs beside the
      code it decided and not in the auditor's map. SubtleCrypto ships `digest` and none of the rest, every one
-     of which needs §13's CryptoKey model first. Without rows the audit would report both interfaces as
+     of which stands on §13's CryptoKey. Without rows the audit would report both interfaces as
      nothing at all rather than as a member list with a reason — and the list's LENGTH is deliberately not
      written here: it is what the row prints, it changed under this comment once already when the modern-algos
-     IDL added the encapsulation members, and a count in prose is the one thing a row makes redundant. */
+     IDL added the encapsulation members, and a count in prose is the one thing a row makes redundant.
+     §13's CryptoKey IS a row for the opposite reason: it ships all four of its members, so the row is what
+     makes an interface that is COMPLETE distinguishable from one nobody has looked at. */
   Crypto:               "core/crypto/crypto.c",
   SubtleCrypto:         "core/crypto/subtle_crypto.c",
+  CryptoKey:            "core/crypto/crypto_key.c",
   IDBKeyRange:          "core/indexeddb/idb_key_range.c",
   IDBFactory:           "core/indexeddb/indexed_db.c",
   /* §4.1's IDBRequest and §4.10's IDBTransaction. Each inherits EventTarget, so event_target.c is named

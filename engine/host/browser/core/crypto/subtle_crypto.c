@@ -55,6 +55,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
+#include "core/crypto/crypto_key.h"
 #include "core/crypto/secure_hash.h"
 #include "core/crypto/subtle_crypto.h"
 #include "core/idl_args.h"
@@ -70,9 +71,12 @@ static JSAtom    g_atom_name = JS_ATOM_NULL;
    by description and nothing else would have shown. */
 static JSRuntime *g_rt;
 
-/* WEB IDL §3.7.5's BRAND CHECK. `SubtleCrypto.prototype.digest.call({}, …)` is a TypeError — and because the
-   operation's return type is a promise, §3.7.7 makes that a REJECTION rather than a throw, which core/idl_args
-   performs for every member that declares one. This only has to state the TypeError. */
+/* WEB IDL §3.7.7 Operations' BRAND CHECK — "If jsValue does not implement the interface target, throw a
+   TypeError", so `SubtleCrypto.prototype.digest.call({}, …)` is one. Because the operation's return type is a
+   promise, §3.7.7 makes that a REJECTION rather than a throw, which core/idl_args performs for every member
+   that declares one. This only has to state the TypeError.
+   THE NUMBER USED TO READ §3.7.5, WHICH IS "CONSTANTS" — a real section with no brand check in it at all, so
+   the citation resolved and said nothing the code claims. */
 static bool sd_brand(JSContext *ctx, JSValueConst this_val)
 {
     DCHECK(g_subtle_class != 0, "a SubtleCrypto member ran before subtle_crypto_init declared the class");
@@ -174,10 +178,24 @@ static int sd_reject(JSContext *ctx, SdState *s, JSValue *presult)
 }
 
 /* WEB IDL §3.2.26 Buffer source types' `get a copy of the bytes held by the buffer source`, whose two shapes
-   are the two arms of §4.2's BufferSource and whose detached case is a POSITIVE STATEMENT: "If
-   IsDetachedBuffer(jsArrayBuffer)
-   is true, then return the empty byte sequence." JS_GetBufferBytes answers NULL with a zero length for exactly
-   that, and cannot throw — so the empty message is hashed and no exception is invented. */
+ * are the two arms of §4.2's BufferSource. Steps 1-4 read the WINDOW — the buffer itself for an ArrayBuffer,
+ * and [[ViewedArrayBuffer]] with [[ByteOffset]] and [[ByteLength]] for a view — and step 5 is a POSITIVE
+ * STATEMENT: "If IsDetachedBuffer(jsArrayBuffer) is true, then return the empty byte sequence."
+ *
+ * STEP 5 IS ASKED FIRST HERE, AND THAT IS NOT A REORDERING OF THE OBSERVABLE ALGORITHM — steps 1-4 are pure
+ * reads of internal slots whose results step 5 discards, so the two orders answer identically. It is asked
+ * first because THE WINDOW IS WHAT CANNOT BE READ FOR A DETACHED VIEW: an embedder's only route from a view to
+ * its buffer is JS_GetArrayBufferView, which refuses an OUT-OF-BOUNDS view, and a detached buffer makes every
+ * view over it out of bounds. So the algorithm met an exception at step 3 for exactly the input step 5 defines
+ * the answer to.
+ *
+ * AND THE ARRAYBUFFER ARM IS WHY THAT WENT UNSEEN FOR SO LONG. This function used to lean on JS_GetBufferBytes
+ * answering NULL with a zero length for a detached buffer, which is true and is the whole of the buffer arm —
+ * so `digest(alg, detached)` hashed the empty message correctly while `digest(alg, viewOntoDetached)` aborted,
+ * and the abort named the BRAND TEST ("neither an ArrayBuffer nor an ArrayBufferView"), which is a true
+ * sentence about a value that had passed that very test. One algorithm, two arms, one of them answering a
+ * different question: the defect shape that reads as a diagnosis. JS_IsDetachedBufferSource is the third
+ * member of the pair quickjs-step.h already declares for §3.2.26's other two questions of the same buffer. */
 static JSValue sd_copy_buffer_source(JSContext *ctx, JSValueConst src)
 {
     JSValue view_buf = JS_UNDEFINED;
@@ -187,23 +205,38 @@ static JSValue sd_copy_buffer_source(JSContext *ctx, JSValueConst src)
     const uint8_t *base;
     JSValue copy;
 
+    /* STEP 5, over §3.2.26's "underlying buffer of a buffer source type instance" — V itself for an
+       ArrayBuffer, V.[[ViewedArrayBuffer]] for a view, which is the one question the predicate answers for
+       both arms. The empty byte sequence IS the message, so the digest is SHA-256("") and not an error: a
+       page that detaches its input and then hashes it gets the same answer a browser gives it. */
+    if (JS_IsDetachedBufferSource(src))
+        return JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
+
+    /* STEPS 1-4: the window. Everything past step 5 has a live, fixed-length, non-shared buffer under it —
+       §3.2.26's conversion at the IDL_BUFFERSOURCE position refused the shared and resizable arms, and the
+       detach is the line above — so JS_GetArrayBufferView's out-of-bounds refusal is now unreachable, which
+       is what this DCHECK asserts rather than the brand test it used to name. */
     if (!JS_IsArrayBuffer(src)) {
         view_buf = JS_GetArrayBufferView(ctx, src, &off, &len);
         DCHECK(!JS_IsException(view_buf),
-               "§14.3.5 step 4 reached a `data` that is neither an ArrayBuffer nor an ArrayBufferView — the "
-               "IDL_BUFFERSOURCE position performs §3.2.26's brand test once, so nothing else can arrive here");
+               "§3.2.26's step 3 refused a view whose buffer is neither detached, nor shared, nor resizable — "
+               "the IDL_BUFFERSOURCE conversion performs the brand test and both refusals once and step 5 is "
+               "asked above, so the only remaining cause of an out-of-bounds view has grown a fourth case");
         ab = view_buf;
     }
     base = JS_GetBufferBytes(ab, &whole);
     if (JS_IsArrayBuffer(src)) {
         off = 0;
-        len = base ? whole : 0;
-    } else if (!base) {
-        len = 0;                       /* a view onto a detached buffer: the empty byte sequence */
+        len = whole;
     }
-    DCHECK(!base || off + len <= (size_t)whole,
+    DCHECK(base != NULL || whole == 0,
+           "§3.2.26 reached a live buffer with no storage — step 5 answered for the detached case above, so a "
+           "NULL here is a buffer that is neither detached nor allocated");
+    DCHECK(off + len <= (size_t)whole,
            "a BufferSource's byte range reaches past its own buffer — the offset and the length come from the "
            "view and the size from the buffer, and the three are one fact");
+    /* STEPS 6-7: the copy. A zero-length buffer legitimately has NULL storage, and `base + off` would be
+       arithmetic on it, so the empty case names its own bytes. */
     copy = JS_NewArrayBufferCopy(ctx, base ? base + off : (const uint8_t *)"", len);
     JS_FreeValue(ctx, view_buf);
     return copy;
@@ -275,11 +308,33 @@ static int sd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             return sd_reject(ctx, s, presult);
         }
     }
-    /* AN ABRUPT REQUEST RESULT ARRIVES AT THE STAGE THAT ASKED, because this machine declares that it catches
-       one: a `name` getter or a `toString` that threw is delivered here, and §14.3.5 step 3's answer to every
-       one of them is the same rejection. */
-    if (JS_IsException(cb_result))
-        return sd_reject(ctx, s, presult);
+    /* AN ABRUPT REQUEST RESULT ARRIVES AT THE HELPER THAT PARKED, AS ITS OWN -1 — and it is taken THERE, at
+       SD_NAME's and SD_NAME_STR's `if (r < 0) return sd_reject(...)`, never by a test at the top of this
+       function. A blanket `if (JS_IsException(cb_result)) return sd_reject(...)` stood here and is deleted.
+       It was a workaround for a driver-side rewind (`step_hdr_request_abandon`) that no longer exists:
+       quickjs-step.h's request contract now says an abrupt KEYED or COERCION completion arrives as the
+       helper's own -1, having ENDED the request FIRST — `step_keyed_abrupt` rewinds the cursor and frees the
+       atom before it tests, exactly as a normal completion ends them. Consuming the delivery ahead of the
+       helper leaves the request recorded as IN FLIGHT, so `step_getprop_done`'s key check and
+       `step_keyed_answered`'s stage check — the two asserts that exist to name a stage collecting another
+       stage's answer — never ran on the one path they were written for, and this machine then walked out of
+       SD_NAME with `get_phase` at GET_PH_GOT and `name`'s atom live on the header. It also made both `r < 0`
+       branches below unreachable: two sites that read as the contract while a third quietly decided instead
+       of them.
+       THE DELIVERY IS NOT LOST. step_getprop_run reports -1 with the throw live in the context;
+       step_tostring_run reaches JS_ToStringFree(ctx, JS_EXCEPTION), which quickjs answers with JS_EXCEPTION
+       untouched, and returns -1 the same way — after resetting `str_phase` and releasing its held coercion.
+       sd_reject picks up the identical exception at each site.
+       AND NO OTHER STAGE CAN BE HANDED ONE, which is asserted rather than argued: SD_SELECT parks on
+       step_fork_run, whose contract is JS_STEP_FORK or 0 and which runs none of the page's code, and SD_COPY,
+       SD_BLOCK and SD_FINISH rest on JS_STEP_YIELD, which the driver re-enters with JS_UNDEFINED. Each of
+       those stages FREES cb_result and carries on, so a throw arriving at one would ride live into step 12's
+       resolve. */
+    DCHECK(!JS_IsException(cb_result) || hdr->stage == SD_NAME || hdr->stage == SD_NAME_STR,
+           "§14.3.5 was delivered an abrupt completion at a stage that parks on no request able to throw — "
+           "only the `name` read and its ToString run the page's code, so this machine has grown a request "
+           "kind it does not answer for, and the stage it arrived at frees the delivery and continues with "
+           "the throw still live in the context");
 
     STEP_DISPATCH(SD_STAGES, hdr->stage, "Web Cryptography §14.3.5 digest(algorithm, data)", JS_STEP_ABRUPT);
 
@@ -496,6 +551,11 @@ void subtle_crypto_init(JSContext *ctx)
 
     DCHECK(g_obj_slot < 0, "subtle_crypto_init ran twice — the class, the slot and the member's pool id are "
                            "the AGENT's");
+    /* §13's INTERFACE IS THIS COMPONENT'S DEPENDENCY and is declared here, for the reason core/crypto/crypto.c
+       gives about this one: every absent method of §14.3 takes a CryptoKey or mints one, so the component that
+       will call the mint is the component that declares it. core/realm.h runs the per-realm installs in
+       DECLARATION order, so CryptoKey.prototype exists before anything of §14's can hand a key back. */
+    crypto_key_init(ctx);
     g_rt = JS_GetRuntime(ctx);
     JS_NewClassID(JS_GetRuntime(ctx), &g_subtle_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_subtle_class, &d) == 0,
@@ -521,6 +581,7 @@ void subtle_crypto_init(JSContext *ctx)
 
 void subtle_crypto_free(void)
 {
+    crypto_key_free();
     if (g_obj_slot < 0)
         return;
     DCHECK(g_rt != NULL, "SubtleCrypto was declared without recording the runtime its atom belongs to");

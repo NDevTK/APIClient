@@ -210,8 +210,10 @@ static JSValue js_crypto_random_uuid(JSContext *ctx, JSValueConst this_val,
 static JSValue crypto_get_subtle(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
-    /* WEB IDL §3.7.5's BRAND CHECK on an attribute getter. `Object.getOwnPropertyDescriptor(Crypto.prototype,
-       'subtle').get.call({})` is a TypeError, and the attribute's type is not a promise, so it THROWS. */
+    /* WEB IDL §3.7.6 Attributes' BRAND CHECK on an attribute getter — "If jsValue does not implement target,
+       then: … throw a TypeError". `Object.getOwnPropertyDescriptor(Crypto.prototype, 'subtle').get.call({})`
+       is that throw, and the attribute's type is not a promise, so it THROWS rather than rejecting.
+       THE NUMBER USED TO READ §3.7.5, WHICH IS "CONSTANTS" and has no brand check in it. */
     if (JS_GetClassID(this_val) != g_crypto_class)
         return JS_ThrowTypeError(ctx, "the `subtle` getter was reached on something that is not a Crypto");
     return subtle_crypto_object(ctx);
