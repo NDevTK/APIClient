@@ -1702,11 +1702,13 @@ static const char *HTML =
     "fetch('/api/cename?v=' + cename);"
     /* …and the same throw UNCAUGHT, at a chunk's top level, where a page error is what it becomes. */
     "loadScript('/chunk/cethrow.js');"
-    /* HTML §8.1.7.5 — the two claims that make the two lists necessary, and neither can be proved by the other.
+    /* HTML §8.1.4.7 Unhandled promise rejections — the two claims that make the two lists necessary, and
+       neither can be proved by the other.
        (1) A rejection nobody ever handles IS a page error: an async bundle delivers most of its errors this way
        and every one of them used to be silent. (2) A handler attached in a LATER microtask is ordinary correct
        code, so that rejection must never be reported — which only an ABSENCE can prove. */
-    /* §8.1.7.5 fires `unhandledrejection` at the global, CANCELABLE, before anything is reported. A page that
+    /* §8.1.4.7 Unhandled promise rejections fires `unhandledrejection` at the global, CANCELABLE, before
+       anything is reported. A page that
        ships its own error reporter cancels it — and that reporter is code with a fetch in it, which is the
        surface this engine exists to reach, so the event is worth more than the report. Cancelling must
        SUPPRESS the report, which only the absence of the reason from the output can prove. */
@@ -4195,6 +4197,30 @@ static int hostreq_answer_all(JSContext *ctx)
    browser. What stays below is what is genuinely this fixture's: its host EDGES and its sinks. */
 static int g_id_host_read, g_id_append_child;   /* declared once per agent — a member has one pool entry */
 
+/* THIS FIXTURE'S OUTPUT IS A STREAM OF LINES, SO AN UNCAUGHT PAGE ERROR IS PRINTED WHERE IT HAPPENS.
+ * solver/result.h states the rule; what makes this host the STREAM answer and not the DOCUMENT one is the same
+ * sentence that already put `@S` on this stream: `@RESULT` runs after run_scheduler RETURNS, the exploring
+ * session returns only once fixture_have_answers finds every row 1, and a row is 0 for as long as the
+ * capability behind it is missing — so on exactly the runs where the document would explain something, it is
+ * composed at every sample and printed never.
+ *
+ * WHAT THAT COST IS MEASURED AND IS THE REASON THIS FUNCTION EXISTS. A page's throw ends its <script>; HTML
+ * §8.1.4.6 Runtime script errors' report-an-exception reports it and the parser goes on to the NEXT script,
+ * which is spec-correct and is also the quietest possible way for this fixture to stop asserting. Every
+ * endpoint the rest of that script would have emitted is simply absent, every probe row over them reads 0,
+ * and a 0 row is indistinguishable from the capability behind it being unbuilt. That is three states behind
+ * one answer — unbuilt, never reached, and reached-and-wrong — and keeping those apart is what this fixture's
+ * whole design is for. It happened to the biggest script in this document: a throw a few statements in left
+ * the four @S sinks it holds unreached, and the entire @S half of the report read 0 with nothing saying why.
+ *
+ * IT IS A PRINT AND NOT AN ASSERT, DELIBERATELY. §CLAUDE's offensive-programming rule names the one class of
+ * error that is NOT a should-never-happen: a forced-exec flow THROWING on opaque or attacker input is the
+ * exploration surface, and this document is run under forced multi-path execution where arms a browser would
+ * never take are taken on purpose. This document also STAGES uncaught errors on purpose — a chunk whose top
+ * level throws §4.13.1's SyntaxError, and a `Promise.reject` nobody handles — and a DCHECK here would abort on
+ * the fixture's own claims. What was wrong was never that the error happened; it was that nothing said so. */
+static void tf_page_error(const char *msg) { printf("@PAGEERR %s\n", msg); fflush(stdout); }
+
 static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
 {
     static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
@@ -4209,6 +4235,7 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
     /* THIS FIXTURE'S EDGES — WHO answers, which is the half that is legitimately per-host. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
+    result_set_page_error_hook(tf_page_error);   /* …and WHO reads an uncaught page error — see tf_page_error */
 
     /* AND THEN THE FACTS. `false` is §7.5.1's requestsOAC: this fixture's document comes from no response at
        all — it is a string of HTML handed to the probe — so there is no `Origin-Agent-Cluster` header to have
@@ -5875,7 +5902,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         /* a template's TWO child lists. The clone copies both — 1 ordinary child in, 1 out, and it is the <u>.
            The serialisation shows only the content, which is §13.3 replacing the template with its contents. */
         { "\"/api/tplboth\"",    "1:1" },
-        { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.7.5's cancelable event reached a page listener */
+        { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.4.7's cancelable event reached a page listener */
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },
     };
@@ -5919,14 +5946,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§4.13.3 attributeChangedCallback saw the old value and the new one");
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "data-ignored") && !strstr(js, "\"nope\""),
              "§4.13.3 the UNOBSERVED attribute produced no reaction");
-    /* §8.1.7.5: the rejection nobody handled is reported, and the one handled a microtask later is NOT. */
+    /* §8.1.4.7: the rejection nobody handled is reported, and the one handled a microtask later is NOT. */
     fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "rejNOHANDLER"),
-             "§8.1.7.5 the rejection nobody handled is reported");
+             "§8.1.4.7 the rejection nobody handled is reported");
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "rejHANDLED"),
-             "§8.1.7.5 the rejection handled a microtask later is NOT reported");
+             "§8.1.4.7 the rejection handled a microtask later is NOT reported");
     /* …and the one a listener CANCELLED is not reported either — the page answered for it. */
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "rejCANCEL"),
-             "§8.1.7.5 the rejection a listener CANCELLED is not reported");
+             "§8.1.4.7 the rejection a listener CANCELLED is not reported");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         fold_row(&nodealgo_tt, &nodealgo_why,
                  strstr(js, NODE_ALGOS[ai][0]) && strstr(js, NODE_ALGOS[ai][1]), NODE_ALGOS[ai][0]);
@@ -6596,6 +6623,30 @@ static int fixture_have_answers(void) {
                   "reports the @S half as silent when it is merely unprinted");
         printf("@S %s\n", sj);
         free(sj);
+    }
+    /* …AND WHAT AN EMPTY `@S []` IS EVIDENCE FOR, WHICH THE ARRAY ITSELF CANNOT SAY. solver/solve.h's
+       detect_sink names the four readings an entry-less @S surface has — the page never read an attacker
+       source; a source was read but no sink RAN; a sink ran and only the page's own strings arrived; something
+       tainted arrived and the search was SUPPRESSED because the check on it was unforgeable — and they take
+       opposite actions: the first two are a driving gap, the third is a page that may have no such flow, the
+       fourth is a positive result ABOUT the page. The counters that split them are computed at the mint
+       (concolic_source_wrap) and at the one point all three sink classes converge (detect_sink), and their
+       ONLY reader was the result document — which this host publishes after the scheduler returns and
+       therefore, on a run whose frontier does not drain, never. A computed writer with nothing that reads it
+       is the mirror of the read-with-no-writer defect and is harder to see, because the value is real and
+       asserted and consumed by nothing.
+       MEASURED, WHICH IS WHY THIS LINE IS HERE: a full-budget run emitted 349 samples of `@S []` and 349
+       @WFQ lines reading `cands: 0`, and neither said whether a sink had run at all. It had not — the script
+       holding all four of them ended on an uncaught throw more than a thousand statements earlier — and
+       `reached=0` is the one number that says so.
+       IT IS THE PRODUCERS' OWN COUNTS AND NOT A RE-DERIVATION OUT OF `js`, for the reason the @S array above
+       is: measure what the shipped path writes, or the number is a property of the instrument. */
+    {
+        long reached = 0, tainted = 0, suppressed = 0;
+
+        solve_arrival_census(&reached, &tainted, &suppressed);
+        printf("@SCENSUS {\"sourceReads\":%ld,\"sinkReached\":%ld,\"sinkTainted\":%ld,\"sinkSuppressed\":%ld}\n",
+               concolic_source_reads(), reached, tainted, suppressed);
     }
     free(js);
     return ok;
@@ -10347,7 +10398,7 @@ int main(int argc, char **argv) {
     media_query_list_free(ctx);
     animation_frame_free(ctx);
     event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
-    /* §8.1.7.5's rejection list is a row on core/platform.h's release column now, run by the
+    /* §8.1.4.7's rejection list is a row on core/platform.h's release column now, run by the
        platform_agent_free above — see main.c's teardown for what having it here cost the host that did not. */
     abort_free(ctx);
     observable_free(ctx);

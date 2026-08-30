@@ -163,6 +163,11 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
        fetch.c aborts on a fetch issued with no provider, which is what asserts this line is here. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */
+    /* …AND WHO READS AN UNCAUGHT PAGE ERROR, which is an edge of the same kind and the one this host answers
+       with its document: `qjs_result` publishes result_json for every page unconditionally, so `pageErrors`
+       reaches the zone whether or not the frontier drained. Stated rather than left as a NULL hook — see
+       solver/result.h for the host that was counted as this answer and was not. */
+    result_page_errors_ride_the_document();
 
     /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's and `opener_policy` is §7.1.3's,
        both decided by the browser component that reads the response (§7.4.6's navigation params, which

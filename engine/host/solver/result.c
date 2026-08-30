@@ -17,15 +17,39 @@
    here interprets it. */
 static char **g_errs; static int g_errs_n, g_errs_cap;
 
-/* WHO PRINTS ONE AS IT HAPPENS — see result.h. NULL for a host whose output is a document it writes at the
-   end; set by a host whose output is a stream. */
+/* WHO PRINTS ONE AS IT HAPPENS, AND THE FACT THAT A HOST ANSWERED THE QUESTION AT ALL — see result.h. The
+   second is not bookkeeping for the first: a NULL hook USED to mean "this host publishes the document", so a
+   host that had considered where an uncaught page error is read and a host that never had made the identical
+   call, and the one that never had was the fixture whose whole job is naming unbuilt capabilities. */
 static void (*g_err_hook)(const char *msg);
-void result_set_page_error_hook(void (*fn)(const char *msg)) { g_err_hook = fn; }
+static int g_err_route_declared;
+void result_set_page_error_hook(void (*fn)(const char *msg)) {
+    DCHECK(fn != NULL,
+           "a host declared a page-error STREAM and handed it no printer. Clearing the hook is not how a host "
+           "says it publishes the document — result_page_errors_ride_the_document is — so this would restore "
+           "the silent default that declaration exists to end");
+    g_err_hook = fn;
+    g_err_route_declared = 1;
+}
+void result_page_errors_ride_the_document(void) { g_err_route_declared = 1; }
 
 void result_page_error(const char *msg) {
     if (!msg || !*msg) return;
+    /* AT THE ORIGIN — the FIRST uncaught page error, which is the last moment at which this host's silence is
+       still recoverable. A page's throw is the forcing function that names an unbuilt capability, so a host
+       that reaches one having declared neither route is a host in which that name cannot be read, and the
+       failure is silent in the one direction nobody checks: the run continues and reports the surface it
+       happened to reach. The message is recorded either way — what is undeclared is whether anything ever
+       says so. */
+    DCHECK(g_err_route_declared,
+           "the page threw and this host has never said where an uncaught page error is READ — call "
+           "result_set_page_error_hook (this host's output is a stream of lines, so it must print the error "
+           "when it occurs) or result_page_errors_ride_the_document (this host publishes result_json "
+           "unconditionally and `pageErrors` is in it). A host that renders the document only at the END of a "
+           "run is the FIRST of those, not the second: a run that is killed before it drains publishes "
+           "nothing, and the throw that ended a <script> is then the one fact its report cannot state");
     for (int i = 0; i < g_errs_n; i++) if (!strcmp(g_errs[i], msg)) return;
-    if (g_err_hook) g_err_hook(msg);
+    if (g_err_hook) g_err_hook(msg);   /* routing between the two declared answers, never a default past one */
     if (g_errs_n >= g_errs_cap) {
         int c = g_errs_cap ? g_errs_cap * 2 : 8;
         char **a = realloc(g_errs, (size_t)c * sizeof(char *));
