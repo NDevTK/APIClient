@@ -233,20 +233,51 @@ void flow_credit_emit(double v) {
  * NOT KEYED ON THE RUNNING FLOW, unlike the credit above: the observation is made about a specific flow's own
  * bytes and the caller already holds that flow, so passing it is what stops this becoming a second way to ask
  * which flow is running. */
-void flow_set_distance(Flow *f, double d) {
+void flow_observe_survival(Flow *f, double frac) {
     DCHECK(f != NULL,
-           "an @S candidate's travelled distance was recorded against no flow — the distance is a fact about "
+           "an @S candidate's surviving fraction was recorded against no flow — the distance is a fact about "
            "ONE flow's own payload, so a caller with no flow measured somebody else's bytes");
-    DCHECK(d >= 0.0 && d <= 1.0,
-           "an @S candidate's travelled distance is not a fraction — it is the surviving run over the payload's "
+    DCHECK(frac >= 0.0 && frac <= 1.0,
+           "an @S candidate's surviving fraction is not a fraction — it is the surviving run over the payload's "
            "own length, so a value outside [0,1] is a run measured against a denominator that is not this "
            "candidate's, and it enters the weight beside an optimism term whose entire range is 1.0");
     DCHECK(f->cand_payload != NULL,
-           "a travelled distance was recorded for a flow carrying no payload — the fraction's denominator IS "
+           "a surviving fraction was recorded for a flow carrying no payload — the fraction's denominator IS "
            "the payload, so a flow with none has nothing this number could be a fraction of and would rank "
            "above every exploration flow on a measurement of nothing");
-    if (d <= f->cand_dist) return;   /* not an improvement: the rank did not move, so nothing may re-rank on it */
-    f->cand_dist = d;
+    if (frac <= f->cand_surv) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
+    f->cand_surv = frac;
+    frontier_rank_changed();
+}
+
+/* THE SAME QUANTITY, ONE RUNG UP — see flow.h for why the two writers are separate entry points and why the
+ * ladder is three rungs rather than §@S's four. Everything flow_observe_survival says about being a reading
+ * rather than a payment holds verbatim here; what this adds is the ORDER, which the fraction does not have.
+ * WHY THE ORDER IS ASSERTED RATHER THAN ARRANGED. Each escape site in solve.c runs downstream of the arrival
+ * site on the SAME string of the SAME flow, so the predecessor is always already recorded — and the one way
+ * that stops being true is the one that matters: the arrival write is refused for a candidate the search's own
+ * delivery table has since contradicted, and an escape recorded past a refused arrival would advance a flow
+ * onto a rung the search declined to give it. That is not a rank one rung too high; it is a rank identical to
+ * a candidate that arrived AND escaped, taken by one the search has measured cannot arrive at all. */
+void flow_observe_rung(Flow *f, int rung) {
+    DCHECK(f != NULL,
+           "an @S candidate's rung was recorded against no flow — a rung is a fact about ONE flow's own bytes "
+           "standing at ONE sink, so a caller with no flow observed somebody else's");
+    DCHECK(rung == FLOW_RUNG_ARRIVED || rung == FLOW_RUNG_ESCAPED,
+           "an @S rung outside the ladder was recorded — the comparator's denominator is FLOW_RUNGS_N and the "
+           "rungs are its numerator, so a value outside them puts the fitness term outside [0,1] and lets a "
+           "candidate outrank a flow that has emitted a finding");
+    DCHECK(f->cand_payload != NULL,
+           "a rung was recorded for a flow carrying no payload — a rung is a statement about where THIS flow's "
+           "injected bytes stood, so a flow that injected none has nothing to have stood anywhere and would "
+           "rank above every exploration flow on an observation of nothing");
+    DCHECK(rung <= f->cand_rung + 1,
+           "an @S candidate skipped a rung — its bytes were recorded as having ESCAPED a context they were "
+           "never recorded as ARRIVING in, so either the two observations are being made about different "
+           "strings, or the arrival was refused for a payload this search has contradicted and the escape is "
+           "about to hand that same payload the whole ladder anyway");
+    if (rung <= f->cand_rung) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
+    f->cand_rung = rung;
     frontier_rank_changed();
 }
 
@@ -443,7 +474,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
     DCHECK(sib->val == 0.0 && sib->val_born == 0.0 && sib->cpu == 0 && sib->visits == 0 &&
-           sib->cand_dist == 0.0 && sib->path_forced == 0 &&
+           sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0,
            "a forked sibling was credited, charged or DECIDED before it inherited its parent's account — it "
            "was ranked, and possibly run, at a weight that belongs to no flow, and this assignment throws that "
@@ -472,12 +503,19 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     sib->visits = parent->visits;
     /* …AND THE DISTANCE, which is the same sentence about the term that is not a ledger. An arm of a candidate
        carries the SAME payload to the SAME sink (engine.c copies the substitution to the sibling), so it stands
-       exactly where its parent stood: the bytes that survived to a sink survived on the prefix both arms share.
+       exactly where its parent stood: the bytes that survived to a sink survived on the prefix both arms share,
+       and so did the rungs those bytes reached there.
        Zeroing it would let a candidate refresh its own rank by branching — the reset-by-splitting this
        accounting forbids everywhere else, arriving through the one term that is read rather than accumulated —
        and the rank-neutrality assertion below is what catches it. For a NON-candidate parent this copies zero
-       to zero, which is the truth about an arm of a flow that has no payload. */
-    sib->cand_dist = parent->cand_dist;
+       to zero, which is the truth about an arm of a flow that has no payload.
+       BOTH FIELDS, AND THE SECOND ONE IS WHY THE ASSERTION BELOW IS WRITTEN OVER flow_weight. The fitness was
+       ONE double when this line was written; splitting it into the fraction and the rung count is exactly the
+       "a term the fork does not carry" shape, and a list-of-fields assertion would have passed with the rung
+       left behind — a candidate that had ARRIVED and ESCAPED could then re-enter the queue as one that had
+       merely survived, by branching, which is worth two thirds of the comparator's whole range. */
+    sib->cand_surv = parent->cand_surv;
+    sib->cand_rung = parent->cand_rung;
     /* AND THE FAMILY IT JOINS — the term the AGING reads, and the one line that makes "a fork chain is one
        monopolizer wearing N names" true of the arithmetic rather than only of this comment. The arm does not
        FOUND a family: flow_new minted it a root of its own (that is what the precondition above checks), and
@@ -514,8 +552,9 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
        instead of six minutes later in a progress line that says `finished 0`.
        RE-DERIVED FOR EVERY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
-       `val + cand_dist + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must carry FIVE things for this to hold
-       and it carries exactly five: `val` (copied above), `cand_dist` (copied above — the fitness comparator's),
+       `val + (cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must carry
+       SIX things for this to hold and it carries exactly six: `val` (copied above), `cand_surv` and
+       `cand_rung` (copied above — the fitness comparator's two rung quantities),
        `visits` (copied above — the optimism term's), `cpu` (copied above — the aging's own half), and the
        family tag (joined above — the aging's other half). Each addition
        to the formula has arrived through this line firing, which is the whole reason it is written as an
@@ -1886,10 +1925,28 @@ static double flow_queue_weight(const Flow *f) {
    out of a saturated frontier, not enough to hold the thread against a flow that has emitted. It is
    charged the same aging as everything else, so it buys a candidate turns, never a monopoly.
    ZERO FOR EVERY FLOW THAT IS NOT A CANDIDATE, which is not a special case in the arithmetic: a flow with
-   no payload has no distance to be a fraction of, and flow_set_distance asserts that rather than allowing
-   one to be recorded. */
+   no payload has no ladder to stand on, and both fitness writers assert that rather than allowing
+   one to be recorded.
+   AND IT IS THE WHOLE LADDER, WHICH IS WHAT MAKES THE PARAGRAPH ABOVE TRUE OF MORE THAN ONE MOMENT. Read only
+   the survival rung and the term is a constant across every candidate of any search whose page does not
+   transform the payload — the fraction is 1.0 for all of them the instant their bytes surface — so "two flows
+   standing at the same distance rank equal" would be the answer for a whole population that is emphatically
+   not standing at the same distance. The rungs are what tell them apart, and flow.h's `cand_rung` says why
+   they had to move onto the flow to do it. */
+double flow_distance(const Flow *f) {
+    DCHECK(f != NULL, "the fitness term was asked of no flow — it is a reading OF an item, so there is no item "
+                      "here for it to be a reading of");
+    /* THE PAIR INVARIANT — "a flow with no payload stands at exactly 0" — IS NOT ASSERTED HERE, and that is a
+       decision about WHERE rather than about whether. It is transiently false BY CONSTRUCTION: an arm of a
+       candidate takes its parent's account first (flow_fork_inherit decides where it enters the queue) and its
+       parent's substitution a few lines later, and the rank-neutrality equality between those two points calls
+       this function. So the invariant is asserted at engine.c's fork, where both halves are in place and where
+       a field added to the candidate identity is already an obligation. */
+    return (f->cand_surv + (double)f->cand_rung) / (double)FLOW_RUNGS_N;
+}
+
 double flow_weight(const Flow *f) {
-    return flow_queue_weight(f) + f->cand_dist;
+    return flow_queue_weight(f) + flow_distance(f);
 }
 
 /* THE SILENCE AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's
@@ -1914,7 +1971,8 @@ double flow_weight(const Flow *f) {
    returns is at least 1.0 too. Write that out for the picked flow,
    with `v` its visit count, `D` its fitness distance, `A` its silence notch IN QUANTA and `Q` the price of one
    quantum (FLOW_AGE_QUANTUM): `val + D + 1/(1+v) − A*Q >= 1`, and since `1/(1+v) <= 1` it forces
-   `A*Q <= val + D`. `D` is a FRACTION (flow_set_distance asserts [0,1]), so `A*Q <= val + 1` and hence
+   `A*Q <= val + D`. `D` is a FRACTION — `(cand_surv + cand_rung) / FLOW_RUNGS_N` with the survival rung
+   asserted in [0,1] and the rung count asserted at most FLOW_RUNGS_N - 1 — so `A*Q <= val + 1` and hence
    `A <= (val + 1) / Q`. `A` is a FLOOR of `(cpu + fam_us) / S` with `S` the cooperative quantum, so
    `cpu + fam_us < (A + 1) * S = (val + 1) * FLOW_SILENCE_US + S`. That is this expression.
    THE TWO TERMS ARE EARNED SEPARATELY AND THE SECOND ONE JUST SHRANK BY A FACTOR OF 83, which is the whole
@@ -2118,8 +2176,8 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
    It is the bound the assertion at the end of flow_wfq_census holds the observed spread to, and it is written
    term-by-term against flow_weight rather than as a single constant so that ADDING a term to the weight
    without adding its range here is a compile-visible omission in one place and a fired assert in the other.
-   READ IT AS THE DERIVATION IT IS. `val` and `cand_dist` enter the weight positively and contribute
-   max−min directly — `cand_dist`'s floor is 0 by the type (flow.h), so its maximum IS its range. The optimism
+   READ IT AS THE DERIVATION IT IS. `val` and the fitness distance enter the weight positively and contribute
+   max−min directly — the distance's floor is 0 by the type (flow.h), so its maximum IS its range. The optimism
    term is 1/(1+visits), decreasing, so its range is taken at the visit count's two ends in that order. The
    aging enters negatively at FLOW_AGE_QUANTUM per notch, and its notch is flow_silence_notch's floor of the
    SUM `(cpu + fam_us)` while the census floors the two halves separately: floor(a+b) <= floor(a)+floor(b)+1,
@@ -2241,7 +2299,7 @@ void flow_wfq_census(WfqCensus *out) {
            Its floor is 0 by the type rather than by measurement (flow.h says why), so the maximum IS the
            range. Taken over every member and not only the candidates, because the bound below is over the
            weights of every member and a candidate's distance is what lifts it above the rest of them. */
-        if (f->cand_dist > out->dist_max) out->dist_max = f->cand_dist;
+        { double d = flow_distance(f); if (d > out->dist_max) out->dist_max = d; }
         /* AND THE SAME QUESTIONS ASKED OF THE CANDIDATES ALONE — see flow.h. `cand_src` is what a candidate
            session IS (the substitution it carries), and engine.c copies it to a sibling, so this counts the
            search's whole live population rather than its roots. */
@@ -2288,7 +2346,7 @@ void flow_wfq_census(WfqCensus *out) {
      * the aging term measuring this flow or the whole frontier'", and printed by nobody — a writer with no
      * reader, which §Architecture names as the mirror of the defaulted-field defect and which is harder to see
      * precisely because the value is real and asserted about. Meanwhile the aging term had grown a SECOND
-     * scope (`fam_us`) whose floor no row reported at all, and the fitness term (`cand_dist`) had entered
+     * scope (`fam_us`) whose floor no row reported at all, and the fitness term (flow_distance) had entered
      * flow_weight with no row here of any kind. Three terms, three different ways of being invisible, and the
      * census kept reporting a spread it could not account for. Measured on the smoke fixture's steady state:
      * an aging term of 856 points, of which 93.3% was the family half, over a frontier whose entire weight

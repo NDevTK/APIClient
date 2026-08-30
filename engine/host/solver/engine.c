@@ -3124,6 +3124,18 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            "an arm of an @S candidate session left the fork without the substitution that makes it one — it "
            "would explore the other arm as an ordinary flow inside a heap the payload has already been read "
            "into, report its requests as observed endpoints, and be unable to record a fire");
+    /* AND THE RANK THAT SUBSTITUTION IS THE DENOMINATOR OF — flow.h's "every non-candidate stands at exactly
+       0", asserted at the ONE point where it is transiently false and then made true again. flow_fork_inherit
+       runs first (it decides where the arm enters the queue) and copies the parent's ladder position, so
+       between that line and the copy above the sibling holds a distance and no payload; the fitness writers
+       refuse such a flow and flow_distance therefore leaves the invariant to be asked HERE, where both halves
+       are in place. What it catches is a candidate identity that stops being copied while the rank still is:
+       the arm would carry up to a full point of fitness — the comparator's entire range, one whole finding's
+       worth of weight — into ordinary exploration, where nothing would ever move it again. */
+    DCHECK(sib->cand_payload != NULL || (sib->cand_surv == 0.0 && sib->cand_rung == 0),
+           "an arm stands on the @S ladder while carrying no payload to have stood there with — the fitness is "
+           "a reading of bytes THIS flow injected, so an arm that inherited the rank without the substitution "
+           "outranks the whole frontier on a measurement belonging to an identity it does not have");
     /* THE ANSWER TOKEN TRAVELS, AND IT TRAVELS WITH THE QUEUE — there is nothing to copy here any more. This
        sibling resumes the same operation's program from the fork point and completes it in its own timeline,
        so it owes the same peer an answer of its own: that is the multiplicity §7.2.1 has when a document's
@@ -4583,8 +4595,9 @@ static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census belo
    rival — is what the generation key is for and still happens only on a change; evaluating one weight is two
    divisions beside a clock read the hook already performs.
    AND IT IS NOT THE FITNESS TERM, WHICH IS WORTH WRITING DOWN BECAUSE THE TWO ARRIVED TOGETHER AND THE OTHER
-   ONE IS A CLAUSE IN THE ASSERTION BELOW. A `cand_dist` write cannot fire that assertion: it is made only on
-   the RUNNING flow, only through flow_set_distance, and that raises the generation — so clause one is true for
+   ONE IS A CLAUSE IN THE ASSERTION BELOW. A fitness write cannot fire that assertion: it is made only on
+   the RUNNING flow, only through flow_observe_survival or flow_observe_rung, and both raise the generation —
+   so clause one is true for
    the whole remainder of the turn and the disjunction cannot be false. Watching the distance is the discipline
    the snapshot block states for ANY summand of the weight and is right on that ground alone; it is not the
    mechanism that aborts, and a reader who takes it for one will conclude this cache is sound. ONE READING
@@ -4768,7 +4781,7 @@ static int preempt_hook(int kind) {
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
                flow_silence_notch(cur) != g_ranked_silence ||
                cur->visits != g_ranked_visits || cur->val != g_ranked_val ||
-               cur->cand_dist != g_ranked_dist,
+               flow_distance(cur) != g_ranked_dist,
                "the VALUE YIELD fired on a flow whose rank nothing changed since the scheduler switched it in — "
                "same frontier generation, same silence notch, same completed-unit count, same reward and same "
                "fitness distance on both "
@@ -5944,7 +5957,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
     g_ranked_gen = flow_frontier_gen(); g_ranked_val = f->val;
     g_ranked_silence = flow_silence_notch(f);  /* the aging term — see the assertion in preempt_hook */
     g_ranked_visits = f->visits;               /* …and the optimism term's, which is a count and not a clock */
-    g_ranked_dist = f->cand_dist;              /* …and the fitness term's, which is a reading and not a payment */
+    g_ranked_dist = flow_distance(f);          /* …and the fitness term's, which is a reading and not a payment */
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */

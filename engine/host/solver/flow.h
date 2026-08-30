@@ -31,6 +31,19 @@
    subsystem can grow a second ranking out of. See flow.c for the refcounting and the charge. */
 typedef struct FlowAcct FlowAcct;
 
+/* §@S'S LADDER, NAMED WHERE THE FITNESS TERM IS DEFINED RATHER THAN WHERE IT IS OBSERVED. The rungs are
+   ORDERED stages toward a fire and the comparator is composed from them (flow_distance), so the count of them
+   is arithmetic in the weight and cannot be a convention two files agree on separately.
+   THREE AND NOT FOUR. §@S names {filter-survived, sink-reached, context-escaped, handler-fires}; the fourth is
+   the OUTCOME, and §@S(i)'s whole objection to the old fitness is that rungs sitting at or past the thing they
+   are a distance to are "the outcome restated". A fire closes the search and is a finding — the LEDGER's
+   quantity — so the comparator orders the candidates that have not fired, out of one fractional rung
+   (survival) and the two booleans below it. Its range is therefore exactly 1.0, which is what prices it
+   against the optimism term so a PROMISE never outweighs a FINDING (flow.c's flow_weight). */
+#define FLOW_RUNG_ARRIVED 1   /* this flow's breakout reached the sink its own search is for */
+#define FLOW_RUNG_ESCAPED 2   /* …and stood there in a position the sink's own language executes */
+#define FLOW_RUNGS_N      3   /* the fractional rung plus the two above it — the comparator's denominator */
+
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
    without any member leaving the queue. */
@@ -187,20 +200,50 @@ typedef struct Flow {
        it and every later candidate that travels the same nine tenths is worth what an unstarted flow is worth.
        §@S's "a near-miss is mutated toward the gap; a dead candidate starves" is then true of nothing — not
        because the distance is unmeasured, but because the only place it was written was a ledger.
-       SO THIS IS NEVER ACCUMULATED AND NEVER PAID. It is the best fraction of THIS flow's own payload that any
-       re-execution has been observed to deliver, in [0,1], overwritten upward and read at the pick. It cannot
-       double-count because there is nothing to count: two flows at the same distance simply compare equal, and
-       one that falls behind another is passed. It shares the optimism term's entire range, so it is priced
-       against the same aging and buys a candidate the same order of thread time a never-run flow gets.
+       SO THIS IS NEVER ACCUMULATED AND NEVER PAID. It is where THIS flow's own bytes have been observed to
+       stand on §@S's ladder, in [0,1], overwritten upward and read at the pick. It cannot double-count because
+       there is nothing to count: two flows at the same distance simply compare equal, and one that falls
+       behind another is passed. It shares the optimism term's entire range, so it is priced against the same
+       aging and buys a candidate the same order of thread time a never-run flow gets.
+       AND IT IS THE WHOLE LADDER RATHER THAN ITS FIRST RUNG, WHICH IS THE HALF THAT WAS MISSING AND THE HALF
+       THAT MATTERS MOST ON THE SINKS THAT MATTER MOST. §@S names four rungs — {filter-survived, sink-reached,
+       context-escaped, handler-fires} — and only the FIRST of them was ever written here; the other two
+       pre-fire rungs were paid into the search-level LEDGER at a 0->1 crossing and nowhere else. Read the two
+       rules above against that arrangement and the consequence is exact rather than theoretical: a page that
+       does not transform the payload delivers it whole, so the survival fraction is 1.0 for EVERY candidate of
+       that search the moment its bytes surface anywhere, and the comparator is then a CONSTANT across the one
+       population it exists to order. The candidate whose breakout arrived at its own sink and left the state it
+       was written into ranked exactly equal to the one whose bytes turned up in some unrelated string and
+       stopped — while the ledger, obeying its own honest rule, had already paid the single crossing to whichever
+       flow got there first and had nothing left for either. So the rungs are recorded HERE, per flow, and the
+       distance is composed from them; the ledger keeps its crossings and is untouched.
+       THE FIRE IS NOT ONE OF THE RUNGS, and excluding it is §@S(i) rather than an omission: a fitness whose
+       rungs sit AT the thing they are a distance to "is not a distance at all, it is the outcome restated".
+       Firing closes the search (solve.c's record_sink) and is a FINDING, which is the ledger's quantity; the
+       comparator's job is to order the candidates that have NOT fired, and every rung it reads has its
+       observation site strictly before that.
        IT IS CARRIED BY A FORK for the reason every weight term is: an arm of a candidate is that candidate's
        run continued under one more arm, carrying the same payload to the same sink, so a fork that dropped it
        would let a candidate improve its own rank by branching. flow_fork_inherit's rank-neutrality assertion is
-       what forces that and fires the moment it is forgotten.
+       what forces that and fires the moment it is forgotten — and it is written over the WHOLE weight rather
+       than over a list of fields precisely so that splitting this quantity into the two fields below could not
+       be done without the fork carrying both.
        IT DOES NOT CROSS THE COLD TIER, and that is the same decision `cand_fired` records one field up: a
        distance is an OBSERVATION of a re-execution, and a resumed session has not made it. A parked candidate
        comes back at zero and re-earns it from its first arrival, which is what keeps the number a measurement
        of this session's runs rather than a rank inherited from a run nobody watched. */
-    double cand_dist;
+    /* RUNG ONE, HELD AS THE FRACTION IT IS: the best fraction of this flow's own payload that any re-execution
+       has been observed to deliver to any code-execution sink, in [0,1]. It is the only rung that is not a
+       boolean, because "how much of what the page was given is still alive" has degrees and the other two do
+       not. */
+    double cand_surv;
+    /* …AND THE BOOLEAN RUNGS ABOVE IT, AS A COUNT RATHER THAN AS BITS, because they are ORDERED and a count is
+       what makes the order the arithmetic instead of a convention: 0 = nothing but survival observed,
+       FLOW_RUNG_ARRIVED = this flow's breakout reached the sink its own search is for, FLOW_RUNG_ESCAPED = and
+       it stood in an executable position there. A flow cannot hold the second without the first (every escape
+       site in solve.c runs downstream of the arrival site on the same string), and flow_observe_rung asserts
+       that rather than trusting it. */
+    int cand_rung;
 
     /* IS THIS FLOW A DRIVEN ORPHAN — a flow whose frame is a CALL of a function the page defined and nothing
        ever called (engine.c's engine_orphan_fork). It is not a different KIND of flow in any way the scheduler
@@ -929,9 +972,12 @@ typedef struct {
      * which is how many gates it has replayed and therefore how deep into the program it is. A candidate
      * re-runs from the BASELINE, so arriving at a sink is a distance problem before it is anything else, and
      * §@S requires the search to be DISTANCE-DIRECTED: "a fitness of {filter-survived, sink-reached,
-     * context-escaped, handler-fires} the WFQ reads". flow_weight reads none of those four — a candidate 800
-     * gates into its runway ranks exactly like one 3 gates in. This is the number that says whether that gap
-     * is what is costing the run, and it separates three states that look identical from outside: served and
+     * context-escaped, handler-fires} the WFQ reads". flow_weight reads the three PRE-FIRE rungs of that list
+     * (flow_distance) and none of them moves until the candidate's bytes surface somewhere, so a candidate 800
+     * gates into its runway still ranks exactly like one 3 gates in for the whole of the runway itself. This is
+     * the number that says whether THAT gap is what is costing the run — the ladder starts at the first sink
+     * the bytes reach, and nothing measures the approach to it. It separates three states that look identical
+     * from outside: served and
      * progressing (distance — build the fitness), never served (starvation — the ordering), and served while
      * pinned at zero (a candidate being RESTARTED rather than resumed, which no amount of thread time fixes). */
     long cand_members;    /* members carrying a payload substitution — a candidate session OR A FORK OF ONE,
@@ -999,8 +1045,8 @@ typedef struct {
      * reversed, and it is harder to see because the value is real. Every field of this struct is emitted; the
      * accounting assertion at the end of flow_wfq_census is what keeps that true as terms are added. */
     /* THE FITNESS TERM'S OWN RANGE — §@S's distance, which flow_weight adds and which no row here reported.
-       Its FLOOR is not a field because it is a constant of the type: a flow with no payload has no distance
-       to be a fraction of and flow_set_distance refuses to record one, so every non-candidate stands at
+       Its FLOOR is not a field because it is a constant of the type: a flow with no payload has no ladder to
+       stand on and both fitness writers refuse to record one, so every non-candidate stands at
        exactly 0 and [0, dist_max] is the range rather than an estimate of it. Read beside `cands`: a run with
        `cands: 0` has this at 0 by construction and the fitness term is then ordering nothing — which is a fact
        about the run's @S population and not about the term, and the pair is what separates them. */
@@ -1108,19 +1154,35 @@ unsigned flow_frontier_gen(void);
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
 void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise reward, reset aging */
-/* THE RUNNING CANDIDATE'S OWN BYTES WERE OBSERVED THIS FAR ALONG — §@S's fitness written where a fitness goes.
-   `d` is the fraction of this flow's payload a re-execution delivered, in [0,1]. It RAISES `cand_dist` and does
-   nothing when the flow already stands further along, so the quantity is monotone per flow and an observation
-   can never demote the flow that made it. Not a credit: nothing is added, nothing accumulates, and this may be
-   called for the same distance any number of times. It bumps the frontier generation exactly as an emission
-   does, because a weight that moves without one is a rank the value-yield cannot see changing. */
-void  flow_set_distance(Flow *f, double d);
+/* WHERE THIS CANDIDATE'S OWN BYTES STAND ON §@S's LADDER — the fitness term of flow_weight, composed from the
+   two rung fields rather than stored, so there is no second copy of the order to go stale and no writer that
+   can forget to keep one. `(cand_surv + cand_rung) / FLOW_RUNGS_N`, in [0,1], and exactly 0 for every flow
+   that is not a candidate — which is not a special case in the arithmetic but the truth about a flow with no
+   payload, asserted at both writers rather than assumed here. */
+double flow_distance(const Flow *f);
+/* THE RUNNING CANDIDATE'S OWN BYTES SURVIVED THIS MUCH OF THE PAGE — §@S's FIRST rung, written where a fitness
+   goes. `frac` is the fraction of this flow's payload a re-execution delivered, in [0,1]. It RAISES `cand_surv`
+   and does nothing when the flow already stands further along, so the quantity is monotone per flow and an
+   observation can never demote the flow that made it. Not a credit: nothing is added, nothing accumulates, and
+   this may be called for the same fraction any number of times. It bumps the frontier generation exactly as an
+   emission does, because a weight that moves without one is a rank the value-yield cannot see changing. */
+void  flow_observe_survival(Flow *f, double frac);
+/* …AND THE RUNG ABOVE IT THAT THIS FLOW'S BYTES HAVE NOW REACHED — FLOW_RUNG_ARRIVED or FLOW_RUNG_ESCAPED.
+   SAME RULES, SECOND QUANTITY, AND IT IS A SEPARATE ENTRY POINT BECAUSE THE OBSERVATIONS ARE MADE AT SEPARATE
+   SITES AND NEITHER SITE CAN SEE THE OTHER'S ANSWER. The survival fraction is measured at every code-execution
+   sink, class-independently; a rung is measured inside the candidate's OWN class, by that class's own language.
+   A single "set the distance" entry would force one of them to compose a number out of a quantity it does not
+   hold, and the way that goes wrong is silent — it reads back the other rung from the composite and rounds.
+   MONOTONE AND ORDERED: it raises `cand_rung` and never lowers it, and it refuses a rung whose predecessor
+   this flow has not stood on, because a ladder whose rungs can be taken out of order is a ranking in which
+   "escaped" and "arrived and escaped" are the same number. */
+void  flow_observe_rung(Flow *f, int rung);
 /* THE RUNNING FLOW JUST TOOK AN ARM ITS CONCRETE EXAMPLE CONTRADICTS — `path_forced`'s ONE writer, and the
    whole of what makes a request this flow goes on to build FORCED rather than DERIVED. Idempotent and
    monotone: a path cannot un-take an arm, and the second contradiction says nothing the first did not.
    IT IS NOT A CREDIT AND NOT A CHARGE. Nothing about the rank moves here — a fork is rank-neutral and a
    contradicted arm is still a fork — so this deliberately does NOT bump the frontier generation the way
-   flow_credit_emit and flow_set_distance do: no weight changed, so no rival needs recomputing. */
+   flow_credit_emit and the two fitness writers above do: no weight changed, so no rival needs recomputing. */
 void  flow_mark_forced_arm(void);
 /* HAS THIS FLOW'S PATH STOOD ON ONE — read at the PARK, never at the join, because a park is a work item and
    §scheduler's "an operation that becomes a work item takes its inputs with it" applies to its provenance

@@ -111,7 +111,14 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    `escaped` IS THE THIRD, and it is boolean per arrival like `reached`: the bytes are at an executable
    position or they are not. It is what separates the two failures `reached` reported identically — bytes that
    ARRIVED and bytes that GOT OUT — and until it existed the popup stated which of the two had happened from
-   the sink CLASS, with nothing measuring it. */
+   the sink CLASS, with nothing measuring it.
+   ALL THREE COUNTERS HERE ARE THE LEDGER'S HALF AND NONE OF THEM IS THE COMPARATOR. They are facts about the
+   SEARCH — how far the best of its candidates has ever got — and §@S(ii) is that such a record cannot order
+   the search's own live candidates against each other, because a rung already reached is paid to nobody
+   twice. The comparator's copy of the same three observations lives on the FLOW (flow.h's `cand_surv` and
+   `cand_rung`, written beside each credit below), and the two are deliberately not one number: a ledger that
+   could be re-earned reorders the frontier on repetition, and a comparator that cannot be re-read cannot say
+   where anything stands. */
 typedef struct {
     char *src; char *root; int sink; int tried; int reached; int turns; int fires;
     /* THE LEDGER'S OWN LATCH FOR THE ARRIVAL RUNG, AND IT IS SPLIT OFF `reached` BECAUSE ONE NUMBER WAS
@@ -1057,13 +1064,21 @@ static void breakout_arrived(Cand *e) {
            "a sink recorded a BREAKOUT arriving while its search holds nothing but its own probes — a derived "
            "class's breakout exists only because a probe run returned one, and a single-context class's "
            "vectors are not probes at all (nprobe is 0 for it), so these bytes were not built by this search");
-    /* §@S's SECOND FITNESS RUNG, PAID INTO THE WFQ — "the search is DISTANCE-DIRECTED (a fitness of
-       {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)". flow_weight reads `val`
-       and nothing else, and a candidate flow records no endpoints by design (endpoint_suppress), so until this
-       line the ONLY thing that could ever raise a candidate's reward was record_sink — the LAST rung, a
+    /* §@S's SECOND FITNESS RUNG, WRITTEN TO BOTH QUANTITIES — "the search is DISTANCE-DIRECTED (a fitness of
+       {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)". A candidate flow records
+       no endpoints by design (endpoint_suppress), so before this rung existed the ONLY thing that could ever
+       raise a candidate's reward was record_sink — the LAST rung, a
        fire-verified PoC. A candidate that carried the attacker's bytes all the way to the sink and did not
        break out of it was worth exactly as much to the scheduler as one that had not started, so the near-miss
        §@S says to mutate toward the gap was outranked by every arm of the exploration tree and never ran again.
+       AND THE LEDGER ALONE DID NOT CLOSE THAT, WHICH IS WHY THE RUNG IS NOW WRITTEN TWICE. A crossing is paid
+       once per SEARCH, so the second candidate to reach this sink was paid nothing for reaching it — and on a
+       page that does not transform the payload the survival fraction is 1.0 for every candidate of the search
+       the moment its bytes surface anywhere, so the comparator was a CONSTANT across exactly the population
+       §@S needs ordered. The arm that arrived and the arm that never left the runway compared equal, and "a
+       near-miss is mutated toward the gap" had nothing to read. flow_observe_rung is the other half: the
+       ARRIVAL is now a fact recorded on THIS FLOW, so every candidate that reaches this sink outranks every
+       candidate of the same search that has not, however many got here first.
        ONCE PER SEARCH, at the 0→1 crossing, and that is what "NEW" means in §WFQ's "accumulated emitted VALUE
        (new @H+@S)" — the same shape sink_search uses one function up, where only the call that CREATED the
        search credits it. It is not a seen-set and truncates nothing: every later arrival still derives, still
@@ -1087,12 +1102,18 @@ static void breakout_arrived(Cand *e) {
        table contradicted it later, the payment stood for an observation that was TRUE when it was made, which
        is the whole rule a ledger obeys; un-paying it would revise a record on hindsight and would charge
        whichever flow happens to be running now for a credit some other flow was given. What the search loses
-       there is one rung, once, and the COMPARATOR still separates the two candidates — filter_survived writes
-       each flow's own surviving fraction, so the spelling that arrives intact stands at 1.0 and the one that
-       arrives as an attribute name stands at its marker's four bytes. */
-    if (solve_delivered_ok(&e->deliv, f->cand_payload) && e->reach_credited == 0) {
-        e->reach_credited = 1;
-        flow_credit_emit(1.0);
+       there is one rung, once, and the COMPARATOR still separates the two candidates — a contradicted spelling
+       is refused the arrival rung as well as the crossing, so the spelling that can still arrive stands a whole
+       rung above it and holds that lead for the rest of its life rather than for one payment. */
+    /* ONE QUESTION, TWO WRITES, AND THE PAIR IS WHAT §@S(ii) IS ABOUT. The condition is the search's own
+       measurement that these bytes can still arrive; inside it the COMPARATOR is written unconditionally and
+       the LEDGER is latched, which is the whole of the difference between the two quantities stated at the one
+       site that makes both. The rung says where THIS flow stands and is therefore true of the second, third
+       and tenth candidate to stand there; the crossing says what the SEARCH learned and is therefore paid to
+       the first only. */
+    if (solve_delivered_ok(&e->deliv, f->cand_payload)) {
+        flow_observe_rung(f, FLOW_RUNG_ARRIVED);
+        if (e->reach_credited == 0) { e->reach_credited = 1; flow_credit_emit(1.0); }
     }
     e->reached++;
 }
@@ -1149,10 +1170,10 @@ static void filter_survived(const char *out) {
        DISTANCE-DIRECTED and says a dead candidate starves; a ledger cannot express either, because both are
        statements about candidates STANDING at different distances at the same moment.
        SO IT IS TAKEN FIRST AND UNCONDITIONALLY, above the `run == 0` return and above the ratchet's
-       improvement test. A zero run is an observation with a value of zero and flow_set_distance discards it as
-       a non-improvement; a run that ties the search's best is no news to the ledger and is the whole news to
+       improvement test. A zero run is an observation with a value of zero and flow_observe_survival discards it
+       as a non-improvement; a run that ties the search's best is no news to the ledger and is the whole news to
        the comparator, because it says THIS candidate is where the best one got. */
-    flow_set_distance(f, (double)o.run / (double)o.len);
+    flow_observe_survival(f, (double)o.run / (double)o.len);
     if (o.run == 0) return;                  /* none of this candidate is in this string: an OBSERVATION */
     /* WHICH CANDIDATE THIS IS, recorded before the search-level ratchet because the ratchet is what erases the
        distinction. A NEGATIVE index is a POSITIVE statement and not a miss: solve_resume_candidate raises
@@ -1196,17 +1217,37 @@ static void filter_survived(const char *out) {
    "event handler content attributes" among the mechanisms that "cause author-provided executable code to
    run"), and the URL sink asks whether the delivered address survived as a `javascript:` one, which for a
    single-context sink IS the escape.
-   ONCE PER SEARCH AT THE 0->1 CROSSING — the shape breakout_arrived uses, and for its reason: this is a
-   boolean fact about the search, so it has exactly one crossing and repeating the credit would pay twice for
-   one observation. */
+   ONCE PER SEARCH AT THE 0->1 CROSSING for the LEDGER — the shape breakout_arrived uses, and for its reason:
+   this is a boolean fact about the search, so it has exactly one crossing and repeating the credit would pay
+   twice for one observation. AND ONCE PER FLOW FOR THE COMPARATOR, which is the same split breakout_arrived
+   makes and the reason the rung is worth writing at all: the crossing says what the search learned, the rung
+   says which of its live candidates is standing at an executable position RIGHT NOW, and only the second can
+   order the second and tenth breakout of one derivation against each other.
+   THE DELIVERY TABLE IS ASKED HERE TOO, and it is not a second policy: it is the SAME question breakout_arrived
+   asks one rung down, and asking it once there would leave this rung able to hand a contradicted spelling the
+   whole ladder — two thirds of the comparator's range — one moment after the arrival rung refused it a third.
+   The table only ever narrows, so a spelling still deliverable here was deliverable at its arrival, which is
+   what keeps flow_observe_rung's ordering assert an invariant rather than a hope. */
 static void escape_reached(Cand *e) {
+    /* THE FLOW IS THE RUNNING ONE, for breakout_arrived's reason exactly: these are the running flow's own
+       injected bytes, and the search `e` is the one its substitution resolves to. `CHECK` because both are
+       dereferenced below. */
+    Flow *f = flow_running();
+
     DCHECK(e != NULL, "a context escape was recorded against no search — the caller resolved one to record the "
                       "arrival that must precede it");
+    CHECK(f != NULL && f->cand_payload != NULL,
+          "solve: a context escape was observed at a sink with no candidate substitution on the running flow — "
+          "nothing but a candidate run injects a marker, so an escape with no payload behind it is a fact about "
+          "bytes this flow did not write and the rung below would be given to whoever happens to be running");
     DCHECK(e->reached > 0,
            "a breakout was observed in an EXECUTABLE position at a sink its own bytes have not been recorded "
            "as ARRIVING at — every escape site runs downstream of breakout_arrived on the same string, so an "
            "escape with no arrival behind it means the two are being asked about different strings");
-    if (e->escaped == 0) flow_credit_emit(1.0);
+    if (solve_delivered_ok(&e->deliv, f->cand_payload)) {
+        flow_observe_rung(f, FLOW_RUNG_ESCAPED);
+        if (e->escaped == 0) flow_credit_emit(1.0);
+    }
     e->escaped++;
 }
 
