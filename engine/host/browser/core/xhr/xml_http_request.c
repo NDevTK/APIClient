@@ -1786,7 +1786,7 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
                      "reads it");
     memset(&req, 0, sizeof req);
     req.method = m;
-    req.url = u;   /* the two fields §4.3 reads; a §4.3 answer never reaches the host, so it owes it nothing */
+    req.url = u;   /* the two fields §4.3 Scheme fetch reads; a §4.3 answer never reaches the host, so it owes it nothing */
     switch (scheme_fetch(ctx, &req, JS_UNDEFINED, &reply)) {
     case SCHEME_FETCH_RESPONSE:
         /* Through the ONE reply object every answer to this component takes, exactly as a host reply is. */
@@ -1800,7 +1800,7 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
         local = true;
         break;
     default:
-        /* §4.3 hands this one to HTTP fetch, which is the trusted host's to answer. */
+        /* §4.3 Scheme fetch's "HTTP(S) scheme" arm, which hands to §4.4 HTTP fetch — the trusted host's to answer. */
         local = false;
         break;
     }
