@@ -67,6 +67,19 @@
  *         this host's slice is bounded by the wall clock read at whichever of those the flow next reaches.
  *     quantum_measure() answers with that, in one string, so no message anywhere restates it and goes stale.
  *
+ * AND THE ANSWER IS SAID OUT LOUD, ONCE PER INSTANCE, AT THE FIRST SLICE — the `@QUANTUM cpu=… slice=…ms
+ * measure=…` line quantum.c writes. Both readers of quantum_measure() were inside SEAM-ASSERTION MESSAGES, so
+ * this fact reached a person only on the runs that aborted and never on the runs a person compares; and what
+ * it changes is not the slice but the ORDER, because engine.c bills the WFQ's aging charge in this same
+ * currency and that charge is a comparison BETWEEN flows, so a descheduling the OS chose moves one flow's rank
+ * and re-picks. Two runs of one artifact over one document then take different frontier orders with nothing
+ * about the tree differing. That is the host and is not to be silenced — §scheduler's razor forbids both cures
+ * (drop the quantum and it is a drive-to-completion; bound the slice in steps and it is a cap) — so the whole
+ * of the fix is that a run STATES which denomination produced its numbers. The line is UNCONDITIONAL rather
+ * than dev-only because a consumer's contract is checked against it: engine/build.mjs THROWS when a run
+ * printed the frontier census and not this line, and a writer compiled out from under its reader is
+ * §Architecture's field contract broken from the producing side.
+ *
  * The slice is a FLOOR ON SHARING, never a cap: nothing is dropped, starved, skipped, reordered or forgotten
  * across it. The flow parks as a COW snapshot and the SAME flow resumes on the byte-identical frontier unless
  * the WFQ says otherwise. */

@@ -758,6 +758,69 @@ function censusReading(out) {
                         "reading of the run";
 }
 
+/* WHAT THIS RUN'S NUMBERS ARE DENOMINATED IN, READ FROM THE ENGINE'S OWN STATEMENT OF IT — solver/quantum.c's
+   `@QUANTUM` line, written once per instance at its first slice by the component that owns the fact
+   (`quantum_measure`/`quantum_measure_is_cpu`). It is not a reading of the run and does not vary within one:
+   it is a property of the HOST, and it is here because every OTHER number this file prints is a reading of a
+   frontier whose ORDER that property decides.
+   WHY IT MATTERS TO A READER OF THIS FILE'S VERDICTS. On a host with no CPU clock (the wasm one — emscripten
+   answers CLOCK_MONOTONIC and both CPUTIME clocks from one `emscripten_get_now()`) the slice AND
+   solver/engine.c's `flow_age_running` charge are denominated in WALL TIME. The charge is a comparison BETWEEN
+   flows, so a descheduling the OS chose lands on whichever flow was running, moves ITS rank alone, and changes
+   which flow is picked next — two runs of ONE artifact over ONE document then take different frontier orders
+   and their census series differ with nothing about the tree differing. Every discriminator below compares
+   census samples, so without this line a reader cannot tell a frontier difference from an artefact of slicing,
+   and this file's own history says what that costs: it records two consecutive revisions with the SAME probe
+   standing answering `a HEALTHY FRONTIER` and `a STALL`.
+   IT IS LEGIBILITY AND NOT A FIX. §NO BOUNDS and §scheduler's razor forbid both cures — removing the quantum
+   is a drive-to-completion, bounding the slice in steps is a cap — so the variance stays and is NAMED.
+   THE CONTRACT IS ONE IMPLICATION AND IT IS CHECKED RATHER THAN DEFAULTED. A run that printed `@COLD` drove
+   `run_scheduler`, whose census is printed only AFTER an `engine_sched_step`, and every step is bracketed by
+   `quantum_begin`/`quantum_end` — so `@COLD` present with no `@QUANTUM` is a BROKEN CONTRACT and throws, in
+   the same way and for the same reason a renamed `COLD_FIELDS` row does. The converse is not a contract: a
+   stage that opens slices and drives no scheduler (the two-instance ABI drive) prints this line and no census,
+   and a stage that declines the edge entirely prints neither. ABSENCE IS REPORTED AS ABSENCE — never as a
+   default, and never as the positive claim that a run was CPU-denominated. */
+function quantumDenomination(out) {
+  const rows = [...out.matchAll(/^@QUANTUM cpu=([01]) slice=(\d+)ms measure=(.+)$/gm)]
+    .map((m) => ({ cpu: m[1] === "1", sliceMs: Number(m[2]), measure: m[3].trim() }));
+  if (!rows.length) {
+    if (/^@COLD \{/m.test(out))
+      throw new Error("[build] this run printed the @COLD frontier census and no @QUANTUM line. Every " +
+                      "`engine_sched_step` is bracketed by solver/quantum.c's slice and the first " +
+                      "`quantum_begin` announces what that slice is measured in, so a run that reached a " +
+                      "census reached the announce — a missing line is that writer having been removed, " +
+                      "renamed or compiled out from under this reader, and every verdict below would then " +
+                      "read as CPU-denominated by default.");
+    return null;
+  }
+  /* TWO INSTANCES OF ONE BINARY MUST AGREE, and the ABI drive provisions exactly that pair, so this is a
+     reading rather than a hypothetical. A disagreement is not a number to average: it is one program whose two
+     engines are being scheduled in two different currencies, which no verdict here could be about. */
+  for (const r of rows)
+    if (r.cpu !== rows[0].cpu || r.measure !== rows[0].measure || r.sliceMs !== rows[0].sliceMs)
+      throw new Error(`[build] two @QUANTUM lines in one run disagree — ${JSON.stringify(rows[0])} against ` +
+                      `${JSON.stringify(r)}. They are the same binary on the same host, so this is not a ` +
+                      `measurement that varies; it is the announce reading something that is not a property ` +
+                      `of the host.`);
+  return { ...rows[0], instances: rows.length };
+}
+/* THE SAME FACT AT EVERY OUTCOME, PASS INCLUDED, because the runs a reader compares are the ones that finished
+   — a caveat printed only on the failures is a caveat absent from precisely the comparison it is about. */
+const quantumText = (q) =>
+  q === null
+    ? `[build]   no @QUANTUM line — this stage opened no engine slice, so it has no scheduler denomination ` +
+      `rather than an unstated one`
+    : `[build]   the engine's slice (${q.sliceMs} ms) and the WFQ's aging charge are denominated in ` +
+      `${q.measure}` + (q.instances > 1 ? ` — ${q.instances} instances, all agreeing` : ``) +
+      (q.cpu
+        ? `\n[build]   that is real thread CPU, so this run's census series is invariant to what else this ` +
+          `box was doing`
+        : `\n[build]   THAT IS NOT CPU: this run's census series is a reading of ONE INTERLEAVING. The aging ` +
+          `charge bills wall time to whichever flow the OS happened to leave running, so the frontier ORDER ` +
+          `— and therefore every census below it — varies run to run on one artifact. Compare two runs of ` +
+          `one revision before reading a difference between two revisions.`);
+
 /* A DIAGNOSIS DERIVED FROM A SIGNAL THE SUBJECT DOES NOT EMIT IS A CLAIM ABOUT THE INSTRUMENT, NOT THE RUN.
    This discriminator reads @COLD, which only a stage that drives a scheduler prints. Applied to a stage that
    never prints one -- the two-instance ABI drive -- it concluded "has not reached engine_sched_begin's first
@@ -766,7 +829,7 @@ function censusReading(out) {
    question, and it read as a confident verdict about the subject. So the absence of the signal is now reported
    AS an absence of the signal, and the tail -- which is what a reader actually has -- is named as the evidence
    instead. `nothing has been established` is a true statement; `it never started` was not. */
-function hungCause(out) {
+function hungCauseCensus(out) {
   const s = [];
   for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
   if (s.length === 0) {
@@ -964,6 +1027,23 @@ function hungCause(out) {
          `measurement to start from, and the streams above are the rest of what this run said.`;
 }
 
+/* …AND THE CAUSE CARRIES THE CURRENCY ITS EVIDENCE WAS TAKEN IN. Every arm above is a comparison of census
+   SAMPLES, and on a host with no CPU clock which samples exist — and in which ORDER the frontier reached them
+   — is decided by a wall-time aging charge, so the discriminator's own inputs move between two runs of one
+   artifact. That does not make an arm wrong: a stall is a stall. It makes the DIFFERENCE between two runs
+   unreadable, which is the comparison this file's verdicts are used for.
+   THE MARK RIDES THE NAME, not the parenthetical, and that is deliberate: `causeName` ends a name at the first
+   " (" or " — ", so this file's own record says a fact behind either is a fact the one line anybody reads does
+   not carry. The separator is "; " for exactly the reason the landmarks use it — it is neither cut. The full
+   sentence goes to the detail line, which `runNumbers` prints at EVERY outcome including the pass.
+   ONLY WHERE IT IS FALSE, because a mark on every verdict is a mark that stops being read. `cpu=1` is a
+   positive statement that this caveat does not apply, and it is stated in the detail rather than in silence. */
+function hungCause(out) {
+  const cause = hungCauseCensus(out);
+  const q = quantumDenomination(out);
+  return q && !q.cpu ? `WALL-SLICED; ${cause}` : cause;
+}
+
 /* ONE WAY TO RUN A CHILD, and it hands the run's own bytes to the reporter that judges it. The five call sites
    this replaced each open-coded `spawnSync(..., { stdio: "inherit", timeout })` and then asked `runOutcome`
    about a run it had never seen — five copies of the same three options, and every one of them a place for the
@@ -1021,11 +1101,18 @@ function runChild(label, prog, args, hint) {
    in a comment nobody reads at 2am, because it is the number that six consecutive builds' worth of readers
    took for a budget; the load average is printed beside it for the same reason it always was — it is what
    explains an elapsed figure, and it explains nothing about the CPU one. */
+/* AND THE THIRD NUMBER IS NOT THIS FILE'S AT ALL — it is the ENGINE'S own clock, which is a different question
+   from either of the two above and was stated nowhere. The two lines above are what THIS FILE spent and what
+   the box was doing while it spent it; the line below is what the SCHEDULER INSIDE the child denominated its
+   slice and its aging charge in, which is what decides the order of the very census samples every verdict here
+   is derived from. A run that says how much CPU it consumed and not which currency its frontier was ordered in
+   has answered the cheaper of the two questions. */
 const runNumbers = (t) =>
   `[build]   CPU consumed: ${cpuText(t.cpuSeconds)} of the ${RUN_CPU_BUDGET_S / 60} min budget — THIS IS THE ` +
   `MEASURE THE VERDICT IS IN\n` +
   `[build]   elapsed ${t.wallSeconds.toFixed(1)} s against a ${RUN_DEADLOCK_MS / 60000} min deadlock ` +
-  `backstop, at load ${loadNow()} on ${cpus().length} cores — CONTEXT, never the verdict`;
+  `backstop, at load ${loadNow()} on ${cpus().length} cores — CONTEXT, never the verdict\n` +
+  quantumText(quantumDenomination(t.captured));
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, WHICH ARE THE ONE THING A GREEN RUN CAN BE HIDING. A `<script>` that throws
    ends at the throw — spec-correct, and CLAUDE.md deliberately makes this a PRINT rather than an assert,

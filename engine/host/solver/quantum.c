@@ -7,8 +7,66 @@
 #include "check.h"
 #include "quickjs.h"           /* JS_RequestFlowYield — the one call the edge makes */
 
+#include <stdio.h>             /* the one line this component says out loud — see quantum_announce */
 #include <time.h>
 #include <string.h>
+
+/* ── WHAT THIS RUN'S NUMBERS ARE DENOMINATED IN, SAID ONCE, BY THE COMPONENT THAT OWNS THE FACT ─────────────
+ *
+ * quantum.h says what each host CAN measure and quantum_measure() answers it in one string. Nothing said it
+ * OUT LOUD: both readers of that string were inside SEAM-ASSERTION MESSAGES, so the fact reached a person only
+ * on the runs that ABORTED — never on the runs a person actually compares.
+ *
+ * AND THE CAVEAT IS NOT ABOUT THE SLICE, IT IS ABOUT THE ORDER, which is the larger half and the one a reader
+ * cannot reconstruct from quantum.h alone. On a host with no CPU clock the SLICE is defensible on the wall
+ * clock for the reason quantum.h gives — the host that would use the returned thread IS this thread, so wall
+ * time in which this thread was descheduled is time nobody was denied. The WFQ'S AGING CHARGE IS NOT: engine.c
+ * bills `flow_age_running(now - t0)` in this same currency, and that charge is a COMPARISON BETWEEN FLOWS. A
+ * descheduling the OS chose therefore lands on whichever flow happened to be running, moves ITS rank and not
+ * its siblings', and changes which flow is picked next — so two runs of ONE artifact over ONE document take
+ * different frontier orders, and their census series differ with nothing about the tree differing. That has
+ * been measured on this fixture: two runs of one build diverging in live count, fork count and pending bytes
+ * from the first few hundred steps onward.
+ *
+ * THE VARIANCE IS THE HOST AND IS NOT TO BE SILENCED — §scheduler's razor forbids the two things that would
+ * remove it (drop the quantum and the engine drives to completion; bound the slice in steps and it is a cap).
+ * What was missing is only that the series did not SAY which denomination produced it, so a reader could not
+ * tell a frontier difference from an artefact of slicing. This line is that statement and nothing else.
+ *
+ * UNCONDITIONAL, NOT DEV-ONLY, because a CONSUMER's contract is checked against it and a consumer may not hold
+ * a second answer for a release build: engine/build.mjs THROWS when a run printed the frontier census and not
+ * this line. That is §Architecture's field contract — a name read somewhere and written nowhere is a broken
+ * contract, and a default is what stops it being a crash — so the writer may not be compiled out from under
+ * the reader. The bill is one printf of a constant string, once per instance, not once per slice.
+ *
+ * AT THE FIRST SLICE, so there is no route to remember: every host that opens a slice announces by
+ * construction, and a host that declines this edge (wpt_runner.c drives flows under its own preempt policy)
+ * announces nothing and prints no census either — an absence that is the same positive statement on both.
+ *
+ * RESIDUAL — NARROWER THAN THE RULE IT SERVES, AND NAMED RATHER THAN CRASHED ON BECAUSE THIS IS CORRECT FOR
+ * WHAT IT COVERS. NOT COVERED: the SHIPPED path. `run_scheduler`'s census lines are a smoke-only stream, and
+ * §Testing's "measure what the shipped path writes" is why `result.h` moved the four censuses onto the RESULT
+ * DOCUMENT — where `_cold`, `_swap`, `_heap` and `_wfq` cross the ABI and the trusted zone asserts them field
+ * for field. This line crosses too (renderer.html drains the engine's stdout into every reply) and bridge.js
+ * IGNORES it, so on the extension the denomination is written and unread. NEXT DIFF: `_quantum`
+ * (`{measure, isCpu, sliceMs}`) on `result_json` beside the other censuses, with `extension/check.js`
+ * asserting its presence and shape exactly as it asserts theirs, and this printf then reads the same composer
+ * the way `run_scheduler` reads the census composers. ABSENCE SHOWS AS: two `_wfq` orderings compared across
+ * runs of one revision on a real page, with nothing in either document saying the aging charge that produced
+ * them was billed in wall time — the same unreadable difference this diff just fixed for the smoke, one
+ * surface over, and the surface where a person actually looks at a frontier. */
+static int g_announced;
+static void quantum_announce(void)
+{
+    if (g_announced) return;
+    g_announced = 1;
+    /* ONE MARKER, ONE LINE — build.mjs matches `^@QUANTUM ` exactly as it matches the censuses. The two fields
+       a reader PARSES come first and the free-form measure string is LAST, so an edit to the prose inside
+       quantum_measure() cannot move a parsed field. */
+    printf("@QUANTUM cpu=%d slice=%dms measure=%s\n",
+           quantum_measure_is_cpu(), (int)ENGINE_QUANTUM_MS, quantum_measure());
+    fflush(stdout);
+}
 
 /* ── EMSCRIPTEN: no CPU clock, no asynchronous edge ────────────────────────────────────────────────────────
    Both are facts about the transport (quantum.h names the requirement that would change them), so what is
@@ -29,7 +87,6 @@ thread's own thread-local copy of that byte; see quantum.h) rather than linking 
 
 static int64_t g_slice_start_us;
 static int  g_slice_open;
-static int  g_clock_checked;
 
 int64_t quantum_thread_us(void)
 {
@@ -65,12 +122,15 @@ int quantum_measure_is_cpu(void) { return 0; }
 static void quantum_check_clock(void)
 {
 #if APICLIENT_DEV
+    /* THE LATCH LIVES WITH ITS ONLY READER. As a file-scope static it was a `-Wunused-variable` in every
+       release link, because the `#if` that compiles the reader out does not compile the object out with it. */
+    static int checked;
     struct timespec cpu = { 0, 0 };
     int64_t ta, tc, tb;
     int rc;
 
-    if (g_clock_checked) return;
-    g_clock_checked = 1;
+    if (checked) return;
+    checked = 1;
     /* The two brackets are taken through this host's OWN reader, so the missing-monotonic-clock case is
        reported by the CHECK that already stands at the one place this file reads a clock, rather than by a
        second copy of it here that could disagree with the first. */
@@ -98,6 +158,9 @@ void quantum_begin(void)
 {
     DCHECK(!g_slice_open, "quantum_begin inside an open slice — the budget of the outer slice would be "
                           "silently replaced by the inner one's, and the outer would never expire");
+    /* THE CLAIM FIRST, THE CHECK OF IT SECOND. If the check below aborts, the stream already carries what this
+       host claimed to be measuring, which is the whole of what the abort is about. */
+    quantum_announce();
     quantum_check_clock();
     g_slice_start_us = quantum_thread_us();
     g_slice_open = 1;
@@ -194,6 +257,60 @@ const char *quantum_measure(void) { return "thread-cpu (timer_create CLOCK_THREA
 
 int quantum_measure_is_cpu(void) { return 1; }
 
+/* THE CLAIM ONE LINE UP, CHECKED — "asked, never assumed", and this is the half that had only ever DECLARED.
+   The emscripten branch tests that its CPUTIME clock really is its monotonic clock; this is the same test read
+   the other way, and it is the one with CONSUMERS BEHIND IT. `quantum_measure_is_cpu()` is what two DCHECKs
+   are GATED ON — solver/rest_unit.c's rest-unit overrun and solver/engine.c's seamless-stretch verdict — and
+   §Testing forbids a verdict a loaded machine can falsify. Both of those aborts are legitimate ONLY while this
+   thread's clock is thread CPU: were it secretly a wall clock they would fire on a busy box against code that
+   consumed nothing, which is exactly the confident false red this project has measured four separate times in
+   one session. A `return 1` that nothing tests is that red waiting to happen, and the fact that the platform
+   makes it true today is the argument for asserting it rather than the argument against.
+   THE TEST. Bracket ONE CLOCK_MONOTONIC read between two of this branch's own readers. If the kernel is
+   answering both names from one source, the middle read must land BETWEEN the two outer ones — that is the
+   emscripten branch's own reasoning, and here landing inside is the FAILURE rather than the pass. Two distinct
+   clocks cannot collide by accident: CLOCK_MONOTONIC counts from boot while this thread's CPU is a subset of
+   the time since this THREAD started, so a real pair sits orders of magnitude apart rather than within the
+   microsecond or two this bracket is wide.
+   ONCE, AT THE FIRST SLICE, because what it tests is a property of the kernel and not of a slice; DEV-ONLY,
+   because a release build paying for a diagnostic is a diagnostic that has quietly become behaviour — the same
+   two answers the emscripten branch gives for the same two questions. */
+static void quantum_check_clock(void)
+{
+#if APICLIENT_DEV
+    /* THE LATCH LIVES WITH ITS ONLY READER — see the same line on the other branch. */
+    static int checked;
+    struct timespec mono = { 0, 0 };
+    int64_t ta, tm, tb;
+    int rc;
+
+    if (checked) return;
+    checked = 1;
+    /* The brackets are taken through this host's OWN reader, so a missing thread-CPU clock is reported by the
+       CHECK that already stands at the one place this file reads that clock rather than by a second copy here
+       that could disagree with the first. */
+    ta = quantum_thread_us();
+    rc = clock_gettime(CLOCK_MONOTONIC, &mono);
+    tm = (int64_t)mono.tv_sec * 1000000 + mono.tv_nsec / 1000;
+    tb = quantum_thread_us();
+    /* A FAILED READ IS THE SAME NEWS AS A MISMATCH AND IS NOT SWALLOWED — the emscripten branch records what
+       an `if (rc != 0) return;` cost there: a check that quietly declines to run on the very input it exists
+       to judge leaves the assumption it guards false with nothing anywhere saying so. */
+    DCHECK(rc == 0,
+           "this host refused CLOCK_MONOTONIC outright — there is then no second clock to check this thread's "
+           "CPU clock against, so quantum_measure_is_cpu()'s 1 is a bare declaration again and the two DCHECKs "
+           "gated on it (rest_unit.c's rest-unit overrun, engine.c's seamless-stretch verdict) are verdicts a "
+           "loaded machine could falsify");
+    DCHECK(!(tm >= ta && tm <= tb),
+           "this host answered CLOCK_MONOTONIC from the same source as CLOCK_THREAD_CPUTIME_ID — a reading "
+           "taken BETWEEN two of this thread's CPU readings landed between them, which one clock does and two "
+           "cannot. quantum_thread_us() is then WALL time while quantum_measure_is_cpu() reports 1, so the "
+           "slice, the WFQ's aging charge and every verdict gated on that predicate are denominated in "
+           "something this file is telling every reader they are not; measure this platform's real thread CPU "
+           "or make this branch answer 0 like the host that has no CPU clock");
+#endif
+}
+
 static void quantum_make_timer(void)
 {
     struct sigaction sa;
@@ -251,6 +368,10 @@ void quantum_begin(void)
 {
     DCHECK(!g_slice_open, "quantum_begin inside an open slice — the outer slice's budget would be silently "
                           "replaced by the inner one's and would never expire");
+    /* THE CLAIM FIRST, THE CHECK OF IT SECOND — same order and same reason as the other branch: if the check
+       aborts, the stream already carries what this host claimed to be measuring. */
+    quantum_announce();
+    quantum_check_clock();
     if (!g_timer_made) quantum_make_timer();
     /* THE TIMER BELONGS TO A THREAD, so the thread it was made for must be the thread about to run the flow.
        If the scheduler ever moved to another thread the signal would keep arriving at the old one: the flow
