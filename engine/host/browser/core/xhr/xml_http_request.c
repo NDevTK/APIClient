@@ -156,6 +156,42 @@ static const uint16_t XHR_VALS[] = {
 };
 static const CowRecord XHR_REC = { sizeof(XhrData), XHR_VALS, (int)(sizeof(XHR_VALS) / sizeof(XHR_VALS[0])) };
 
+/* ---- XHR §3.2 Garbage collection -----------------------------------------------------------------------
+ *
+ * THE STANDARD, VERBATIM: "An XMLHttpRequest object must not be garbage collected if its state is either
+ * opened with send() invoked being true, headers received, or loading, and it has one or more event listeners
+ * registered whose type is one of readystatechange, progress, abort, error, load, timeout, and loadend." Those
+ * seven types are the WHOLE of the listener half and this is the one place they are stated; nothing below
+ * tests them one at a time. `xhr_gc_window` is the READINESS half, and it is the same three-state disjunction
+ * §3.5.7 The abort() method's step 2 tests, so both read it here rather than spelling it twice.
+ *
+ * WHAT DISCHARGES IT IS A REFERENCE AND NOT A FLAG. "Must not be garbage collected" is a statement about
+ * REACHABILITY, and this collector has no predicate to consult — Blink answers §3.2 with
+ * ActiveScriptWrappable's HasPendingActivity, which is a hook quickjs does not have — so the only honest
+ * expression of it is a real reference from something already reachable. There is one, and it is the LIFECYCLE
+ * MACHINE: xhr_run_closure captures the object at XHR_CD_OBJECT, and that closure is owned for exactly as long
+ * as §3.5.6 The send() method's fetch, processResponse and handle response end-of-body have work left —
+ * by the enqueuing flow's own job record for an asynchronous send(), and by the calling machine's `fn` (which
+ * its `visit` declares) for a synchronous send() and for §3.5.7's error mode. A flow's job queue is held by
+ * the scheduler's C state rather than by anything in the heap graph, so nothing subtracts those references and
+ * the object below them is rooted for the whole window.
+ *
+ * THE ENGINE'S RULE IS BROADER THAN §3.2'S, DELIBERATELY. The machine holds the object whether or not one of
+ * the seven listeners is registered, because the machine exists to run the request and not to answer §3.2.
+ * §3.2 FORBIDS collecting and never requires it, so a broader retention conforms; what it costs is that an
+ * in-flight XMLHttpRequest nobody listens to is held until its machine finishes, which the request it is
+ * waiting on bounds. The narrower reading needs a per-TYPE listener query over DOM §2.7 Interface EventTarget's
+ * event listener list, and event_target.h offers only event_target_has_any_listener — build
+ * `event_target_has_listener_of_any(ctx, target, types, n)` on the day this retention stops being the
+ * machine's, and not before, because until then the exact set would have no reader.
+ *
+ * WHAT IS LEFT IS THE STANDARD'S SECOND PARAGRAPH, AND IT IS THE MACHINE'S TEARDOWN — see js_xhr_run_fini. */
+static bool xhr_gc_window(const XhrData *d)
+{
+    return (d->state == XHR_OPENED && d->send_invoked) || d->state == XHR_HEADERS_RECEIVED ||
+           d->state == XHR_LOADING;
+}
+
 /* THE BYTES AN UNKNOWN ARGUMENT CROSSES AS. Web IDL's DOMString / ByteString / USVString conversion PASSES
    unknown external input THROUGH untouched — idl_args.c states why, and it is deliberate: opacity has to
    survive a coercion or the value stops forking control flow and stops being solvable at a sink — so a member
@@ -1341,7 +1377,9 @@ static const IdlStepDecl XHR_RESPONSE_XML_DECL = {
  *     flow suspends inside send() exactly as §3.5.6's "Pause until…" says;
  *   - `send()` on an ASYNCHRONOUS object ENQUEUES it as a task, so send() returns and the response is processed
  *     in its own turn of the event loop;
- *   - `abort()` CALLS it in error mode, because §3.5.7's request error steps are the identical sequence.
+ *   - `abort()` CALLS it in error mode, because the request error steps §3.5.7 The abort() method step 2 runs
+ *     are §3.5.6 The send() method's own — that is where the standard DEFINES them — so they are the identical
+ *     sequence rather than a second one.
  * Writing the sequences twice — once for the send machine and once for a task — is how two copies of an event
  * order drift, and the order IS the spec. */
 enum { XHR_MODE_FETCH = 0, XHR_MODE_ERROR };
@@ -1987,8 +2025,44 @@ error_steps:
     return JS_STEP_DONE;
 }
 
+/* XHR §3.2 Garbage collection's SECOND PARAGRAPH, at the one moment it can apply: "If an XMLHttpRequest object
+ * is garbage collected while its connection is still open, the user agent must terminate the XMLHttpRequest
+ * object's fetch controller."
+ *
+ * THE MACHINE'S TEARDOWN IS WHEN THE CONNECTION LOSES ITS ONLY READER, which is why the requirement lands here
+ * and not in xhr_finalizer. The block above states that this closure IS the reference discharging §3.2's first
+ * paragraph, so by the time the object itself is collected this machine is already gone — and it is gone
+ * through here. `s->req` is this component's fetch controller: XR_WAIT clears it the instant the answer is
+ * taken, so a non-zero one at teardown says the machine was abandoned with a request still outstanding with
+ * the trusted zone (a flow dropped under HTML §7.5.10 Destroying documents, or a chain freed under a throw).
+ * Nothing takes that entry afterwards: it is a register slot whose only reader has been freed, which is
+ * precisely the leak §COW names — malloc'd platform state the runtime's own GC walk cannot see.
+ *
+ * IT CANNOT BE DISCHARGED YET AND THAT IS WHAT THIS SAYS. engine.h has engine_host_request /
+ * engine_host_answered / engine_host_take and NO terminate: an outstanding id can be waited on or taken, never
+ * withdrawn, so there is no operation here that means "terminate". Taking an already-arrived answer and
+ * dropping it is not the same act and must not stand in for it — it would leave an unanswered request
+ * outstanding for ever while reporting success for the answered one. The next diff builds
+ * `engine_host_terminate(uint32_t req)` beside those three, and this becomes its call.
+ *
+ * `take_result` is not read because this machine's completion is undefined on every path — the driver's own
+ * `fini ? fini(…) : JS_UNDEFINED` is what it returned before this existed, and the return is unchanged. */
+static JSValue js_xhr_run_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSXhrRunState *s = st;
+
+    (void)ctx; (void)take_result;
+    DCHECK(s->req == 0,
+           "an XMLHttpRequest's lifecycle machine was torn down while its request was still outstanding with "
+           "the trusted zone — XHR §3.2 Garbage collection requires the fetch controller to be TERMINATED when "
+           "the object goes away with its connection open, and engine.h has no terminate for a host request "
+           "(only request/answered/take), so this register entry now has no reader at all: build "
+           "engine_host_terminate(req) and call it here");
+    return JS_UNDEFINED;
+}
+
 static const JSTrampStepDef js_xhr_run_def = {
-    sizeof(JSXhrRunState), js_xhr_run_step, NULL, 0, .visit = js_xhr_run_visit,
+    sizeof(JSXhrRunState), js_xhr_run_step, js_xhr_run_fini, 0, .visit = js_xhr_run_visit,
     .algorithm = "XHR §3.5.6 send()'s fetch, processResponse, handle response end-of-body and the request "
                  "error steps",
     .steps = js_xhr_run_steps
@@ -2267,8 +2341,10 @@ static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         if (!d) return JS_ThrowTypeError(ctx, "not an XMLHttpRequest"), -1;
         d->aborted = 1;
-        if ((d->state == XHR_OPENED && d->send_invoked) || d->state == XHR_HEADERS_RECEIVED ||
-            d->state == XHR_LOADING) {
+        /* Step 2's "if this's state is opened with this's send() invoked being true, headers received, or
+           loading" — the same three-state disjunction §3.2 Garbage collection states, read from the one
+           place that states it. */
+        if (xhr_gc_window(d)) {
             DCHECK(!d->synchronous,
                    "abort() reached the request error steps on a SYNCHRONOUS XMLHttpRequest — §3.5.6's step 4 "
                    "would throw an exception abort() was never given, and the flow that called send() is "
