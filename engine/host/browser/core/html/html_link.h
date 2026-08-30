@@ -86,9 +86,28 @@ void html_link_inserted(JSContext *ctx, lxb_dom_element_t *el);
    boolean rather than with the three reasons the prose distinguishes — see the derivation at `link_obtained`. */
 void html_link_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);
 
-/* The PARSER's `<link>` elements. A parser-inserted element reaches no mutation chokepoint (core/dom's drain
-   runs for script-driven insertion), so the tree the parse produced is walked once, exactly as
-   core/html/html_image.c's `html_image_parsed` and core/html/media_element.c's walk are. */
+/* The PARSER's `<link>` elements, INVENTORIED. A parser-inserted element reaches no mutation chokepoint
+   (core/dom's drain runs for script-driven insertion), so the tree the parse produced is walked once, exactly
+   as core/html/html_image.c's `html_image_parsed` and core/html/media_element.c's walk are — but this walk
+   RECORDS the document instead of triggering, and the pair of entries is one algorithm rather than two.
+   WHY THE SPLIT EXISTS, and it is a property of §4.2.4.3 rather than of this component. Every other parsed-tree
+   walk either performs a DOM-only step or queues the SPEC'S OWN microtask before it fetches (§4.8.4.3.5
+   "Updating the image data" is the worked example, and §scheduler makes every enqueued job a flow). §4.2.4.3's
+   default fetch and process the linked resource has no such step: it ends in "Fetch request with
+   processResponseConsumeBody set to …", and this engine's fetch parks on the flow's own pending register. The
+   document a session opens over is installed at the pre-boot BASELINE, where there is no flow — so triggering
+   here aborted the engine on a `<link rel=preload>` in the head, which is what every modern bundler emits.
+   Queueing a task HERE would invent a step §4.2.4.3 does not have and reorder the request against the rest of
+   the parse, so what moves is the MOMENT the trigger is performed and never the order of its steps. */
 void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root);
+
+/* …AND THE FLOW THAT SERVES THEM. Runs §4.6.8.20's browsing-context-connected time for ONE inventoried element
+   and returns 1, or 0 when every document this timeline can see has been drained. Registered with the
+   scheduler as a work item on the ONE frontier (solver/engine.h's engine_set_link_connected_hook), asked
+   AHEAD of the document's own programs because in a browser the parser connects a `<link>` during tree
+   construction and every script of the document is written after it. It is declared here as well because a
+   host that drives its own pump owes the same step; a host that runs none of it has documents whose own
+   preloads are never requested, which is a lazy-chunk graph that never loads. */
+int html_link_connected_step(JSContext *ctx);
 
 #endif

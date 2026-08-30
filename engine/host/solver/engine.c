@@ -268,6 +268,20 @@ void engine_set_rendering_hook(int (*fn)(JSContext *ctx))
     g_rendering_hook = fn;
 }
 
+/* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a PARSE produced,
+   registered by the link component for the reason the two above are: naming it here would make the scheduler
+   depend on the browser half. It is asked AHEAD of everything else a flow could do, which is the position and
+   not a preference — see the arm in flow_step. */
+static int (*g_link_connected_hook)(JSContext *ctx);
+void engine_set_link_connected_hook(int (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_link_connected_hook == NULL,
+           "a second component claimed §4.6.8.20's connected time for parsed link elements — the inventory it "
+           "drains is one list per AGENT, so the second claim silently stops the first draining and every "
+           "document's own preloads go unrequested with nothing to say so");
+    g_link_connected_hook = fn;
+}
+
 /* THE END OF A MICROTASK CHECKPOINT — HTML §8.1.7.3, registered by the browser component that owns what HTML
    invokes there. See engine.h; the one caller today is Indexed Database §2.7.1's transaction cleanup. */
 static void (*g_checkpoint_hook)(JSContext *ctx);
@@ -5398,6 +5412,23 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* WHICH OF THE ORPHAN STEP'S THREE OUTCOMES HAPPENED — held so the branch can name its own work
                rather than labelling three unrelated things with the name of one of them. */
             int orphan_step;
+            /* THE PARSER'S OWN `<link>` ELEMENTS, AHEAD OF EVERYTHING ELSE THIS FLOW COULD DO — HTML §4.6.8.20
+               Link type "preload"'s "when the external resource link's link element becomes browsing-context
+               connected", for the elements a parse produced. THE POSITION IS THE SPEC AND NOT A PREFERENCE: a
+               browser connects those elements during TREE CONSTRUCTION, so their requests are issued before
+               any script of that document runs and before any task the parse queued — and a lexbor parse has
+               no per-token seam, so the trigger has to be performed by the first thing that HAS a flow, which
+               is this. Running it after the programs would put a chunk preload's request after the bundle that
+               waits on its `load`, which is a different page.
+               ONE ELEMENT PER CALL, like every other unit of work in this function: the hook returns 1 having
+               served one and the step returns, so the scheduler re-ranks between them and a document that
+               ships seventy of them is seventy work items rather than one stretch with no suspend point on it.
+               IT IS ASKED EVERY STEP AND COSTS ONE INTEGER READ ONCE DRAINED (core/html/html_link.c keeps the
+               cursor, per flow, over an inventory that holds only documents still owing a request), which is
+               what lets a document installed LATER — a child navigable's — be served by the timeline that
+               created it without this arm having to be told that one appeared. */
+            if (g_link_connected_hook && g_link_connected_hook(ctx)) {
+                g_step_unit = "link-connected-time"; return 0; }
             /* THE ROUTED DELIVERIES THIS FLOW HAS BEEN HANDED, and they are first because the task each one
                enqueues is what every branch below then finds on the queue. ONE PER STEP, oldest first: each
                becomes a §9.3.3 task at the receiving Window and the step returns, so the tasks are enqueued in
@@ -7911,6 +7942,11 @@ void solver_agent_free(JSContext *ctx)
            "§13.2.7's document-load lifecycle step was still registered when the solver's agent state was "
            "released — core/dom/document.c claimed it at document_init and gives it back at "
            "document_agent_free, which is a row on core/platform.h's release column and therefore runs first");
+    DCHECK(g_link_connected_hook == NULL,
+           "§4.6.8.20's connected time for parsed link elements was still registered when the solver's agent "
+           "state was released — core/html/html_link.c claimed it at html_link_declare and gives it back at "
+           "html_link_free, which html_element_free calls and core/dom/element.c drives from platform.h's "
+           "release column, and that column runs in full before this one");
     /* THE @S SEARCHES GO BACK BEFORE THE FRONTIER, AND THE ORDER IS THE WHOLE OF WHY. A search takes a
        reference on the DECISION CHAIN at the moment its sink is detected — add_pending's decide_freeze_path,
        the re-injection point every later candidate is seeded from — and that reference is neither a flow's nor

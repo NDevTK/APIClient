@@ -4255,8 +4255,16 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* HTML §4.2.4 FOR THE SAME TREE AND FOR THE SAME REASON — §4.6.8.20's appropriate times are stated over an
        element that "becomes browsing-context connected", and a parser-inserted `<link>` becomes connected
        through the parser rather than through the mutation chokepoint, so the markup's own
-       `<link rel=preload>` elements are triggered here. AFTER the declarative-shadow conversion, for the
-       reason the media and image walks are. */
+       `<link rel=preload>` elements are found here. AFTER the declarative-shadow conversion, for the reason
+       the media and image walks are.
+       IT INVENTORIES AND DOES NOT TRIGGER, WHICH IS THE ONE OF THESE WALKS THAT COULD NOT PERFORM ITS STEPS
+       HERE. §4.2.4.3 "Fetching and processing a resource from a link element" ends in a fetch with no task and
+       no microtask in front of it, and a fetch parks on a FLOW's own pending register — and THIS LINE IS THE
+       PRE-BOOT BASELINE, where there is none. The image walk above reaches its fetch through §4.8.4.3.5
+       "Updating the image data"'s own microtask, which §scheduler makes a flow; §4.2.4.3 has no such step to
+       hang one on, and inventing one here would reorder the request against the rest of the parse. So the
+       elements are recorded and the first flow of this document serves them, before it runs a program of it —
+       core/html/html_link.h states the pair. */
     html_link_parsed(ctx, lxb_dom_interface_node(dom));
     /* HTML §4.2.6 FOR THE TREE THE PARSER BUILT — "the element is popped off the stack of open elements of an
        HTML parser" is update a style block's first trigger, and a Lexbor parse has no per-token seam, so the

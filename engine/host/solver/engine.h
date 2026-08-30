@@ -212,6 +212,14 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx));
    moments on the ONE virtual clock and this one defers to a timer that expires first. */
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx));
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
+/* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a PARSE produced
+   (html_link.h). Registered by the link component for the reason the two above are registered rather than
+   named. Asked AHEAD of everything else a flow could do, which is a spec position and not a preference: a
+   browser connects those elements during tree construction, so their requests precede every script of that
+   document. It exists at all because §4.2.4.3 "Fetching and processing a resource from a link element" ends in
+   a fetch with no task and no microtask in front of it, and a fetch parks on a FLOW — so the walk that finds
+   the elements (which for a session's own document runs at the pre-boot baseline) can only inventory them. */
+void engine_set_link_connected_hook(int (*fn)(JSContext *ctx));
 /* THE END OF A MICROTASK CHECKPOINT — HTML §8.1.7.3's "perform a microtask checkpoint", the step that runs
    once the microtask queue has drained and before the checkpoint flag is cleared. It is a SCHEDULER fact and
    nothing else can answer it: the checkpoint is over exactly when the flow that just ran a unit of work holds

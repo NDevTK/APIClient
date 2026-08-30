@@ -26,6 +26,7 @@
 #include "core/css/media_query.h"   /* §4.2.4.1's "matches the environment", which is HTML §2.3.10's predicate */
 #include "solver/dom_cow.h"      /* the taint an `href` composed out of unknown input carries */
 #include "solver/flow.h"         /* §4.2.4.3 ends in a FETCH, and a fetch parks on a flow — see link_trigger */
+#include "solver/engine.h"       /* …so the PARSER's own elements are served as a work item — see below */
 #include "core/mime/mime_type.h"    /* §4.6.8.20's "a string type matches a preload destination" */
 #include "core/html/html_link.h"
 
@@ -33,6 +34,16 @@ static int      g_ready;
 static JSValue  g_state_key;
 static JSAtom   g_atom_state = JS_ATOM_NULL;
 static int      g_task_stepid = -1;
+/* THE DOCUMENTS WHOSE PARSED `<link>` ELEMENTS ARE STILL OWED §4.6.8.20's BROWSING-CONTEXT-CONNECTED TIME —
+   see html_link_parsed, which appends to it, and html_link_connected_step, which drains it inside a flow.
+   IT IS A JS RECORD AND NOT A C LIST, which is CLAUDE.md §State-isolation's rule for exactly this shape: the
+   entries are written by flows (a child navigable's Document is installed inside the flow that created its
+   container, so ONLY that timeline has one), and a JS property write is what the COW delta already captures.
+   A malloc'd list would be one list for every timeline at once, and its cursor would rewind on a context
+   switch while the nodes it named stayed reachable from nothing.
+   NULL-PROTOTYPE, for core/idl_slots.h's reason: `n` and `i` are fields this file reads back, and a page that
+   assigns `Object.prototype.n` a setter would otherwise swallow the write and answer the read. */
+static JSValue  g_parsed;
 
 /* ---- the element, and its `rel` ---------------------------------------------------------------------------- */
 
@@ -110,6 +121,18 @@ static LinkExternalType link_external_type_of(lxb_dom_element_t *el)
     for (i = 0; i < sizeof(LINK_EXT_KEYWORDS) / sizeof(LINK_EXT_KEYWORDS[0]); i++)
         if (rel_has(rel, rel_n, LINK_EXT_KEYWORDS[i])) return LINK_EXT_UNBUILT;
     return LINK_EXT_NONE;
+}
+
+/* WHICH TYPES' APPROPRIATE TIMES THIS COMPONENT REGISTERS — ONE PREDICATE, asked by the two places that must
+   agree about it. HTML §4.6.8 "Link types" states the appropriate times PER LINK TYPE (see html_link.h), so a
+   type this file has no steps for is a type whose times it does not register; the TRIGGER asks because it
+   serves them, and the parsed walk asks because it COUNTS them — its cursor indexes exactly the elements the
+   trigger will act on, so an element the trigger silently declines can never make that cursor step over one it
+   would have served. Two spellings of this question would put the walk and the trigger on different sets and
+   the difference would look like a preload that simply never fired. */
+static bool link_times_registered(lxb_dom_element_t *el)
+{
+    return link_external_type_of(el) == LINK_EXT_PRELOAD;
 }
 
 /* ---- the element's state ---------------------------------------------------------------------------------- */
@@ -607,44 +630,36 @@ static void link_trigger(JSContext *ctx, lxb_dom_element_t *el)
     /* ONLY THE TYPES WHOSE TIMES THIS COMPONENT CARRIES. See html_link.h: §4.6.8 states the appropriate times
        PER LINK TYPE, so a type this file has no steps for is a type whose times it does not register — the
        standard's own structure, and the reason the dispatch's other arms are asserts rather than live paths. */
-    if (link_external_type_of(el) != LINK_EXT_PRELOAD) return;
-    /* §4.2.4.3's default fetch and process the linked resource ENDS IN A FETCH — "Set request's synchronous
-     * flag … Fetch request with processResponseConsumeBody set to …" — with no task and no microtask anywhere
-     * in it, so every trigger below reaches a request. THIS ENGINE CANNOT ISSUE ONE OUTSIDE A FLOW: the park
-     * pushes onto the flow's own pending register (solver/engine.c), which is per-flow because a global one
-     * would resolve one flow's fetch into another flow's COW, so a caller with no flow has nowhere to be owed
-     * a reply and nowhere to resume when it arrives.
+    if (!link_times_registered(el)) return;
+    /* §4.2.4.3's default fetch and process the linked resource ENDS IN A FETCH — its last step is "Fetch
+     * request with processResponseConsumeBody set to …", with no task and no microtask anywhere in it — so
+     * every trigger below reaches a request. THIS ENGINE CANNOT ISSUE ONE OUTSIDE A FLOW: the park pushes onto
+     * the flow's own pending register (solver/engine.c), which is per-flow because a global one would resolve
+     * one flow's fetch into another flow's COW, so a caller with no flow has nowhere to be owed a reply and
+     * nowhere to resume when it arrives.
      *
-     * THE THREE LIVE TIMES HAVE A FLOW AND THE PARSED WALK DOES NOT, WHICH IS WHY THE ASSERT IS HERE AND NOT
-     * AT THE PARK. `html_link_inserted` and `html_link_attr_changed` are reached from script or from a job,
-     * and both of those ARE flows. `html_link_parsed` is reached from core/dom/document.c's parsed-tree walk,
-     * which that file states is "still the pre-boot BASELINE" — this engine performs there the steps a browser
-     * performs during TREE CONSTRUCTION, because a lexbor parse has no per-token seam. Measured on a real
-     * document: gitlab.com/explore ships four `<link rel=preload as=font>` in its head, and a document whose
-     * ENTIRE content is one such element and no script at all aborted the engine before a single flow ran —
-     * which on a page that also ships scripts means every endpoint that page's bundle names is lost.
+     * ALL THREE OF THIS FILE'S ENTRIES REACH THIS FROM A FLOW, AND THE THIRD IS WHY THE ASSERT MOVED RATHER
+     * THAN BEING DELETED. `html_link_inserted` and `html_link_attr_changed` are reached from script or from a
+     * job, and both of those ARE flows. The PARSER's own elements are the third, and they used to be
+     * triggered by core/dom/document.c's parsed-tree walk — which for the document a session opens over runs at
+     * the pre-boot BASELINE, where there is no flow at all, so a `<link rel=preload>` in the head aborted the
+     * engine before a single line of the page ran. They are INVENTORIED by that walk now and SERVED by
+     * html_link_connected_step, which the scheduler asks inside a flow; so this line has stopped naming
+     * something to build and states the invariant that makes the four entries one algorithm.
      *
-     * `<img>` DOES NOT REACH THIS AND THE DIFFERENCE IS NOT A DESIGN. §4.8.4.3.5's "update the image data"
-     * queues the SPEC'S OWN microtask before it fetches, and §scheduler makes every enqueued job a flow, so the
-     * image half of the same walk hands its fetch to a flow by the standard's structure rather than by anyone
-     * having arranged it. Queueing one HERE to match would be inventing a step §4.2.4.3 does not have, and
-     * §Browser-half makes ORDER the spec: a preload's request would then be issued after work the parse
-     * ordered before it.
-     *
-     * WHAT TO BUILD, AND THE LINE IT FALLS ON: the baseline walk may RECORD the address — an endpoint is what
-     * the page COMPOSED and recording it is not a request, which is why link_preload's endpoint_record stands
-     * before this and stays — but it may not ISSUE one. The issue belongs to the BOOT FLOW, beside where that
-     * document's parsed scripts are driven (core/loader/document_scripts.h's inventory is the same shape one
-     * step earlier: the walk inventories, the flow runs). Until it is there, this crashes rather than letting a
-     * document's own preloads go unrequested in silence — a `<link rel=preload as=script>` that never fires
-     * `load` is a lazy-chunk graph that never loads, which is the surface this component exists for. */
+     * `<img>` REACHES ITS FETCH BY A DIFFERENT ROUTE AND THAT IS THE STANDARD'S DOING, not a design this file
+     * could have copied. §4.8.4.3.5's "update the image data" queues the SPEC'S OWN microtask before it
+     * fetches, and §scheduler makes every enqueued job a flow, so the image half of the same walk hands its
+     * fetch to a flow by the standard's structure. Queueing one HERE would be inventing a step §4.2.4.3 does
+     * not have, and §Browser-half makes ORDER the spec: the request would then be issued after work the parse
+     * ordered before it. Deferring the whole TRIGGER keeps the algorithm's steps in the standard's order and
+     * moves only the moment it is performed, which is what the parse's own lack of a per-token seam costs. */
     DCHECK(flow_running() != NULL,
-           "§4.2.4.3's fetch and process the linked resource was entered with no running flow, which means the "
-           "PARSED-TREE WALK reached it: core/dom/document.c performs at pre-boot baseline the steps HTML "
-           "defines over tree construction, and this one ends in a fetch that has no flow to park on. Drive "
-           "the parsed document's preload triggers from the BOOT FLOW instead, where that document's parsed "
-           "scripts are driven — not by queueing a task here, which invents a step §4.2.4.3 does not have and "
-           "reorders the request against the rest of the parse");
+           "§4.2.4.3's fetch and process the linked resource was entered with no running flow — it ends in a "
+           "fetch, and a fetch parks on the FLOW's own pending register, so a caller with none has nowhere to "
+           "be owed a reply. Every one of §4.6.8.20's appropriate times reaches this from a flow: the mutation "
+           "entries are script or a job, and the parser's own elements are served by html_link_connected_step, "
+           "which the scheduler asks INSIDE a flow. A fourth entry has been added without one");
     link_fetch_and_process(ctx, el);
 }
 
@@ -686,18 +701,157 @@ void html_link_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *n
     }
 }
 
-void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root)
+/* ---- the PARSER's own elements: the walk inventories, a flow serves ---------------------------------------- */
+
+/* ONE FIELD OF ONE RECORD, read and written through these two so that a field this file writes and reads back
+   is never DEFAULTED — CLAUDE.md counts seven live defects whose whole shape was a `||` standing where a
+   producer had not written. Both records here are null-prototype (core/idl_slots.h), so neither read nor write
+   can reach the page. */
+static int link_rec_int(JSContext *ctx, JSValueConst rec, const char *field)
+{
+    JSValue v = JS_GetPropertyStr(ctx, rec, field);
+    int32_t i = 0;
+
+    DCHECK(JS_IsNumber(v),
+           "§4.2.4's parsed-document record answered a counter with something that is not a number — every "
+           "field of this record is written by this file at the one site that creates it, so a non-number here "
+           "is a read of a field that was never written rather than a value to interpret");
+    JS_ToInt32(ctx, &i, v);
+    JS_FreeValue(ctx, v);
+    return (int)i;
+}
+
+static void link_rec_set_int(JSContext *ctx, JSValueConst rec, const char *field, int v)
+{
+    JS_SetPropertyStr(ctx, (JSValue)rec, field, JS_NewInt32(ctx, v));
+}
+
+/* THE `want`TH OF `root`'s `<link>` ELEMENTS WHOSE TIMES THIS COMPONENT REGISTERS, in shadow-including tree
+   order, or NULL when the tree holds fewer than that.
+   SHADOW-INCLUDING, for the reason core/html/html_image.c's walk is: a `<template shadowrootmode>` has by now
+   become a shadow root whose children are in the tree and are not reachable by the ordinary walk.
+   THE POSITION IS THE IDENTITY, and that is sound because of WHEN this is asked rather than by assumption: the
+   scheduler asks the service below before this flow runs any program of the document (solver/engine.c), and a
+   SIBLING flow's DOM writes are unapplied while this flow is switched in (CLAUDE.md §State-isolation), so the
+   tree this walk indexes is the tree the parse produced and it does not move between two calls. `connected` is
+   asked per element because §4.6.8.20's every appropriate time is stated over one that is browsing-context
+   connected, and because it is what keeps a `<template>`'s inert contents out of the count. */
+static lxb_dom_element_t *link_parsed_nth(JSContext *ctx, lxb_dom_node_t *root, int want)
 {
     lxb_dom_node_t *n;
+    int i = 0;
+
+    for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
+        if (!link_is_node(n)) continue;
+        if (!node_is_connected(n)) continue;
+        if (!link_times_registered(lxb_dom_interface_element(n))) continue;
+        if (i++ == want) return lxb_dom_interface_element(n);
+    }
+    return NULL;
+}
+
+/* See html_link.h. THE WALK INVENTORIES AND DOES NOT TRIGGER — core/loader/document_scripts.h is the same
+   shape one step earlier, and the reason is the same one: §4.2.4.3 ends in a fetch, a fetch parks on a flow,
+   and the document a session opens over is installed at the pre-boot BASELINE where there is no flow.
+   NOTHING IS RECORDED FOR A DOCUMENT WITH NOTHING TO SERVE, which is what keeps the service below free for
+   every document that ships no `<link rel=preload>`: the list holds only documents that owe a trigger, so a
+   drained list is one comparison per scheduler step rather than a tree walk per step for ever. */
+void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root)
+{
+    JSValue rec;
+    int n;
 
     DCHECK(root != NULL, "§4.2.4's parsed-tree walk was given no tree to walk");
     DCHECK(g_ready, "a parsed tree reached §4.2.4 before html_link_declare ran");
-    /* SHADOW-INCLUDING, for the reason core/html/html_image.c's walk is: a `<template shadowrootmode>` has by
-       now become a shadow root whose children are in the tree and are not reachable by the ordinary walk. */
-    for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
-        if (!link_is_node(n)) continue;
-        link_trigger(ctx, lxb_dom_interface_element(n));
+    if (!link_parsed_nth(ctx, root, 0)) return;
+    rec = idl_slots_new(ctx);
+    CHECK(!JS_IsException(rec), "§4.2.4: OOM recording a parsed document's link elements");
+    /* THE DOCUMENT OBJECT AND NOT ITS NODE POINTER, because this entry is read by a flow that may be many
+       scheduler steps away and a raw tree pointer is not a thing a timeline can hold: node_of reads the node
+       back at the service, and the reference is DROPPED there the moment the document is drained, so the list
+       keeps a document alive only while it still owes a request. */
+    DCHECK(JS_IsObject(document_object(ctx)),
+           "§4.2.4's parsed-tree walk ran in a realm with no Document object — the walk is reached from the "
+           "install that BUILDS one, so an entry filed here without it would name no document at the service "
+           "and every one of that document's preloads would be a request nothing could issue");
+    JS_SetPropertyStr(ctx, rec, "doc", JS_DupValue(ctx, document_object(ctx)));
+    link_rec_set_int(ctx, rec, "served", 0);
+    n = link_rec_int(ctx, g_parsed, "n");
+    JS_SetPropertyUint32(ctx, g_parsed, (uint32_t)n, rec);
+    link_rec_set_int(ctx, g_parsed, "n", n + 1);
+}
+
+/* See html_link.h. ONE ELEMENT PER CALL, then return, because this is a work item on the one frontier like
+ * everything else the scheduler asks for — core/dom/document.c's document_lifecycle_step states the same
+ * sentence for the same reason, and it is what keeps a document that ships seventy preloads from being a
+ * stretch of the scheduler's time with no suspend point on it.
+ *
+ * THE CURSOR IS THE FLOW'S, WHICH IS THE WHOLE POINT: `served` and `i` are properties of baseline records, so
+ * a write to either rides the writing flow's COW delta and every timeline drains this list once, on its own.
+ * That is the same answer the document's own `<script>` rows already get — every base flow of a document runs
+ * its programs — and it is what makes a resumed flow re-issue the preloads it was in the middle of.
+ *
+ * IN THE DOCUMENT'S OWN REALM. §4.6.8.20's steps read that document's base URL, its policy container and its
+ * media environment, so the realm is asked of the ENTRY and never of whoever is running: a same-origin agent
+ * cluster holds a realm per document, and answering a child's preload with the root's policy is the defect
+ * CLAUDE.md §per-realm names — one fact answered from one place for many agents. */
+int html_link_connected_step(JSContext *ctx)
+{
+    int i, n;
+
+    if (!g_ready) return 0;
+    n = link_rec_int(ctx, g_parsed, "n");
+    for (i = link_rec_int(ctx, g_parsed, "i"); i < n; i++) {
+        JSValue rec = JS_GetPropertyUint32(ctx, g_parsed, (uint32_t)i);
+        int served;
+
+        DCHECK(JS_IsObject(rec),
+               "§4.2.4's parsed-document list holds no entry at an index below its own length — the entry and "
+               "the length are written together at the one site that appends, so a hole here is a list whose "
+               "count outran what a flow can see of it");
+        served = link_rec_int(ctx, rec, "served");
+        if (served >= 0) {
+            JSValue docv = JS_GetPropertyStr(ctx, rec, "doc");
+            lxb_dom_node_t *root = node_of(docv);
+            JSContext *dctx;
+            lxb_dom_element_t *el;
+
+            DCHECK(root != NULL,
+                   "§4.2.4's parsed-document list holds an entry whose `doc` is not a node — it is written "
+                   "from that Document's own object and from nowhere else, and it is cleared only together "
+                   "with the `served` sentinel that stops this arm being reached");
+            dctx = document_realm_of(root);
+            /* NOT AN IMPOSSIBLE STATE — A COUPLING THAT IS NOT BUILT, which is why it crashes here naming it
+               rather than skipping the entry. The entry is appended by the install that BUILDS that realm, so
+               a null means the Document's record went away while a timeline still owed its preloads a request:
+               HTML §7.5.10 "Destroying documents"' step 7 removes that document's queued TASKS, and this
+               inventory is not one of them, so the destruction must drop this timeline's entry the same way.
+               Skipping instead would leave the flow's cursor standing on a document that no longer exists and
+               call the preloads served, which is a page whose whole chunk graph silently never loads. */
+            DCHECK(dctx != NULL,
+                   "§4.2.4's parsed-document list holds a document with no realm — a Document was DESTROYED "
+                   "while a timeline still owed its parsed `<link>` elements §4.6.8.20's connected time. "
+                   "§7.5.10's step 7 takes that document's queued tasks off the flow and this inventory is "
+                   "not one of them: drop this timeline's entry there, beside that removal");
+            el = link_parsed_nth(dctx, root, served);
+            if (el) {
+                link_rec_set_int(ctx, rec, "served", served + 1);
+                JS_FreeValue(ctx, docv);
+                JS_FreeValue(ctx, rec);
+                link_trigger(dctx, el);
+                return 1;
+            }
+            link_rec_set_int(ctx, rec, "served", -1);
+            JS_SetPropertyStr(ctx, rec, "doc", JS_UNDEFINED);
+            JS_FreeValue(ctx, docv);
+        }
+        JS_FreeValue(ctx, rec);
+        /* THE ENTRY CURSOR ONLY EVER ADVANCES, because this loop drains in index order and returns the moment
+           it serves one: an entry below `i` is drained in this timeline, so the scan a drained list costs is
+           one integer read rather than a pass over every document this agent has ever parsed. */
+        link_rec_set_int(ctx, g_parsed, "i", i + 1);
     }
+    return 0;
 }
 
 /* ---- the agent's declaration ------------------------------------------------------------------------------ */
@@ -714,16 +868,30 @@ void html_link_declare(JSContext *ctx)
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
     CHECK(g_atom_state != JS_ATOM_NULL, "§4.2.4: the link processing state key could not be interned");
     g_task_stepid = JS_RegisterStepDef(rt, &link_task_def);
+    /* THE PARSED-DOCUMENT LIST IS BUILT WITH THE AGENT AND NOT ON FIRST USE, for the reason CLAUDE.md gives
+       for every per-realm intrinsic: a record minted lazily is minted INSIDE whichever flow happened to touch
+       it first, and every other timeline would then see a list that does not exist. This line is the pre-boot
+       baseline, so the empty list is a fact every flow forks from. */
+    g_parsed = idl_slots_new(ctx);
+    CHECK(!JS_IsException(g_parsed), "§4.2.4: the parsed-document list allocation failed");
+    JS_SetPropertyStr(ctx, g_parsed, "n", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, g_parsed, "i", JS_NewInt32(ctx, 0));
+    /* §4.6.8.20's browsing-context-connected time for the PARSER's own elements is a work item on the ONE
+       frontier — see html_link_connected_step. Claimed here, once per AGENT, beside the machine above. */
+    engine_set_link_connected_hook(html_link_connected_step);
     g_ready = 1;
 }
 
 void html_link_free(JSRuntime *rt)
 {
     if (!g_ready) return;
+    engine_set_link_connected_hook(NULL);
     JS_FreeAtomRT(rt, g_atom_state);
     g_atom_state = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_state_key);
     g_state_key = JS_UNDEFINED;
+    JS_FreeValueRT(rt, g_parsed);
+    g_parsed = JS_UNDEFINED;
     g_task_stepid = -1;
     g_ready = 0;
 }
