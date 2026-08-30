@@ -152,6 +152,30 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
     g_ns_n++;
 }
 
+/* THE KEY, READ ONCE FOR BOTH HALVES, AND THE ENGINE'S GATE ASSERTED WHERE THE PATH IS COMPOSED FROM IT.
+   The channel is a server writing a RECORD OF FIELDS, so its keys are strings and array indices — and the
+   engine gates on exactly that (JS_AtomIsPublishedName) before it asks either hook. This is the other side of
+   that gate: a SYMBOL reaching here would be spelled into a provenance out of its DESCRIPTION, which is
+   neither unique nor a name (`Symbol()` twice spells one path for two keys), and a WELL-KNOWN one is the
+   engine's own protocol — a slot the interpreter is about to CALL.
+   IT IS ASSERTED RATHER THAN FILTERED BECAUSE THE FILTER ALREADY EXISTS AND WAS ALREADY GONE AROUND. The gate
+   arrived with the HIT arm and the MISS arm asked nothing, so for the life of that asymmetry §7.1.1
+   ToPrimitive ( input [ , preferredType ] ) step 1.a's `? GetMethod(input, %Symbol.toPrimitive%)` — a read
+   that misses on EVERY object — was answered here with a callable unknown, and step 1.b.vi's "Throw a
+   TypeError exception" ended the document. Measured: `var b={}; 1 & b` and `1 & globalThis` both died. A
+   second filter here would have hidden that instead of ending it; an assert makes the next route that skips
+   the gate crash at the first read rather than at a coercion a thousand statements later. */
+static const char *ns_key_str(JSContext *ctx, JSAtom name)
+{
+    DCHECK(JS_AtomIsPublishedName(JS_GetRuntime(ctx), name),
+           "the engine asked this channel about a key it cannot NAME — the injected-state channel is a record "
+           "of string- and index-keyed fields, so a symbol here is a read that reached the hook without going "
+           "through js_absent_ask / js_present_ask's key rule. A well-known symbol answered with an unknown "
+           "replaces a slot the interpreter is about to CALL: §7.1.1 ToPrimitive ( input [ , preferredType ] ) "
+           "step 1.a reads %Symbol.toPrimitive% off every object it coerces");
+    return JS_AtomToCString(ctx, name);
+}
+
 /* THE ONE SPELLING of an injected member's provenance, used by both halves of this file.
    The PROVENANCE is the whole read as the run composed it — `gon` and `gon.current_user_id` are two different
    unknowns and each must decide only its own predicates, so the path is composed WHOLE rather than into a
@@ -183,7 +207,7 @@ static void ns_member_spell(const char *base, const char *name, char **shape, ch
    an @S candidate substitutes at `__FLAGS.admin` exactly as it does at a member nothing wrote. */
 JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JSValueConst value)
 {
-    const char *s = JS_AtomToCString(ctx, name);
+    const char *s = ns_key_str(ctx, name);
     const char *base;
     char *shape = NULL, *src = NULL;
     JSValue r = JS_UNINITIALIZED;
@@ -218,7 +242,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
 {
     JSValue g = JS_GetGlobalObject(ctx);
     int is_global = (JS_VALUE_GET_PTR(obj) == JS_VALUE_GET_PTR(g));
-    const char *s = JS_AtomToCString(ctx, name);
+    const char *s = ns_key_str(ctx, name);
     const char *base = NULL;
     JSValue r = JS_UNINITIALIZED;
     char *shape = NULL, *src = NULL;
