@@ -505,7 +505,12 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (currentBodyMode !== savedBodyMode) setBodyMode(savedBodyMode);
           // Re-render response tree so renamed field is immediately visible
           if (lastSendResult) {
-            delete lastSendResult.discovery;
+            /* SAID WITH THE RECORD'S OWN WORD FOR IT. The rename just reloaded this panel's schema, so the
+               doc the result was resolved against is stale and lib/popup-response.js must re-read the
+               popup's copy — which is what `discovery: null` MEANS there. `delete` made the same statement
+               in the one spelling the record cannot carry: an ABSENT key, which is what a producer that had
+               stopped writing the field also produces, and which that file now asserts against. */
+            lastSendResult.discovery = null;
             renderResponse(lastSendResult);
           }
         }

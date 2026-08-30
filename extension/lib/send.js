@@ -877,8 +877,14 @@ async function executeSendRequest(documentId, msg) {
     }
   }
 
-  // Include latest discovery info in result
-  const discovery = tab.discoveryDocs.get(msg.service);
+  /* `null` IS THE ABSENCE, IN THE SPELLING THE REST OF THIS RECORD ALREADY USES. A Map miss answers
+     `undefined`, and this record crosses chrome.runtime.sendMessage to the popup — a serialization that DROPS
+     an undefined property, so "this document knows no discovery doc for that service" arrived as a record
+     with no `discovery` KEY AT ALL, which is byte-identical to this producer having stopped writing one.
+     `service` and `methodId` beside it already say "nothing was chosen" with null and are asserted as such
+     where the command arrives; this is the third member of that trio and it now says it the same way. */
+  const _discoveryHit = tab.discoveryDocs.get(msg.service);
+  const discovery = _discoveryHit === undefined ? null : _discoveryHit;
 
   return {
     ok: resp.ok,

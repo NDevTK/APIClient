@@ -83,17 +83,38 @@ function renderResponse(result) {
   }
 }
 
+/* THE THREE METADATA NAMES ARE ECHOED BACK ON EVERY SUCCESS RECORD, AND `null` IS WHAT EACH SAYS WHEN THERE
+   IS NOTHING TO ECHO. lib/send.js writes `service`, `methodId` and `discovery` in the same literal as
+   ok/status/headers/body — so the question these three `||`s were answering is not "did the producer write
+   it" (it always does) but "did the reviewer have a discovery method selected when they pressed Send", which
+   is a state the panel is legitimately in and which `null` states outright. Written as `||`, that legitimate
+   null and a producer that had stopped echoing were the same bytes, and the fallback — the CURRENT contents
+   of the endpoint select — is a different question's answer: what is selected NOW, which after a re-select is
+   not what this response came from. So each is read as itself, and the select is consulted only where the
+   record says there was nothing to echo. */
 function renderResultBody(result) {
-  // Use schema-aware rendering if possible
-  const methodId =
-    result.methodId ||
-    document.getElementById("send-ep-select").dataset.discoveryId;
-  const svc =
-    result.service || document.getElementById("send-ep-select").dataset.svc;
+  DCHECK((result.service === null || typeof result.service === "string") &&
+         (result.methodId === null || typeof result.methodId === "string"),
+         "a send result's service/methodId is neither a name nor a stated absence — lib/send.js echoes both " +
+         "on every success record and asserts `null` for \"no discovery method was chosen\" where the request " +
+         "was composed, so a third spelling here is that echo broken and this panel would resolve the " +
+         "response against whichever method the select happens to be showing now");
+  DCHECK(result.discovery === null || (!!result.discovery && typeof result.discovery === "object"),
+         "a send result's `discovery` is neither a doc entry nor a stated absence — `null` MEANS the " +
+         "offscreen store held no discovery document for this service, and `undefined` cannot mean it: " +
+         "chrome.runtime.sendMessage DROPS an undefined property, so that spelling arrives as a record with " +
+         "no `discovery` key and is indistinguishable from a producer that stopped writing one");
+
+  const sel = document.getElementById("send-ep-select");
+  const methodId = result.methodId === null ? sel.dataset.discoveryId : result.methodId;
+  const svc = result.service === null ? sel.dataset.svc : result.service;
   let respSchema = null;
 
-  // Prioritize discovery info returned in the result (most up-to-date)
-  const discoveryInfo = result.discovery || tabData?.discoveryDocs?.[svc];
+  /* The result's own doc is the one this response was resolved against; the popup's cached copy is consulted
+     only where the offscreen store had none. (popup.js clears this to `null` after a field rename — saying
+     "that doc is stale, re-read mine" — where it used to `delete` the property, which is the same statement
+     made in the one spelling this record cannot carry.) */
+  const discoveryInfo = result.discovery === null ? tabData?.discoveryDocs?.[svc] : result.discovery;
 
   // Deterministic schema ID for storing response field renames
   const responseSchemaId = methodId ? `${methodId}.response` : "";
@@ -117,10 +138,16 @@ function renderResultBody(result) {
   const rawBody = result.body.raw;
   const respContentType = result.headers["content-type"] || "";
 
+  /* `svc`, NOT `result.service || svc`, AT ALL THREE PROTOCOL RENDERERS. `svc` IS `result.service` wherever
+     that is stated, so the `||` could only ever yield `svc` — it had no reachable second arm at all. It read
+     as a safety net over the same field the line above had already resolved, which is why it survived three
+     copies: a default nobody can see the effect of, because it has none. The gRPC renderer below now takes
+     the resolved `methodId` beside it rather than the raw echo: it was handed a RESOLVED service and an
+     UNRESOLVED method id as one pair, and the two halves of that pair name one method. */
   if (isAsyncChunkedResponse(rawBody)) {
     return renderAsyncResponse(
       rawBody,
-      { service: result.service || svc, url: currentRequestUrl },
+      { service: svc, url: currentRequestUrl },
       discoveryInfo?.doc,
     );
   }
@@ -131,7 +158,7 @@ function renderResultBody(result) {
     if (grpcBytes) {
       return renderGrpcWebResponse(
         grpcBytes,
-        { service: result.service || svc, methodId: result.methodId },
+        { service: svc, methodId },
         discoveryInfo?.doc,
       );
     }
@@ -162,7 +189,7 @@ function renderResultBody(result) {
   if (isBatchExecuteResponse(rawBody)) {
     return renderBatchExecuteResponse(
       rawBody,
-      { service: result.service || svc },
+      { service: svc },
       discoveryInfo?.doc,
     );
   }
