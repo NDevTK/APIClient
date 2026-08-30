@@ -1822,6 +1822,18 @@ static const char *HTML =
     "function orphanClamp(e){ var v = Math.max(0, Math.min(255, e.n));"
     " fetch('/api/orphan/clamp?v=' + v); }"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
+    /* THE SAME REPLY THROUGH THE OTHER SPELLING, AND THE ROW IS THE SECOND REACTION. Every statement above
+       reaches the reply with `await`, which is §27.5.4.7.1 PromiseResolve ( ctor, resolution ) inside Await;
+       this is `.then(r => r.json()).then(…)`, which is how essentially every shipped bundle reads a config and
+       is a DIFFERENT arrangement of the same two settlements — the reaction's derived promise is resolved with
+       json()'s promise (an ordinary Promise), and json()'s own promise is separately resolved with the parsed
+       record. Only the second of those can go wrong, and when it does the FIRST reaction still runs: the tell
+       is a run in which `chain1` is present and `chain2` is absent, with no page error, nothing parked and a
+       frontier reporting that it drained. Both tags ride ONE address so that the two are one comparison rather
+       than two rows that could each be missing for their own reason, and the region rides with them because a
+       second reaction that runs without its value is a third outcome again. */
+    "fetch('/api/config').then(function(r){ fetch('/api/chain?at=chain1');"
+      " return r.json(); }).then(function(c){ fetch('/api/chain?at=chain2-' + c.region); });"
     /* §6.4 clone(), which is how a caching or interceptor layer is written: copy the reply, read the copy, and
        still hand the original on. Both halves of the spec are asserted because both are the reason it exists —
        the clone reads INDEPENDENTLY (its own body-used latch, or the copy would be dead the moment the original
@@ -5511,6 +5523,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
        API-value learning, through the Response the shipped fetch component actually hands back. */
     int fetch_await = (strstr(js, "\"/api/user\"") && strstr(js, "us-west-2"));
+    /* THE SECOND REACTION OF `.then(r => r.json()).then(…)` — and the row is the PAIR, because either half
+       alone is a term that cannot localise. `chain1` alone says the reply was delivered and the first handler
+       ran; `chain2` is the only thing that says json()'s own promise ever SETTLED, and its absence beside a
+       present `chain1` is the exact signature of §27.5.1.3 CreateResolvingFunctions ( toResolve ) step 2.i
+       having taken its true arm over an unknown: the promise is adopted into a `then` this engine answers with
+       another unknown, so it settles neither way, no flow is blocked, nothing parks, and the run reports that
+       it completed. Measured on the built artifact through the production ABI: `arrayBuffer()` — whose value
+       is a container the reply's provenance is not wrapped around — settles and emits, while `json()` and
+       `text()` on the identical bytes emit nothing at all.
+       ASKED THROUGH THE PARAM READER AND NOT AN `strstr`, for the reason those helpers were written: both tags
+       are values of ONE param of ONE endpoint, and an unscoped match would find `chain2-us-west-2` in any
+       other statement that happens to carry the region. */
+    int then_chain = (param_value_has(js, "/api/chain", "at", "chain1") &&
+                      param_value_has(js, "/api/chain", "at", "chain2-us-west-2"));
     /* §6.4 clone(): the copy read the body, the ORIGINAL still read it afterwards, and cloning a read body
        threw where the page put its catch. A caching layer's first move is `res.clone()`, so without it the
        reply — and every endpoint behind it — was lost at that line. */
@@ -6427,6 +6453,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE },
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
+        { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE },

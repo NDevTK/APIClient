@@ -1,4 +1,5 @@
-/* READING A BYTE SEQUENCE AS A PROMISE — Fetch §5.2's body readers and File API §3.3's Blob readers.
+/* READING A BYTE SEQUENCE AS A PROMISE — Fetch §5.3 "Body mixin"'s body readers and File API §3.3 "Methods
+ * and Parameters"'s Blob readers.
  *
  * WHY IT IS NOT IN body.c, WHERE IT WAS WRITTEN. `blob.text()`, `blob.arrayBuffer()` and `blob.bytes()` are the
  * same three algorithms as `response.text()`, `response.arrayBuffer()` and `response.bytes()` — File API defines
@@ -12,12 +13,22 @@
  * an interface's own `take` and its own reader table, so neither is a condition this file tests.
  *
  * THE BYTES ARE ALREADY HERE, so the promise is settled before the page ever sees it — but SETTLING it is not a
- * C-private act. 27.5.1.3 step 2.f reads `Get(resolution, "then")` off the value, which for `json()`'s result is
- * an ordinary object whose prototype the page owns: `Object.prototype.then = { get(){…} }` makes that read the
- * page's code, and prototype pollution is a gadget class this engine exists to run rather than assume away.
- * Performed with a JS_Call from C it would run in an activation with no flow base, so a loop in that getter
- * would drive to completion. The resolving function is a CALL REQUEST instead, and the read happens on the tramp
- * where it can suspend and fork. */
+ * C-private act. 27.5.1.3 CreateResolvingFunctions ( toResolve ) step 2.f reads `Get(resolution, "then")` off
+ * the value, and the record `json()` parsed is an ordinary object whose prototype the page owns:
+ * `Object.prototype.then = { get(){…} }` makes that read the page's code, and prototype pollution is a gadget
+ * class this engine exists to run rather than assume away. Performed with a JS_Call from C it would run in an
+ * activation with no flow base, so a loop in that getter would drive to completion. The resolving function is a
+ * CALL REQUEST instead, and the read happens on the tramp where it can suspend and fork.
+ *
+ * AND THE VALUE THIS READER HANDS THE SETTLE IS NOT THAT RECORD — byte_reader_content wraps it in the solver's
+ * unknown, which is a callable exotic whose [[Get]] answers every name before the prototype chain is walked at
+ * all. The sentence above was therefore true of the value this file computes and FALSE of the value it hands
+ * over, and the gap between the two is where every awaited reply was lost: step 2.f answered a callable
+ * unknown, step 2.i took its true arm, and the promise was adopted into a `then` that settles nothing. That is
+ * repaired where the read is performed rather than here — quickjs.c's resolving-function machine asks the
+ * question of the value the run OBSERVED — so this paragraph is once again a true statement about a read that
+ * really does reach the page's prototype. It is spelled out because the two changes were each correct and
+ * their SEAM was not, which is not visible from either side alone. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -54,22 +65,22 @@ static const ByteReaderIface *iface_of(JSValueConst v)
     return NULL;
 }
 
-/* WHERE THIS MACHINE RESTS. §5.2's "consume body" is seven steps, and its sixth delegates to "fully read a
-   body", whose steps 4 and 5 are the two CALLS a stream-backed body takes before there are any bytes —
-   acquiring a reader and issuing the first read. Both are precisely why this is a machine: it can park on
+/* WHERE THIS MACHINE RESTS. §5.3 "Body mixin"'s "consume body" is seven steps, and its sixth delegates to
+   "fully read a body", whose steps 4 and 5 are the two CALLS a stream-backed body takes before there are any
+   bytes — acquiring a reader and issuing the first read. Both are precisely why this is a machine: it can park on
    them. The LOOP after them is not here, which is why readable_stream_drain owns it.
    A BODY THAT IS ALREADY BYTES skips both and goes straight from step 5 to the settle. */
 #define BYTE_READER_STAGES(X) \
     X(BR_TAKE, \
-      "Fetch §5.2 consume body steps 1-5 (the unusable refusal, the promise, and — for a null or " \
+      "Fetch §5.3 Body mixin's consume body steps 1-5 (the unusable refusal, the promise, and — for a null " \
       "already-read body — convertBytesToJSValue over the bytes)") \
     X(BR_ACQUIRE, \
-      "Fetch §5.2 consume body step 6 → fully read a body step 4 (get a reader for body's stream)") \
+      "Fetch §5.3 Body mixin's consume body step 6 → fully read a body step 4 (get a reader for the stream)") \
     X(BR_FIRST_READ, \
-      "Fetch §5.2 consume body step 6 → fully read a body step 5 (read all bytes from the reader)") \
+      "Fetch §5.3 Body mixin's consume body step 6 → fully read a body step 5 (read all bytes from the reader)") \
     X(BR_SETTLE, \
-      "Fetch §5.2 consume body steps 3-4 (resolve promise with the converted value, or reject it with the " \
-      "error) — 27.5.1.3 step 2.f's `then` read is the page's")
+      "Fetch §5.3 Body mixin's consume body steps 3-4 (resolve promise with the converted value, or reject " \
+      "error) — 27.5.1.3 step 2.f's `then` read reaches the page's own prototype chain")
 enum { BYTE_READER_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_byte_reader_steps[] = { BYTE_READER_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -184,7 +195,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     }
 
     DCHECK(s->hdr.stage == BR_SETTLE,
-           "the byte-read machine was re-entered at a stage §5.2 does not have");
+           "the byte-read machine was re-entered at a stage §5.3 Body mixin does not have");
     r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), s->func, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
                       cb_result, &settled, out_cb, out_argc);
     if (r > 0) return r;          /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
@@ -200,7 +211,8 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
    a ninth reader is one F(8) here, and forgetting to raise the ceiling stops the build rather than leaving a
    NULL row for a driver to be handed — which is the failure js_step_defs_check_table caught in the engine's own
    table on the day it was written. */
-#define BYTE_READER_ALGORITHM "Fetch §5.2 consume body (also File API §3.3's Blob readers)"
+#define BYTE_READER_ALGORITHM "Fetch §5.3 Body mixin's consume body (also File API §3.3 Methods and " \
+                              "Parameters)"
 #define BYTE_READER_ROWS(F) F(0) F(1) F(2) F(3) F(4) F(5) F(6) F(7)
 #define BYTE_READER_ROW(i) \
     { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, (i), .visit = js_byte_reader_visit, \
@@ -320,8 +332,9 @@ static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue va
 
 JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    /* Fetch §5.2 / File API §3.3.3: "run consume body with this and UTF-8 decode" — ENCODING §6's UTF-8 decode,
-       which is a named algorithm and not a synonym for whatever the host's string constructor does. This read
+    /* Fetch §5.3 "Body mixin" / File API §3.3 "Methods and Parameters": "run consume body with this and
+       UTF-8 decode" — ENCODING §6's UTF-8 decode, which is a named algorithm and not a synonym for
+       whatever the host's string constructor does. This read
        `JS_NewStringLen`, and quickjs's decoder is not that algorithm in either direction: cutils.h converts an
        encoding error to U+FFFD "and uses a single byte" (Encoding consumes the whole maximal subpart) and it
        "accepts UTF-8 encoded surrogates as JavaScript allows them in strings" (Encoding answers U+FFFD). It
@@ -341,10 +354,11 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
 
 JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    /* Fetch §5.2's `json()` is "run consume body with this and parse JSON from bytes", and Infra's parse JSON
-       FROM BYTES is TWO steps: "let string be the result of running UTF-8 decode on bytes", then parse JSON
-       from string. Handing the bytes straight to the parser ran quickjs's lenient decoder instead, so a body
-       whose bytes are not well-formed UTF-8 parsed as something Encoding's decoder would have replaced.
+    /* Fetch §5.3 "Body mixin"'s `json()` is "run consume body with this and parse JSON from bytes", and
+       Infra's parse JSON FROM BYTES is TWO steps: "let string be the result of running UTF-8 decode on
+       bytes", then parse JSON from string. Handing the bytes straight to the parser ran quickjs's lenient
+       decoder instead, so a body whose bytes are not well-formed UTF-8 parsed as something Encoding's
+       decoder would have replaced.
        The REAL parser runs on the decoded string, so a malformed body rejects with the SyntaxError the page
        would actually catch rather than a placeholder this engine invented. */
     char *text;
@@ -356,7 +370,7 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
     out = JS_ParseJSON(ctx, text, n, "<body>");
     free(text);
     /* THE PARSE ARM ONLY. A body that is not a JSON text left a SyntaxError standing and `out` is the
-       exception, which byte_reader_content hands straight back so §5.2 rejects with the throw the page
+       exception, which byte_reader_content hands straight back so §5.3 rejects with the throw the page
        catches — a record this reader never built has no provenance to carry. */
     return byte_reader_content(ctx, recv, out);
 }
