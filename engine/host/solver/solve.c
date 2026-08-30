@@ -1886,7 +1886,7 @@ static void emit_delivery(JsonBuf *b, const char *root, const char *delivers) {
            "these bytes to the victim' and 'this session cannot say' — which the report renders identically");
     enc = concolic_source_encodes(root);
 
-    if (enc) { json_buf_puts(b, ",\"sourceEncodes\":"); json_buf_str(b, enc); }
+    if (enc) { json_buf_raw(b, ","); json_buf_key(b, "sourceEncodes"); json_buf_str(b, enc); }
     /* IMMEDIATELY AFTER THE DECLARATION IT IS A SUBSET OF, because the pair is one statement and a reader has
        to be able to hold the two against each other. */
     if (delivers) {
@@ -1894,13 +1894,13 @@ static void emit_delivery(JsonBuf *b, const char *root, const char *delivers) {
                "a measured delivery set is being emitted for a source that declares no percent-encode set — "
                "the measured set is the subset of the DECLARED one a run saw arrive, so a measurement with no "
                "declaration behind it is a subset of nothing");
-        json_buf_puts(b, ",\"sourceDelivers\":"); json_buf_str(b, delivers);
+        json_buf_raw(b, ","); json_buf_key(b, "sourceDelivers"); json_buf_str(b, delivers);
     }
     if (concolic_source_delivery(root, &kind, &prefix) && kind) {
-        json_buf_puts(b, ",\"delivery\":"); json_buf_str(b, kind);
+        json_buf_raw(b, ","); json_buf_key(b, "delivery"); json_buf_str(b, kind);
         if (prefix) {
             char p[2] = { prefix, 0 };
-            json_buf_puts(b, ",\"deliveryPrefix\":"); json_buf_str(b, p);
+            json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
         }
     }
 }
@@ -1918,19 +1918,19 @@ static void emit_delivery(JsonBuf *b, const char *root, const char *delivers) {
 char *solve_json_array(JSContext *ctx) {
     JsonBuf b = { 0 };
     int n = 0;
-    json_buf_puts(&b, "[");
+    json_buf_raw(&b, "[");
     for (int i = 0; i < g_sinks_n; i++) {
         const SinkClass *sc = sink_class(g_sinks[i].cls);
         const PolicyContainer *pc = document_policy(ctx);
 
-        if (n++) json_buf_puts(&b, ",");
-        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, sc->name);
-        json_buf_puts(&b, ",\"source\":"); json_buf_str(&b, g_sinks[i].source);
-        json_buf_puts(&b, ",\"poc\":"); json_buf_str(&b, g_sinks[i].poc);
+        if (n++) json_buf_raw(&b, ",");
+        json_buf_raw(&b, "{"); json_buf_key(&b, "sink"); json_buf_str(&b, sc->name);
+        json_buf_raw(&b, ","); json_buf_key(&b, "source"); json_buf_str(&b, g_sinks[i].source);
+        json_buf_raw(&b, ","); json_buf_key(&b, "poc"); json_buf_str(&b, g_sinks[i].poc);
         /* §S(d): EVERY PoC CARRIES ITS REPRODUCTION ENVELOPE. What makes it RUN is the first thing a reader
            needs and the last thing this record carried — the vector was decided one line below, for the CSP
            question, and thrown away. It comes off the sink's own fire oracle (see the table). */
-        json_buf_puts(&b, ",\"firesOn\":"); json_buf_str(&b, sc->fires_on);
+        json_buf_raw(&b, ","); json_buf_key(&b, "firesOn"); json_buf_str(&b, sc->fires_on);
         /* §S: A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT. The PoC has to run under the page's
            ACTUAL policy, and an inline `onerror` is dead under `script-src 'self'`. Reporting a bare XSS there
            is a false positive a reader cannot tell from a real one; reporting nothing would hide a sink that IS
@@ -1948,7 +1948,7 @@ char *solve_json_array(JSContext *ctx) {
                                                      poc ? strlen(poc) : 0);
 
             if (!allowed) {
-                json_buf_puts(&b, ",\"cspBlocks\":");
+                json_buf_raw(&b, ","); json_buf_key(&b, "cspBlocks");
                 json_buf_str(&b, policy_container_csp(pc));
             }
         }
@@ -1958,7 +1958,7 @@ char *solve_json_array(JSContext *ctx) {
            along and nothing asked it. The emitted value is the SINK GROUP the CSP names, because that is what
            the directive is written in terms of and what a reader has to add a policy for. */
         if (sc->tt >= 0 && trusted_types_required(ctx, (TrustedTypeKind)sc->tt)) {
-            json_buf_puts(&b, ",\"trustedTypes\":");
+            json_buf_raw(&b, ","); json_buf_key(&b, "trustedTypes");
             json_buf_str(&b, "script");
         }
         /* THE DELIVERY — including whether this is §S(b)'s TWO-STAGE plant-then-load PoC. There is deliberately
@@ -1984,33 +1984,34 @@ char *solve_json_array(JSContext *ctx) {
                   "solve: a fire-verified @S finding is being emitted with no search behind it — record_sink "
                   "asserts the twin at the moment the PoC is stored, so an absent one here means the pending "
                   "list was rewritten under a finding and the report is about to state a cost it cannot read");
-            json_buf_puts(&b, ",\"searched\":");
-            snprintf(t, sizeof t, "%d", tw->tried); json_buf_puts(&b, t);
+            json_buf_raw(&b, ","); json_buf_key(&b, "searched");
+            snprintf(t, sizeof t, "%d", tw->tried); json_buf_raw(&b, t);
             /* AND THE MEASURED CONSTRAINT THE PoC WAS BUILT UNDER, from the same search. On a FIRED entry it
                is what says which bytes the exploit is allowed to contain, so a reader reproducing it by hand
                knows which of them the browser would have eaten — a fact the payload alone does not carry. */
             emit_delivery(&b, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv));
         }
-        json_buf_puts(&b, "}");
+        json_buf_raw(&b, "}");
     }
     for (int i = 0; i < g_pending_n; i++) {
         char t[32];
         if (solved(g_pending[i].sink, g_pending[i].src)) continue;
-        if (n++) json_buf_puts(&b, ",");
-        json_buf_puts(&b, "{\"sink\":"); json_buf_str(&b, sink_name(g_pending[i].sink));
-        json_buf_puts(&b, ",\"source\":"); json_buf_str(&b, g_pending[i].src);
-        json_buf_puts(&b, ",\"search\":\"parked\",\"tried\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].tried); json_buf_puts(&b, t);
+        if (n++) json_buf_raw(&b, ",");
+        json_buf_raw(&b, "{"); json_buf_key(&b, "sink"); json_buf_str(&b, sink_name(g_pending[i].sink));
+        json_buf_raw(&b, ","); json_buf_key(&b, "source"); json_buf_str(&b, g_pending[i].src);
+        json_buf_raw(&b, ","); json_buf_key(&b, "search"); json_buf_str(&b, "parked");
+        json_buf_raw(&b, ","); json_buf_key(&b, "tried");
+        snprintf(t, sizeof t, "%d", g_pending[i].tried); json_buf_raw(&b, t);
         /* …AND HOW MANY OF THOSE RUNS GOT HERE, which is the half `tried` cannot state (see the field). The
            two together are the only thing that tells a document nobody has explored far enough apart from a
            breakout that arrived and did not work — `reached:0` is the first, anything else is the second. */
-        json_buf_puts(&b, ",\"reached\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].reached); json_buf_puts(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "reached");
+        snprintf(t, sizeof t, "%d", g_pending[i].reached); json_buf_raw(&b, t);
         /* …AND HOW MANY TURNS THE SCHEDULER HAS GIVEN IT, which is what makes `reached:0` readable: with
            `turns:0` this search's candidates have never once held the thread, and with `turns:N` they have run
            and have not got as far as the sink. One is a WFQ question and the other is a distance question. */
-        json_buf_puts(&b, ",\"turns\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_puts(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "turns");
+        snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_raw(&b, t);
         /* …AND THE TWO MIDDLE RUNGS, WHICH IS WHAT SPLITS `reached:0` AND `reached:N` INTO THE FOUR STATES THEY
            REALLY ARE. `survived`/`survivedOf` is the FURTHEST any candidate of this search has got its own
            bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:0` is a
@@ -2024,12 +2025,12 @@ char *solve_json_array(JSContext *ctx) {
            candidate has been seen at any sink; nothing has got out of its context). `survivedOf:0` beside
            `survived:0` is the same statement said once — no observation has been recorded — and not a length
            this file failed to write. */
-        json_buf_puts(&b, ",\"survived\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].surv_run); json_buf_puts(&b, t);
-        json_buf_puts(&b, ",\"survivedOf\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].surv_len); json_buf_puts(&b, t);
-        json_buf_puts(&b, ",\"escaped\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].escaped); json_buf_puts(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "survived");
+        snprintf(t, sizeof t, "%d", g_pending[i].surv_run); json_buf_raw(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "survivedOf");
+        snprintf(t, sizeof t, "%d", g_pending[i].surv_len); json_buf_raw(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "escaped");
+        snprintf(t, sizeof t, "%d", g_pending[i].escaped); json_buf_raw(&b, t);
         /* AND WHAT WAS ACTUALLY TRIED, which three counts cannot say. `tried` is how many runs, `reached` how
            many arrived and `turns` how many turns the scheduler gave them — all quantities, and the state this
            search is most often in wants a STRING: a breakout that ARRIVED and did not fire is a question about
@@ -2054,8 +2055,8 @@ char *solve_json_array(JSContext *ctx) {
            fields already use: that class's sink evaluates its own argument, so there is no queue to count and
            a `0` there would read as "nothing executable" when it means "nothing to queue". */
         if (sink_class(g_pending[i].sink)->queues_fire) {
-            json_buf_puts(&b, ",\"fires\":");
-            snprintf(t, sizeof t, "%d", g_pending[i].fires); json_buf_puts(&b, t);
+            json_buf_raw(&b, ","); json_buf_key(&b, "fires");
+            snprintf(t, sizeof t, "%d", g_pending[i].fires); json_buf_raw(&b, t);
         }
         /* WHETHER THE CONTEXT PROBE EVER GOT THERE — the producer fact that splits `probes == payloads` into
            the two opposite things it has been saying at once, and the last of `reached:0`'s readings with no
@@ -2077,8 +2078,8 @@ char *solve_json_array(JSContext *ctx) {
            states its vectors at detection and runs no context probe at all, so a `0` there would read as "the
            probe never arrived" about a search that has none. Same shape and same reason as `fires`. */
         if (sink_class(g_pending[i].sink)->derive != SINK_DERIVE_NONE) {
-            json_buf_puts(&b, ",\"witnessed\":");
-            snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_puts(&b, t);
+            json_buf_raw(&b, ","); json_buf_key(&b, "witnessed");
+            snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_raw(&b, t);
         }
         /* HOW MANY OF `payloads`' LEADING ENTRIES ARE PROBES — the producer fact that splits `reached:0` one
            more time, and the one state of this search the report could not say at all. `npl > nprobe` is
@@ -2096,14 +2097,14 @@ char *solve_json_array(JSContext *ctx) {
            EMITTED UNCONDITIONALLY, because 0 is a real value it must be able to say: a single-context class
            states its written-down vectors at detection and has no probe at all, so `probes:0` beside a
            non-empty list is the positive statement that every entry is an attack. */
-        json_buf_puts(&b, ",\"probes\":");
-        snprintf(t, sizeof t, "%d", g_pending[i].nprobe); json_buf_puts(&b, t);
-        json_buf_puts(&b, ",\"payloads\":[");
+        json_buf_raw(&b, ","); json_buf_key(&b, "probes");
+        snprintf(t, sizeof t, "%d", g_pending[i].nprobe); json_buf_raw(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "payloads"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
-            if (c) json_buf_puts(&b, ",");
+            if (c) json_buf_raw(&b, ",");
             json_buf_str(&b, g_pending[i].pl[c]);
         }
-        json_buf_puts(&b, "]");
+        json_buf_raw(&b, "]");
         /* …AND HOW FAR EACH OF THOSE PAYLOADS GOT, one entry per `payloads` entry and in the same order, so a
            reader lines the two up by index rather than by guessing. It is the column `survived` cannot have:
            the ratchet saturates the moment ANY candidate lands intact, so `survived:16 survivedOf:16` beside
@@ -2112,12 +2113,12 @@ char *solve_json_array(JSContext *ctx) {
            `[14,0]` says the inert probe's bytes reached a sink and the breakout built from them never did;
            `[14,9]` says the breakout travelled too and something after arrival is the problem. Those take
            opposite work and `survived` alone reports them identically. */
-        json_buf_puts(&b, ",\"survivedBy\":[");
+        json_buf_raw(&b, ","); json_buf_key(&b, "survivedBy"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
-            if (c) json_buf_puts(&b, ",");
-            snprintf(t, sizeof t, "%d", g_pending[i].surv_pl[c]); json_buf_puts(&b, t);
+            if (c) json_buf_raw(&b, ",");
+            snprintf(t, sizeof t, "%d", g_pending[i].surv_pl[c]); json_buf_raw(&b, t);
         }
-        json_buf_puts(&b, "]");
+        json_buf_raw(&b, "]");
         /* …AND WHICH OF THEM THE SEARCH'S OWN MEASUREMENT HAS SINCE WITHDRAWN, one entry per `payloads` entry
            and in the same order as the two lists above it.
            IT EXISTS BECAUSE THE WITHDRAWAL WOULD OTHERWISE BE A SILENT DROP, and a silent drop on this record
@@ -2137,13 +2138,13 @@ char *solve_json_array(JSContext *ctx) {
            reading a withdrawal off the payload's SHAPE would be a view restating a producer fact it cannot
            check. A `1` is a positive statement about the SOURCE's transform; `0` is a positive statement that
            this spelling is still on the table. */
-        json_buf_puts(&b, ",\"withdrawn\":[");
+        json_buf_raw(&b, ","); json_buf_key(&b, "withdrawn"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
-            if (c) json_buf_puts(&b, ",");
-            json_buf_puts(&b, (c >= g_pending[i].nprobe &&
+            if (c) json_buf_raw(&b, ",");
+            json_buf_raw(&b, (c >= g_pending[i].nprobe &&
                                !solve_delivered_ok(&g_pending[i].deliv, g_pending[i].pl[c])) ? "1" : "0");
         }
-        json_buf_puts(&b, "]");
+        json_buf_raw(&b, "]");
         /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
            vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
            about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a
@@ -2152,9 +2153,9 @@ char *solve_json_array(JSContext *ctx) {
             char dv[64];
             emit_delivery(&b, g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv));
         }
-        json_buf_puts(&b, "}");
+        json_buf_raw(&b, "}");
     }
-    json_buf_puts(&b, "]");
+    json_buf_raw(&b, "]");
     return json_buf_take(&b);
 }
 

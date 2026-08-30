@@ -1608,36 +1608,36 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     uint32_t n = hl_len(ctx, d->author_headers), i;
     const char *m = JS_ToCString(ctx, d->method), *u = JS_ToCString(ctx, d->url);
 
-    json_buf_puts(&b, "xhr.send\t{\"method\":");
+    json_buf_raw(&b, "xhr.send\t{"); json_buf_key(&b, "method");
     json_buf_str(&b, m ? m : "GET");
-    json_buf_puts(&b, ",\"url\":");
+    json_buf_raw(&b, ","); json_buf_key(&b, "url");
     json_buf_str(&b, u ? u : "");
-    json_buf_puts(&b, ",\"credentials\":");
+    json_buf_raw(&b, ","); json_buf_key(&b, "credentials");
     json_buf_str(&b, d->cross_origin_credentials ? "include" : "same-origin");
-    json_buf_puts(&b, ",\"headers\":[");
+    json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
         JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
         const char *nm = JS_ToCString(ctx, nv), *val = JS_ToCString(ctx, vv);
-        if (i) json_buf_puts(&b, ",");
-        json_buf_puts(&b, "[");
+        if (i) json_buf_raw(&b, ",");
+        json_buf_raw(&b, "[");
         json_buf_str(&b, nm ? nm : "");
-        json_buf_puts(&b, ",");
+        json_buf_raw(&b, ",");
         json_buf_str(&b, val ? val : "");
-        json_buf_puts(&b, "]");
+        json_buf_raw(&b, "]");
         if (nm) JS_FreeCString(ctx, nm);
         if (val) JS_FreeCString(ctx, val);
         JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
     }
-    json_buf_puts(&b, "],\"body\":");
+    json_buf_raw(&b, "],"); json_buf_key(&b, "body");
     if (JS_IsNull(d->request_body)) {
-        json_buf_puts(&b, "null");
+        json_buf_raw(&b, "null");
     } else {
         const char *body = JS_ToCString(ctx, d->request_body);
         json_buf_str(&b, body ? body : "");
         if (body) JS_FreeCString(ctx, body);
     }
-    json_buf_puts(&b, "}");
+    json_buf_raw(&b, "}");
     if (m) JS_FreeCString(ctx, m);
     if (u) JS_FreeCString(ctx, u);
     return json_buf_take(&b);

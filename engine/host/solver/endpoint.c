@@ -321,7 +321,7 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
         for (i = 0; i < an; i++) if (seg[i] != '{' && seg[i] != '}') name[nlen++] = seg[i];
         name[nlen] = 0;
         if (!strchr(seg, '{') || !nlen) {
-            json_buf_puts(&p, seg);   /* a literal segment, or a `{}` this surface cannot name */
+            json_buf_raw(&p, seg);   /* a literal segment, or a `{}` this surface cannot name */
         } else {
             /* THE GRAMMAR THE CONSUMER SUBSTITUTES BY, ASSERTED AT THE MINT. Both bytes are stripped above and
                a segment cannot hold a `/`, so this holds by construction — which is exactly why it is worth
@@ -330,7 +330,7 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
                    "a path param's NAME still holds a brace or a slash — the popup substitutes a hole by "
                    "matching /\\{([^}/]+)\\}/ against this path, so a name outside that grammar names a hole "
                    "no substitution can find");
-            json_buf_puts(&p, "{"); json_buf_puts(&p, name); json_buf_puts(&p, "}");
+            json_buf_raw(&p, "{"); json_buf_raw(&p, name); json_buf_raw(&p, "}");
             /* THE NAME *IS* THE HOLE KEY on this path — both are the segment with every brace stripped, which
                is concolic_hole_key's own rule, so a path param looks its domain up by the same string the
                popup substitutes it by. The VALUE here is the concrete example aligned out of the URL and
@@ -339,7 +339,7 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
         }
         free(seg); free(name);
         if (!ae) break;
-        json_buf_puts(&p, "/");
+        json_buf_raw(&p, "/");
         a = ae + 1;
         if (aligned) b = be + 1;
     }
@@ -642,7 +642,7 @@ void endpoint_mark_asset(const char *method, const char *url) {
 char *endpoint_json_array(void) {
     JsonBuf b = { 0 };
     int wrote_one = 0;
-    json_buf_puts(&b, "[");
+    json_buf_raw(&b, "[");
     for (int i = 0; i < g_eps_n; i++) {
         Endpoint *e = &g_eps[i];
         /* A RESOURCE THAT TURNED OUT TO BE A STATIC ASSET IS NOT AN ENDPOINT — §Attacker sources says so in
@@ -651,22 +651,22 @@ char *endpoint_json_array(void) {
            index-keyed comma emits a leading one the moment record 0 is the skipped kind, and that is invalid
            JSON on a document whose whole delivery is one parse. */
         if (e->is_asset) continue;
-        if (wrote_one) json_buf_puts(&b, ",");
+        if (wrote_one) json_buf_raw(&b, ",");
         wrote_one = 1;
-        json_buf_puts(&b, "{\"method\":"); json_buf_str(&b, e->method);
-        json_buf_puts(&b, ",\"url\":"); json_buf_str(&b, e->path);
-        json_buf_puts(&b, ",\"params\":[");
+        json_buf_raw(&b, "{"); json_buf_key(&b, "method"); json_buf_str(&b, e->method);
+        json_buf_raw(&b, ","); json_buf_key(&b, "url"); json_buf_str(&b, e->path);
+        json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
-            if (j) json_buf_puts(&b, ",");
-            json_buf_puts(&b, "{\"name\":"); json_buf_str(&b, e->params[j].name);
+            if (j) json_buf_raw(&b, ",");
+            json_buf_raw(&b, "{"); json_buf_key(&b, "name"); json_buf_str(&b, e->params[j].name);
             DCHECK(e->params[j].loc == EP_QUERY || e->params[j].loc == EP_PATH || e->params[j].loc == EP_BODY,
                    "an endpoint param carries a location this surface has no name for — the enum and its "
                    "name table are read together at exactly this line, so one grown without the other is "
                    "caught here rather than emitted as a field the consumer cannot classify");
-            json_buf_puts(&b, ",\"location\":"); json_buf_str(&b, ep_loc_name[e->params[j].loc]);
-            json_buf_puts(&b, ",\"validValues\":[");
-            for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_puts(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }
-            json_buf_puts(&b, "]");
+            json_buf_raw(&b, ","); json_buf_key(&b, "location"); json_buf_str(&b, ep_loc_name[e->params[j].loc]);
+            json_buf_raw(&b, ","); json_buf_key(&b, "validValues"); json_buf_raw(&b, "[");
+            for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_raw(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }
+            json_buf_raw(&b, "]");
             /* THE DOMAIN, AND ONLY WHERE ONE WAS OBSERVED. An empty array would be a third state beside "the
                field is absent" and "the field lists tokens", and a consumer cannot tell an empty constraint
                from an unconstrained param — so the ABSENCE is the statement: no equality gate over this hole
@@ -674,9 +674,9 @@ char *endpoint_json_array(void) {
                field exists for: without it a param proved to be neither "admin" nor "prod" rendered with the
                same bytes as one nothing had ever tested, and that silence reads as "anything goes". */
             if (e->params[j].nexcl) {
-                json_buf_puts(&b, ",\"excludes\":[");
-                for (int k = 0; k < e->params[j].nexcl; k++) { if (k) json_buf_puts(&b, ","); json_buf_str(&b, e->params[j].excl[k]); }
-                json_buf_puts(&b, "]");
+                json_buf_raw(&b, ","); json_buf_key(&b, "excludes"); json_buf_raw(&b, "[");
+                for (int k = 0; k < e->params[j].nexcl; k++) { if (k) json_buf_raw(&b, ","); json_buf_str(&b, e->params[j].excl[k]); }
+                json_buf_raw(&b, "]");
             }
             /* …AND THE INTERVAL, IN THE STANDARD'S OWN VOCABULARY FOR IT, and only where a bound survived every
                observed path. JSON Schema Validation 2020-12 §6.2 Validation Keywords for Numeric Instances
@@ -694,38 +694,43 @@ char *endpoint_json_array(void) {
                interval — `validValues` is still only what the code COMPUTED. */
             if (e->params[j].bnd.has_lo || e->params[j].bnd.has_hi) {
                 int wrote = 0;
-                json_buf_puts(&b, ",\"bounds\":{");
+                json_buf_raw(&b, ","); json_buf_key(&b, "bounds"); json_buf_raw(&b, "{");
                 if (e->params[j].bnd.has_lo) {
-                    json_buf_puts(&b, e->params[j].bnd.lo_incl ? "\"minimum\":" : "\"exclusiveMinimum\":");
-                    json_buf_puts(&b, e->params[j].bnd.lo_txt);
+                    if (e->params[j].bnd.lo_incl) json_buf_key(&b, "minimum"); else json_buf_key(&b, "exclusiveMinimum");
+                    json_buf_raw(&b, e->params[j].bnd.lo_txt);
                     wrote = 1;
                 }
                 if (e->params[j].bnd.has_hi) {
-                    if (wrote) json_buf_puts(&b, ",");
-                    json_buf_puts(&b, e->params[j].bnd.hi_incl ? "\"maximum\":" : "\"exclusiveMaximum\":");
-                    json_buf_puts(&b, e->params[j].bnd.hi_txt);
+                    if (wrote) json_buf_raw(&b, ",");
+                    if (e->params[j].bnd.hi_incl) json_buf_key(&b, "maximum"); else json_buf_key(&b, "exclusiveMaximum");
+                    json_buf_raw(&b, e->params[j].bnd.hi_txt);
                 }
-                json_buf_puts(&b, "}");
+                json_buf_raw(&b, "}");
             }
-            json_buf_puts(&b, "}");
+            json_buf_raw(&b, "}");
         }
-        json_buf_puts(&b, "]");
+        json_buf_raw(&b, "]");
         /* The transport half, and ONLY when there is one — an endpoint with no learned header must not claim an
            empty requirement, which reads as "needs nothing" rather than "nothing was observed". A record keyed
            by header name, which is the shape the popup's Required Headers section already reads. */
         if (e->nh) {
-            json_buf_puts(&b, ",\"headers\":{");
+            json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "{");
             for (int j = 0; j < e->nh; j++) {
-                if (j) json_buf_puts(&b, ",");
+                /* THE ONE COMPUTED KEY IN THIS SEAM, AND IT IS NOT A FIELD NAME. json_buf_key takes a literal
+                   and the compiler enforces it, which is what makes every FIELD name here auditable; this key
+                   is a HEADER NAME, so it is DATA and no producer could ever declare it. Writing it through
+                   the VALUE entry is the distinction: a reader who greps json_buf_key gets the contract, and
+                   a key that is not one is visibly a different construct rather than an exception to a rule. */
+                if (j) json_buf_raw(&b, ",");
                 json_buf_str(&b, e->hdrs[j].name);
-                json_buf_puts(&b, ":");
+                json_buf_raw(&b, ":");
                 json_buf_str(&b, e->hdrs[j].value);
             }
-            json_buf_puts(&b, "}");
+            json_buf_raw(&b, "}");
         }
-        json_buf_puts(&b, "}");
+        json_buf_raw(&b, "}");
     }
-    json_buf_puts(&b, "]");
+    json_buf_raw(&b, "]");
     return json_buf_take(&b);
 }
 

@@ -516,14 +516,27 @@ const SHELL_ECHO = /\becho\s+(?:-[neE]+\s+)*(?:\\?["'])?$/;
 
 /* ---- C side ---------------------------------------------------------------------------------------------- */
 
-/* The emission vocabulary. `printf`/`fprintf`/`js_printf` write the seam directly; `json_buf_puts`/`_str` are
-   how endpoint.c and solve.c build their arrays; `snprintf`/`sprintf` build a buffer whose fate is decided
-   below. Anything else that could carry a JSON key is a refusal, not an assumption. */
-/* `json_buf_str` is NOT here and that is the point: it serializes its argument AS a JSON string, escaping the
-   quotes, so a key can never come out of it — endpoint.c writes `json_buf_puts(&b, "{\"method\":")` for the key
-   and `json_buf_str(&b, e->method)` for the value. Listing it made twenty-nine value expressions into refusals
-   about a field that could not have been there. */
-const C_EMIT = { printf: 0, fprintf: 1, js_printf: 0, json_buf_puts: 1 };
+/* The emission vocabulary. `printf`/`fprintf`/`js_printf` write the seam directly; `snprintf`/`sprintf` build a
+   buffer whose fate is decided below. Anything else that could carry a JSON key is a refusal, not an
+   assumption. */
+/* core/json_buf.h's writer is NOT in this list, and that is the fix rather than an omission. Its entries name
+   their ROLE — `json_buf_key` a field name, `json_buf_raw` structure and formatted values, `json_buf_str` a
+   string value — so which one a call is is a fact about the CALLEE and not about what its argument happens to
+   hold. The key entry is a macro that concatenates its argument with the quotes and the colon, so a non-literal
+   there does not compile; the other two cannot carry a name at all. Read below as its own construct. */
+const C_EMIT = { printf: 0, fprintf: 1, js_printf: 0 };
+/* The key entry's argument is a BARE NAME, not a JSON fragment — `json_buf_key(&b, "url")`. It is read as a
+   declaration of exactly that field, which is the whole return on the split: one argument, one name, nothing to
+   parse out of a string. A non-literal cannot reach here (it is a syntax error), so an argument this cannot
+   resolve is a name hiding behind a MACRO, and that is refused with its place like any other unreadable
+   construct rather than guessed at. */
+const C_KEY = "json_buf_key";
+/* And the other half of the same contract, checked rather than assumed: the raw entry MUST NOT carry a field
+   name. The compiler forbids a computed key; nothing but this forbids a literal one written the old way, and
+   without it the split is a convention that decays the first time somebody writes `json_buf_raw(&b, ",\"x\":")`
+   because it is one call instead of two. */
+const C_RAW = "json_buf_raw";
+const rawKeys = [];   // {file,line,keys,text}
 const C_BUILD = { snprintf: 2, sprintf: 1 };
 const C_MATCH = ["strstr", "strcasestr", "strncmp", "strcmp", "memmem", "strnstr"];
 
@@ -601,13 +614,12 @@ function scanC(file, src) {
   const fault = bracketFault(struct);
   if (fault) { refuse(file, lineOf(src, fault.off), "a C file whose brackets do not balance — every span answer about it would be a guess", fault.why); return; }
   const patterns = matcherOperands(struct, code);
-  /* THE BUFFERS THIS SCAN HAS ALREADY READ. `snprintf(t, sizeof t, ",\"searched\":%d", n)` then
-     `json_buf_puts(&b, t)` is ONE emission written in two statements, and refusing over the second was this
-     file counting its own resolved answer as a hole — the largest single group in the refusal list was a
-     destination whose format had been read three lines above it. A `json_buf_puts` of a plain identifier that
-     is a resolved build destination in this file therefore carries text already accounted for, which is a
-     DECIDED negative on exactly the rule the build side already uses: nothing but the destination's other use
-     in the file tells these apart, and that use is a construct rather than a dataflow. */
+  /* THE BUFFERS THIS SCAN HAS ALREADY READ. `snprintf(line, sizeof line, "{\"n\":%d}", n)` then `printf(line)`
+     is ONE emission written in two statements, and refusing over the second would be this file counting its own
+     resolved answer as a hole. An emission whose format is a plain identifier that is a resolved build
+     destination in this file therefore carries text already accounted for, which is a DECIDED negative on
+     exactly the rule the build side already uses: nothing but the destination's other use in the file tells
+     these apart, and that use is a construct rather than a dataflow. */
   const builtDests = new Set();
   for (const [fn, fmtIdx] of Object.entries(C_BUILD))
     for (const c of callSites(struct, fn)) {
@@ -619,7 +631,7 @@ function scanC(file, src) {
     }
   const site = (off) => ({ file, line: lineOf(src, off) });
 
-  /* ONE C FUNCTION'S EMISSIONS ARE ONE RECORD. endpoint_json_array writes its object one `json_buf_puts` at a
+  /* ONE C FUNCTION'S EMISSIONS ARE ONE RECORD. endpoint_json_array writes its object one `json_buf_key` at a
      time, so the call is not the record and the literal is not the shape — the enclosing body is. Top-level
      brace spans are what a function body is in a masked C file; a file-scope initializer is one too, and an
      initializer that emits JSON keys is a record by any reading, so nothing needs to tell them apart. */
@@ -687,6 +699,44 @@ function scanC(file, src) {
       }
       emit(lit, a[0], true);
     }
+
+  /* THE FIELD-NAME ENTRY. One argument, one name — the macro turns `json_buf_key(&b, "url")` into the quoted
+     key, so there is no fragment to parse and no value it could have been instead. */
+  for (const c of callSites(struct, C_KEY)) {
+    /* THE ENTRY'S OWN DEFINITION IS NOT A USE OF IT. `#define json_buf_key(b, name) …` names its PARAMETER
+       where a call names a field, and reading it as a call made the writer of the rule its own first violation
+       — the scan reporting its own definition as the one place a name was hiding. A macro definition is the
+       text from `#define` to the identifier, which is a construct and not a guess. */
+    if (/^\s*#\s*define\s+$/.test(code.slice(src.lastIndexOf("\n", c.at) + 1, c.at))) continue;
+    if (!c.args || !c.args[1]) { refuse(file, lineOf(src, c.at), `a ${C_KEY}( with no name argument to read`); continue; }
+    const a = c.args[1];
+    const name = cLiteral(code, struct, a[0], a[1]);
+    if (name === null) {
+      /* A non-literal is a SYNTAX ERROR at this entry, so what reaches here is a literal spelled through a
+         macro — readable by a compiler and not by this. Refused with its place, exactly as an unresolvable
+         format is: the point of the entry is that a name is readable off the source, and a name this cannot
+         read is the one remaining hiding place rather than a name to guess at. */
+      refuse(file, lineOf(src, c.at), `a ${C_KEY}( whose name is not a literal in this file — a field name behind a macro`,
+             code.slice(a[0], Math.min(a[1], a[0] + 60)).trim());
+      continue;
+    }
+    rec(fields, name).writes.push(site(a[0]));
+    cEmitted.add(name);
+    shapeOf(bodyOf(a[0])).add(name);
+  }
+
+  /* AND THE HALF THAT KEEPS THE OTHER ONE TRUE. The raw entry writes structure and formatted values; a field
+     name in it is the pre-split spelling coming back, and it is a DEFECT rather than a refusal because it is
+     perfectly readable — this is not a construct the scan cannot decide, it is one the producer must not
+     write. Non-literals are ignored on purpose: raw bytes are the entry's job. */
+  for (const c of callSites(struct, C_RAW)) {
+    if (!c.args || !c.args[1]) continue;
+    const a = c.args[1];
+    const lit = cLiteral(code, struct, a[0], a[1]);
+    if (lit === null) continue;
+    const ks = keysIn(lit);
+    if (ks.length) rawKeys.push({ file, line: lineOf(src, a[0]), keys: ks, text: lit.slice(0, 60) });
+  }
 
   for (const [fn, fmtIdx] of Object.entries(C_BUILD))
     for (const c of callSites(struct, fn)) {
@@ -2691,6 +2741,11 @@ if (wholeDefaulted.length) {
     log(`  ${place(d)}  ${d.left} ${d.op} { ${d.keys.slice(0, 4).join(", ")}${d.keys.length > 4 ? ", …" : ""} }   [${d.shape}]`);
 }
 
+show(`FIELD NAME THROUGH THE RAW ENTRY — ${rawKeys.length} ${C_RAW}( literal(s) carrying a \`"name":\`. ` +
+     `${C_KEY} is the entry that declares a field name and the only one a reader has to look at; a name written ` +
+     `around it is a producer's contract hiding in bytes nothing audits`,
+     rawKeys, (r) => `${place(r)}  ${r.keys.join(" ")}   in \`${r.text}\``);
+
 if (ambiguous.length) {
   log(`── AMBIGUOUS ANCHOR — ${ambiguous.length} receiver(s) reading exactly ONE field of an emitted record beside ` +
       `name(s) no producer writes. Whether the object is that record is not decidable here, so neither is whether ` +
@@ -2785,7 +2840,7 @@ show(`A REPLY FIELD THE BOUNDARY DOES NOT DECLARE — ${replyFieldDefects.length
 {
   const areaOf = new Map(files.map((f) => [relative(ROOT, f.path), f.area]));
   const tally = new Map();
-  const bump = (f, k) => { const a = areaOf.get(f) || "?"; if (!tally.has(a)) tally.set(a, { rnw: 0, wnr: 0, def: 0, amb: 0, dom: 0, off: 0, ref: 0 }); tally.get(a)[k]++; };
+  const bump = (f, k) => { const a = areaOf.get(f) || "?"; if (!tally.has(a)) tally.set(a, { rnw: 0, wnr: 0, def: 0, amb: 0, dom: 0, off: 0, ref: 0, rk: 0 }); tally.get(a)[k]++; };
   for (const d of outsideDomain) bump(d.file, "dom");
   for (const d of unenumerated) bump(d.file, "dom");
   for (const d of undeclaredDomain) bump(d.file, "dom");
@@ -2795,13 +2850,14 @@ show(`A REPLY FIELD THE BOUNDARY DOES NOT DECLARE — ${replyFieldDefects.length
   for (const o of offInterface) bump(o.file, "off");
   for (const a of ambiguous) bump(a.file, "amb");
   for (const r of refusals) bump(r.file, "ref");
+  for (const r of rawKeys) bump(r.file, "rk");
   log("── per area ──");
   const w = Math.max(...[...tally.keys()].map((k) => k.length));
   for (const [a, t] of [...tally].sort((x, y) => (y[1].rnw + y[1].wnr + y[1].def) - (x[1].rnw + x[1].wnr + x[1].def)))
     log(`  ${a.padEnd(w)}  read-no-writer ${String(t.rnw).padStart(4)}   write-no-reader ${String(t.wnr).padStart(4)}` +
         `   defaulted ${String(t.def).padStart(4)}   domain ${String(t.dom).padStart(3)}` +
         `   off-iface ${String(t.off).padStart(3)}   ambiguous ${String(t.amb).padStart(3)}` +
-        `   refused ${String(t.ref).padStart(4)}`);
+        `   refused ${String(t.ref).padStart(4)}   raw-key ${String(t.rk).padStart(3)}`);
 }
 
 const rByReason = new Map();
@@ -2846,6 +2902,7 @@ const cats = [
   ["mojo reply fields a CALLER reads that the boundary does not declare", replyFieldDefects.length],
   ["reads OFF the interface a platform receiver's own declaration names, that nothing else writes either",
    offInterface.length],
+  [`field names emitted through ${C_RAW} — ${C_KEY} is the only entry that may declare one`, rawKeys.length],
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
 ].filter(([, n]) => n);

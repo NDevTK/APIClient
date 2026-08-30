@@ -156,18 +156,23 @@ static void console_printer(JSContext *ctx, const char *level, JSValueConst list
     char *line;
 
     CHECK(JS_GetLength(ctx, list, &n) == 0, "console: the printer was handed something with no length");
-    json_buf_puts(&b, "@LOG {\"level\":");
+    json_buf_raw(&b, "@LOG {"); json_buf_key(&b, "level");
     json_buf_str(&b, level);
-    snprintf(depth, sizeof depth, ",\"group\":%d,\"args\":[", console_group_depth(ctx));
-    json_buf_puts(&b, depth);
+    /* The DEPTH is formatted; the two names around it are not. A `snprintf` that carries a field name inside its
+       format is the same hiding place json_buf_key exists to close — the name is still a literal, but it is one
+       nobody looking at the emitter's vocabulary would think to read. */
+    json_buf_raw(&b, ","); json_buf_key(&b, "group");
+    snprintf(depth, sizeof depth, "%d", console_group_depth(ctx));
+    json_buf_raw(&b, depth);
+    json_buf_raw(&b, ","); json_buf_key(&b, "args"); json_buf_raw(&b, "[");
     for (i = 0; i < n; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, list, (uint32_t)i);
 
-        if (i) json_buf_puts(&b, ",");
+        if (i) json_buf_raw(&b, ",");
         console_render(ctx, &b, e);
         JS_FreeValue(ctx, e);
     }
-    json_buf_puts(&b, "]}\n");
+    json_buf_raw(&b, "]}\n");
     line = json_buf_take(&b);
     CHECK(line != NULL, "console: the printer's line could not be allocated");
     fputs(line, stderr);
@@ -232,7 +237,7 @@ static JSValue console_substitute(JSContext *ctx, const char *bytes, size_t len,
            "and %d/%i/%f are %parseInt%/%parseFloat% calls, so there is no third shape it can have");
     ins = JS_ToCStringLen(ctx, &ins_len, converted);
     CHECK(ins != NULL, "console: §2.2's converted value could not be rendered");
-    /* json_buf is a byte buffer; json_buf_puts appends NUL-terminated runs, and neither half here can contain a
+    /* json_buf is a byte buffer; json_buf_raw appends NUL-terminated runs, and neither half here can contain a
        NUL — a JS string's UTF-8 encodes U+0000 as 0xC0 0x80 in quickjs's CESU-style output, so the two halves
        are C strings. The prefix is written by length instead, because it is a SLICE of one. */
     {
@@ -241,11 +246,11 @@ static JSValue console_substitute(JSContext *ctx, const char *bytes, size_t len,
         CHECK(pre != NULL, "console: §2.2's prefix could not be allocated");
         memcpy(pre, bytes, (size_t)at);
         pre[at] = 0;
-        json_buf_puts(&b, pre);
+        json_buf_raw(&b, pre);
         js_free(ctx, pre);
     }
-    json_buf_puts(&b, ins);
-    json_buf_puts(&b, bytes + at + 2);   /* everything after the two bytes of the specifier */
+    json_buf_raw(&b, ins);
+    json_buf_raw(&b, bytes + at + 2);   /* everything after the two bytes of the specifier */
     JS_FreeCString(ctx, ins);
     whole = json_buf_take(&b);
     CHECK(whole != NULL, "console: §2.2's substituted target could not be allocated");
@@ -445,8 +450,8 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
 
                 CHECK(lab != NULL, "console: §1.2.1's label could not be read");
                 snprintf(tail, sizeof tail, ": %d", (int)next);
-                json_buf_puts(&b, lab);
-                json_buf_puts(&b, tail);
+                json_buf_raw(&b, lab);
+                json_buf_raw(&b, tail);
                 JS_FreeCString(ctx, lab);
                 whole = json_buf_take(&b);
                 CHECK(whole != NULL, "console: §1.2.1's concat could not be allocated");
@@ -557,8 +562,8 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                 snprintf(tail, sizeof tail, ": %.3f ms", now - start);
             }
             JS_FreeValue(ctx, nowv);
-            json_buf_puts(&b, lab);
-            json_buf_puts(&b, tail);
+            json_buf_raw(&b, lab);
+            json_buf_raw(&b, tail);
             JS_FreeCString(ctx, lab);
             whole = json_buf_take(&b);
             CHECK(whole != NULL, "console: §1.4's concat could not be allocated");
@@ -651,9 +656,9 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                     char *whole;
 
                     CHECK(f != NULL, "console: §1.1.1's first datum could not be read");
-                    json_buf_puts(&b, MSG);
-                    json_buf_puts(&b, ": ");
-                    json_buf_puts(&b, f);
+                    json_buf_raw(&b, MSG);
+                    json_buf_raw(&b, ": ");
+                    json_buf_raw(&b, f);
                     JS_FreeCString(ctx, f);
                     JS_FreeValue(ctx, first);
                     whole = json_buf_take(&b);
