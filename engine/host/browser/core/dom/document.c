@@ -800,7 +800,8 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
  * request site and every request this machine makes has to answer for it. */
 #define DCE_STAGES(X) \
     X(DCE_LOOKUP,    "DOM §4.5 steps 1-5 into §4.9 steps 1-3 (the local name, and looking up a custom element " \
-                     "definition for it) and §4.9 step 6 when there is none") \
+                     "definition for it), §4.9 step 6 when there is none, and §4.9 steps 5.1.1-5.1.3 (the " \
+                     "active custom element constructor map entry the Construct runs under) when there is") \
     X(DCE_CONSTRUCT, "DOM §4.9 step 5.1.4.1 (constructing C with no arguments — the page's constructor)") \
     X(DCE_CHECKS,    "DOM §4.9 steps 5.1.4.2-11 (what the constructor returned, checked against what this " \
                      "operation asked for)") \
@@ -896,6 +897,16 @@ typedef struct {
     JSValue local;      /* the local name the operation was given (owned) — step 5.1.4.8 compares against it */
     JSValue result;     /* what the page's constructor answered (owned) */
     JSValue exc;        /* step 5.1.4's caught exception (owned), held across the report's own park */
+    /* STEP 5.1.1'S `C`, HELD BECAUSE STEP 5.1.6 NAMES IT AND STEP 5.1.6 RUNS AT AN EXIT THIS STATE MAY NOT
+       REACH. The definition is on `def` and the constructor could be re-read off it, but the restore runs from
+       `release`, which is entered for a flow discarded mid-construct as well as for a completion — and a
+       re-read there would ask a definition that another arm's `define` may have replaced which constructor
+       this algorithm entered the map with. Owned. */
+    JSValue ctor;
+    /* WHETHER STEPS 5.1.2-5.1.3 RAN, so step 5.1.5-5.1.6's restore runs exactly once and only for a state that
+       entered. It is a plain flag rather than `JS_IsObject(s->ctor)` because those are two different facts the
+       day an enter is made conditional on something other than having a constructor. */
+    uint8_t entered;
     ReportExceptionWork rw;
 } DocCreateElState;
 
@@ -908,16 +919,27 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->local);
     v->val(ctx, &s->result);
     v->val(ctx, &s->exc);
+    v->val(ctx, &s->ctor);
     report_exception_work_visit(ctx, &s->rw, v);
 }
 
-/* §8.1.4.6 step 5's FLAG, and nothing else: every value this state holds — the report's own included — is named
-   by doc_create_el_visit, which is the one list the teardown discharges. A flag on the global is not a
-   reference, so no declaration can name it, and leaving it set would put the global in error reporting mode
-   forever and swallow every later report on it. */
+/* WHAT THIS ALGORITHM TOOK FROM OUTSIDE ITSELF AND OWES BACK ON EVERY EXIT — §8.1.4.6 step 5's error-reporting
+   flag on the global, and DOM §4.9 STEPS 5.1.5-5.1.6, the restore half of the active custom element
+   constructor map pair steps 5.1.2-5.1.3 entered. Every VALUE this state holds is named by doc_create_el_visit
+   instead, which is the one list the teardown discharges; neither of these is a value, which is why they are
+   here and why this function reads an owned one (`ctor`) without freeing it.
+   THE MAP IS WHY THIS ARM MATTERS RATHER THAN BEING TIDINESS. Step 5.1.4 parks on the page's constructor, so a
+   flow discarded there never resumes to run 5.1.5-5.1.6 by itself — and the entry it would have removed is
+   AGENT-WIDE, so HTML §3.2.3 "HTML element constructors" step 3 would answer that constructor out of this
+   creation's registry for every later `new C()` in the agent, in flows that never named it. */
 static void doc_create_el_release(JSContext *ctx, void *st)
 {
-    report_exception_work_unlock(ctx, &((DocCreateElState *)st)->rw);
+    DocCreateElState *s = st;
+
+    report_exception_work_unlock(ctx, &s->rw);
+    if (!s->entered) return;
+    custom_elements_active_ctor_leave(ctx, s->ctor);   /* STEPS 5.1.5-5.1.6 */
+    s->entered = 0;
 }
 
 static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -933,7 +955,8 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         cb_result = JS_UNDEFINED;
         /* EVERY owned field before the first thing that can throw — the failure path tears this state down
            through doc_create_el_release, which frees exactly what the state holds and nothing else. */
-        s->cb[0] = s->def = s->el = s->local = s->result = s->exc = JS_UNDEFINED;
+        s->cb[0] = s->def = s->el = s->local = s->result = s->exc = s->ctor = JS_UNDEFINED;
+        s->entered = 0;
         report_exception_work_start(&s->rw);
         /* §4.5 createElement STEP 3, and it runs whatever the local name is: `{is, customElementRegistry}`
            refuses itself before any element is created. */
@@ -958,43 +981,45 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
            the once-only rule and the scoped-registry latch belong with the slot and not with each writer. */
         custom_elements_node_associate_registry(ctx, s->el, registry);
         s->def = custom_elements_definition_lookup_for_element(ctx, s->el);   /* §4.9 STEP 3 */
-        /* §4.9 STEPS 5.1.2-5.1.3, WHICH DO NOT EXIST YET AND ARE NOW REACHABLE. They set the surrounding
-           agent's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP[C] to `registry` for the duration of the construct,
-           and that map is the only thing that tells §3.2.3's `[HTMLConstructor]` which registry the element
-           it mints belongs to — with it absent the constructor derives the DOCUMENT's, so an element created
-           through a scoped registry would answer for a registry the page never named. Until this creation
-           option existed no scoped registry could reach a construct at all; now one can, so the case that
-           cannot be answered aborts here instead of answering wrongly. */
-        DCHECK(!JS_IsObject(s->def) || !JS_IsObject(registry) ||
-                   !custom_elements_registry_is_scoped(ctx, registry),
-               "DOM §4.9 steps 5.1.2-5.1.3 are unbuilt: a custom element was created through a SCOPED "
-               "CustomElementRegistry, and the agent's ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP is what carries "
-               "that registry into HTML §3.2.3's constructor. core/html/custom_elements.c owns it — the map "
-               "is per AGENT, keyed by the definition's constructor, set around the Construct and restored "
-               "after it (steps 5.1.5-5.1.6) — and §3.2.3 step 3 must read it instead of deriving the "
-               "current global's document's registry");
-        JS_FreeValue(ctx, registry);
         if (!JS_IsObject(s->def)) {                  /* §4.9 step 6: not a custom element */
+            JS_FreeValue(ctx, registry);
             *presult = s->el;
             s->el = JS_UNDEFINED;
             return 0;
         }
+        /* §4.9 STEP 5.1.1 — `C` is the definition's constructor, and it is held on the state because step
+           5.1.6 names it from an exit this stage cannot see. */
+        s->ctor = custom_elements_definition_constructor(ctx, s->def);
+        /* §4.9 STEPS 5.1.2-5.1.3, WHICH BRACKET STEP 5.1.4'S CONSTRUCT. `previousRegistry` is read and
+           map[C] is set to `registry` — and that map is the only thing that tells HTML §3.2.3 "HTML element
+           constructors" step 3 which registry the element its `super()` mints belongs to. Without the entry
+           step 4 derives the current global's document's registry, so a class defined in a SCOPED registry
+           cannot find its own definition and throws a TypeError out of its own constructor; the element a
+           page did get back would answer for a registry it never named.
+           THE RESTORE IS DECLARED, NOT WRITTEN AFTER THE CONSTRUCT. Step 5.1.4 parks on the page's code, so
+           the exits from it are three (the checks completed, the report completed, or this flow was discarded
+           mid-construct) and only `release` is common to all of them — see doc_create_el_release. */
+        custom_elements_active_ctor_enter(ctx, s->ctor, registry);
+        s->entered = 1;
+        JS_FreeValue(ctx, registry);
         /* Step 5.1.4.8 compares what the constructor made against the name this operation was GIVEN, which the
            declaration has already converted to a string. */
         s->local = JS_DupValue(ctx, argv[0]);
         STEP_GOTO(hdr->stage, DCE_CONSTRUCT, &s->phase, NULL);
     }
     if (hdr->stage == DCE_CONSTRUCT) {
-        /* §4.9 STEP 5.1.4.1 — constructing C. Steps 5.1.2-5.1.3's active custom element constructor map is
-           what a SCOPED registry would be carried into the constructor through; the LOOKUP stage asserts that
-           no scoped registry reaches here, and names the map as the thing to build, rather than this stage
-           constructing as though every registry were the document's. */
-        JSValue ctor = custom_elements_definition_constructor(ctx, s->def);
+        /* §4.9 STEP 5.1.4.1 — constructing C, the value step 5.1.1 named and steps 5.1.2-5.1.3 entered into
+           the active custom element constructor map. It is CONSTRUCTED from the state rather than re-read off
+           the definition, so the class this parks on is the same one step 5.1.6 will restore for even if a
+           `define` running inside the constructor replaced the definition's entry. */
         JSValue made = JS_UNDEFINED;
 
-        r = step_construct_run(ctx, &s->phase, STEP_CB(s->cb), ctor, 0, NULL, cb_result, &made,
+        DCHECK(s->entered, "DOM §4.9 step 5.1.4 was reached without steps 5.1.2-5.1.3 — the Construct below is "
+                           "what that pair brackets, so an unentered map means HTML §3.2.3 \"HTML element "
+                           "constructors\" step 3 is about to answer out of the document's registry for a "
+                           "creation that may have named a scoped one");
+        r = step_construct_run(ctx, &s->phase, STEP_CB(s->cb), s->ctor, 0, NULL, cb_result, &made,
                                out_cb, out_argc);
-        JS_FreeValue(ctx, ctor);
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;                          /* parked ON the page's constructor */
         /* step 5.1.4's catch. The construct threw — synchronously (r < 0) or delivered as JS_EXCEPTION,

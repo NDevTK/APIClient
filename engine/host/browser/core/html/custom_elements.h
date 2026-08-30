@@ -119,6 +119,28 @@ JSValue custom_elements_document_registry(JSContext *ctx);
 JSValue custom_elements_node_registry(JSContext *ctx, JSValueConst wrap);
 /* The definition's constructor — DOM §4.9 step 5.1.1's `C`, the value `create an element` Constructs. OWNED. */
 JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def);
+
+/* §4.13.4'S ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP, AS THE ONE PAIR THAT BRACKETS A CONSTRUCT. "Each
+   similar-origin window agent has an associated active custom element constructor map, which is a map of
+   constructors to CustomElementRegistry objects" — and every algorithm that Constructs a definition's `C` has
+   to put `registry` in it first and take it back out after, because HTML §3.2.3 "HTML element constructors"
+   step 3 reads it and is the ONLY way a class defined in a SCOPED registry can resolve its own definition from
+   inside its own `super()`. Without the entry §3.2.3 step 4 derives the current global's document's registry
+   instead, so the definition is real and simply not in the set that was asked, and the constructor throws a
+   TypeError at the page.
+   TWO CALLS AND NOT A SLOT, because what the standard writes is a SAVE and a RESTORE — §4.13.5 "Upgrades"
+   steps 8-9 and its step 10 regardless-list steps 1-2, and DOM §4.9 "Interface Element" create an element
+   steps 5.1.2-5.1.3 and 5.1.5-5.1.6 — and `previousRegistry` is what makes them a pair rather than two writes.
+   The leave takes `ctor` back so the assert it carries is an IDENTITY question: a pair that ran out of order
+   would otherwise restore some other algorithm's previousRegistry with nothing to say so.
+   THE LEAVE OWES EVERY EXIT, TEARDOWN INCLUDED. "Regardless of whether the above steps threw" covers the flow
+   that is DISCARDED while parked on the page's constructor, which no resume ever comes back from — so a step
+   machine that entered declares the leave through IdlStepDecl's `release`, which is that field's stated
+   purpose ("a global or per-object FLAG the algorithm took and must give back on every exit"). The map is
+   agent-wide, so an entry left on it answers every later `new C()` in the agent, in flows that never named
+   this registry — and nothing reports it, because the entry is a live value on a live object. */
+void custom_elements_active_ctor_enter(JSContext *ctx, JSValueConst ctor, JSValueConst registry);
+void custom_elements_active_ctor_leave(JSContext *ctx, JSValueConst ctor);
 /* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state
    it then writes onto it. They are here rather than in document.c because "result's custom element state" and
    "result's custom element definition" are this component's own record, and a second writer of them is a

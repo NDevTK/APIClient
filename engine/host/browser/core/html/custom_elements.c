@@ -61,6 +61,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
@@ -685,15 +686,23 @@ static void ce_array_set_len(JSContext *ctx, JSValueConst arr, uint32_t n)
  * look itself up in the document's set and throw a TypeError — the constructor would be unreachable, which
  * is the whole feature.
  *
- * IT IS A STACK, AND THAT IS THE MAP. The spec's two writers are paired — §4.13.5 "Upgrades" steps 8-9 save
- * `previousRegistry` and set the entry, and the cleanup puts the previous value back or removes the entry —
- * so a walk that finds the LAST entry for a constructor answers exactly what the map holds, and dropping the
- * last entry restores exactly what the map restores. Nesting (a constructor that constructs its own class) is
- * what makes `previousRegistry` non-null and what the stack models directly.
+ * IT IS A STACK, AND THAT IS THE MAP. Both of the standard's writers are PAIRS of steps that bracket one
+ * Construct — §4.13.5 "Upgrades" steps 8-9 save `previousRegistry` and set the entry and its regardless-list
+ * steps 1-2 put the previous value back or remove the entry, and DOM §4.9 "Interface Element"'s create an
+ * element does exactly the same at steps 5.1.2-5.1.3 and 5.1.5-5.1.6 around step 5.1.4. So a walk that finds
+ * the LAST entry for a constructor answers exactly what the map holds, and dropping the last entry restores
+ * exactly what the map restores. Nesting (a constructor that constructs its own class, or one whose
+ * `[CEReactions]` member drains an upgrade) is what makes `previousRegistry` non-null and what the stack
+ * models directly.
+ *
+ * THE PAIR IS THE INTERFACE, AND THE LEAVE NAMES THE CONSTRUCTOR IT IS UNDOING. A bare pop can only assert
+ * that SOMETHING is on the stack, which is true for every mismatched pair there is; taking `ctor` back makes
+ * the assert an identity question, so a leave that runs out of order — or one whose enter never ran — names
+ * the constructor it expected instead of silently restoring another algorithm's entry.
  *
  * AN ARRAY, AGENT-WIDE, in a module static for the reason the backup element queue is one: it is the AGENT's,
  * not a realm's, and its entries are property writes the COW delta captures — so a flow parked inside a
- * constructor carries the map state it was constructed under. */
+ * constructor carries the map state it was constructed under, and two forked arms each restore their own. */
 static JSValue g_active_ctor_map = JS_UNDEFINED;
 
 /* §3.2.3 step 3: "if map[NewTarget] exists, set registry to it". OWNED; JS_UNDEFINED when there is no entry,
@@ -721,25 +730,54 @@ static JSValue ce_active_registry(JSContext *ctx, JSValueConst ctor)
     return JS_UNDEFINED;
 }
 
-/* §4.13.5 step 9 / DOM §4.9 step 5.1.3: "set map[C] to element's custom element registry". */
-static void ce_active_push(JSContext *ctx, JSValueConst ctor, JSValueConst reg)
+/* §4.13.5 steps 8-9 / DOM §4.9 steps 5.1.2-5.1.3 — see custom_elements.h. */
+void custom_elements_active_ctor_enter(JSContext *ctx, JSValueConst ctor, JSValueConst registry)
 {
     JSValue e = JS_NewArray(ctx);
 
+    DCHECK(JS_IsObject(g_active_ctor_map),
+           "§4.13.4's active custom element constructor map was written before custom_elements_init built it");
+    DCHECK(JS_IsConstructor(ctx, ctor),
+           "§4.13.4's active custom element constructor map was keyed by something that is not a constructor. "
+           "The key is a DEFINITION's constructor and §4.13.4's `define` step 1 is \"If IsConstructor("
+           "constructor) is false, then throw a TypeError\", so anything else here came from a definition this "
+           "component never committed — and HTML §3.2.3 \"HTML element constructors\" step 3 would then key "
+           "its lookup on a value no `super()` can ever present");
     CHECK(!JS_IsException(e), "an active custom element constructor map entry could not be allocated");
     JS_SetPropertyUint32(ctx, e, 0, JS_DupValue(ctx, ctor));
-    JS_SetPropertyUint32(ctx, e, 1, JS_DupValue(ctx, reg));
+    JS_SetPropertyUint32(ctx, e, 1, JS_DupValue(ctx, registry));
     ce_array_push(ctx, g_active_ctor_map, e);
 }
 
-/* §4.13.5's cleanup: restore `previousRegistry`, or remove the entry when there was none. Dropping the last
-   entry IS both, because the entry below it is the previous value. */
-static void ce_active_pop(JSContext *ctx)
+/* §4.13.5 step 10's regardless-list steps 1-2 / DOM §4.9 steps 5.1.5-5.1.6 — see custom_elements.h. */
+void custom_elements_active_ctor_leave(JSContext *ctx, JSValueConst ctor)
 {
     uint32_t n = ce_array_len(ctx, g_active_ctor_map);
 
-    DCHECK(n > 0, "§4.13.4's active custom element constructor map was restored with nothing on it — the set "
-                  "and the restore are one pair and only §4.13.5 and DOM §4.9 step 5.1 write them");
+    (void)ctor;   /* the identity assert below is the only reader, and it is dev-only */
+    DCHECK(n > 0, "§4.13.4's active custom element constructor map was restored with nothing on it. Three "
+                  "algorithms bracket a Construct with this pair — HTML §4.13.5 \"Upgrades\" steps 8-9 and its "
+                  "step 10 regardless-list, that same upgrade's teardown while it is parked mid-construct, and "
+                  "DOM §4.9 \"Interface Element\" create an element steps 5.1.2-5.1.3 and 5.1.5-5.1.6 — so an "
+                  "empty stack means one of them left without entering");
+#if APICLIENT_DEV
+    /* THE IDENTITY HALF, READ ONLY WHERE THERE IS AN ENTRY TO READ. It is a dev question and nothing else —
+       the restore itself is one truncation — so the read that answers it is not performed in a release build,
+       where the assert above has already been compiled out and `n` is trusted. */
+    {
+        JSValue e = JS_GetPropertyUint32(ctx, g_active_ctor_map, n - 1);
+        JSValue c = JS_GetPropertyUint32(ctx, e, 0);
+        bool mine = JS_VALUE_GET_PTR(c) == JS_VALUE_GET_PTR(ctor);
+
+        JS_FreeValue(ctx, c);
+        JS_FreeValue(ctx, e);
+        DCHECK(mine, "§4.13.4's active custom element constructor map was restored for a constructor that is "
+                     "not the one on top of it. Every enter/leave pair brackets ONE Construct and nests, so a "
+                     "mismatch is a leave that ran out of order — the entry below is another algorithm's "
+                     "previousRegistry, and dropping it makes HTML §3.2.3 \"HTML element constructors\" step 3 "
+                     "answer that algorithm's constructor out of a registry it never named");
+    }
+#endif
     ce_array_set_len(ctx, g_active_ctor_map, n - 1);
 }
 
@@ -867,11 +905,9 @@ void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVi
     for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) v->val(ctx, &q->cb[k]);
 }
 
-void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q)
-{
-    q->reporting = 0;
-    report_exception_work_unlock(ctx, &q->rep);
-}
+/* custom_elements_queue_unlock is defined BELOW §4.13.5 rather than here beside the other three lifecycle
+   calls: what it owes at a teardown is that algorithm's step 10 regardless-list, so it is unreadable away
+   from the enter it undoes. */
 
 /* Which of §4.13.6 step 1.3.1's arms the drain last parked in — see custom_elements.h. */
 int custom_elements_queue_arm(const CustomElementQueue *q)
@@ -970,15 +1006,16 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         DCHECK(JS_IsObject(stack), "a custom element definition carries no §4.13.3 construction stack");
         ce_array_push(ctx, stack, JS_DupValue(ctx, el));
         JS_FreeValue(ctx, stack);
-        /* steps 8-9: the agent's active custom element constructor map takes THIS ELEMENT'S registry for
-           the duration of the construct, because that is the only way §3.2.3 step 3 can find a definition that
-           lives in a SCOPED registry. The push is paired with the pop below, which runs whether or not the
-           construction threw — step 10's regardless-list. */
+        /* steps 7-9: `C` is the definition's constructor, and the agent's active custom element constructor
+           map takes THIS ELEMENT'S registry for the duration of the construct, because that is the only way
+           §3.2.3 step 3 can find a definition that lives in a SCOPED registry. The enter is paired with the
+           leave below, which runs whether or not the construction threw — step 10's regardless-list — and
+           with the one in custom_elements_queue_unlock for the drain that never gets back here at all. */
         {
             JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
             JSValue reg = ce_registry_of_node(ctx, el);
 
-            ce_active_push(ctx, ctor, reg);
+            custom_elements_active_ctor_enter(ctx, ctor, reg);
             JS_FreeValue(ctx, reg);
             JS_FreeValue(ctx, ctor);
         }
@@ -1034,9 +1071,14 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
         failed = 1;                    /* step 10.1 threw; the catching list is over before 10.2 */
     }
     /* Step 10's REGARDLESS-LIST steps 1-2: previousRegistry goes back into the active custom element
-       constructor map — the pop that the push at step 9 is one half of, run whether or not the catching list
-       threw. */
-    ce_active_pop(ctx);
+       constructor map — the leave that the enter at step 9 is one half of, run whether or not the catching
+       list threw. */
+    {
+        JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
+
+        custom_elements_active_ctor_leave(ctx, ctor);
+        JS_FreeValue(ctx, ctor);
+    }
     /* Step 10's REGARDLESS-LIST step 3: the last entry comes off the construction stack, threw or not. */
     stack = JS_GetProperty(ctx, def, g_atom_stack);
     {
@@ -1073,6 +1115,45 @@ static int ce_upgrade_run(JSContext *ctx, CustomElementQueue *q, JSValueConst el
     element_internals_upgrade_form_steps(ctx, el);
     ce_set_state(ctx, el, CE_STATE_CUSTOM);   /* step 12 */
     return 0;
+}
+
+/* THE DRAIN'S TEARDOWN, AND IT IS §4.13.5 STEP 10'S REGARDLESS-LIST FOR THE UPGRADE THAT NEVER COMES BACK.
+ * "Regardless of whether the above steps threw an exception or not" is a claim about EVERY exit from step 10,
+ * and a flow torn down while parked on step 10.3's Construct is one of them — the resume that would have run
+ * the list is exactly what teardown means. What step 10 took by then is agent-wide and outlives the flow: the
+ * active custom element constructor map entry steps 8-9 pushed, whose survival makes HTML §3.2.3 "HTML element
+ * constructors" step 3 answer THIS constructor out of THIS element's registry for every later `new C()` in the
+ * agent; and step 6's construction stack entry, which §3.2.3 step 12 takes as "the last entry in definition's
+ * construction stack" — so the next `super()` for that definition is handed an element belonging to a flow
+ * that no longer exists, and §3.2.3 step 13's already-constructed-marker question is asked about it.
+ * NEITHER IS VISIBLE TO ANY DETECTOR HERE — both are live values on live objects, so the leak walk has nothing
+ * to say, and the wrong answer arrives later in another algorithm.
+ * `up_stage` is zero exactly when no upgrade is in flight, which is what makes this decidable at the teardown;
+ * the definition is the reaction's own (`q->cur`'s second element), never the name's current entry, for the
+ * same reason the drain reads it there. */
+void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q)
+{
+    q->reporting = 0;
+    report_exception_work_unlock(ctx, &q->rep);
+    if (q->up_stage == CE_UP_IDLE) return;
+    DCHECK(JS_IsObject(q->cur),
+           "HTML §4.13.5 was in flight at the drain's teardown with no reaction to name its definition — the "
+           "reaction is held across the park precisely so this exit can undo what step 10 took");
+    {
+        JSValue def = JS_GetPropertyUint32(ctx, q->cur, 1);
+        JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
+        JSValue stack = JS_GetProperty(ctx, def, g_atom_stack);
+        uint32_t n = ce_array_len(ctx, stack);
+
+        custom_elements_active_ctor_leave(ctx, ctor);        /* regardless-list steps 1-2 */
+        DCHECK(n > 0, "HTML §4.13.5 step 10's regardless-list step 3 found an empty construction stack at the "
+                      "drain's teardown — step 6 pushed onto it before the Construct this flow is parked on");
+        ce_array_set_len(ctx, stack, n - 1);                 /* regardless-list step 3 */
+        JS_FreeValue(ctx, stack);
+        JS_FreeValue(ctx, ctor);
+        JS_FreeValue(ctx, def);
+    }
+    q->up_stage = CE_UP_IDLE;
 }
 
 /* §4.13.6 "invoke custom element reactions in an element queue", one reaction per entry.
@@ -2974,6 +3055,13 @@ void custom_elements_init(JSContext *ctx)
     g_active_ctor_map = JS_NewArray(ctx);
     CHECK(!JS_IsException(g_active_ctor_map),
           "§4.13.4's active custom element constructor map could not be allocated");
+    /* AND BECAUSE IT IS THE AGENT'S, IT IS DECLARED AS THE AGENT'S. The row is `element`, not this file:
+       core/platform.c calls element_free, element_free calls custom_elements_free, and a sub-component names
+       the row whose release reaches it (core/agent_state.h). It matters more for this slot than for a class
+       id — the map now has TWO writers (HTML §4.13.5 "Upgrades" and DOM §4.9 "Interface Element"'s create an
+       element) and a release that freed the array while keeping the handle would hand the NEXT agent in this
+       process a map whose entries name constructors from a runtime that is gone. */
+    agent_state_value("element", &g_active_ctor_map, "§4.13.4's active custom element constructor map");
     /* §4.13.6's stack, its backup queue and the two private keys the queues are read through. Built here, in
        the agent's own pre-boot realm, so a flow's push is captured by the heap COW rather than being that
        flow's private object. */
