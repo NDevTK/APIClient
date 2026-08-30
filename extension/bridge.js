@@ -348,6 +348,20 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
          "on `_run`, so a word none of them knows is a run whose completeness nothing can judge");
+  /* THE DOCUMENT THIS ANALYSIS IS ABOUT. `sourceUrl: (msg && msg.sourceUrl) || ""` stood in the literal below
+     and wrote an EMPTY ADDRESS onto the one field every consumer identifies the analysis by: lib/merge.js
+     resolves relative call-site addresses against it, keys each security finding on it, and files a falsy one
+     under `"unknown_" + i` — so a message that had gone silent would have produced findings filed under a
+     made-up name beside real ones, which is the FABRICATED half of the defaulted-field defect rather than the
+     concealed half. `engineRoot` has always DCHECKed this same `msg.sourceUrl` non-empty (§4.4's document
+     address is what the engine derives this document's principal from) and asserts `eng.msg === msg` where
+     the instance is rooted; both callers of this function pass `eng.msg`. There is nothing here for a `||` to
+     have been standing in for. */
+  DCHECK(!!msg && typeof msg.sourceUrl === "string" && msg.sourceUrl !== "",
+         "an analysis is being built for a document with no address (`" + (msg && msg.sourceUrl) + "`) — " +
+         "engineRoot asserts this same field non-empty before the instance runs, so its absence here is that " +
+         "message record having been replaced, and every finding on this analysis would be keyed on the " +
+         "empty string and land in the moat under a fabricated name");
   let result = null;
   const extraErrors = [];
   /* THE RESUME COUNT IS NOT READ OFF `lines`, AND THAT IS THE WHOLE OF THE FIX. It used to be, and `lines` is
@@ -596,7 +610,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        error-derived schema to relay; the record the Send panel reads is written by the two systems that DO
        probe — lib/req2proto.js (driven by lib/discovery-probe.js and lib/response-decode.js) — straight into
        `globalStore.probeResults`, which never crossed this boundary. */
-    sourceUrl: (msg && msg.sourceUrl) || "",
+    // The document this analysis is about, asserted at the top of this function rather than defaulted here.
+    sourceUrl: msg.sourceUrl,
     /* WHAT THIS ANALYSIS IS A RECORD OF, CARRIED WITH IT. Every consumer of an analysis has to be able to tell
        a snapshot of a running page from a finished run, and both of those from a run that died — and until
        this field there was nothing on the object that said so. `_engineCrashed` was set on the crash arm and

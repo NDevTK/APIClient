@@ -545,10 +545,24 @@ function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
       return;
     }
     if (!result.fetchCallSites.length && !result.securitySinks.length) return;   // legitimately empty (nothing learned yet) — not an invariant break
-    result.sourceUrl = sourceUrl || result.sourceUrl || "";
+    /* TWO NAMES FOR ONE FACT, ASKED TO AGREE INSTEAD OF ONE OVERWRITING THE OTHER. `result.sourceUrl =
+       sourceUrl || result.sourceUrl || ""` stood here: a three-rung ladder in which the argument won, the
+       record's own statement was the consolation, and `""` was what both absences collapsed to. Neither
+       absence exists. `linesToAnalysis` builds `result.sourceUrl` out of `eng.msg.sourceUrl` and states it
+       (bridge.js asserts it non-empty there), and BOTH callers of onFrontierAdvance pass that same
+       `eng.msg.sourceUrl` as this argument — so the two are the same string by construction, the assignment
+       was a no-op, and the only thing the ladder could ever have done was quietly file this advance's
+       findings under the empty string. What is worth checking is the AGREEMENT: two names for one document
+       that disagree mean the advance was built from one message and delivered under another, which merges a
+       page's findings into a different page's record. */
+    DCHECK(typeof sourceUrl === "string" && sourceUrl !== "" && result.sourceUrl === sourceUrl,
+           "an engine advance names the document `" + sourceUrl + "` while the analysis it carries was built " +
+           "for `" + result.sourceUrl + "` — bridge.js builds both out of the same `eng.msg.sourceUrl`, so a " +
+           "disagreement is an advance delivered under a message that is not the one it was produced from, " +
+           "and every endpoint and sink on it would be attributed to the wrong page");
     if (!documentIds.length) {
       var view = _emptyDocView();
-      view.url = sourceUrl || ""; view.tabUrl = sourceUrl || "";
+      view.url = sourceUrl; view.tabUrl = sourceUrl;
       mergeASTResultsIntoVDD(view, [result]);
       mergeToGlobal(view);
       return;
