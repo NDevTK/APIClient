@@ -96,6 +96,24 @@ static IterData *iter_of(JSValueConst v)
     return it;
 }
 
+/* WRITE ONE OF THE TWO NODE POINTERS, and never `JS_FreeValue(ctx, it->cand_node); it->cand_node = <build
+   one>;` — see cow.h for the order and the defect. BOTH sides of it are real here. The REFILL allocates:
+   node_wrap mints a wrapper, and an allocation IS a collection (js_trigger_gc has exactly one caller,
+   JS_NewObjectFromShape), so a slot left naming freed storage across the build is walked by iter_gc_mark and
+   decrefs a JSObject already back on the allocator's free list. The RELEASE is the same hazard from the other
+   side: giving a node pointer back can drop the last reference to a wrapper, and a wrapper's finalizer is the
+   page's platform code, which may allocate — which is why even step 4's `= JS_UNDEFINED` comes here.
+   The record and its layout are bound HERE rather than at each call, so no site can pass a slot from another
+   record with this layout — and that is also what makes §6.1's "adjust a node pointer" checkable at all: it
+   writes THROUGH a pointer to whichever of the two pointers §6.1 handed it, and the layout assert is the only
+   thing that can say the pointer named one of them.
+   node_iterator_new's mint does not come here, and that is the one honest exception: before JS_SetOpaque the
+   record is unreachable by the collector and its calloc'd slots hold no value to release. */
+static void ni_set(JSContext *ctx, IterData *it, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, it, &ITER_REC, slot, v);
+}
+
 static IterData *iter_here(JSContext *ctx, JSValueConst v)
 {
     IterData *it = iter_of(v);
@@ -187,8 +205,7 @@ static void iter_adjust(JSContext *ctx, IterData *it, JSValue *pnode, uint8_t *p
     if (*pbefore) {
         fresh = iter_following_outside(removed, root);
         if (fresh) {
-            JS_FreeValue(ctx, *pnode);
-            *pnode = node_wrap(ctx, fresh);
+            ni_set(ctx, it, pnode, node_wrap(ctx, fresh));
             *pbefore = 1;
             return;
         }
@@ -196,8 +213,7 @@ static void iter_adjust(JSContext *ctx, IterData *it, JSValue *pnode, uint8_t *p
     /* STEPS 3-4. */
     fresh = removed->prev ? iter_last_inclusive_descendant(removed->prev) : removed->parent;
     DCHECK(fresh != NULL, "§6.1's adjust reached a node being removed from no parent");
-    JS_FreeValue(ctx, *pnode);
-    *pnode = node_wrap(ctx, fresh);
+    ni_set(ctx, it, pnode, node_wrap(ctx, fresh));
     *pbefore = 0;
 }
 
@@ -256,8 +272,7 @@ static void ni_release(JSContext *ctx, void *st)
 /* Step 4's "set iterator's candidate reference to null", which is also step 3.4's abrupt exit. */
 static void ni_drop_candidate(JSContext *ctx, IterData *it)
 {
-    JS_FreeValue(ctx, it->cand_node);
-    it->cand_node = JS_UNDEFINED;
+    ni_set(ctx, it, &it->cand_node, JS_UNDEFINED);
     it->cand_before = 0;
 }
 
@@ -278,8 +293,7 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* STEP 1: the candidate starts as the reference. STEP 2's `result` is this body's `*presult`. */
-        JS_FreeValue(ctx, it->cand_node);
-        it->cand_node = JS_DupValue(ctx, it->ref_node);
+        ni_set(ctx, it, &it->cand_node, JS_DupValue(ctx, it->ref_node));
         it->cand_before = it->ref_before;
         hdr->stage = NI_FILTER;
     }
@@ -297,16 +311,14 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 if (!it->cand_before) {
                     lxb_dom_node_t *following = node_next_in(cand, root);
                     if (!following) break;             /* STEP 3.1.1.1's "then break" */
-                    JS_FreeValue(ctx, it->cand_node);
-                    it->cand_node = node_wrap(ctx, following);
+                    ni_set(ctx, it, &it->cand_node, node_wrap(ctx, following));
                 }
                 it->cand_before = 0;
             } else {
                 if (it->cand_before) {
                     lxb_dom_node_t *preceding = node_prev_in(cand, root);
                     if (!preceding) break;
-                    JS_FreeValue(ctx, it->cand_node);
-                    it->cand_node = node_wrap(ctx, preceding);
+                    ni_set(ctx, it, &it->cand_node, node_wrap(ctx, preceding));
                 }
                 it->cand_before = 1;
             }
@@ -321,8 +333,7 @@ static int ni_traverse_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (r > 0) return r;
         if (r < 0) { ni_drop_candidate(ctx, it); return JS_STEP_ABRUPT; }
         if (result == NODE_FILTER_ACCEPT) {           /* STEP 3.5 */
-            JS_FreeValue(ctx, it->ref_node);
-            it->ref_node = JS_DupValue(ctx, it->cand_node);
+            ni_set(ctx, it, &it->ref_node, JS_DupValue(ctx, it->cand_node));
             it->ref_before = it->cand_before;
             /* STEP 3.5.2 RETURNS `node`, WHICH STEP 3.3 BOUND BEFORE THE FILTER RAN — not the candidate
                reference, which the filter may have moved. A filter that removes the very node it is filtering

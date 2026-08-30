@@ -147,6 +147,23 @@ static IdlAsyncIter *ait_of(JSValueConst v)
     return NULL;
 }
 
+/* WRITE ONE OWNED SLOT OF THE RECORD, and never `JS_FreeValue(ctx, rec->ongoing); rec->ongoing = <build one>;`
+   — see cow.h for the order and the defect. §3.7.10.1's `ongoing promise` is the slot that makes both sides of
+   it real. The REFILL allocates: step 10.4 stores the promise JS_PerformPromiseThen just built and step 11.1
+   the one an algorithm just returned, and an allocation IS a collection (js_trigger_gc has exactly one caller,
+   JS_NewObjectFromShape), so a slot left naming freed storage across the build is walked by
+   idl_async_iter_gc_mark and decrefs a JSObject already back on the allocator's free list. The RELEASE is the
+   same hazard from the other side: giving the previous ongoing promise back can drop the last reference to a
+   promise whose reaction records hold the page's own functions, and a finalizer reached that way is the page's
+   platform code, which may allocate — which is why steps 8.5.1 and 8.7.1's `= JS_NULL` comes here too.
+   js_idl_async_make's mint does not come here, and that is the one honest exception: it fills the record before
+   JS_SetOpaque, where the collector cannot reach it and its js_mallocz'd slots hold no value to release. The
+   initialization steps' write to `state` does not either, for the reason stated where they are run. */
+static void ait_set(JSContext *ctx, IdlAsyncIter *rec, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, rec, &AIT_REC, slot, v);
+}
+
 JSValue idl_async_iter_end(JSContext *ctx)
 {
     DCHECK(g_end_class != 0, "§2.5.10's end of iteration was asked for before any async_iterable<> declared "
@@ -354,8 +371,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
             rec = ait_of(s->iter);
             DCHECK(rec != NULL, "a §3.7.10.2 reaction captured something that is not a default asynchronous "
                                 "iterator object — it was captured at the ask, so it cannot have become one");
-            JS_FreeValue(ctx, rec->ongoing);
-            rec->ongoing = JS_NULL;                        /* steps 8.5.1 and 8.7.1 */
+            ait_set(ctx, rec, &rec->ongoing, JS_NULL);     /* steps 8.5.1 and 8.7.1 */
             if (op == AIT_REJECT) {
                 rec->finished = 1;                         /* step 8.7.2 */
                 /* step 8.7.3: "Throw reason" — which rejects the capability step 8.9 attached this to, so the
@@ -413,8 +429,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
                     cap = JS_PerformPromiseThen(ctx, rec->ongoing, onsettled, onsettled);   /* step 10.3 */
                     JS_FreeValue(ctx, onsettled);
                     if (JS_IsException(cap)) return JS_STEP_ABRUPT;
-                    JS_FreeValue(ctx, rec->ongoing);
-                    rec->ongoing = cap;                                                     /* step 10.4 */
+                    ait_set(ctx, rec, &rec->ongoing, cap);                                  /* step 10.4 */
                     if (op == AIT_NEXT) {
                         s->result = JS_DupValue(ctx, rec->ongoing);                         /* step 12 */
                         return JS_STEP_DONE;
@@ -544,10 +559,8 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     /* step 11.1: "Set object's ongoing promise to the result of running nextSteps/returnSteps" — for the
        MEMBER only. An entry reached as step 10.2's onSettled had the ongoing promise set by step 10.4 before it
        was ever queued, and overwriting it here would drop the chain a third call is already waiting on. */
-    if (op == AIT_NEXT || op == AIT_RETURN) {
-        JS_FreeValue(ctx, rec->ongoing);
-        rec->ongoing = JS_DupValue(ctx, s->result);
-    }
+    if (op == AIT_NEXT || op == AIT_RETURN)
+        ait_set(ctx, rec, &rec->ongoing, JS_DupValue(ctx, s->result));
     if (op == AIT_RETURN) return ait_return_tail(ctx, s, rec);   /* steps 12-15 */
     return JS_STEP_DONE;                                         /* next step 12 / a reaction's own answer */
 }
