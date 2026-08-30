@@ -1701,9 +1701,33 @@ static const char *HTML =
     "xa.setAttribute('data-w', 'second');"
     "xa.setAttribute('data-ignored', 'nope');"   /* not observed: no reaction, and only an absence proves it */
     "xa.removeAttribute('data-w');"
-    /* §4.13.4 get(), and §4.13.1's name rule — a name with no hyphen is a SyntaxError, not a quiet registration. */
+    /* §4.13.4 get(), and §4.13.3's name rule — a name with no hyphen is a SyntaxError, not a quiet registration. */
     "var cename = 'wrong'; try { customElements.define('nohyphen', XPanel); } catch (e) { cename = 'issyntax'; }"
     "fetch('/api/cename?v=' + cename);"
+    /* §4.13.3's OTHER THREE REFUSALS, AND THE REASON EACH ONE NAMES. "A valid custom element name" is five
+       requirements and §4.13.4 step 2 answers all five with one "SyntaxError", so the row above passes with
+       four of the clauses DELETED — the reserved list, the upper-alpha clause and DOM §1.4's own predicate
+       have never once been exercised by this fixture, and `catch (e) { ok = true }` is why. That is the
+       "right exception for the wrong reason" shape exactly, so each row asserts the REASON the exception
+       carries and reads `SyntaxError-wrongreason` when the clause that fired is not the clause under test. */
+    "var ceres = 'wrong'; try { customElements.define('annotation-xml', class extends HTMLElement {}); }"
+    " catch (e) { ceres = e.name + (e.message.indexOf('reserves') >= 0 ? '-isreserved' : '-wrongreason'); }"
+    "fetch('/api/cereserved?v=' + ceres);"
+    "var ceup = 'wrong'; try { customElements.define('x-A', class extends HTMLElement {}); }"
+    " catch (e) { ceup = e.name + (e.message.indexOf('upper') >= 0 ? '-isupper' : '-wrongreason'); }"
+    "fetch('/api/ceupper?v=' + ceup);"
+    "var celoc = 'wrong'; try { customElements.define('x-a b', class extends HTMLElement {}); }"
+    " catch (e) { celoc = e.name + (e.message.indexOf('local name') >= 0 ? '-islocal' : '-wrongreason'); }"
+    "fetch('/api/celocal?v=' + celoc);"
+    /* …AND THE ACCEPTANCE NO REFUSAL CAN PROVE. §4.13.3 says it in its own words — "a large variety of names
+       is allowed, to give maximum flexibility for use cases like <math-alpha> or <emotion-emoji>" — and that
+       is true only because its first bullet is DOM §1.4's "valid element local name" rather than a character
+       class: §1.4's ASCII-alpha arm excludes U+0000, ASCII whitespace, U+002F and U+003E and NOTHING ELSE.
+       The `PotentialCustomElementName` grammar that used to be cited here is gone from the standard, and an
+       engine still checking a PCENChar-shaped `[-.0-9a-z]` set would refuse this name while every refusal row
+       above stayed green — which is why the acceptance is a row and not a remark. */
+    "var ceuni = 'wrong'; try { customElements.define('emotion-\\u{1F60D}', class extends HTMLElement {});"
+    " ceuni = 'isuni'; } catch (e) { ceuni = 'threw-' + e.message; } fetch('/api/ceuni?v=' + ceuni);"
     /* …and the same throw UNCAUGHT, at a chunk's top level, where a page error is what it becomes. */
     "loadScript('/chunk/cethrow.js');"
     /* HTML §8.1.4.7 Unhandled promise rejections — the two claims that make the two lists necessary, and
@@ -6023,7 +6047,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/celife\"",     "isce"    },   /* §4.13 connectedCallback ran — code nothing else calls */
         { "\"/api/ceearly\"",    "isearly" },   /* the retroactive upgrade, and the wrapper's identity surviving */
         { "\"/api/ceasync\"",    "ceAWAIT" },   /* the reaction is a flow: it parked at a loop and at an await */
-        { "\"/api/cename\"",     "issyntax"},   /* §4.13.1 a name with no hyphen is refused */
+        { "\"/api/cename\"",     "issyntax"},   /* §4.13.3 a name with no hyphen is refused */
+        /* …and the three requirements that refusal cannot speak for, told apart by the REASON the one
+           SyntaxError carries. A row that only checked the throw stays green with these clauses deleted. */
+        { "\"/api/cereserved\"", "SyntaxError-isreserved" },
+        { "\"/api/ceupper\"",    "SyntaxError-isupper" },
+        { "\"/api/celocal\"",    "SyntaxError-islocal" },
+        /* …and the ACCEPTANCE no refusal can prove: an astral code point is a legal custom element name,
+           because §4.13.3's first bullet is DOM §1.4's predicate and not a character class. */
+        { "\"/api/ceuni\"",      "isuni"   },
         { "\"/api/ceget\"",      "isget"   },
         { "\"/api/ceext\"",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
         { "\"/api/cedeep\"",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */

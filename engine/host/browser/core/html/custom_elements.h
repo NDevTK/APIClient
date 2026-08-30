@@ -155,10 +155,39 @@ JSValue custom_elements_definition_of_element(JSContext *ctx, JSValueConst wrap)
 /* DOM §4.9's custom element state for an element — one of the five CE_STATE_* values. §4.13.7's
    `attachInternals` step 6 branches on exactly it. */
 int custom_elements_state_of_element(JSContext *ctx, JSValueConst wrap);
-/* HTML §4.13.1's "valid custom element name" — the PotentialCustomElementName production plus the reserved
-   list, over UTF-8 bytes. Public because DOM §4.8's "valid shadow host name" is stated as "a valid custom
-   element name, or one of eighteen built-ins": a second copy of the production beside it would be a second
-   answer to which names may host a shadow tree.*/
+/* HTML §4.13.3 "Core concepts"'s "valid custom element name" — five requirements over UTF-8 bytes, the first
+   of which is the DOM's own "valid element local name" (core/dom/names.h). It is NO LONGER a grammar: the
+   `PotentialCustomElementName` production this comment used to name has been REMOVED from the standard, which
+   is why the name is now stated as a conjunction of five bullets and why a much wider set of names is legal
+   than a PCENChar list admits ("a large variety of names is allowed, to give maximum flexibility for use cases
+   like <math-α> or <emotion-😍>", §4.13.3). A citation to a production the spec no longer contains reads as
+   authoritative and sends the next reader to look for text that is not there.
+   Public because DOM §4.8's "valid shadow host name" is stated as "a valid custom element name, or one of
+   eighteen built-ins": a second copy of the requirements beside it would be a second answer to which names may
+   host a shadow tree. */
+/* WHICH OF THE FIVE FAILED, because §4.13.4's step 2 answers all five with ONE "SyntaxError" and the page's
+   `catch` therefore cannot tell a missing hyphen from a reserved MathML name from an uppercase letter. That is
+   not a cosmetic difference: a check that throws the right exception for the WRONG REASON passes any test that
+   only checks the throw, so four of these five clauses could be deleted and every assertion over the throw
+   would stay green. The verdict is the ONE implementation and `custom_elements_name_is_valid` is `verdict ==
+   CE_NAME_OK` — never a second walk beside it, which is how the registry's own four-line copy drifted from the
+   DOM's predicate in the first place. The ORDER is §4.13.3's own bullet order, so the verdict names the FIRST
+   requirement the standard lists that this name fails. */
+typedef enum {
+    CE_NAME_OK = 0,
+    CE_NAME_NOT_A_LOCAL_NAME,      /* bullet 1 — DOM §1.4 "valid element local name" */
+    CE_NAME_NOT_LOWER_ALPHA_FIRST, /* bullet 2 — the 0th code point is an ASCII lower alpha */
+    CE_NAME_HAS_UPPER,             /* bullet 3 — it contains no ASCII upper alphas */
+    CE_NAME_NO_HYPHEN,             /* bullet 4 — it contains a U+002D (-) */
+    CE_NAME_RESERVED,              /* bullet 5 — it is one of the eight SVG/MathML hyphenated names */
+    CE_NAME_VERDICT_COUNT
+} CeNameVerdict;
+CeNameVerdict custom_elements_name_verdict(const char *name, size_t len);
+/* The sentence §4.13.4 step 2's SyntaxError carries for that verdict. It starts with "not a valid custom
+   element name" for every one of them — that half is the SPEC's answer and is what a reader greps for — and
+   names the failed bullet after a colon. DFAILs on CE_NAME_OK and on a verdict with no sentence, because a
+   clause added to the enum without a message is a fifth reason rendered as a fourth. */
+const char *custom_elements_name_why(CeNameVerdict v);
 bool custom_elements_name_is_valid(const char *name, size_t len);
 
 /* §4.13's "element is a form-associated custom element": it carries a definition whose form-associated field

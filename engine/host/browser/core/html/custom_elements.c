@@ -508,17 +508,25 @@ static JSValue ce_find_for_node(JSContext *ctx, JSValueConst wrap, const char *n
     return def;
 }
 
-/* §4.13.1 A VALID CUSTOM ELEMENT NAME — all five of its requirements. This was "starts with a-z and contains a
-   hyphen", which is two of them, and the three it left out are not pedantry: `a-A` was accepted although no
-   parser can round-trip it, `annotation-xml` was accepted although the name belongs to MathML, and every name
-   whose later code points the DOM forbids was accepted although `createElement` could never build one. The
-   requirement that carries the others is the FIRST one — the name must be a VALID ELEMENT LOCAL NAME, which is
-   the DOM's own predicate and lives with its sibling in core/dom/names.c rather than being re-derived here.
-   The hyphen requirement is still what guarantees a custom name cannot collide with a future built-in; the
-   reserved list is the eight names that already contain one and are already taken. */
-bool custom_elements_name_is_valid(const char *name, size_t len)
+/* §4.13.3 "Core concepts" A VALID CUSTOM ELEMENT NAME — all five of its requirements. This was "starts with
+   a-z and contains a hyphen", which is two of them, and the three it left out are not pedantry: `a-A` was
+   accepted although no parser can round-trip it, `annotation-xml` was accepted although the name belongs to
+   MathML, and every name whose later code points the DOM forbids was accepted although `createElement` could
+   never build one. The requirement that carries the others is the FIRST one — the name must be a VALID ELEMENT
+   LOCAL NAME, which is the DOM's own predicate and lives with its sibling in core/dom/names.c rather than
+   being re-derived here. The hyphen requirement is still what guarantees a custom name cannot collide with a
+   future built-in; the reserved list is the eight names that already contain one and are already taken.
+   IT IS A CONJUNCTION AND NOT A GRAMMAR, and the difference is load-bearing rather than editorial: the
+   standard's `PotentialCustomElementName` production is GONE, so a `[-.0-9a-z·…]` character class is not
+   a stricter reading of this definition, it is a DIFFERENT and much narrower one. Bullet 1 admits every code
+   point the HTML tokenizer can read back — DOM §1.4's ASCII-alpha arm excludes only U+0000, ASCII whitespace,
+   U+002F and U+003E — so `x-a"b`, `x-a=b` and `emotion-😍` are all valid names here, and an engine that
+   rejects them refuses to define components real pages ship.
+   IT RETURNS WHICH REQUIREMENT FAILED, not a bit — see custom_elements.h. Everything below is one walk; the
+   bool predicate is this function compared against CE_NAME_OK. */
+CeNameVerdict custom_elements_name_verdict(const char *name, size_t len)
 {
-    /* §4.13.1's list, verbatim: the SVG and MathML element names that contain a hyphen. */
+    /* §4.13.3's list, verbatim: the SVG and MathML element names that contain a hyphen. */
     static const char *const RESERVED[] = {
         "annotation-xml", "color-profile", "font-face", "font-face-src", "font-face-uri",
         "font-face-format", "font-face-name", "missing-glyph", NULL
@@ -526,16 +534,60 @@ bool custom_elements_name_is_valid(const char *name, size_t len)
     size_t i;
     bool hyphen = false;
 
-    if (!dom_valid_element_local_name(name, len)) return false;
-    if (name[0] < 'a' || name[0] > 'z') return false;      /* the 0th code point is an ASCII lower alpha */
+    if (!dom_valid_element_local_name(name, len)) return CE_NAME_NOT_A_LOCAL_NAME;
+    /* THE LOCAL-NAME PREDICATE HAS ALREADY REFUSED THE EMPTY STRING AND THE NULL POINTER, which is what makes
+       the byte read below legal rather than lucky. Asserted because the ORDER is the guarantee: a later edit
+       that moved bullet 2 above bullet 1 to "fail fast" would read name[0] of a zero-length name, and §4.13.3
+       lists them in this order anyway. */
+    DCHECK(name != NULL && len > 0,
+           "DOM §1.4 accepted a name that is empty or absent — bullet 1 of §4.13.3 is what guarantees bullet "
+           "2 has a 0th code point to look at, so this predicate's order is not an optimisation to reverse");
+    if (name[0] < 'a' || name[0] > 'z') return CE_NAME_NOT_LOWER_ALPHA_FIRST;  /* 0th cp is ASCII lower alpha */
     for (i = 0; i < len; i++) {
-        if (name[i] >= 'A' && name[i] <= 'Z') return false;  /* it contains no ASCII upper alphas */
-        if (name[i] == '-') hyphen = true;                  /* it contains a U+002D (-) */
+        if (name[i] >= 'A' && name[i] <= 'Z') return CE_NAME_HAS_UPPER;  /* it contains no ASCII upper alphas */
+        if (name[i] == '-') hyphen = true;                               /* it contains a U+002D (-) */
     }
-    if (!hyphen) return false;
+    if (!hyphen) return CE_NAME_NO_HYPHEN;
     for (i = 0; RESERVED[i]; i++)
-        if (strlen(RESERVED[i]) == len && memcmp(RESERVED[i], name, len) == 0) return false;
-    return true;
+        if (strlen(RESERVED[i]) == len && memcmp(RESERVED[i], name, len) == 0) return CE_NAME_RESERVED;
+    return CE_NAME_OK;
+}
+
+/* ONE SENTENCE PER VERDICT, INDEXED BY THE VERDICT, so a clause added to the enum without a message is a
+   compile-time-sized array with a hole in it and a DFAIL at the read rather than a neighbouring reason
+   silently rendered for the new one. */
+const char *custom_elements_name_why(CeNameVerdict v)
+{
+    static const char *const WHY[CE_NAME_VERDICT_COUNT] = {
+        [CE_NAME_OK]                    = NULL,
+        [CE_NAME_NOT_A_LOCAL_NAME]      = "not a valid custom element name: it is not a valid element local "
+                                          "name (DOM §1.4) — it is empty, or contains U+0000, ASCII "
+                                          "whitespace, U+002F (/) or U+003E (>)",
+        [CE_NAME_NOT_LOWER_ALPHA_FIRST] = "not a valid custom element name: its 0th code point is not an "
+                                          "ASCII lower alpha",
+        [CE_NAME_HAS_UPPER]             = "not a valid custom element name: it contains an ASCII upper alpha",
+        [CE_NAME_NO_HYPHEN]             = "not a valid custom element name: it contains no U+002D (-)",
+        [CE_NAME_RESERVED]              = "not a valid custom element name: it is one of the eight hyphenated "
+                                          "SVG/MathML element names the standard reserves",
+    };
+
+    /* CHECK AND NOT DCHECK, both of them, for the reason check.h reserves CHECK for: the next line INDEXES a
+       table with `v` and hands the result to a `%s`, so an out-of-range verdict is an out-of-bounds read and
+       CE_NAME_OK is a NULL format argument. Neither may proceed in release either, and a DCHECK compiled out
+       would leave exactly that. There is no `if (bad) return "…"` here on purpose: a generic sentence for a
+       verdict the enum does not have is this component telling the page a reason it did not compute. */
+    CHECK(v > CE_NAME_OK && v < CE_NAME_VERDICT_COUNT,
+          "a reason sentence was asked for a name §4.13.3 ACCEPTS, or for a verdict outside CeNameVerdict — "
+          "the caller is about to throw a SyntaxError for a name this predicate did not refuse");
+    CHECK(WHY[v] != NULL,
+          "a §4.13.3 verdict carries no sentence — a requirement was added to CeNameVerdict without the "
+          "message its SyntaxError is supposed to name, so the page would be told the wrong reason");
+    return WHY[v];
+}
+
+bool custom_elements_name_is_valid(const char *name, size_t len)
+{
+    return custom_elements_name_verdict(name, len) == CE_NAME_OK;
 }
 
 /* DOM §4.9's custom element state for an element, DERIVED when nothing has written one — see g_state_key. The
@@ -2055,19 +2107,20 @@ static JSValue js_ce_when_defined(JSContext *ctx, JSValueConst this_val, int arg
     size_t nlen;
     JSValue map, entry, promise, resolving[2], def;
     JSValueConst reg = this_val;
+    CeNameVerdict verdict;
     JSAtom a;
 
     (void)magic; (void)argc;
     if (!ce_registry_this(ctx, this_val)) return JS_EXCEPTION;
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return JS_EXCEPTION;
-    if (!custom_elements_name_is_valid(nm, nlen)) {              /* step 1: a REJECTED promise, never a synchronous throw */
+    if ((verdict = custom_elements_name_verdict(nm, nlen)) != CE_NAME_OK) {  /* step 1: a REJECTED promise, never a synchronous throw */
         JSValue exc;
 
         JS_FreeCString(ctx, nm);
         promise = JS_NewPromiseCapability(ctx, resolving);
         if (JS_IsException(promise)) return promise;
-        JS_ThrowDOMException(ctx, "SyntaxError", "not a valid custom element name");
+        JS_ThrowDOMException(ctx, "SyntaxError", "%s", custom_elements_name_why(verdict));
         exc = JS_GetException(ctx);
         if (JS_CallAsFlow(ctx, resolving[1], exc) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, exc);
@@ -2283,6 +2336,7 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
     const char *nm;
     size_t nlen;
     bool taken;
+    CeNameVerdict verdict;
     JSValue prev;
 
     /* step 1: IsConstructor(constructor). */
@@ -2292,9 +2346,11 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
     }
     nm = JS_ToCStringLen(ctx, &nlen, argv[0]);   /* a real string by now: the declaration converted it */
     if (!nm) return -1;
-    if (!custom_elements_name_is_valid(nm, nlen)) {              /* step 2 */
+    /* step 2 — and WHICH of §4.13.3's five requirements it failed, because the standard answers all five with
+       one "SyntaxError" and a page that catches it can then only report that something was wrong. */
+    if ((verdict = custom_elements_name_verdict(nm, nlen)) != CE_NAME_OK) {
         JS_FreeCString(ctx, nm);
-        JS_ThrowDOMException(ctx, "SyntaxError", "not a valid custom element name");
+        JS_ThrowDOMException(ctx, "SyntaxError", "%s", custom_elements_name_why(verdict));
         return -1;
     }
     prev = ce_find_in(ctx, registry, nm, nlen);  /* step 3 */
