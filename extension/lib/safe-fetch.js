@@ -14,6 +14,15 @@
 //                        state. A well-designed server never mutates on GET, so even
 //                        the credentialed replay is side-effect-free; POST/PUT/DELETE
 //                        endpoints are only RECORDED by forced exec, never issued.
+//   • destructive-path — that "well-designed" is an ASSUMPTION about someone else's
+//     deny list          server, and RFC 9110 §9.2.1 Safe Methods makes it theirs to
+//                        honour rather than ours to verify. So a credentialed GET whose
+//                        path or query carries a session-ending or resource-destroying
+//                        token is REFUSED before it is sent: the one place this project
+//                        matches on a name, matching only to refuse, because an
+//                        accidental logout is a CSRF this tool commits against its own
+//                        user. See _destructiveToken for why the deny direction escapes
+//                        §RUN-DON'T-MATCH and what it may never be read as.
 //   • HTTP(S) only     — scheme must be http:/https:; file:/data:/blob:/chrome-
 //                        extension:/etc. are rejected so a crafted URL can't read
 //                        local/extension resources.
@@ -297,6 +306,81 @@ function _isPrivateHost(host) {
 // item, resp.url says what the last one is. Deriving "did it redirect" from
 // resp.url !== requested instead would report a 3xx that lands back on its own
 // address as no redirect at all, which is a chain the list DID grow along.
+/* THE DESTRUCTIVE-PATH DENY LIST — the ONE place this project matches on a name, and
+   it matches only to REFUSE.
+   CLAUDE.md's §RUN-DON'T-MATCH bans matching because a matched name would be ASSERTED
+   as a value, and a name is meaningless in minified code. A deny list asserts NOTHING.
+   It refuses, and the two directions fail in ways that are not comparable: a wrong DENY
+   costs exactly one unfired request, which forced execution still derives and still
+   reports in full, while a wrong ASSERT fabricates a finding that PROPAGATES, since one
+   invented field is the example that shapes the next endpoint. So this list is sound
+   PRECISELY BECAUSE IT IS ALLOWED TO BE WRONG, and being over-broad is its cheap
+   direction rather than its dangerous one.
+   WHAT IT IS FOR. Forced execution builds requests no real client makes, and RFC 9110
+   §9.2.1 Safe Methods says a GET must not be relied on to change state — but it says so
+   by placing the duty on the RESOURCE OWNER ("it is the resource owner's responsibility
+   to ensure that the action is consistent with the request method semantics"), and names
+   the failure it expects: "unfortunate side effects when automated processes perform a
+   GET on every URI reference". This tool is that automated process. A GET that ends the
+   person's session mid-analysis is a CSRF we committed against our own user, and no
+   amount of §9.2.1 correctness makes that acceptable to discover afterwards.
+   WHY ONLY WHEN CREDENTIALED. The harm needs the session: an uncredentialed GET to a
+   logout path destroys nothing, and denying it would cost real learning for no safety.
+   So the gate is scoped to the exact condition under which the harm exists, rather than
+   applied everywhere and called caution.
+   WHAT IT MAY NEVER BE READ AS. A path that does NOT match is not thereby established
+   safe. This list is a FLOOR under the policy and never a substitute for it — the method
+   and the value provenance still decide, and no absence of a match licenses firing
+   anything they refuse.
+   MATCHING IS BY WHOLE TOKEN, NEVER BY SUBSTRING, because substring matching is how a
+   deny list becomes useless: `/catalogue` contains no token `logout`, and `/deleted-items`
+   yields `deleted`, which is not `delete`. Each path segment and query token is tested
+   raw AND with `-`, `_` and `.` removed, so `log-out` and `log_out` reach `logout`
+   without the list having to enumerate spellings. */
+var _DESTRUCTIVE = [
+  /* ending a session or revoking an authorization */
+  "logout", "logoff", "signout", "signoff", "deauth", "deauthorize", "revoke",
+  "endsession", "destroysession", "invalidate", "unsubscribe", "optout",
+  /* destroying or disabling a resource or an account */
+  "delete", "destroy", "remove", "purge", "erase", "wipe", "truncate",
+  "deactivate", "disable", "terminate", "cancel", "reset",
+  "unlink", "unfollow", "unfriend", "deleteaccount", "closeaccount"
+];
+/* A TOKEN THAT COULD NEVER MATCH IS A SILENT HOLE IN A SECURITY GATE, so the shape the
+   matcher requires is asserted rather than assumed: the comparison is against lowercased,
+   separator-stripped tokens, so an entry carrying an uppercase letter or a `-` would sit
+   in this list looking protective and match nothing, for ever. */
+var _DESTRUCTIVE_SET = (function () {
+  var m = Object.create(null);
+  for (var i = 0; i < _DESTRUCTIVE.length; i++) {
+    DCHECK(/^[a-z0-9]+$/.test(_DESTRUCTIVE[i]),
+           "a destructive-path token is compared against lowercased separator-stripped " +
+           "tokens, so one carrying an uppercase letter or a separator can never match — " +
+           "it would be a gate entry that looks protective and refuses nothing: " +
+           _DESTRUCTIVE[i]);
+    m[_DESTRUCTIVE[i]] = true;
+  }
+  return m;
+})();
+/* Returns the token that refused this URL, or "" — a POSITIVE statement that nothing in
+   the list matched, never a boolean whose false could also mean "not asked". The token
+   travels into the status message so a refusal is attributable and a reviewer can
+   disagree with THIS entry rather than with the list. */
+function _destructiveToken(u) {
+  var raw;
+  try { raw = (String(u.pathname) + "&" + String(u.search)).toLowerCase(); }
+  catch (e) { return ""; }
+  var parts = raw.split(/[^a-z0-9._-]+/);
+  for (var i = 0; i < parts.length; i++) {
+    var t = parts[i];
+    if (!t) continue;
+    if (_DESTRUCTIVE_SET[t]) return t;
+    var squashed = t.replace(/[-._]/g, "");
+    if (squashed && _DESTRUCTIVE_SET[squashed]) return squashed;
+  }
+  return "";
+}
+
 function _urlList(requested, resp) {
   var redirected = false, final = requested;
   try { redirected = !!(resp && resp.redirected); } catch (e) {}
@@ -335,6 +419,16 @@ async function safeFetch(url, opts) {
   // action. The reply is gated by our OWN SOP/CORS check after the fetch (see below) —
   // the browser's does not apply to an extension fetch with host_permissions.
   var credentialed = !!opts.credentialed;
+  // THE DENY LIST, BEFORE THE REQUEST EXISTS — see _destructiveToken. Scoped to the
+  // credentialed case because that is the whole of where the harm is: without the
+  // person's cookies a logout path ends no session. The refusal names the token so it
+  // is attributable, exactly as `blocked-scheme:` and `blocked-corb:` name their ground.
+  if (credentialed) {
+    var _dtok = _destructiveToken(parsed);
+    if (_dtok)
+      return { ok: false, status: 0, statusText: "blocked-destructive:" + _dtok, headers: {},
+               body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+  }
   var init = { method: "GET", credentials: credentialed ? "include" : "omit", redirect: "follow" };
   // Analyzer probe headers only (e.g. discovery's X-Goog-Api-Key / X-Http-Method-
   // Override). Auth headers are never added here; cookies (credentialed mode) are the
@@ -352,6 +446,24 @@ async function safeFetch(url, opts) {
       return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {},
                body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
   } catch (e) {}
+  /* THE DENY LIST AGAIN ON THE FINAL URL, AND WHAT IT CAN AND CANNOT DO. `redirect:
+     "follow"` means a 30x into a destructive path was ALREADY followed by the time this
+     runs, so unlike the pre-request check this one cannot un-send anything — it refuses
+     to INGEST, which is exactly the shape and exactly the limit of the private-host
+     check immediately above it, and it is placed here for the same reason.
+     That is not a hole being papered over: following a redirect the SERVER chose is the
+     server's own behaviour, and a person who navigated to the initial address would have
+     been carried to the same place. The harm this file exists to prevent is INITIATING a
+     request the person never would, and that decision is the pre-request check. What is
+     left here is refusing to build analysis on the reply. */
+  if (credentialed) {
+    try {
+      var _rtok = resp.url ? _destructiveToken(new URL(resp.url)) : "";
+      if (_rtok)
+        return { ok: false, status: 0, statusText: "blocked-destructive-redirect:" + _rtok,
+                 headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, resp), computedType: "" };
+    } catch (e) {}
+  }
   var headers = {};
   try { resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; }); } catch (e) {}
   /* §2.2.5's BODY, READ AS THE BYTE SEQUENCE IT IS — after both SSRF checks (the
