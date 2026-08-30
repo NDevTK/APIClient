@@ -223,6 +223,22 @@ const SPECS = [
      W3C-hosted rows, so it needs no reader of its own. */
   { key: "permissionspolicy", label: "Permissions Policy", kind: "bikeshed",
     base: "https://w3c.github.io/webappsec-permissions-policy/", anchors: ["permissions policy"] },
+  /* AN UNINDEXED STANDARD DOES NOT ONLY LOSE COVERAGE — WHERE AN INDEXED ONE DEFINES AN ADJACENT TERM, IT
+     MANUFACTURES FINDINGS AGAINST CORRECT CITATIONS, and that is the cry-wolf direction this file's header
+     names as the one that gets a checker muted. Streams and Permissions Policy were silent zeros: their
+     citations went to OTHER_SPECS and nothing was asserted about them. High Resolution Time was not silent.
+     Its citations name `time origin`, `coarsen time` and `current high resolution time`, and HTML defines an
+     environment settings object's `time origin` at §8.1.3.2 — so with no hr-time index to say that §4 is
+     itself titled "Time Origin", every one of those sites resolved BY ITS TERM to HTML and was reported as a
+     misattribution — eight of them, every one correct as written, plus the forty-four sites that shared their
+     number and were reported as undecided against it. The shape to keep: a standard is a candidate for
+     this table not when the tree cites it OFTEN but when the vocabulary it owns is vocabulary some indexed
+     standard also defines, because that is when the resolver has somewhere wrong to go.
+     ITS ANCHOR IS THE HYPHENATED SHORT NAME AND THE THREE-WORD FULL NAME. `time` alone is a word this tree
+     writes in prose constantly and would swallow every unanchored citation near it; both listed spellings are
+     the ones the tree actually writes in front of a §. It is bikeshed, so it needs no reader of its own. */
+  { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
+    base: "https://w3c.github.io/hr-time/", anchors: ["hr-time", "hrtime", "high resolution time"] },
   { key: "xml", label: "Extensible Markup Language (XML) 1.0 (Fifth Edition)", kind: "xmlspec",
     base: "https://www.w3.org/TR/xml/", anchors: ["xml"] },
 ];
@@ -768,7 +784,15 @@ const LEVELLED = /^[a-z]+(-[a-z0-9]+)*-[0-9]+$/;
  * this way before its term is read; the BEFORE text was not, and that asymmetry was the bug. */
 function anchorTokens(before) {
   const flat = before.replace(/[\n\r]+[ \t]*\*?[ \t]*/g, " ").replace(/["\\]+/g, " ");
-  const tail = flat.replace(/[\s'"’(\[]+$/, "").replace(/\s+(?:Standard|standard|spec|Spec)$/, "");
+  /* A LEVEL SUFFIX IS PART OF THE EDITION AND NOT PART OF THE NAME, AND LEAVING IT ON DOES NOT DEGRADE THE
+   * ANSWER — IT ERASES THE QUESTION. The tail regex below requires its last token to START WITH A LETTER, so
+   * `HIGH RESOLUTION TIME Level 3 §4` and `CSS Syntax Level 3 §5.4` end in a digit and match NOTHING: the
+   * citation comes back with no anchor at all, and an unanchored citation is never asked the one check that
+   * needs an anchor — whether the standard HAS the number. A spelled-out level is the same fact as the
+   * levelled shortname LEVELLED already reads out of `css-syntax-3`, so it is trimmed for the same reason
+   * `Standard` is: the words after the name say which document, and the name is what decides which index. */
+  const tail = flat.replace(/[\s'"’(\[]+$/, "").replace(/\s+(?:Level|level)\s+[0-9]+$/, "")
+    .replace(/\s+(?:Standard|standard|spec|Spec)$/, "");
   const m = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)$/.exec(tail);
   if (!m) return [];
   const w = m[1].split(/[ \t]+/);
@@ -1107,6 +1131,23 @@ function audit(argv, opts = {}) {
          * the multi-standard tie-break fell back to the file's anchor, judged it against HTML §5.1
          * "Introduction", and reported a citation that had already proved itself. A stated title is evidence
          * about WHICH standard as much as about which section. */
+        /* THE TITLE CONSUMES THE WHOLE SITE, AND THE ONE REFINEMENT THAT LOOKS OBVIOUS HERE WAS BUILT, MEASURED
+         * AND REFUSED — recorded because it will look obvious again. A citation states TWO claims when it names
+         * an algorithm after the title (`§3 Tools for Specification Authors' coarsen time`): that the section
+         * is titled that, and that the algorithm lives there. The title confirms the first and the second is
+         * never asked, so a misattribution is invisible EXACTLY WHERE THE AUTHOR DID WHAT CLAUDE.md ASKS and
+         * wrote the title down. Resuming the term scan on the words the title did NOT consume looks like the
+         * cure and is not: it raised 74 findings tree-wide and the read sample was the header's own
+         * prefix-matching defect at a new position — `§7.4.9 IteratorStep ( iteratorRecord )` followed by prose
+         * that names IteratorClose, IteratorStepValue or GetIterator, every one of them an operation the cited
+         * clause CALLS rather than one it should have cited. ECMAScript is where it is worst, because an
+         * operation name is a one-word term and its clauses are written as sequences of other operations.
+         * AND IT DID NOT CATCH ITS OWN MOTIVATING CASE, which is what settles it: hr-time §3 LINKS `coarsen
+         * time` three times, so USE_FLOOR confirms that site anyway, exactly as the "defined in one section and
+         * used in another" rule says it should. A channel that cannot see the case it was built for is a
+         * different mechanism, not a narrower one — the same bar this file's header sets for the cross-standard
+         * confirmation it also refused. What a future attempt needs is a way to tell a section's SUBJECT from
+         * the operations it merely invokes; a positional scan is not that. */
         const titleCands = c.anchor && idx.has(c.anchor) ? [c.anchor] : [...idx.keys()];
         for (const k of titleCands) {
           const sx = idx.get(k).sections[no];

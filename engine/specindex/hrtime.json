@@ -1,0 +1,225 @@
+{
+ "spec": "High Resolution Time",
+ "key": "hrtime",
+ "base": "https://w3c.github.io/hr-time/",
+ "specUpdated": "24 March 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Time Concepts",
+   "page": "",
+   "id": "sec-concepts"
+  },
+  "3": {
+   "title": "Tools for Specification Authors",
+   "page": "",
+   "id": "sec-tools"
+  },
+  "4": {
+   "title": "Time Origin",
+   "page": "",
+   "id": "sec-time-origin"
+  },
+  "5": {
+   "title": "The DOMHighResTimeStamp typedef",
+   "page": "",
+   "id": "sec-domhighrestimestamp"
+  },
+  "6": {
+   "title": "The EpochTimeStamp typedef",
+   "page": "",
+   "id": "sec-epochtimestamp"
+  },
+  "7": {
+   "title": "The Performance interface",
+   "page": "",
+   "id": "sec-performance"
+  },
+  "8": {
+   "title": "Extensions to WindowOrWorkerGlobalScope mixin",
+   "page": "",
+   "id": "sec-windoworworkerglobalscope"
+  },
+  "9": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "sec-security"
+  },
+  "10": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "sec-privacy"
+  },
+  "11": {
+   "title": "Acknowledgments",
+   "page": "",
+   "id": "acknowledgments"
+  },
+  "1.1": {
+   "title": "Use-cases",
+   "page": "",
+   "id": "use-cases"
+  },
+  "1.2": {
+   "title": "Examples",
+   "page": "",
+   "id": "examples"
+  },
+  "2.1": {
+   "title": "Clocks",
+   "page": "",
+   "id": "sec-clocks"
+  },
+  "2.2": {
+   "title": "Moments and Durations",
+   "page": "",
+   "id": "sec-moments-and-durations"
+  },
+  "3.1": {
+   "title": "Examples",
+   "page": "",
+   "id": "sec-tools-examples"
+  },
+  "7.1": {
+   "title": "now() method",
+   "page": "",
+   "id": "now-method"
+  },
+  "7.2": {
+   "title": "timeOrigin attribute",
+   "page": "",
+   "id": "timeorigin-attribute"
+  },
+  "7.3": {
+   "title": "toJSON() method",
+   "page": "",
+   "id": "tojson-method"
+  },
+  "8.1": {
+   "title": "The performance attribute",
+   "page": "",
+   "id": "the-performance-attribute"
+  },
+  "9.1": {
+   "title": "Clock resolution",
+   "page": "",
+   "id": "clock-resolution"
+  },
+  "9.2": {
+   "title": "Clock drift",
+   "page": "",
+   "id": "clock-drift"
+  }
+ },
+ "dfns": {
+  "coarsen time": [
+   "4"
+  ],
+  "coarsened moment": [
+   "2.2"
+  ],
+  "coarsened moments": [
+   "2.2"
+  ],
+  "coarsened shared current time": [
+   "4"
+  ],
+  "current coarsened wall time": [
+   "3"
+  ],
+  "current high resolution time": [
+   "4"
+  ],
+  "current monotonic time": [
+   "3"
+  ],
+  "current relative timestamp": [
+   "3"
+  ],
+  "current wall time": [
+   "3"
+  ],
+  "duration from": [
+   "2.2"
+  ],
+  "estimated monotonic time of the unix epoch": [
+   "4"
+  ],
+  "get time origin timestamp": [
+   "4"
+  ],
+  "implicitly convert a duration to a timestamp": [
+   "2.2"
+  ],
+  "monotonic clock": [
+   "2.1"
+  ],
+  "relative high resolution coarse time": [
+   "4"
+  ],
+  "relative high resolution time": [
+   "4"
+  ],
+  "unix epoch": [
+   "4"
+  ],
+  "unsafe current time": [
+   "2.1"
+  ],
+  "unsafe moment": [
+   "2.2"
+  ],
+  "unsafe shared current time": [
+   "4"
+  ],
+  "wall clock": [
+   "2.1"
+  ]
+ },
+ "uses": {
+  "coarsen time": {
+   "3": 3
+  },
+  "coarsened moments": {
+   "3": 10,
+   "4": 6,
+   "5": 4,
+   "11": 2
+  },
+  "current monotonic time": {
+   "3.1": 2
+  },
+  "current wall time": {
+   "3.1": 2
+  },
+  "duration from": {
+   "4": 2
+  },
+  "monotonic clock": {
+   "3": 3,
+   "4": 6,
+   "9.2": 4
+  },
+  "unix epoch": {
+   "3": 2,
+   "5": 2
+  },
+  "unsafe current time": {
+   "3": 3,
+   "4": 3,
+   "11": 3
+  },
+  "unsafe moment": {
+   "4": 2
+  },
+  "wall clock": {
+   "3": 4,
+   "4": 2
+  }
+ }
+}
