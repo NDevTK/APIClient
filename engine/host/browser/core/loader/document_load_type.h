@@ -5,6 +5,7 @@
 
 #include <stddef.h>
 
+#include "core/dom/document.h"   /* DocumentKind — DOM §4.5's two creation facts, which §7.5.1 is given */
 #include "core/fetch/headers.h"
 #include "core/mime/mime_type.h"
 
@@ -62,5 +63,40 @@ void document_load_computed_type(MimeType *out, const HeaderList *response_heade
    it. Never NULL — every arm has one, and a caller formatting an arm this does not know has asked the wrong
    question. */
 const char *document_load_type_section(DocumentLoadType t);
+
+/* HTML §7.5.1 "Shared document creation infrastructure"'s TWO Document ARGUMENTS for this response — the
+ * `type` and `contentType` every §7.5 subsection passes to "create and initialize a Document object", which
+ * §7.5.1 then writes onto the Document ("Let document be a new Document, with type type content type
+ * contentType …"). DOM §4.5 "Interface Document" is where the pair lives afterwards, so the value is
+ * core/dom/document.h's.
+ *
+ * IT IS PART OF THE DISPATCH AND NOT A SECOND CLASSIFICATION BESIDE IT. The pair is a function of the ARM,
+ * and the arm is what `document_load_type_of` above answers — so asking it anywhere else is the defect this
+ * whole component exists to end: two entries asking one question and getting two answers. It is decided per
+ * arm because §7.5 decides it per arm, and the arms genuinely disagree:
+ *   §7.5.2 "Loading HTML documents" — given "html" and the LITERAL "text/html", whatever the response said.
+ *     So a `text/html;charset=utf-8` response is a Document whose contentType is "text/html" exactly, which
+ *     is what a browser reports and is why this cannot be "the computed type" for every arm.
+ *   §7.5.3 "Loading XML documents" — given "xml" and `type`, the computed type itself. This is the arm the
+ *     literal answer was wrong for: every XHTML document this engine installed reported "text/html" and was
+ *     an HTML document by §4.5's predicate, which is what let HTML §13.2's parse-boundary correction run
+ *     over a tree an XML parser built.
+ *   §7.5.4 "Loading text documents" — given "html" and `type`. BOTH halves matter and they point opposite
+ *     ways: a `text/plain` document IS an HTML document (§7.5.4 creates an HTML parser and puts the response
+ *     in a `pre`) whose contentType is NOT "text/html". Any code deriving one of the two facts from the other
+ *     answers this arm wrong in one direction or the other, which is why the pair travels as a pair.
+ *   §7.5.6 "Loading media documents" — given "html" and `type`, for §7.5.4's reason.
+ * The CONTENT TYPE this yields is §4.2's ESSENCE and never §4.5's serialization: §7.5's `type` is the
+ * computed MIME type record, and the string a Document holds is the type it IS, without the parameters that
+ * decided its encoding.
+ *
+ * THE TWO ARMS THAT STATE NO PAIR ARE REFUSED, and that is a different refusal from "this build has no
+ * loader". §7.5.5 "Loading multipart/x-mixed-replace documents" does not create a Document at all: it parses
+ * the body by RFC 2046's rules and RECURSES — "Let document be the result of loading a document given
+ * firstPartNavigationParams" — so the pair belongs to the first PART's own computed type and inventing one
+ * for the multipart response would attach the wrapper's type to a document made of something else. §7.4.5's
+ * final "Otherwise" arm creates no Document either. Both crash HERE naming that, rather than answering; the
+ * unbuilt-loader crash stays at the parse (core/loader/document_load.h), where the consumer is. */
+DocumentKind document_load_kind(const MimeType *computed);
 
 #endif

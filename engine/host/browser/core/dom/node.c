@@ -2331,7 +2331,13 @@ static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
     DCHECK(cd->type == src->type, "§4.4 creates a document implementing the SAME INTERFACES as node, and the "
                                   "copy's lexbor dtype is not the source's — one of the two was built by "
                                   "something other than lxb_html_document_create");
-    w = document_new(realm, copy, document_url_of(src), document_content_type_of(src));
+    /* §4.4 "clone a single node" copies BOTH of §4.5's creation facts and names them in one list — "set
+       copy's encoding, content type, URL, origin, TYPE, mode, and allow declarative shadow roots to those of
+       node" — so the copy takes the source's type as well as its content type. Taking only the content type
+       and re-deriving the type from it would make a clone of a `text/plain` document an XML document, which
+       is the derivation DocumentKind exists to make unspellable. */
+    w = document_new(realm, copy, document_url_of(src),
+                     document_kind(document_is_xml_of(src), document_content_type_of(src)));
     CHECK(JS_IsObject(w), "clone a single node: the Document copy's wrapper allocation failed");
     /* The RECORD holds the wrapper (document_new dup'd it) and the record lives as long as the document, so
        this reference has nothing left to do: the answer this algorithm returns is the NODE, and the member

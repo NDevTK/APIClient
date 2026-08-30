@@ -205,7 +205,9 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
           "DOMParser: the markup handed to parseFromString could not be parsed");
     /* §8.5.1 step 2: the URL is the relevant global's associated Document's, and the content type is `type` —
        which for this arm is "text/html", the string that makes a Document an HTML document. */
-    doc = document_new(ctx, dom, url, "text/html");
+    /* §8.5.1 step 2's content type is `type`, which on THIS arm is the string "text/html" that selected it —
+       and step 3's first sub-step, "Set document's type to `html`", is the other half of the pair. */
+    doc = document_new(ctx, dom, url, document_kind(/*is_xml*/false, "text/html"));
     root = lxb_dom_interface_node(dom);
 
     /* THE PARSE BOUNDARY, and which seams belong to it is the STANDARD'S answer rather than a copy of
@@ -287,7 +289,11 @@ static JSValue parse_xml_from_a_string(JSContext *ctx, const char *url, const ch
     }
     /* §8.5.1 step 2: the URL is the relevant global's associated Document's, and the content type is `type` —
        which for this arm is whichever XML DOMParserSupportedType the caller passed, unchanged. */
-    return document_new(ctx, dom, url, type);
+    /* …AND ITS TYPE STAYS `xml`. Step 2's Document is a new Document, whose §4.5 default type is `xml`, and
+       only the "text/html" arm's first sub-step sets it to `html` — so this arm is an XML DOCUMENT, which is
+       what makes `parseFromString(…, "application/xml").createCDATASection(…)` work and what keeps HTML
+       §13.2's parse-boundary correction (which this arm deliberately does not run) unreachable for it. */
+    return document_new(ctx, dom, url, document_kind(/*is_xml*/true, type));
 }
 
 /* §8.5.1 `parseFromString(string, type)`.

@@ -270,6 +270,11 @@ typedef struct Document {
     int                  n_addrs;
     int                  cap_addrs;
     char                 content_type[32];   /* §4.5 contentType — what this document was created as */
+    /* §4.5's OTHER creation fact: "A document is said to be an XML document if its type is `xml`; otherwise
+       an HTML document." A FIELD AND NOT A COMPARE AGAINST THE BYTES ABOVE — see DocumentKind in document.h
+       for HTML §7.5.4's text document, which is an HTML document whose content type is not "text/html" and
+       which every such compare therefore answered backwards. */
+    bool                 is_xml;
     /* HTML §3.1.1's "Each Document has an encoding (an encoding), used for the document's character encoding"
        — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1 falls back to when a
        `<script>` has no `charset` attribute: "let encoding be el's node document's the encoding". It is a
@@ -1111,7 +1116,11 @@ static JSValue js_doc_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     CHECK(dom != NULL, "new Document(): OOM building a second Document");
     /* The ORIGIN is the constructing realm's document's, which document_new takes from the realm it runs in —
        the same rule createDocument's step 6 states, and the reason this is not `document_install`. */
-    return document_new(ctx, dom, "about:blank", "application/xml");
+    /* §4.5's OWN DEFAULTS, which is what `new Document()` is: "Unless stated otherwise, a document's …
+       content type is `application/xml`, URL is `about:blank`, … type is `xml`". The constructor states
+       nothing else, so both facts are the standard's initial values verbatim — and the `xml` half is what
+       makes `new Document().createCDATASection(…)` succeed where an HTML document's must throw. */
+    return document_new(ctx, dom, "about:blank", document_kind(/*is_xml*/true, "application/xml"));
 }
 
 /* §4.5.1 `createCDATASection(data)` and `createProcessingInstruction(target, data)` — the two node factories
@@ -1134,10 +1143,14 @@ static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int
     if (!d) return JS_EXCEPTION;
     dom = lxb_dom_interface_document(d->dom);
     if (magic == 0) {
-        /* STEP 1. `createCDATASection` on an HTML document is a NotSupportedError — this engine's documents
-           are HTML unless createDocument or `new Document()` made them, and the content type is what says so.
-           §4.5's own words are "if this is an HTML document"; the content type is how a Document records it. */
-        if (!strcmp(d->content_type, "text/html"))
+        /* STEP 1. `createCDATASection` on an HTML document is a NotSupportedError, and §4.5's own words are
+           "if this is an HTML document" — which §4.5 defines over the document's TYPE alone ("A document is
+           said to be an XML document if its type is `xml`; otherwise an HTML document"). This asked the
+           CONTENT TYPE instead, which answers the same for §4.5.1's factories and differently for a Document
+           a load created: HTML §7.5.4 "Loading text documents" creates an HTML document whose content type is
+           the response's, so every `text/plain` document was treated as XML here and allowed a CDATA section
+           that a browser refuses. */
+        if (!d->is_xml)
             return JS_ThrowDOMException(ctx, "NotSupportedError",
                                         "an HTML document has no CDATA sections");
     } else {
@@ -3702,16 +3715,47 @@ void document_install_proto(JSContext *ctx)
     }
 }
 
+/* DOM §4.5's TWO CREATION FACTS, BUILT — see document.h for why they are one value and why neither derives
+   the other. The assertions are here rather than at the copy into the record because THIS is where a caller's
+   answer arrives: a type that is empty or does not fit is a caller that has not run an algorithm producing
+   one, and letting it through would put bytes in the record that no standard emitted and that every later
+   read reports as this document's own. */
+DocumentKind document_kind(bool is_xml, const char *content_type)
+{
+    DocumentKind k;
+
+    DCHECK(content_type != NULL && content_type[0] != '\0',
+           "a Document was created with no content type — §4.5 gives every document one and every algorithm "
+           "that creates a Document states it (HTML §7.5.2's literal \"text/html\", §7.5.3's and §7.5.4's "
+           "computed type, §4.5.1's own arguments), so an absent one is a creation that skipped its own step");
+    DCHECK(strlen(content_type) < sizeof k.content_type,
+           "a Document's content type does not fit the record — §4.2 \"MIME type\"'s essence is what a "
+           "creation states here and this buffer was sized for one, so a longer string is either a full "
+           "serialization (parameters and all, which §7.5.1 does not pass) or a type this build should size "
+           "for; truncating it would store bytes no MIME type parse produced");
+    k.is_xml = is_xml;
+    snprintf(k.content_type, sizeof k.content_type, "%s", content_type);
+    return k;
+}
+
+/* HTML §7.3.2.1 "Creating browsing contexts": "Let document be a new Document, with: type `html`, content
+   type `text/html`, …" — the Document created with no response at all. */
+DocumentKind document_kind_initial_about_blank(void)
+{
+    return document_kind(/*is_xml*/false, "text/html");
+}
+
 /* A DOCUMENT'S RECORD, AND THE ONE PLACE THE (document -> record) ANSWER IS ESTABLISHED.
  *
  * It lives on the Lexbor document's own `user` slot, which lexbor keeps for its embedder and never reads. That
  * slot used to hold the REALM pointer, which was already the (document -> realm) answer §4.2.3 needs; holding
  * the record instead answers that question and every other per-document one through one indirection, with no
  * registry to keep in step — a registry is a second list of documents whose failure mode is a stale row. */
-static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *type)
+static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentKind kind)
 {
     lxb_dom_document_t *dd = lxb_dom_interface_document(dom);
     Document *d;
+    const char *type = kind.content_type;
 
     DCHECK(dom != NULL, "a document record was built for no document");
     /* §4.5 GIVES EVERY DOCUMENT A CONTENT TYPE, so this is a required argument and not a defaulted one — the
@@ -3766,7 +3810,10 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     d->addr.value = JS_NewString(ctx, url ? url : "");
     CHECK(!JS_IsException(d->addr.value), "document: OOM naming a document's address");
     doc_addr_assert_agrees(ctx, d);
+    /* BOTH OF §4.5's CREATION FACTS, FROM THE ONE VALUE THAT CARRIES THEM. `document_kind` has already
+       asserted the content type is non-empty and fits, so this copy cannot be the one that truncates. */
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
+    d->is_xml = kind.is_xml;
     /* §3.1.1's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
        and one decode of them — so this is the real answer rather than an initial value waiting to be
        overwritten, and it is asked of the REGISTRY rather than written as a table index so that the set of
@@ -3852,9 +3899,9 @@ static JSValue doc_finish(JSContext *ctx, Document *d)
 }
 
 /* A SECOND DOCUMENT IN THIS REALM — see document.h. */
-JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type)
+JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentKind kind)
 {
-    Document *d = doc_rec_new(ctx, dom, url, content_type);
+    Document *d = doc_rec_new(ctx, dom, url, kind);
 
     /* WHO DESTROYS IT. A document a FLOW created is that flow's, exactly like a node it created: the COW delta
        owns it and destroys it when the delta is discarded, so the frontier does not accumulate one document per
@@ -3914,11 +3961,14 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
 
         CHECK(dom != NULL, "HTML §4.12.3: OOM creating an inert template document");
         /* "If document is an HTML document, then mark newDocument as an HTML document also." What makes a
-           Document an HTML document here is its CONTENT TYPE — the same fact §4.5's createCDATASection refuses
-           on — and a document that is not one gets what "creating a document that implements Document"
-           produces, which is `application/xml` at `about:blank` with no browsing context. */
+           Document an HTML document is §4.5's TYPE — the same fact §4.5.1's createCDATASection refuses on —
+           so the owner takes `document`'s type and NOT a compare against its content type, which HTML §7.5.4's
+           text documents answer backwards. A document that is not an HTML document gets what "creating a
+           document that implements Document" produces: §4.5's defaults, `application/xml` at `about:blank`
+           with no browsing context. The CONTENT TYPE is the standard's default either way and never the
+           creator's — §4.12.3 marks the owner an HTML document, it does not copy the response's type. */
         inert = doc_rec_new(d->realm, dom, "about:blank",
-                            strcmp(d->content_type, "text/html") == 0 ? "text/html" : "application/xml");
+                            document_kind(d->is_xml, d->is_xml ? "application/xml" : "text/html"));
         inert->is_inert_template = 1;
         doc_realm_owns(d->realm, inert);
         /* The wrapper the record itself holds is the one that outlives this: nothing here has a use for a
@@ -3948,8 +3998,20 @@ const char *document_content_type_of(const lxb_dom_document_t *dom)
     return d->content_type;
 }
 
+bool document_is_xml_of(const lxb_dom_document_t *dom)
+{
+    Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "a document's §4.5 TYPE was read from a document with no record — the type is set once, "
+                      "by whichever of document_install and document_new created the document, and a tree "
+                      "that came from neither never had one to answer with. It is asked BEFORE any HTML "
+                      "parse-boundary correction runs over a tree, so a caller reaching here with no record "
+                      "is one whose correction would run over a tree nothing has classified");
+    return d->is_xml;
+}
+
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                      DocumentKind kind, SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                       uint32_t doc_id, JSValueConst nav_proxy)
 {
     Document *d;
@@ -3968,7 +4030,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "a document was installed twice into one realm — that is a NAVIGATION, and its container is "
            "per-flow state: build it as a COW record (like ProxyData's PROXY_REC) captured in its accessor, so "
            "the flow that navigated and the sibling that did not each read their own");
-    d = doc_rec_new(ctx, dom, url, "text/html");
+    d = doc_rec_new(ctx, dom, url, kind);
     d->doc = doc_id;
     /* CSP §2.2's SELF-ORIGIN BECOMES A RECORD HERE, at the one point a document's facts stop being the bytes a
        host stated and start being the types the algorithms are written over. origin_parse is the transport
@@ -4129,8 +4191,19 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        tree's iframes get their step here. It is LAST, after every wrapper and prototype exists, because
        creating a navigable wraps the element and stores a WindowProxy on it. */
     /* HTML tree construction produces attributes in the NULL namespace; lexbor stamps them with the element's
-       namespace instead, and only here — on the tree the parse just built — are the two distinguishable. */
-    dom_attr_normalize_parsed(lxb_dom_interface_node(dom));
+       namespace instead, and only here — on the tree the parse just built — are the two distinguishable.
+       ONLY FOR A TREE AN HTML PARSER BUILT, and the arm is the Document's recorded §4.5 TYPE rather than a
+       classification made here. HTML §7.5.2 "Loading HTML documents" and §7.5.4 "Loading text documents" both
+       create an HTML PARSER, so their trees carry §13.2.6.1's boundary; §7.5.3 "Loading XML documents"
+       creates an XML parser, whose attribute namespaces are Namespaces in XML §6.2's EXPANSION — already
+       computed from the bindings in scope, with nothing to correct and names the standard just decided.
+       core/html/domparser.c makes the identical split for §8.5.1's two arms and states each seam's own
+       reason; the closure is the assertion inside the walk, so a THIRD route into it fires rather than
+       silently widening this one. Running it over an XML tree is not a no-op: an `id` or `class` attribute
+       reaches the walk's own DCHECK, because those two are the element's cached attribute slots and the walk
+       is about to re-intern the name they are keyed on. */
+    if (!document_is_xml_of(lxb_dom_interface_document(dom)))
+        dom_attr_normalize_parsed(lxb_dom_interface_node(dom));
     /* HTML §4.2.3 FOR THE TREE THE PARSER BUILT, AND FIRST AMONG THESE WALKS. A browser sets the frozen base
        URL as tree construction inserts the element, so a `<base href>` in the page's own markup is in force
        before anything else in the document resolves a URL — and every walk below resolves one: §4.8.5's

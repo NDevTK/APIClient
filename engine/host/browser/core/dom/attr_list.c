@@ -23,6 +23,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/dom/attr_list.h"
+#include "core/dom/document.h"   /* §4.5's TYPE — which parser built the tree this correction is stated over */
 #include "core/dom/name_intern.h"   /* §4.9.2's storage step stores the three names AS GIVEN */
 #include "core/dom/node.h"   /* node_wrap_forget / node_agent_runtime — a destroyed Attr hands back its wrapper */
 #include "solver/attr_shadow.h"   /* …and the taint keyed on it, for the same pool-reuse reason */
@@ -465,6 +466,27 @@ void dom_attr_normalize_parsed(lxb_dom_node_t *root)
     lxb_dom_node_t *n = root;
 
     if (!root) return;
+    /* AND IT IS AN HTML PARSER'S BOUNDARY, ASSERTED HERE RATHER THAN TRUSTED AT THE CALLER. Every sentence
+       above is stated over HTML §13.2 "Parsing HTML documents" — §13.2.6.1's "adjust foreign attributes" is
+       what moves three families out of the null namespace, and lexbor's counterpart is what this undoes — so
+       the correction has no meaning for a tree an HTML parser did not build. An XML parser's attribute
+       namespaces are Namespaces in XML §6.2's EXPANSION, computed from the bindings in scope and written
+       straight through dom_attr_write: there is nothing to correct, and running this would REWRITE names the
+       standard just decided.
+       THE ASSERT IS HERE BECAUSE THE CALLERS ARE THE THING THAT CAN GO WRONG. Two entries in this engine
+       reach a parse boundary (core/dom/document.c for a navigated Document, core/html/domparser.c for HTML
+       §8.5.1) and they used to answer this question differently — domparser.c split its two arms and said in
+       prose why the XML one must not run this, while document.c ran it over every tree it installed. A third
+       entry added later would inherit whichever it copied; with the assertion at the walk it FIRES instead.
+       It is a DCHECK on the DOCUMENT'S OWN RECORDED TYPE and never on the tree's shape: an XHTML document and
+       an HTML one hold the same elements in the same namespace, so nothing here could recover the answer by
+       inspection — which is exactly why §4.5 makes it a stored fact and why doc_rec_new writes it. */
+    DCHECK(!document_is_xml_of(root->owner_document),
+           "HTML §13.2's parse-boundary attribute correction was run over an XML document's tree — Namespaces "
+           "in XML §6.2 already EXPANDED those names, so this walk would rewrite them: it strips the "
+           "namespace off every attribute whose namespace is its element's, and re-interns the local name of "
+           "any attribute whose qualified name differs. Route the caller by the Document's §4.5 type the way "
+           "core/dom/document.c and core/html/domparser.c do, rather than widening this walk");
     for (;;) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *el = lxb_dom_interface_element(n);

@@ -1132,8 +1132,12 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
             return;                                                                             /* null */
         }
         url = JS_ToCString(ctx, d->response_url);
-        /* Steps 8-11, as on the HTML arm below and for its reasons. */
-        xhr_set(ctx, d, &d->response_object, document_new(ctx, dom, url ? url : "", content_type));
+        /* Steps 8-11, as on the HTML arm below and for its reasons. AN XML DOCUMENT: this arm's document is
+           "the result of running the XML parser", and only the HTML arm carries §3.6.6's "Flag document as an
+           HTML document" step — so §4.5's default type `xml` stands, which is what `responseXML` on an XML
+           response must be for `createCDATASection` and for the parse-boundary correction to stay away. */
+        xhr_set(ctx, d, &d->response_object,
+                document_new(ctx, dom, url ? url : "", document_kind(/*is_xml*/true, content_type)));
         if (url) JS_FreeCString(ctx, url);
         free(content_type);
         return;
@@ -1162,8 +1166,13 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
           "XMLHttpRequest: the response document could not be parsed");
     url = JS_ToCString(ctx, d->response_url);
     /* Steps 8-11: the document's encoding, content type, URL and origin. document_new takes the address and
-       the content type; the origin is the realm's, which is what a document made in this realm has. */
-    xhr_set(ctx, d, &d->response_object, document_new(ctx, dom, url ? url : "", content_type));
+       §4.5's creation pair; the origin is the realm's, which is what a document made in this realm has.
+       "FLAG DOCUMENT AS AN HTML DOCUMENT" is §3.6.6's own step on this arm and it is the `is_xml` half — a
+       fact the content type cannot stand in for, because step 9 sets that to finalMIME's essence and an HTML
+       MIME type is not only "text/html" (`application/xhtml+xml` is an XML MIME type and takes the arm
+       above, but `text/html;charset=…`'s essence is what lands here). */
+    xhr_set(ctx, d, &d->response_object,
+            document_new(ctx, dom, url ? url : "", document_kind(/*is_xml*/false, content_type)));
     if (url) JS_FreeCString(ctx, url);
     free(content_type);
 }

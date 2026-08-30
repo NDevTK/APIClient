@@ -144,9 +144,11 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
     CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
                               (const lxb_char_t *)SKELETON, sizeof SKELETON - 1) == LXB_STATUS_OK,
           "createHTMLDocument: the skeleton its own steps 3-5 and 7 describe did not parse");
-    /* §4.5's "a new document": address `about:blank`, content type "text/html". The record has to exist before
-       any node of this tree is wrapped — node_wrap resolves a node's prototype through its document's realm. */
-    doc = document_new(ctx, dom, "about:blank", "text/html");
+    /* §4.5.1 createHTMLDocument step 2 STATES BOTH FACTS IN ONE SENTENCE — "Set doc's type to `html` and
+       content type to `text/html`" — which is why they travel as one value; the address is §4.5's default
+       `about:blank`. The record has to exist before any node of this tree is wrapped — node_wrap resolves a
+       node's prototype through its document's realm. */
+    doc = document_new(ctx, dom, "about:blank", document_kind(/*is_xml*/false, "text/html"));
 
     if (argc >= 1 && !JS_IsUndefined(argv[0])) {   /* step 6, and only when the title was GIVEN */
         lxb_dom_node_t *head = NULL, *n, *root = node_of(doc)->first_child;
@@ -223,7 +225,11 @@ static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, in
     CHECK(dom != NULL, "createDocument: OOM building a second Document");
     /* Step 1's document has NO tree at all — not even a document element — which is why this is a create and
        not a parse. §4.5's own steps 4 and 5 are what put nodes in it, if the arguments name any. */
-    doc = document_new(ctx, dom, "about:blank", type);
+    /* AND IT IS AN XML DOCUMENT — step 1 is "creating a document that implements XMLDocument", and §4.5's
+       default type `xml` is what that leaves in place (only createHTMLDocument beside it sets `html`). So
+       `createDocument(…).createCDATASection(…)` succeeds where an HTML document's must throw, which is the
+       one observable this pair decides here. */
+    doc = document_new(ctx, dom, "about:blank", document_kind(/*is_xml*/true, type));
 
     if (argc > 1 && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
         const char *qname = JS_ToCString(ctx, argv[1]);

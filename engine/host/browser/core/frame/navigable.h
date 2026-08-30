@@ -41,6 +41,7 @@
 #include "core/frame/navigate_event_fire.h" /* §7.2.6.10.4's fire, which §7.4.3 step 1 performs */
 /* §7.1.7's POLICY CONTAINER in the form it crosses a seam — a Document is created with one and a navigable is
    created with the clone of its creator's, so both entries below take one. */
+#include "core/dom/document.h"           /* DocumentKind — DOM §4.5's type and content type for a Document */
 #include "core/frame/policy_container.h"
 #include "core/frame/embedder_policy.h"   /* §7.1.4's item, which §7.1.4.2 checks a rooted navigable against */
 #include "core/frame/opener_policy.h"     /* §7.5.1's opener policy ROW, which a rooted navigable carries */
@@ -120,8 +121,13 @@
    contain (§2.2.2 states it from the RESPONSE's URL, while §7.3.2.1's clone hands the CREATOR's to a document
    that came from no response). A builder that answered it from `origin` would be right for an unsandboxed
    document loaded from its own address and wrong for both of those. */
+/* `kind` is DOM §4.5 "Interface Document"'s TYPE AND CONTENT TYPE for the Document being built — HTML
+   §7.5.1's two creation arguments, chosen by §7.4.5's load-a-document arm for a response and by §7.3.2.1
+   "Creating browsing contexts" for the initial `about:blank`. A builder NEVER derives it: the arm is a fact
+   about the response, which the builder does not have, and a builder that answered "text/html" would be
+   stating the one thing every Document in this engine used to say whatever had been fetched. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                   const char *top_level_url, const char *origin,
+                                   const char *top_level_url, const char *origin, DocumentKind kind,
                                    SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                                    uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);

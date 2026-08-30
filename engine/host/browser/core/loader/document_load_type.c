@@ -125,6 +125,39 @@ DocumentLoadType document_load_type_of(const MimeType *m)
     return DOC_LOAD_EXTERNAL;
 }
 
+DocumentKind document_load_kind(const MimeType *computed)
+{
+    DocumentLoadType arm = document_load_type_of(computed);   /* asserts the record for both of us */
+    DocumentKind     k;
+    char            *essence;
+
+    /* §7.5.2's contentType is a LITERAL and not this response's type, so the HTML arm never reads the record:
+       "creating and initializing a Document object given "html", "text/html", and navigationParams". */
+    if (arm == DOC_LOAD_HTML)
+        return document_kind(/*is_xml*/false, "text/html");
+    /* THE TWO ARMS THAT CREATE NO DOCUMENT THROUGH §7.5.1 — see the header. Asked BEFORE the essence is
+       allocated, so the crash is not standing over a leak. */
+    if (arm == DOC_LOAD_MULTIPART)
+        DFAIL("HTML §7.5.5 Loading multipart/x-mixed-replace documents states no §7.5.1 type and content type "
+              "of its own — it parses the body by RFC 2046's rules and loads the FIRST PART as a document, so "
+              "the pair belongs to that part's computed type. Build §7.5.5's part splitting and ask this "
+              "again with the part's type; a pair answered here would give the part's Document the wrapper's");
+    if (arm == DOC_LOAD_EXTERNAL)
+        DFAIL("HTML §7.4.5's final Otherwise arm creates no Document, so it has no §7.5.1 type and content "
+              "type — the response is handled by external software or by §7.5.7 Loading a document for inline "
+              "content that doesn't have a DOM, neither of which goes through create-and-initialize. A caller "
+              "asking for this response's Document pair has already decided to build a Document out of bytes "
+              "§7.4.5 does not load as one");
+    /* §7.5.3, §7.5.4 and §7.5.6 all pass `type` — the computed type — as contentType, and differ only in the
+       §7.5.1 `type` argument: "xml" for §7.5.3, "html" for the other two. §4.2's ESSENCE is what a Document
+       holds; the parameters that came with the response decided its ENCODING and are not part of what it is. */
+    essence = mime_type_essence(computed);
+    CHECK(essence != NULL, "OOM composing a response's MIME type essence for its Document's content type");
+    k = document_kind(/*is_xml*/arm == DOC_LOAD_XML, essence);
+    free(essence);
+    return k;
+}
+
 const char *document_load_type_section(DocumentLoadType t)
 {
     switch (t) {

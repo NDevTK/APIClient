@@ -10,6 +10,42 @@
 #include "core/frame/policy_container.h"
 #include "core/permissions_policy/permissions_policy.h"   /* §9.5's policy is a field of this record */
 
+/* DOM §4.5 "Interface Document"'s TWO CREATION FACTS, AS ONE VALUE — the pair HTML §7.5.1 "Shared document
+ * creation infrastructure" is given ("create and initialize a Document object, given a type `type`, content
+ * type `contentType`, and navigation params navigationParams") and writes onto the Document it makes ("Let
+ * document be a new Document, with type `type`, content type `contentType`, …").
+ *
+ * THEY ARE TWO FACTS AND NEITHER DERIVES THE OTHER, which is the whole reason this is a type. §4.5 states them
+ * separately — "Unless stated otherwise, a document's … content type is `application/xml` … type is `xml`" —
+ * and then defines the predicate over only one of them: "A document is said to be an XML document if its type
+ * is `xml`; otherwise an HTML document." HTML §7.5.4 "Loading text documents" is the case that makes the
+ * distinction load-bearing rather than pedantic: it creates its Document given type `"html"` and contentType
+ * `type`, so a `text/plain` response is an HTML DOCUMENT whose `contentType` is not "text/html". Answering
+ * "is this an HTML document" with a string compare against the content type therefore reports every text
+ * document as an XML one — and this engine asked it that way, so `createCDATASection` was permitted on a
+ * document that must refuse it and §4.12.3's template contents owner was minted with the wrong type.
+ *
+ * ONE VALUE AND NOT ONE ARGUMENT PER ITEM, for core/platform.h's reason and with its force: it is built
+ * through the constructors below, each of which names every item, so a creation that stops stating one stops
+ * compiling rather than silently keeping a neighbour's answer. */
+typedef struct {
+    bool is_xml;             /* §4.5's `type`: true is "xml", false is "html" — the predicate above, stored */
+    char content_type[32];   /* §4.5's content type — the string `document.contentType` answers */
+} DocumentKind;
+
+/* THE PAIR A STANDARD STATES OUTRIGHT — DOM §4.5.1's three factories, HTML §8.5.1's `parseFromString` and
+   XMLHttpRequest §3.6.6's "set a document response", each of which is given both facts by its own algorithm
+   and has no response to dispatch on. `content_type` is copied; it must be non-empty and must fit, and both
+   are asserted rather than truncated, because a content type that lost its tail is a type no algorithm
+   produced and every later compare against it silently answers for a document that does not exist. */
+DocumentKind document_kind(bool is_xml, const char *content_type);
+
+/* HTML §7.3.2.1 "Creating browsing contexts"' INITIAL `about:blank` — "Let document be a new Document, with:
+   type `html`, content type `text/html`, …". The Document with no response, so there is no computed type to
+   dispatch on and nothing for core/loader/document_load_type.h to answer; it is a constant of the standard,
+   stated in ONE place because a constant spelled at each of the entries that creates one is that many rules. */
+DocumentKind document_kind_initial_about_blank(void);
+
 /* Install `document` for `dom`, addressed at `url`. THE REALM IS THE DOCUMENT: `ctx` is what this document's
    state hangs off from here on, so a second same-origin document in the same agent is a second JSContext in the
    same JSRuntime and not a second instance. Only the members this engine can answer TRUTHFULLY are
@@ -47,8 +83,16 @@ void document_install_proto(JSContext *ctx);
    because only the caller knows which algorithm is running: §7.2's create-a-new-browsing-context-and-document
    gives the initial about:blank the navigable's CREATION sandboxing flags alone, while §7.5.1 gives a
    navigated Document §7.4.5's union of those and the response policy's CSP-derived flags. */
+/* `kind` is DOM §4.5's TYPE AND CONTENT TYPE for this Document, as HTML §7.4.5 "Populating a session history
+   entry"'s load-a-document arm decided them — core/loader/document_load_type.h's `document_load_kind` for a
+   response, §7.3.2.1's constant for the initial `about:blank`. IT IS CARRIED AND NEVER RE-DERIVED HERE: the
+   arm is a fact about the RESPONSE, which this function does not have, and the one component that classifies
+   a response is the one every loader already dispatches through. This used to be the literal "text/html",
+   written into every Document this engine installed whatever had been fetched — so an XHTML document reported
+   `text/html`, §4.5's "is this an HTML document" answered yes for it, and the HTML parse-boundary correction
+   ran over a tree an XML parser built. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                      DocumentKind kind, SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                       uint32_t doc_id, JSValueConst nav_proxy);
 
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
@@ -277,7 +321,7 @@ lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc);
    `dom` is CONSUMED: whoever ends up owning the document destroys it. That is the running flow's COW delta when
    capture is on — a document a flow created dies with the flow, exactly like a node it created — and the REALM
    when it is off, since a creation made at baseline is baseline. Returns the document's wrapper, OWNED. */
-JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *content_type);
+JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentKind kind);
 
 /* HTML §4.12.3's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT for `doc` — the inert Document a `<template>`'s
    contents belong to, so that a template's markup is NOT live: the owner has no browsing context, which is what
@@ -300,6 +344,13 @@ const char *document_url_of(const lxb_dom_document_t *dom);
    that took the creator's default instead would answer for a document it is not a copy of. BORROWED: the
    record owns the bytes and outlives the tree they describe. */
 const char *document_content_type_of(const lxb_dom_document_t *dom);
+
+/* §4.5's OTHER creation fact for ONE document: "A document is said to be an XML document if its type is
+   `xml`; otherwise an HTML document." A SEPARATE READ from the content type beside it, never a compare
+   against those bytes — see DocumentKind above for the text document that makes the two disagree. §4.4's
+   "clone a single node" copies both ("set copy's encoding, content type, URL, origin, type, mode, and allow
+   declarative shadow roots to those of node"), which is the other reason the record has to hold both. */
+bool document_is_xml_of(const lxb_dom_document_t *dom);
 
 /* THE DOCUMENT IS ABOUT TO BE DESTROYED — release the record that names it, and everything the record holds
    (its wrapper, its DOMImplementation, its policy container). Called from the ONE place a document's lifetime

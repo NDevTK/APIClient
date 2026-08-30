@@ -46,6 +46,7 @@
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
+#include "core/dom/document.h"           /* DocumentKind — DOM §4.5's type and content type, per document */
 #include "core/frame/opener_policy.h"
 /* §7.1.7's POLICY CONTAINER, in the form it crosses this seam — a Document is created with one, so the call
    below takes one and this unit is a direct user of the type. */
@@ -136,10 +137,18 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
  * from the policy for the same reason `url` and `origin` are separate from each other: §7.1.7's policy
  * container holds no flag set, so a host that derived one from the policy would answer a question the
  * container was never asked. §7.5.1 lists them as two rows of one creation.
+ * `kind` is DOM §4.5 "Interface Document"'s TYPE AND CONTENT TYPE, the pair HTML §7.5.1 "Shared document
+ * creation infrastructure" is given and writes onto the Document. It is a SEPARATE fact from `url` and
+ * `origin` for the reason those two are separate from each other, and it is DECIDED BY THE RESPONSE rather
+ * than by anything a host holds: §7.4.5's load-a-document arm chooses it (core/loader/document_load_type.h's
+ * `document_load_kind`), and §7.3.2.1's constant answers for a Document created from no response at all. A
+ * host that stated it itself would be the second entry asking a question the loader already answered — which
+ * is exactly how every Document this engine installed came to report the literal "text/html".
  * `doc_id` is the world registry's name for this document.
  * `nav_proxy` is §7.2.3's ONE WindowProxy for the navigable this document is active in. */
 void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                               const char *origin, SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                               const char *origin, DocumentKind kind, SerializedPolicyContainer policy,
+                               SandboxFlags sandbox_flags,
                                uint32_t doc_id, JSValueConst nav_proxy);
 
 /* THE AGENT HALF, UNDONE — every component's agent-lifetime release, in the reverse of the declaration order,

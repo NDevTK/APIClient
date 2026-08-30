@@ -517,6 +517,11 @@ typedef struct {
     const Origin *origin, *top_level_origin;
     OpenerPolicyValue opener_policy;
     SandboxFlags sandbox_flags;
+    /* DOM §4.5's TYPE AND CONTENT TYPE for the Document this create is making — HTML §7.5.1's own two
+       arguments, decided by §7.4.5's arm at the BEGIN and held until the realm exists. It is a VALUE and not
+       a pointer to the computed type for the reason the policy items above are copied: the record outlives
+       the frame that computed it, and a snapshot of this work item outlives the session. */
+    DocumentKind kind;
     bool navigates;
     /* HTML §13.2.3.2's ANSWER FOR THIS RESPONSE, and the UTF-8 the parser is handed because of it. -1 is "no
        response", which is §7.4's initial about:blank and an address whose fetch failed: those get DOM §4.5
@@ -654,6 +659,13 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
     w->navigates                = navigates;
     w->encoding                 = encoding;
     w->decoded                  = decoded;
+    /* DOM §4.5's TYPE AND CONTENT TYPE, TAKEN HERE AND CARRIED, for CLAUDE.md's "an operation that becomes a
+       work item takes its inputs with it": the pair is a fact about the RESPONSE this create was given, the
+       computed type it is read from is the caller's stack record and is freed when that frame returns, and
+       the realm this pair is for is not built until a later STEP of this same work item. Reading it back off
+       anything at that point would be reading it at the wrong time. §7.3.2.1 "Creating browsing contexts"'s
+       constant is the answer for the no-response arm — this create's own §7.4 initial `about:blank`. */
+    w->kind = computed_type ? document_load_kind(computed_type) : document_kind_initial_about_blank();
     w->dom = child_document(body ? decoded : NULL, decoded_len, computed_type, &w->load);
     return w;
 }
@@ -716,7 +728,7 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted at the begin. */
     cctx = g_realm_builder(JS_GetRuntime(ctx), w->dom, w->url, w->top_level_url, origin_serialized(w->origin),
-                           policy, w->sandbox_flags, w->doc, nav_proxy);
+                           w->kind, policy, w->sandbox_flags, w->doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     /* AND §13.2.3.2's ANSWER ONTO THE DOCUMENT IT IS ABOUT, for the same reason and in the same place as the
        about base URL below: it is a fact the OPERATION determined and the host's realm builder cannot answer.

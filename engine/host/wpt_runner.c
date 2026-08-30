@@ -2496,6 +2496,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
    a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
+                              DocumentKind kind,
                               SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                               uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -2523,7 +2524,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        and the assert in window_proxy_new_remote said so the moment a parsed iframe reached it.
        THE ADDRESS, NOT THE ORIGIN, is what a Window is installed at — this host passed `origin` where the
        other two passed the address, which is the substitution two separate facts make unspellable. */
-    platform_document_install(ctx, global, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
+    platform_document_install(ctx, global, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
 
     JS_FreeValue(ctx, global);
 }
@@ -2532,7 +2533,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
    similar-origin window agent is. It gets the identical per-document install the first document got; there is
    no smaller variant of it, because a child whose `window` is smaller is a different browser. */
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                  const char *top_level_url, const char *origin,
+                                  const char *top_level_url, const char *origin, DocumentKind kind,
                                   SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                                   uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -2546,7 +2547,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        §7.4 decided the CHILD's top-level creation URL and handed it over; a builder that used `url` here
        would make an about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    wpt_realm_install(ctx, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
+    wpt_realm_install(ctx, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
        THEY ARE QUEUED ONTO THE FRONTIER, NOT RUN HERE. A realm is built from inside §7.4 step 14's load job —
@@ -2640,6 +2641,9 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        before the parse is a type this document was never loaded under. */
     MimeType computed;
     bool computed_defined = false;
+    /* §7.5.1's TYPE AND CONTENT TYPE for the document this runner loads, decided by the same §7.4.5 dispatch
+       the parse runs and carried to the install rather than restated there. */
+    DocumentKind root_kind;
     NavigationParams np;
     const char *src = html;
     JSRuntime *rt;
@@ -2732,6 +2736,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
              : html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED,
                                    (const lxb_char_t *)src, html_n)) == LXB_STATUS_OK,
           "the runner's document did not parse");
+    /* AND §7.5.1's TYPE AND CONTENT TYPE FOR THIS DOCUMENT, off the same computed type the parse above
+       dispatched on — read BEFORE the record is freed, and never restated at the install below. The
+       no-response arm is §7.3.2.1 "Creating browsing contexts"' constant, which is the same split the two
+       parse calls above make and for the same reason: a document with no response has no type to compute. */
+    root_kind = computed_defined ? document_load_kind(&computed) : document_kind_initial_about_blank();
     if (computed_defined)
         mime_type_free(&computed);
     free(fetched);
@@ -2802,7 +2811,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                                serialized_embedder_policy_of(&np.embedder));
         policy = policy_container_determine_navigation_params(g_base_url, response, inherited);
 
-        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, policy,
+        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_kind, policy,
                           np.sandbox_flags, world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }

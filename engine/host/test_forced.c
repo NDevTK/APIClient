@@ -4507,12 +4507,13 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
    globals: a host ADDS to the one list and cannot subtract from it, and adding afterwards is also what lets
    the `eval` sink below stand where the language's own `eval` would. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
+                             DocumentKind kind,
                              SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                              uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
-    platform_document_install(ctx, g, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
+    platform_document_install(ctx, g, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
 
     /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
        these is this fixture's, which is why it is here and not in the list. */
@@ -4550,7 +4551,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
 
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
 static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                 const char *top_level_url, const char *origin,
+                                 const char *top_level_url, const char *origin, DocumentKind kind,
                                  SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                                  uint32_t doc_id, JSValueConst nav_proxy)
 {
@@ -4564,7 +4565,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    tf_realm_install(ctx, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
+    tf_realm_install(ctx, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -11256,7 +11257,14 @@ int main(int argc, char **argv) {
            document has even though it has no policy, because a CSP list carries one whether or not it holds
            any, and `'self'` in a policy this fixture builds later is measured against it. It is this
            document's own address's origin, because this document is its own response. */
+        /* AND §7.5.1's TYPE AND CONTENT TYPE, STATED AND NOT DISPATCHED. This fixture's document is HTML
+           markup it holds as a C string literal and parses with the HTML parser, so there is no response to
+           compute a type from and nothing for §7.4.5's dispatch to answer — the pair is §7.5.2 "Loading HTML
+           documents"' own, which is a LITERAL for that arm ("creating and initializing a Document object
+           given "html", "text/html"") rather than anything read off a response. Stated here because this host
+           is the one that knows its document came from no server. */
         tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test",
+                         document_kind(/*is_xml*/false, "text/html"),
                          serialized_policy_container(NULL, "https://x.test",
                                                      serialized_embedder_policy_new()), 0,
                          world_local_doc(), root_proxy);
