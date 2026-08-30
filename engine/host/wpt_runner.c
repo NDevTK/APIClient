@@ -348,7 +348,8 @@ static char g_wpt_root[512];
  * A `fetch()` PARKS the flow that issued it (engine_pending_fetch_url): the flow keeps its snapshot, reports
  * itself host-owed, and its continuation resumes with the reply. That register records the WHOLE request —
  * method, headers and body — and the seam the HOST is offered now names TWO of those: engine_pending_fetches
- * lists `METHOD<TAB>URL` and engine_provide delivers against the pair. The corpus still asks this host for
+ * lists `METHOD<TAB>INITIATOR<TAB>URL` and engine_provide delivers against the pair. The corpus still asks
+ * this host for
  * POSTs whose answer depends on the BODY sent (`echo-content.py`) and for probes whose answer is the HEADERS it
  * was given (`inspect-headers.py`), and neither is on the line.
  *
@@ -1415,7 +1416,7 @@ static int wpt_issue_pending(void)
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
-        const char *method, *url;
+        const char *method, *initiator, *url;
         FetchRequest req;
         HeaderList none = { 0 };
         int i, rec = -1;
@@ -1423,8 +1424,15 @@ static int wpt_issue_pending(void)
         if (!end) break;
         *end = 0;
         /* SPLIT WHERE IT WAS JOINED, by the engine's own splitter — three hosts each finding the TAB for
-           themselves is three places for the grammar to drift. */
-        engine_pending_split(p, &method, &url);
+           themselves is three places for the grammar to drift.
+           THIS RUNNER ISSUES EVERY PARK WHATEVER ITS INITIATOR, and that is a property of its network rather
+           than a policy it is skipping: it serves the CHECKED-OUT CORPUS off wptserve's own loopback socket, so
+           there is no third party to spend anything at and no session to spend. The field's consumer is the
+           zone that talks to the real web (engine/trusted.mjs); what is owed here is the vocabulary assert,
+           because a runner that read a field it never checked would be the first to see the producer drift. */
+        engine_pending_split(p, &method, &initiator, &url);
+        DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
+               "the pending join stated an initiator that is neither token engine.h declares");
         /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this host now visits the list at every slice rather
            than once per answer — so without this the page's one `fetch` would become one REQUEST PER SLICE at
            the server, which is a different question asked repeatedly rather than the one the flow parked on. */

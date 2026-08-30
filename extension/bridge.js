@@ -2070,8 +2070,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      that about every other refusal safeFetch makes (blocked-scheme, blocked-cors-credentialed, CORB). */
   const fetched = async (method, u, asScript) => {
     DCHECK(typeof method === "string" && method !== "",
-           "a pending request reached the chokepoint with no method — GetPending answers `METHOD<TAB>URL` and " +
-           "the pair is what the flow parked on, so a request whose method is unknown can be neither refused " +
+           "a pending request reached the chokepoint with no method — GetPending answers " +
+           "`METHOD<TAB>INITIATOR<TAB>URL` and the pair is what the flow parked on, so a request whose method is unknown can be neither refused " +
            "nor issued");
     if (method !== "GET") return null;
     if (!canFetch || hasHole(u)) return null;
@@ -2611,11 +2611,28 @@ async function engineProvide(eng, method, url, rep) {
    right for as long as the page issues nothing else. */
 function pendingRequest(line) {
   const tab = line.indexOf("\t");
-  CHECK(tab > 0 && tab < line.length - 1,
-        "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>URL`: `" + line + "` — the " +
-        "engine joins the pair and this zone must deliver against both halves, so a line missing one is a " +
-        "reply keyed on a request nothing parked on");
-  return { method: line.slice(0, tab), url: line.slice(tab + 1) };
+  const tab2 = tab < 0 ? -1 : line.indexOf("\t", tab + 1);
+  CHECK(tab > 0 && tab2 > tab + 1 && tab2 < line.length - 1,
+        "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>INITIATOR<TAB>URL`: `" +
+        line + "` — the engine joins the three and this zone must deliver against the (method, url) pair, so " +
+        "a line missing a field puts an initiator token where the address belongs and keys a reply on a " +
+        "request nothing parked on");
+  const initiator = line.slice(tab + 1, tab2);
+  /* THE FIELD IS HTML §4.12.1's PARSER-INSERTED FLAG (solver/engine.h), and this zone reads it for ONE of the
+     two things it decides. It classifies the CORB load type below — a parser-inserted `<script src>` is a code
+     load, which `GetChunks` alone could never say. It does NOT yet decide whether the request is FIRED: that
+     is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's OBSERVED / DERIVED / FORCED split, this zone still fires
+     every line uncredentialed, and SECURITY.md §Network already names that as its own standing open item
+     ("that vocabulary … is the next subproblem"). Turning it into a per-origin policy is that subproblem and
+     not a side effect of the field arriving; `engine/trusted.mjs` is the zone that decides it today, for the
+     native host, and its narrowness is stated there rather than copied here.
+     THE MEMBERSHIP CHECK IS THE CONTRACT'S READER and fires the day the vocabulary drifts — which matters more
+     now that a value this zone does not know would silently take the non-script CORB arm. */
+  CHECK(initiator === "parser" || initiator === "script",
+        "GetPending stated an initiator this zone does not know: `" + initiator + "` — solver/engine.h " +
+        "declares exactly `parser` and `script`, and a third value would be answered by whichever arm a " +
+        "consumer happened to write first");
+  return { method: line.slice(0, tab), initiator, url: line.slice(tab2 + 1) };
 }
 async function engineServiceFetch(eng) {   // one round: answer every parked REQUEST, then the engine is hot again
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
@@ -2637,11 +2654,23 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      as code: strictly a CORB narrowing (a cross-origin non-JS body is refused where a browser would have read
      it as data), and the residual that the destination is being read out of a second list instead of off the
      request. */
+  /* AND THE CHUNK LIST WAS NEVER THE WHOLE CORB CLASS, WHICH THE PENDING LINE'S INITIATOR NOW CLOSES HALF OF.
+     `module_loader_chunks` is filled by `module_load` and by nothing else, so it names DYNAMIC `import()`
+     targets alone — a document's own `<script src>` was fetched with no `as` at all, and a cross-origin body
+     served for it was ingested as data and then COMPILED. The pending line states HTML §4.12.1's
+     parser-inserted flag (solver/engine.h), and a parser-inserted `<script src>` IS a code load by that
+     token's definition, so it takes the class it always should have had.
+     THE RESIDUAL IS NAMED RATHER THAN CLOSED: an INJECTED `<script src>` and a dynamic `import()` both report
+     `script`, which is also what a plain `fetch()` reports, so this field cannot separate the two. What
+     separates them is Fetch §2.2.5 Requests' DESTINATION, which is the field this line and `GetChunks` are
+     both standing in for and which belongs on the pending line beside the method — after which the chunk list
+     has nothing left to say and deletes. */
   const asScript = new Set(owedList("GetChunks", (await eng.r.renderer.getChunks()).urls));
   const requests = owedList("GetPending", (await eng.r.renderer.getPending()).requests);
   for (const line of requests) {
-    const { method, url } = pendingRequest(line);
-    await engineProvide(eng, method, url, await eng.fetched(method, url, asScript.has(url)));
+    const { method, initiator, url } = pendingRequest(line);
+    await engineProvide(eng, method, url,
+                        await eng.fetched(method, url, asScript.has(url) || initiator === "parser"));
   }
   await engineServiceHostRequests(eng);
 }

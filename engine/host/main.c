@@ -1304,7 +1304,7 @@ QJS_EXPORT void qjs_teardown(void)
  * engine that reports no pending fetches while a flow is parked on one that never arrives — the protocol would
  * run to completion over the hole and the result would look finished. */
 
-/* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>URL` lines — the same grammar
+/* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>INITIATOR<TAB>URL` lines — the same grammar
    qjs_host_requests answers in, and the method is there because it is half the request's IDENTITY. This list
    was addresses alone and the reply edge matched on one, so a page issuing a GET and a POST to one address had
    both promises settled with whichever the zone fetched first (solver/engine.h states the whole of it). The
@@ -1359,9 +1359,9 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
     /* THE REQUEST THIS ANSWERS IS THE PAIR, IN THE ORDER THE JOIN EMITTED IT — a request line, METHOD then
        target (RFC 9112 §3 Request Line). A zone still calling this with four operands lands its URL in `method`
        and engine_provide's token assert names exactly that. */
-    DCHECK(method != NULL, "a reply was provided with no METHOD — qjs_pending answers `METHOD<TAB>URL` lines "
-                           "and this entry takes both halves; a host sending the address alone is answering a "
-                           "request it cannot name");
+    DCHECK(method != NULL, "a reply was provided with no METHOD — qjs_pending answers "
+                           "`METHOD<TAB>INITIATOR<TAB>URL` and this entry takes the pair; a host sending the "
+                           "address alone is answering a request it cannot name");
     DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
                           "which is a value the engine's delivery distinguishes from a reply it never got");
     DCHECK(body != NULL || body_len == 0,

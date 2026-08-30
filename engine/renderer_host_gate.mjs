@@ -648,8 +648,8 @@ try {
     const st = await opener.renderer.step();
     steps++;
     /* THE REQUESTS FLOWS ARE PARKED ON, ANSWERED THE WAY THE PRODUCTION CONSUMER ANSWERS THEM — one
-       `METHOD<TAB>URL` line each, and the reply record crossing as JSON with the BODY BESIDE IT as bytes,
-       because §2.2.5 makes a response's body a byte sequence and every way of putting one inside JSON is an
+       `METHOD<TAB>INITIATOR<TAB>URL` line each, and the reply record crossing as JSON with the BODY BESIDE
+       IT as bytes, because §2.2.5 makes a response's body a byte sequence and every way of putting one inside JSON is an
        encode or a decode run by the zone that fetched. `computedType` is this zone's own decision and is
        asserted rather than defaulted at the far end: this zone minted the two characters below and
        `application/json` is what it computed them to be. */

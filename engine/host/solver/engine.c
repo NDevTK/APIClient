@@ -2064,6 +2064,13 @@ const char *engine_pending_fetches(void) {
        the host provide twice and the second call finds nothing left. Deduping over the URL alone did the
        opposite of that and worse — it deleted the POST from a list that already held the GET, so the host never
        issued it and the engine settled the POST's promise with the GET's body. */
+    /* THE IN-PLACE UPGRADE BELOW IS ONLY SOUND WHILE THE TWO TOKENS ARE ONE WIDTH, so the assumption is
+       asserted rather than remembered: a third token of another length added to engine.h would otherwise
+       rewrite six bytes of a URL and the host would fetch an address no flow parked on. */
+    DCHECK(sizeof PENDING_INITIATOR_PARSER == sizeof PENDING_INITIATOR_SCRIPT,
+           "the pending line's initiator tokens are no longer one width — the join upgrades a duplicate's "
+           "initiator by overwriting it in place, which is a rewrite of the following field the moment the two "
+           "differ in length");
     if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending requests"); }
     join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
@@ -2074,9 +2081,22 @@ const char *engine_pending_fetches(void) {
             size_t ul = 0, ml = 0;
             const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
             const char *m = JS_IsString(mv) ? JS_ToCStringLen(pending_ctx(), &ml, mv) : NULL;
+            /* HTML §4.12.1's PARSER-INSERTED FLAG, read off the kind the park already carries — see
+               engine.h's tokens for why the engine states it and does not act on it. */
+            const char *ini = pending_get_int(pe, PEND_KIND) == FLOW_PENDING_DOCSCRIPT
+                              ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
+            const size_t il = sizeof PENDING_INITIATOR_PARSER - 1;
             int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
             if (!skip) {
-                const char *q = join, *stop = join + n_out;
+                char *q = join, *stop = join + n_out;
+                /* A SYNCHRONOUS HOST REQUEST HAS NO ADDRESS AND MUST NOT REACH THIS LIST — it is
+                   engine_host_requests' business, and a host handed one here would fetch a URL and settle a
+                   rendezvous that answers a program. It is skipped above by carrying no URL, so this asserts
+                   the reason rather than the symptom. */
+                DCHECK(pending_get_int(pe, PEND_KIND) != FLOW_PENDING_HOSTREQ,
+                       "a synchronous host request carries an ADDRESS — it is answered by engine_host_answer "
+                       "against a request id, not by a fetched body against a (method, url) pair, so listing "
+                       "it here would have the host answer one seam's question through the other");
                 /* THE PRODUCER'S HALF, ASSERTED WHERE THE RECORD IS READ rather than where it is written: a park
                    that named an address and no method is a component that dropped a field, and the host would be
                    handed a line the split cannot make sense of. */
@@ -2097,21 +2117,35 @@ const char *engine_pending_fetches(void) {
                        "an outstanding request's METHOD is not a token — Fetch §2.2.1 Methods, and RFC 9110 "
                        "§5.6.2 Tokens is the production; the joined line would not split back into the pair");
                 while (q < stop) {
-                    const char *e = memchr(q, '\n', (size_t)(stop - q));
+                    char *e = memchr(q, '\n', (size_t)(stop - q));
                     size_t l = e ? (size_t)(e - q) : (size_t)(stop - q);
-                    if (l == ml + 1 + ul && !memcmp(q, m, ml) && q[ml] == '\t' &&
-                        !memcmp(q + ml + 1, u, ul)) { skip = 1; break; }
+                    if (l == ml + 1 + il + 1 + ul && !memcmp(q, m, ml) && q[ml] == '\t' &&
+                        q[ml + 1 + il] == '\t' && !memcmp(q + ml + 1 + il + 1, u, ul)) {
+                        /* THE SET'S INITIATOR IS THE MOST OBSERVED OF ITS MEMBERS, and that is a statement
+                           about the REQUEST rather than a preference. The dedup is over the pair because the
+                           pair is the request's identity and one reply fills every entry parked on it — so
+                           when a document's own `<script src>` and a running arm's `fetch()` name one address,
+                           the line has to state the fact that survives them both: a real load of this document
+                           makes this request. Taking whichever flow happened to be walked first would make a
+                           zone's firing decision a function of scheduler order, which is the same value read
+                           two ways on two runs. The upgrade is monotone and never runs downward. */
+                        if (!memcmp(ini, PENDING_INITIATOR_PARSER, il))
+                            memcpy(q + ml + 1, PENDING_INITIATOR_PARSER, il);
+                        skip = 1; break;
+                    }
                     if (!e) break;
                     q = e + 1;
                 }
             }
             if (!skip) {
-                while (n_out + ml + ul + 3 > cap) {
+                while (n_out + ml + il + ul + 4 > cap) {
                     cap *= 2;
                     join = realloc(join, cap);
                     CHECK(join, "engine: OOM growing the pending-request join");
                 }
                 memcpy(join + n_out, m, ml); n_out += ml;
+                join[n_out++] = '\t';
+                memcpy(join + n_out, ini, il); n_out += il;
                 join[n_out++] = '\t';
                 memcpy(join + n_out, u, ul); n_out += ul;
                 join[n_out++] = '\n';
@@ -2126,21 +2160,38 @@ const char *engine_pending_fetches(void) {
     return join;
 }
 
-void engine_pending_split(char *line, const char **method, const char **url) {
-    char *tab;
+void engine_pending_split(char *line, const char **method, const char **initiator, const char **url) {
+    char *tab, *tab2;
 
-    DCHECK(line && method && url, "a pending line was split with nowhere to put its halves");
+    DCHECK(line && method && initiator && url, "a pending line was split with nowhere to put its fields");
     tab = strchr(line, '\t');
-    /* A `CHECK`, NOT A DCHECK, because the release path has no defined answer: the two halves are what a reply
+    /* A `CHECK`, NOT A DCHECK, because the release path has no defined answer: the fields are what a reply
        is delivered against, and a line that is not the shape this engine joined would key a delivery on a method
        nobody asked for — which is the wrong answer this seam exists to make impossible, in the one build where
        nothing else would say so. */
     CHECK(tab != NULL,
           "engine: a host split a pending line that carries no TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>URL` lines and this one is neither half of that");
+          "`METHOD<TAB>INITIATOR<TAB>URL` lines and this one is none of that");
+    tab2 = strchr(tab + 1, '\t');
+    /* THE SECOND TAB IS THE ONE A HOST WRITTEN AGAINST THE OLD GRAMMAR WOULD NOT FIND, and it is a CHECK for
+       the same sentence as the first with the failure one field over: without it the INITIATOR silently becomes
+       the address, so the zone would fetch the six characters `parser` and every flow parked on the real URL
+       would wait for a reply keyed on a request nothing made. A URL cannot contain a TAB (URL Standard §4.4
+       URL parsing removes every ASCII tab and newline from its input), so the second TAB is unambiguous and
+       the URL is the remainder of the line. */
+    CHECK(tab2 != NULL,
+          "engine: a host split a pending line carrying one TAB — engine_pending_fetches joins "
+          "`METHOD<TAB>INITIATOR<TAB>URL` and this host is reading the two-field grammar that preceded it, so "
+          "its address is about to be an initiator token");
     *tab = 0;
+    *tab2 = 0;
     *method = line;
-    *url = tab + 1;
+    *initiator = tab + 1;
+    *url = tab2 + 1;
+    DCHECK(!strcmp(*initiator, PENDING_INITIATOR_PARSER) || !strcmp(*initiator, PENDING_INITIATOR_SCRIPT),
+           "a pending line's INITIATOR is neither of the two tokens engine.h declares — the trusted zone's "
+           "firing decision reads this field, and a value it does not know would be answered by whichever of "
+           "its arms happened to be the default");
 }
 
 /* IS ANYTHING OUTSTANDING ON THE WHOLE FRONTIER — the third answer over the same two walks above, and the one

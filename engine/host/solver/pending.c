@@ -207,8 +207,8 @@ int pending_owed_replies(JSValueConst reg)
         int kind = (int)pending_get_int(e, PEND_KIND);
         if (kind != FLOW_PENDING_HOSTREQ && pend_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
-               lists `METHOD<TAB>URL` and engine_provide delivers against both halves, so an owed entry missing
-               either is one the host was never shown and never will be — counting it credits a reply nobody is
+               lists `METHOD<TAB>INITIATOR<TAB>URL` and engine_provide delivers against the pair, so an owed
+               entry missing either is one the host was never shown and never will be — counting it credits a reply nobody is
                going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at
                the origin of the DEBT rather than on the register's hot path: pending_blocked runs at every
                suspend point, this runs once per flow the pager sells.

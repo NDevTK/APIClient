@@ -219,8 +219,8 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     M.HEAPU8[p + u8.length] = 0;
     return [p, u8.length];
   };
-  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>URL` lines and the delivery
-     matches both halves, so a GET and a POST to one address are two questions with two replies. */
+  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>INITIATOR<TAB>URL` lines and
+     the delivery matches both halves, so a GET and a POST to one address are two questions with two replies. */
   const provide = (method, u, reply, body) => {
     const [p, n] = bs(body);
     try { M.ccall('qjs_provide', 'void', ['number','number','number','number','number'],
@@ -427,8 +427,16 @@ async function service(e) {
   let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const tab = line.indexOf('\t');
-    if (tab <= 0) fail(`a pending line carries no METHOD: ${line}`);
-    const method = line.slice(0, tab), u = line.slice(tab + 1);
+    const tab2 = tab < 0 ? -1 : line.indexOf('\t', tab + 1);
+    if (tab <= 0 || tab2 <= tab + 1)
+      fail(`a pending line is not \`METHOD<TAB>INITIATOR<TAB>URL\`: ${line}`);
+    const method = line.slice(0, tab), initiator = line.slice(tab + 1, tab2), u = line.slice(tab2 + 1);
+    /* THIS DRIVER ANSWERS EVERY PARK WHATEVER ITS INITIATOR — its fixtures' fetches are named `/hold`,
+       `/resume`, `/got` and `/closed` and the reply is `{}` served out of a literal, so there is no network
+       here for a firing policy to be about. The vocabulary is checked because a driver that read a field it
+       never verified is the one that would carry a producer's drift into every assertion below it. */
+    if (initiator !== 'parser' && initiator !== 'script')
+      fail(`a pending line states the initiator \`${initiator}\`, which is neither token solver/engine.h declares`);
     if (u.includes('/hold')) continue;
     if (u.includes('/resume') && resumeOwed) continue;
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }

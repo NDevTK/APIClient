@@ -399,14 +399,17 @@
         params: [],
         reply: [
           { name: "requests", type: "string",
-            why: "the REQUESTS flows are parked on — one `METHOD<TAB>URL` line each, newline-joined, \"\" for " +
-                 "none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
+            why: "the REQUESTS flows are parked on — one `METHOD<TAB>INITIATOR<TAB>URL` line each, " +
+                 "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +
                  "two, and both settled with whichever body the zone fetched first. TAB can occur in neither " +
                  "half — URL Standard §4.4 URL parsing has the basic URL parser remove every ASCII tab or " +
                  "newline from its input before anything else, and Fetch §2.2.1 Methods makes a method a byte " +
                  "sequence matching the method token production, whose tchar (RFC 9110 §5.6.2 Tokens) is " +
-                 "VCHAR-only and excludes HTAB. It is the grammar GetHostRequests already answers in, and an " +
+                 "VCHAR-only and excludes HTAB — and the INITIATOR between them is one of two fixed tokens " +
+                 "(`parser`/`script`, solver/engine.h), HTML §4.12.1 \"The script element\"'s parser-inserted " +
+                 "flag, which says whether the BYTES THIS ZONE FETCHED named the request or whether running " +
+                 "code did. It is the grammar GetHostRequests already answers in, and an " +
                  "empty list is the empty string and never a NULL pointer turned into the four characters " +
                  "\"null\" and then into one bogus record" },
           WORKING_SET] },

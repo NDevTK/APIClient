@@ -310,8 +310,8 @@ async function child(docPath, schedName) {
        FETCHED: that is what Fetch §5.2's `text()` was doing in safe-fetch.js, and it is why HTML §8.1.4.2's
        classic-script decode had never once seen the bytes whose charset it exists to honour. The mock body is
        written as source text here, so this is an ENCODE. */
-    /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers `METHOD<TAB>URL` lines and
-       the reply is delivered against both halves, so a GET and a POST to one address are two questions here. */
+    /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers
+       `METHOD<TAB>INITIATOR<TAB>URL` and the reply is delivered against both halves, so a GET and a POST to one address are two questions here. */
     const provide = (method, u, reply, body) => {
       const b = new TextEncoder().encode(body);
       const p = M._malloc(b.length + 1);
@@ -368,10 +368,20 @@ async function child(docPath, schedName) {
                  : pending;
     for (const line of answer) {
       const tab = line.indexOf("\t");
-      if (tab <= 0)
-        gateFail("a pending line carries no METHOD — qjs_pending answers `METHOD<TAB>URL` lines and the reply " +
-                 "is delivered against both halves");
-      const method = line.slice(0, tab), u = line.slice(tab + 1);
+      const tab2 = tab < 0 ? -1 : line.indexOf("\t", tab + 1);
+      if (tab <= 0 || tab2 <= tab + 1)
+        gateFail("a pending line is not `METHOD<TAB>INITIATOR<TAB>URL` — qjs_pending joins the three and the " +
+                 "reply is delivered against the (method, url) pair, so a short line makes an initiator token " +
+                 "the address");
+      const method = line.slice(0, tab), initiator = line.slice(tab + 1, tab2), u = line.slice(tab2 + 1);
+      /* THIS GATE ANSWERS EVERY PARK WHATEVER ITS INITIATOR, and that is what it MUST do: its subject is that
+         one document's finding set is the same under several schedules, so a reply policy that varied with a
+         request's provenance would be a fourth schedule the comparison cannot see. The field is checked for
+         its VOCABULARY only — a producer that drifts is a differential this gate would otherwise report as a
+         solver disagreement. Firing policy is engine/trusted.mjs's. */
+      if (initiator !== "parser" && initiator !== "script")
+        gateFail(`a pending line states the initiator \`${initiator}\`, which is neither token ` +
+                 "solver/engine.h declares — the vocabulary moved under every host that reads it");
       /* `computedType` IS THIS ZONE'S DECISION, AND WITHOUT IT THIS GATE COULD NOT MEASURE A REPLY AT ALL.
          The sniff belongs to whoever READ the bytes, so fetch_reply_computed_type asserts the field rather
          than defaulting it — and this record was written before that field existed. It is the same omission

@@ -697,8 +697,26 @@ void engine_perform(JSContext *ctx, const char *token, const char *record);
    not here to queue anything in, while the outgoing one is local by construction. */
 void engine_unload_document(uint32_t doc);
 
-/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>URL` line per outstanding request,
- * newline-terminated, "" for none, DEDUPED BY THE PAIR.
+/* WHO ASKED FOR THE REQUEST, AS A FACT ABOUT THE PARK AND NEVER AS A POLICY. HTML §4.12.1 "The script element"
+ * gives every `script` element a PARSER-INSERTED flag and a parser document, and that flag is the whole of the
+ * difference the trusted zone has to be able to see: a parser-inserted script is named by the BYTES THE ZONE
+ * ITSELF FETCHED, so a real load of that document makes exactly that request; every other park is made by
+ * RUNNING CODE, and this engine runs code on forced arms. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE calls the
+ * first OBSERVED and makes the second DERIVED or FORCED — a distinction this register cannot yet draw, because
+ * nothing on a flow records whether its path took a forced arm.
+ * SO THE ENGINE STATES THE FLAG AND THE ZONE DECIDES, which is the split CLAUDE.md names in as many words:
+ * "the engine holds no network policy by construction, so `safeFetch` decides, from the provenance the request
+ * declares beside its method and credential state". A branch here that refused to LIST a park would be that
+ * policy inside the engine, and the flow it silenced would wait forever with nothing saying so.
+ * THE TWO TOKENS ARE THE SAME LENGTH ON PURPOSE and the join asserts it: a duplicate pair whose members
+ * disagree is UPGRADED in place to `parser` (see engine_pending_fetches), because a parser-inserted park is a
+ * request a real load makes whatever else parked on the same address — and an upgrade that had to re-length the
+ * line would have to rebuild the join. */
+#define PENDING_INITIATOR_PARSER "parser"   /* HTML §4.12.1's parser-inserted script of the loaded document */
+#define PENDING_INITIATOR_SCRIPT "script"   /* a park made by running code: fetch(), import(), an injected src */
+
+/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>INITIATOR<TAB>URL` line per
+ * outstanding request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
  *
  * THE METHOD IS PART OF THE REQUEST'S IDENTITY, and this seam used to answer an ADDRESS ALONE. The register
  * has carried the method since the day it carried the whole request (PEND_METHOD), and it was dropped at
@@ -719,8 +737,11 @@ void engine_unload_document(uint32_t doc);
 const char *engine_pending_fetches(void);
 /* ONE LINE, SPLIT WHERE IT WAS JOINED — because three hosts each deriving the pair is three places to get it
    wrong, which is the hand-copy 59d0e42d abolished. `line` is the host's own mutable copy of one line (no
-   newline); the TAB is overwritten with a NUL and the two halves are handed back pointing into it. */
-void engine_pending_split(char *line, const char **method, const char **url);
+   newline); each TAB is overwritten with a NUL and the three fields are handed back pointing into it.
+   THE INITIATOR IS AN OUT-PARAMETER AND NOT OPTIONAL, deliberately: a host that did not want it could pass
+   NULL and would then be a host reading a request whose provenance it never asked about, which is the
+   defaulted-field defect wearing a convenience. It costs a caller one local and one membership assert. */
+void engine_pending_split(char *line, const char **method, const char **initiator, const char **url);
 /* DELIVER A BODY FOR ONE REQUEST — keyed on `(method, url)`, which is what the flow parked on. Returns how many
    entries it filled; 0 with nothing matched is the host's pairing being off (or a sale — engine_take_paged_owed),
    and it is the CALLER that tells those apart because the caller owns the credit. */

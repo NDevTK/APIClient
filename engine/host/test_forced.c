@@ -105,6 +105,7 @@
 #include <lexbor/dom/dom.h>
 #include <math.h>     /* css-values-4 §10.9.2's signed zero and infinity, which only `signbit`/`isinf` can see */
 #include <limits.h>   /* UINT_MAX — the `--abi` arm's document length is narrowed to the ABI's own parameter */
+#include <stdarg.h>   /* the `--abi` arm speaks one record per line and composes each with one call */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -249,7 +250,7 @@ static int fixture_provide(JSContext *ctx) {
         const char *nl = strchr(urls, '\n');
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
-        const char *method, *url;
+        const char *method, *initiator, *url;
         UrlRecord rec;
         char *abs;
         JSValue reply;
@@ -257,9 +258,15 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        /* THE LINE IS `METHOD<TAB>URL` AND IT IS SPLIT BY THE ENGINE'S OWN SPLITTER — the reply seam is keyed on
-           the pair, so a fixture that answered the whole line as an address would match nothing. */
-        engine_pending_split(one, &method, &url);
+        /* THE LINE IS `METHOD<TAB>INITIATOR<TAB>URL` AND IT IS SPLIT BY THE ENGINE'S OWN SPLITTER — the reply
+           seam is keyed on the pair, so a fixture that answered the whole line as an address would match
+           nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER ITS INITIATOR, deliberately: what it exercises is
+           the PATH (parked, delivered, resumed), and a firing policy is the trusted zone's — engine/trusted.mjs
+           is where the field decides anything. What is asserted here is the field's VOCABULARY, which is the
+           producer's contract and is exactly what a fixture is for. */
+        engine_pending_split(one, &method, &initiator, &url);
+        DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
+               "the pending join stated an initiator that is neither token engine.h declares");
         url_record_init(&rec);
         ok = url_parse(&rec, url, strlen(url), &base);
         DCHECK(ok, "the fixture was asked for a URL that will not parse even against its document's address");
@@ -10142,16 +10149,27 @@ static void message_source_selftest(void)
  * three-code step loop and one print. `route.mjs` wrote this driver's logic once already, in JS, against these
  * same entries; what is here is that protocol with the wasm boundary removed.
  *
- * WHAT IT DELIBERATELY CANNOT DO YET, NAMED RATHER THAN FAKED. It cannot PAY the frontier. A pending fetch and
- * a cross-agent operation are the trusted zone's to answer — SECURITY.md puts every byte of network through
- * `safe-fetch.js`'s chokepoint and CLAUDE.md's §Attacker-sources makes the FIRING DECISION a policy in that
- * zone, keyed on the request's provenance and its credential state — and a native host has no such zone yet.
- * So this arm opens no socket. A stall it cannot pay ABORTS naming what must be built, which is the forcing
- * function; an unpoliced `fetch()` bolted on here would be the same code with the rule deleted, and the
- * §Architecture line has no carve-out for a host being native. Peer provisioning is the same refusal one seam
- * along: `wpt_runner.c` already forks and execs a second instance of this very binary over a pipe, so the
- * mechanism exists and what is missing is the ROUTING TABLE between instances — which is the trusted zone's
- * one fact ("which instance holds which document") and is the next diff, not a line of this one. */
+ * WHERE THE TRUSTED ZONE IS, AND WHY IT IS NOT IN THIS FILE. This arm still opens no socket, and it never will:
+ * SECURITY.md puts every byte of network through `safe-fetch.js`'s chokepoint and CLAUDE.md's §Attacker-sources
+ * makes the FIRING DECISION a policy in that zone. What changed is that the zone now EXISTS for this host —
+ * `engine/trusted.mjs`, a Node process that loads that same file verbatim and RUNS THIS PROGRAM AS ITS CHILD.
+ * Three facts decided that shape rather than a C twin of the chokepoint, and only the last of them is about
+ * duplication: there is no TLS anywhere in this tree and §Bind-before-build forbids growing one ("never
+ * crypto/parsers from scratch"), so a C zone could not reach an `https:` origin at all — the policy is the easy
+ * half and the client is the hard one; the zone must be the PARENT, because a trusted process forked BY the
+ * untrusted one would have its argv, its environment, its file descriptors and its lifetime chosen by the
+ * process it is supposed to police; and a second copy of `safe-fetch.js`'s rules would drift from the day it
+ * landed, with the drift's failure mode a hole that exists on one host only.
+ * WHAT THE BOUNDARY HERE IS AND IS NOT. In the extension the engine sits in another PROCESS behind Site
+ * Isolation at an opaque origin. Here it is LINKED INTO THIS ONE, so this process is untrusted as a whole and
+ * what separates it from the zone is a pipe and a process — weaker, and stated rather than implied.
+ * SO THE STALL IS A CONVERSATION AND THE ABORT IS NOW A DECLINE. `stalled` is this host asking to be paid; the
+ * zone answers with the replies it will make and the refusals it will not, and a round that pays NOTHING is the
+ * zone saying it cannot — which is the same forcing function with the reason supplied by the party that has it
+ * rather than guessed by the party that does not.
+ * PEER PROVISIONING IS STILL REFUSED, one seam along: `wpt_runner.c` already forks and execs a second instance
+ * of this very binary over a pipe, so the mechanism exists and what is missing is the ROUTING TABLE between
+ * instances — the trusted zone's one fact ("which instance holds which document") — which is the next diff. */
 
 /* ONE RECORD OFF STDIN. `getdelim` rather than a `char line[N]` with an abort past it: a real bundle's document
    is megabytes and its base64 is more, so a fixed line buffer is a document this host would refuse to be
@@ -10238,24 +10256,233 @@ static void abi_notices(void)
            "the named document parked for the rest of the session. notices=%s", n);
 }
 
-/* THE FRONTIER STALLED, WHICH IS A BILL. Every member is parked on something only a host can supply, the
-   session is live and every snapshot is intact — so this is not a crash in the engine, it is this host being
-   asked to pay in a currency it does not have. The two registers are both read because a stall names what is
-   owed through their union (main.c asserts exactly that at the entry that produces the code), and reporting
-   one of them would send the reader looking for a request that is on the other list. */
+/* ONE RECORD OUT. Every line this host writes is one of these, and each is flushed at once because the zone
+   is a process reading a pipe rather than a library returning: a bill left in a stdio buffer is a bill the
+   zone cannot start work on, and at the stall it would be a bill nobody can see while both ends wait. */
+static void abi_say(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    putchar('\n');
+    fflush(stdout);
+}
+
+/* THE BILL THIS HOST HAS ALREADY WRITTEN, so it is written ONCE rather than once per step. An outstanding
+   request stays on both registers until it is answered — that is what makes an unanswered one visible — and a
+   host that re-announced it every round would turn one parked flow into a record per slice on the channel.
+   THIS IS NOT A SEEN-SET IN §NO-BOUNDS' SENSE and the distinction is the one that section draws: a bound
+   decides work will not HAPPEN, and this decides only how many times a fact is REPEATED. Nothing is dropped —
+   the registers are the truth and the zone is free to ask again — and the moment the union changes at all, the
+   whole of it is re-stated rather than a diff of it, so a zone that missed a record cannot be left holding a
+   stale half. */
+static char *g_abi_announced;
+
+static void abi_say_lines(const char *s, const char *stop, const char *verb)
+{
+    while (s < stop) {
+        const char *e = memchr(s, '\n', (size_t)(stop - s));
+        size_t l = e ? (size_t)(e - s) : (size_t)(stop - s);
+
+        if (l) abi_say("%s\t%.*s", verb, (int)l, s);
+        if (!e) break;
+        s = e + 1;
+    }
+}
+
+/* WHAT THE FRONTIER IS OWED, WRITTEN AND NOT READ BACK. A YIELD round announces and steps straight on, so the
+   zone can have a fetch in flight while siblings keep running — the alternative is this host standing in the
+   read, which is exactly what `wpt_runner.c` calls out at its own park ("blocking the FLOW is the design;
+   blocking the THREAD it shares with every other flow of the document was this host's own addition").
+   AND THE CHANNEL IS HALF-DUPLEX BY RULE, WHICH IS WHAT KEEPS IT FROM DEADLOCKING: the zone may write only in
+   answer to `stalled`. Two processes each filling the other's pipe while neither drains is a hang with no
+   symptom, and this is the one line that makes it impossible rather than unlikely. */
+static void abi_announce(void)
+{
+    char *fetches = strdup(qjs_pending());
+    const char *ops;
+    char *bill;
+    size_t fn, on;
+
+    CHECK(fetches != NULL, "OOM copying the frontier's pending list — the two registers answer out of buffers "
+                           "they reuse, so the first is copied before the second is asked for");
+    ops = qjs_host_requests();
+    fn = strlen(fetches);
+    on = strlen(ops);
+    bill = malloc(fn + on + 2);
+    CHECK(bill != NULL, "OOM composing the frontier's bill");
+    memcpy(bill, fetches, fn);
+    /* A SEPARATOR NEITHER LIST CAN CONTAIN — both are newline-joined lines of tab-separated fields, so a
+       vertical tab is the one byte that cannot make two different unions compare equal. */
+    bill[fn] = '\v';
+    memcpy(bill + fn + 1, ops, on);
+    bill[fn + 1 + on] = 0;
+    free(fetches);
+    if (g_abi_announced && !strcmp(g_abi_announced, bill)) { free(bill); return; }
+    free(g_abi_announced);
+    g_abi_announced = bill;
+    abi_say_lines(bill, bill + fn, "fetch");
+    abi_say_lines(bill + fn + 1, bill + fn + 1 + on, "request");
+}
+
+/* A FIELD THAT MAY BE ABSENT, AND ABSENCE IS A DIFFERENT FACT FROM EMPTINESS. `-` is "there are no bytes at
+   all" and the empty field is "there is a byte sequence and it is zero bytes long" — main.c holds those apart
+   at both entries this feeds (a NETWORK ERROR has no body; a 204 has an empty one; an answer that is a number
+   has none while an answer that is a document has bytes), so the channel has to be able to say both. */
+static char *abi_maybe_bytes(const char *field, size_t *plen, const char *what)
+{
+    if (!strcmp(field, "-")) { *plen = 0; return NULL; }
+    return abi_bytes(field, plen, what);
+}
+
+/* WHY THE ZONE WOULD NOT PAY, IN ITS OWN WORDS — accumulated because a stall may be owed several things and
+   the reader of the abort needs all of them. It is the zone's sentence and not this host's guess: a refusal
+   named by the party that did not make it is the stale-`DFAIL` failure with a process boundary in the middle. */
+static char *g_abi_declined;
+
+static void abi_declined(const char *reason)
+{
+    size_t have = g_abi_declined ? strlen(g_abi_declined) : 0;
+    size_t n = strlen(reason);
+    char *grown = realloc(g_abi_declined, have + n + 2);
+
+    CHECK(grown != NULL, "OOM recording the trusted zone's refusal — it is the whole of what the abort below "
+                         "has to say, so there is nothing to continue toward without it");
+    if (have) grown[have++] = '\n';
+    memcpy(grown + have, reason, n + 1);
+    g_abi_declined = grown;
+}
+
+/* THE ROUND IN WHICH THIS HOST IS PAID. It runs only after `stalled`, which is the one moment blocking on the
+   channel denies nobody the thread: every member of the frontier is parked, so there is no sibling this read
+   is standing in front of. Answers how many payments landed — the caller reads zero as the zone declining,
+   which is a fact about the zone rather than about the engine. */
+static int abi_pay(void)
+{
+    int paid = 0;
+
+    for (;;) {
+        char *rec = abi_line();
+        char *p, *reply_b64, *body_f, *json_f;
+        const char *verb;
+        char *body;
+        size_t body_n = 0, json_n = 0;
+        unsigned long id, completion;
+
+        CHECK(rec != NULL, "the trusted zone closed this host's channel while the frontier was still parked — "
+                           "every flow's snapshot is intact and every request is still owed, so this is not a "
+                           "session that ended, it is one whose only payer went away");
+        p = rec;
+        verb = abi_take(&p, "verb");
+        if (!strcmp(verb, "go")) {
+            CHECKF(p == NULL, "the round terminator carries a field after it — `go` says only that this round "
+                              "is over, so a value beside it crossed to a reader that never looks at it. "
+                              "trailing=[%s]", p ? p : "");
+            free(rec);
+            return paid;
+        }
+        if (!strcmp(verb, "provide")) {
+            const char *method = abi_take(&p, "request method");
+            const char *url = abi_take(&p, "request address");
+
+            reply_b64 = abi_take(&p, "reply record");
+            body_f = abi_take(&p, "reply body");
+            CHECKF(p == NULL, "a reply record carries a field after its body — this host is OLDER than the "
+                              "zone that wrote it. trailing=[%s]", p ? p : "");
+            /* THE REPLY CROSSES BASE64 AND NOT RAW, EVEN THOUGH IT IS TEXT. It is composed by a JSON
+               serializer that escapes every control character today, so a raw field would work today — and
+               the grammar would then depend on a property of the ENCODER rather than of the channel, which is
+               a coupling nothing would assert and the next producer would not know it had. */
+            {
+                char *reply = abi_bytes(reply_b64, &json_n, "reply record");
+                DCHECK(json_n == strlen(reply),
+                       "a reply record carries a NUL — it reaches the ABI as a C string, so everything past "
+                       "that byte is metadata the zone stated and this engine will never be shown");
+                body = abi_maybe_bytes(body_f, &body_n, "reply body");
+                DCHECK(body_n <= (size_t)UINT_MAX,
+                       "a reply body is longer than the ABI's length parameter can name — the truncated value "
+                       "would be accepted, so the flow would resume on a PREFIX of the response and every "
+                       "value learned from it would be a fact about bytes the server did not send");
+                qjs_provide(method, url, reply, body, (unsigned)body_n);
+                free(reply);
+                free(body);
+            }
+            paid++;
+        } else if (!strcmp(verb, "answer")) {
+            const char *id_f = abi_take(&p, "request id");
+            char *end;
+
+            json_f = abi_take(&p, "answer record");
+            {
+                const char *comp_f = abi_take(&p, "completion type");
+
+                body_f = abi_take(&p, "answer body");
+                CHECKF(p == NULL, "an answer carries a field after its body — this host is OLDER than the zone "
+                                  "that wrote it. trailing=[%s]", p ? p : "");
+                completion = strtoul(comp_f, &end, 10);
+                CHECKF(*comp_f != '\0' && *end == '\0',
+                       "an answer's COMPLETION is not a number: `%s` — ECMA-262 6.2.4 makes a completion a "
+                       "type and a value, and a type this host cannot read would be delivered as whichever "
+                       "arm a `strtoul` of nothing happens to produce", comp_f);
+            }
+            id = strtoul(id_f, &end, 10);
+            CHECKF(*id_f != '\0' && *end == '\0',
+                   "an answer names a request id that is not a number: `%s` — the id is the rendezvous, so an "
+                   "unreadable one would land this answer on whatever request id zero belongs to", id_f);
+            {
+                /* `-` IS `null` HERE TOO, AND MAIN.C READS IT AS `undefined` — the answer to a request whose
+                   operation returns nothing. It is the same absent/empty split the body field has, one field
+                   over, and it is why neither is an empty string. */
+                char *json = strcmp(json_f, "-") ? abi_bytes(json_f, &json_n, "answer record") : NULL;
+                body = abi_maybe_bytes(body_f, &body_n, "answer body");
+                DCHECK(!json || json_n == strlen(json),
+                       "an answer record carries a NUL — it reaches the ABI as a C string, so everything past "
+                       "that byte is an answer the zone computed and this engine will never be shown");
+                DCHECK(body_n <= (size_t)UINT_MAX,
+                       "an answer's body is longer than the ABI's length parameter can name");
+                qjs_host_answer((unsigned)id, json, (unsigned)completion, body, (unsigned)body_n);
+                free(json);
+                free(body);
+            }
+            paid++;
+        } else if (!strcmp(verb, "decline")) {
+            char *reason;
+            size_t rn = 0;
+
+            reason = abi_bytes(abi_take(&p, "refusal reason"), &rn, "refusal reason");
+            CHECKF(p == NULL, "a refusal carries a field after its reason. trailing=[%s]", p ? p : "");
+            DCHECK(rn == strlen(reason), "a refusal reason carries a NUL");
+            abi_declined(reason);
+            free(reason);
+        } else {
+            CHECKF(0, "a record arrived on this host's channel under the verb `%s`, which it does not carry — "
+                      "the payment round takes `provide`, `answer`, `decline` and `go`, and a verb this host "
+                      "does not know is a zone expecting a capability it has not", verb);
+        }
+        free(rec);
+    }
+}
+
+/* THE FRONTIER STALLED AND THE ZONE PAID NOTHING, WHICH IS A REFUSAL AND NOT A GAP. Every member is parked on
+   something only the trusted zone can supply, the session is live and every snapshot is intact — so this is
+   not a crash in the engine, it is the zone stating that it will not perform these requests. The two registers
+   are both read because a stall names what is owed through their union (main.c asserts exactly that at the
+   entry that produces the code), and reporting one of them would send the reader looking for a request that is
+   on the other list. THE ZONE'S OWN REASONS ARE PRINTED FIRST, because the party that refused is the party
+   that knows why: this host would otherwise be guessing at a policy it deliberately does not hold. */
 static void abi_stalled(void)
 {
     const char *fetches = qjs_pending();
     const char *ops = qjs_host_requests();
 
-    DFAILF("the frontier STALLED and this host cannot pay it. Every byte of network belongs to the trusted "
+    DFAILF("the frontier STALLED and the trusted zone paid none of it. Every byte of network belongs to that "
            "zone's chokepoint (SECURITY.md: `safe-fetch.js`) and the decision to FIRE a request at all is a "
-           "per-origin policy over the request's PROVENANCE and its credential state, so a native host that "
-           "opened a socket here would be this project's one rule with the rule deleted. What must be built "
-           "is that zone for this host — a policy that reads the provenance the request declares, performs "
-           "the fetch, and hands the reply back through qjs_provide/qjs_host_answer. Until it exists, a "
-           "document that reaches the network is one this entry cannot drive. fetches=[%s] ops=[%s]",
-           fetches, ops);
+           "per-origin policy over the request's PROVENANCE and its credential state, so a socket opened HERE "
+           "would be this project's one rule with the rule deleted. The zone is engine/trusted.mjs and it said "
+           "why. refusals=[%s] fetches=[%s] ops=[%s]",
+           g_abi_declined ? g_abi_declined : "(none stated)", fetches, ops);
 }
 
 /* THE ARM ITSELF. One document in, one result out.
@@ -10370,7 +10597,18 @@ static int abi_main(void)
            last step produced is exactly the one a drain placed before the terminator would lose. */
         abi_notices();
         if (step == ENGINE_STEP_DONE) break;
-        if (step == ENGINE_STEP_STALLED) { abi_stalled(); break; }
+        /* THE BILL GOES OUT ON EVERY ROUND AND IS READ BACK ON NONE OF THEM — see abi_announce for why the
+           announcement and the payment are separate halves and why the channel is half-duplex between them. */
+        abi_announce();
+        if (step == ENGINE_STEP_STALLED) {
+            abi_say("stalled");
+            /* A ROUND THAT PAID NOTHING IS THE ZONE DECLINING, which is the one thing that ends a live
+               session here. A round that paid ANYTHING goes back into the step loop with no further
+               condition: whether that payment unparked a flow is the frontier's answer to give on the next
+               step, not this host's to predict — and predicting it is how a driver comes to stop one step
+               before the work it was waiting for. */
+            if (abi_pay() == 0) { abi_stalled(); break; }
+        }
         /* ENGINE_STEP_YIELD — the thread was ASKED FOR, not a payment, so a host with nothing else to do
            steps straight back in. There is no membership assert on `step` here and that is deliberate:
            `qjs_step` asserts it at the entry that PRODUCES the code, and a rule spelled at both is two. */
@@ -10388,6 +10626,12 @@ static int abi_main(void)
        slices of it and this entry never copied them. */
     free(html);
     free(rec);
+    /* THE CHANNEL'S OWN TWO ALLOCATIONS. Neither is in the runtime's heap, so the gc walk in JS_FreeRuntime
+       cannot see either and only this line can. */
+    free(g_abi_announced);
+    g_abi_announced = NULL;
+    free(g_abi_declined);
+    g_abi_declined = NULL;
     return 0;
 }
 
