@@ -47,6 +47,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/agent_state.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/document.h"
 #include "core/dom/node.h"
@@ -79,20 +80,36 @@ static const char *const DOM_PARSER_SUPPORTED_TYPE[] = {
 /* THE OBJECT'S WHOLE STATE — see the head comment. */
 typedef struct { JSValue document; } DomParser;
 
+/* THE COLLECTOR'S TWO ENTRIES READ NO STATIC THIS COMPONENT'S RELEASE RESETS — core/agent_state.h's rule. Both
+   run AFTER core/platform.c's release column (every host's teardown is `platform_agent_free()` … `JS_RunGC` …
+   `JS_FreeRuntime`), so a DOMParser a page still holds would be finalized with `g_class` already back at 0 and
+   `JS_GetOpaque(val, 0)` would answer NULL for it: the record leaks, and the unmarked Document it holds keeps
+   the internal reference gc_decref exists to subtract, so gc_scan reads that document's realm as rooted from
+   outside the heap and never collects it. JS_GetAnyOpaque, because the collector dispatched here THROUGH the
+   class — the id is a fact it already has and must not look up. */
 static void domparser_finalizer(JSRuntime *rt, JSValue val)
 {
-    DomParser *p = JS_GetOpaque(val, g_class);
+    JSClassID id = 0;
+    DomParser *p = JS_GetAnyOpaque(val, &id);
 
-    if (!p) return;
+    (void)id;
+    /* NOT `if (!p) return;`. js_domparser_ctor is the one mint and it sets the record with nothing in between
+       that allocates in the JS heap. */
+    DCHECK(p != NULL, "a DOMParser was finalized with no record — §8.5.1's one mint sets it with nothing in "
+                      "between that could collect");
     JS_FreeValueRT(rt, p->document);
     free(p);
 }
 
 static void domparser_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    DomParser *p = JS_GetOpaque(val, g_class);
+    JSClassID id = 0;
+    DomParser *p = JS_GetAnyOpaque(val, &id);
 
-    if (p) JS_MarkValue(rt, p->document, mark_func);
+    (void)id;
+    DCHECK(p != NULL, "a DOMParser was marked with no record — the Document it holds is a counted reference "
+                      "and an unmarked child is read by gc_scan as rooted from outside the heap");
+    JS_MarkValue(rt, p->document, mark_func);
 }
 
 /* `new DOMParser()` — "the constructor steps are to do nothing", plus the one fact the object has to carry so
@@ -371,7 +388,30 @@ void domparser_init(JSContext *ctx)
     g_id_parse = idl_method_id(ctx, PARSE_ARGS, 2, js_domparser_parse_from_string, 0);
     idl_enum_values(DOM_PARSER_SUPPORTED_TYPE);
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. This row was on
+       core/platform.c's list with an EMPTY release column and no release function existed at all, so all four
+       of these survived the runtime they were made in and nothing could say so: a class id and a pool entry
+       are ints, so neither of JS_FreeRuntime's censuses has anything to report, and the only reader of a stale
+       one is the next agent's `domparser_init`, which consults `g_ready` precisely to decide it need not
+       run. */
+    agent_state_class("domparser", &g_class, "HTML §8.5.1's DOMParser class");
+    agent_state_flag("domparser", &g_ready, "HTML §8.5.1's declaration latch");
+    agent_state_id("domparser", &g_id_ctor, "HTML §8.5.1's DOMParser constructor declaration");
+    agent_state_id("domparser", &g_id_parse, "HTML §8.5.1's parseFromString declaration");
     realm_declare_intrinsic(domparser_install_proto);
+}
+
+/* THE INVERSE OF THE DECLARATION ABOVE, which did not exist. The prototype and the interface object are the
+   REALMS' and go with their contexts; what is the AGENT's is the class this runtime registered and the three
+   ints beside it. The class goes back to 0 because a class is registered in a RUNTIME — core/agent_state.h's
+   one policy — and the latch goes with it, since a carried latch makes the next agent's `domparser_init`
+   return before re-registering anything. */
+void domparser_free(void)
+{
+    DCHECK(g_ready, "§8.5.1's DOMParser was released in an agent that never declared it");
+    g_id_ctor = g_id_parse = -1;
+    g_ready = 0;
+    g_class = 0;
 }
 
 void domparser_install_proto(JSContext *ctx)

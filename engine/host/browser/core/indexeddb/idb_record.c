@@ -44,6 +44,7 @@
 #include <stdlib.h>
 
 #include "check.h"
+#include "core/agent_state.h"
 #include "quickjs.h"
 #include "core/idl_args.h"
 #include "core/indexeddb/idb_key.h"
@@ -95,11 +96,25 @@ bool idb_record_is(JSValueConst v)
     return g_record_class != 0 && JS_GetClassID(v) == g_record_class;
 }
 
+/* THE COLLECTOR'S TWO ENTRIES READ NO STATIC THIS COMPONENT'S RELEASE RESETS — core/agent_state.h's rule. Both
+   run AFTER core/platform.c's release column, so a snapshot a page still holds would be finalized with
+   `g_record_class` already back at 0 and `JS_GetOpaque(val, 0)` would answer NULL: three counted references
+   leak, and an unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads the
+   stored VALUE — an arbitrary structured clone of the page's own object graph — as rooted from outside the
+   heap. JS_GetAnyOpaque, because the collector dispatched here THROUGH the class. This is the mechanism the
+   head comment above already gives the reason for: not the accessor, because a capture during collection would
+   dup values on an object being torn down — and not the id either, because the id is gone by then. */
 static void record_finalizer(JSRuntime *rt, JSValue val)
 {
-    IdbRecordData *r = JS_GetOpaque(val, g_record_class);
+    JSClassID id = 0;
+    IdbRecordData *r = JS_GetAnyOpaque(val, &id);
 
-    if (!r) return;
+    (void)id;
+    /* NOT `if (!r) return;`. idb_record_new is the one mint — §4.8 declares no constructor — and it sets the
+       record with nothing in between that allocates in the JS heap. */
+    DCHECK(r != NULL, "an IDBRecord was finalized with no snapshot — §4.8 declares no constructor, so the one "
+                      "mint is idb_record_new and it sets the record with nothing in between that could "
+                      "collect");
     JS_FreeValueRT(rt, r->key);
     JS_FreeValueRT(rt, r->primary_key);
     JS_FreeValueRT(rt, r->value);
@@ -108,9 +123,12 @@ static void record_finalizer(JSRuntime *rt, JSValue val)
 
 static void record_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    IdbRecordData *r = JS_GetOpaque(val, g_record_class);
+    JSClassID id = 0;
+    IdbRecordData *r = JS_GetAnyOpaque(val, &id);
 
-    if (!r) return;
+    (void)id;
+    DCHECK(r != NULL, "an IDBRecord was marked with no snapshot — its three fields are counted references and "
+                      "an unmarked child is read by gc_scan as rooted from outside the heap");
     JS_MarkValue(rt, r->key, mark_func);
     JS_MarkValue(rt, r->primary_key, mark_func);
     JS_MarkValue(rt, r->value, mark_func);
@@ -205,5 +223,23 @@ void idb_record_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_record_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_record_class, &d) == 0,
           "IDBRecord: the class could not be declared");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. One slot, and it survived every
+       agent this engine has torn down: this row was on core/platform.c's list with an EMPTY release column and
+       no release function existed anywhere. Neither of JS_FreeRuntime's censuses can report a class id, and
+       the only reader of a stale one is the next agent's `idb_record_init`, which consults it precisely to
+       decide it need not run. */
+    agent_state_class("idb_record", &g_record_class,
+                      "Indexed Database §4.8's IDBRecord class, and this component's declaration latch");
     realm_declare_intrinsic(idb_record_install_realm);
+}
+
+/* THE INVERSE OF THE DECLARATION ABOVE, WHICH DID NOT EXIST. The prototype is the REALMS' and goes with their
+   contexts; what is the AGENT's is the class this runtime registered. It goes back to 0 because a class is
+   registered in a RUNTIME — core/agent_state.h's one policy — and it is also this component's latch, so a
+   carried id would make the next agent's `idb_record_init` return before re-registering it and every snapshot
+   that agent mints would be branded with a number the live runtime never gave out. */
+void idb_record_free(void)
+{
+    DCHECK(g_record_class != 0, "§4.8's IDBRecord was released in an agent that never declared it");
+    g_record_class = 0;
 }

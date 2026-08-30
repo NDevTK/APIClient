@@ -222,9 +222,10 @@ static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_ini
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
 static void d_domparser(JSContext *c, const PlatformAgent *a) { (void)a; domparser_init(c); }
-/* §16.2.1.9's host hook is the RUNTIME's, which is what an agent is. `import(specifier)` with none installed
-   resolved to nothing at all — no module, no error, no record — and a page that asks to load code and is
-   answered silently is the one shape an unbuilt capability must not have. */
+/* ECMAScript §16.2.1.10 HostLoadImportedModule is the RUNTIME's hook, which is what an agent is.
+   `import(specifier)` with none installed resolved to nothing at all — no module, no error, no record — and a
+   page that asks to load code and is answered silently is the one shape an unbuilt capability must not
+   have. */
 static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; module_loader_install(JS_GetRuntime(c)); }
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
@@ -419,6 +420,20 @@ static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
 static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
+/* THE FIVE ROWS THAT HAD NO RELEASE FUNCTION AT ALL, which is the arm the pairing below silently passes: a row
+   with an empty release column and a component that declared nothing agree, and they agree whether the
+   component holds nothing or holds everything and gives none of it back. All five held. Indexed Database §4.7's
+   IDBKeyRange carried a class and five pool entries, §4.8's IDBRecord a class, §4.3's IDBFactory a class, a
+   realm-value slot and five declarations, HTML §8.5.1's DOMParser a class, its latch and two entries; and
+   §16.2.1.10 HostLoadImportedModule's loader — the one that is not an int — carried a strdup'd specifier per
+   lazy chunk and the buffer they are joined into, which is a malloc'd leak neither of JS_FreeRuntime's
+   censuses can see and which a second agent would have REPORTED as its own document's imports. Each declares
+   its slots to core/agent_state.h now, so the release is CHECKED rather than merely present. */
+static void r_idb_key_range(JSRuntime *rt) { (void)rt; idb_key_range_free(); }
+static void r_idb_record(JSRuntime *rt) { (void)rt; idb_record_free(); }
+static void r_indexed_db(JSRuntime *rt) { (void)rt; indexed_db_free(); }
+static void r_domparser(JSRuntime *rt) { (void)rt; domparser_free(); }
+static void r_module_loader(JSRuntime *rt) { module_loader_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -570,14 +585,17 @@ static const PlatformComponent PLATFORM[] = {
        origin-keyed agent cluster, and storage is keyed by origin — so the set is the agent's, a same-origin
        child navigable reaches THAT one rather than a second, and what a C static holds for the agent is freed
        against the runtime here (core/platform.h's third column) rather than in each host's own teardown. */
-    { "idb_key_range",       d_idb_key_range,       NULL },
+    { "idb_key_range",       d_idb_key_range,       NULL,        r_idb_key_range },
     /* §2.12's RECORD SNAPSHOT with §4.8's IDBRecord over it, beside §2.9's key range because it is the same
-       kind of row: a value type of this standard, holding no agent-lifetime state, installing one interface
-       per realm. It is declared before every row that MINTS one — §6.2's and §6.3's retrieve-multiple arms,
-       reached from §4.5's and §4.6's members — because core/realm.h runs the per-realm installs in
-       DECLARATION order and a snapshot built in a realm with no IDBRecord.prototype crashes at the mint. */
-    { "idb_record",          d_idb_record,          NULL },
-    { "indexed_db",          d_indexed_db,          NULL },
+       kind of row: a value type of this standard, installing one interface per realm. THE SENTENCE THAT USED
+       TO STAND HERE SAID IT HELD NO AGENT-LIFETIME STATE, and it held a class — which is a fact about a
+       RUNTIME, so it is exactly agent-lifetime, and saying otherwise is how these three rows kept an empty
+       release column while the pairing that would have caught it read the two silences as agreement.
+       It is declared before every row that MINTS one — §6.2's and §6.3's retrieve-multiple arms, reached from
+       §4.5's and §4.6's members — because core/realm.h runs the per-realm installs in DECLARATION order and a
+       snapshot built in a realm with no IDBRecord.prototype crashes at the mint. */
+    { "idb_record",          d_idb_record,          NULL,        r_idb_record },
+    { "indexed_db",          d_indexed_db,          NULL,        r_indexed_db },
     { "idb_database",        d_idb_database,        NULL,        r_idb_database },
     /* §2.7's TRANSACTION and §2.8's REQUEST, in that order because a request is placed against a transaction
        and §5.6 asserts its state before it makes one. Both are declared after §2.7's EventTarget above,
@@ -719,8 +737,8 @@ static const PlatformComponent PLATFORM[] = {
        this interface builds a second Document through core/dom/document.h's `document_new`, so the component
        that owns Documents is what it is declared against. Its own prototype chains to Object.prototype, so no
        earlier row is required for that half. */
-    { "domparser",           d_domparser,           i_domparser },
-    { "module_loader",       d_module_loader,       NULL },
+    { "domparser",           d_domparser,           i_domparser, r_domparser },
+    { "module_loader",       d_module_loader,       NULL,        r_module_loader },
 };
 static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
 

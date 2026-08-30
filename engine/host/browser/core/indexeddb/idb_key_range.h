@@ -80,4 +80,7 @@ bool idb_key_range_contains(JSContext *ctx, JSValueConst range, JSValueConst key
    question exists on its own. */
 bool idb_key_range_is(JSValueConst v);
 
+/* The AGENT's half, undone — core/platform.h's release column. */
+void idb_key_range_free(void);
+
 #endif

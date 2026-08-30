@@ -43,6 +43,7 @@
 #include <stdbool.h>
 
 #include "check.h"
+#include "core/agent_state.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
@@ -546,5 +547,35 @@ void indexed_db_init(JSContext *ctx)
        be a JS_Call from C. */
     g_id_databases = idl_method_id_step(ctx, NULL, 0, NULL, 0, &DBS_STEP, 0);
     g_id_databases_task = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_idb_databases_task_def);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Its header used to state that it
+       "holds no agent-lifetime JS value, so there is nothing to release", and the conclusion did not follow
+       from the premise: no JS VALUE, but a class id, a realm-value slot and five declarations, every one of
+       them made in and against THIS runtime. This row was on core/platform.c's list with an EMPTY release
+       column and no release function existed anywhere, so all seven survived — invisible to both of
+       JS_FreeRuntime's censuses, since each is an int, and read by nothing until the next agent's
+       `indexed_db_init` consults `g_obj_slot` to decide it need not run. */
+    agent_state_class("indexed_db", &g_factory_class, "Indexed Database §4.3's IDBFactory class");
+    agent_state_id("indexed_db", &g_obj_slot,
+                   "Indexed Database §4.3's realm-value slot for the realm's one [SameObject] IDBFactory, "
+                   "and this component's declaration latch");
+    agent_state_id("indexed_db", &g_id_cmp, "Indexed Database §4.3's cmp declaration");
+    agent_state_id("indexed_db", &g_id_open, "Indexed Database §4.3's open declaration");
+    agent_state_id("indexed_db", &g_id_delete, "Indexed Database §4.3's deleteDatabase declaration");
+    agent_state_id("indexed_db", &g_id_databases, "Indexed Database §4.3's databases declaration");
+    agent_state_id("indexed_db", &g_id_databases_task,
+                   "Indexed Database §4.3's databases task step definition");
     realm_declare_intrinsic(indexed_db_install_realm);
+}
+
+/* THE INVERSE OF THE DECLARATION ABOVE, WHICH DID NOT EXIST. Every prototype, every interface object and every
+   realm's one IDBFactory are the REALMS' and go with their contexts — the realm-value POOL is released by
+   realm_intrinsics_free, so what this owes is the SLOT NUMBER it holds into that pool, which would otherwise
+   index a pool the next agent has not built yet. The class goes back to 0 because a class is registered in a
+   RUNTIME (core/agent_state.h's one policy). */
+void indexed_db_free(void)
+{
+    DCHECK(g_obj_slot >= 0, "§4.3's IDBFactory was released in an agent that never declared it");
+    g_id_cmp = g_id_open = g_id_delete = g_id_databases = g_id_databases_task = -1;
+    g_obj_slot = -1;
+    g_factory_class = 0;
 }

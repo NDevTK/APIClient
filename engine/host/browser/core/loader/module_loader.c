@@ -6,18 +6,20 @@
  * engine answered silently, which is the one shape an unbuilt capability must not have.
  *
  * It records the specifier — qjs_chunks reports it and the trusted host fetches it, because SECURITY.md puts
- * every byte of network behind safeFetch and this sandbox cannot reach it — and then PARKS the load. 16.2.1.9
- * lets the host finish a load asynchronously, which is what a browser's module fetch is, so the loader hands
- * the engine a promise of the SOURCE TEXT and returns. The promise is the flow's own pending register, exactly
- * as core/fetch parks a request: qjs_provide settles it, and the load resumes on its reaction — compile, link,
- * evaluate, and the page's `await import(...)` continues from where it suspended. Nothing re-runs; the
- * importing scope is never re-entered, which would be a replay. */
+ * every byte of network behind safeFetch and this sandbox cannot reach it — and then PARKS the load.
+ * ECMAScript §16.2.1.10 HostLoadImportedModule lets the host finish a load asynchronously, and §16.2.1.11
+ * FinishLoadingImportedModule is the completion it hands back — which is what a browser's module fetch is. So
+ * the loader hands the engine a promise of the SOURCE TEXT and returns. The promise is the flow's own pending
+ * register, exactly as core/fetch parks a request: qjs_provide settles it, and the load resumes on its
+ * reaction — compile, link, evaluate, and the page's `await import(...)` continues from where it suspended.
+ * Nothing re-runs; the importing scope is never re-entered, which would be a replay. */
 #include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "solver/engine.h"
+#include "core/agent_state.h"
 #include "core/loader/module_loader.h"
 
 /* THE CHUNK REGISTER: every specifier forced execution reached, in discovery order, deduped. It never forgets
@@ -84,5 +86,44 @@ static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *o
 void module_loader_install(JSRuntime *rt)
 {
     DCHECK(rt != NULL, "the module loader was installed on no runtime");
+    /* THE REGISTER'S PRE-INIT STATE, ASSERTED HERE. It is malloc'd rather than a JS value, so a previous
+       agent's leftover is invisible to both of JS_FreeRuntime's censuses and would simply be REPORTED as this
+       agent's chunks — a specifier the page never imported, handed to safeFetch as a discovery. */
+    DCHECK(g_chunks == NULL && g_chunk_n == 0 && g_chunk_cap == 0 && g_chunk_join == NULL,
+           "the chunk register still holds a previous agent's specifiers — this agent would report imports "
+           "that belong to another document");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The register is not a cache: it
+       is what qjs_chunks answers with, so a stale entry is not a slow start, it is a document reporting
+       another document's lazy chunks. §16.2.1.10 HostLoadImportedModule is the RUNTIME's hook and is released
+       below rather than declared, because its storage is in the JSRuntime and there is no static here to point
+       at. */
+    agent_state_ptr("module_loader", &g_chunks,
+                    "the register of every specifier §16.2.1.10 HostLoadImportedModule was asked for");
+    agent_state_flag("module_loader", &g_chunk_n, "the number of specifiers in that register");
+    agent_state_flag("module_loader", &g_chunk_cap, "the capacity of that register");
+    agent_state_ptr("module_loader", &g_chunk_join, "the newline-joined register qjs_chunks answers with");
     JS_SetModuleLoaderFunc(rt, NULL, module_load, NULL);
+}
+
+/* THE REGISTER IS THE AGENT'S AND WAS FREED BY NOTHING. Every specifier is a strdup and the join is a malloc,
+   so what this component leaked appears in NEITHER of JS_FreeRuntime's two censuses — a malloc'd block is not
+   on gc_obj_list and is not an atom — and the only reader of a surviving one is the next agent's
+   `module_loader_chunks`, which would report another document's lazy chunks as this one's. This row was on
+   core/platform.c's list with an EMPTY release column and no release function existed anywhere, which is the
+   arm that column's pairing silently passes. */
+void module_loader_free(JSRuntime *rt)
+{
+    int i;
+
+    DCHECK(rt != NULL, "the module loader was released against no runtime");
+    /* THE HOOK COMES OFF FIRST, so this release is the exact inverse of the install above: §16.2.1.10
+       HostLoadImportedModule is state this component put in the RUNTIME, and a component gives back what it
+       claimed rather than relying on the runtime being freed shortly afterwards. */
+    JS_SetModuleLoaderFunc(rt, NULL, NULL, NULL);
+    for (i = 0; i < g_chunk_n; i++) free(g_chunks[i]);
+    free(g_chunks);
+    free(g_chunk_join);
+    g_chunks = NULL;
+    g_chunk_join = NULL;
+    g_chunk_n = g_chunk_cap = 0;
 }

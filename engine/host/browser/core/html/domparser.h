@@ -9,5 +9,7 @@ void domparser_init(JSContext *ctx);
 void domparser_install_proto(JSContext *ctx);
 /* §3.7.1's interface object on this realm's global. */
 void domparser_install(JSContext *ctx, JSValueConst global);
+/* The AGENT's half, undone — core/platform.h's release column. */
+void domparser_free(void);
 
 #endif

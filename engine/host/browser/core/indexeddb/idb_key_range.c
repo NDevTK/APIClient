@@ -40,6 +40,7 @@
 #include <stdlib.h>
 
 #include "check.h"
+#include "core/agent_state.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
@@ -101,11 +102,24 @@ static IdbRangeData *range_here(JSContext *ctx, JSValueConst v)
     return r;
 }
 
+/* THE COLLECTOR'S TWO ENTRIES READ NO STATIC THIS COMPONENT'S RELEASE RESETS — core/agent_state.h's rule. Both
+   run AFTER core/platform.c's release column (every host's teardown is `platform_agent_free()` … `JS_RunGC` …
+   `JS_FreeRuntime`), so a key range a page still holds would be finalized with `g_range_class` already back at
+   0 and `JS_GetOpaque(val, 0)` would answer NULL: the record and its two counted key references leak, and an
+   unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads the keys as rooted
+   from outside the heap. JS_GetAnyOpaque, because the collector dispatched here THROUGH the class — the id is a
+   fact it already has and must not look up. `range_here` keeps the class test, because that one is Web IDL
+   §3.7.5's BRAND and runs while the agent is live. */
 static void range_finalizer(JSRuntime *rt, JSValue val)
 {
-    IdbRangeData *r = JS_GetOpaque(val, g_range_class);
+    JSClassID id = 0;
+    IdbRangeData *r = JS_GetAnyOpaque(val, &id);
 
-    if (!r) return;
+    (void)id;
+    /* NOT `if (!r) return;`. §2.9's create-a-new-key-range is the one mint and it sets the record with nothing
+       in between that allocates in the JS heap. */
+    DCHECK(r != NULL, "an IDBKeyRange was finalized with no record — §2.9's one mint sets it with nothing in "
+                      "between that could collect");
     JS_FreeValueRT(rt, r->lower);
     JS_FreeValueRT(rt, r->upper);
     free(r);
@@ -113,9 +127,12 @@ static void range_finalizer(JSRuntime *rt, JSValue val)
 
 static void range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    IdbRangeData *r = JS_GetOpaque(val, g_range_class);
+    JSClassID id = 0;
+    IdbRangeData *r = JS_GetAnyOpaque(val, &id);
 
-    if (!r) return;
+    (void)id;
+    DCHECK(r != NULL, "an IDBKeyRange was marked with no record — its two bounds are counted references and an "
+                      "unmarked child is read by gc_scan as rooted from outside the heap");
     JS_MarkValue(rt, r->lower, mark_func);
     JS_MarkValue(rt, r->upper, mark_func);
 }
@@ -584,5 +601,31 @@ void idb_key_range_init(JSContext *ctx)
     idl_optional_from(2);
     g_id_includes    = idl_method_id_step(ctx, ONE_ANY,    1, NULL, 0, &RANGE_ONE_KEY_STEP,
                                          RANGE_M_INCLUDES);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. This row was on
+       core/platform.c's list with an EMPTY release column and no release function existed anywhere, so all six
+       survived the runtime they were made in and nothing could report it: a class id and a pool entry are
+       ints, so neither of JS_FreeRuntime's censuses sees them, and the only reader of a stale one is the next
+       agent's `idb_key_range_init`, which consults `g_range_class` precisely to decide it need not run. */
+    agent_state_class("idb_key_range", &g_range_class,
+                      "Indexed Database §4.7's IDBKeyRange class, and this component's declaration latch");
+    agent_state_id("idb_key_range", &g_id_only, "Indexed Database §4.7's IDBKeyRange.only declaration");
+    agent_state_id("idb_key_range", &g_id_lower_bound,
+                   "Indexed Database §4.7's IDBKeyRange.lowerBound declaration");
+    agent_state_id("idb_key_range", &g_id_upper_bound,
+                   "Indexed Database §4.7's IDBKeyRange.upperBound declaration");
+    agent_state_id("idb_key_range", &g_id_bound, "Indexed Database §4.7's IDBKeyRange.bound declaration");
+    agent_state_id("idb_key_range", &g_id_includes, "Indexed Database §4.7's includes declaration");
     realm_declare_intrinsic(idb_key_range_install_realm);
+}
+
+/* THE INVERSE OF THE DECLARATION ABOVE, WHICH DID NOT EXIST. The prototype and the interface object are the
+   REALMS' and go with their contexts; what is the AGENT's is the class this runtime registered and the five
+   pool entries beside it. The class goes back to 0 because a class is registered in a RUNTIME —
+   core/agent_state.h's one policy — and it is also this component's latch, so a carried id would make the next
+   agent's `idb_key_range_init` return before re-registering anything. */
+void idb_key_range_free(void)
+{
+    DCHECK(g_range_class != 0, "§4.7's IDBKeyRange was released in an agent that never declared it");
+    g_id_only = g_id_lower_bound = g_id_upper_bound = g_id_bound = g_id_includes = -1;
+    g_range_class = 0;
 }

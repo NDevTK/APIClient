@@ -35,4 +35,7 @@ JSValue idb_record_new(JSContext *ctx, JSValue key, JSValue primary_key, JSValue
 /* Web IDL §3.7.5's brand, asked of a value that arrived from another component. */
 bool idb_record_is(JSValueConst v);
 
+/* The AGENT's half, undone — core/platform.h's release column. */
+void idb_record_free(void);
+
 #endif
