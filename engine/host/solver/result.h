@@ -94,7 +94,12 @@ char *result_swap_json(void);
    and the document reported the surface it had reached, with nothing to say a script had died. Recording it
    makes the capability the page needed READABLE, which is the difference between "this page yields little" and
    "this page needs Element.matches". Deduped; the document carries them as `pageErrors`. */
-void result_page_error(const char *msg);
+/* `filename` IS §8.1.4.6 "Runtime script errors"'s OWN FIELD — the throw site the extract-error-information
+   algorithm derives, asked of core/events/report_exception.h so one component owns the derivation. It is
+   REQUIRED and never NULL: "" is the positive answer for a thrown value that carries no backtrace (every
+   non-Error a page can throw), which is a DIFFERENT fact from "this reader was not told", and a consumer
+   partitioning a run's errors by the script they came from has to be able to see it as one. */
+void result_page_error(const char *msg, const char *filename);
 /* The same, from the thrown VALUE. It runs NO page code: `toString` on an Error is the page's (and in this
    engine a step builtin the interpreter must dispatch), so this reads the own `name`/`message` slots and uses
    them only when they are already strings. A diagnostic that runs the page's code to describe the page's crash
@@ -124,8 +129,15 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
    SO THE CHOICE IS DECLARED AND NEVER DEFAULTED. A NULL hook meaning "document" made the host that had thought
    about it and the host that had not produce the identical call, which is a producer's field a consumer
    defaults; both forms are positive statements now, and result_page_error asserts one of them was made before
-   it records anything. The hook is called once per DISTINCT message, since that is what the set below holds. */
-void result_set_page_error_hook(void (*fn)(const char *msg));
+   it records anything.
+   THE HOOK IS CALLED ONCE PER DISTINCT (message, throw site) PAIR, AND THE PAIR IS THE UNIT ON PURPOSE. The
+   set used to be keyed on the message alone, which folds two different scripts raising the same error into
+   one — and that is precisely the case a reader most needs kept apart, because a document that STAGES an
+   uncaught error and a regression that raises the same message elsewhere are then one line. The document's
+   `pageErrors` is still one line per distinct MESSAGE (report_exception.c calls it a developer console and
+   that is what a console is); the stream carries the pair, because a stream is one line per occurrence and is
+   the half a per-script reader reads. */
+void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename));
 /* The other half of that declaration: this host PUBLISHES result_json unconditionally and reads `pageErrors`
    out of it. Say it where the host states its other edges, beside WHO answers the network and WHO evaluates a
    string handler — a page error's reader is an edge of exactly that kind. */

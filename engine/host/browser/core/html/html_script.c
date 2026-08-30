@@ -530,7 +530,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                with. A program is a program OF a document (solver/flow.h), so it names one. */
             /* …AND AT THE SLOT THE ASSERT ABOVE ALREADY NAMED. §4.12.1.1's last step is "immediately execute
                the script element el, even if other scripts are already executing", so this program runs before
-               anything the flow's sequence already holds. It went to engine_queue_script, whose entries take
+               anything the flow's sequence already holds. It went to the APPEND entries, which take
                the TAIL — the position of the `as soon as possible` destinations this element is explicitly not
                in — so an injected <script> ran after every remaining program of the document instead of
                before the next statement of the code that injected it. */

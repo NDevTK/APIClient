@@ -18,19 +18,25 @@
    is the one that answers. §A-CAPABILITY-MATERIALIZED-PER-FLOW makes it a ceiling, and navigable.c's own OOM
    CHECK sends its reader to this number by name. */
 #include "core/frame/navigable.h"
+/* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
+#include "core/events/report_exception.h"
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
-   unbuilt capability, and it was silent. This is a plain string set — the message is the page's own, so nothing
-   here interprets it. */
-static char **g_errs; static int g_errs_n, g_errs_cap;
+   unbuilt capability, and it was silent. The message is the page's own, so nothing here interprets it.
+   EACH ENTRY IS A PAIR — the message and §8.1.4.6 "Runtime script errors"'s throw site — and the DEDUPE KEY IS
+   THE PAIR. Keyed on the message alone, two different scripts raising one error are one entry, which is the
+   one collapse a reader cannot afford: a document that stages an uncaught error on purpose and a regression
+   raising the same message somewhere else become a single indistinguishable line. `at` is "" for a thrown
+   value with no backtrace, which is §8.1.4.6's own answer and not an absent field. */
+static char **g_errs; static char **g_errs_at; static int g_errs_n, g_errs_cap;
 
 /* WHO PRINTS ONE AS IT HAPPENS, AND THE FACT THAT A HOST ANSWERED THE QUESTION AT ALL — see result.h. The
    second is not bookkeeping for the first: a NULL hook USED to mean "this host publishes the document", so a
    host that had considered where an uncaught page error is read and a host that never had made the identical
    call, and the one that never had was the fixture whose whole job is naming unbuilt capabilities. */
-static void (*g_err_hook)(const char *msg);
+static void (*g_err_hook)(const char *msg, const char *filename);
 static int g_err_route_declared;
-void result_set_page_error_hook(void (*fn)(const char *msg)) {
+void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename)) {
     DCHECK(fn != NULL,
            "a host declared a page-error STREAM and handed it no printer. Clearing the hook is not how a host "
            "says it publishes the document — result_page_errors_ride_the_document is — so this would restore "
@@ -40,8 +46,15 @@ void result_set_page_error_hook(void (*fn)(const char *msg)) {
 }
 void result_page_errors_ride_the_document(void) { g_err_route_declared = 1; }
 
-void result_page_error(const char *msg) {
+void result_page_error(const char *msg, const char *filename) {
     if (!msg || !*msg) return;
+    /* NEVER NULL, AND "" IS THE ANSWER RATHER THAN THE ABSENCE OF ONE — result.h states why. A NULL here would
+       be a caller that never asked §8.1.4.6 where the throw was, which reads downstream exactly like a value
+       that carried no backtrace, and those are different facts about different runs. */
+    DCHECK(filename != NULL,
+           "a page error was recorded with no throw-site field at all — §8.1.4.6's `filename` is \"\" for a "
+           "thrown value carrying no backtrace and that is a positive answer, so a null one is a caller that "
+           "did not ask rather than a value that had nothing to say");
     /* AT THE ORIGIN — the FIRST uncaught page error, which is the last moment at which this host's silence is
        still recoverable. A page's throw is the forcing function that names an unbuilt capability, so a host
        that reaches one having declared neither route is a host in which that name cannot be read, and the
@@ -55,16 +68,27 @@ void result_page_error(const char *msg) {
            "unconditionally and `pageErrors` is in it). A host that renders the document only at the END of a "
            "run is the FIRST of those, not the second: a run that is killed before it drains publishes "
            "nothing, and the throw that ended a <script> is then the one fact its report cannot state");
-    for (int i = 0; i < g_errs_n; i++) if (!strcmp(g_errs[i], msg)) return;
-    if (g_err_hook) g_err_hook(msg);   /* routing between the two declared answers, never a default past one */
+    for (int i = 0; i < g_errs_n; i++)
+        if (!strcmp(g_errs[i], msg) && !strcmp(g_errs_at[i], filename)) return;
+    /* routing between the two declared answers, never a default past one */
+    if (g_err_hook) g_err_hook(msg, filename);
     if (g_errs_n >= g_errs_cap) {
         int c = g_errs_cap ? g_errs_cap * 2 : 8;
         char **a = realloc(g_errs, (size_t)c * sizeof(char *));
-        if (!a) return;   /* a lost diagnostic is not worth failing a run over */
-        g_errs = a; g_errs_cap = c;
+        char **b = realloc(g_errs_at, (size_t)c * sizeof(char *));
+        /* BOTH COLUMNS OR NEITHER — a half-grown pair is a row whose message is at an index its throw site is
+           not, which the dedupe above would then read across. A lost diagnostic is not worth failing a run
+           over; a MISFILED one is worse than a lost one. */
+        if (a) g_errs = a;
+        if (b) g_errs_at = b;
+        if (!a || !b) return;
+        g_errs_cap = c;
     }
     g_errs[g_errs_n] = strdup(msg);
-    if (g_errs[g_errs_n]) g_errs_n++;
+    g_errs_at[g_errs_n] = strdup(filename);
+    if (g_errs[g_errs_n] && g_errs_at[g_errs_n]) { g_errs_n++; return; }
+    free(g_errs[g_errs_n]); free(g_errs_at[g_errs_n]);
+    g_errs[g_errs_n] = NULL; g_errs_at[g_errs_n] = NULL;
 }
 
 /* Describe a thrown value WITHOUT running any of the page's code — see result.h. An own slot that is already a
@@ -132,8 +156,15 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
 
 void result_page_error_value(JSContext *ctx, JSValueConst err) {
     char buf[320];
+    /* §8.1.4.6 "Runtime script errors"'s THROW SITE, asked of the component that owns the derivation
+       (core/events/report_exception.h) rather than re-parsed out of the rendered frame `result_error_text`
+       appends. Two parsers of one backtrace disagree the first time either is corrected, and the answer here
+       is the one a reader partitions a run's errors by. */
+    char at[512];
+    uint32_t line = 0, col = 0;
+    report_exception_position(ctx, err, at, sizeof at, &line, &col);
     result_error_text(ctx, err, buf, sizeof buf);
-    result_page_error(buf);   /* an empty description is dropped by result_page_error's own first line */
+    result_page_error(buf, at);   /* an empty description is dropped by result_page_error's own first line */
 }
 
 /* Append RAW (a delimiter this file controls) or ESCAPED (page-supplied text). Escaping the delimiters too was
@@ -168,11 +199,22 @@ static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
     }
 }
 
+/* ONE ENTRY PER DISTINCT MESSAGE, which is what `pageErrors` has always been and what the readers of the
+   document expect — core/events/report_exception.c calls this a developer console, and a console is a list of
+   what went wrong rather than a list of occurrences. The RECORD is keyed on (message, throw site) now, so this
+   is the one place the two shapes part: a message raised from two scripts is two rows there and one line
+   here, and the per-script fact is carried by the STREAM (result.h), which is where a reader that needs it
+   reads. The skip is written out rather than folded into the record because collapsing it at the record would
+   put the document's shape back into the dedupe and lose the pair again. */
 static char *errs_json_array(void) {
     char *b = NULL; size_t cap = 0, len = 0;
+    int emitted = 0;
     errs_raw(&b, &cap, &len, "[");
     for (int i = 0; i < g_errs_n; i++) {
-        if (i) errs_raw(&b, &cap, &len, ",");
+        int seen = 0;
+        for (int j = 0; j < i; j++) if (!strcmp(g_errs[j], g_errs[i])) { seen = 1; break; }
+        if (seen) continue;
+        if (emitted++) errs_raw(&b, &cap, &len, ",");
         errs_raw(&b, &cap, &len, "\"");
         errs_append(&b, &cap, &len, g_errs[i]);
         errs_raw(&b, &cap, &len, "\"");

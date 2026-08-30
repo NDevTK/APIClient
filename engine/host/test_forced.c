@@ -127,20 +127,60 @@ static JSValue js_url_sink(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+/* THIS DOCUMENT'S CHUNK SERVER, AS ONE TABLE, because three readers ask one question of it and a second copy
+   of the answer is exactly what would let them disagree: the load edge below serves the BODY, the queue is
+   given the ADDRESS the bytes came from, and tf_page_error declares which of these programs raises an uncaught
+   error ON PURPOSE. Written as three `if (strstr(...))` it was one of those and the address was nobody's.
+   `at` IS HTML §8.1.4.1 "Scripts"'s BASE URL — "the URL from which the script was obtained, for external
+   scripts" — resolved against this document's own address (https://x.test/p), which is what a real fetch
+   would have made of the request path beside it. It is what §8.1.4.6 "Runtime script errors" then reports as
+   the throw site, and it is therefore this fixture's own token for "which program is this": a regression in
+   the DOCUMENT's scripts cannot produce it, which is the whole reason a staged error and a real one can be
+   told apart without matching a word of any engine message.
+   `stages_page_error` IS A CLAIM AND NOT A LICENCE. The row does not suppress anything — the two chunks that
+   carry it are asserted to have raised their error by NODE_ALGOS rows over the result document, so a staged
+   error that stops happening still FAILS. What it declares is the other direction, which nothing could state
+   before: an uncaught error from any OTHER program is one this document did not stage. */
+typedef struct { const char *req; const char *at; const char *body; int stages_page_error; } TfChunk;
+static const TfChunk TF_CHUNKS[] = {
+    { "/chunk/admin.js",    "https://x.test/chunk/admin.js",
+      "fetch('/api/admin/audit-log');", 0 },   /* chunk-only endpoint */
+    /* A chunk that THROWS is what a page error IS — the report must name the capability. A DOMException is the
+       most common throw in a DOM engine and keeps its name and message behind prototype accessors, so an
+       own-property reader calls it "an object with no own name/message". */
+    { "/chunk/cethrow.js",  "https://x.test/chunk/cethrow.js",
+      "customElements.define('nohyphen', class {});", 1 },
+    /* …AND HTML §8.1.4.7 "Unhandled promise rejections"'s HALF OF THE SAME CLAIM, from a chunk rather than from
+       the document, and with an Error rather than a bare string as the reason. Both are the point: a bundle
+       delivers most of its errors as rejections OF ERRORS from its lazily-loaded halves, and only a value that
+       carries a backtrace has a throw site for §8.1.4.6's extract to report — so this is the row that proves
+       the rejection path reaches that derivation at all. The three string-reason rejections stay in the
+       document, where the rows that read them back need them. */
+    { "/chunk/rejthrow.js", "https://x.test/chunk/rejthrow.js",
+      "Promise.reject(new Error('rejNOHANDLER'));", 1 },
+};
+
 /* the script-load host-edge: a lazy chunk / injected <script> / import(). Forced exec reaches it behind a
-   branch; the loaded JS becomes more code in THIS flow (engine_queue_script), forking through the one BFS. In
-   reality safeFetch fetches the body; here a mock chunk server returns it by URL. */
+   branch; the loaded JS becomes more code in THIS flow (engine_queue_fetched_script), forking through the one
+   BFS. In reality safeFetch fetches the body; here the table above is the origin server.
+   AN ADDRESS THE TABLE DOES NOT HAVE SERVES NOTHING, which is a 404 and is a real answer rather than a
+   swallowed one — and it is NOT asserted, because this edge's argument reaches it as whatever the page
+   computed, and a forced arm may hold unknown external input there (§Offensive programming: asserting on
+   attacker input is the one thing a DCHECK must never do). */
 static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc > 0) {
         const char *url = JS_ToCString(ctx, argv[0]);
         if (url) {
-            /* THE FIXTURE'S OWN DOCUMENT — a chunk this host mints belongs to the document that loaded it. */
-            if (strstr(url, "admin")) engine_queue_script(world_local_doc(), "fetch('/api/admin/audit-log');");   /* chunk-only endpoint */
-            /* A chunk that THROWS is what a page error IS — the report must name the capability. A DOMException
-               is the most common throw in a DOM engine and keeps its name and message behind prototype
-               accessors, so an own-property reader calls it "an object with no own name/message". */
-            if (strstr(url, "cethrow")) engine_queue_script(world_local_doc(), "customElements.define('nohyphen', class {});");
+            for (unsigned i = 0; i < sizeof(TF_CHUNKS) / sizeof(TF_CHUNKS[0]); i++) {
+                if (strcmp(url, TF_CHUNKS[i].req)) continue;
+                /* THE FIXTURE'S OWN DOCUMENT — a chunk this host mints belongs to the document that loaded it —
+                   AND THE ADDRESS IT WAS SERVED FROM, which §8.1.4.1 makes the program's base URL and which the
+                   entry refuses to be called without. */
+                engine_queue_fetched_script(world_local_doc(), TF_CHUNKS[i].body,
+                                            strlen(TF_CHUNKS[i].body), TF_CHUNKS[i].at);
+                break;
+            }
             JS_FreeCString(ctx, url);
         }
     }
@@ -1729,6 +1769,9 @@ static const char *HTML =
     " ceuni = 'isuni'; } catch (e) { ceuni = 'threw-' + e.message; } fetch('/api/ceuni?v=' + ceuni);"
     /* …and the same throw UNCAUGHT, at a chunk's top level, where a page error is what it becomes. */
     "loadScript('/chunk/cethrow.js');"
+    /* …and §8.1.4.7's rejection nobody handles, from a chunk of its own — see TF_CHUNKS for why it is an
+       Error from a lazily-loaded program rather than a bare string from this one. */
+    "loadScript('/chunk/rejthrow.js');"
     /* HTML §8.1.4.7 Unhandled promise rejections — the two claims that make the two lists necessary, and
        neither can be proved by the other.
        (1) A rejection nobody ever handles IS a page error: an async bundle delivers most of its errors this way
@@ -1749,7 +1792,6 @@ static const char *HTML =
     "var pe = new PromiseRejectionEvent('t', { promise: Promise.resolve(), reason: 'peREASON', cancelable: true });"
     "fetch('/api/prector?v=' + (pe.reason === 'peREASON' && pe instanceof Event && pe.cancelable && !pe.isTrusted"
     " ? 'isctor' : 'wrong'));"
-    "Promise.reject('rejNOHANDLER');"
     "var prs = Promise.reject('rejSYNC'); prs.catch(function(){});"
     "var prh = Promise.reject('rejHANDLED');"
     "Promise.resolve().then(function(){ prh.catch(function(){}); });"
@@ -2156,7 +2198,7 @@ static const char *HTML =
        The src'd path is not unexercised meanwhile: `node engine/wpt.mjs html/browsers` runs hundreds of src'd
        iframes at flow counts a realm-per-flow can still pay for. */
 
-    /* HTML §8.6's TIMER TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
+    /* HTML §8.7 Timers's TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
        at all, so `setTimeout` had no probe in the engine's own test despite being how a great deal of real code
        reaches the event loop. The ORDER is the assertion: a microtask checkpoint runs before the next task, so
        the `.then` continuation must observe its marker BEFORE the timer callback runs, and two timers with the
@@ -4391,7 +4433,43 @@ static int g_id_host_read, g_id_append_child;   /* declared once per agent — a
  * never take are taken on purpose. This document also STAGES uncaught errors on purpose — a chunk whose top
  * level throws §4.13.1's SyntaxError, and a `Promise.reject` nobody handles — and a DCHECK here would abort on
  * the fixture's own claims. What was wrong was never that the error happened; it was that nothing said so. */
-static void tf_page_error(const char *msg) { printf("@PAGEERR %s\n", msg); fflush(stdout); }
+/* AND IT NAMES *WHICH PROGRAM*, which is the half that made this line carry no information in the state it
+ * spends every run in. This document STAGES uncaught errors on purpose, so the count is never zero — and a
+ * reader with a message and a count alone cannot separate `staged only`, `staged plus a real one` and `a real
+ * one only`. Three states behind one answer, in the very line written to end three states behind one answer.
+ * THE KEY IS §8.1.4.6 "Runtime script errors"'s `filename` AND NEVER THE MESSAGE TEXT. A message is the
+ * engine's own prose: `x-panel` breaking would raise the identical "not a valid custom element name" string
+ * from the DOCUMENT's script, so any text-based classifier swallows exactly the regression it exists to
+ * surface. An address is this fixture's own token — TF_CHUNKS mints it, no other program of this document can
+ * produce it, and it is correct only because a queued script now carries the address its bytes came from.
+ * `-` IS §8.1.4.6'S OWN ANSWER AND NOT A MISSING FIELD: every non-Error a page can throw carries no backtrace,
+ * so there is no throw site to report. It is printed as a value rather than omitted, because a reader that
+ * cannot see the difference between "thrown from nowhere nameable" and "this printer said nothing" is back to
+ * the defect above one column over.
+ *
+ * IT IS A PRINT AND NOT AN ASSERT, DELIBERATELY. §CLAUDE's offensive-programming rule names the one class of
+ * error that is NOT a should-never-happen: a forced-exec flow THROWING on opaque or attacker input is the
+ * exploration surface, and this document is run under forced multi-path execution where arms a browser would
+ * never take are taken on purpose. The staged errors are the other reason — a DCHECK here would abort on the
+ * fixture's own claims — and they are ASSERTED elsewhere, by NODE_ALGOS rows over the result document, so the
+ * declaration below suppresses nothing: it says which addresses are expected to appear, never that an absent
+ * one is acceptable. */
+static void tf_page_error(const char *msg, const char *filename) {
+    printf("@PAGEERR at=%s %s\n", filename && *filename ? filename : "-", msg);
+    fflush(stdout);
+}
+
+/* …AND THE DECLARATION THE READER SUBTRACTS. Printed from the same table the chunks are served from, so there
+ * is no second list to keep in step, and printed ONCE per process because it is a statement about the
+ * document rather than about a run of it. */
+static void tf_declare_staged_page_errors(void) {
+    static int said;
+    if (said) return;
+    said = 1;
+    for (unsigned i = 0; i < sizeof(TF_CHUNKS) / sizeof(TF_CHUNKS[0]); i++)
+        if (TF_CHUNKS[i].stages_page_error) printf("@PAGEERR-STAGED %s\n", TF_CHUNKS[i].at);
+    fflush(stdout);
+}
 
 static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
 {
@@ -4406,8 +4484,9 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
     g_id_append_child = idl_method_id(ctx, ONE_STR, 1, js_append_child, 0);
     /* THIS FIXTURE'S EDGES — WHO answers, which is the half that is legitimately per-host. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
-    timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
+    timer_set_script_sink(engine_queue_timer_script);   /* §8.7 Timers: a STRING handler is evaluated, as a flow */
     result_set_page_error_hook(tf_page_error);   /* …and WHO reads an uncaught page error — see tf_page_error */
+    tf_declare_staged_page_errors();   /* …and which of them this document raises on purpose */
 
     /* AND THEN THE FACTS. `false` is §7.5.1's requestsOAC: this fixture's document comes from no response at
        all — it is a string of HTML handed to the probe — so there is no `Origin-Agent-Cluster` header to have
@@ -5781,7 +5860,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int xdocread_tt = (strstr(js, "\"/api/xdocread\"") && strstr(js, "xread"));
     /* The same cross-document read reached from inside a QUEUED JOB, which parks the flow at a job root. */
     int xdocjob_tt = (strstr(js, "\"/api/xdocjob\"") && strstr(js, "jobread"));
-    /* §8.6 + §8.1.7: the microtask ran first, then the two timers in the order they were set. */
+    /* §8.7 Timers + §8.1.7: the microtask ran first, then the two timers in the order they were set. */
     int timer_tt = (strstr(js, "\"/api/timerfire\"") && strstr(js, "ABC"));
     /* §8.7's string handler was compiled and RUN as a program, and the handle the two arms hand back comes
        out of one per-global counter. Two endpoints because the two halves fail independently. */

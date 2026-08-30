@@ -224,9 +224,13 @@ void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
    WPT reads all three off the event (`lineno` and `colno` are asserted to be greater than zero in six of
    dom/observable's subtests alone), so a fabricated number would be a wrong answer dressed as a right one and
    a zero is a right answer that loses information the engine has. */
-static void report_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
-                            uint32_t *pline, uint32_t *pcol)
+void report_exception_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
+                               uint32_t *pline, uint32_t *pcol)
 {
+    DCHECK(file != NULL && file_cap > 0 && pline != NULL && pcol != NULL,
+           "§8.1.4.6's throw site was asked for into no buffer — the three values are derived together and a "
+           "caller that wants one of them still owns storage for all three");
+    *file = '\0'; *pline = 0; *pcol = 0;
     JSValue stack = JS_GetErrorStackString(ctx, exception);
     const char *s, *nl, *p, *colon2, *colon1, *open;
     size_t n;
@@ -275,7 +279,7 @@ JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const 
     JSValue filename;
     JSValue ev;
 
-    report_position(ctx, exception, path, sizeof path, &line, &col);
+    report_exception_position(ctx, exception, path, sizeof path, &line, &col);
     filename = JS_NewString(ctx, path);
     JS_DiagFreeCString(ctx, what, owned);
     ev = error_event_new(ctx, type, cancelable, message, filename, line, col, exception);

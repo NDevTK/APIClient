@@ -4203,7 +4203,7 @@ static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKi
     dyn_body_unref(b);
 }
 
-/* …AND THE ROWS NO ELEMENT CAUSED. §4.12.1.1's "execute the script element" never runs for these — a §8.6
+/* …AND THE ROWS NO ELEMENT CAUSED. §4.12.1.1's "execute the script element" never runs for these — a §8.7
    string handler, a lazy chunk's reply, §7.4.2.3.2's `javascript:` URL, an @S candidate and a cross-agent
    operation's program are classic scripts §8.1.4.4 evaluates with no element behind them — so the document's
    §3.1.7 `currentScript` stays null while they run, which is that section's own answer and not a default this
@@ -4356,23 +4356,45 @@ static lxb_dom_element_t *flow_dyn_el(const Flow *f) {
     return f->dyn_el[f->script_i];
 }
 
-/* EVERY SOURCE THAT REACHES THIS ONE IS A TASK — a lazy chunk's reply, a §8.6 string handler — so the tail IS
-   its position, and the entry cannot be asked for another (engine.h's DynPos).
-   AND EVERY ONE OF THEM IS A CLASSIC SCRIPT, which is §8.1.4.4's answer for a program that has no `<script>`
-   element behind it rather than a default this entry happens to pick: §8.6's string handler is evaluated as a
-   classic script, and a lazy chunk's reply is the body an already-running program asked for. An entry that DOES
-   have an element behind it says which of the two algorithms runs it — engine_queue_element_script below. */
-/* THE ONE ENTRY THAT STILL TAKES A NUL-TERMINATED BODY, AND IT IS NOT THIS FILE'S TO FIX. It is §8.6's string
-   handler sink (`timer_set_script_sink`), so its shape is that hook's `void (*)(uint32_t, const char *)`, and
-   the length is lost one level UP — at the `JS_ToCString` in core/timing/timer.c that turns the handler
-   DOMString into C. Widening this signature without widening that hook and that conversion would move the
-   truncation rather than remove it, so the length goes end to end there or not at all: a `setTimeout("\0…")`
-   is still read to the first NUL. The `strlen` is written HERE, once, rather than left implicit in
-   engine_queue, so that the site carrying the remaining gap is the site that names it. */
-void engine_queue_script(uint32_t doc, const char *body) {
-    DCHECK(body != NULL, "a §8.6 string handler was queued with no source at all — the sink is called with "
-                         "the handler's DOMString and there is no program in a null one");
+/* BOTH ENTRIES BELOW ARE A TASK — so the tail IS their position and neither can be asked for another
+   (engine.h's DynPos) — and both are a CLASSIC SCRIPT, which is §8.1.4.4's answer for a program that has no
+   `<script>` element behind it rather than a default they happen to pick. An entry that DOES have an element
+   behind it says which of the two algorithms runs it — engine_queue_element_script below.
+   THEY ARE TWO BECAUSE HTML §8.1.4.1 "Scripts" gives them two different BASE URLs, and one entry that could
+   not express the difference gave both the inline answer — see engine.h. */
+/* HTML §8.7 "Timers"'s STRING HANDLER. Its base URL is §8.7's own "settings object's API base URL", which for
+   a Window is its Document's base URL — so the address column is NULL as a positive statement, and the
+   compile reads exactly that (`document_base_url` when flow_dyn_url answers NULL). engine.h names the
+   residual: §8.7's initiating-script case needs §8.1.4.1's active script, which this engine does not track.
+   THE ONE ENTRY THAT STILL TAKES A NUL-TERMINATED BODY, AND IT IS NOT THIS FILE'S TO FIX. Its shape is
+   `timer_set_script_sink`'s `void (*)(uint32_t, const char *)`, and the length is lost one level UP — at the
+   `JS_ToCString` in core/timing/timer.c that turns the handler DOMString into C. Widening this signature
+   without widening that hook and that conversion would move the truncation rather than remove it, so the
+   length goes end to end there or not at all: a `setTimeout("\0…")` is still read to the first NUL. The
+   `strlen` is written HERE, once, rather than left implicit in engine_queue, so that the site carrying the
+   remaining gap is the site that names it. */
+void engine_queue_timer_script(uint32_t doc, const char *body) {
+    DCHECK(body != NULL, "a §8.7 Timers string handler was queued with no source at all — the sink is called "
+                         "with the handler's DOMString and there is no program in a null one");
     engine_queue(doc, body, strlen(body), DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
+}
+
+/* …AND A PROGRAM WHOSE BYTES CAME FROM A RESPONSE. §8.1.4.2 "Fetching scripts" creates the script with the
+   RESPONSE'S URL, and §8.1.4.1 "Scripts" makes that the row's base URL — "the URL from which the script was
+   obtained, for external scripts" — so this entry REQUIRES one. It is not a defaultable field: the document's
+   address is a DIFFERENT script's answer rather than a weaker form of this one, and taking it silently is
+   what filed a fetched chunk as an inline script (the compile reads a missing address as
+   JS_EVAL_FLAG_INLINE_SCRIPT, which says the bytes were rendered against THIS visitor's credentials) and
+   named the page as the throw site of every error the chunk raised. */
+void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, const char *url) {
+    DCHECK(body != NULL, "a fetched program was queued with no source at all — the caller holds the reply's "
+                         "bytes and there is no program in a null one");
+    DCHECK(url != NULL && *url != '\0',
+           "a program whose bytes came from a RESPONSE was queued with no address — §8.1.4.2 creates the "
+           "script with the response's URL and §8.1.4.1 keeps it as the script's base URL, so a caller here "
+           "with none has the bytes and has thrown away where they came from; nothing downstream can "
+           "re-derive it, and the document's address is another script's answer rather than a weaker one");
+    engine_queue(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, url, DYN_POS_APPEND);
 }
 
 /* …AND THE ROW A `<script>` ELEMENT PUT THERE, which is the same position and one more fact: HTML §4.12.1.1
@@ -4395,7 +4417,8 @@ void engine_queue_script(uint32_t doc, const char *body) {
 void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
                                  lxb_dom_element_t *el) {
     DCHECK(el != NULL, "a `<script>` element's program was queued with no element — this entry is the one an "
-                       "ELEMENT reaches (the other is engine_queue_script), so a caller with nothing to pass "
+                       "ELEMENT reaches; the element-less entries are engine_queue_timer_script and "
+                       "engine_queue_fetched_script, so a caller here with nothing to pass "
                        "is a caller at the wrong entry");
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, DYN_POS_APPEND, el);
 }
@@ -5084,7 +5107,7 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
    script element el, even if other scripts are already executing" — that program ran INSIDE the one that
    inserted it, so the stack never emptied across it and the checkpoint the inserting program owes falls AFTER
    its row. Every OTHER program the flow has left is a task: the document's next <script>, a lazy chunk, a
-   `javascript:` URL, a §8.6 string handler, a peer's operation. §8.1.7.3 "Processing model" performs the
+   `javascript:` URL, a §8.7 Timers string handler, a peer's operation. §8.1.7.3 "Processing model" performs the
    checkpoint at the END of each task, so all of them come after it, and that is the whole of the answer.
    THIS USED TO BE ASKED ONLY AFTER THE SEQUENCE WAS EXHAUSTED, which is why it is a function now. The job arm
    sat below the arms that compile a program, so it was reachable only once the cursor had passed the last row

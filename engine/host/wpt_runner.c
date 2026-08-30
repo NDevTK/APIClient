@@ -2156,9 +2156,14 @@ static char   g_variant[256];   /* "" or the "?…"/"#…" this run is */
    It is a report and NEVER a verdict: a browser's script that throws does not stop the document, so the flow
    runs on to the next program exactly as it would in Chrome, and testharness's own subtest results decide the
    file. */
-static void wpt_page_error(const char *msg)
+/* THE THROW SITE IS ITS OWN COLUMN, and it is not the test's address: a WPT document loads scripts from
+   `/resources/` and from its own directory, so "which file threw" and "which test was running" are different
+   questions and this line used to answer only the second. §8.1.4.6 "Runtime script errors"'s `filename` is ""
+   for a thrown value with no backtrace, which is that algorithm's own answer and is printed as `-`. */
+static void wpt_page_error(const char *msg, const char *filename)
 {
-    fprintf(report_out(), "@WPTERR %s: %s\n", g_test_url[0] ? g_test_url : "<document>", msg);
+    fprintf(report_out(), "@WPTERR %s at=%s: %s\n", g_test_url[0] ? g_test_url : "<document>",
+            filename && *filename ? filename : "-", msg);
 }
 
 /* THIS DOCUMENT'S PROGRAM SEQUENCE — what a session is opened over (engine.h). Each entry is its own program
@@ -2475,7 +2480,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        `setTimeout("…")` in the corpus took its document down here while the two hosts that DO register it
        (main.c, test_forced.c) ran the same code correctly. An edge absent from one host is not a weaker host,
        it is an area this gate publishes a number for without having run it. */
-    timer_set_script_sink(engine_queue_script);
+    timer_set_script_sink(engine_queue_timer_script);
 
     /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's, from the response the caller
        fetched — a WPT test document IS fetched from the corpus's own wptserver, so it has a response, and

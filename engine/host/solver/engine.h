@@ -8,7 +8,7 @@
 #ifndef ENGINE_HOST_SOLVER_ENGINE_H
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
-#include <stddef.h>   /* size_t — every program crosses this header as (text, LENGTH); see engine_queue_script */
+#include <stddef.h>   /* size_t — every program crosses this header as (text, LENGTH); see engine_queue_fetched_script */
 
 #include <lexbor/dom/dom.h>
 
@@ -24,7 +24,7 @@
  * guesses — the same sentence engine_queue_into already makes about which flow and which document.
  *   DYN_POS_APPEND is what a TASK is. An `error`/`load` event fired at an element, a `javascript:` navigation
  * (HTML §7.4.2.2 "Beginning navigation" queues a global task on the navigation and traversal task source to
- * reach §7.4.2.3.2), a §8.6 string timer, a lazy chunk's reply, a document's own sequence being filled one
+ * reach §7.4.2.3.2), a §8.7 Timers string timer, a lazy chunk's reply, a document's own sequence being filled one
  * entry at a time: each of those is queued and runs when the sequence reaches it, and a task queue is FIFO,
  * so the TAIL is its position.
  *   DYN_POS_IMMEDIATE is where a program the RUNNING program caused runs. HTML §4.12.1.1 "Processing model"
@@ -41,34 +41,59 @@
 typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
 
 /* Queue a script body to run in the CURRENT flow after the current script, sharing its globals + COW delta.
-   Three callers, and they are one thing — code the page caused to run: a DYNAMICALLY-LOADED body (a lazy
-   chunk / injected <script> / import()), a `setTimeout` STRING handler, and the classic scripts of a DOCUMENT
-   this flow just created (§7.4 step 14's load, whose realm builder hands them over). Because a load sits
-   behind a branch, the ONE BFS discovers different lazy scripts on different arms — lazy loading is not a
-   separate system, just more code the flow runs and forks through. The body is copied; the queue is per-run
-   and drained by the flow that owns it.
+   Because a load sits behind a branch, the ONE BFS discovers different lazy scripts on different arms — lazy
+   loading is not a separate system, just more code the flow runs and forks through. The body is copied; the
+   queue is per-run and drained by the flow that owns it.
    `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS, which is WHERE IT IS COMPILED (solver/flow.h's `dyn_doc`). An
    instance is an ORIGIN-KEYED AGENT CLUSTER, so this is a child navigable's document as often as the
    session's, and a program compiled in the wrong realm is closed over the wrong Window — it defines the
    child's globals on its creator and reads the creator's back as the child's. There is no default: the caller
    knows which document's code it is holding, and a scheduler that guessed would guess the same way for every
    document this agent has.
-   EVERY ONE OF THOSE THREE IS A TASK, so this entry is DYN_POS_APPEND and cannot be asked for anything else:
-   a lazy chunk's reply, a §8.6 string handler and a document's own sequence each run when the sequence reaches
-   them. The one script source that is NOT a task has its own entry below.
-   AND EVERY ONE OF THEM IS A CLASSIC SCRIPT, which is HTML §8.1.4.4 "Calling scripts"'s answer for a program
-   with no `<script>` element behind it rather than a default this entry picks: §8.6's string handler is
-   evaluated as a classic script and a lazy chunk's reply is the body an already-running program asked for. A
-   row that DOES have an element behind it states which of §8.1.4.4's two algorithms runs it — the entry below
-   this one.
+   BOTH ARE A TASK, so both are DYN_POS_APPEND and neither can be asked for anything else. The one script
+   source that is NOT a task has its own entry further below.
+   AND BOTH ARE A CLASSIC SCRIPT, which is HTML §8.1.4.4 "Calling scripts"'s answer for a program with no
+   `<script>` element behind it rather than a default these entries pick: §8.7 Timers's string handler is
+   evaluated as a classic script, and a lazy chunk's reply is the body an already-running program asked for. A
+   row that DOES have an element behind it states which of §8.1.4.4's two algorithms runs it.
+
+   THEY ARE TWO ENTRIES BECAUSE THEY ANSWER HTML §8.1.4.1 "Scripts"'s BASE URL DIFFERENTLY, and one entry that
+   could not express the difference answered it once for both. That field's own definition is the whole rule:
+   "Null or a base URL used for resolving module specifiers. When non-null, this will either be the URL from
+   which the script was obtained, for external scripts, or the document base URL of the containing document,
+   for inline scripts." So NULL in the row's address column is not an absent value — it is the positive
+   statement "the document's", read at the compile — and a program whose bytes came from a RESPONSE has an
+   address that no consumer can re-derive from the document it ran in. Merged, the fetched case took the inline
+   answer: a chunk served from /chunk/x.js compiled under the DOCUMENT's address, so the throw site §8.1.4.6
+   "Runtime script errors" reports named the page rather than the chunk, a nested `import('./y.js')` resolved
+   against the page, and — because the compile reads a missing address as `JS_EVAL_FLAG_INLINE_SCRIPT` — every
+   record the chunk published was filed as state the server rendered against THIS visitor's credentials, which
+   is the opposite of what a subresource served identically to everybody is. */
+/* HTML §8.7 "Timers"'s STRING HANDLER, evaluated when the timer fires — the sink core/timing/timer.h names.
+   ITS BASE URL IS THE DOCUMENT'S, WHICH IS §8.7'S OWN ANSWER AND NOT THIS ENTRY'S CONVENIENCE: the timer
+   initialization steps read "Let base URL be settings object's API base URL", and for a Window that is its
+   associated Document's document base URL. So the row's address column is NULL, positively.
+   NAMED RESIDUAL — §8.7's very next step is "If initiating script is not null: … Set base URL to initiating
+   script's base URL", and this engine does not yet track HTML §8.1.4.1's ACTIVE SCRIPT, so a `setTimeout`
+   string scheduled from a chunk takes the document's base URL where the standard takes the chunk's. The next
+   diff builds active-script tracking (ECMAScript's GetActiveScriptOrModule, which is the FUNCTION's script and
+   not the running row, so `flow_dyn_url` is not it). Its absence shows as a `setTimeout("import('./y.js')")`
+   written in a bundle served from /assets/app.js resolving ./y.js against the page instead of /assets/.
    A PROGRAM IS `(text, len)` EVERYWHERE ELSE IN THIS FILE, AND THIS IS THE ONE ENTRY THAT IS STILL A C STRING.
    ECMAScript §11.1 "Source Text" permits every code point from U+0000 up, so a bundle carrying a NUL is a
    bundle a browser runs whole and this engine used to run a PREFIX of — silently, with every endpoint and sink
-   past that byte unreachable. Every entry below therefore takes a length. This one cannot yet: it is §8.6's
-   string-handler sink, whose shape is core/timing/timer.h's `void (*)(uint32_t, const char *)`, and the length
-   is already gone by the time that hook is called. `setTimeout("\0…")` is the remaining truncation and it is
-   fixed in timer.c's conversion, not here. */
-void engine_queue_script(uint32_t doc, const char *body);
+   past that byte unreachable. Every entry below therefore takes a length. This one cannot yet: its shape is
+   core/timing/timer.h's `void (*)(uint32_t, const char *)`, and the length is already gone by the time that
+   hook is called. `setTimeout("\0…")` is the remaining truncation and it is fixed in timer.c's conversion. */
+void engine_queue_timer_script(uint32_t doc, const char *body);
+/* …AND A PROGRAM WHOSE BYTES CAME FROM A RESPONSE — a lazy chunk, a body an already-running program asked for.
+   `url` IS §8.1.4.1's base URL and is REQUIRED, which is the half the merged entry could not state. §8.1.4.2
+   "Fetching scripts" creates the script with the response's URL, so a fetched program always has one: an entry
+   reached with none is a caller that has the bytes and threw away where they came from, which is unrecoverable
+   here (the document's address is a different script's answer, not a weaker form of this one).
+   `body_n` IS THE PROGRAM'S LENGTH for ECMAScript §11.1's reason above — a decoded response body may hold a
+   U+0000 and a browser runs the whole of it. */
+void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, const char *url);
 /* …AND THE ROW A `<script>` ELEMENT PUT THERE, at the same position and carrying one more fact. HTML §4.12.1.1
    "Processing model"'s "execute the script element" ends in a switch on the ELEMENT's type — "classic" runs the
    classic script, "module" runs the module script — so the row carries `stype` and flow_step routes it to
@@ -98,7 +123,7 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
    INSERTED reaches the end of "prepare the script element" — "Otherwise, immediately execute the script
    element el, even if other scripts are already executing" — and "execute the script element" then runs the
    classic script right there. So it takes the slot AFTER the program that inserted it rather than the tail,
-   and nothing the sequence already holds may run in between. Separate from engine_queue_script rather than a
+   and nothing the sequence already holds may run in between. Separate from the two entries above rather than a
    flag on it, because the two are different spec steps and the four callers of that one must not be able to
    pick this by accident.
    THE TYPE IS CLASSIC AND IS NOT A PARAMETER: §4.12.1.1 reaches this step only for what falls past "If el's
@@ -409,7 +434,7 @@ void engine_sched_end(void);
  * the creating flow, so its scripts are that flow's next programs (core/frame/navigable.c seeds them there);
  * a joined Document is built at the BASELINE like the root's, before any flow of it exists, so its scripts are
  * the programs of a flow that has to be MINTED for them. There is no flow to queue into, which is why this is
- * an entry of its own and not a second caller of engine_queue_script.
+ * an entry of its own and not a second caller of engine_queue_fetched_script.
  *
  * IT IS A MEMBER OF THE ONE FRONTIER AND NOT A SECOND SESSION. §scheduler: a new document APPENDS its flows to
  * the one continuous frontier; it does not start a scheduler, a run or an attention. So this adds ONE flow —

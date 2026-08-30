@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_REPORT_EXCEPTION_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_REPORT_EXCEPTION_H
 #include <stdbool.h>
+#include <stddef.h>   /* size_t — report_exception_position takes the caller's buffer capacity */
 #include <stdint.h>
 
 #include "quickjs.h"
@@ -51,6 +52,19 @@ typedef struct {
  * §7.2.6.8 fires `navigateerror` with DOM's plain fire-an-event — and they are here because the one thing every
  * caller does with an errorInfo is dispatch it. `exception` is BORROWED; the result is OWNED. */
 JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable);
+
+/* …AND THE PART OF THAT EXTRACTION A CALLER MAY WANT WITHOUT AN EVENT: §8.1.4.6's `filename`, `lineno` and
+ * `colno`, derived from the backtrace the value already carries. One component owns the derivation because
+ * two would disagree the first time either is corrected — the second reader is solver/result.h's page-error
+ * stream, which reports WHICH SCRIPT threw and would otherwise re-parse the rendered frame itself.
+ *
+ * THE EMPTY FILENAME IS A POSITIVE ANSWER AND NEVER A HOLE. Every non-Error a page can throw carries no
+ * backtrace, so "" states that this value has no throw site to report — which is §8.1.4.6's own answer, and is
+ * exactly the fact a reader partitioning errors by script has to be able to see rather than default past.
+ * Runs NO page code (JS_GetErrorStackString reads the slot; a host reporting what went wrong must not depend
+ * on the code that went wrong). `exception` is BORROWED. */
+void report_exception_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
+                               uint32_t *pline, uint32_t *pcol);
 
 /* The private key §8.1.4.6 step 6's "in error reporting mode" flag hangs off the global by. One per AGENT. */
 void report_exception_init(JSContext *ctx);

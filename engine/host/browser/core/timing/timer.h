@@ -1,4 +1,4 @@
-/* TIMERS — HTML 8.6, the timer task source. */
+/* TIMERS — HTML §8.7 "Timers", the timer task source. */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_TIMER_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_TIMER_H
 #include "quickjs.h"
@@ -36,7 +36,7 @@ void timer_clear_map(JSContext *ctx);
    itself can be unknown so is that sum. The comparison is core/timing/event_loop.h's one moment order. */
 int timer_due_before(JSContext *ctx, JSValueConst moment);
 
-/* HTML 8.6: a STRING handler is EVALUATED when the timer fires. Running it is the HOST's — the extension's host
+/* HTML §8.7 "Timers": a STRING handler is EVALUATED when the timer fires. Running it is the HOST's — the extension's host
    queues it onto the flow that scheduled it, which is what keeps a `setTimeout("...")` payload explorable — and
    naming that register here would make the browser half depend on the scheduler, and through it on the whole
    solver, exactly as fetch.h says of its own provider. A host that registers none has not built the capability,

@@ -924,11 +924,42 @@ const runNumbers = (t) =>
    for itself on its first run by naming a document-ending regression that had been invisible across every
    prior build, and the only thing it lacked was a reporter — a marker a person has to scroll a log for is a
    measurement nobody takes. It is REPORTED and never a verdict: a page error is evidence, not a failure. */
+/* …AND THE PART OF IT THAT WAS ITSELF THREE STATES BEHIND ONE ANSWER, WHICH IS THE DEFECT ONE LEVEL UP. The
+   fixture STAGES uncaught errors on purpose (a chunk whose top level throws §4.13.3's SyntaxError, and a
+   rejection nobody handles), so this line was ON for every run there has ever been and carried no information
+   in the state it spends its life in. An unexpected SECOND error read as `2 UNCAUGHT PAGE ERROR(S), first:
+   <the expected one>` — the count moved and the one that mattered was not even quoted — and `staged only`,
+   `staged plus a real one` and `a real one only` were one number. A reader that cannot separate a designed
+   observation from a real one is not a reader.
+   THE PARTITION IS BY SCRIPT AND NEVER BY MESSAGE TEXT. A message is engine prose: `x-panel` breaking raises
+   the identical "not a valid custom element name" string from the DOCUMENT's script, so a text-keyed
+   suppression list swallows exactly the regression it exists to surface. `at=` is HTML §8.1.4.6 "Runtime
+   script errors"'s `filename`, which the fixture's own chunk table mints and no other program of that document
+   can produce — and it is right only because a queued script now carries the address its bytes came from.
+   THE STAGED SET IS THE FIXTURE'S OWN STATEMENT, NOT THIS FILE'S. `@PAGEERR-STAGED` is printed from the same
+   table the chunks are served from, so nothing here has to be kept in step with the document, and a fixture
+   that stages one more error moves both sides by itself. It is also NOT a suppression: each staged error is
+   asserted to have HAPPENED by a NODE_ALGOS row over the result document, so one that stops occurring still
+   fails — this only says which occurrences are expected.
+   `-` IS §8.1.4.6'S OWN ANSWER for a thrown value with no backtrace and is reported as its own population,
+   because "raised from nowhere nameable" is a fact about the throw and not a hole in this reader.
+   REPORTED AND NEVER A VERDICT: a page error is evidence, not a failure. */
 function pageErrorText(out) {
-  const errs = [...out.matchAll(/^@PAGEERR (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x);
+  const staged = new Set([...out.matchAll(/^@PAGEERR-STAGED (\S+)$/gm)].map((m) => m[1]));
+  const errs = [...out.matchAll(/^@PAGEERR at=(\S+) (.*)$/gm)]
+    .map((m) => ({ at: m[1], msg: m[2].trim() }))
+    .filter((e) => e.msg);
   if (!errs.length) return "";
-  return ` — ${errs.length} UNCAUGHT PAGE ERROR(S), first: ${JSON.stringify(errs[0].slice(0, 160))}` +
-         (errs.length > 1 ? ` (+${errs.length - 1} more, deduped by solver/result.c)` : "");
+  const known = errs.filter((e) => staged.has(e.at));
+  const rogue = errs.filter((e) => !staged.has(e.at));
+  /* THE STAGED COUNT IS CARRIED EVEN WHEN NOTHING IS WRONG, because its DISAPPEARANCE is the other direction
+     this line can report: a run in which the document staged two errors and produced one is a run whose
+     fixture stopped exercising something, and a reader shown only the rogue population would see silence. */
+  const stagedText = `${known.length} staged of ${staged.size} declared`;
+  if (!rogue.length) return ` — page errors: ${stagedText}, none unstaged`;
+  const q = (e) => `${JSON.stringify(e.msg.slice(0, 160))} at ${e.at === "-" ? "no throw site (§8.1.4.6's own answer for a value with no backtrace)" : e.at}`;
+  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (${stagedText}), first: ${q(rogue[0])}` +
+         (rogue.length > 1 ? ` (+${rogue.length - 1} more, deduped by solver/result.c on (message, throw site))` : "");
 }
 
 /* WHAT THE PAGE ITSELF SAID WENT WRONG — the @LOG stream's `level`, which is Console Standard §2.3 Printer's

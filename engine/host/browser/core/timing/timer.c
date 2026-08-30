@@ -1,4 +1,4 @@
-/* TIMERS — HTML 8.6 "Timers", the timer task source.
+/* TIMERS — HTML §8.7 "Timers", the timer task source.
  *
  * WHY THIS BLOCKED EVERYTHING. testharness.js finishes a document from inside a timer:
  *
@@ -15,7 +15,7 @@
  * expiry is enqueued through JS_EnqueueCallTask, which runs it as a call-root flow: preemptible, forkable and
  * parkable like any other program.
  *
- * IT IS A TASK, AND THE WORD IS LOAD-BEARING. 8.6 says "queue a global task on the timer task source", and
+ * IT IS A TASK, AND THE WORD IS LOAD-BEARING. §8.7 says "queue a global task on the timer task source", and
  * 8.1.7 says the event loop performs a MICROTASK CHECKPOINT between one task and the next — so every promise
  * reaction outstanding when a timer expires runs BEFORE the callback does. Enqueued as a microtask instead, a
  * `setTimeout(f, 0)` cut into the middle of a promise chain: `delay(0)` observed a stream write that the chain
@@ -64,7 +64,7 @@
  * THIS ARM IS NOW ONE OF TWO SEAMS RATHER THAN THE ONLY ONE, and the split is ownership. The ECMAScript
  * intrinsics announce themselves (quickjs's JS_SetEvalSinkHook, which solve_init registers), so 19.2.1 eval in
  * both its direct spellings, indirect eval, 20.2.1.1.1's `new Function` and ShadowRealm.prototype.evaluate all
- * reach the same detector without this component. What stays HERE is exactly what the engine cannot see: 8.6's
+ * reach the same detector without this component. What stays HERE is exactly what the engine cannot see: §8.7's
  * handler is a DOMString this component compiles LATER through `g_script_sink`, so the value has to be
  * announced where it ARRIVES and not where some other algorithm evaluates it.
  * Worse, it did not merely go unnoticed: the
@@ -788,7 +788,7 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             return JS_STEP_ABRUPT;
         DCHECK(g_script_sink != NULL,
                "setTimeout was given a STRING handler and this host registered no way to evaluate one — HTML "
-               "8.6 evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
+               "§8.7 Timers evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
         /* IN THIS REALM'S DOCUMENT — §8.7 Timers compiles the string with the entry global object's settings, which
            is the Window whose `setTimeout` was called and not the agent's root. */
         g_script_sink(document_doc(ctx), src);
@@ -909,7 +909,7 @@ static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
-/* HTML 8.6.4 queueMicrotask: a MICROTASK, which is the whole of what it is for — it runs inside the current
+/* HTML §8.8 "Microtask queuing"'s queueMicrotask: a MICROTASK, which is the whole of what it is for — it runs inside the current
    checkpoint, ahead of every task, including a timer set for zero. */
 static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
