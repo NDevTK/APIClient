@@ -18,7 +18,7 @@
 // reach a same-document listener; the sender's own context is excluded).
 function sendToOffscreen(msg) {
   /* THE OTHER HALF OF THE EDGE bridge.js ALREADY ASSERTS FROM ITS SIDE (onFrontierAdvance). bridge.js is the
-     last script ast-worker.html loads, so by the time any document delivers its CONTENT_HTML the dispatch is
+     last script ast-worker.html loads, so by the time any document delivers its CONTENT_SEED the dispatch is
      installed — its absence is a broken load order, not an optional feature. Returning a failure response
      instead reported "analysis worker dispatch unavailable" as this document's `_astError` and moved on,
      which is a page that silently never reached the frontier at all. */
@@ -99,45 +99,18 @@ function _pushGlobalLog(entry, tabId, documentId, frameId) {
 
 const _wsConnState = new Map(); // documentId → Map<wsId, { url, readyState }>
 
-/* -- Review-completion RECLAIM ------------------------------------------------
-   THE ANALYSIS OWNS THE BUFFER; THE DOCUMENT OWNS ITSELF. This swept `state.docs.delete(documentId)` the
-   moment a document's forced-exec run returned, which un-registered a document that was still OPEN and still
-   firing requests. Every learner resolves its writes through `_docForLearning(documentId)` and that lookup
-   then missed, so from ~a second after page load — the entire lifetime of the page — every key, endpoint,
-   schema and probe result learned from live traffic was written into a throwaway object and dropped, and the
-   automatic req2proto probe went out with `tabId: null` and came back `relay_failed`. The eviction was aimed
-   at the BIG state (the combined page source), and that is the only thing reclaimed here.
-   A DocData is small (identity + the maps this document's own view holds, all of which are already merged
-   into globalStore) and it lives exactly as long as `_docOrigins`' entry for the same document does — the
-   offscreen's session. `_wsConnState` is the LIVE document's, never the analysis's, and was dropped here too:
-   a page whose run has returned still has its WebSockets open and the message console still routes to them. */
-var _reclaimSweepTimer = null;
-function _scheduleEvictSweep() {   // name kept: lib/merge.js posts here at the end of every merge
-  if (_reclaimSweepTimer) return;
-  _reclaimSweepTimer = setTimeout(function () { _reclaimSweepTimer = null; _reclaimReviewedDocs(); }, 1000);
-}
-function _reclaimReviewedDocs() {
-  var n = 0;
-  state.docs.forEach(function (doc, documentId) {
-    /* Reviewed = its forced-exec run has RETURNED (`_astRun`/`_astError` are written by the ONE analysis when
-       its engine finalizes). `_reclaimed` is what keeps this from re-running over the same document on every
-       later merge — it is the reclaim's own record, not a second answer to "did the run return".
-       IT ASKED `_astResults` AND THAT IS NO LONGER THE SAME QUESTION: the incremental merge writes a snapshot
-       into that slot while the engine is still exploring, so reading it here would free the page source of a
-       document whose run is mid-flight. `_astRun` is the outcome and is written once, at the return. */
-    if (doc._reclaimed || !(doc._astRun || doc._astError)) return;
-    _reclaimReviewedDoc(documentId, doc);
-    n++;
-  });
-  if (n) console.debug("[reclaim] freed the page source of %d reviewed document(s)", n);
-}
-function _reclaimReviewedDoc(documentId, doc) {
-  // The combined page source, in the two places it is held. Nothing reads either after the run returns: a
-  // re-delivered CONTENT_HTML writes both again before it dispatches.
-  _scriptBuffers.delete(documentId);
-  doc._pageHtml = null;
-  doc._reclaimed = true;
-}
+/* THE REVIEW-COMPLETION RECLAIM IS DELETED, AND WITH IT THE LAST BYTES THIS ZONE HELD OF A DOCUMENT.
+   It existed for ONE thing - "the eviction was aimed at the BIG state (the combined page source), and that is
+   the only thing reclaimed here" - and this zone no longer holds a page source at all: a seed is an ADDRESS,
+   the custom browser loads the document itself through the one chokepoint, and the bytes live in that
+   instance (`eng.html`, which the park writes to the cold tier) and are freed with it. A sweep that frees
+   nothing is not harmless upkeep, it is a mechanism whose reason has gone, and one earlier version of it
+   swept `state.docs.delete(documentId)` for a document that was still OPEN and still firing requests - so
+   every key, endpoint, schema and probe result learned from live traffic was written into a throwaway object
+   for the entire lifetime of the page, with nothing to say so. What is left is small and correct: a DocData
+   is identity plus this document's own view (already merged into globalStore) and lives exactly as long as
+   `_docOrigins`' entry for the same document does - the offscreen's session - and a `_scriptBuffers` entry
+   is now the same size and the same lifetime. */
 
 // Shape/template holes ({}, {id}) survive new URL().href/.pathname as %7B..%7D (the WHATWG path
 // percent-encode set includes {}). Decode so a learned endpoint URL/path keeps the canonical hole the
@@ -258,22 +231,33 @@ function _statedFacts(facts) {
   return facts;
 }
 
+/* THE ORIGIN OF AN ADDRESS, AND IT IS NOT A PRINCIPAL. `_browserFacts.origin` is the credentialed-read
+   principal and comes from `MessageSender.origin`, which is where every authorization decision in this zone
+   reads it from — a sandboxed document has a perfectly ordinary URL and an OPAQUE origin, so parsing its
+   address would fabricate a tuple origin the browser refused to give it, and SECURITY.md records that exact
+   substitution as a hole that was removed. This function answers a different and much smaller question: do
+   two ADDRESSES name the same origin. Its one caller compares a suggested address against the address the
+   browser reported for the same document, to establish that the suggestion is a route of THAT document and
+   not a new destination — a comparison between two URLs, decided by URL rules, authorizing nothing.
+   `""` for an address that will not parse, which its caller reads as a refusal rather than as a match. */
+function _originOfUrl(u) { try { return new URL(u).origin; } catch (_) { return ""; } }
+
 // Prioritization (recency + grind focus) is NOT driven by browser navigation or
 // tab events anymore — those operate at the TAB level and can only guess which
-// frame is the "main" document. It is driven by each document's own CONTENT_HTML
+// frame is the "main" document. It is driven by each document's own CONTENT_SEED
 // message (see handleContentMessage): the message arrival IS the "analyze me now"
 // signal, per document, with the document's authoritative own url/origin.
 
-// Cross-script AST analysis: buffer scripts per document, debounce, concatenate + analyze
-// Per-DOCUMENT analysis state, keyed by documentId (sender.documentId ONLY — no
+// Per-DOCUMENT dispatch record, keyed by documentId (sender.documentId ONLY — no
 // tabId:frameId fallback; a doc-less content message fails closed). A tab holds many documents/frames (iframes,
 // navigations), each its OWN origin; keying by tab merged them into one buffer
-// and collapsed the credentialed-read principal. Each entry: { tabId, docKey,
-// origin, url, pageHtml, scripts:[], chunk-state }. One CONTENT_HTML per document
-// creates/refreshes its entry; the engine sources the scripts itself (Lexbor
-// parses the HTML, qjs_run_doc_scripts runs each <script> in document order —
-// inline directly, external <script src> via __feLoadScript).
-const _scriptBuffers = new Map(); // documentId → per-document analysis state
+// and collapsed the credentialed-read principal. Each entry is exactly TWO fields:
+// `{ facts, seedUrl }` — the browser-minted fact record this document is analysed under, and the ADDRESS the
+// ambient observer suggested. It holds NO BYTES: one CONTENT_SEED per document creates/refreshes it, the
+// custom browser LOADS that address through the one chokepoint, and the engine sources every script from what
+// it loaded (Lexbor parses the response, qjs_run_doc_scripts runs each <script> in document order — inline
+// directly, external <script src> via __feLoadScript).
+const _scriptBuffers = new Map(); // documentId → { facts, seedUrl }
 
 // Global persistent store — survives tab closes and SW restarts
 const globalStore = {
@@ -313,7 +297,7 @@ function getDoc(documentId) {
       documentId: documentId,   // storage key (also a field)
       tabId: null,              // UI filter (network tab) + Chrome routing ONLY — never a key
       frameId: 0,               // Chrome routing ONLY (tabs.sendMessage / the page-context relay)
-      origin: "",               // MessageSender principal (set at CONTENT_HTML) — NEVER url-derived
+      origin: "",               // MessageSender principal (set at CONTENT_SEED) — NEVER url-derived
       url: "",                  // the document's OWN url (display + relative TARGET resolution)
       title: "",                // multi-tab log label
       closed: false,            // true once the owning tab closes (logs stay visible)
@@ -338,8 +322,7 @@ function getDoc(documentId) {
    document that exists, and Clear does not un-say it. What Clear must remove is everything we inferred, and
    that is exactly the list below (the `delete`s rather than `= null` matter: lib/serialize.js distinguishes an
    ABSENT `_resolverErrors` — "the engine recorded nothing" — from a present one of the wrong shape, which it
-   asserts on). A document whose page source is dropped here also loses its `_reclaimed` mark, so a re-delivered
-   CONTENT_HTML is reclaimed again in its own right. */
+   asserts on). */
 function _clearDocLearning() {
   state.docs.forEach(function (doc) {
     doc.apiKeys = new Map();
@@ -349,13 +332,12 @@ function _clearDocLearning() {
     doc.probeResults = new Map();
     doc.scopes = new Map();
     doc._valueIndex = createValueIndex();
-    doc._pageHtml = null;
-    doc._reclaimed = false;
-    /* The page-source record goes with the page source. Clear bins what was inferred AND what was delivered;
-       leaving "delivered" behind would have the popup state that this document's bundle arrived while the
-       bytes it names are gone, which is the one thing this field exists to stop being said wrongly. */
+    /* The page-source record goes with what it describes. Clear bins what was inferred AND what was loaded;
+       leaving "delivered" behind would have the popup state that this document's bundle was loaded while the
+       run it names is gone, which is the one thing this field exists to stop being said wrongly. There is no
+       `_pageHtml`/`_responseHeaders` beside it any more: this zone holds no document bytes and no response of
+       its own — the custom browser loads the document through the one chokepoint and holds both. */
     delete doc._pageSource;
-    delete doc._responseHeaders;
     delete doc._astResults;
     delete doc._astRun;
     delete doc._astError;
@@ -728,7 +710,7 @@ function collectKeysForService(tab, service, hostname) {
 
 // (Response-body protocol decoding -- handleResponseBody -- extracted to lib/response-decode.js, first.)
 
-/* THE ONE HANDOFF from a delivered document to the ONE frontier — and it is now beside the CONTENT_HTML
+/* THE ONE HANDOFF from a seeded document to the ONE frontier — and it is now beside the CONTENT_SEED
    handler that writes the buffer and hands it over on the next line, instead of in a file of its own.
    `lib/analyze.js` held it and is DELETED. What went with it was not a step in the handoff; it was four
    mechanisms reading fields NO PRODUCER WRITES, each held together by a `||`:
@@ -746,7 +728,8 @@ function collectKeysForService(tab, service, hostname) {
        of this one, so removing it leaves ONE security merge instead of two.
      * `_markSecurityFindingChanges` — wrote `_changeType` and `_fixedCount`. Neither name has a reader.
      * THE SCRIPT CONCATENATION (`combined`/`scriptOffsets`/`scriptUrls`/`totalChars`/`_analyzeDiag`). The
-       CONTENT_HTML handler set `_buf.scripts = []` and nothing ever pushed to it — the engine sources every
+       CONTENT_HTML handler set `_buf.scripts = []` and nothing ever pushed to it (that handler is now
+       CONTENT_SEED and holds no bytes at all) — the engine sources every
        script itself (Lexbor parses the HTML; `qjs_run_doc_scripts` runs inline + external in document order).
        That empty array is gone too, with `_buf.pending` and `_buf.loadFired` beside it: a writer whose reader
        was deleted is the same broken contract as a reader whose writer was, and this sentence would otherwise
@@ -766,13 +749,12 @@ function collectKeysForService(tab, service, hostname) {
    debug line is what let the bridge's own contract checks land in a log nothing reads. */
 async function _dispatchDocument(docKey) {
   var buf = _scriptBuffers.get(docKey);
-  /* THE BUFFER IS THIS DOCUMENT'S RECORD AND THE HANDLER JUST WROTE IT. `if (!buf || !buf.pageHtml) return`
-     stood here and made three different broken states — no buffer, a buffer for another document, and a
-     document whose HTML never arrived — indistinguishable from a page legitimately having nothing to
-     analyse, which is the one outcome that produces no symptom at all. content.js THROWS on an empty body
-     rather than shipping one, so an empty pageHtml at this point is our own delivery path having lost it. */
-  DCHECK(!!buf, "a document was handed to the analysis with no script buffer — the CONTENT_HTML handler " +
-                "creates the buffer immediately before this call, so its absence is that record being lost " +
+  /* THE BUFFER IS THIS DOCUMENT'S RECORD AND THE HANDLER JUST WROTE IT. A guarded early return stood here and
+     made three different broken states — no buffer, a buffer for another document, and a record whose seed
+     never arrived — indistinguishable from a page legitimately having nothing to analyse, which is the one
+     outcome that produces no symptom at all. */
+  DCHECK(!!buf, "a document was handed to the analysis with no dispatch record — the CONTENT_SEED handler " +
+                "creates it immediately before this call, so its absence is that record being lost " +
                 "between the two lines");
   /* THE FACTS THIS DOCUMENT IS ANALYSED UNDER, AND THE ASSERTION THAT THEY ARE THE BROWSER'S. Everything the
      analysis is authorized by — the private-network principal, window.location, the credentialed-read origin,
@@ -783,23 +765,25 @@ async function _dispatchDocument(docKey) {
          "a script buffer is filed under a documentId that is not its own — every principal this analysis " +
          "runs under is read off this record, so a mis-filed one analyses a document under another " +
          "document's identity");
-  DCHECK(!!buf.pageHtml, "a document reached the analysis with no page HTML — content.js refuses to ship an " +
-                         "empty body (it reports it as unavailable instead), so this is the bundle that was " +
-                         "fetched being lost on the way here, and analysing nothing would report the page " +
-                         "as clean");
+  /* THE SEED, WHICH IS THE WHOLE OF WHAT AN AMBIENT OBSERVER CONTRIBUTES. The handler admits a seed only
+     after checking it against the browser's own address for this document, so an absent one at this point is
+     our own delivery path having lost it — and dispatching without one would hand the custom browser no
+     document to navigate to at all. */
+  DCHECK(typeof buf.seedUrl === "string" && buf.seedUrl !== "",
+         "a document reached the analysis with no seed address — the CONTENT_SEED arm validates one and " +
+         "writes it immediately before handing over, so this is that address being lost between the two " +
+         "lines, and the custom browser would be asked to navigate to nothing");
   var tabId = facts.tabId;
   var tab = getDoc(docKey);
-  /* THE OTHER HALF OF THE PAGE-SOURCE PAIR, ASSERTED WHERE THE ZONE COMMITS TO ANALYSING. Both writers are
-     the two content arms and this is the only path out of the delivering one, so a document being analysed
-     while its record says anything but "delivered" is those two writers disagreeing — and the popup would
-     then describe a page the engine is running as one whose bundle never arrived, or the reverse. The pairing
-     is what makes the silence unreachable: no document is analysed without this positive record, and no
-     document is refused analysis without a REASON (the unavailable arm validates one before it writes). */
-  DCHECK(!!tab._pageSource && tab._pageSource.state === "delivered",
-         "a document reached the analysis with page-source record `" + JSON.stringify(tab._pageSource) +
-         "` — the CONTENT_HTML arm writes {state:\"delivered\"} immediately before handing over, so anything " +
-         "else here is that write lost between the two lines, and the reviewer would be told this page's " +
-         "bundle never arrived while its engine was running");
+  /* THE PAGE-SOURCE RECORD IS NOT ASSERTED HERE ANY MORE, AND THAT IS THE MOVE RATHER THAN A LOOSENING. It
+     used to be written by the arm above this line, because the arm above this line held the document's bytes;
+     the document is now LOADED by the custom browser, one zone along, so the fact of whether it loaded is not
+     yet known at this point and asserting it here would be asserting a thing this zone had just made up. The
+     PAIRING it enforced is intact and lives where the answer is: bridge.js writes {state:"delivered"} on the
+     one path that seats an engine and an {state:"unavailable", kind, …} record — carrying the chokepoint's
+     own refusal reason — on every path that does not, both through `onNavigationOutcome` below, before either
+     returns. No document is analysed without the positive record, and no document is refused without a
+     REASON. */
   var _ep = _dataEpoch;   // a Clear during the engine round-trip invalidates this run
 
   // This run's merge re-registers every AST-derived endpoint, so drop the previous round's first — a
@@ -817,8 +801,13 @@ async function _dispatchDocument(docKey) {
      ever set it, so the limb was a defaulted read of a field no producer produces — CLAUDE.md's "a name that
      is READ somewhere and WRITTEN nowhere is a broken contract, and a default is what stops it being a crash".
      Worse than dead: the only value in this zone that has ever been spelled `pageUrl` is the one content.js
-     puts in its own CONTENT_HTML message (content.js:263), so the one plausible way to make that limb fire
-     would have re-introduced by name the exact content-script-stated principal SECURITY.md says was removed. */
+     ever put in its own message to this zone is a `pageUrl`, so the one plausible way to make that limb fire
+     would have re-introduced by name the exact content-script-stated principal SECURITY.md says was removed.
+     THE SEED IS NOT AN EXCEPTION TO THAT AND MUST NOT BECOME ONE: `buf.seedUrl` is what the custom browser
+     NAVIGATES TO, and this is what the navigation is AUTHORIZED as — safeFetch classifies the private-network
+     target against `sourceUrl`, so a seed that reached this line would be an address authorizing itself. The
+     two are same-origin by the CONTENT_SEED arm's own check, which is exactly why nothing is lost by keeping
+     them apart. */
   var tabUrl = facts.url;
   var response;
   try {
@@ -837,15 +826,24 @@ async function _dispatchDocument(docKey) {
       // and run INSIDE its cluster's instance (§4.8.5's insertion steps) while a top document is not.
       groupId: facts.tabId, frameId: facts.frameId,
       // HTML §8.1.3.1's TOP-LEVEL CREATION URL — the browser-provided address of the top of this document's
-      // navigable chain, captured on CONTENT_HTML from sender.tab.url. It is NOT sourceUrl: this document may
+      // navigable chain, captured on CONTENT_SEED from sender.tab.url. It is NOT sourceUrl: this document may
       // be a sub-frame, and §8.1.3.5 decides secure-context (and therefore which [SecureContext] members the
       // engine installs) from the TOP of the chain rather than from the frame's own address.
       // `|| tabUrl` went with it: the mint asserts sender.tab.url, so a top-level address that is missing here
       // is a broken invariant and not a document that legitimately has none — substituting the frame's OWN
       // address for its embedder's is precisely the ancestral answer Secure Contexts §4.2 exists to refuse.
       topLevelUrl: facts.topLevelUrl,
-      pageHtml: tab._pageHtml || null,
-      responseHeaders: tab._responseHeaders || {},   // real CSP/Content-Type -> engine (header-CSP is the PRIMARY policy; meta-CSP is secondary)
+      /* THE SEED — AN ADDRESS, AND NEVER BYTES. `pageHtml` and `responseHeaders` stood here and this zone had
+         them because a content script had FETCHED the document in the page's own realm, with the person's
+         cookies, reaching the network chokepoint never — a second document-load transport, unpoliced by
+         construction. Both were also DEFAULTED reads (`|| null`, `|| {}`), so a delivery path that lost the
+         bundle or the policy answered the engine with a page that parses to nothing and a response that sent
+         no CSP. What crosses now is the one fact an ambient observer holds and no solver can derive: the
+         address the browser actually navigated to. bridge.js LOADS it — through the same `navigationLoad` a
+         child navigable's document comes through — and derives from the reply everything this pair used to
+         carry, plus the two things a page realm could never state: Fetch §2.2.6 "Responses"' URL LIST, and a
+         refusal that names the rule that refused. */
+      seedUrl: buf.seedUrl,
       // Participate in the GLOBAL cross-session frontier: this engine's residue parks to IDB under RAM
       // pressure (resource-driven, host-side) and rehydrates by value order later. With headroom the page
       // runs to completion in one visit — nothing is lost to a clock; there is NO dispatch/step quantum.
@@ -1035,20 +1033,24 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
   notifyPopup(tabId);
 }
 
-/* WHAT A DOCUMENT'S PAGE SOURCE IS, AS A THREE-VALUED FACT — and the reason it is a field rather than
-   something read off `_pageHtml`. The reclaim sweep NULLS `_pageHtml` the moment a run returns, so a page
-   that delivered and was analysed and one that never delivered at all both hold `null` a second later; the
-   record below is written once at the arrival and is not reclaimed with the bytes.
-     • absent            — no content script has reported on this document's page source YET. Not "clean",
-                           not "failed": nothing has been said. A document registered by its own live traffic
-                           (RESPONSE_BODY) and nothing else sits here.
-     • {state:"delivered"}   — the bundle arrived; the analysis owns the outcome from there (`_astRun`).
-     • {state:"unavailable", kind, …} — a content script ran, asked for the bundle, and did not get it.
-   MEASURED, and the reason this exists: reddit.com answers 403 to the second GET of a document whose URL
-   carries its bot challenge's single-use token, so `_sendPageHtml` threw in the untrusted realm and this zone
-   held ONE registered document with no HTML, no buffer, no error and no engine — the same picture as a page
-   still loading and as a page nobody visited. §@S: "a candidate killed by a gate MUST be distinguishable
-   from one a filter ate and from one that was never scheduled". */
+/* WHAT A DOCUMENT'S PAGE SOURCE IS, AS A THREE-VALUED FACT — the analysability of this document, stated so
+   that a page nobody could analyse is never rendered as a page that was analysed and found clean.
+     • absent            — nothing has been said about this document's source YET. Not "clean", not "failed".
+                           A document registered by its own live traffic (RESPONSE_BODY) and nothing else, and
+                           a document whose navigation is still in flight, sit here.
+     • {state:"delivered"}   — the custom browser LOADED this document; the analysis owns the outcome from
+                           there (`_astRun`).
+     • {state:"unavailable", kind, …} — the seeded navigation did not produce a document, WITH the reason.
+   MEASURED, and the reason this exists: reddit.com answers 403 to a second GET of a document whose URL
+   carries its bot challenge's single-use token, so the load fails and this zone would otherwise hold ONE
+   registered document with no document, no error and no engine — the same picture as a page still loading and
+   as a page nobody visited. §@S: "a candidate killed by a gate MUST be distinguishable from one a filter ate
+   and from one that was never scheduled".
+   ITS WRITER IS THE ZONE THAT LOADS, WHICH IS NO LONGER THIS ONE. The two content-script message types that
+   used to carry this fact are gone with the fetch that produced them; bridge.js performs the §7.4 navigation
+   and calls `onNavigationOutcome` below the instant it settles. That is the same edge shape as
+   `onFrontierAdvance`, and it is why the record still appears while a run is going rather than only at its
+   end: what a reader asks over an empty panel is "did this fail, or is there nothing here yet". */
 function _setPageSource(doc, record) {
   DCHECK(record.state === "delivered" || record.state === "unavailable",
          "a document's page-source record was written with state `" + record.state + "`, which is neither of " +
@@ -1061,39 +1063,71 @@ function _setPageSource(doc, record) {
   doc._pageSource = record;
 }
 
-/* WHAT THE UNTRUSTED SIDE IS ALLOWED TO HAVE SAID, checked here and NOT asserted. A content script is a
-   hostile input (SECURITY.md's trust table), so a malformed report is a compromised renderer and not this
-   zone's invariant broken: it is DROPPED, closed, exactly like a content message with no documentId. A DCHECK
-   here would hand any web renderer an abort of the only trusted zone in the extension.
-   THE KINDS ARE A CLOSED SET AND `status` RIDES EXACTLY ONE OF THEM, because that pairing is the whole
-   content of the report — "unavailable" with no distinguishing reason is the silence this arm replaces,
-   spelled as a message. An absent `status` on `network`/`empty` is the positive statement "this kind has no
-   status" and is stored absent, never as a plausible 0. */
+/* THE KINDS A REFUSAL MAY WEAR, AND THEY ARE A CLOSED SET BECAUSE THAT PAIRING IS THE WHOLE CONTENT OF THE
+   REPORT — "unavailable" with no distinguishing reason is the silence this record exists to replace, spelled
+   as a field. `status` rides exactly one of them; an absent `status` on `network`/`empty` is the POSITIVE
+   statement "this kind has no status" and is stored absent, never as a plausible 0.
+   THEY ARE ASSERTED NOW, NOT VALIDATED-AND-DROPPED, AND THAT IS THE CONSEQUENCE OF THE PRODUCER MOVING. The
+   old producer was a CONTENT SCRIPT — a hostile input under SECURITY.md's trust table, so a malformed report
+   was a compromised renderer and had to be dropped closed rather than crash the only trusted zone. The
+   producer is now bridge.js, in this same document, composing from `lib/safe-fetch.js`'s own reply record: a
+   malformed one there is OUR logic being wrong, which is a DCHECK by §Offensive-programming and would be
+   silently swallowed by a drop. */
 var _PAGE_SOURCE_KINDS = ["status", "empty", "network"];
-function _pageSourceUnavailableRecord(msg) {
-  if (_PAGE_SOURCE_KINDS.indexOf(msg.kind) < 0) return null;
-  var rec = { state: "unavailable", kind: msg.kind };
-  if (msg.kind === "status") {
-    if (!Number.isInteger(msg.status) || msg.status < 100 || msg.status > 599) return null;
-    rec.status = msg.status;
-  } else if (msg.status !== undefined) {
-    return null;   // a status on a kind that has none: the two halves of the report disagree
+/* THE EDGE FROM THE ZONE THAT LOADS TO THE ZONE THAT RENDERS. bridge.js calls this exactly once per seeded
+   document, the instant its §7.4 navigation settles and BEFORE it seats an engine or returns — so the
+   pairing that used to be asserted at the dispatch is intact one zone along: no document is analysed without
+   {state:"delivered"}, and no document is refused analysis without a reason. */
+self.onNavigationOutcome = function onNavigationOutcome(documentId, record) {
+  DCHECK(typeof documentId === "string" && documentId !== "",
+         "a navigation outcome arrived naming no document — the record is filed against the browser-provided " +
+         "documentId the dispatch was made under, and one without it would be a report about a page the " +
+         "reviewer cannot be shown");
+  DCHECK(!!record && (record.state === "delivered" || record.state === "unavailable"),
+         "a navigation outcome arrived in a state this zone does not speak (`" + (record && record.state) +
+         "`) — bridge.js writes exactly the two, and a third would reach the popup as a page whose " +
+         "analysability is simply not stated");
+  if (record.state === "unavailable") {
+    DCHECK(_PAGE_SOURCE_KINDS.indexOf(record.kind) >= 0,
+           "a navigation outcome was refused with kind `" + record.kind + "`, which is not one of the three " +
+           "this seam and the popup both spell out — a report that cannot say WHICH failure it was is the " +
+           "silence it exists to replace wearing a field name");
+    DCHECK((record.kind === "status") === (record.status !== undefined),
+           "a navigation outcome carries kind `" + record.kind + "` with status `" + record.status + "` — a " +
+           "status rides the `status` kind and no other, so this pair is the two halves of one report " +
+           "disagreeing about which failure it describes");
+    DCHECK(record.kind !== "status" ||
+           (Number.isInteger(record.status) && record.status >= 100 && record.status <= 599),
+           "a navigation outcome reported status `" + record.status + "`, which no HTTP response has — " +
+           "safeFetch answers 0 for a request that never went on the wire and that is the `network` kind, " +
+           "carrying the rule that refused it");
+    DCHECK((record.kind === "network") === (typeof record.detail === "string"),
+           "a navigation outcome of kind `" + record.kind + "` carries detail `" + record.detail + "` — the " +
+           "detail is the chokepoint's own refusal reason and rides the `network` kind alone, so this pair " +
+           "is one report's two halves disagreeing");
   }
-  if (msg.kind === "network") {
-    if (typeof msg.detail !== "string") return null;
-    rec.detail = msg.detail;
-  } else if (msg.detail !== undefined) {
-    return null;
-  }
-  return rec;
-}
+  /* THE DOCUMENT IS LOOKED UP, NEVER MINTED. `getDoc` creates an empty DocData for an unknown id, and a
+     navigation outcome is only ever produced for a document this zone SEEDED — so a mint here would file a
+     load report against a document nobody announced, under an identity (tabId, origin, url) that is empty,
+     and the popup would render a page that does not exist. */
+  var doc = state.docs.get(documentId);
+  DCHECK(!!doc,
+         "a navigation outcome arrived for a document this zone never registered — the CONTENT_SEED arm " +
+         "registers the document and mints its facts before it dispatches, so an unknown id here is a " +
+         "report about a load nobody asked for");
+  if (!doc) return;   // release path under the assert
+  _setPageSource(doc, record);
+  notifyPopup(doc.tabId);
+};
 
-/* THE FIVE TYPES `CONTENT_TYPES` ADMITS, AND NOTHING ELSE — the dispatch below is exhaustive over that set
+/* THE FOUR TYPES `CONTENT_TYPES` ADMITS, AND NOTHING ELSE — the dispatch below is exhaustive over that set
    and DFAILs past it, so the router's admission and this function's arms cannot drift apart in silence.
    CONTENT_KEYS / CONTENT_ENDPOINTS were removed (heuristic regex scans over HTML text, which is Lexbor's
    parsing job); CONTENT_DOM / CONTENT_FORMS / SCRIPT_SOURCE went with the per-script shipping the engine
-   replaced. Raw HTML lands in CONTENT_HTML and the engine parses it; real endpoints come from forced
-   execution observing actual fetch/XHR at the host edge. */
+   replaced; CONTENT_HTML and CONTENT_HTML_UNAVAILABLE went with the content-script fetch that produced them —
+   a seed is an ADDRESS and the custom browser loads the document itself, so what a page could not load is the
+   LOADER's report and not a message type. Real endpoints come from forced execution observing actual
+   fetch/XHR at the host edge. */
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
@@ -1107,12 +1141,12 @@ function handleContentMessage(msg, sender) {
     return;
   }
   /* A MESSAGE IS A DOCUMENT ANNOUNCING ITSELF, SO THIS IS WHERE IT IS REGISTERED — every type, not just
-     CONTENT_HTML. `state.docs.get` for everything else stood here, guarded by `if (doc)`, on the reasoning
-     that passive traffic must not "resurrect" a document the review sweep had dropped. But the sweep dropped
-     documents that were still open (it now reclaims their page source and leaves them registered), and what
-     the guard actually did was route every learner below to a throwaway view. There is nothing to resurrect:
+     CONTENT_SEED. `state.docs.get` for everything else stood here, guarded by `if (doc)`, on the reasoning
+     that passive traffic must not "resurrect" a document a review sweep had dropped. That sweep is gone (this
+     zone holds no document bytes to reclaim), and what the guard actually did was route every learner below
+     to a throwaway view. There is nothing to resurrect:
      a DocData is identity plus this document's own view of what has been learned, the learned half is already
-     in globalStore, and getDoc mints an empty one. CONTENT_HTML remains the ANALYSIS trigger — a distinct
+     in globalStore, and getDoc mints an empty one. CONTENT_SEED remains the ANALYSIS trigger — a distinct
      thing from being registered.
      ONE MINT PER MESSAGE, and the DocData is stamped from it rather than from `sender` a field at a time.
      `if (sender.url) doc.url = sender.url` stood here too, which is a guarded assign past a broken invariant:
@@ -1145,55 +1179,61 @@ function handleContentMessage(msg, sender) {
   }
 
   // SCRIPT_SOURCE / SCRIPTS_LOADED removed: content.js no longer ships per-script
-  // bodies or a load signal. One CONTENT_HTML per document drives the analysis; the
-  // engine sources every script from that HTML (inline via the SSR phase, external
-  // via __feLoadScript, dynamic via the createElement host edge).
+  // bodies or a load signal. One CONTENT_SEED per document drives the analysis; the custom browser loads the
+  // suggested address and the engine sources every script from what it loaded (inline via the SSR phase,
+  // external via __feLoadScript, dynamic via the createElement host edge).
 
   if (msg.type === "CONTENT_FORM_SUBMIT") {
     _handleFormSubmit(documentId, msg, tabId, sender.frameId);
     return;
   }
 
-  /* A DOCUMENT STATING THAT IT COULD NOT HAND OVER ITS BUNDLE. The registration above already happened, which
-     is the half that matters most: a page whose source is unobtainable and which makes no other request now
-     APPEARS, where before it was absent from this zone entirely and therefore identical to a page nobody
-     opened. Nothing is dispatched — there is nothing to analyse — and no `_astError` is written either: that
-     field is what an engine RUN failed with, and claiming a run failed when none was ever started would swap
-     one wrong story for another. */
-  if (msg.type === "CONTENT_HTML_UNAVAILABLE") {
-    var _rec = _pageSourceUnavailableRecord(msg);
-    if (!_rec) {
-      console.debug("[brain:content] CONTENT_HTML_UNAVAILABLE dropped — kind=%s status=%s is not a report this " +
-                    "zone speaks (a content script is an untrusted input; fail closed)", msg.kind, msg.status);
+  /* A DOCUMENT SUGGESTING WHICH DOCUMENT TO EXPLORE — an ADDRESS, and the whole of what an ambient observer
+     contributes. It used to be the page's BYTES, fetched by the content script in the page's own realm with
+     the person's cookies: a second document-load transport that reached `lib/safe-fetch.js` never, so the
+     scheme allowlist, the origin-relative SSRF/PNA guard on the initial AND post-redirect URL, CORB and the
+     credentialed destructive-path deny list applied to the engine's own navigations and to nothing arriving
+     that way. The custom browser now LOADS the suggestion itself; there is one document-load path and this is
+     not it. `CONTENT_HTML_UNAVAILABLE` went with the fetch that produced it — a report about a load belongs
+     to the LOADER, and bridge.js makes it through `onNavigationOutcome`, carrying the chokepoint's own reason.
+
+     THE ONE CHECK THIS ZONE OWES, AND WHY IT IS EXACTLY THIS ONE. A content script is a hostile input
+     (SECURITY.md's trust table) and an untrusted zone does not get to state an address — so a suggestion that
+     named ANY address would hand a compromised renderer a fetch of the user's intranet through this
+     extension's `<all_urls>` host permissions. What makes the seed admissible is that it is not a free
+     address: HTML §7.2.5 "The History interface"'s shared history push/replace state steps refuse a rewrite
+     unless the target passes "a Document document can have its URL rewritten to a URL targetURL", which
+     returns false "if targetURL and documentURL differ in their scheme, username, password, host, or port
+     components". So the ONLY thing pushState can move is the PATH, and the only thing an SPA needs the seed
+     for is exactly that. This zone therefore admits a seed whose ORIGIN is the one the BROWSER reported for
+     this document and refuses every other, which admits every SPA route and no new address at all.
+     AND THE PRINCIPAL IS STILL NEVER THE SEED'S. `facts.url` — the browser-stated address — is what travels
+     as `sourceUrl` and is what safeFetch classifies the private-network target against; the seed is only ever
+     the thing to fetch. Same-origin is what makes those two classify identically, which is why refusing the
+     mismatch costs nothing real.
+     DROPPED CLOSED, NOT ASSERTED: a mismatch is a compromised renderer, not this zone's invariant broken, and
+     a DCHECK here would hand any web page an abort of the only trusted zone in the extension. */
+  if (msg.type === "CONTENT_SEED") {
+    if (typeof msg.seedUrl !== "string" || msg.seedUrl === "") {
+      console.debug("[brain:content] CONTENT_SEED dropped — no address (a content script is an untrusted " +
+                    "input; fail closed)");
       return;
     }
-    _setPageSource(doc, _rec);
-    notifyPopup(tabId);
-    return;
-  }
-
-  if (msg.type === "CONTENT_HTML") {
-    // ONE MESSAGE PER DOCUMENT. The engine (Lexbor) parses this HTML and runs EVERY
-    // script in document order in one realm — inline directly, external <script src>
-    // via __feLoadScript (the safeFetch chokepoint), all by qjs_run_doc_scripts.
-    // The analysis target is the realm the grind drives; content.js ships nothing
-    // but this HTML. Keyed by documentId, NOT tabId: a tab holds many documents/
-    // frames (iframes, navigations), each its OWN origin — keying by tab merges them
-    // and collapses the credentialed-read principal. The principal for this
-    // document's analysis (safeFetch SSRF origin + window.location + the credentialed
-    // reply-seed) is THIS document's own origin/url, from the browser-provided sender.
-    doc._pageHtml = String(msg.html || "");
-    doc._responseHeaders = msg.responseHeaders || {};   // real navigation response headers (CSP, Content-Type) — same-origin fetch(location.href), so all readable
-    doc._reclaimed = false;   // a re-delivered document holds a page source again, so the reclaim owes it one more pass
-    /* THE POSITIVE HALF OF THE SAME FACT, WRITTEN HERE AND NOT DERIVED. It cannot be read off `_pageHtml`
-       later: the reclaim sweep nulls that the moment the run returns. A document that reported unavailable
-       and is then re-delivered (the RESHIP path, or a challenge that has since been solved) OVERWRITES the
-       earlier record rather than accumulating both — the latest report is the fact. */
-    _setPageSource(doc, { state: "delivered" });
+    var _seedOrigin = _originOfUrl(msg.seedUrl);
+    var _docOrigin = _originOfUrl(_facts.url);
+    if (_seedOrigin === "" || _seedOrigin !== _docOrigin) {
+      console.debug("[brain:content] CONTENT_SEED dropped — suggested `%s` (origin %s) for a document the " +
+                    "browser says is at origin %s; HTML §7.2.5 lets pushState move the path and never the " +
+                    "origin, so this is not a route of this document", msg.seedUrl, _seedOrigin, _docOrigin);
+      return;
+    }
+    /* NO PAGE-SOURCE RECORD IS WRITTEN HERE. Whether this document loads is not known yet — the navigation
+       has not happened — and writing "delivered" at the arrival of a SUGGESTION would state a fact this zone
+       invented. bridge.js writes it, both ways, the instant the load settles. */
     var _dk = documentId;
     var _buf = _scriptBuffers.get(_dk);
     if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
-    /* THE BUFFER CARRIES THE FACT RECORD, NOT SIX COPIES OF ITS FIELDS. Each of tabId / frameId / docKey /
+    /* THE RECORD CARRIES THE FACT RECORD, NOT SIX COPIES OF ITS FIELDS. Each of tabId / frameId / docKey /
        origin / url / topLevelUrl used to be re-stated here off `doc` or off `sender`, and every restatement is
        a place a value can be substituted for a neighbouring one — which is exactly what happened at the
        address: `_buf.url` once fell back to `sender.tab.url`, inverting the origin-relative rule (a frame in a
@@ -1204,11 +1244,9 @@ function handleContentMessage(msg, sender) {
        question, the same provenance as `sender.tab.url`, and bridge.js reads it to tell a SUB-frame (which its
        cluster's instance already runs as a realm of its own, §4.8.5) from the group's TOP document. */
     _buf.facts = _facts;
-    _buf.pageHtml = doc._pageHtml;
-    /* `_buf.scripts = []`, `_buf.pending = 0` and `_buf.loadFired = true` are DELETED — three writers with no
-       reader anywhere in the extension. The engine sources every script itself (Lexbor parses this HTML and
-       qjs_run_doc_scripts runs inline + external in document order), which is why nothing ever pushed to the
-       array; the other two are the remains of a load-tracking handshake that went with it. */
+    /* AND THE SEED BESIDE IT — the one thing on this record that is not the browser's, kept as its own field
+       rather than folded into the fact record precisely so that nothing downstream can mistake it for one. */
+    _buf.seedUrl = msg.seedUrl;
     /* THIS DOCUMENT NOW BECOMES WORK ON THE ONE FRONTIER — it APPENDS its flows (boot fork + orphans) and
        does not start a run, a scheduler or an attention of its own. `lastActivatedTs` went with the queue
        that read it: it ordered documents by RECENCY, and recency is not value. The only order is the level-1
@@ -1725,8 +1763,7 @@ const EXTENSION_ORIGIN = `chrome-extension://${chrome.runtime.id}`;
    with neither end. A document's liveness is answered by webNavigation.getAllFrames (GET_FRAMES), which is the
    browser's answer rather than a page's claim about itself. */
 const CONTENT_TYPES = new Set([
-  "CONTENT_HTML",
-  "CONTENT_HTML_UNAVAILABLE",
+  "CONTENT_SEED",
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "PROBE_HIT",
@@ -1738,7 +1775,7 @@ const CONTENT_TYPES = new Set([
 // the SW relaying anything. The thin SW forwards only ONE browser event the
 // offscreen can't observe and that no document message carries: __evt TAB_REMOVED
 // (so per-tab transient state is freed when a tab closes). Navigation/activation
-// are NOT forwarded — prioritization is driven by each document's CONTENT_HTML.
+// are NOT forwarded — prioritization is driven by each document's CONTENT_SEED.
 //   • __evt TAB_REMOVED (from the SW, extension origin) → _onTabRemoved
 //   • CONTENT_TYPES from a web-page origin   → handleContentMessage (UNTRUSTED;
 //                    real browser-verified sender = tab/frame/url)

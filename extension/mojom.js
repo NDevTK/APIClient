@@ -80,8 +80,9 @@
      entries assert exactly that, on `g_ctx` and `g_begun` — so the sequence stays ordered by being one
      interface rather than by a rule somebody remembers.
      WHY THE DOCUMENT IS `array<uint8>` AND NOT THE TWO SHAPES IT REPLACES. The old envelope carried a document
-     EITHER as a JS string (content.js ships a serialized DOM) OR as bytes (a child navigable's document is
-     safeFetch's response body), and the untrusted frame ran a UTF-8 encode on the first. `qjs_init` takes ONE
+     EITHER as a JS string (a content script fetched the top document in the PAGE'S own realm and shipped its
+     characters — a second, unpoliced document-load transport, since deleted) OR as bytes (a child navigable's
+     document off safeFetch), and the untrusted frame ran a UTF-8 encode on the first. `qjs_init` takes ONE
      thing — a byte sequence and its LENGTH — so the wire says one thing and the encode happens once, in the
      zone that already holds the characters. The LENGTH is what makes `array<uint8>` the honest declaration
      rather than a spelling of a C string: a document may contain a 0x00 (HTML §13.2.3.5 "Preprocessing the
@@ -164,8 +165,8 @@
   var DOCUMENT_HEADERS = { name: "headers", type: "string", retained: false,
     why: "the response's HEADER FIELD LINES verbatim, which is what HTML §7.1.7 \"Policy containers\"' " +
          "create-a-policy-container-from-a-fetch-response is run over. The empty string is the positive " +
-         "statement that this document had no response at all (an about:blank, a serialized DOM off " +
-         "content.js), which differs from a response carrying no headers. NOT retained: its one sink is " +
+         "statement that this document had no response at all (an about:blank, a §7.4 load that did not " +
+         "load), which differs from a response carrying no headers. NOT retained: its one sink is " +
          "header_list_parse_field_lines (core/fetch/headers.c), which mallocs both halves of every field line " +
          "it reads, and the list built out of them is freed inside the same entry" };
   /* THE CREATOR'S POLICY CONTAINER, WHICH IS TWO PARAMETERS BECAUSE CSP §2.2 MAKES IT TWO THINGS. It is

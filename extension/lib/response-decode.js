@@ -709,6 +709,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
 // _bufferScript / _scriptBufferDecrementPending / _fetchAndBufferScript removed:
 // the per-script SCRIPT_SOURCE buffering machinery is gone. content.js ships one
-// CONTENT_HTML per document; the engine (Lexbor + qjs_run_doc_scripts) sources the
-// document's scripts. The per-document buffer now holds only {tabId, origin, url,
-// pageHtml, chunk-state}; the offscreen no longer fetches/combines scripts.
+// CONTENT_SEED per document — an ADDRESS — and the custom browser loads it; the engine
+// (Lexbor + qjs_run_doc_scripts) sources the document's scripts. The per-document
+// record now holds only {facts, seedUrl} and no bytes at all.

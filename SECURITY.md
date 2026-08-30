@@ -105,19 +105,44 @@ has to remember:
   never compare same-origin, and no `documentId` → an unstorable fresh token → fails closed.
 - **NO PRINCIPAL-SHAPED FIELD ON THE WIRE.** An untrusted zone does not get to state an origin or an
   address, so it does not get to SEND a field shaped like one. `content.js` used to put `origin:
-  location.origin` and `pageUrl: docUrl` on `CONTENT_HTML` and `CONTENT_FORM_SUBMIT`; nothing ever read
-  them, and that is exactly what made them dangerous — they sat on the wire under the precise names the
+  location.origin` and `pageUrl: docUrl` on its page-source message and on `CONTENT_FORM_SUBMIT`; nothing ever
+  read them, and that is exactly what made them dangerous — they sat on the wire under the precise names the
   removed hole was spelled in, waiting for a consumer. They are deleted. The rule is the general one: a
-  message from an untrusted zone carries MATERIAL (html, response bytes, the address the page is posting
+  message from an untrusted zone carries MATERIAL (response bytes, the address the page is posting
   TO) and never identity.
-  `CONTENT_HTML_UNAVAILABLE` — a document stating that its own bundle could not be re-fetched, so that a page
-  the analysis never saw is a stated fact in this zone rather than a silence — is held to the same rule and is
-  the case where obeying it takes an extra step: it names a `kind`, an HTTP `status` and a network-error
-  `detail`, and NOT the address it failed to fetch, because that address is `_browserFacts`' answer and the
-  untrusted side restating it is the removed hole under a third name. Its three fields are also the shape a
-  compromised renderer would reach for, so the arm VALIDATES them against a closed set and DROPS on a
-  mismatch — it does not assert, because a `DCHECK` on a hostile input hands any web renderer an abort of the
-  only trusted zone in the extension.
+- **THE ONE ADDRESS-SHAPED FIELD THAT DOES CROSS IS A SUGGESTION, AND IT IS CHECKED BEFORE IT IS ACTED ON.**
+  `CONTENT_SEED` carries `seedUrl` — the address the browser actually navigated to, which
+  `PerformanceNavigationTiming`'s `name` states (Navigation Timing Level 2 §5 "Creating a navigation timing
+  entry" sets it from the DOCUMENT'S URL at entry creation) and which `history.pushState` cannot forge. It is
+  the one fact an ambient observer holds that no solver can derive, and shipping it is what let the
+  content-script document FETCH be deleted.
+  It is address-SHAPED and it is not a principal, and the distinction is enforced rather than asserted. The
+  brain admits a seed **only where its origin is the origin of `_browserFacts.url`** — the browser's own
+  address for that document — which is sound because HTML §7.2.5 "The History interface" refuses a rewrite
+  unless "a Document document can have its URL rewritten to a URL targetURL", and that algorithm returns false
+  "if targetURL and documentURL differ in their scheme, username, password, host, or port components". So
+  pushState can move the PATH and never the ORIGIN, which admits every SPA route and no new destination.
+  A mismatch is DROPPED closed with a debug line, never asserted — a `DCHECK` on a hostile input hands any web
+  renderer an abort of the only trusted zone in the extension. And the seed is never the PRINCIPAL: the
+  private-network classification and `window.location` are still `_browserFacts.url`, and `bridge.js` passes
+  that as `safeFetch`'s `pageUrl`, so a suggested address can never authorize itself.
+- **AND THE SECOND DOCUMENT-LOAD TRANSPORT IS GONE WITH IT.** `content.js` used to re-fetch the page's own
+  document with `credentials:"same-origin"` and ship the bytes. Those bytes were fetched in the PAGE'S realm
+  and reached `safeFetch` never, so every guarantee in §Network below — scheme allowlist, origin-relative
+  SSRF/PNA on the initial AND post-redirect URL, CORB by expected type, the credentialed destructive-path deny
+  list — applied to the engine's own navigations and to nothing arriving that way. It was also a SECOND
+  credentialed GET of a document the person had already loaded, which a server may answer differently under
+  cache, nonce, personalised SSR or a rate limit, so it did not even buy the observed bytes it appeared to.
+  `bridge.js`'s `navigationLoad` is now the ONE document-load path — a seed's HTML §7.4 navigation and a child
+  navigable's §7.4.5 load are the same call — and the only raw `fetch` left in `content.js` is the
+  page-context relay's far end.
+- **WHAT A PAGE COULD NOT LOAD IS THE LOADER'S REPORT, NOT A MESSAGE TYPE.** `CONTENT_HTML_UNAVAILABLE` — a
+  document stating that its own bundle could not be re-fetched — is deleted with the fetch that produced it.
+  The `{state:"unavailable", kind, status|detail}` record the popup renders is now written by `bridge.js`
+  through `onNavigationOutcome`, from `safeFetch`'s own reply — so the `detail` is the CHOKEPOINT'S refusal
+  reason (`blocked-scheme:`, `blocked-private-from-public`, `blocked-corb:`) rather than a page realm's
+  exception text, and its fields are DCHECKed rather than validated-and-dropped, because the producer is now
+  this trusted document rather than a hostile renderer.
 - **Same-origin principal for a CREDENTIALED read is a stricter value: the *requesting frame's*
   `MessageSender.origin`** (documentId-keyed, opaque-unique via `_senderOrigin`), **never** the top
   frame and **never** parsed from a URL. A page can sandbox its own iframe, giving it an opaque

@@ -1079,14 +1079,20 @@ function renderDeepStatus() {
            "an unavailable pageSource reached the popup with kind `" + ps.kind + "` — serialize.js admits " +
            "exactly three and asserts them, so a fourth here is that seam broken and this row would state " +
            "that the page could not be analysed without saying why, which is the silence it replaces");
+    /* `detail` IS THE CHOKEPOINT'S OWN REFUSAL REASON and it is shown verbatim, not summarised. It is the one
+       string that distinguishes a server that would not answer (`Failed to fetch`) from a request this tool
+       REFUSED to make (`blocked-scheme:about:`, `blocked-private-from-public`), and the two need opposite
+       things from the person reading this row. It was a content script's own exception text before the load
+       moved to the chokepoint; it is a named rule now. */
     const reason = ps.kind === "status" ? `the server answered ${esc(String(ps.status))} to it`
                  : ps.kind === "empty"  ? "the server answered with an empty body"
-                 : `the request failed: ${esc(String(ps.detail).slice(0, 160))}`;
+                 : `the load did not happen: ${esc(String(ps.detail).slice(0, 160))}`;
     html += `<div class="deep-row"><span class="deep-label"><strong>This page was NOT analysed.</strong> `
-          + `The content script asked the server for the document again — the only way to get the bundle as `
-          + `shipped, with its real response headers — and ${reason}. Nothing below was learned by running `
-          + `this page's code. A single-use URL (a bot challenge, a one-time token) cannot be fetched twice, `
-          + `and neither can a document that was reached by anything other than a plain GET.</span></div>`;
+          + `The analyser loaded this page's address itself — the only way to get the bundle as SHIPPED, with `
+          + `its real response headers, rather than this tab's already-executed DOM — and ${reason}. Nothing `
+          + `below was learned by running this page's code. A single-use URL (a bot challenge, a one-time `
+          + `token) cannot be fetched twice, and neither can a document that was reached by anything other `
+          + `than a plain GET.</span></div>`;
   }
   if (tabData.analysisRun === "crashed") {
     html += `<div class="deep-row"><span class="deep-label"><strong>The engine crashed while analysing this `

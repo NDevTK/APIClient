@@ -70,7 +70,7 @@ function toBrain(m) {
 // ─── Browser events the offscreen can't observe → forward to the brain ────────
 // Only tab-close: it frees per-tab transient state and is carried by no document
 // message. Navigation/activation/update are NOT forwarded — the brain prioritizes
-// by each document's own CONTENT_HTML arrival, not a tab-level main-frame guess.
+// by each document's own CONTENT_SEED arrival, not a tab-level main-frame guess.
 // (webNavigation is still used on demand — getAllFrames via __rpc for GET_FRAMES.)
 chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", tabId: tabId }); });
 

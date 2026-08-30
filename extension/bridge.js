@@ -1277,9 +1277,10 @@ function _bestCandidate(idx) {
    response delivered, `name: value`, one per line. This is a RELAY and not logic: it restates what the browser
    already gave this zone, and every decision made from it (which policy container, which sandboxing flags,
    which agent cluster key) is the engine's, in the browser components that own those standards.
-   NOTHING IS DEFAULTED HERE. `h` is written by both producers that reach engineCreate — a content script's
-   captured response headers, and the `{}` a child-document notice starts from — so an absent one is a contract
-   that changed rather than "a response with no headers", and the empty object already says the second thing.
+   NOTHING IS DEFAULTED HERE. `h` is written by every producer that reaches engineCreate — `navigationLoad`'s
+   own reply for a live document, the `{}` a child-document notice starts from, and a cold entry's stored list
+   — so an absent one is a contract that changed rather than "a response with no headers", and the empty
+   object already says the second thing.
    A value carrying CR or LF would split into a line the engine cannot read; the browser's `Headers` forbids
    both, so one here means the value did not come off a response and the engine's own CHECK would abort on the
    fragment. It is asserted at the producer's edge instead, where the name of the offending header survives. */
@@ -1302,6 +1303,115 @@ function responseFieldLines(h) {
     out.push(name + ": " + value);
   }
   return out.join("\n");
+}
+
+/* ─── THE ONE DOCUMENT-LOAD PATH ────────────────────────────────────────────────────────────────────
+   HTML §7.4 "Navigation"'s load, as this host performs it: an ADDRESS goes in and a §7.4.5 "Populating a
+   session history entry" RESPONSE comes out — the bytes a Document is parsed from, the header list its
+   policy container is created from, and the URL its origin is determined over. Every document this engine
+   ever holds arrives through here, and there is no second transport beside it.
+
+   THERE USED TO BE ONE, AND THE FAILURE WAS NOT DUPLICATION. A content script fetched the top document in
+   the PAGE'S OWN REALM with the person's cookies and shipped the bytes, so `lib/safe-fetch.js` — the scheme
+   allowlist, the origin-relative SSRF/PNA guard on the initial AND post-redirect URL, CORB by expected type,
+   the credentialed destructive-path deny list — applied to the engine's own navigations and to nothing that
+   arrived that way. What replaced it is a SEED: an address the ambient observer suggests and this function
+   loads. Everything the old message carried but the address is derived here and derived better — the whole
+   response header list rather than a map assembled in a page realm, Fetch §2.2.6 "Responses"' URL LIST
+   (which only the fetching zone can see), and a refusal that NAMES the rule that refused.
+
+   AND IT IS UNCREDENTIALED, WHICH IS A DIFFERENT DOCUMENT AND SAYS SO. §7.4's fetch here is a navigation
+   this engine initiated, not a learned GET being replayed for its reply, so no cookies are attached and the
+   bytes are the LOGGED-OUT document — which is the surface CLAUDE.md §What-the-tool-produces aims at ("learn
+   the LOGGED-IN API surface WHILE LOGGED OUT"), and which §the-symbolic/trust-boundary already requires the
+   engine to treat correctly: server-injected absent app state is UNKNOWN INJECTED INPUT, so the auth gate
+   FORKS to the logged-in arm rather than concretizing on whatever a personalised SSR happened to render.
+
+   TWO OUTCOMES AND THEY ARE PAIRED, never defaulted: `bytes` is a byte sequence and `unavailable` is null, or
+   `bytes` is null and `unavailable` NAMES WHY in the closed vocabulary the popup renders. `bytes: null` is a
+   load that did not load — the navigable still exists and shows an error page, which is what the engine's own
+   child_document reads it as — and it is a real §7.4 outcome rather than a softening.
+   EMPTINESS IS NOT JUDGED HERE. An OK response with a zero-length body is a perfectly ordinary empty Document
+   under §7.4.5, and refusing one is a SEED's rule (a document with no bytes cannot be the bundle), stated at
+   the seed rather than imposed on every child navigable a page creates. */
+async function navigationLoad(u, base, principalUrl) {
+  /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. §7.4.5
+     determines the loaded Document's ORIGIN over the RESPONSE's URL, and a navigable whose load did not load
+     still gets a Document — so "there was no response" is not a reason to answer without one, and the honest
+     URL in that case is the one that was requested. An address that will not parse is a caller's serializer
+     output disagreeing with a URL parser, which is a broken contract rather than a page's doing, so it
+     THROWS: a DFAIL would be a no-op in release and leave every arm below reading `undefined`, which is the
+     defaulted-field defect with a check's name on it. */
+  const abs = new URL(u, base).href;
+  /* THE CHOKEPOINT IS NOT OPTIONAL, AND ITS ABSENCE IS A LOAD ORDER. ast-worker.html loads safe-fetch.js
+     before this file, so a missing `self.safeFetch` is that order broken — answering "a load that did not
+     load" for it would report every document in the session as a navigable showing an error page, which is
+     indistinguishable from a network nobody can reach. */
+  DCHECK(typeof self.safeFetch === "function",
+         "a §7.4 navigation was asked for with no network chokepoint installed — lib/safe-fetch.js is loaded " +
+         "before this file in ast-worker.html, so its absence is that load order broken and every document " +
+         "of this session would report as a load that did not load");
+  /* THE PRIVATE-NETWORK PRINCIPAL IS THE CALLER'S AND IS NEVER RE-DERIVED FROM `u`. safeFetch classifies the
+     SSRF host relative to `opts.pageUrl`, so an address that named ITSELF as its own principal would
+     self-authorize a private target — which is exactly the confused-deputy the guard exists to refuse. */
+  DCHECK(typeof principalUrl === "string" && principalUrl !== "",
+         "a §7.4 navigation was asked for with no private-network principal — safeFetch classifies the SSRF " +
+         "host relative to it, and a load that supplied its own address as its own principal would let any " +
+         "requested URL authorize itself into the user's intranet");
+  try {
+    // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed
+    // (see the header above).
+    const r = await self.safeFetch(abs, { pageUrl: principalUrl });
+    DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
+           "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
+           "\"Populating a session history entry\"'s attempt-to-populate reads the BODY and the POLICY off " +
+           "it, and a Document judged under no policy is how a page whose CSP kills a sink gets reported as " +
+           "exploitable");
+    DCHECK(typeof r.statusText === "string",
+           "safeFetch answered a document load with no statusText — every refusal it makes carries its REASON " +
+           "there (`blocked-scheme:`, `blocked-private-from-public`, `blocked-corb:`), which is the whole of " +
+           "what a seeded page that could not be loaded has to tell its reader");
+    /* AND FETCH §2.2.6 "Responses"' URL LIST, WHOSE LAST ITEM IS THE RESPONSE'S URL — "a pointer to the last
+       URL in response's URL list". THIS ZONE IS THE ONLY PARTY THAT SAW THE REDIRECT CHAIN, and the engine
+       determines the Document's origin over exactly this string: a same-origin request that 302s off this
+       origin produces a Document belonging to ANOTHER agent cluster, and a caller handed the requested
+       address instead has no way to know that. It is asserted rather than read past, because the list is
+       empty only for a URL that would not parse — and this call hands safeFetch an already-absolute href, so
+       an empty list here is the chokepoint's contract having changed under a reader that decides a principal. */
+    DCHECK(Array.isArray(r.urlList) && r.urlList.length >= 1 &&
+           typeof r.urlList[r.urlList.length - 1] === "string" && r.urlList[r.urlList.length - 1] !== "",
+           "safeFetch answered a document load with no Fetch §2.2.6 URL LIST — its last item is the " +
+           "RESPONSE's URL, which is what HTML §7.4.5 determines the loaded Document's origin, CSP §2.2.2's " +
+           "self-origin and §7.5.1's creationURL over. Without it a redirect off this origin becomes a " +
+           "Document created under the principal of the address that was merely requested");
+    const finalUrl = r.urlList[r.urlList.length - 1];
+    /* STATUS 0 IS NOT A REPLY. It is the one status no HTTP response has, and it is exactly what the
+       chokepoint answers when the request never went on the wire at all — a blocked scheme, a blocked private
+       target, CORB, a URL that would not parse. The REASON is in `statusText` and it travels: a page that
+       could not be seeded says WHICH rule refused it, which is the whole difference between a report and the
+       silence it replaces. */
+    if (r.status === 0)
+      return { url: finalUrl, headers: {}, bytes: null, unavailable: { kind: "network", detail: r.statusText } };
+    /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page. The URL still
+       crosses: a response that failed still came from somewhere, and where it came from is what the Document
+       a browser shows for it is at. A 404/500 error page is NEVER smuggled through as a document. */
+    if (!r.ok)
+      return { url: finalUrl, headers: {}, bytes: null, unavailable: { kind: "status", status: r.status } };
+    /* THE BYTES, because a Document is PARSED from a byte sequence — the response's own, not a UTF-8 decode
+       of them: HTML §13.2.3.2 "Determining the character encoding" is the ENGINE's algorithm and this zone
+       owes it the bytes to run it over.
+       AND THE WHOLE HEADER LIST, NOT ONE POLICY PULLED OUT OF IT. Which names matter is the ENGINE's question,
+       in the browser components that own those standards (HTML §7.1.3's opener policy, §7.1.4's embedder
+       policy, §7.5.1's `Origin-Agent-Cluster`); this zone relays what the response carried. */
+    return { url: finalUrl, headers: r.headers, bytes: r.body, unavailable: null };
+  } catch (e) {
+    /* A THROWN fetch IS Fetch §5.6's NETWORK ERROR and it is a real outcome. AN INVARIANT ABORT IS NOT: the
+       asserts above throw through this same catch, and reporting one as a page whose request failed on the
+       wire would hand a broken host contract to the engine wearing a server's clothes. */
+    RETHROW_FATAL(e);
+    return { url: abs, headers: {}, bytes: null,
+             unavailable: { kind: "network", detail: String((e && e.message) || e) } };
+  }
 }
 
 /* HTML §7.1.4 "Cross-origin embedder policies"' EMBEDDER POLICY, AS THIS ZONE RELAYS IT — the ITEM of §7.1.7's
@@ -1444,7 +1554,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
      name is a document that this zone reports as held by nothing for as long as its instance takes to boot.
      A LIVE ROOT DOCUMENT IS NAMED BY THE NAME THE BROWSER ALREADY GAVE IT. The counter answered "which
      document is this?" with a fresh number every time it was asked, so the pool could not tell one document
-     delivered twice (content.js re-ships its CONTENT_HTML when the offscreen brain broadcasts RESHIP) from
+     delivered twice (content.js re-ships its CONTENT_SEED when the offscreen brain broadcasts RESHIP) from
      two documents, and built a second WASM instance for it — two instances behind one principal, which is
      the one thing SECURITY.md's "one instance per ORIGIN-KEYED AGENT CLUSTER" forbids. A document a peer
      engine CREATED arrives already named (`docName`, minted in that engine's navigable.create notice); a
@@ -1646,14 +1756,17 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* qjs_init ANSWERS, and this discarded the answer. Its C body is a wall of CHECKs whose failures abort the
      instance, so the only value it can return is 0 — which is exactly why reading it costs nothing and why a
      non-zero would be an entry that started reporting a failure this zone was not listening for. */
-  /* THE DOCUMENT CROSSES AS BYTES, ONE SHAPE, because `qjs_init` takes one thing: a byte sequence and its
-     LENGTH. It used to cross as EITHER — content.js ships a SERIALIZED DOM (the renderer parsed
-     the response and this is its characters) while a child navigable's document is the response's own BYTES off
-     safeFetch — and the UNTRUSTED frame was the zone that ran the UTF-8 encode on the first of those.
-     `content.mojom.Renderer.Init` declares `array<uint8>`, so the encode happens HERE, in the zone that already
-     holds the characters. It is an encode and never a decode, which is the direction that matters: decoding the
-     BYTES into a string on the way would be this zone running HTML §13.2.3.2's encoding sniffing, badly, as
-     UTF-8.
+  /* THE DOCUMENT CROSSES AS BYTES, because `qjs_init` takes one thing: a byte sequence and its LENGTH, and
+     because every LIVE document now arrives as the response's own bytes off `navigationLoad` — the seed's
+     §7.4 navigation and a child navigable's load are the same call. It used to cross as EITHER: a content
+     script fetched the top document in the PAGE'S realm and shipped CHARACTERS, so the UNTRUSTED frame was
+     the zone that ran the UTF-8 encode, and HTML §13.2.3.2 "Determining the character encoding" had nothing
+     left to decide by the time the engine saw them. That transport is deleted.
+     THE STRING ARM SURVIVES FOR ONE PRODUCER AND IS NOT DEAD: a cold-tier entry parked by an earlier session
+     may hold its document as characters (frontierDoc asserts exactly these two shapes in the other
+     direction), so this encodes rather than assuming. It is an encode and never a decode, which is the
+     direction that matters: decoding the BYTES into a string on the way would be this zone running §13.2.3.2
+     badly, as UTF-8.
      THE TWO SHAPES ARE ASSERTED RATHER THAN DEFAULTED PAST. `html || ""` stood here, and it turned "the
      producer handed over no document at all" into a page that parses to nothing — a successful analysis of an
      empty document, which reads exactly like a page with no endpoints and no sinks.
@@ -1662,8 +1775,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      document, so moving the buffer here would leave the cross-session frontier holding a page that parses to
      nothing. mojom.js states why that is a property of the declared TYPE rather than a flag on this call. */
   DCHECK(html instanceof Uint8Array || typeof html === "string",
-         "a document reached qjs_init as neither a byte sequence nor characters — content.js ships the " +
-         "renderer's serialized DOM and safeFetch ships a response body, so anything else is a producer that " +
+         "a document reached qjs_init as neither a byte sequence nor characters — navigationLoad ships a " +
+         "response body and a cold-tier entry may hold characters, so anything else is a producer that " +
          "stopped producing a document, with nothing downstream to notice but an empty finding set");
   const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
   /* A 0x00 IN THESE BYTES IS NOT ASSERTED AGAINST ANY MORE, AND THE ASSERT THAT STOOD HERE IS DELETED RATHER
@@ -1903,66 +2016,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       return null;
     }
   };
-  // §7.4 STEP 14's RESPONSE, which is the SAME safeFetch and a DIFFERENT answer: a Document is judged against
-  // the policy its response carried, so the header travels with the bytes. `fetched` above cannot serve this —
-  // it returns the body alone, and answering a child document with no policy is how a page whose CSP kills a
-  // sink gets reported as exploitable. A load that does not load answers `bytes: null`, which is a navigable
-  // that still exists showing an error page, exactly as the engine's own child_document reads it.
+  // HTML §7.4.5 "Populating a session history entry"'s RESPONSE, for a child navigable this engine created —
+  // THE SAME `navigationLoad` the SEED that rooted this instance came through, which is what "one
+  // document-load path" means as a shape rather than as a rule someone follows. `fetched` above cannot serve
+  // this: it returns the body alone, and answering a child document with no policy is how a page whose CSP
+  // kills a sink gets reported as exploitable. A load that does not load answers `bytes: null`, which is a
+  // navigable that still exists showing an error page, exactly as the engine's own child_document reads it.
+  // THE PRINCIPAL IS THE INITIATING DOCUMENT'S, NOT THE TARGET'S: this load was initiated by the document
+  // this instance holds, so `msg.sourceUrl` is what safeFetch classifies the SSRF host relative to.
+  // `unavailable` is the loader's REASON and this caller has no reader for it — a child navigable's page
+  // does not appear in the popup's page-source row; `bytes: null` is the whole of what the engine reads.
   const fetchedDocument = async (u) => {
-    /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. HTML
-       §7.4.5 "Populating a session history entry" determines the loaded Document's ORIGIN over the RESPONSE's
-       URL, and a navigable whose load did not load still gets a Document — so "there was no response" is not a
-       reason to answer without one, and the honest URL in that case is the one that was requested. An address
-       that will not parse is the ENGINE's own serializer output disagreeing with a URL parser, which is a
-       broken contract rather than a page's doing.
-       IT IS RESOLVED OUTSIDE THE `try`, DELIBERATELY. It used to sit inside it, whose catch answers "a load
-       that did not load" — so an address the engine's own serializer produced and a URL parser refuses became
-       a navigable showing an error page. The parse THROWS here instead: a DFAIL would be a no-op in release
-       and leave every arm below reading `undefined`, which is the defaulted-field defect with a check's name
-       on it. */
-    const abs = new URL(u, msg.sourceUrl).href;
-    if (!canFetch) return { url: abs, headers: {}, bytes: null };
-    try {
-      // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed:
-      // §7.4's fetch is a navigation this engine initiated, not a learned GET being replayed for its reply.
-      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl });
-      DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
-             "safeFetch answered a document load with something other than its reply record — §7.4 step 14 " +
-             "reads the BODY and the POLICY off it, and a Document judged under no policy is how a page whose " +
-             "CSP kills a sink gets reported as exploitable");
-      /* AND FETCH §2.2.6 "Responses"' URL LIST, WHOSE LAST ITEM IS THE RESPONSE'S URL — "a pointer to the last
-         URL in response's URL list". THIS ZONE IS THE ONLY PARTY THAT SAW THE REDIRECT CHAIN (safe-fetch.js
-         says so in its own header), and the engine determines the Document's origin over exactly this string:
-         a same-origin request that 302s off this origin produces a Document belonging to ANOTHER agent
-         cluster, and an engine handed the requested address instead has no way to know that. It is asserted
-         rather than read past, because the list is empty only for a URL that would not parse — and this call
-         hands safeFetch an already-absolute href, so an empty list here is the chokepoint's contract having
-         changed under a reader that decides a principal. */
-      DCHECK(Array.isArray(r.urlList) && r.urlList.length >= 1 &&
-             typeof r.urlList[r.urlList.length - 1] === "string" && r.urlList[r.urlList.length - 1] !== "",
-             "safeFetch answered a document load with no Fetch §2.2.6 URL LIST — its last item is the " +
-             "RESPONSE's URL, which is what HTML §7.4.5 determines the loaded Document's origin, CSP §2.2.2's " +
-             "self-origin and §7.5.1's creationURL over. Without it a redirect off this origin becomes a " +
-             "Document created under the principal of the address that was merely requested");
-      /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page, which is what
-         a null body means to the engine's child_document. That is a real §7.4 outcome, not a softening. The
-         URL still crosses: a response that failed still came from somewhere, and where it came from is what
-         the Document a browser shows for it is at. */
-      if (!r.ok) return { url: r.urlList[r.urlList.length - 1], headers: {}, bytes: null };
-      /* THE BYTES, because a Document is PARSED from a byte sequence. This answered `r.body` while that was
-         `resp.text()`'s UTF-8 decode, so a document served in any other encoding reached lexbor already
-         replaced with U+FFFD and HTML §13.2.3.2's encoding sniffing — the BOM, then the transport charset,
-         then §13.2.3.3's prescan — had nothing left to decide. The engine owes that algorithm; this zone owes
-         it the bytes. */
-      /* THE WHOLE HEADER LIST, NOT ONE POLICY PULLED OUT OF IT. This answered
-         `r.headers["content-security-policy"] || null` — one name, chosen here — so HTML §7.1.3's opener
-         policy, §7.1.4's embedder policy and §7.5.1's `Origin-Agent-Cluster` could not reach a navigated
-         Document at ALL, and every document a navigation created got the agent-cluster keying and the
-         cross-origin isolation of a response that sent nothing. Which names matter is the ENGINE's question,
-         in the browser components that own those standards; this zone relays what the response carried, the
-         same way it already does for the document that roots an instance (responseFieldLines). */
-      return { url: r.urlList[r.urlList.length - 1], headers: r.headers, bytes: r.body };
-    } catch (e) { RETHROW_FATAL(e); return { url: abs, headers: {}, bytes: null }; }
+    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl);
+    return { url: r.url, headers: r.headers, bytes: r.bytes };
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
      this zone stamps on everything it sends — both are read only by the notice router below, which is the
@@ -2155,8 +2221,8 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavig
      declares `array<uint8>` because `qjs_join` has main.c's byte-identical signature, so the two operations
      take ONE contract and a change to what a document arrives with reaches both. */
   DCHECK(html instanceof Uint8Array || typeof html === "string",
-         "a joined document arrived as neither a byte sequence nor characters — a child navigable's document " +
-         "is safeFetch's response body and a reported one is the renderer's serialized DOM, so anything else " +
+         "a joined document arrived as neither a byte sequence nor characters — every live document is " +
+         "navigationLoad's response body and a cold-tier one may hold characters, so anything else " +
          "is a document this agent would hold as nothing at all");
   const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
   /* THE SAME 0x00 THE ROOT'S DOCUMENT NO LONGER ASSERTS AGAINST, deleted here with it and for the one reason:
@@ -3051,7 +3117,7 @@ async function engineServiceHostRequests(eng) {
     // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
     // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
     // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
-    /* §7.4 step 14's answer: the RESPONSE'S URL, its HEADER LIST as the HTTP field lines it delivered, and the
+    /* HTML §7.4.5 "Populating a session history entry"'s answer: the RESPONSE'S URL, its HEADER LIST as the HTTP field lines it delivered, and the
        document as BYTES. It carried one extracted policy (`{csp}`) — see fetchedDocument. The field-line form
        is the one a header list crosses this ABI in and is exactly what qjs_init takes, so a navigated Document
        and a rooted one are built from the identical shape by the identical parse.
@@ -3067,7 +3133,8 @@ async function engineServiceHostRequests(eng) {
   }
 }
 /* THE SAME TWO CHANNELS FOR A SYNCHRONOUS ANSWER. Two of the requests this zone can genuinely answer carry a
-   fetched BODY — XHR §3.5.6's fetch and §7.4 step 14's document load — and a body is a byte sequence for the
+   fetched BODY — XHR §3.5.6's fetch and HTML §7.4.5 "Populating a session history entry"'s document load —
+   and a body is a byte sequence for the
    same reason a reply's is. `bytes === null` says this answer has none, which is what every other request kind
    is: an answer that is a number or a document NAME has no bytes beside it. The trailing 0 is ECMA-262 6.2.4's
    NORMAL completion — this zone fetched bytes rather than running another instance's program, so it has
@@ -3651,7 +3718,8 @@ const _hostOps = {
       if (cluster) {
         /* THE CLUSTER'S INSTANCE ALREADY HOLDS THIS DOCUMENT, and that is a statement about the ENGINE rather
            than about this table. A same-origin sub-frame is created INSIDE that heap by §4.8.5's insertion
-           steps (navigable.c mints its name, adopts it into this agent, and §7.4 step 14 loads its address
+           steps (navigable.c mints its name, adopts it into this agent, and HTML §7.4.5 "Populating a
+           session history entry" loads its address
            through this same safeFetch chokepoint), so the instance is already running it as a realm of its own.
            The caller is therefore answered by that instance's finalize — its findings ARE this document's —
            which is the same path the RESHIP re-delivery of one document already took. What is deleted is the
@@ -3822,7 +3890,7 @@ const _hostOps = {
            navigable no create notice named, and the reason this zone can state its §7.3.1.3 parent at all.
            `none`: a top-level traversable's Document has no container document, so §3.1.3's steps 2-3 return
            the empty list — the same fact its `u` parent states one link along. */
-        const eng = engineCreate(job.code, job.html, job.msg, job.persist, null, null, false, null, "u",
+        const eng = engineCreate("", job.html, job.msg, job.persist, null, null, false, null, "u",
                                  "null", "none");
         DCHECK(hostClusterOf(key) === eng,
                "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
@@ -4069,7 +4137,7 @@ function _hostKick() {
        picked up when a slot freed — but a freed slot is a pool that is not empty, and with an EMPTY pool RAM is
        free by definition, so the only document that can still be waiting is one admit DEFERRED (a sub-frame
        whose same-origin top has not reported yet). Re-kicking for that one spins the loop at full speed on a
-       condition nothing in this file can change; the thing that changes it is the top's CONTENT_HTML, which
+       condition nothing in this file can change; the thing that changes it is the top's CONTENT_SEED, which
        kicks the pool itself when it arrives. */
     () => { _hostDriving = false; if (_pool.length) _hostKick(); },
     /* THE LOOP DIED. NOTHING RETRIED, BECAUSE NOTHING HERE IS RETRYABLE: every rejection that reaches this arm
@@ -4372,12 +4440,6 @@ self.astDispatch = async function astDispatch(msg) {
                                         entries: (await frontierIndex()).size } };
     }
     if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };
-    const html = msg.pageHtml || "";
-    const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
-    // NOTHING TO RUN, so no engine runs and there is no result document to expect — this is the one analysis
-    // that legitimately has none, and it says so rather than sharing the absent-document path with a real run.
-    if (!html && !code) return { success: true, result: linesToAnalysis([], msg, "nothing-to-run", null) };
-
     /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every
        other open document by value-of-information — no run-to-completion, no recency monopoly. The per-doc
        promise resolves when THIS engine finalizes (fully explored or host-evicted); the pool persists its
@@ -4409,11 +4471,71 @@ self.astDispatch = async function astDispatch(msg) {
            "(which its cluster's instance already runs) from the group's TOP document (which it does not), and " +
            "an absent one is indistinguishable from frame 0");
     const persist = !!msg.persist;
+    /* ─── THE SEED'S OWN §7.4 NAVIGATION, PERFORMED HERE AND NOWHERE ELSE ────────────────────────────────
+       The trusted zone hands this entry an ADDRESS the ambient observer suggested and the browser's own
+       answer agreed with; the document behind it is loaded HERE, through `navigationLoad` — the same
+       function a child navigable's load goes through, which is what makes "one document-load path" a shape
+       rather than a rule. Nothing arrives carrying bytes any more, so there is nothing to compare a second
+       transport's bytes against and nothing for a carve-out to hide in.
+       THE PRINCIPAL IS THE BROWSER'S, NOT THE SEED'S. `msg.sourceUrl` is the address the BROWSER reported
+       for this document (MessageSender-derived, in the trusted zone), and safeFetch classifies the SSRF host
+       relative to it — so a suggested address can never authorize itself into the person's intranet. The
+       zone that admits the seed has already established the two are same-origin, which is the whole of what
+       HTML §7.2.5 "The History interface" lets an SPA's pushState change. */
+    DCHECK(typeof msg.seedUrl === "string" && msg.seedUrl !== "",
+           "an AST_ANALYZE for a live document named no seed — a seed is an ADDRESS and it is the whole of " +
+           "what an ambient observer contributes, so a dispatch without one is a document nothing can load");
+    DCHECK(typeof msg.sourceUrl === "string" && msg.sourceUrl !== "",
+           "an AST_ANALYZE for a live document carried no browser-stated address — it is the private-network " +
+           "principal this navigation is classified against, and without it a suggested address would be " +
+           "classified against itself");
+    DCHECK(msg.pageHtml === undefined && msg.responseHeaders === undefined,
+           "an AST_ANALYZE for a live document arrived carrying a document body or a header list — a seed is " +
+           "an address and never bytes, so a producer that ships either has rebuilt the second, unpoliced " +
+           "document-load transport this entry exists to be the only alternative to");
+    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl);
+    /* THE SEED'S OWN RULE, ON TOP OF THE LOADER'S, AND IT IS THE SEED'S BECAUSE IT IS ABOUT A BUNDLE. §7.4.5
+       gives an OK response with a zero-length body a perfectly ordinary empty Document, and a child navigable
+       gets exactly that — but a SEEDED document with no bytes cannot be the program this run exists to
+       explore, and analysing it would emit nothing and read as a page that was analysed and found clean. */
+    const unavailable = loaded.unavailable !== null ? loaded.unavailable
+                      : loaded.bytes.length === 0 ? { kind: "empty" } : null;
+    /* THE REPORT GOES BACK THE INSTANT THE LOAD SETTLES, not when the run ends. What a reader asks on opening
+       the popup over an empty panel is "did this fail, or is there nothing here yet", and the analysis has
+       not started — so a record written only at finalize would leave every RUNNING page indistinguishable
+       from one nothing was ever said about. This is the edge that used to be the content script's two message
+       types, moved to the zone that now knows the answer; `onFrontierAdvance` beside it is the same shape. */
+    DCHECK(typeof self.onNavigationOutcome === "function",
+           "the trusted zone has no onNavigationOutcome to record this navigation's outcome against — it is " +
+           "the ONLY writer of a document's page-source record now that the load happens here, so without it " +
+           "a page whose seed could not be loaded is a silence in the only zone that renders one");
+    if (unavailable !== null) {
+      self.onNavigationOutcome(msg.documentId, Object.assign({ state: "unavailable" }, unavailable));
+      /* NO ENGINE RUNS, so there is no result document to expect — the one analysis that legitimately has
+         none. The REASON is not lost by sharing this outcome with an empty document: it is on the page-source
+         record above, which is the field that exists to carry it, and a seeded document that DID load is
+         never empty (that is the rule immediately above). */
+      return { success: true, result: linesToAnalysis([], msg, "nothing-to-run", null) };
+    }
+    self.onNavigationOutcome(msg.documentId, { state: "delivered" });
+    /* AND THE DOCUMENT IS AT THE ADDRESS THE RESPONSE CAME FROM. HTML §7.4.5 determines the loaded Document's
+       URL — and therefore its origin, its §4.4 API base URL and the frontier key its residue parks under —
+       over the RESPONSE's URL, not over the address that was merely requested. This is the same rule
+       `fetchedDocument` has always applied to a child navigable; the root document being the one exception
+       was the second-path defect one level down. It also deletes a hybrid no browser produces: the old
+       transport handed the engine the bytes served at the navigation URL under a `location` that pushState
+       had already moved to a client route. */
+    msg.sourceUrl = loaded.url;
+    msg.responseHeaders = loaded.headers;
     /* THE WAITER CARRIES BOTH SETTLERS. A Clear must be able to tell a document that was never seated that its
        analysis is not coming, and "cleared" is the exact error _dispatchDocument reads to abandon its tail without
        recording a page-level failure — resolving it with a plausible empty result instead would report the
-       wiped page as analysed and clean. */
-    const result = await new Promise((resolve, reject) => { _waiting.push({ code, html, msg, persist, resolve, reject }); _hostKick(); });
+       wiped page as analysed and clean.
+       `code` IS GONE FROM THIS PATH RATHER THAN DEFAULTED THROUGH IT: `msg.code || ""` stood here and no
+       producer that reaches this entry has ever written one (the two that do — a peer engine's child document
+       and a rehydrated cold recipe — build their engine directly), so it was a read of a field nobody writes
+       with a `||` as the reason it never crashed. The empty string is passed explicitly at the one call site. */
+    const result = await new Promise((resolve, reject) => { _waiting.push({ html: loaded.bytes, msg, persist, resolve, reject }); _hostKick(); });
     return { success: true, result };   // result.fetchCallSites is already deduped by the engine
   } catch (e) {
     /* AN INVARIANT ABORT IS NOT AN ANALYSIS FAILURE. This catch reports a failed dispatch to the brain, which

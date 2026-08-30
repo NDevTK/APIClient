@@ -254,10 +254,10 @@ function mergeASTResultsIntoVDD(tab, results) {
       console.debug("[AST:merge] Security findings for %s: %d sinks", analysis.sourceUrl, secSinks.length);
     }
   }
-  // Schedule the eviction sweep after this merge: the doc's forced-exec run has produced
-  // results (globalStore updated, residue parked to IDB), so once it is no longer in-flight
-  // the sweep drops its transient RAM view. Debounced to one pending timer.
-  _scheduleEvictSweep();
+  /* NO EVICTION SWEEP AFTER THIS MERGE. It was scheduled here to drop a reviewed document's "transient RAM
+     view", which was the page source this zone used to hold — and this zone holds no document bytes any more:
+     a seed is an address, the custom browser loads the document itself, and those bytes live in and die with
+     that instance. What remained after the page source was identity, which a merge does not make stale. */
 }
 
 // ─── Message Handling ────────────────────────────────────────────────────────

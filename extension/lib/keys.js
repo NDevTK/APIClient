@@ -111,6 +111,6 @@ function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
 // Per-DOCUMENT analysis state, keyed by documentId — the stable per-document
 // identity from MessageSender. tabId/frameId are FIELDS (UI filter + Chrome
 // routing), NEVER the key. `origin` is the MessageSender principal (stamped at
-// CONTENT_HTML via _originForDoc) — NEVER derived from `url`; it stays "" (fail
+// CONTENT_SEED via _originForDoc) — NEVER derived from `url`; it stays "" (fail
 // closed) until the document reports. `url` is the document's OWN url (display +
 // relative TARGET resolution only).
