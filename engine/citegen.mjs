@@ -6,6 +6,8 @@
  *   node engine/citegen.mjs [path …]      audit (default: engine/host + the fork's own quickjs.c/.h)
  *   node engine/citegen.mjs --all         print every finding rather than the first 120 of each kind
  *   node engine/citegen.mjs --titles      the numbers cited most often that carry no title and no known term
+ *   node engine/citegen.mjs --unanchored  the citations naming no standard that only a file vote placed — the
+ *                                         ones inside a DCHECK/DFAIL/CHECK message first, since a crash prints them
  *   node engine/citegen.mjs --regen [key] fetch the standard(s), rewrite engine/specindex/<key>.json
  *
  * WHY THIS EXISTS. CLAUDE.md §Browser half: a named spec with no number cannot be looked up, so it cannot
@@ -32,7 +34,8 @@
  * and ECMAScript 12, so the fallback declared the JavaScript engine an HTML file and judged 58 citations of
  * ECMAScript §7.4.9 against a number the HTML standard does not have.
  *
- * SO A CITATION IS RESOLVED BY ITS OWN EVIDENCE, ACROSS EVERY INDEXED STANDARD, AND THE FILE VOTE IS GONE.
+ * SO A CITATION IS RESOLVED BY ITS OWN EVIDENCE, ACROSS EVERY INDEXED STANDARD, AND THE FILE VOTE NO LONGER
+ * DECIDES WHAT THE TOOL ASSERTS.
  * The trailing phrase is looked up in EVERY index at once and the longest match wins; the standards that
  * define that phrase are the candidates, and the citation is a finding only when NO candidate places the term
  * at the cited number. The claim the tool then makes is strictly true and carries its own proof — "no indexed
@@ -41,6 +44,32 @@
  * never asserted about. The cost is recall, and it is the right trade: a checker that cries wolf gets muted,
  * and a muted checker is worse than none.
  *
+ * BUT THE VOTE IS NOT GONE — IT IS DEMOTED, AND THE SENTENCE ABOVE USED TO SAY "GONE", WHICH IS WHY THIS
+ * PARAGRAPH EXISTS. A citation that names a number and no standard is 32614 of this tree's 39071 — 83%, at the
+ * revision this was measured — and the vote still picks a standard for 8299 of them, because nothing else can. That is not a defect on its own;
+ * a bucket has to be chosen before an undecided site can be filed under one. The defect is a HEADER that told
+ * the next reader the channel had been removed, so an auditor of THIS FILE would have gone looking for the
+ * guess and concluded there was none. The rule that replaces the false claim is a division of labour, and it
+ * is the one asymmetry this resolver already had in one place and lacked in another:
+ *   — THE FILE VOTE MAY RESOLVE. It decides which bucket an undecided citation is counted under, which is a
+ *     statement about a POPULATION and is read as one.
+ *   — THE FILE VOTE MAY NOT JUDGE. Every check whose truth depends on WHICH standard was picked is asked only
+ *     of a citation whose standard is its own evidence. The number-does-not-exist check has always been gated
+ *     that way and says so below; the TITLE-MISMATCH check was not, and it is the one live route by which an
+ *     inference could have become a verdict — 398 file-voted sites carry a quoted phrase and stand on a number
+ *     their guessed standard has, which is everything that check needs. It produced nothing today, and "it has
+ *     not fired yet" is not a property of a mechanism. A MISATTRIBUTED cannot arise from a vote at all, and
+ *     that is structural rather than lucky: the vote is only reached when the file's anchor is NOT among the
+ *     standards the citation's own term evidence names, so `owned` below is false by construction.
+ * WHAT THAT LEAVES IS A COUNT, AND A COUNT WITH NO LIST BEHIND IT IS THE SILENT-ZERO SHAPE THIS FILE ALREADY
+ * NAMES ELSEWHERE. 8299 cannot be printed — a category that size is read once and never again, which is the
+ * muting this whole file is written against. So it is printed the way --titles prints the unverified
+ * population: the count in the summary, the ACTIONABLE HEAD behind a flag. The head is the citations sitting
+ * inside a DCHECK/DFAIL/CHECK STRING LITERAL, because that text is what a crash prints and what a reader acts
+ * on — a bare number in a comment costs one reading, and a bare number in an abort message sends whoever is
+ * standing at the crash to the wrong document. --unanchored lists exactly those.
+ *
+
  * A TERM IS DEFINED IN ONE SECTION AND USED IN ANOTHER, AND A READER MAY CITE EITHER. `is initial about:blank`
  * is DEFINED in HTML §3.1.1 "The Document object" and CLEARED in §7.4.4; a comment about the clearing that
  * cites §7.4.4 is right, and a definition-site-only index calls it wrong. So the index records USES as well as
@@ -808,10 +837,46 @@ function anchorTokens(before) {
    * `Standard` is: the words after the name say which document, and the name is what decides which index. */
   const tail = flat.replace(/[\s'"’(\[]+$/, "").replace(/\s+(?:Level|level)\s+[0-9]+$/, "")
     .replace(/\s+(?:Standard|standard|spec|Spec)$/, "");
+  /* AND A LEVEL WRITTEN WITHOUT THE WORD "Level" IS THE SAME FACT AGAIN, IN THE SPELLING THIS TREE ACTUALLY
+   * USES — but it is JOINED to the name rather than trimmed off it, and that difference is the whole of why
+   * this is allowed where the SPECS table's own comment refuses a trim. That comment is right: `CSS Images 3`
+   * and `CSS Images 4` are different documents with different numbering, so a rule that drops the level
+   * answers both with one index and manufactures wrong answers. Joining loses nothing — `css-color-4` is
+   * exactly the levelled shortname LEVELLED already reads, so Level 4 and Level 5 stay two names.
+   * WHAT THIS FIXES IS A CITATION THAT IS ALREADY CORRECT. `css_color.c` writes `CSS Color 4 §16.2's
+   * serialization` inside a DFAIL — the number with its standard, which is what CLAUDE.md asks for — and the
+   * tail regex below cannot end on `4`, so the site came back UNANCHORED and the file vote filed it under
+   * HTML, whose §16.2 is a different document's section entirely. Twenty-nine of that one file's crash
+   * messages were in that state. Editing correct prose to satisfy a tokenizer would be the churn this audit
+   * exists to avoid; the tokenizer reads the spelling.
+   * IT IS GATED ON A NAME THIS FILE ALREADY KNOWS, AND THE GATE IS NOT CAUTION — IT IS THE DIFFERENCE BETWEEN
+   * ADDING A RESOLUTION AND DESTROYING ONE. An anchor classified `other:` is FOREIGN and is never audited at
+   * all, so joining a level onto an unknown name would take a citation that is currently resolved by the term
+   * it names and drop it out of the audit. `ECMA 262` and `HTML 5` are exactly that shape. So the join is
+   * emitted only where the joined form is an indexed standard's own anchor, or where the base name is already
+   * on the foreign list — in both cases the classification it produces is one this file had already decided. */
+  /* THE JOIN MUST NOT ABSORB THE SENTENCE THAT LEADS INTO THE NAME, and the first spelling of this did:
+   * `no keyword in CSS Color 4 §10` produced `in-css-color-4`, which LEVELLED happily accepts as a standard,
+   * so one file's citations of one document were counted under three different names. A tail is only a NAME
+   * when its first word can start one — the CSS modules all start `css`, and a single word answers for
+   * itself — so a lead-in word is refused rather than hyphenated into the answer. */
+  const nameStart = (w) => ANCHOR_TO_KEY.has(w) || OTHER_SPECS.includes(w);
+  const lv = /^(.*?)((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+([0-9]+)$/.exec(tail);
+  const joined = [];
+  if (lv) {
+    const w2 = lv[2].split(/[ \t]+/);
+    for (let n = w2.length; n >= 1; n--) {
+      const bw = w2.slice(w2.length - n).map((x) => x.toLowerCase());
+      const base = bw.join(" ");
+      const j = base.replace(/\s+/g, "-") + "-" + lv[3];
+      if (ANCHOR_TO_KEY.has(j) || OTHER_SPECS.includes(base) ||
+          (OTHER_SPECS.includes(bw[n - 1]) && nameStart(bw[0]))) joined.push(j);
+    }
+  }
   const m = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)$/.exec(tail);
-  if (!m) return [];
+  if (!m) return joined;
   const w = m[1].split(/[ \t]+/);
-  const out = [];
+  const out = joined;
   for (let n = w.length; n >= 1; n--) out.push(w.slice(w.length - n).join(" "));
   return out;                                       /* longest tail first */
 }
@@ -847,6 +912,13 @@ function walk(dir, out = []) {
  * dotted number is read only out of these, so a float literal, an array bound and a version in a Makefile-ish
  * define are never candidates. String literals count because a DFAIL message is prose that a reader follows
  * exactly like a comment, and its number must be right for the same reason. */
+/* THE TWO PLACES A CITATION CAN LIVE ARE NOT WORTH THE SAME, so the span carries WHICH ONE it is. A citation
+ * in a comment is read by whoever opens the file; a citation in a string literal is read by whoever is
+ * standing at an abort with the message in front of them, and that reader has no file open and no neighbouring
+ * citations to compare it against. CLAUDE.md's own worked example of the damage — a DFAIL that instructed the
+ * next person to build something the spec makes unreachable, "SPEC-WRONG and had been followed once" — is a
+ * message, not a comment. Third element: "c" for comment, "s" for a string literal. `inSpans` reads [0] and
+ * [1] only and is unaffected. */
 function proseSpans(src) {
   const spans = [];
   const n = src.length;
@@ -854,17 +926,55 @@ function proseSpans(src) {
     const c = src[i];
     if (c === "/" && src[i + 1] === "*") {
       const e = src.indexOf("*/", i + 2);
-      spans.push([i + 2, e < 0 ? n : e]); i = e < 0 ? n : e + 2;
+      spans.push([i + 2, e < 0 ? n : e, "c"]); i = e < 0 ? n : e + 2;
     } else if (c === "/" && src[i + 1] === "/") {
       let e = src.indexOf("\n", i + 2); if (e < 0) e = n;
-      spans.push([i + 2, e]); i = e;
+      spans.push([i + 2, e, "c"]); i = e;
     } else if (c === '"' || c === "'") {
       let j = i + 1;
       while (j < n && src[j] !== c) { if (src[j] === "\\") j++; if (src[j] === "\n") break; j++; }
-      spans.push([i + 1, Math.min(j, n)]); i = j + 1;
+      spans.push([i + 1, Math.min(j, n), "s"]); i = j + 1;
     } else i++;
   }
   return spans;
+}
+
+/* WHICH SPAN AN OFFSET IS IN, or null. Same bisection as inSpans; kept separate because inSpans answers a
+ * membership question on a hot path and this one answers a reporting question. */
+function spanAt(spans, at) {
+  let lo = 0, hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid][1] <= at) lo = mid + 1;
+    else if (spans[mid][0] > at) hi = mid - 1;
+    else return spans[mid];
+  }
+  return null;
+}
+
+/* IS THIS CITATION IN A CRASH MESSAGE — asked of a literal span, by walking back to the statement that opens
+ * it. A message is built from several adjacent literals, so the scan starts at the FIRST literal of the run
+ * and stops at the nearest statement boundary; anything else would miss every continuation line, which is
+ * where a long DFAIL puts most of its words. A hit is the macro's own name immediately before an open paren.
+ * THE WALK SKIPS PROSE RATHER THAN READING IT, because a message whose own text contains a `;` or a `}` — and
+ * this tree's messages quote code constantly — would otherwise stop the scan at a statement boundary that is
+ * a character inside a string. That is the same defect as a `sed` over a citation: prose and program are
+ * different languages sharing one file, and a scan that forgets which one it is in gets the wrong answer. */
+const CRASH_MACRO = /\b(DCHECK|DFAIL|CHECK|CHECK_FAIL)\s*\($/;
+function inCrashMessage(src, spans, at) {
+  const sp = spanAt(spans, at);
+  if (!sp || sp[2] !== "s") return false;
+  let i = sp[0] - 2;                       /* before this literal's own opening quote */
+  const floor = Math.max(0, i - 4000);
+  while (i > floor) {
+    const s2 = spanAt(spans, i);
+    if (s2) { i = s2[0] - (s2[2] === "s" ? 2 : 3); continue; }
+    const ch = src[i];
+    if (ch === ";" || ch === "{" || ch === "}") return false;
+    if (ch === "(" && CRASH_MACRO.test(src.slice(Math.max(0, i - 24), i + 1))) return true;
+    i--;
+  }
+  return false;
 }
 
 function inSpans(spans, at) {
@@ -952,10 +1062,15 @@ function audit(argv, opts = {}) {
   const undecided = [];
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, unverified: 0, multiSpec: 0,
-                 foreignTerm: 0 };
+                 foreignTerm: 0, titleRefused: 0 };
   const byKey = new Map();
+  /* Per standard, how many of its audited citations were placed there by the file vote rather than by their
+   * own anchor or their own term — and the sites themselves, so the count has a list behind it. */
+  const byKeyVoted = new Map();
+  const voted = [];
   const byOther = new Map();
   const untitled = new Map();
+  const untitledVoted = new Map();
   const unknownTok = new Map();
   const SEC = "[0-9]+(?:\\.[0-9]+)*|[A-F](?:\\.[0-9]+)+";
   const CITE = new RegExp("§(" + SEC + ")", "g");
@@ -1115,6 +1230,16 @@ function audit(argv, opts = {}) {
       if (!idx.has(spec)) { stat.other++; byOther.set(spec.replace(/^other:/, ""), (byOther.get(spec.replace(/^other:/, "")) || 0) + 1); continue; }
       stat[how === "anchored" ? "anchored" : how === "term" ? "byTerm" : "byFile"]++;
       byKey.set(spec, (byKey.get(spec) || 0) + 1);
+      /* A GUESSED RESOLUTION IS COUNTED APART FROM A MATCHED ONE EVERYWHERE IT IS COUNTED AT ALL. Pooling them
+       * makes "audited by standard: html=N" a number in which inference and evidence are indistinguishable —
+       * which is the shape CLAUDE.md calls a plausible datum, performed on the audit's own census. */
+      if (how === "file") {
+        byKeyVoted.set(spec, (byKeyVoted.get(spec) || 0) + 1);
+        voted.push({ file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec,
+                     has: !!idx.get(spec).sections[c.no],
+                     crash: inCrashMessage(src, spans, c.at),
+                     text: src.slice(c.at, c.at + 110).split("\n")[0] });
+      }
 
       const ix = idx.get(spec);
       const sections = ix.sections, no = c.no;
@@ -1217,8 +1342,16 @@ function audit(argv, opts = {}) {
           }
         }
 
-        /* (4) A quoted phrase that titles a DIFFERENT section of the same standard — the renumbering tell. */
-        if (!verdict && c.quoted) {
+        /* (4) A quoted phrase that titles a DIFFERENT section of the same standard — the renumbering tell.
+         * ASKED ONLY WHERE THE STANDARD IS THE CITATION'S OWN EVIDENCE, for the reason check (1) is: both
+         * sides of the sentence this raises — "X titles <spec> §A; §B is Y" — are statements about the
+         * RESOLVED standard, so on a file-voted resolution both are statements about a document the citation
+         * never named. A false one of these is the worst finding this tool can emit: it reads as the
+         * renumbering tell CLAUDE.md asks authors to write titles to catch, it names a specific replacement
+         * number, and obeying it edits a CORRECT citation into a wrong one. The refusals are counted rather
+         * than dropped — a check that silently declines to run is the silent zero again. */
+        if (!verdict && c.quoted && how === "file") stat.titleRefused++;
+        else if (!verdict && c.quoted) {
           const q = normTerm(c.quoted);
           if (titleToNo.get(spec).has(q)) {
             verdict = { kind: "TITLE-MISMATCH",
@@ -1233,6 +1366,11 @@ function audit(argv, opts = {}) {
         stat.unverified++;
         const uk = `${spec} §${no}`;
         untitled.set(uk, (untitled.get(uk) || 0) + 1);
+        /* THE KEY'S LEFT HALF CAN BE A GUESS, and --titles reads that key as an instruction: "a title here
+         * makes the citation checkable". Under a file-voted standard the instruction is half wrong — what is
+         * missing first is the STANDARD'S NAME, and a title written under the inferred one would confirm the
+         * inference instead of testing it. So the row says how much of it is inference. */
+        if (how === "file") untitledVoted.set(uk, (untitledVoted.get(uk) || 0) + 1);
         rec.groupNo = c.no;
         undecided.push(rec);
         continue;
@@ -1270,9 +1408,12 @@ function audit(argv, opts = {}) {
       `${Object.keys(ix.uses).length} with a prominent use site — index fetched ${ix.fetched}, standard updated ${ix.specUpdated}`);
   }
   console.log(`  ${stat.total} citations in ${files.length} files (${stat.bare} written without a §, admitted by group evidence)`);
-  console.log(`  resolved: ${stat.anchored} by their own anchor, ${stat.byTerm} by the term they name, ${stat.byFile} by their file's dominant anchor`);
+  console.log(`  resolved: ${stat.anchored} by their own anchor, ${stat.byTerm} by the term they name`);
+  console.log(`  INFERRED: ${stat.byFile} name no standard and no term, and were placed by their file's dominant anchor — a guess, ` +
+    `so nothing below judges them (${stat.titleRefused} title check(s) refused on that ground); --unanchored lists them`);
   console.log(`  ${stat.other} belong to a standard this audit does not index; ${stat.skipped} name no standard and no term it knows`);
-  console.log(`  audited by standard: ${[...byKey].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  console.log(`  audited by standard (in parentheses, how many of them only a file vote placed there): ` +
+    `${[...byKey].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}(${byKeyVoted.get(k) || 0})`).join(" ")}`);
   console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ${stat.confirmedByUse} by a prominent use rather than the definition site), ` +
     `${stat.unverified} carry no title and no term any index knows, ${stat.multiSpec} name a term more than one standard defines`);
   console.log(`  ${stat.foreignTerm} name a term only ANOTHER standard defines, so the standard they cite numbers nothing this audit could hold them to`);
@@ -1312,8 +1453,31 @@ function audit(argv, opts = {}) {
     for (const [k, v] of [...untitled].sort((a, b) => b[1] - a[1]).slice(0, 40)) {
       const [key, no] = k.split(" §");
       const s = idx.get(key).sections[no];
-      console.log(`  ${String(v).padStart(4)}x  ${k}  ${s ? `"${s.title}"` : "(no such section)"}`);
+      const g = untitledVoted.get(k) || 0;
+      console.log(`  ${String(v).padStart(4)}x  ${k}  ${s ? `"${s.title}"` : "(no such section)"}` +
+        (g ? `  — ${g} of them name no standard either, so the "${key}" half of this key is this audit's guess` : ""));
     }
+  }
+
+  if (argv.includes("--unanchored")) {
+    /* THE ACTIONABLE HEAD OF THE GUESS, AND IT IS ORDERED BY WHO PAYS FOR IT BEING WRONG. A citation in a
+     * comment is read with the file open; a citation in a DCHECK/DFAIL message is read by whoever is standing
+     * at the abort, with nothing around it — so a bare number there sends that reader to a section of a
+     * document the author never named, and the tree has been burned by exactly that (a DFAIL whose
+     * instruction was spec-wrong, followed once). Within the crash set, a number the GUESSED standard
+     * actually has is listed first: that is where the tool holds a concrete opinion it has no evidence for,
+     * and where a reader skimming the audit would take the parenthesised standard as a fact. */
+    const crash = voted.filter((v) => v.crash);
+    const solid = crash.filter((v) => v.has), thin = crash.filter((v) => !v.has);
+    console.log(`\ncitations naming NO standard that only a file vote placed, and that a CRASH PRINTS: ${crash.length} of ${voted.length} file-voted sites`);
+    console.log(`  (the standard in parentheses is this audit's INFERENCE from the file's other citations, never the citation's own claim.`);
+    console.log(`   Writing the standard's name at the site is what turns each of these into something any later run can check.)`);
+    const cap = argv.includes("--all") ? Infinity : 120;
+    for (const v of [...solid, ...thin].slice(0, cap)) {
+      console.log(`  ${v.file}:${v.line}  §${v.no} (${v.spec}${v.has ? "" : ", which has no such section"})`);
+      console.log(`      ${v.text.trim()}`);
+    }
+    if (crash.length > cap) console.log(`  … ${crash.length - cap} more (--all)`);
   }
 
   const groups = new Map();
