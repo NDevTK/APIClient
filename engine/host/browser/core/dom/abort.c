@@ -157,7 +157,28 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
  * whole purpose is to reproduce ONE path the page really takes. A fabricated abort is a different program.
  *
  * A NON-CONCOLIC FLAG DECLARES NOTHING, because the seam answers -1 for it before this value is ever read and
- * the real ToBool decides — which is §3.2's answer exactly. */
+ * the real ToBool decides — which is §3.2's answer exactly.
+ *
+ * AND NEITHER DOES A FLAG WHOSE EXAMPLE THIS FLOW HAS ITSELF CONTRADICTED, WHICH IS A FACT ABOUT THE FLOW AND
+ * NOT ABOUT THE SLOT. `concolic_example` is a PER-FLOW accessor: §Learning-from-replies' "the forced sibling
+ * drops the contradicted example" is performed AT THE READ, so a flow standing on the arm that proved the
+ * modelled moment wrong is handed nothing — the value is intact, the producer supplied its boolean, and this
+ * flow is simply no longer entitled to believe it. An assert stood here reading that absence as a foreign
+ * producer, and it was TRUE WHEN WRITTEN and became a claim about a mechanism that did not exist yet: the two
+ * states are indistinguishable through this one accessor, so the absence proves nothing about who wrote the
+ * slot, and asserting over it crashed a run for taking an arm it was forced to take.
+ *
+ * WHAT ABSENCE ACTUALLY MEANS HERE IS SOLVER_NO_NONFORKING_ARM'S OWN SENTENCE — "this question has no answer
+ * with only one world in it" — and the crash that belongs to it lives at the seam, where it can see the thing
+ * this site cannot: whether the answer is NEEDED. The operand is computed at every call, including on every
+ * flow the seam then answers from a REFINED or REPLAYED arm (solver/decide.h: it is consulted at exactly one
+ * of the three ways a decision is reached), and the flow whose example was contradicted is by construction a
+ * flow that already decided this predicate — so what fired was an assert about a value nobody was going to
+ * read. Handing the absence over instead puts the failure where it is real: a NEW decision at this predicate
+ * in a session that explores nothing crashes in dec_answer_here NAMING the predicate, in dev AND in release,
+ * which is strictly louder than what stood here. That session never reaches it, because an example is
+ * contradicted only by taking an arm against it and such a session forces no arm — which is the same reasoning
+ * as core/timing/event_loop.c's el_rel_nonforking, the sibling site that already answers this shape this way. */
 static int signal_aborted_nonforking(JSContext *ctx, JSValueConst flag)
 {
     JSValue ex;
@@ -166,10 +187,18 @@ static int signal_aborted_nonforking(JSContext *ctx, JSValueConst flag)
     if (!concolic_is(flag))
         return SOLVER_NO_NONFORKING_ARM;
     ex = concolic_example(ctx, flag);
+    if (JS_IsUndefined(ex)) {
+        JS_FreeValue(ctx, ex);
+        return SOLVER_NO_NONFORKING_ARM;
+    }
+    /* THE PRODUCER CONTRACT THAT IS STILL A CONTRACT: §3.2 declares `readonly attribute boolean aborted` over
+       a flag written only by "signal abort", so an example that EXISTS states one of two moments. A third kind
+       of value in it is a writer this file does not have. */
     DCHECK(JS_IsBool(ex),
-           "an AbortSignal's `aborted` slot holds unknown input carrying no boolean example — §3.2's flag is a "
-           "real state machine and the one writer that makes it unknown states the moment it is standing at as "
-           "the example, so a slot without one was written by a producer that is not in this file");
+           "an AbortSignal's `aborted` slot holds unknown input whose example is not a boolean — §3.2 declares "
+           "`readonly attribute boolean aborted` over a flag written only by \"signal abort\", so the moment an "
+           "example states is one of exactly two, and anything else was written by a producer that is not in "
+           "this file");
     r = JS_ToBool(ctx, ex);
     JS_FreeValue(ctx, ex);
     return r;
