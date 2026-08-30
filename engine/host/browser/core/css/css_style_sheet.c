@@ -91,6 +91,23 @@ static CssStyleSheetData *sheet_of(JSValueConst v)
     return s;
 }
 
+/* WRITE ONE OWNED SLOT, and never `JS_FreeValue(ctx, s->f); s->f = <a new value>;` — see cow.h for the order
+   and the defect. §6.2's remove a CSS style sheet is the worst shape of it this component has, and it is worse
+   than the ordinary pair: it freed THREE slots and then assigned all three, so between the first free and its
+   assignment sat two more JS_FreeValues, each able to run a host finalizer — the page's platform code, which
+   may allocate — and an allocation IS a collection (js_trigger_gc has exactly one caller,
+   JS_NewObjectFromShape) that reaches this record through sheet_gc_mark and decrefs a JSObject already back on
+   the allocator's free list. Giving `owner_node` back is exactly that: it can drop the last reference to an
+   element wrapper. Routing each write through one operation is what makes the window impossible rather than a
+   property of how the three lines happen to be grouped.
+   The record and its layout are bound HERE rather than at each call, so no site can pass a slot from another
+   record with this layout. css_style_sheet_new's mint does not come here: before JS_SetOpaque the record is
+   unreachable by the collector and its calloc'd slots hold no value to release. */
+static void sheet_set(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, s, &SHEET_REC, slot, v);
+}
+
 /* The receiver, brand-checked. Both interfaces declare every member on a PROTOTYPE, so a page can apply one to
    anything at all and §3.7.5's answer is a TypeError rather than a read of nothing. */
 static CssStyleSheetData *sheet_here(JSContext *ctx, JSValueConst v)
@@ -334,15 +351,11 @@ void css_style_sheet_remove(JSContext *ctx, JSValueConst sheet)
        nulls the owner node and says nothing about the title, so after this line there is nothing left to read
        it off and the last value the live read produced IS the title from here on. */
     title = sheet_title_concept(ctx, s);
-    JS_FreeValue(ctx, s->title);
-    s->title = title;
+    sheet_set(ctx, s, &s->title, title);
     /* Step 2. */
-    JS_FreeValue(ctx, s->owner_node);
-    JS_FreeValue(ctx, s->parent_style_sheet);
-    JS_FreeValue(ctx, s->owner_rule);
-    s->owner_node = JS_NULL;
-    s->parent_style_sheet = JS_NULL;
-    s->owner_rule = JS_NULL;
+    sheet_set(ctx, s, &s->owner_node, JS_NULL);
+    sheet_set(ctx, s, &s->parent_style_sheet, JS_NULL);
+    sheet_set(ctx, s, &s->owner_rule, JS_NULL);
 }
 
 /* ---- §6.1.2's CSS RULES: cssRules, insertRule and deleteRule ---------------------------------------------- */

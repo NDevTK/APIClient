@@ -87,6 +87,20 @@ static DomRectBox *dr_box(JSValueConst v)
     return b;
 }
 
+/* WRITE ONE OF §3'S FOUR STORED VARIABLES, and never `JS_FreeValue(ctx, *slot); *slot = <a new value>;` — see
+   cow.h for the order and the defect. The RELEASE is the side that bites here: a variable holding unknown
+   external input is an object, so giving it back can drop the last reference to one whose finalizer may
+   allocate, and an allocation IS a collection (js_trigger_gc has exactly one caller, JS_NewObjectFromShape)
+   that reaches this record through dr_gc_mark and decrefs a JSObject already back on the allocator's free
+   list. The setter writes THROUGH a pointer it picked from a switch, so the layout assert this operation
+   carries is the only thing that can say the pointer named one of the four the list knows.
+   dr_alloc's mint does not come here: it fills the box before JS_SetOpaque, where the collector cannot reach
+   it and its slots hold no value to release. */
+static void dr_set(JSContext *ctx, DomRectBox *b, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, b, &DOM_RECT_REC, slot, v);
+}
+
 bool dom_rect_is(JSValueConst v)
 {
     return JS_GetOpaque(v, g_ro_class) != NULL || JS_GetOpaque(v, g_rect_class) != NULL;
@@ -349,8 +363,7 @@ static JSValue js_dr_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
               "the derived edges have no setter, and `inherit attribute` names exactly the four that do");
         return JS_UNDEFINED;
     }
-    JS_FreeValue(ctx, *slot);
-    *slot = dr_value(ctx, JS_DupValue(ctx, val));
+    dr_set(ctx, b, slot, dr_value(ctx, JS_DupValue(ctx, val)));
     return JS_UNDEFINED;
 }
 

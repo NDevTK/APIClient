@@ -59,6 +59,22 @@ static WalkerData *walker_of(JSValueConst v)
     return w;
 }
 
+/* WRITE `current`, and never `JS_FreeValue(ctx, w->current); w->current = <build one>;` — see cow.h for the
+   order and the defect. The RELEASE is what makes it real on this record: giving `current` back can drop the
+   last reference to a node wrapper, whose finalizer is the page's platform code and may allocate, and an
+   allocation IS a collection (js_trigger_gc has exactly one caller, JS_NewObjectFromShape) that reaches this
+   record through walker_gc_mark and decrefs a JSObject already back on the allocator's free list. The refill
+   is on the safe side of it at both of §6.2's write sites — tw_accept builds its wrapper first and the setter
+   was handed one — and this operation is what keeps that from being a property of the order they are written
+   in. The record and its layout are bound HERE rather than at each call, so no site can pass a slot from
+   another record with this layout.
+   tree_walker_new's mint does not come here: before JS_SetOpaque the record is unreachable by the collector
+   and its calloc'd slot holds no value to release. */
+static void tw_set(JSContext *ctx, WalkerData *w, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, w, &WALKER_REC, slot, v);
+}
+
 /* The receiver, brand-checked. Every member of §6.2 is declared on the prototype, so a page can apply one to
    anything at all and the answer is a TypeError rather than a walk of nothing. */
 static WalkerData *walker_here(JSContext *ctx, JSValueConst v)
@@ -169,8 +185,7 @@ static int tw_filter(JSContext *ctx, JSStepHdr *hdr, WalkerData *w, TreeWalkStat
 static JSValue tw_accept(JSContext *ctx, WalkerData *w, lxb_dom_node_t *n)
 {
     JSValue v = node_wrap(ctx, n);
-    JS_FreeValue(ctx, w->current);
-    w->current = JS_DupValue(ctx, v);
+    tw_set(ctx, w, &w->current, JS_DupValue(ctx, v));
     return v;
 }
 
@@ -556,8 +571,7 @@ static JSValue js_walker_set_current(JSContext *ctx, JSValueConst this_val, JSVa
 
     (void)magic;
     if (!w) return JS_EXCEPTION;
-    JS_FreeValue(ctx, w->current);
-    w->current = JS_DupValue(ctx, val);
+    tw_set(ctx, w, &w->current, JS_DupValue(ctx, val));
     return JS_UNDEFINED;
 }
 
