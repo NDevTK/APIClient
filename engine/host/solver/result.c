@@ -160,11 +160,11 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
        (core/events/report_exception.h) rather than re-parsed out of the rendered frame `result_error_text`
        appends. Two parsers of one backtrace disagree the first time either is corrected, and the answer here
        is the one a reader partitions a run's errors by. */
-    char at[512];
     uint32_t line = 0, col = 0;
-    report_exception_position(ctx, err, at, sizeof at, &line, &col);
+    char *at = report_exception_position(ctx, err, &line, &col);
     result_error_text(ctx, err, buf, sizeof buf);
     result_page_error(buf, at);   /* an empty description is dropped by result_page_error's own first line */
+    free(at);
 }
 
 /* Append RAW (a delimiter this file controls) or ESCAPED (page-supplied text). Escaping the delimiters too was

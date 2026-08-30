@@ -336,38 +336,63 @@ static bool frame_site(const char *b, const char *e, const char **fb, const char
    "no filename", and it is the honest answer for an exception raised entirely inside the engine: a
    `releaseLock()` rejection has one native frame and no script anywhere under it. The hosts print it as its own
    population rather than folding it into an absent field. */
-void report_exception_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
-                               uint32_t *pline, uint32_t *pcol)
+/* THE ADDRESS IS RETURNED, NOT COPIED INTO THE CALLER'S BUFFER, AND THAT IS THE WHOLE OF THIS CHANGE. It took
+   a `char *file` and a `size_t file_cap` and did `if (n >= file_cap) n = file_cap - 1;` — a silent truncation
+   at whatever length the caller happened to declare, which both callers declared as 512. A script URL is not
+   bounded by 512 bytes: a `data:` URL is a whole program, and a bundler's `sourceURL` can be any length at
+   all. What came out was a PREFIX OF AN ADDRESS THAT STILL PARSES AS AN ADDRESS — indistinguishable from a
+   real one, carrying no mark of having been cut, and this is the value a reader partitions a run's errors by,
+   so two different scripts sharing a 511-byte prefix become one population. It is the defect the throw-site
+   work exists to end, one column over: a plausible datum manufactured by a consumer's own storage decision.
+   NOT A DCHECK, and not a bigger buffer. A very long script URL is legitimate PAGE DATA, so aborting on it is
+   asserting about the document rather than about the engine, and any fixed size is the same bug at a different
+   length. The representation is what has to stop being able to truncate, which is why this changes the
+   signature and both call sites rather than a constant.
+   `""` STAYS THE POSITIVE ANSWER for a value with no throw site (see the header) — the return is always an
+   owned string and never NULL, so absence and emptiness remain ONE fact rather than two the caller must tell
+   apart. The allocation is a CHECK because it is an allocation: a diagnostic that silently answers "no throw
+   site" because a malloc failed would be exactly the fabricated datum this function just stopped producing. */
+char *report_exception_position(JSContext *ctx, JSValueConst exception, uint32_t *pline, uint32_t *pcol)
 {
     JSValue stack;
     const char *s, *b, *e, *fb = NULL, *fe = NULL;
     uint32_t line = 0, col = 0;
-    size_t n;
+    char *file = NULL;
 
-    DCHECK(file != NULL && file_cap > 0 && pline != NULL && pcol != NULL,
-           "§8.1.4.6's throw site was asked for into no buffer — the three values are derived together and a "
-           "caller that wants one of them still owns storage for all three");
-    *file = '\0'; *pline = 0; *pcol = 0;
+    DCHECK(pline != NULL && pcol != NULL,
+           "§8.1.4.6's throw site was asked for into no out-parameter — the three values are derived together "
+           "and a caller that wants one of them still owns storage for all three");
+    *pline = 0; *pcol = 0;
     stack = JS_GetErrorStackString(ctx, exception);
-    if (!JS_IsString(stack)) { JS_FreeValue(ctx, stack); return; }
-    s = JS_ToCString(ctx, stack);
-    JS_FreeValue(ctx, stack);
-    if (!s) return;
-    /* THE THREE ARE PUBLISHED TOGETHER OR NOT AT ALL — they are ONE site, so a frame that yields a position and
-       no name must not leave its line behind for the next frame's answer to be read beside. */
-    for (b = s; *b; b = (*e == '\n') ? e + 1 : e) {
-        e = b + strcspn(b, "\n");
-        if (!frame_site(b, e, &fb, &fe, &line, &col) || fe == fb)
-            continue;
-        n = (size_t)(fe - fb);
-        if (n >= file_cap) n = file_cap - 1;
-        memcpy(file, fb, n);
-        file[n] = '\0';
-        *pline = line;
-        *pcol = col;
-        break;
+    if (JS_IsString(stack)) {
+        s = JS_ToCString(ctx, stack);
+        JS_FreeValue(ctx, stack);
+        /* THE THREE ARE PUBLISHED TOGETHER OR NOT AT ALL — they are ONE site, so a frame that yields a position
+           and no name must not leave its line behind for the next frame's answer to be read beside. */
+        for (b = s; s && *b; b = (*e == '\n') ? e + 1 : e) {
+            e = b + strcspn(b, "\n");
+            if (!frame_site(b, e, &fb, &fe, &line, &col) || fe == fb)
+                continue;
+            file = malloc((size_t)(fe - fb) + 1);
+            CHECK(file != NULL, "§8.1.4.6's filename could not be allocated — a diagnostic that answered "
+                  "\"no throw site\" here would be reporting a malloc failure as a fact about the page");
+            memcpy(file, fb, (size_t)(fe - fb));
+            file[fe - fb] = '\0';
+            *pline = line;
+            *pcol = col;
+            break;
+        }
+        if (s) JS_FreeCString(ctx, s);
+    } else {
+        JS_FreeValue(ctx, stack);
     }
-    JS_FreeCString(ctx, s);
+    if (!file) {
+        file = malloc(1);
+        CHECK(file != NULL, "§8.1.4.6's empty filename could not be allocated — the empty string is a POSITIVE "
+              "answer here and a caller must be able to read it as one");
+        file[0] = '\0';
+    }
+    return file;
 }
 
 /* §8.1.4.6's EXTRACT ERROR INFORMATION, materialized as the event whichever algorithm asked for it then fires.
@@ -383,13 +408,14 @@ JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const 
     char *owned = NULL;
     const char *what = JS_DiagCString(ctx, exception, &owned);
     JSValue message = JS_NewString(ctx, what ? what : "Uncaught exception");
-    char path[512] = "";
+    char *path;
     uint32_t line = 0, col = 0;
     JSValue filename;
     JSValue ev;
 
-    report_exception_position(ctx, exception, path, sizeof path, &line, &col);
+    path = report_exception_position(ctx, exception, &line, &col);
     filename = JS_NewString(ctx, path);
+    free(path);
     JS_DiagFreeCString(ctx, what, owned);
     ev = error_event_new(ctx, type, cancelable, message, filename, line, col, exception);
     JS_FreeValue(ctx, message);

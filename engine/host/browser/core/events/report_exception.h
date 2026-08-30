@@ -2,7 +2,6 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_REPORT_EXCEPTION_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_REPORT_EXCEPTION_H
 #include <stdbool.h>
-#include <stddef.h>   /* size_t — report_exception_position takes the caller's buffer capacity */
 #include <stdint.h>
 
 #include "quickjs.h"
@@ -62,9 +61,14 @@ JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const 
  * backtrace, so "" states that this value has no throw site to report — which is §8.1.4.6's own answer, and is
  * exactly the fact a reader partitioning errors by script has to be able to see rather than default past.
  * Runs NO page code (JS_GetErrorStackString reads the slot; a host reporting what went wrong must not depend
- * on the code that went wrong). `exception` is BORROWED. */
-void report_exception_position(JSContext *ctx, JSValueConst exception, char *file, size_t file_cap,
-                               uint32_t *pline, uint32_t *pcol);
+ * on the code that went wrong). `exception` is BORROWED.
+ *
+ * THE FILENAME IS RETURNED OWNED — `free()` it — AND NEVER NULL, because a caller-sized buffer cannot hold an
+ * address. It took one and truncated to it, and a truncated URL still PARSES as a URL: two scripts sharing a
+ * 511-byte prefix reported as one script, with nothing anywhere saying a cut had happened. A `data:` script
+ * URL is a whole program, so no fixed size is a bound on this, and a page's long URL is page data rather than
+ * an engine invariant — there is nothing to assert, only a representation to fix. */
+char *report_exception_position(JSContext *ctx, JSValueConst exception, uint32_t *pline, uint32_t *pcol);
 
 /* The private key §8.1.4.6 step 6's "in error reporting mode" flag hangs off the global by. One per AGENT.
  * THE RELEASE TAKES THE RUNTIME, because core/platform.h's release column is what runs it: what this component
