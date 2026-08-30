@@ -277,6 +277,23 @@ static CssRuleData *rule_of(JSValueConst v)
     return r;
 }
 
+/* WRITE ONE OF THE TWENTY-ONE, and never `JS_FreeValue(ctx, r->f); r->f = <build one>;` — see cow.h for the
+   order and the defect. The DISCRIMINATOR is worth stating, because most of this file's refills are strings and
+   look identical to the ones that bite: js_trigger_gc has exactly one caller, JS_NewObjectFromShape, so an
+   OBJECT allocation is a collection and a string allocation is not. The refills that build an object —
+   media_list_new, the three *_array builders, and the `style` factory — therefore run the collector with this
+   record's slot naming freed storage, and rule_gc_mark walks that slot and decrefs a JSObject already back on
+   the allocator's free list. A run of adjacent frees is the same hazard arriving the other way: the second
+   release may run a finalizer that allocates, and the first slot has not been rewritten yet.
+   Routing ALL of them rather than the object-valued ones is the point — which slot is a string today is not a
+   property the next reader should have to re-derive to know whether a write is safe.
+   The MINT does not come here: rule_new fills every slot before JS_SetOpaque, where the record is unreachable
+   by the collector and has no value to release. */
+static void rule_set(JSContext *ctx, CssRuleData *r, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, r, &RULE_REC, slot, v);
+}
+
 static CssRuleData *rule_here(JSContext *ctx, JSValueConst v)
 {
     CssRuleData *r = rule_of(v);
@@ -532,10 +549,8 @@ static JSValue style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
     obj = rule_new(ctx, PROTO_STYLE, RULE_TYPE_STYLE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->selector_text);
-    JS_FreeValue(ctx, r->block_text);
-    r->selector_text = JS_NewString(ctx, selector_text);
-    r->block_text = JS_NewString(ctx, block_text);
+    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, selector_text));
+    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, block_text));
     return obj;
 }
 
@@ -554,8 +569,7 @@ static JSValue media_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
     obj = rule_new(ctx, PROTO_MEDIA, RULE_TYPE_MEDIA, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->media);
-    r->media = media_list_new(ctx, prelude);
+    rule_set(ctx, r, &r->media, media_list_new(ctx, prelude));
     return obj;
 }
 
@@ -615,8 +629,7 @@ static JSValue supports_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     obj = rule_new(ctx, PROTO_SUPPORTS, RULE_TYPE_SUPPORTS, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->supports_text);
-    r->supports_text = JS_NewString(ctx, prelude);
+    rule_set(ctx, r, &r->supports_text, JS_NewString(ctx, prelude));
     return obj;
 }
 
@@ -671,8 +684,7 @@ static JSValue container_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     obj = rule_new(ctx, PROTO_CONTAINER, RULE_TYPE_CONTAINER, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_container_conditions_free(&conds); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->container_conditions);
-    r->container_conditions = container_conditions_array(ctx, &conds);
+    rule_set(ctx, r, &r->container_conditions, container_conditions_array(ctx, &conds));
     css_container_conditions_free(&conds);
     return obj;
 }
@@ -695,15 +707,12 @@ static JSValue import_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
     obj = rule_new(ctx, PROTO_IMPORT, RULE_TYPE_IMPORT, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_import_prelude_free(&p); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->href);
-    r->href = JS_NewString(ctx, p.href);
-    if (p.layer_name) { JS_FreeValue(ctx, r->layer_name); r->layer_name = JS_NewString(ctx, p.layer_name); }
+    rule_set(ctx, r, &r->href, JS_NewString(ctx, p.href));
+    if (p.layer_name) rule_set(ctx, r, &r->layer_name, JS_NewString(ctx, p.layer_name));
     if (p.supports_text) {
-        JS_FreeValue(ctx, r->supports_text);
-        r->supports_text = JS_NewString(ctx, p.supports_text);
+        rule_set(ctx, r, &r->supports_text, JS_NewString(ctx, p.supports_text));
     }
-    JS_FreeValue(ctx, r->media);
-    r->media = media_list_new(ctx, p.media_text);
+    rule_set(ctx, r, &r->media, media_list_new(ctx, p.media_text));
     css_import_prelude_free(&p);
     return obj;
 }
@@ -724,10 +733,8 @@ static JSValue namespace_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     obj = rule_new(ctx, PROTO_NAMESPACE, RULE_TYPE_NAMESPACE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(prefix); free(uri); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->prefix);
-    JS_FreeValue(ctx, r->namespace_uri);
-    r->prefix = JS_NewString(ctx, prefix);
-    r->namespace_uri = JS_NewString(ctx, uri);
+    rule_set(ctx, r, &r->prefix, JS_NewString(ctx, prefix));
+    rule_set(ctx, r, &r->namespace_uri, JS_NewString(ctx, uri));
     free(prefix);
     free(uri);
     return obj;
@@ -749,8 +756,7 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     obj = rule_new(ctx, PROTO_FONT_FACE, RULE_TYPE_FONT_FACE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->block_text);
-    r->block_text = JS_NewString(ctx, block_text);
+    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, block_text));
     return obj;
 }
 
@@ -793,12 +799,10 @@ static JSValue page_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JS
     obj = rule_new(ctx, PROTO_PAGE, RULE_TYPE_PAGE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(selectors); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->selector_text);
-    r->selector_text = JS_NewString(ctx, selectors);
+    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, selectors));
     free(selectors);
     decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_PAGE);
-    JS_FreeValue(ctx, r->block_text);
-    r->block_text = JS_NewString(ctx, decls ? decls : "");
+    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
     free(decls);
     return obj;
 }
@@ -823,11 +827,9 @@ static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
     obj = rule_new(ctx, PROTO_MARGIN, RULE_TYPE_MARGIN, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->at_name);
-    r->at_name = JS_NewString(ctx, name);
+    rule_set(ctx, r, &r->at_name, JS_NewString(ctx, name));
     decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_MARGIN);
-    JS_FreeValue(ctx, r->block_text);
-    r->block_text = JS_NewString(ctx, decls ? decls : "");
+    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
     free(decls);
     return obj;
 }
@@ -921,10 +923,8 @@ static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     obj = rule_new(ctx, PROTO_KEYFRAMES, RULE_TYPE_KEYFRAMES, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(name); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->keyframes_name);
-    r->keyframes_name = JS_NewString(ctx, name);
-    JS_FreeValue(ctx, r->at_name);
-    r->at_name = JS_NewString(ctx, at_keyword);
+    rule_set(ctx, r, &r->keyframes_name, JS_NewString(ctx, name));
+    rule_set(ctx, r, &r->at_name, JS_NewString(ctx, at_keyword));
     free(name);
     return obj;
 }
@@ -951,12 +951,10 @@ static JSValue keyframe_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     obj = rule_new(ctx, PROTO_KEYFRAME, RULE_TYPE_KEYFRAME, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { free(keys); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->selector_text);
-    r->selector_text = JS_NewString(ctx, keys);
+    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, keys));
     free(keys);
     decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_KEYFRAME);
-    JS_FreeValue(ctx, r->block_text);
-    r->block_text = JS_NewString(ctx, decls ? decls : "");
+    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
     free(decls);
     return obj;
 }
@@ -1004,8 +1002,7 @@ static JSValue layer_block_rule_new(JSContext *ctx, JSValueConst parent_style_sh
     obj = rule_new(ctx, PROTO_LAYER_BLOCK, RULE_TYPE_LAYER_BLOCK, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_layer_names_free(&names); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->layer_names);
-    r->layer_names = layer_names_array(ctx, &names);
+    rule_set(ctx, r, &r->layer_names, layer_names_array(ctx, &names));
     css_layer_names_free(&names);
     return obj;
 }
@@ -1030,8 +1027,7 @@ static JSValue layer_statement_rule_new(JSContext *ctx, JSValueConst parent_styl
     obj = rule_new(ctx, PROTO_LAYER_STATEMENT, RULE_TYPE_LAYER_STATEMENT, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_layer_names_free(&names); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->layer_names);
-    r->layer_names = layer_names_array(ctx, &names);
+    rule_set(ctx, r, &r->layer_names, layer_names_array(ctx, &names));
     css_layer_names_free(&names);
     return obj;
 }
@@ -1097,8 +1093,7 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     obj = rule_new(ctx, PROTO_PROPERTY, RULE_TYPE_PROPERTY, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) { css_property_names_free(&names); return obj; }
     r = JS_GetOpaque(obj, g_rule_class);
-    JS_FreeValue(ctx, r->property_names);
-    r->property_names = property_names_array(ctx, &names);
+    rule_set(ctx, r, &r->property_names, property_names_array(ctx, &names));
     css_property_names_free(&names);
     bl = strlen(block_text);
 
@@ -1133,8 +1128,7 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
            "an `@property` rule holds a NON-universal syntax definition with no syntax string behind it — the "
            "only definition this rule can have without one is §3.1's initial `\"*\"`, which IS §5.4.1's "
            "universal syntax definition");
-    JS_FreeValue(ctx, r->property_syntax);
-    r->property_syntax = JS_NewString(ctx, syntax ? syntax : "*");
+    rule_set(ctx, r, &r->property_syntax, JS_NewString(ctx, syntax ? syntax : "*"));
     free(syntax);
 
     /* §3.2 "The inherits Descriptor" — `Value: true | false`, `Initial: true`. A value that is neither leaves
@@ -1144,8 +1138,7 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
         css_property_descriptor_inherits(declared, strlen(declared), &inherits);
         free(declared);
     }
-    JS_FreeValue(ctx, r->property_inherits);
-    r->property_inherits = JS_NewBool(ctx, inherits);
+    rule_set(ctx, r, &r->property_inherits, JS_NewBool(ctx, inherits));
 
     /* §3.3 "The initial-value Descriptor" — `Value: <declaration-value>?`, `Initial: the guaranteed-invalid
        value`, which §6.1 answers as its nullable `initialValue`'s NULL.
@@ -1164,11 +1157,10 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
        does NOT invalidate the rule, because §3 says an invalid descriptor is "invalid and ignored" and only
        the prelude can drop an `@property`. */
     declared = cssom_declared_value(block_text, bl, "initial-value");
-    JS_FreeValue(ctx, r->property_initial_value);
-    r->property_initial_value = JS_NULL;
+    rule_set(ctx, r, &r->property_initial_value, JS_NULL);
     if (declared) {
         if (def.universal || css_property_syntax_matches(&def, declared, strlen(declared)))
-            r->property_initial_value = JS_NewString(ctx, declared);
+            rule_set(ctx, r, &r->property_initial_value, JS_NewString(ctx, declared));
         free(declared);
     }
     css_syntax_definition_free(&def);
@@ -1183,10 +1175,8 @@ static void rule_orphan(JSContext *ctx, JSValueConst rule)
     CssRuleData *r = rule_of(rule);
 
     DCHECK(r != NULL, "§6.4's remove a CSS rule was invoked on something that is not a CSS rule");
-    JS_FreeValue(ctx, r->parent_style_sheet);
-    JS_FreeValue(ctx, r->parent_rule);
-    r->parent_style_sheet = JS_NULL;
-    r->parent_rule = JS_NULL;
+    rule_set(ctx, r, &r->parent_style_sheet, JS_NULL);
+    rule_set(ctx, r, &r->parent_rule, JS_NULL);
 }
 
 /* ---- building the objects a PARSE produced ---------------------------------------------------------------- */
@@ -2831,7 +2821,7 @@ enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELEC
 static JSValue rule_css_rules(JSContext *ctx, CssRuleData *r)
 {
     if (!JS_IsObject(r->rule_list))
-        r->rule_list = css_rule_list_new(ctx, JS_DupValue(ctx, r->child_rules));
+        rule_set(ctx, r, &r->rule_list, css_rule_list_new(ctx, JS_DupValue(ctx, r->child_rules)));
     return JS_DupValue(ctx, r->rule_list);
 }
 
@@ -3222,8 +3212,7 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
             free(reserialized);
             reserialized = absolutized;
         }
-        JS_FreeValue(ctx, r->selector_text);
-        r->selector_text = JS_NewString(ctx, reserialized);
+        rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, reserialized));
     }
     free(reserialized);
     return JS_UNDEFINED;
@@ -3252,8 +3241,7 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
     parsed = css_prelude_page_selectors(v, strlen(v));
     JS_FreeCString(ctx, v);
     if (parsed) {
-        JS_FreeValue(ctx, r->selector_text);
-        r->selector_text = JS_NewString(ctx, parsed);
+        rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, parsed));
         free(parsed);
     }
     return JS_UNDEFINED;
@@ -3277,8 +3265,7 @@ static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSVal
     JS_FreeCString(ctx, v);
     if (!parsed)
         return JS_ThrowDOMException(ctx, "SyntaxError", "the value is not a keyframe selector list");
-    JS_FreeValue(ctx, r->selector_text);
-    r->selector_text = JS_NewString(ctx, parsed);
+    rule_set(ctx, r, &r->selector_text, JS_NewString(ctx, parsed));
     free(parsed);
     return JS_UNDEFINED;
 }
@@ -3300,8 +3287,7 @@ static JSValue js_rule_set_keyframes_name(JSContext *ctx, JSValueConst this_val,
            "§6.3.2's `name` setter reached its body with a value that is not a string. The declaration runs "
            "the CSSOMString conversion (and parks on the page's `toString` if there is one) before the body "
            "is entered, so what arrives here is always the converted value");
-    JS_FreeValue(ctx, r->keyframes_name);
-    r->keyframes_name = JS_DupValue(ctx, val);
+    rule_set(ctx, r, &r->keyframes_name, JS_DupValue(ctx, val));
     return JS_UNDEFINED;
 }
 
@@ -3596,8 +3582,7 @@ static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
     r = rule_here_typed(ctx, this_val, OF[magic].type, OF[magic].iface);
     if (!r) return JS_EXCEPTION;
     if (!JS_IsObject(r->style)) {
-        JS_FreeValue(ctx, r->style);
-        r->style = OF[magic].create(ctx, this_val);
+        rule_set(ctx, r, &r->style, OF[magic].create(ctx, this_val));
     }
     return JS_DupValue(ctx, r->style);
 }
@@ -3644,13 +3629,11 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
     if (rule_block_context(r->type) != CSSOM_BLOCK_UNRESTRICTED) {
         char *kept = cssom_serialize_declarations(text, len, rule_block_context(r->type));
 
-        JS_FreeValue(ctx, r->block_text);
-        r->block_text = JS_NewString(ctx, kept ? kept : "");
+        rule_set(ctx, r, &r->block_text, JS_NewString(ctx, kept ? kept : ""));
         free(kept);
         return;
     }
-    JS_FreeValue(ctx, r->block_text);
-    r->block_text = JS_NewStringLen(ctx, text, len);
+    rule_set(ctx, r, &r->block_text, JS_NewStringLen(ctx, text, len));
 }
 
 /* ---- the AUTHOR CASCADE's view ----------------------------------------------------------------------------- */
