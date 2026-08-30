@@ -10233,29 +10233,6 @@ static char *abi_bytes(const char *b64, size_t *plen, const char *what)
     return bytes;
 }
 
-/* THE ONE-WAY NOTICES, DRAINED BY THE READ — and every one of them is a document this host cannot provision.
-   Read rather than left standing, because a register nothing ever reads grows for the life of the session and
-   its contents are then invisible; refused rather than dropped, because a `navigable.create` the host drops is
-   a document nothing runs and every read through it parks its flow forever, which from outside is
-   indistinguishable from a page that is merely slow.
-   IT DOES NOT FIRE ON AN ORDINARY DOCUMENT, and that is a property of the register rather than of this host's
-   luck: every writer of a notice is a CROSS-INSTANCE fact (a navigable created, a message posted across, a
-   world whose death a peer must be told of — world_flow_gone answers only for names that actually CROSSED),
-   so a document that reaches no peer emits none. What this refuses is exactly the surface the next diff
-   builds, which is why it is the forcing function for it and not a nuisance in front of it. */
-static void abi_notices(void)
-{
-    const char *n = qjs_host_notices();
-
-    if (!*n) return;
-    DFAILF("this host was handed a one-way NOTICE and has nowhere to put it. Provisioning a peer instance is a "
-           "second process of this same binary — engine/host/wpt_runner.c already does exactly that with "
-           "pipe2(O_CLOEXEC)/fork()/execl and stamps the child's origin from the parent — and ROUTING between "
-           "instances is the trusted zone's one fact, which instance holds which document. Neither exists at "
-           "this entry yet, and answering a notice by discarding it would leave every flow that reads through "
-           "the named document parked for the rest of the session. notices=%s", n);
-}
-
 /* ONE RECORD OUT. Every line this host writes is one of these, and each is flushed at once because the zone
    is a process reading a pipe rather than a library returning: a bill left in a stdio buffer is a bill the
    zone cannot start work on, and at the stall it would be a bill nobody can see while both ends wait. */
@@ -10268,6 +10245,38 @@ static void abi_say(const char *fmt, ...)
     va_end(ap);
     putchar('\n');
     fflush(stdout);
+}
+
+/* THE ONE-WAY NOTICES, DRAINED BY THE READ AND WRITTEN OUT — each is a CROSS-INSTANCE fact, and the party that
+   can act on one is the party that knows which instance holds which document. That is the trusted zone and
+   never this process: SECURITY.md gives the routing and the origin STAMPED on a delivered message to the zone
+   alone, and an engine that answered its own notices would be the untrusted side naming a foreign message's
+   sender, which defeats every `event.origin` check in every bundle.
+   THIS ENTRY USED TO ABORT, and the abort was a claim about the zone made by the party that is not the zone —
+   the stale-`DFAIL` failure with a process boundary in the middle, which the fetch half of this channel already
+   corrected for (see abi_stalled: the zone's refusals are printed because the party that refused is the party
+   that knows why). What is REFUSED is still refused; it is refused one process over, in words this host does
+   not have to guess at, and a `navigable.create` the zone will not provision arrives back as a `decline` that
+   names its own ground rather than as this host asserting one.
+   READ RATHER THAN LEFT STANDING, because a register nothing ever reads grows for the life of the session and
+   its contents are then invisible. `notice<TAB>` and the record VERBATIM: the record is the emitting engine's
+   own grammar (world vectors, base64 payloads, a raw CSP header that may contain HTAB), so this host relays it
+   whole rather than taking it apart and writing it back out in a shape of its own — which is the defect
+   wpt_runner.c's router names at its own relay ("the doc field dropped, the sender origin spliced into its
+   place — window_message.c's grammar restated where nothing can check it against the writer"). No record may
+   contain a NEWLINE — engine_host_notices joins them with one — so the line is the record and nothing more. */
+static void abi_notices(void)
+{
+    const char *n = qjs_host_notices();
+
+    while (*n) {
+        const char *e = strchr(n, '\n');
+        size_t l = e ? (size_t)(e - n) : strlen(n);
+
+        if (l) abi_say("notice\t%.*s", (int)l, n);
+        if (!e) break;
+        n = e + 1;
+    }
 }
 
 /* THE BILL THIS HOST HAS ALREADY WRITTEN, so it is written ONCE rather than once per step. An outstanding
@@ -10447,6 +10456,104 @@ static int abi_pay(void)
                 free(body);
             }
             paid++;
+        } else if (!strcmp(verb, "route")) {
+            /* A CROSS-DOCUMENT MESSAGE, ARRIVING — the record VERBATIM as the sending instance wrote it, and
+               the SENDER'S ORIGIN beside it rather than inside it. The split is SECURITY.md's: the record is
+               the emitting engine's grammar and the origin is the trusted zone's to state, because an engine
+               that named its own sender would forge `event.origin` for every bundle downstream of it. */
+            const char *origin = abi_take(&p, "sender origin");
+            char *rec_f = abi_take(&p, "routed record");
+            size_t rn = 0;
+            char *routed;
+
+            CHECKF(p == NULL, "a routed record carries a field after it. trailing=[%s]", p ? p : "");
+            CHECK(*origin != '\0',
+                  "a record was routed here with no SENDER ORIGIN — the stamp is the zone's alone and the "
+                  "empty string is not one: a receiving page's `event.origin === \"https://x\"` would then be "
+                  "false about a message the zone knows the sender of, and a page's forgeable check would pass "
+                  "for a sender nobody named");
+            routed = abi_bytes(rec_f, &rn, "routed record");
+            DCHECK(rn == strlen(routed),
+                   "a routed record carries a NUL — it reaches the ABI as a C string, so everything past that "
+                   "byte is a field the sending instance wrote and this engine will never be shown");
+            qjs_route(routed, origin);
+            free(routed);
+            paid++;
+        } else if (!strcmp(verb, "perform")) {
+            /* AN OPERATION ANOTHER INSTANCE ASKED OF A DOCUMENT THIS ONE HOLDS. Nothing runs inside the entry
+               and there is no answer to read when it returns: a peer answers BY RUNNING A PROGRAM, so the
+               record becomes a flow of every live timeline of the named document and each completion leaves
+               through the notice channel. `token` is the ZONE's rendezvous and is opaque here — it says which
+               instance and which request the answer belongs to, which the asking flow's own id cannot, since
+               two peers may hold the same number. */
+            const char *token = abi_take(&p, "rendezvous token");
+            char *rec_f = abi_take(&p, "cross-agent operation");
+            size_t rn = 0;
+            char *op;
+
+            CHECKF(p == NULL, "a cross-agent operation carries a field after it. trailing=[%s]", p ? p : "");
+            CHECK(*token != '\0',
+                  "a cross-agent operation arrived with no RENDEZVOUS TOKEN — every completion this instance "
+                  "emits for it echoes that token, so an empty one is an answer the zone cannot route back to "
+                  "the instance and the request that asked it");
+            op = abi_bytes(rec_f, &rn, "cross-agent operation");
+            DCHECK(rn == strlen(op),
+                   "a cross-agent operation carries a NUL — it reaches the ABI as a C string, so everything "
+                   "past that byte is an operand the asking instance wrote and this engine will never see");
+            qjs_perform(token, op);
+            free(op);
+            paid++;
+        } else if (!strcmp(verb, "remote")) {
+            /* A PEER'S COMPLETION, COMING HOME. It is a separate verb from `answer` and not a field on it
+               because the two carry different kinds of thing and neither grammar can express the other's: an
+               answer the ZONE computed is a data record (JSON), and an answer a PEER computed may be an
+               OBJECT, which crosses as a NAME in that peer's namespace — remote_object.c's grammar, decoded
+               inside this instance because a name only means something to an engine. */
+            const char *id_f = abi_take(&p, "request id");
+            const char *world = abi_take(&p, "answering timeline");
+            char *comp_f = abi_take(&p, "completion record");
+            size_t cn = 0;
+            char *comp, *end;
+
+            CHECKF(p == NULL, "a peer's completion carries a field after it. trailing=[%s]", p ? p : "");
+            id = strtoul(id_f, &end, 10);
+            CHECKF(*id_f != '\0' && *end == '\0',
+                   "a peer's completion names a request id that is not a number: `%s` — the id is the "
+                   "rendezvous inside THIS instance, so an unreadable one would land the answer on whatever "
+                   "request id zero belongs to", id_f);
+            /* THE TIMELINE IS A PARAMETER AND NOT A DETAIL: a peer's document state IS its flows, so one
+               question has one true answer per live timeline, and this is the only field that tells a SECOND
+               TIMELINE (a fork the asking flow owes) from ONE timeline's answer relayed TWICE. */
+            CHECK(*world != '\0',
+                  "a peer's completion arrived naming no TIMELINE — the answering instance writes the world of "
+                  "the flow that ran the program on every answer it emits, so an empty one is a relay that "
+                  "dropped the field and this instance can no longer tell the peer's other timelines from a "
+                  "duplicate");
+            comp = abi_bytes(comp_f, &cn, "completion record");
+            DCHECK(cn == strlen(comp),
+                   "a peer's completion carries a NUL — remote_object.c's grammar is a one-letter tag and "
+                   "'.'-terminated base64, so a NUL in it is a relay that spliced something else in and the "
+                   "decode would answer out of the prefix");
+            qjs_host_answer_remote((unsigned)id, world, comp);
+            free(comp);
+            paid++;
+        } else if (!strcmp(verb, "world-gone")) {
+            /* A WORLD OF ANOTHER INSTANCE IS FINISHED WITH, so the COW segment this one materialized for it can
+               go. BROADCAST by the zone, because the sending engine deliberately does not record which peers a
+               flow reached — releasing a world with no segment here is a no-op, so tracking it would be state
+               kept only to avoid one.
+               IT COUNTS AS A PAYMENT, which is a decision and not an accident: `paid == 0` at a stall is this
+               host reading the zone as DECLINING, and a zone that released a segment did act on this
+               instance's registers. Miscounting it as nothing would end a live session on the round the
+               reclamation ran, which is the one round that must not look like a refusal. */
+            const char *world = abi_take(&p, "world name");
+
+            CHECKF(p == NULL, "a world death carries a field after its name. trailing=[%s]", p ? p : "");
+            CHECK(*world != '\0',
+                  "a world death arrived with no NAME — world_parse would answer out of whatever this instance "
+                  "last read, so an empty name is a segment released at random rather than none released");
+            qjs_world_gone(world);
+            paid++;
         } else if (!strcmp(verb, "decline")) {
             char *reason;
             size_t rn = 0;
@@ -10458,8 +10565,9 @@ static int abi_pay(void)
             free(reason);
         } else {
             CHECKF(0, "a record arrived on this host's channel under the verb `%s`, which it does not carry — "
-                      "the payment round takes `provide`, `answer`, `decline` and `go`, and a verb this host "
-                      "does not know is a zone expecting a capability it has not", verb);
+                      "the payment round takes `provide`, `answer`, `route`, `perform`, `remote`, "
+                      "`world-gone`, `decline` and `go`, and a verb this host does not know is a zone "
+                      "expecting a capability it has not", verb);
         }
         free(rec);
     }
@@ -10486,17 +10594,32 @@ static void abi_stalled(void)
 }
 
 /* THE ARM ITSELF. One document in, one result out.
-   THE RECORD IS `document<TAB><address><TAB><name><TAB><headers base64><TAB><document base64>`, verb first and
-   tab separated, which is `wpt_runner.c`'s child channel's own shape rather than a second grammar. Three of
-   its five fields are facts only the zone that fetched the document can state — where it was loaded FROM,
-   what the world registry calls it, and what its response delivered — and none of the three is derivable
-   here. */
+   THE RECORD IS `document` and then, in `qjs_init`'s own parameter order, every fact that entry takes:
+   `<address><TAB><name><TAB><headers b64><TAB><document b64><TAB><top-level creation URL><TAB>
+    <inherited CSP b64><TAB><CSP self-origin><TAB><COEP><TAB><COEP endpoint><TAB><COEP report-only><TAB>
+    <COEP report-only endpoint><TAB><parent navigable><TAB><container policy><TAB><ancestor origins>`,
+   verb first and tab separated, which is `wpt_runner.c`'s child channel's own shape rather than a second
+   grammar.
+   TEN OF THOSE FIELDS USED TO BE ANSWERED HERE, WITH THE SPEC'S OWN ANSWERS FOR A TOP-LEVEL TRAVERSABLE, and
+   the answers were right for the only document this arm could then be handed. They are wrong for the one it
+   can be handed now: a PEER INSTANCE provisioned for a CROSS-ORIGIN CHILD is rooted at a document whose
+   §8.1.3.1 top-level creation URL is its EMBEDDER's, whose §7.1.7 policy container is a CLONE OF ITS
+   CREATOR'S, and whose §7.3.1.3 parent, §9.5 container answer and §3.1.3 ancestor origins are three separate
+   statements the creating instance computed and this process cannot reach. An entry that kept answering them
+   would root every peer as a TOP-LEVEL TRAVERSABLE under no inherited policy — a child judged under no CSP,
+   reporting itself at the top of its own tree, and §8.1.3.5's secure-context answer taken over the wrong URL.
+   So the facts come from the party that has them, and this entry states none of them.
+   THEY ARE NOT DEFAULTED EITHER: every one is a POSITIVE statement in its own grammar, and a top-level
+   traversable's answers are now written by the ZONE (which is what knows this document is one) rather than
+   assumed by the reader. `abi_take` refuses an ABSENT field, so a zone that stopped writing one is a record
+   that stops rather than a peer seated on ten silent defaults. */
 static int abi_main(void)
 {
     char *rec, *p;
-    const char *verb, *url, *doc_id;
-    char *headers, *html;
-    size_t headers_n = 0, html_n = 0;
+    const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
+    const char *coep_ro, *coep_ro_ep, *parent, *container_policy, *ancestor_origins;
+    char *headers, *html, *csp;
+    size_t headers_n = 0, html_n = 0, csp_n = 0;
     int r;
 
     rec = abi_line();
@@ -10541,6 +10664,71 @@ static int abi_main(void)
            "the document is longer than the ABI's length parameter can name — the truncated value would be "
            "accepted and parsed, so this instance would run a PREFIX of the page and report its findings as "
            "the page's");
+    /* HTML §8.1.3.1 "Environments"' TOP-LEVEL CREATION URL. This document's own address when it IS the top of
+       its tree; its EMBEDDER's when it is a peer's child, which only the instance that created it knows.
+       §8.1.3.5 reads it to decide whether the document is a SECURE CONTEXT, and Web IDL §3.3.13's members
+       exist in that realm or do not by that answer, so a wrong one is a different set of globals. */
+    top_level_url = abi_take(&p, "top-level creation URL");
+    CHECK(*top_level_url != '\0',
+          "the document record names no TOP-LEVEL CREATION URL — §8.1.3.1 gives every environment one and a "
+          "nested document's is not derivable from its own address, so an empty field is a secure-context "
+          "answer taken over nothing");
+    /* HTML §7.1.7 "Policy containers"' CLONE OF THE CREATOR'S, in the two halves CSP §2.2 "Policies" makes a
+       CSP list out of — "a struct consisting of policies (a list of policies) and a self-origin". The second
+       cannot be recovered from the first: CSP §2.2.2 "Parse response's Content Security Policies" states it
+       from OUTSIDE the policy bytes, and a document that INHERITED its policy resolves `'self'` against the
+       origin the policy came FROM rather than its own. BOTH EMPTY is the positive statement that this document
+       has no creator, which is what a top-level traversable is. The policy crosses base64 because a raw CSP
+       header field value may contain HTAB (RFC 9110 §5.5 "Field Values") and this channel splits on one —
+       every other field below is a token, an origin serialization or a grammar that asserts it has no tab. */
+    csp = abi_bytes(abi_take(&p, "inherited CSP list"), &csp_n, "inherited CSP list");
+    DCHECK(csp_n == strlen(csp),
+           "the inherited CSP list carries a NUL — it reaches the ABI as a C string, so every policy past that "
+           "byte is one the creator's container held and this document would be judged without");
+    csp_self = abi_take(&p, "inherited CSP self-origin");
+    /* HTML §7.1.4 "Cross-origin embedder policies"' item of that same container, which has NO EMPTY SPELLING:
+       §7.1.7 gives every container one, so a container with no creator states §7.1.4's own initial value
+       rather than nothing. The two VALUES are that section's tokens; main.c is the only party that turns one
+       into a value and it crashes on a token naming none of the three. */
+    coep = abi_take(&p, "inherited embedder policy");
+    coep_ep = abi_take(&p, "inherited embedder policy reporting endpoint");
+    coep_ro = abi_take(&p, "inherited embedder policy report-only value");
+    coep_ro_ep = abi_take(&p, "inherited embedder policy report-only endpoint");
+    CHECK(*coep != '\0' && *coep_ro != '\0',
+          "the document record carries no §7.1.4 EMBEDDER POLICY VALUE — the section gives every container "
+          "one and its initial value is a TOKEN, so an empty field is a caller that did not state which of the "
+          "two answers applies (the creator's clone, or a new embedder policy where there is no creator)");
+    /* HTML §7.3.1.3 "Child navigables"' PARENT, which is not an item of the container beside it — a policy
+       container is five policies and says nothing about a frame tree. The section defines "is a child
+       navigable" as "its parent is non-null", so `u` — core/frame/remote_object.h's undefined — is the
+       positive statement that this navigable has none, and a record that said nothing would root a peer's
+       CHILD as a top-level traversable with every walk up out of it finding nothing rather than crashing. */
+    parent = abi_take(&p, "parent navigable");
+    CHECK(*parent != '\0',
+          "the document record carries no §7.3.1.3 PARENT NAVIGABLE — a navigable either has a parent or is a "
+          "top-level traversable and both are ANSWERS, so an empty field is neither");
+    /* §7.3.1.3's OTHER LINK, carrying an ANSWER rather than an element: Permissions Policy §9.5 "Create a
+       Permissions Policy for a navigable" is given "null or an element (container) and an origin", and both
+       of those belong to the creating instance — it holds the element and it computed the child's origin. So
+       §9.5 runs once there and this is its result; `null` is that grammar's own word for "there is no
+       container", which is what a top-level traversable states. Without it the engine takes §9.7 step 1, "if
+       container is null, return `Enabled`", for a navigable that HAS one. */
+    container_policy = abi_take(&p, "container permissions policy");
+    CHECK(*container_policy != '\0',
+          "the document record carries no §9.5 answer for this navigable's CONTAINER — the algorithm answers "
+          "for a container and for none, and the empty string is neither of its two words");
+    /* HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the Document this instance
+       builds — a THIRD statement about the same navigable and not a derivation of the two above it. §3.1.3's
+       steps read the parent Document's own recorded list, that Document's ORIGIN RECORD and the container
+       element, and the origin RECORD is exactly what a serialization drops (§7.1.1 decides an opaque origin by
+       IDENTITY while every opaque origin is the three bytes `null`), so the steps run in the creating instance
+       and the ANSWER travels. `none` is that grammar's word for "there are no ancestors"; the EMPTY list would
+       be the positive claim that this Document is at the top of its own tree. */
+    ancestor_origins = abi_take(&p, "ancestor origins");
+    CHECK(*ancestor_origins != '\0',
+          "the document record carries no §3.1.3 ANCESTOR ORIGINS statement — the steps return an empty output "
+          "for a Document with no container document and a composed one otherwise, so an absent field is a "
+          "caller that did not state which applies and this document would report itself top-level");
     /* AND NOTHING AFTER IT. A record with a field this driver does not read is a writer NEWER than this reader,
        which a left-to-right walk is structurally silent about — it only ever asks for what it was told to
        expect — so the value would be computed, sent, and consumed by nothing while its author believed it
@@ -10550,35 +10738,14 @@ static int abi_main(void)
                       "trailing=[%s]", p ? p : "");
 
     /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the fifteen facts a document
-       arrival carries. Three came on the record above; the rest are the SPEC's OWN ANSWERS for a TOP-LEVEL
-       TRAVERSABLE, which is what this entry roots, and every one of them is a positive statement rather than a
-       default — which is exactly why they are spelled here rather than left off.
-         · HTML §8.1.3.1 "Environments"' TOP-LEVEL CREATION URL is this document's own address, because this
-           document IS the top of its tree. A NESTED document's is its EMBEDDER's, which only the zone that
-           created it knows — and that zone is the peer provisioning this entry does not have yet, so the day
-           a `--document` arm exists it carries its own, exactly as `wpt_runner.c`'s child does.
-         · HTML §7.1.7 "Policy containers"' inherited container is EMPTY IN BOTH HALVES, because §7.1.7 clones
-           a CREATOR's and a top-level traversable this process was handed has none. It is two fields because
-           CSP §2.2 "Policies" makes a CSP list "a struct consisting of policies (a list of policies) and a
-           self-origin", and the second cannot be recovered from the first — CSP §2.2.2 "Parse response's
-           Content Security Policies" states it from outside the policy bytes. This document's OWN policy is
-           not this line's business at all: it arrives in the header block above, where a server put it.
-         · HTML §7.1.4 "Cross-origin embedder policies"' item of that same container has NO empty spelling —
-           §7.1.7 gives every container one — so a container with no creator states §7.1.4's own initial value
-           rather than nothing, which is what the four slots say.
-         · HTML §7.3.1.3 "Child navigables" defines "is a child navigable" as "its parent is non-null", so `u`
-           — core/frame/remote_object.h's undefined — is the positive statement that this navigable has none.
-         · Permissions Policy §9.5 "Create a Permissions Policy for a navigable" is given "null or an element
-           (container) and an origin", and the answer here is that grammar's `null`: nothing embeds this
-           navigable, so nothing presents it.
-         · HTML §3.1.3 "Ancestor origins"' list is `none`, that grammar's word for "there are no ancestors",
-           by the same sentence read one algorithm along. */
-    r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, /*top_level_url*/ url,
-                 /*inherited_csp*/ "", /*inherited_csp_self_origin*/ "",
-                 /*inherited_coep*/ "unsafe-none", /*endpoint*/ "",
-                 /*report_only*/ "unsafe-none", /*report_only_endpoint*/ "",
-                 /*parent_navigable*/ "u", /*container_policy*/ "null", /*ancestor_origins*/ "none");
+       arrival carries — every one of them now stated by the party that HAS it. This document's OWN policy is
+       not on that list at all: it arrives in the header block above, where a server put it. */
+    r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, top_level_url,
+                 csp, csp_self, coep, coep_ep, coep_ro, coep_ro_ep,
+                 parent, container_policy, ancestor_origins);
     DCHECK(r == 0, "qjs_init refused the document this process was handed");
+    /* THE POLICY BYTES ARE PARSED AND COPIED INSIDE THE ENTRY, exactly as the header block below is. */
+    free(csp);
     /* THE BLOCK IS PARSED AND COPIED (core/fetch/headers.c allocates its own name and value per field line),
        and the list it was parsed into is released inside the entry above, so these bytes are done. The
        DOCUMENT's are not — see the free at the bottom. */

@@ -64,9 +64,23 @@
  * only in reply to `stalled`. Two processes each filling the other's pipe while neither drains is a hang with
  * no symptom, and that one rule makes it impossible rather than unlikely.
  *
- * WHAT IT DOES NOT DO. It provisions no peer instance: a `navigable.create` notice still aborts in the child,
- * because ROUTING ("which instance holds which document") is the trusted zone's one other fact and is a diff of
- * its own. `engine/route.mjs` is where that mechanism is written today, against wasm instances. */
+ * AND IT ROUTES, WHICH IS THE ZONE'S ONE OTHER FACT: which instance holds which document. An instance is an
+ * ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so a CROSS-ORIGIN child is a second PROCESS of the same binary and
+ * everything that crosses between them crosses this zone — a posted message with the sender's origin STAMPED
+ * here (the untrusted engine may not name its own sender), a synchronous cross-origin read handed to the
+ * instance that HOLDS the document and answered by it BY RUNNING A PROGRAM, and the completion relayed back to
+ * the flow that suspended at the read. This zone reads none of those payloads: it routes TEXT, and only an
+ * engine knows what a world vector or an object name means. `engine/route.mjs` is the same protocol against
+ * wasm instances and is where its reasoning is written at length.
+ *
+ * WHAT IT STILL DOES NOT DO, AND WHY THE ROUTING ABOVE IS NOT THEREFORE EXERCISED BY DEFAULT. Provisioning a
+ * peer means LOADING a document at an address the PAGE'S OWN CODE chose, and this zone cannot yet establish
+ * that address's provenance (see UNSTATED_PROVENANCE). CLAUDE.md's §Attacker-sources is explicit that a
+ * navigation whose provenance is not established CRASHES at the decision rather than proceeding, so by default
+ * it does — and the refusal travels to the child, which prints it at the stall. What lifts it is the second of
+ * the two things that bullet names, and it is built here because it is the zone's to own: the PER-ORIGIN
+ * WIDENING (`--explore <origin>`), which is a person saying "at this host, navigate what the bundle names".
+ * See NAVIGATION_WIDENING for why that is a whole answer here and not half of one. */
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -167,15 +181,72 @@ const UNSTATED_PROVENANCE =
   'finer, so a page fetch(), an injected <script src> and a dynamic import() are one class here and this zone ' +
   'fires none of them. TWO THINGS WOULD LIFT IT, in order: a flow that RECORDS whether its path took a forced ' +
   'arm, which is what separates DERIVED from FORCED; and the per-origin configuration CLAUDE.md requires ' +
-  'before a forced request may be fired at all, which does not exist and whose absence is this crash rather ' +
-  'than a default';
+  'before a forced request may be fired at all. The SECOND now exists and covers NAVIGATIONS only ' +
+  '(`--explore <origin>`, see NAVIGATION_WIDENING); a fetch cannot join it while the pending line carries no ' +
+  'DESTINATION, because a body that becomes executable code is fetched `as:"script"` and that is the CORB ' +
+  'class — firing a running-code park without knowing which it is would read a cross-origin HTML body as code';
+
+/* THE PER-ORIGIN WIDENING, WHICH IS A PERSON'S SENTENCE AND NOT AN INFERENCE — `--explore <origin>`, repeated.
+ * CLAUDE.md §Attacker-sources: "It is CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG
+ * AND A SINGLE SWITCH CANNOT SAY SO … Default conservative, widened deliberately per origin, never inferred
+ * from a site looking like a test." Firing what a bundle NAMES at an app you own is the point of the tool;
+ * doing it at a stranger's production account is not; and no property of the address distinguishes them, which
+ * is exactly why the answer is a person's and is stated per origin rather than derived.
+ *
+ * IT COVERS NAVIGATIONS AND NOTHING ELSE, and that narrowness is the design rather than a first instalment.
+ * §Attacker-sources' real-navigable bullet puts the WHOLE of a navigation's safety in the choice of ADDRESS:
+ * a top-level navigation is a GET, which RFC 9110 §9.2.1 "Safe Methods" contains, so the METHOD half is
+ * already answered and the entire remaining question is PROVENANCE — which is what this flag answers. A
+ * running-code FETCH has a second question this flag cannot answer (which CORB class the body is), so it is
+ * refused on its own ground and not swept in here.
+ *
+ * AND THE ONE COMBINATION THAT IS NEVER A SETTING IS UNREACHABLE HERE BY CONSTRUCTION, which is why this is a
+ * whole answer and not a hole with a flag over it. That combination is credentialed AND state-mutating AND
+ * forced. This process has NO COOKIE JAR (see this file's header: Node's `fetch` has no cookie store, so
+ * `credentials:"include"` would attach nothing and name a person who is not present), and `safe-fetch.js` is
+ * GET-only BY ABSENCE — it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`. So both
+ * of the other two conjuncts are false at every setting of this flag, including its widest. */
+const NAVIGATION_WIDENING = new Set();
+
+/* WHY A NAVIGATION AT AN UNWIDENED ORIGIN IS REFUSED, in the zone's own words — the same shape as
+   UNSTATED_PROVENANCE and a different sentence, because it is a different decision over a different record. */
+const UNWIDENED_NAVIGATION =
+  'a DOCUMENT LOAD at an address the page\'s own code chose. CLAUDE.md §Attacker-sources makes a navigation\'s ' +
+  'whole safety the choice of address and its whole remaining question PROVENANCE: an OBSERVED or DERIVED ' +
+  'address is navigated freely, a FORCED one is the deliberate per-origin widening, and one whose provenance ' +
+  'is NOT ESTABLISHED crashes at the decision rather than proceeding. This zone cannot establish it — the ' +
+  'create notice carries the child\'s name, address, origin, §8.1.3.1 top-level creation URL, §7.1.7 policy ' +
+  'container, §7.3.1.3 links and §3.1.3 ancestors, and says nothing about WHO NAMED THE ADDRESS, which is the ' +
+  'one fact the pending register already carries for a fetch (solver/engine.h\'s INITIATOR). Two things lift ' +
+  'it and either is enough: carry that initiator on the create notice so a navigable the PARSER of the ' +
+  'seeded document created is OBSERVED by the same argument its parser-inserted <script src> is; or say ' +
+  '`--explore <origin>` for this host, which is a person authorizing exactly this';
 
 async function main() {
-  const target = process.argv[2];
-  const bin = process.argv[3] || join(ENGINE, 'host', 'out', 'qjs-native-none');
+  /* THE FLAGS ARE TAKEN OUT BEFORE THE POSITIONALS ARE COUNTED, so `--explore` may appear anywhere and the
+     two addresses this command line carries cannot be confused for each other. An `--explore` with no value
+     is REFUSED rather than ignored: the flag is a person authorizing a navigation, and one that authorized
+     nothing while reading as though it had is the shape of permission this zone must never grant by accident.
+     THE VALUE IS NORMALIZED TO AN ORIGIN through the URL parser, because that is what the comparison is
+     against — a person who types `https://b.test/some/path` means the host, and a string compare against a
+     serialized origin would silently authorize nothing. */
+  const positional = [];
+  for (let i = 2; i < process.argv.length; i++) {
+    if (process.argv[i] !== '--explore') { positional.push(process.argv[i]); continue; }
+    const v = process.argv[++i];
+    if (v === undefined) {
+      console.error('[trusted] `--explore` was given no origin. The flag is a person authorizing navigation ' +
+                    'at a host; one that names none authorizes nothing, and accepting it would leave this ' +
+                    'zone reading as though a permission had been granted.');
+      process.exit(2);
+    }
+    NAVIGATION_WIDENING.add(new URL(v).origin);
+  }
+  const target = positional[0];
+  const bin = positional[1] || join(ENGINE, 'host', 'out', 'qjs-native-none');
 
   if (!target) {
-    console.error('usage: node engine/trusted.mjs <url> [path-to-native-binary]');
+    console.error('usage: node engine/trusted.mjs <url> [path-to-native-binary] [--explore <origin>]...');
     process.exit(2);
   }
   if (!existsSync(bin)) {
@@ -209,31 +280,149 @@ async function main() {
   const docUrl = String(seeded.meta.urlList[seeded.meta.urlList.length - 1]);
   const docId = 'd1';
 
-  const child = spawn(bin, ['--abi'], { stdio: ['pipe', 'pipe', 'inherit'] });
-  const say = (rec) => child.stdin.write(rec + '\n');
+  /* ── THE ROUTING TABLE ────────────────────────────────────────────────────────────────────────────────────
+     "Which instance holds which document" is the one fact only this zone has, and every line below is that
+     fact being asked. It is a LIST scanned for an EXACT name and never a prefix match: a child document's name
+     is prefixed by its creator's (`<creator>.<n>`) and the creator is precisely the instance that does NOT
+     hold it — that is why the notice exists at all — so a prefix match routes a post straight back to its
+     sender, which the engine catches at its arrival entry rather than silently performing. */
+  const instances = [];
+  const holderOf = (doc) => instances.find((i) => i.live && i.docId === doc) ?? null;
+  const loops = [];
+  let serial = 0;
 
-  child.stdout.setEncoding('utf8');   /* a StringDecoder, so a multi-byte character split across two chunk
-                                         boundaries is not two replacement characters — the @RESULT line is
-                                         the engine's own JSON and carries whatever a page put in it */
-  say(['document', docUrl, docId, b64(fieldLines(seeded.meta.headers)), b64(seeded.bytes)].join('\t'));
-
-  /* ONE ANSWER PER REQUEST, EVER — keyed on what the request IS. A pending entry stays on the register until
-     it is filled and the child re-states the whole bill whenever it changes, so without this a re-announced
-     request would be fetched again and `qjs_provide` would be called twice for one park, which is
-     engine_provide's answered-twice abort. It is not a bound: nothing is dropped, and a request this zone
-     never answers keeps being reported until the frontier stalls on it. */
-  const answered = new Map();
-  const ready = [];
-  let result = null;
-  /* A FAILED PIECE OF WORK IS RAISED AT THE STALL AND NOT SWALLOWED THERE. The work is started when the bill
-     is announced and awaited a round or more later, so a rejection would otherwise sit unhandled for exactly
-     as long as the engine keeps running — which is the window in which Node decides an unhandled rejection is
-     a process-level event. Held, then thrown where it can be read. */
+  /* A FAILED PIECE OF WORK IS RAISED WHERE IT CAN BE READ AND NOT SWALLOWED WHERE IT HAPPENS. The work is
+     started when the bill is announced and awaited a round or more later, so a rejection would otherwise sit
+     unhandled for exactly as long as the engine keeps running — which is the window in which Node decides an
+     unhandled rejection is a process-level event. */
   let fatal = null;
-  const track = (key, p) => answered.set(key, p.catch((e) => { fatal = fatal || e; }));
+  const raise = (e) => { fatal = fatal || e; };
+  /* HOW MUCH WORK THIS ZONE HAS STARTED AND NOT FINISHED. It is the difference between "nobody can be paid"
+     and "nobody has been paid YET", and those take opposite actions: the first ends the session with the
+     zone's reason, the second waits. Without it a fetch in flight for one instance would be read as a refusal
+     by another that happened to stall while it was outstanding. */
+  let busy = 0;
 
-  const workFetch = async (method, initiator, url) => {
-    const abs = new URL(url, docUrl).href;
+  /* WORK THIS ZONE COULD NOT ROUTE YET — a post or an operation naming a document no instance holds. HELD and
+     retried rather than failed at first sighting, and the reason is a property of the CHANNEL rather than
+     caution: the child announces its bill only when the bill CHANGES (test_forced.c's abi_announce), so a
+     record this zone drops is never offered again, and a `windowproxy.post` legitimately outruns the
+     `navigable.create` that names its target — the create is a notice and the load it needs is a network
+     round trip. `route.mjs` learned the same thing the other way round and recorded it: a permanent verdict on
+     a transient condition, measured before the thing it is about has happened. What IS a failure is a record
+     still held when every instance has ended, and that is reported at the bottom where it is decidable. */
+  const held = [];
+  const retryHeld = () => { for (let i = held.length - 1; i >= 0; i--) if (held[i].go()) held.splice(i, 1); };
+
+  /* EVERY CROSS-AGENT OPERATION IN FLIGHT, BY THE TOKEN THIS ZONE MINTED. The token is the ZONE's rendezvous
+     and never the asking flow's own request id, because an id is unique only inside the instance that minted
+     it and two peers may hold the same number — which is exactly the fact only the routing zone has. */
+  const reads = new Map();
+
+  /* HTML §7.5.1 "Shared document creation infrastructure"'s ten remaining facts, for a document that is its
+     own TOP-LEVEL TRAVERSABLE. They are written HERE and not assumed by the child, because the party that
+     knows a document is at the top of its tree is the party that seated it — and every one of them is a
+     POSITIVE statement in its own grammar rather than a blank:
+       · §8.1.3.1 "Environments"' TOP-LEVEL CREATION URL is this document's own address.
+       · §7.1.7 "Policy containers"' inherited container is EMPTY IN BOTH HALVES — §7.1.7 clones a CREATOR's
+         and a top-level traversable has none. Two halves because CSP §2.2 "Policies" makes a CSP list "a
+         struct consisting of policies (a list of policies) and a self-origin" and §2.2.2 states the second
+         from outside the policy bytes.
+       · §7.1.4 "Cross-origin embedder policies"' item of that container has NO empty spelling, so a container
+         with no creator states that section's own initial value.
+       · §7.3.1.3 "Child navigables" defines "is a child navigable" as "its parent is non-null", so `u` —
+         core/frame/remote_object.h's undefined — says this navigable has none.
+       · Permissions Policy §9.5 "Create a Permissions Policy for a navigable" is given "null or an element
+         (container) and an origin"; `null` is that grammar's word for the first, and nothing embeds this.
+       · HTML §3.1.3 "Ancestor origins"' list is `none` by the same sentence read one algorithm along. */
+  const topLevelFacts = (url) =>
+    [url, b64(''), '', 'unsafe-none', '', 'unsafe-none', '', 'u', 'null', 'none'];
+
+  /* …AND THE SAME TEN FOR A PEER, TAKEN OFF THE CREATE NOTICE VERBATIM. Not one of them is derivable in the
+     instance that will host the child — they are items of the CREATOR's §7.1.7 container plus three separate
+     statements about the navigable's place in the creator's frame tree — which is the whole reason the notice
+     carries them. The POLICY is the record's REMAINDER because a raw CSP header field value may contain HTAB
+     (RFC 9110 §5.5 "Field Values"), and it crosses this channel base64'd for exactly that reason; every other
+     field is an origin serialization, a §7.1.4 token, remote_object.c's tag-and-base64 identity, §4.1's
+     feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
+     engine asserts as much at the writer. */
+  const createFacts = (f) =>
+    [f[5], b64(f.slice(14).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]];
+
+  /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
+     "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
+     zone at all (navigable.c's `child_in_this_agent` emits no notice for one), so everything that arrives
+     here is a cluster this process does not host.
+     THE SHAPE IS `wpt_runner.c`'s, WHICH IS WHY THERE IS NO SECOND ONE: that host already provisions a child
+     with the child's NAME, ADDRESS, ORIGIN and POLICY over a pipe and stamps the child's origin from the
+     parent. What differs is only which process is trusted — there the runner owns the network, here the
+     parent does — and the record on the wire is this channel's `document` line rather than an argv. */
+  async function provision({ docId, url, origin, headers, bytes, facts }) {
+    const child = spawn(bin, ['--abi'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const e = {
+      docId, docUrl: url, origin, child,
+      /* THE INSTANCE'S OWN NAME IN THIS ZONE'S NAMESPACE. A document NAME is stable by requirement (the
+         routing depends on it) while an instance is one session of it, and a rendezvous token has to name the
+         second: without the serial a resumed instance's request 1 would land on the rendezvous of the ended
+         instance's request 1 and this zone would answer a question nobody asked. */
+      tag: `${docId}/s${++serial}`,
+      say: (rec) => child.stdin.write(rec + '\n'),
+      ready: [], answered: new Map(), stalled: false, live: true, result: null,
+      closed: new Promise((res) => child.on('close', res)),
+    };
+    child.stdout.setEncoding('utf8');   /* a StringDecoder, so a multi-byte character split across two chunk
+                                           boundaries is not two replacement characters — the @RESULT line is
+                                           the engine's own JSON and carries whatever a page put in it */
+    e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts].join('\t'));
+    instances.push(e);
+    loops.push(drive(e));
+    retryHeld();
+    flush();
+    return e;
+  }
+
+  /* ONE ANSWER PER REQUEST, EVER — keyed on what the request IS, and per INSTANCE because two instances
+     legitimately park on the same address. A pending entry stays on the register until it is filled and the
+     child re-states the whole bill whenever it changes, so without this a re-announced request would be
+     fetched again and `qjs_provide` would be called twice for one park, which is engine_provide's
+     answered-twice abort. It is not a bound: nothing is dropped, and a request this zone never answers keeps
+     being reported until the frontier stalls on it. */
+  const track = (e, key, work) => {
+    busy++;
+    e.answered.set(key, work.then((v) => v, raise).then(() => { busy--; retryHeld(); flush(); }));
+  };
+
+  /* A DOCUMENT LOAD, WHICH IS A DIFFERENT DECISION FROM A FETCH AND IS MADE HERE FOR BOTH OF ITS CALLERS —
+     §7.4.5's load for a navigable this instance holds, and the load that roots a PEER. Both are HTML §7.4.5
+     "Populating a session history entry"'s create-navigation-params-by-fetching, both are GETs, and the whole
+     of what separates them is which instance the bytes end up in.
+     THE REFUSAL IS THE DEFAULT AND IT NAMES ITSELF. See UNWIDENED_NAVIGATION: the create notice says nothing
+     about who named the address, so provenance is UNESTABLISHED and §Attacker-sources makes that a crash at
+     the decision rather than a load.
+     A LOAD THAT DID NOT LOAD IS A DOCUMENT TOO. `replyRecord` answers null for the chokepoint's status 0 — a
+     blocked scheme, a private target, a refused read — and HTML still gives that navigable a Document: the
+     empty byte sequence is the `about:blank`-shaped one the engine's own child_document builds. The ADDRESS
+     is then the one that was asked for, because a refusal has no response URL to have been redirected to, and
+     saying so is a fact about this zone's own network rather than a field filled to satisfy a reader. */
+  async function navigate(url, fromDocUrl, what) {
+    const abs = new URL(url, fromDocUrl).href;
+
+    if (!NAVIGATION_WIDENING.has(new URL(abs).origin))
+      return { declined: `${what} ${abs} — ${UNWIDENED_NAVIGATION}` };
+    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, credentialed: false }),
+                            `${what} ${abs}`);
+    /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
+       result of determining the origin given response's URL" — and Fetch §2.2.5 "Requests" makes that the LAST
+       item of the URL list. Only this zone followed the redirect chain, so only this zone can say where the
+       bytes came from, and the principal every cross-origin check in that document is written against is
+       taken from it and never from the address the creating engine asked for. */
+    if (!rec) return { url: abs, headers: [], bytes: Buffer.alloc(0) };
+    return { url: String(rec.meta.urlList[rec.meta.urlList.length - 1]), headers: rec.meta.headers,
+             bytes: rec.bytes };
+  }
+
+  const workFetch = async (e, method, initiator, url) => {
+    const abs = new URL(url, e.docUrl).href;
     /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two tokens,
        and a third would be routed by whichever arm of the test below happened to be written as the else —
        which is the defaulted-field defect landing on a firing decision. */
@@ -241,39 +430,232 @@ async function main() {
       throw new Error(`the pending line states the initiator \`${initiator}\`, which is neither token ` +
                       'solver/engine.h declares — this zone\'s firing decision reads that field, so an ' +
                       'unknown value must stop it rather than fall to a default');
-    if (initiator !== 'parser') { ready.push(decline(`${method} ${abs} — ${UNSTATED_PROVENANCE}`)); return; }
+    if (initiator !== 'parser') { e.ready.push(decline(`${method} ${abs} — ${UNSTATED_PROVENANCE}`)); return; }
     if (method !== 'GET') {
       /* §Attacker-sources: a state-mutating request is NEVER fired to learn. `safe-fetch.js` enforces this by
          ABSENCE (it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`), so issuing one
          here would fetch a POST's address as a GET and hand the bytes back under the POST's key — the reply
          would match the request it names and still be a response the server never gave for it. */
-      ready.push(decline(`${method} ${abs} — a non-GET park. The chokepoint is GET-only by ABSENCE ` +
-                         '(SECURITY.md §Network), so this address can only be DERIVED and reported, never ' +
-                         'issued; answering it with a GET\'s body would be a wrong answer rather than a ' +
-                         'missing one'));
+      e.ready.push(decline(`${method} ${abs} — a non-GET park. The chokepoint is GET-only by ABSENCE ` +
+                           '(SECURITY.md §Network), so this address can only be DERIVED and reported, never ' +
+                           'issued; answering it with a GET\'s body would be a wrong answer rather than a ' +
+                           'missing one'));
       return;
     }
     /* A BODY THAT BECOMES EXECUTABLE CODE IS FETCHED `as:"script"`, which is the CORB class: a cross-origin
        HTML/JSON body must never be read as code. It is decided HERE from the initiator the engine stated,
        which is a parser-inserted `script` element by definition of that token. */
-    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: docUrl, as: 'script', credentialed: false }),
+    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: e.docUrl, as: 'script', credentialed: false }),
                             `the parser-inserted script ${abs}`);
-    ready.push(['provide', method, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
-                rec ? b64(rec.bytes) : ABSENT].join('\t'));
+    e.ready.push(['provide', method, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
+                  rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
-  const lines = (async function* () {
-    let buf = '';
-    for await (const chunk of child.stdout) {
-      buf += chunk;
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) { yield buf.slice(0, nl); buf = buf.slice(nl + 1); }
-    }
-    if (buf) yield buf;
-  })();
+  /* ── WRITING, WHICH IS THE ONE THING THIS ZONE DOES ON ITS OWN CLOCK ──────────────────────────────────────
+     THE CHANNEL IS HALF-DUPLEX PER INSTANCE: a child reads only after writing `stalled`, which is the one
+     moment every flow of that instance is parked and blocking denies nobody the thread. So a round is written
+     to an instance ONLY while it is stalled, and never otherwise.
+     A ROUND THAT PAYS NOTHING IS A REFUSAL AND THE CHILD IS ENTITLED TO READ IT AS ONE, which is why a stalled
+     instance with an empty queue is left UNWRITTEN rather than sent a bare `go`: what it is waiting for may be
+     a program another instance is still running, and telling it "nothing" at that moment would end a live
+     session over a peer's turn that had not finished. It waits, its snapshots intact, and its siblings keep
+     running — which is what a cross-instance read being a SUSPEND POINT looks like from out here.
+     AND THE SESSION ENDS WHEN NOBODY CAN BE PAID, WHICH IS A GLOBAL ANSWER AND NOT A PER-INSTANCE ONE. Every
+     live instance stalled at once, every queue empty, and nothing in flight: that is this zone stating it
+     cannot supply what the frontier is waiting for, and it is the same test `engine_run` makes one level down
+     (`r == ENGINE_STEP_STALLED && filled == 0`). It is not a bound and it truncates nothing — every flow keeps
+     its snapshot, and the reason travels as the zone's own words rather than as a guess made by the child. */
+  const flush = () => {
+    let moved = false;
 
-  for await (const line of lines) {
-    if (line.startsWith('@RESULT ')) { result = line.slice('@RESULT '.length); continue; }
+    for (const i of instances) {
+      if (!i.live || !i.stalled || !i.ready.length) continue;
+      for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
+      i.say('go');
+      i.stalled = false;
+      moved = true;
+    }
+    if (moved || busy) return;
+    const live = instances.filter((i) => i.live);
+    if (!live.length || !live.every((i) => i.stalled)) return;
+    for (const i of live) {
+      i.say(decline(
+        'every instance of this session is stalled at once, every queue is empty and this zone has no work ' +
+        'outstanding — so what each frontier is parked on is something this zone will not supply, and the ' +
+        'refusals above this line are why. The other instances and what each of them is owed are on their ' +
+        'own channels; this one is being told only that nothing more is coming for it'));
+      i.say('go');
+      i.stalled = false;
+    }
+  };
+
+  /* THE VECTORS A PARK SAYS ITS RESIDUE CARRIES — recorded, and the reason they cannot simply be relayed is
+     the leak they exist to make finite: `world.gone` is broadcast to LIVE instances, and a parked document is
+     not one, so every death announced while it is cold is lost and the resumed instance would hold a segment
+     for an ended world for ever. Closing it needs a `world name -> parked document` index that outlives a
+     session (the residue is what crosses the tier and can carry it); this zone holds no store at all, so it
+     records the set and reports it rather than pretending to be that index. */
+  const parkedWorlds = [];
+
+  /* ASK THE INSTANCE THAT HOLDS THE DOCUMENT — the whole of the read half, and the only part of it that is
+     this zone's own is WHICH instance. Every cross-agent operation names its target document as its first
+     operand, which is the one fact only the routing table can act on.
+     NOTHING IS ANSWERED INSIDE THIS CALL and there is nothing to read when it returns: a peer answers BY
+     RUNNING A PROGRAM — the IDL getter HTML §7.2.1 "Security infrastructure for Window, WindowProxy, and
+     Location objects" defines the member as — so the operation becomes a flow on that instance's own frontier
+     and each completion arrives later, through its notices, once per live timeline. */
+  function askOperation(e, id, op) {
+    const target = op.split('\t')[1];
+    const token = `${e.tag}#${id}`;
+    const go = () => {
+      const h = holderOf(target);
+      if (!h) return false;
+      reads.set(token, { asker: e, id, op, by: [] });
+      h.ready.push(['perform', token, b64(op)].join('\t'));
+      flush();
+      return true;
+    };
+
+    if (!go()) held.push({ what: `operation ${token} \`${op.slice(0, 90)}\` -> ${target}`, go });
+  }
+
+  /* THE ONE-WAY NOTICES, ROUTED. Every one is a CROSS-INSTANCE fact and the routing is this zone's alone; the
+     records themselves are the emitting engine's grammar and cross VERBATIM, because a zone that took one
+     apart and wrote it back out would be restating a grammar it does not own where nothing can check it
+     against the writer. `e` is the instance that emitted it, which is what a delivery is STAMPED with —
+     SECURITY.md keys authorization on what the trusted zone knows for exactly this reason, and an origin the
+     untrusted engine supplied for a foreign message would defeat every `event.origin` check in every bundle. */
+  async function onNotice(e, record) {
+    const f = record.split('\t');
+
+    if (f[0] === 'navigable.create') {
+      /* FIFTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one an
+         unmoved count would let arrive as `undefined`, and every one of them below is read. */
+      if (f.length < 15)
+        throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
+                        'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
+                        '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s parent ' +
+                        'navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ' +
+                        'ancestor origins, and the policy');
+      /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
+         against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
+         re-announcing it under the same name. A second instance would give one document two heaps and two
+         object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent and
+         which nothing downstream could tell from the routing. */
+      if (holderOf(f[1])) return;
+      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`);
+      if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
+         notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
+         may be minted by the untrusted side because it is only a name, while the ORIGIN is what every
+         bundle's cross-origin check is written against. */
+      await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
+                        headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f) });
+      return;
+    }
+    /* `navigable.swap <new document> <url> <origin>` — HTML §7.1.3.2 "Browsing context group switches due to
+       opener policy": a navigation whose response's opener policy does not match its navigable's active
+       document's builds that Document in a NEW top-level browsing context in a NEW browsing context group. It
+       is the same provisioning act and a different record because §7.3.2.3 creates that context "with null,
+       null, and group" — a NULL CREATOR, so there is no policy container to clone, no parent, no container
+       element and no ancestor list, and the navigable's own address is its environments' top-level creation
+       URL. A new GROUP is a new instance for the same reason a cross-origin child is: SECURITY.md keys one on
+       `(browsing context group, origin)` and a swap changes the first half. */
+    if (f[0] === 'navigable.swap') {
+      if (f.length < 4 || !f[1] || !f[2])
+        throw new Error(`a navigable.swap notice was short of its fields: ${record}`);
+      if (holderOf(f[1])) return;
+      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`);
+      if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
+                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url) });
+      return;
+    }
+    /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances, relayed
+       WHOLE with the sender's origin BESIDE the record rather than spliced into it. */
+    if (f[0] === 'windowproxy.post') {
+      if (f.length < 5) throw new Error(`a windowproxy.post notice was short of its fields: ${record}`);
+      const go = () => {
+        const t = holderOf(f[1]);
+        if (!t) return false;
+        t.ready.push(['route', e.origin, b64(record)].join('\t'));
+        flush();
+        return true;
+      };
+      if (!go()) held.push({ what: `post ${f[2]} -> ${f[1]}`, go });
+      return;
+    }
+    /* `remoteop.answer <token> <world> <completion>` — a COMPLETION the answering instance produced for an
+       operation it was asked to perform. THE WORLD IS FIELD 3 AND THE COMPLETION IS THE REMAINDER, and the
+       split is that way round because only one of them has a boundary: a world vector's own separators are
+       ':' and ',' (world_serialize) while a completion is remote_object.c's grammar and may contain a tab.
+       This zone reads neither — it routes text, and only an engine knows what a name means.
+       EVERY ONE OF THEM IS RELAYED, IN ARRIVAL ORDER. A peer's document state IS its flows, so one question is
+       answered once per live timeline and every one of those answers is TRUE; a zone that kept one would hand
+       the asker an arbitrary timeline's value and drop the rest, and a page reading the member twice in one
+       expression would get two contradictory answers with nothing able to name the disagreement. */
+    if (f[0] === 'remoteop.answer') {
+      if (f.length < 4 || !f[1] || !f[2] || !f[3])
+        throw new Error('a remoteop.answer notice was short of its fields — every answer names the rendezvous ' +
+                        `token, the TIMELINE of the flow that ran the program, and the completion: ${record}`);
+      const r = reads.get(f[1]);
+      if (!r)
+        throw new Error(`a peer answered under a rendezvous token this zone never minted, or one already ` +
+                        `handed back: ${f[1]}. The token is the zone's own name for (instance, request), so ` +
+                        'an unknown one is a relay that invented a rendezvous rather than echoing one');
+      /* ONE TIMELINE ANSWERS ONE QUESTION ONCE — the answering flow spends the token off its row as it
+         answers, so a repeat under one token from one world is that instance emitting twice, which is
+         indistinguishable from a second timeline without the world and would fork the asker an arm into a
+         timeline another arm already holds. */
+      if (r.by.includes(f[2]))
+        throw new Error('the peer answered one cross-agent operation TWICE from the SAME timeline — token ' +
+                        `${f[1]}, world ${f[2]}`);
+      r.by.push(f[2]);
+      r.asker.ready.push(['remote', String(r.id), f[2], b64(f.slice(3).join('\t'))].join('\t'));
+      flush();
+      return;
+    }
+    /* `remoteop.retracted <token>` — an operation handed BACK, because the instance holding it parked while
+       still holding it. The record and the token do not have one lifetime and that is the whole reason this
+       arm exists: the record is text whose names are global, while the TOKEN is a name in THIS zone's
+       namespace and dies with this zone's session.
+       IT IS RE-ISSUED HERE RATHER THAN WAITED FOR, and that is where this channel differs from `route.mjs`.
+       There the asking instance's whole request register is re-read every step, so a forgotten read is
+       re-offered by the engine itself; here the child announces its bill only when the bill CHANGES, and a
+       retraction changes the bill of the PERFORMING instance rather than the asking one. So a zone that merely
+       forgot the token would leave the asking flow parked on a question nobody holds any more, with nothing
+       anywhere able to say so. */
+    if (f[0] === 'remoteop.retracted') {
+      if (f.length < 2 || !f[1]) throw new Error(`a remoteop.retracted notice carried no token: ${record}`);
+      const r = reads.get(f[1]);
+      if (!r) throw new Error(`a retracted token names no operation this zone asked: ${f[1]}`);
+      reads.delete(f[1]);
+      askOperation(r.asker, r.id, r.op);
+      return;
+    }
+    /* `world.gone <name>` — a world of the sending instance is finished with, so every peer holding a COW
+       segment keyed on that name can drop it. BROADCAST, and that is the design rather than this zone being
+       lazy: the sending engine deliberately does not record which peers a flow reached, because releasing a
+       world with no segment is a no-op and tracking it would be state kept only to avoid one. Only the zone
+       knows what the other instances are, which is this record's whole reason to exist. */
+    if (f[0] === 'world.gone') {
+      if (f.length < 2 || !f[1]) throw new Error(`a world.gone notice carried no world name: ${record}`);
+      for (const i of instances) if (i !== e && i.live) i.ready.push(`world-gone\t${f[1]}`);
+      flush();
+      return;
+    }
+    if (f[0] === 'world.parked') {
+      if (f.length < 2 || !f[1]) throw new Error(`a world.parked notice carried no vector: ${record}`);
+      parkedWorlds.push(f[1]);
+      return;
+    }
+    throw new Error(`the host emitted a NOTICE under the operation \`${f[0]}\`, which this zone does not ` +
+                    `route: ${record} — a notice this zone drops is a document nothing runs or a message ` +
+                    'nothing delivers, and every read through it parks its flow for the rest of the session');
+  }
+
+  async function onLine(e, line) {
+    if (line.startsWith('@RESULT ')) { e.result = line.slice('@RESULT '.length); return; }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
       if (f.length !== 4)
@@ -282,52 +664,129 @@ async function main() {
                         'engine joined it, so a short record is the two grammars having parted');
       const [, method, initiator, url] = f;
       const key = `${method}\t${url}`;
-      if (answered.has(key)) continue;
-      track(key, workFetch(method, initiator, url));
+      if (e.answered.has(key)) return;
+      track(e, key, workFetch(e, method, initiator, url));
     } else if (f[0] === 'request') {
-      const id = f[1], op = f.slice(2).join('\t');
-      const key = `req:${id}`;
-      if (answered.has(key)) continue;
-      /* A CROSS-AGENT OPERATION IS REFUSED AND NOT ANSWERED, and the two ways of refusing are not the same:
-         leaving it silent would park the asking flow for the rest of the session while the frontier reported
-         nothing, which from outside is indistinguishable from a page that is merely slow. `document.fetch` is
-         §7.4.5's load for a document this zone cannot seat, because seating it needs a SECOND instance and a
-         table saying which instance holds which document — and that address is one the page's own code chose,
-         so it carries the same unstated provenance as every other running-code park. */
-      answered.set(key, Promise.resolve());
-      ready.push(decline(
-        `request ${id} \`${op.slice(0, 120)}\` — a cross-agent operation. Answering it needs a PEER INSTANCE ` +
-        'and the routing table that says which instance holds which document, which is the trusted zone\'s ' +
-        'other fact and is not built for this host; `engine/route.mjs` is where that mechanism is written ' +
-        'today, against wasm instances. A document.fetch additionally carries the same unstated provenance as ' +
-        'every running-code park, since the page chose the address'));
+      const id = Number(f[1]), op = f.slice(2).join('\t');
+      const key = `req:${f[1]}`;
+      if (e.answered.has(key)) return;
+      if (!Number.isInteger(id))
+        throw new Error(`the host announced a request whose id is not a number: ${line} — the id is the ` +
+                        'rendezvous inside that instance, so an unreadable one would answer whatever request ' +
+                        'zero belongs to');
+      e.answered.set(key, Promise.resolve());
+      /* EVERY CROSS-AGENT OPERATION ROUTES THE SAME WAY — a member of a navigable's Window, and the four
+         internal methods a lent object performs. They differ in what the peer resolves, not in who resolves
+         it, which is why this is a PREFIX and not a list: an operation added to remote_object.c reaches its
+         instance with nothing here to remember. */
+      if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
+        askOperation(e, id, op);
+      } else if (op.startsWith('document.fetch\t')) {
+        /* §7.4.5's load for a document THIS instance holds — answered here rather than routed, because
+           routing a same-origin load to a peer would be answering it out of another agent. */
+        track(e, key, (async () => {
+          const loaded = await navigate(op.slice('document.fetch\t'.length), e.docUrl, 'document.fetch');
+          if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+          /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
+             byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would
+             have had to run first — which is what left HTML §8.1.4.2's classic-script decode nothing to
+             honour. The header list crosses as the response's HTTP FIELD LINES, which is where §7.1.3's opener
+             policy and that document's own CSP are read from. The trailing `0` is ECMA-262 6.2.4's NORMAL
+             completion: this zone fetched bytes rather than relaying another instance's program, so it has
+             nothing to have thrown with. */
+          e.ready.push(['answer', String(id),
+                        b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers) })),
+                        '0', b64(loaded.bytes)].join('\t'));
+        })());
+      } else {
+        /* A REQUEST THIS ZONE DOES NOT CARRY IS REFUSED IN WORDS AND NOT LEFT SILENT: leaving it unanswered
+           parks the asking flow for the rest of the session while the frontier reports nothing, which from
+           outside is indistinguishable from a page that is merely slow. */
+        e.ready.push(decline(
+          `request ${id} \`${op.slice(0, 120)}\` — an operation this zone does not carry. It routes ` +
+          '`windowproxy.get`, the `object.*` internal methods and `document.fetch`, and an operation outside ' +
+          'those is one the engine emits for and nothing performs'));
+      }
+    } else if (f[0] === 'notice') {
+      await onNotice(e, line.slice('notice\t'.length));
     } else if (line === 'stalled') {
-      /* THE ONLY MOMENT THIS ZONE WRITES. Everything outstanding is settled first, because a payment held
-         back here is one the child will read as a refusal — and the child is entitled to read a round that
-         pays nothing as exactly that. */
-      await Promise.all([...answered.values()]);
+      e.stalled = true;
+      /* EVERYTHING OUTSTANDING ACROSS EVERY INSTANCE IS SETTLED FIRST, not just this one's: a payment held
+         back here is one the child will read as a refusal, and the work that produces it may have been
+         started by a sibling's round. */
+      await Promise.all(instances.flatMap((i) => [...i.answered.values()]));
       if (fatal) throw fatal;
-      const round = ready.splice(0, ready.length);
-      for (const rec of round) say(rec);
-      say('go');
+      retryHeld();
+      flush();
     } else {
       throw new Error(`the host wrote a record under the verb \`${f[0]}\`, which this zone does not carry: ` +
                       `${line}`);
     }
   }
 
-  const code = await new Promise((res) => child.on('close', res));
-  if (result === null) {
-    console.error(`[trusted] the host produced no @RESULT (exit ${code}) — an ABSENT result and a result that ` +
-                  'found nothing are different facts and this is the first, so nothing here may be reported ' +
-                  'as a page that was analysed and found clean.');
-    process.exitCode = code || 1;
+  async function drive(e) {
+    let buf = '';
+
+    for await (const chunk of e.child.stdout) {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        await onLine(e, line);
+      }
+    }
+    if (buf) await onLine(e, buf);
+    e.live = false;
+    e.exit = await e.closed;
+    /* AN INSTANCE LEAVING CAN BE WHAT UNBLOCKS THE REST — the stuck answer is GLOBAL, so it is re-asked here
+       as well as at every stall. */
+    retryHeld();
+    flush();
+  }
+
+  const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
+                                 headers: seeded.meta.headers, bytes: seeded.bytes,
+                                 facts: topLevelFacts(docUrl) });
+
+  /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its
+     driver to this queue, and an `all` taken over the queue as it stood would return before that peer's
+     channel had closed — this process would then exit with a live child on the other end of a pipe. */
+  while (loops.length) await loops.shift();
+  if (fatal) throw fatal;
+
+  /* WHAT COULD NOT BE ROUTED FOR THE WHOLE SESSION. A held record is an asking flow parked on a question
+     nothing will ever answer, so it is a failure and not a note — reported HERE because "no holder YET" and
+     "no holder EVER" are the same observation until every instance has ended. */
+  if (held.length)
+    console.error(`[trusted] ${held.length} record(s) named a document no instance ever held, so their askers ` +
+                  `were parked on a question nothing answered: ${held.map((h) => h.what).join(' ; ')}`);
+  if (parkedWorlds.length)
+    console.error(`[trusted] ${parkedWorlds.length} foreign world vector(s) went to a residue this zone holds ` +
+                  'no index for — a `world name -> parked document` index that outlives a session is what ' +
+                  `would close it: ${parkedWorlds.join(' ')}`);
+  /* EVERY PEER'S FINDINGS ARE REAL AND THIS ZONE PRINTS ONE DOCUMENT, WHICH IS STATED RATHER THAN LEFT TO BE
+     DISCOVERED. A cross-origin child is a document that was explored, so its `@RESULT` is a finding set like
+     any other; MERGING several into one report is a grammar this zone does not have — two documents, two
+     bundle ids, two frontiers — and inventing one here would be this zone deciding what a finding set means. */
+  for (const i of instances)
+    if (i !== root)
+      console.error(`[trusted] peer instance [${i.tag}] at ${i.docUrl} exited ${i.exit} and ` +
+                    (i.result === null ? 'produced no @RESULT'
+                                       : `produced a result of ${i.result.length} bytes, which this zone does ` +
+                                         'not merge into the seed\'s'));
+
+  if (root.result === null) {
+    console.error(`[trusted] the host produced no @RESULT (exit ${root.exit}) — an ABSENT result and a result ` +
+                  'that found nothing are different facts and this is the first, so nothing here may be ' +
+                  'reported as a page that was analysed and found clean.');
+    process.exitCode = root.exit || 1;
     return;
   }
-  console.log(result);
+  console.log(root.result);
   /* `exitCode` AND NOT `exit()`: the result is a line on a pipe and `process.exit` does not wait for it to
      drain, so the one thing this process exists to produce is the one thing that would be truncated. */
-  process.exitCode = code;
+  process.exitCode = root.exit;
 }
 
 await main();
