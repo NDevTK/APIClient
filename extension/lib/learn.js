@@ -5,6 +5,25 @@
 // extractInterfaceName/calculateMethodMetadata from lib/grouping.js, protobuf/discovery libs) at call-time.
 // The Passive Learning feature, just relocated out of the brain.
 
+/* EVERY CATCH IN THIS FILE OPENS WITH `RETHROW_FATAL(e)`, AND THE REASON IS STATED ONCE HERE RATHER THAN
+   TWENTY-ONE TIMES.
+   Each of those catches has a REAL JOB and keeps it: "these bytes are not valid gRPC-Web / JSPB / JSON /
+   SSE / NDJSON / multipart" is a DATUM about a server's response, and the right answer to it is to skip this
+   decode and let the next captured response from the same URL try again. That is why they are `console.debug`
+   and not throws, and none of that changes.
+   WHAT WAS ALSO BEING CAUGHT IS THE PROBLEM. Every one of these `try` bodies calls into the code that turns a
+   response into the model — `extractKeysFromText`, `generateSchemaFromJson`/`FromPbTree`, `mergeSchemaInto`,
+   `indexResponseValues`, `learnEndpointParams` — and on this side an assertion is a THROW (extension/check.js:
+   check.h aborts the process, so a C `if (err) goto fail` cannot swallow a DCHECK, while here every legitimate
+   `catch` is a place one silently becomes a plausible answer). So a broken contract anywhere in the learning
+   path was arriving here as one debug line reading "grpc-web frame decode failed" and the endpoint's schema
+   simply never appeared — indistinguishable from a server that sent a malformed frame, on the path CLAUDE.md
+   calls "the POINT". The failure would not even be rare: it is one line per response, over every response the
+   extension ever sees, and the only symptom is a moat that learned less than it should have.
+   `RETHROW_FATAL` is not a second assertion mechanism — it is what keeps the ONE mechanism from being locally
+   disabled — so it goes FIRST in the body, before the datum is interpreted at all. It also means every catch
+   here binds `e`: a `catch (_)` cannot re-raise what it declined to name. */
+
 /* THE ONE HEADER VOCABULARY, IN THE ONE PLACE THAT SPEAKS IT.
    endpoint.c emits an endpoint's headers as a flat name -> STRING record and says what a value means:
    "a concrete one is the literal the code computed, and an unknown one is its SHAPE (`{state}.token`),
@@ -692,6 +711,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
         _nameHint = deriveGraphQLMethodName(_gql.operations[0]);
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       /* GraphQL operation-name detection failed (body wasn't base64 /
          wasn't text / wasn't valid GraphQL syntax). The endpoint still
          registers under its fallback methodName; only the named
@@ -875,6 +895,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
               const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
               mergeSchemaInto(doc, schemaName, newSchema);
             } catch (e) {
+              RETHROW_FATAL(e);
               /* Multipart-batch sub-request JSON parse failed for one
                  part — other parts still process. Surface so a malformed
                  sub-request body on an otherwise-valid batch is visible. */
@@ -903,6 +924,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
           }
         }
       } catch (e) {
+        RETHROW_FATAL(e);
         console.debug("[brain] grpc-web request-body decode failed:", e && e.message || e, "url=" + entry.url);
       }
     } else if (headers["content-type"]?.includes("json+protobuf")) {
@@ -916,6 +938,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
           mergeSchemaInto(doc, schemaName, newSchema);
         }
       } catch (e) {
+        RETHROW_FATAL(e);
         console.debug("[brain] JSPB request-body parse failed:", e && e.message || e, "url=" + entry.url);
       }
     } else if (
@@ -932,6 +955,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
           mergeSchemaInto(doc, schemaName, newSchema);
         }
       } catch (e) {
+        RETHROW_FATAL(e);
         console.debug("[brain] x-protobuf request-body decode failed:", e && e.message || e, "url=" + entry.url);
       }
     } else if (headers["content-type"]?.includes("json")) {
@@ -942,6 +966,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
         const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
         mergeSchemaInto(doc, schemaName, newSchema);
       } catch (e) {
+        RETHROW_FATAL(e);
         console.debug("[brain] JSON request-body parse failed:", e && e.message || e, "url=" + entry.url);
       }
     } else if (headers["content-type"]?.includes("x-www-form-urlencoded")) {
@@ -959,6 +984,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
           }
         }
       } catch (e) {
+        RETHROW_FATAL(e);
         console.debug("[brain] form-urlencoded f.req parse failed:", e && e.message || e, "url=" + entry.url);
       }
     } else if (text && /^[\s﻿\x00-\x1f]*[{\[]/.test(text)) {
@@ -981,6 +1007,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
           mergeSchemaInto(doc, schemaName, newSchema);
         }
       } catch (e) {
+        RETHROW_FATAL(e);
         /* Structural JSON sniff parse failure — text LOOKED like JSON
            (starts with `{`/`[` after whitespace) but JSON.parse rejected
            it. Most often: a partial body / malformed JSON / a JSON
@@ -1058,6 +1085,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
         const _cbText = new TextDecoder().decode(base64ToUint8(entry.rawBodyB64));
         chainBody = JSON.parse(_cbText);
       } catch (e) {
+        RETHROW_FATAL(e);
         /* Chain-tracking body parse failed — request body isn't JSON
            (binary protobuf / form-encoded / etc.). chainBody stays
            empty so this request doesn't contribute body-value chain
@@ -1358,6 +1386,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
       const bytes = base64ToUint8(entry.responseBody);
       textBody = new TextDecoder().decode(bytes);
     } catch (e) {
+      RETHROW_FATAL(e);
       textBody = null;
     }
   }
@@ -1378,10 +1407,10 @@ function learnFromResponse(documentId, interfaceName, entry) {
     let _sniffBytes = null;
     if (entry.responseBase64) {
       try { _sniffBytes = base64ToUint8(entry.responseBody); }
-      catch (e) { console.warn("[brain] mime-sniff base64 decode failed:", e && e.message || e, entry.url); }
+      catch (e) { RETHROW_FATAL(e); console.warn("[brain] mime-sniff base64 decode failed:", e && e.message || e, entry.url); }
     } else if (typeof entry.responseBody === "string") {
       try { _sniffBytes = new TextEncoder().encode(entry.responseBody); }
-      catch (e) { console.warn("[brain] mime-sniff encode failed:", e && e.message || e, entry.url); }
+      catch (e) { RETHROW_FATAL(e); console.warn("[brain] mime-sniff encode failed:", e && e.message || e, entry.url); }
     }
     if (_sniffBytes && _sniffBytes.length >= 1) {
       const b0 = _sniffBytes[0];
@@ -1518,6 +1547,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
         }
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       /* gRPC-Web frame decode failed — the schema for this endpoint
          won't be learned from THIS response, the next captured response
          from the same URL may decode correctly. Surface so a real
@@ -1546,6 +1576,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
         }
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       /* SSE parse failed — malformed event stream (server sent
          data without `data: ` prefix, missing terminator, etc.).
          Surface so the schema-learning skip is observable. */
@@ -1566,6 +1597,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
         mergeSchemaInto(doc, schemaName, newSchema);
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       console.debug("[brain] NDJSON parse failed:", e && e.message || e, "url=" + entry.url);
     }
   } else if (isMultipartBatch(mimeType)) {
@@ -1601,6 +1633,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
             );
             mergeSchemaInto(doc, schemaName, newSchema);
           } catch (e) {
+            RETHROW_FATAL(e);
             /* One part's JSON parse failed — rest of the batch still
                processes. Surface so a malformed part on an otherwise-
                valid batch response is visible. */
@@ -1609,6 +1642,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
         }
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       console.debug("[brain] multipart batch parse failed:", e && e.message || e, "url=" + entry.url);
     }
   /* THE `text/x-component` BRANCH IS GONE TO engine/host/solver/reply_decode.c. It parsed a React Flight
@@ -1641,6 +1675,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
         }
       }
     } catch (e) {
+      RETHROW_FATAL(e);
       console.debug("[brain] GraphQL response parse failed:", e && e.message || e, "url=" + entry.url);
     }
   } else if (mimeType.includes("json") || mimeType.includes("javascript") ||
@@ -1673,6 +1708,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
       const newSchema = generateSchemaFromJson(json, schemaName, doc.schemas);
       mergeSchemaInto(doc, schemaName, newSchema);
     } catch (e) {
+      RETHROW_FATAL(e);
       /* JSON/JSONP response parse failed — common when the body is
          truncated, has a JSONP callback we couldn't strip, isn't valid
          JSON, or is just `ok`/`true`/etc. (the explicit throw above).
@@ -1701,6 +1737,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
       const newSchema = generateSchemaFromPbTree(tree, schemaName, doc.schemas);
       mergeSchemaInto(doc, schemaName, newSchema);
     } catch (e) {
+      RETHROW_FATAL(e);
       /* Protobuf response decode failed — body bytes didn't decode as
          valid wire format (might be a mis-classified text body, a
          compressed payload the brain didn't decompress, or a truncated
@@ -1718,7 +1755,8 @@ function learnFromResponse(documentId, interfaceName, entry) {
       var _ciText = stripJsonp(textBody) || textBody;
       const parsed = JSON.parse(_ciText);
       indexResponseValues(tab._valueIndex, parsed, methodId);
-    } catch (_) {
+    } catch (e) {
+      RETHROW_FATAL(e);
       // Not JSON/JSONP — index the raw text body if it looks like a useful value
       if (textBody.length >= 4 && textBody.length <= 500) {
         indexResponseValues(tab._valueIndex, textBody, methodId);
