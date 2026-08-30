@@ -900,8 +900,13 @@ async function _dispatchDocument(docKey) {
   // This run's merge re-registers every AST-derived endpoint, so drop the previous round's first — a
   // re-delivered document would otherwise double-register them. (The `AST DYN ` prefix this also tested for
   // is a prefix OF `AST `, so it was one condition written twice.)
+  /* THE PREFIX IS NOT SPELLED HERE ANY MORE. This was its third independent copy, and the fourth — a live
+     response consumer that composed the same three parts WITHOUT it — could never match the map it read.
+     lib/endpoint-record.js mints the name and answers this question about it, so the sweep and the mint
+     cannot drift apart. That this predicate is currently true of EVERY entry is the residual recorded at
+     `_ENDPOINT_KEY_PREFIX` there, not a fact to re-derive here. */
   var keysToDelete = [];
-  tab.endpoints.forEach(function (val, key) { if (key.startsWith("AST ")) keysToDelete.push(key); });
+  tab.endpoints.forEach(function (val, key) { if (isEndpointKey(key)) keysToDelete.push(key); });
   for (var di = 0; di < keysToDelete.length; di++) tab.endpoints.delete(keysToDelete[di]);
 
   /* THE ANALYSIS PRINCIPAL. This becomes safeFetch's `opts.pageUrl` — the origin-relative private-network

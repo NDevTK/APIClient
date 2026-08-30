@@ -120,8 +120,14 @@ function mergeASTResultsIntoVDD(tab, results) {
          the code determined it. The "dynamic" arm keyed on the bundle id and the CALL-SITE INDEX `fc`, which
          is not an identity at all — it renumbers whenever the engine's emission order moves, so the same
          endpoint re-registered under a new key on every run and two runs never deduped. A shape is a stable
-         name, so the shape-origin records dedup exactly like the literal ones. */
-      var epKey = "AST " + callSite.method + " " + _addr.host + _addr.path;   // include HOST: an endpoint is method+host+path. Path-only collapsed same-path endpoints across DIFFERENT hosts (and across sites in the cumulative store) → lost the moat's "many sites per session" surface. Mirrors the network key (method + hostname + pathname).
+         name, so the shape-origin records dedup exactly like the literal ones.
+         THE SHAPE IS NO LONGER SPELLED HERE. It was spelled here, again at the structural dedup key below,
+         once more in offscreen-brain.js's per-delivery sweep, and a fourth time — WRONG, without the prefix —
+         by a live-response consumer whose lookup therefore could never match. lib/endpoint-record.js mints
+         it now: the file that
+         owns the record's one description owns its one NAME, and a fifth spelling has nowhere to be written. */
+      var epKey = endpointKeyFromParts(callSite.method, _addr.host, _addr.path,
+                                       "lib/merge.js registering an @H call-site endpoint");
       // DEDUP by STRUCTURAL identity: the SAME endpoint driven with opaque-POSITIONAL args ({arg0}, from
       // __hostDrive's JS-side drive) and with NAMED args ({id}, from the grind's declared-name drive) yields
       // TWO keys for ONE endpoint (verified: spa_gated 5 raw / 4 distinct). Collapse {..} path-param segments
@@ -129,7 +135,13 @@ function mergeASTResultsIntoVDD(tab, results) {
       // {placeholder} segments normalize, so genuinely-distinct endpoints (differing elsewhere) never merge.
       // The stored KEY stays the raw path, so probe/replay of the surviving record are unaffected.
       if (!tab._epNorm) tab._epNorm = new Map();
-      var _structKey = "AST " + callSite.method + " " + _addr.host + _addr.path.replace(/\{[^}]*\}/g, "{}");
+      /* THE STRUCTURAL KEY IS THE SAME NAME OVER A HOLE-NORMALIZED PATH, so it is minted by the same function.
+         It names a different map (`tab._epNorm`), but it is the same NAME SPACE — its values are endpoint
+         keys and it is compared against them — so a shape that drifted in one and not the other would make
+         this dedup silently stop collapsing, which reads as two genuinely distinct endpoints. */
+      var _structKey = endpointKeyFromParts(callSite.method, _addr.host,
+                                            _addr.path.replace(/\{[^}]*\}/g, "{}"),
+                                            "lib/merge.js building the structural dedup key");
       var _posRe = /\{arg\d+\}/;
       var _priorKey = tab._epNorm.get(_structKey);
       if (_priorKey && _priorKey !== epKey && tab.endpoints.has(_priorKey)) {

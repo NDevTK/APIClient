@@ -806,9 +806,48 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         const scopeList = scopeMatch[1].split(/\s+/).filter(Boolean);
         if (scopeList.length > 0) {
           tab.scopes.set(service, scopeList);
-          const endpointKey = `${msg.method} ${url.hostname}${url.pathname}`;
-          const ep = tab.endpoints.get(endpointKey);
-          if (ep) ep.requiredScopes = scopeList;
+          /* THE SECOND HALF OF THIS ARM WAS BROKEN AT BOTH ENDS, AND EITHER END ALONE WOULD HAVE HIDDEN THE
+             OTHER. It read `tab.endpoints.get(`${method} ${hostname}${pathname}`)` — the same never-matching
+             key shape this file's own `lastSeen` comment (at the log entry, "NO `lastSeen` STAMP ON A
+             MATCHING ENDPOINT") records as already found and repaired ONCE on this map, minted here a second
+             time without lib/merge.js's prefix — and then, on the hit that could not
+             happen, wrote `ep.requiredScopes`, a name that appeared EXACTLY ONCE in this repository: right
+             here, as this write. No surface read it, lib/serialize.js did not project it, and
+             lib/endpoint-record.js's constructor REJECTS it by name, so a producer stating it goes through
+             this post-hoc mutation or not at all.
+             That pairing is why it survived. CLAUDE.md names both halves and calls the second the harder one
+             — "an observation with a computed writer and no reader is not a mechanism… harder to see,
+             because the value is real, asserted, and consumed by nothing" — and here each half made the other
+             unfalsifiable: the write never ran, so no record ever carried the stray field to notice; the
+             field had no reader, so nothing ever went looking for the value the lookup failed to deliver.
+             REPAIRING THE KEY ALONE WOULD HAVE BEEN A REGRESSION, not a fix: it would have started writing a
+             constructor-forbidden name onto live records, which persistence then carries into IndexedDB.
+             SO THE SCOPES GO WHERE SCOPES ARE ALREADY READ. `method.scopes` on the discovery method record is
+             the SAME field this file's `discoverServiceInfo` probe arm fills, and it has real consumers —
+             lib/popup-form.js renders it as the Send panel's "Scopes:" row, lib/openapi-export.js emits it as
+             the operation's `security`, lib/send.js carries it onto the resolved schema. Filled only when
+             empty, exactly as that probe does: a discovery document's DECLARED scopes are the API's own
+             statement about the operation, and a challenge answering one forced request must not overwrite
+             it. The unconditional per-service `tab.scopes` write above is untouched and is what guarantees no
+             observation is lost when no document names this method.
+             NAMED RESIDUAL — the scope is attached per SERVICE always and per METHOD only where a discovery
+             document describes it.
+               WHAT IS NOT COVERED: a service with no discovery document (every app that is not a Google API)
+                 records the challenge's scopes against the service and against no individual address, so two
+                 endpoints of one service demanding different scopes are reported as one scope set.
+               WHAT THE NEXT DIFF BUILDS: `requiredScopes` as a DECLARED field on the endpoint record —
+                 added to lib/endpoint-record.js's ENDPOINT_ABSENT with `null` meaning "no challenge has named
+                 a scope for this address", written through `endpointKeyFromParts` here, and given its reader
+                 in the Send panel beside the `requiredHeaders` row that already reads that record.
+               HOW ITS ABSENCE WOULD SHOW: a 403 challenge on a non-Google API surfaces in the popup's
+                 per-service scope rows while the Send panel for that exact endpoint shows no "Scopes:" row. */
+          const _scDoc = globalStore.discoveryDocs.get(service)?.doc;
+          if (_scDoc) {
+            const _scMethod = findDiscoveryMethod(_scDoc, url.pathname, msg.method)?.method;
+            if (_scMethod && (!Array.isArray(_scMethod.scopes) || !_scMethod.scopes.length)) {
+              _scMethod.scopes = scopeList;
+            }
+          }
         }
       }
     }

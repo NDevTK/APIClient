@@ -68,6 +68,95 @@ const _ENDPOINT_STATED = ["url", "method", "host", "path", "service", "source", 
    below silently render as neither. */
 const _ENDPOINT_SOURCES = ["ast_analysis", "ast_shape_origin"];
 
+/* THE KEY — THE NAME THIS RECORD IS FILED UNDER — MINTED HERE AND SPELLED NOWHERE ELSE.
+
+   THE RECORD HAD ONE DESCRIPTION AND ITS NAME HAD NONE, and the two halves fail the same way for the same
+   reason. A key composed independently at two sites is a contract with nothing enforcing it, and its failure
+   is SILENT BY CONSTRUCTION: a Map miss is a legitimate, ordinary outcome, so a key that can never match is
+   indistinguishable from an address nothing learned. It has now happened TWICE, on this one map, in one
+   file — a live-response consumer built `method + " " + host + path` while the producer mints the same three
+   parts behind a prefix, so every `get()` missed and the `if (ep)` beside it read as the true and common
+   statement "this live request hit an address the forced execution never derived". That is CLAUDE.md's
+   defaulted-field defect performed on a KEY: a plausible negative, produced by a lookup that cannot succeed,
+   with nothing anywhere to say so. The first instance was found and repaired; the second sat FURTHER DOWN
+   THE SAME FILE, below the comment written to describe the first — which is the whole argument for minting
+   over describing: a prose record of a defect does not stop the next copy, even in the file it is written in.
+
+   So the shape is not written down for a reader to COPY — copying is how both instances arose. It is MINTED:
+   one spelling of the prefix, one spelling of the separator, and `isEndpointKey` as the only thing permitted
+   to ask whether a string is one of these. A future consumer that needs an endpoint by address calls this and
+   cannot get it wrong, which is the whole of the repair; making the two existing spellings agree would have
+   been the third copy.
+
+   WHY EACH OF THE THREE PARTS IS IN THE NAME. `method`, because one address answering GET and POST is two
+   endpoints. `host`, because a path-only key collapsed the same path across DIFFERENT origins into one
+   record — and the cumulative moat spans sites, so that collapse LOSES the "many sites per session" surface
+   rather than tidying it. `path`, because it is the remainder of the address. `host` + `path` IS the address:
+   that is lib/callsite-url.js's own stated invariant ("`host + path` reconstructs the address in both
+   cases"), and it is why an address whose ORIGIN IS A SHAPE keys exactly like a literal one — `host` is then
+   the shape verbatim, and nothing here treats the two arms differently, so a shape-origin endpoint dedups
+   across runs like any other.
+
+   THIS FUNCTION DOES NOT FOLD CASE, and that is a rule rather than an omission. Both sides of the seam carry
+   a method already normalized by Fetch §2.2.1 "Methods" — verbatim: "To normalize a method, if it is a
+   byte-case-insensitive match for `DELETE`, `GET`, `HEAD`, `OPTIONS`, `POST`, or `PUT`, byte-uppercase it" —
+   the engine half in browser/core/fetch/request.c and the network observer in extension/intercept.js. §2.2.1
+   deliberately leaves everything else alone ("Using `patch` is highly likely to result in a `405 Method Not
+   Allowed`"), so `patch` travels lowercase and a `toUpperCase()` here would be a THIRD rule disagreeing with
+   both producers — which is the same defect as a second key spelling, one field further in. */
+
+/* THE PREFIX, WHICH IS A PROVENANCE TAG WELDED INTO A LOOKUP NAME.
+   It once discriminated: a second producer minted `AST DYN ` for shape-origin addresses, and the prefix said
+   which of the two you were holding. That producer is gone — one mint remains, so EVERY key in these maps
+   carries this, and the one predicate that reads it selects everything. Provenance also already lives where
+   CLAUDE.md puts it, as a FIELD the record states: `source` is "ast_analysis" or "ast_shape_origin".
+
+   NAMED RESIDUAL — the prefix is not removed here, and this is what that leaves.
+     WHAT IS NOT COVERED: the key still carries a provenance tag no consumer distinguishes on, so
+       `isEndpointKey` is a filter that is true of every entry and `offscreen-brain.js`'s per-delivery sweep
+       is a `clear()` written as a predicate.
+     WHAT THE NEXT DIFF BUILDS: dropping the prefix from the mint, which CANNOT be done alone — these keys are
+       PERSISTED. lib/persistence.js serializes globalStore.endpoints BY KEY and restores it, so a prefix-free
+       mint would make every entry a previous session stored unreachable by a freshly minted name, and
+       lib/merge.js's `globalStore.endpoints.get(k)` would miss for all of them. That is this same defect one
+       layer out — across sessions instead of across files — so the diff is the mint plus a store migration
+       that rekeys what IndexedDB already holds, verified against a store written before it.
+     HOW ITS ABSENCE WOULD SHOW: it does not show as breakage, which is why it is a residual and not a bug —
+       it shows as this constant existing at all, and as a sweep predicate that has no false case. */
+const _ENDPOINT_KEY_PREFIX = "AST ";
+
+/* Mint the name for one endpoint address. `where` names the caller, because an assertion that cannot say
+   WHICH producer went silent sends the reader to read all of them. */
+function endpointKeyFromParts(method, host, path, where) {
+  /* A SPACE IS THE SEPARATOR, so a method holding one makes the name ambiguous — `AST A B h/p` parses as two
+     different (method, host) splits and the two would key alike. This is ours to assert rather than a page's
+     input to refuse: a method is an RFC 9110 §5.6.2 "Tokens" token, and Fetch §5.4 "Request class" throws a
+     TypeError on a method that is not one, so no request that ever reached a server carried a space in it. */
+  DCHECK(typeof method === "string" && method !== "" && method.indexOf(" ") < 0,
+         "an endpoint key was minted from a method that is not a single token (" +
+         JSON.stringify(method) + ", " + where + ") — the space between method and host is this name's one " +
+         "separator, so a method carrying one produces a key two different addresses can both spell");
+  /* AN EMPTY HOST WOULD MINT A NAME WITH NO ORIGIN IN IT, which is precisely the path-only key that collapsed
+     the same path across different sites into one record. lib/callsite-url.js answers a non-empty host on
+     both arms — the hostname for a literal origin, the shape verbatim for an undetermined one. */
+  DCHECK(typeof host === "string" && host !== "",
+         "an endpoint key was minted with no origin (" + where + ") — lib/callsite-url.js's " +
+         "`astCallSiteAddress` always answers a host, literal or shape, so an empty one is that parser " +
+         "broken and this address would key alike with every same-path address on every other site");
+  /* `path` MAY BE THE EMPTY STRING and that is a fact, not an absence: a shape-origin address can be nothing
+     but its shape. So this checks TYPE, exactly as the record's own `path` check does. */
+  DCHECK(typeof path === "string",
+         "an endpoint key was minted from a path that is not a string (" + where + ") — an address with no " +
+         "path is written \"\", which is a stated fact about a shape-origin address rather than a gap");
+  return _ENDPOINT_KEY_PREFIX + method + " " + host + path;
+}
+
+/* IS THIS STRING ONE OF THESE NAMES — the only permitted reader of the prefix. Spelled out at a call site it
+   is the prefix's fourth independent copy, and a copy of a name is what this whole section exists to end. */
+function isEndpointKey(key) {
+  return typeof key === "string" && key.startsWith(_ENDPOINT_KEY_PREFIX);
+}
+
 /* THE ONE ORIGIN. Every endpoint record in the extension is built here. `where` names the producer, because
    an assertion that cannot say WHICH producer went silent sends the reader to read all of them. */
 function makeEndpointRecord(parts, where) {
