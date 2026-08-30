@@ -27,7 +27,7 @@
 #include "solver/multipart_batch.h"
 #include "core/agent_state.h"
 #include "core/fetch/fetch.h"
-#include "core/fetch/data_url.h"
+#include "core/fetch/scheme_fetch.h"
 #include "core/file/blob.h"
 #include "core/frame/location.h"
 #include "core/dom/document.h"
@@ -73,7 +73,14 @@ void fetch_set_provider(const FetchProvider *p) { g_provider = p; }
 /* THE SAME SEAM, FOR A COMPONENT WHOSE OWN STANDARD SAYS "FETCH REQUEST" — see fetch.h. `value` is the second
    parameter the provider takes and is JS_UNDEFINED here for the reason it is at `fetch()`'s own call: the
    URL form of the park owes its answer to the host, and a value supplied up front is a reply nobody asked
-   for. */
+   for.
+   AND §4.3 SCHEME FETCH RUNS HERE, WHICH IS WHY THIS IS A SEAM AND NOT A FORWARDER. Every component whose
+   standard says "fetch request" reaches the host through this one function, so this is the point at which the
+   question "who answers these bytes" can be asked ONCE for all of them — and it was being asked at `fetch()`
+   and at XMLHttpRequest and NOWHERE ELSE, so an `<img src="data:image/svg+xml,…">` and a
+   `<link rel=preload>` of one went to the trusted zone, which can fetch nothing but an HTTP(S) scheme and
+   answered a refusal the page cannot tell from a network failure. §4.3 answers it with a 200 out of bytes that
+   were already in this address space, and `deliver` is exactly the processResponse steps that answer needs. */
 void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
 {
     DCHECK(g_provider != NULL && g_provider->owe != NULL,
@@ -86,6 +93,11 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
            "a request was owed to the host without stating its METHOD — Fetch §2.2 Requests gives every "
            "request one (`GET` unless stated otherwise), so a component that reached this seam unnamed "
            "dropped a field rather than made a request that lacks it");
+    /* §4.3 SCHEME FETCH, FIRST. A scheme this agent answers is answered here and the host is never told about
+       it; only what §4.3 hands to HTTP fetch reaches the provider. The blob URL entry is JS_UNDEFINED because no
+       standard but §5.4's Request constructor has one to have captured (core/fetch/scheme_fetch.h). */
+    if (scheme_fetch_answer(ctx, deliver, req, JS_UNDEFINED))
+        return;
     g_provider->owe(ctx, deliver, JS_UNDEFINED, req);
 }
 
@@ -517,10 +529,12 @@ char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply)
     return out;
 }
 
-/* SETTLING A SCHEME §4.3 ANSWERED LOCALLY. `data:` and `blob:` both produce their whole response inside this
-   agent, and both settle the same way: through a FLOW, because resolving reads `then` off the Response and the
-   page owns that prototype. One implementation, because the two arms differ in what they build and in nothing
-   at all about how it is delivered. `value` is consumed. */
+/* SETTLING A REQUEST §4.1 MAIN FETCH STEP 7 REFUSED — a bad port, or a Content Security Policy that blocks it.
+   The settle runs through a FLOW, because resolving reads `then` off the value and the page owns that
+   prototype. `value` is consumed.
+   §4.3's two locally-answered schemes used to settle through here as well, out of two arms written into this
+   function. They are core/fetch/scheme_fetch.c's now, and they settle through the SAME `deliver` closure a
+   host reply settles through — which is why this is left with the one caller that has no reply at all. */
 static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value, int reject)
 {
     if (JS_IsException(value))
@@ -614,101 +628,6 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
             JS_FreeValue(ctx, resolving[1]);
             return promise;
         }
-        if (scheme && !strcmp(scheme, "data")) {
-            /* §4.3's "data" step: §6's processor, and the response it names — status message `OK`, one
-               `Content-Type` header carrying the struct's MIME type SERIALIZED, and the struct's body. There
-               is nothing to request: a `data:` URL that reached the host request path went out as an HTTP GET
-               whose target was the MIME type and whose `Host:` was empty. */
-            DataUrlStruct ds;
-            JSValue value;
-            int reject = 0;
-
-            if (data_url_process(&rec, &ds)) {
-                char *ct = mime_type_serialize(&ds.mime);
-                HeaderList dh = { 0 };
-                /* §4.1: the response's URL list is a clone of the REQUEST's, which for a scheme answered here
-                   is the one URL this fetch was given — SERIALIZED off the record that was already parsed,
-                   never the raw argument, because a URL list holds URLs and `url` parses the last one back. */
-                char *abs = url_serialize(&rec, /*exclude_fragment*/ false);
-                JSValue ul;
-                CHECK(abs, "fetch: OOM serializing a data: URL for the response's URL list");
-                ul = response_url_list(ctx, (const char *const *)&abs, 1);
-                header_list_append(&dh, "content-type", ct);
-                value = response_new(ctx, ul, 200, "OK", &dh, ds.body, ds.body_len);
-                JS_FreeValue(ctx, ul);
-                free(abs);
-                header_list_free(&dh);
-                free(ct);
-                data_url_struct_free(&ds);
-            } else {
-                /* §4.3: the processor's failure is a NETWORK ERROR, which `fetch` rejects with a TypeError. */
-                JS_ThrowTypeError(ctx, "Failed to fetch");
-                value = JS_GetException(ctx);
-                reject = 1;
-            }
-            url_record_free(&rec);
-            fetch_settle_local(ctx, resolving, value, reject);
-            JS_FreeCString(ctx, u);
-            JS_FreeValue(ctx, resolving[0]);
-            JS_FreeValue(ctx, resolving[1]);
-            return promise;
-        }
-        if (scheme && !strcmp(scheme, "blob")) {
-            /* §4.3's "blob" step: answered from the BLOB URL STORE, not from the network — the whole point of
-               `URL.createObjectURL` is that the bytes are already here. The FRAGMENT is stripped before the
-               lookup, because a fragment names a place within a resource and not a different entry. */
-            char *key = url_serialize(&rec, /*exclude_fragment*/ true);
-            /* §4.1's clone of the request's URL list, taken here because the record is freed below and a URL
-               list holds URLs: the KEY has its fragment stripped (a fragment names a place within a resource,
-               not a different entry) and the response's URL keeps it. */
-            char *abs = url_serialize(&rec, /*exclude_fragment*/ false);
-            /* §5.4's CAPTURED ENTRY FIRST: a Request resolved its blob URL when it was built, so a page that
-               revoked the URL afterwards still fetches. The store is consulted only for a URL STRING, which has
-               nothing to have captured. */
-            JSValueConst captured = request_blob_entry(input);
-            /* OWNED, because the store is a per-flow heap Array now: `looked` is this scope's reference and is
-               released on the one way out below, while `blob` is the borrowed alias the steps read through. */
-            JSValue looked = JS_IsUndefined(captured) && key ? blob_url_lookup(ctx, key, strlen(key))
-                                                             : JS_UNDEFINED;
-            JSValueConst blob = !JS_IsUndefined(captured) ? captured : looked;
-            JSValue value;
-            int reject = 0;
-            /* §4.3: a blob fetch whose method is not GET is a NETWORK ERROR before the store is consulted. A
-               blob URL names bytes that are already here; there is nothing for a POST or a DELETE to mean. */
-            if (!JS_IsUndefined(method) && !JS_IsUndefined(blob)) {
-                const char *m = JS_ToCString(ctx, method);
-                if (m && strcmp(m, "GET")) blob = JS_UNDEFINED;
-                if (m) JS_FreeCString(ctx, m);
-            }
-
-            url_record_free(&rec);
-            free(key);
-            if (JS_IsUndefined(blob)) {
-                /* §4.3: no entry is a NETWORK ERROR, which `fetch` rejects with a TypeError. */
-                JS_ThrowTypeError(ctx, "Failed to fetch");
-                value = JS_GetException(ctx);
-                reject = 1;
-            } else {
-                size_t blen = 0;
-                const char *btype = NULL;
-                const char *bytes = blob_bytes_of(blob, &blen, &btype);
-                HeaderList bh = { 0 };
-                JSValue ul;
-                CHECK(abs, "fetch: OOM serializing a blob: URL for the response's URL list");
-                ul = response_url_list(ctx, (const char *const *)&abs, 1);
-                if (btype && *btype) header_list_append(&bh, "content-type", btype);
-                value = response_new(ctx, ul, 200, "OK", btype && *btype ? &bh : NULL, bytes, blen);
-                JS_FreeValue(ctx, ul);
-                header_list_free(&bh);
-            }
-            free(abs);
-            fetch_settle_local(ctx, resolving, value, reject);
-            JS_FreeValue(ctx, looked);
-            JS_FreeCString(ctx, u);
-            JS_FreeValue(ctx, resolving[0]);
-            JS_FreeValue(ctx, resolving[1]);
-            return promise;
-        }
         /* §5.4 STEP 2'S ANSWER, KEPT RATHER THAN THROWN AWAY — and this is the whole of the fix. The parse
            above already resolved the page's string against the API base URL, which is what step 2 says the
            request's URL IS; the record was then freed and the host was handed `u`, the RAW string the page
@@ -741,9 +660,6 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
         DCHECK(g_deliver_stepid >= 0, "fetch() parked a reply before its delivery machine was declared");
         deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 2, data);
         if (!JS_IsException(deliver)) {
-            DCHECK(g_provider != NULL && g_provider->owe != NULL,
-                   "fetch() was called with no host network provider installed — the promise would be owed to "
-                   "nobody and the flow could never finish");
             FetchRequest req;
             const char *m = JS_IsUndefined(method) ? NULL : JS_ToCString(ctx, method);
             /* `GET` IS THE REQUEST'S OWN METHOD, NOT A HOLE FILLED HERE — Fetch §2.2 Requests: "A request has an
@@ -759,7 +675,16 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;
-            g_provider->owe(ctx, deliver, JS_UNDEFINED, &req);
+            /* §4.3 SCHEME FETCH, ASKED HERE AND NOT ONLY AT THE SEAM BELOW, BECAUSE THIS CALLER HOLDS ONE INPUT
+               NO OTHER CALLER HAS: §5.4's CAPTURED blob URL entry. A `Request` resolved its `blob:` URL when it
+               was built, so a page that revoked the URL afterwards still fetches; a URL STRING has nothing to
+               have captured and the store is consulted for it. Every other component reaches §4.3 through
+               `fetch_owe`, which asks with no capture because no other standard has a Request to have made one.
+               The seam asks AGAIN on the way past and cannot disagree: the capture is read by §4.3's `blob` arm
+               alone, and a request that reached the line below took the `HTTP(S) scheme` arm, which no capture
+               can move. */
+            if (!scheme_fetch_answer(ctx, deliver, &req, request_blob_entry(input)))
+                fetch_owe(ctx, deliver, &req);
             if (m) JS_FreeCString(ctx, m);
             JS_FreeValue(ctx, deliver);
         }

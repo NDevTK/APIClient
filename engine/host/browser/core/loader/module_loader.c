@@ -20,6 +20,7 @@
 #include "quickjs.h"
 #include "solver/engine.h"
 #include "core/agent_state.h"
+#include "core/fetch/scheme_fetch.h"   /* Fetch §4.3, which decides who answers a module load's fetch */
 #include "core/loader/module_loader.h"
 
 /* THE CHUNK REGISTER: every specifier forced execution reached, in discovery order, deduped. It never forgets
@@ -76,6 +77,13 @@ static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *o
        a host delivered a bare body string, and stopped being so the moment a reply became the record
        `fetch()` builds a Response out of — JS_ModuleLoadPending would have been handed that record to compile.
        Its own kind settles this promise with the reply's body. */
+    /* FETCH §4.3 SCHEME FETCH, ASKED OF THIS ENTRY AS IT IS ASKED OF EVERY OTHER. §16.2.1.10
+       HostLoadImportedModule ends in HTML's "fetch a single module script", which is the same Fetch algorithm
+       `fetch()` runs — so §4.3's switch on the URL's scheme decides who answers `import("data:text/javascript,
+       export default 1")`, and the answer is a 200 built out of bytes already in this address space. The park
+       below reaches a trusted zone that can fetch nothing but an HTTP(S) scheme, and §4.3's local answer has no
+       delivery on THIS park yet, so this CRASHES naming what to build (core/fetch/scheme_fetch.h). */
+    scheme_fetch_require_network(ctx, module_name);
     engine_pending_module_url(ctx, resolving[0], module_name);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);

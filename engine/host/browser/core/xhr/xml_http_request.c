@@ -64,7 +64,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/fetch/body.h"
-#include "core/fetch/data_url.h"
+#include "core/fetch/scheme_fetch.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/port_blocking.h"
@@ -1731,14 +1731,19 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
  * front of it. Answering it anywhere else would leave `xhr.open("GET", "http://host:25/")` reaching the trusted
  * zone with the one request the standard says must never be made.
  *
- * THE OTHER SCHEMES ARE ABSENT HERE ON PURPOSE. §4.3's "about" and "blob" arms are reachable from `fetch()`
- * and not from this component (XHR §3.5.1 has no blob URL entry to capture), and the day one is, it is
- * another case of this switch rather than another place that decides. */
+ * AND §4.3 Scheme fetch IS NOT WRITTEN OUT HERE. This function used to carry its own copy of the switch — a `data` arm and
+ * nothing else — while core/fetch carried a second copy with a `data` arm AND a `blob` arm, so `fetch(blobUrl)`
+ * was answered inside this agent and the identical `xhr.open("GET", blobUrl)` was sent to a trusted zone that
+ * can fetch nothing but an HTTP(S) scheme. Two copies of one switch is what that asymmetry IS. §4.3 is
+ * core/fetch/scheme_fetch.c now, with its own parse, and this component runs it rather than restating it: an
+ * arm added there is answered here at the same instant, which is the whole reason it is one component. */
 static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
 {
     const char *u = JS_ToCString(ctx, d->url);
+    const char *m;
     UrlRecord rec;
-    DataUrlStruct ds;
+    FetchRequest req;
+    JSValue reply = JS_UNDEFINED;
     bool parsed, local;
 
     CHECK(u != NULL, "XMLHttpRequest: OOM reading the request URL back to switch on its scheme");
@@ -1768,39 +1773,39 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
         JS_FreeCString(ctx, u);
         return true;
     }
-    local = parsed && !strcmp(rec.scheme, "data");
-    JS_FreeCString(ctx, u);
-    if (local && data_url_process(&rec, &ds)) {
-        /* §4.3's "data" step's response, through the ONE reply object every answer to this component takes —
-           status message `OK`, one `Content-Type` carrying the struct's MIME type serialized, and the body. */
-        char *ct = mime_type_serialize(&ds.mime);
-        HeaderList hl = { 0 };
-        JSValue reply;
-        /* §4.1: the response's URL list is a clone of the REQUEST's, which here is the one `data:` URL this
-           request named — serialized off the record just parsed, because a URL list holds URLs. */
-        char *abs = url_serialize(&rec, /*exclude_fragment*/ false);
+    url_record_free(&rec);
 
-        CHECK(abs, "XMLHttpRequest: OOM serializing a data: URL for the response's URL list");
-        header_list_append(&hl, "content-type", ct);
-        /* §4.2's ESSENCE of the type the `data:` URL itself CARRIES, which is what this host computed the
-           resource to be (core/fetch/fetch.h). There is no network and no sniff: §4.3's "data" step says the
-           MIME type IS the one parsed out of the URL, so the URL is the authority and it is stated rather than
-           re-derived by anyone downstream. */
-        char *cty = mime_type_essence(&ds.mime);
-        CHECK(cty, "XMLHttpRequest: OOM stating a data: URL's computed MIME type");
-        reply = fetch_reply_new(ctx, 200, "OK", &hl, ds.body, ds.body_len,
-                                (const char *const *)&abs, 1, cty);
-        free(cty);
-        free(abs);
+    /* §4.3 SCHEME FETCH, over §3.5.6's request. The METHOD is on it because §4.3's `blob` arm reads it — "If
+       request's method is not `GET` … return a network error" — and §3.5.1 step 6 normalized it, so this
+       component states what it has rather than letting the switch read a field nobody filled. §5.4's captured
+       blob URL entry is JS_UNDEFINED: XHR §3.5.1 parses a URL STRING and has no Request object to have
+       captured with, so §4.3 reads the entry off the store as the URL's own. */
+    m = JS_IsString(d->method) ? JS_ToCString(ctx, d->method) : NULL;
+    CHECK(m != NULL, "XMLHttpRequest: the request reached §4.1 main fetch with no method — §3.5.1 open() step "
+                     "6 normalizes one onto the object before the state is `opened`, and §4.3's `blob` arm "
+                     "reads it");
+    memset(&req, 0, sizeof req);
+    req.method = m;
+    req.url = u;   /* the two fields §4.3 reads; a §4.3 answer never reaches the host, so it owes it nothing */
+    switch (scheme_fetch(ctx, &req, JS_UNDEFINED, &reply)) {
+    case SCHEME_FETCH_RESPONSE:
+        /* Through the ONE reply object every answer to this component takes, exactly as a host reply is. */
         xhr_take_reply(ctx, d, reply);
         JS_FreeValue(ctx, reply);
-        header_list_free(&hl);
-        free(ct);
-        data_url_struct_free(&ds);
+        local = true;
+        break;
+    case SCHEME_FETCH_NETWORK_ERROR:
+        /* §3 already has the response as a network error, so there is nothing to write for it: "handle errors"
+           fires the request error steps on the way out. */
+        local = true;
+        break;
+    default:
+        /* §4.3 hands this one to HTTP fetch, which is the trusted host's to answer. */
+        local = false;
+        break;
     }
-    /* §6's failure is §4.3's NETWORK ERROR, and §3 already has the response as one — so there is nothing to
-       write for it, and "handle errors" fires the request error steps on the way out. */
-    url_record_free(&rec);
+    JS_FreeCString(ctx, m);
+    JS_FreeCString(ctx, u);
     return local;
 }
 

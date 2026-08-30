@@ -33,6 +33,7 @@
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
 #include "core/fetch/fetch.h"          /* §2.2.5's body: a response's bytes, which is what a Document is parsed from */
+#include "core/fetch/scheme_fetch.h"   /* Fetch §4.3, which decides who answers §8.1.4.2's fetch */
 #include "core/idl_args.h"
 #include "core/realm.h"              /* §8.1.3.1's environment: the creator's top-level creation URL */
 #include "solver/engine.h"
@@ -469,6 +470,12 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
                "address — document_exec_scripts states one of the two for every executable entry");
         abs_url = script_src_absolute(cctx, ds.srcs[i], strlen(ds.srcs[i]));
         if (!abs_url) continue;
+        /* FETCH §4.3 SCHEME FETCH, ASKED OF THIS ENTRY TOO. §8.1.4.2 "Fetching scripts" runs the same algorithm
+           `fetch()` does, so the switch on the URL's scheme decides who answers these bytes here as well — and
+           both parks below reach a trusted zone that can fetch nothing but an HTTP(S) scheme. §4.3's local
+           answer has no delivery on these two parks yet, so this CRASHES naming it rather than parking the flow
+           on a refusal the page cannot tell from a network failure (core/fetch/scheme_fetch.h). */
+        scheme_fetch_require_network(cctx, abs_url);
         /* THE SET PARKS AND THE ORDERED PASSES TAKE A SLOT — the whole difference between having a position and
            not needing one. A parked reply becomes a program of this flow whenever it drains, which is the
            arrival order a SET is entitled to; a slot holds the sequence at this script until its reply fills it. */
