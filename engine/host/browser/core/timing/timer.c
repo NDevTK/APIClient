@@ -1378,8 +1378,14 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         }
         src = JS_ToCString(ctx, text);
         JS_FreeValue(ctx, text);
-        if (!src)
+        if (!src) {
+            /* THE COVERAGE GOES WITH THE PROGRAM IT COVERED. This is the ONE line between the announcement and
+               the queue that can leave without queueing, so it is the one place the host seam's latch can
+               outlive the bytes it was raised for — and a latch that survives its own program is an assert
+               that answers YES for whatever queues next, which is the assert lying rather than firing. */
+            (void)solve_eval_sink_announced();
             return JS_STEP_ABRUPT;
+        }
         DCHECK(g_script_sink != NULL,
                "setTimeout was given a STRING handler and this host registered no way to evaluate one — HTML "
                "§8.7 Timers evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
