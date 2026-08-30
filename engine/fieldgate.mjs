@@ -450,6 +450,61 @@ function callSites(struct, name) {
 
 const sig = (s, from, to) => { let i = from; while (i < to && /\s/.test(s[i])) i++; return i; };
 
+/* ---- what stands between a read and the `||` after it ------------------------------------------------------ */
+
+/* A `||` OR `??` FOLLOWING A READ IS NOT NECESSARILY THAT READ'S DEFAULT, AND THE TWO ARE OPPOSITE FACTS ABOUT
+ * THE SAME LINE. `x.f || d` SUBSTITUTES `d` for `x.f`, which is the concealment this category is named after —
+ * a field that was never written arrives at the consumer as a plausible datum. `!x.f || …` and
+ * `a.f !== x.f || …` are the OTHER thing: the field's value is consumed by an operator whose result is a
+ * BOOLEAN, and the `||` then joins booleans. Nothing is substituted for the field, because a boolean is not a
+ * value anyone mistook for one — the absence DECIDES a branch instead of hiding inside a datum. Reported as
+ * defaults, those lines say the exact reverse of what they do: `if (!r.headers || typeof r.headers !== 'object')
+ * throw` is the DCHECK this gate's own verdict tells a reader to write, printed as the defect it is the cure for.
+ *
+ * SO THE QUESTION IS STRUCTURAL AND IT IS ASKED TO THE LEFT, NOT TO THE RIGHT. Precedence puts every comparison
+ * and every unary `!` INSIDE an operand of `||`, so a read that ends just before a `||` is the whole left operand
+ * only when nothing to its left is already consuming it. That is one token: the significant text immediately
+ * before the read expression begins.
+ *
+ * ONLY BOOLEAN-PRODUCING OPERATORS COUNT, and the narrowness is the point rather than caution. `(a.b + c.d) || e`
+ * is still reported, because `undefined + 1` is `NaN`, `NaN` is falsy, and `e` then stands in for a number the
+ * producer never wrote — a fabricated datum by the same route as `x.f || 0`. `a && b.c || d` is still reported
+ * for the same reason. Widening this test to "anything that is not the whole operand" would take both of those
+ * out, and they belong in. The list is therefore the comparisons and the logical NOT, and nothing else.
+ *
+ * `=>` IS NOT `>`. The arrow's second character is the one character that makes this test answer backwards —
+ * `xs.map((x) => x.f || 0)` would read its `>` as a relational operator and decide away a real default at the
+ * most ordinary callback shape there is — so every relational form states which characters may NOT precede it. */
+const BOOL_OPS = [
+  { op: "===", before: "" }, { op: "!==", before: "" }, { op: "==", before: "" }, { op: "!=", before: "" },
+  { op: ">=", before: ">" }, { op: "<=", before: "<" }, { op: ">", before: "=>" }, { op: "<", before: "<" },
+];
+function boolConsumer(struct, code, start) {
+  let i = start;
+  while (i > 0 && /\s/.test(struct[i - 1])) i--;
+  if (i === 0) return null;
+  if (struct[i - 1] === "!") return "!";
+  for (const { op, before } of BOOL_OPS) {
+    if (struct.slice(i - op.length, i) !== op) continue;
+    /* `before` is the characters that, standing immediately in FRONT of this text, make it the tail of a
+       different operator: `>>=` in front of `>=`, `<<` in front of `<`, and `=>`/`>>` in front of `>`. Spelled
+       out beside the operator so the guard cannot drift away from the thing it guards. */
+    if (before.includes(struct[i - op.length - 1])) continue;
+    return op;
+  }
+  /* ECMAScript §13.10 Relational Operators' WORD-spelled member. `x instanceof C || …` is a comparison whose
+     text is an identifier, so the character test above cannot see it at all.
+     `in` IS THE OTHER ONE AND IT IS DELIBERATELY ABSENT, because §14.7.5 The for-in, for-of, and for-await-of
+     Statements spells its head with the SAME WORD and the two are not the same operator. `for (var p in
+     schema.properties || {})` — which is in this corpus — is a `|| {}` defaulting a record field, and reading
+     its `in` as a comparison would decide away the exact defect this category exists for. Telling the two
+     apart means looking left for a `for (`, and the value of getting that right is one construct nobody
+     writes: a relational `in` immediately in front of a `||`. So the trap is removed rather than guarded, and
+     an `x in o.f || y` is REPORTED — the under-crediting direction this file chooses everywhere else. */
+  const w = /([A-Za-z_$][\w$]*)\s*$/.exec(code.slice(Math.max(0, i - 24), i));
+  return w && w[1] === "instanceof" ? w[1] : null;
+}
+
 /* ---- the record namespaces ------------------------------------------------------------------------------- */
 
 /* A field name, with every place that WRITES it and every place that READS it. The diff between the two sides
@@ -481,6 +536,11 @@ const rec = (map, name) => {
 };
 
 const defaulted = [];   // {file,line,name,form,recv}
+/* A read a `||`/`??` follows WITHOUT defaulting it, because a boolean-producing operator already consumed the
+   value — see §boolConsumer. Printed in full for the same reason DECIDED PLATFORM is: a decided negative nobody
+   can see is the concealment this file exists to report, performed on its own output. Every row names the
+   operator that decided it, so every row is somewhere a reader can disagree. */
+const decidedOperand = [];  // {file,line,name,recv,form,by}
 
 /* A JSON key POSITION, which is the construct — `"name"` followed by a colon. A bare `"name"` in an emission
    is a VALUE and declares nothing, which is the whole difference between reading a structure and scanning for
@@ -816,7 +876,11 @@ const cMatched = [];
    they are written identically — an aliasing question this deliberately does not answer, because answering it
    by flowing the fact along assignments and into parameters is what made idl_installed.mjs's second solve
    report a union of every caller's object. Identical text is a fact; a flowed identity is an inference. */
-function receiverBefore(struct, code, dotAt) {
+/* `out`, when given, receives `.start` — the offset the receiver EXPRESSION begins at. A caller that has to ask
+   what stands to the LEFT of the whole read needs that offset and cannot recover it from the text: the text is
+   whitespace-collapsed and appears many times in a file, so searching for it would answer about some other
+   occurrence. It is recorded only where a receiver was actually produced. */
+function receiverBefore(struct, code, dotAt, out) {
   let i = dotAt;
   while (i > 0 && /\s/.test(struct[i - 1])) i--;
   if (i === 0) return null;
@@ -865,6 +929,7 @@ function receiverBefore(struct, code, dotAt) {
   }
   const raw = code.slice(i, end).trim();
   const t = raw.replace(/\s+/g, "");
+  if (out) { let st = i; while (st < end && /\s/.test(code[st])) st++; out.start = st; }
   if (/^[A-Za-z_$]/.test(t)) return /^[^\s;]*$/.test(t) ? t : null;
   /* An ARRAY LITERAL head — `[...m.values()].filter(f).length` — is a computed collection and no record ever
      crossed a seam as one: a decided negative. */
@@ -1031,7 +1096,7 @@ function functionScopes(struct, code) {
     if (struct[i] !== "{") continue;
     let p = i - 1;
     while (p >= 0 && /\s/.test(struct[p])) p--;
-    let params = null;
+    let params = null, fnName = null;
     if (struct[p] === ">" && struct[p - 1] === "=") {
       let q = p - 2;
       while (q >= 0 && /\s/.test(struct[q])) q--;
@@ -1046,10 +1111,19 @@ function functionScopes(struct, code) {
       while (k > 0 && /[\w$]/.test(struct[k - 1])) k--;
       /* `if (…) {` and `for (…) {` carry a parenthesized head and bind nothing a receiver can be spelled as */
       if (NOT_A_FUNCTION_HEAD.has(code.slice(k, e))) continue;
+      /* THE NAME A CALL SITE SPELLS, and only where the word in front of it is `function`. A method shorthand
+         `foo(a) { … }` reaches this same shape and is called as `o.foo(…)`, so crediting it would collect a
+         DIFFERENT function's arguments under this one's name — the aliasing that makes a plausible answer. */
+      const nm = code.slice(k, e);
+      let kw = k;
+      while (kw > 0 && /\s/.test(struct[kw - 1])) kw--;
+      const kwEnd = kw;
+      while (kw > 0 && /[\w$]/.test(struct[kw - 1])) kw--;
+      if (code.slice(kw, kwEnd) === "function" && /^[A-Za-z_$][\w$]*$/.test(nm)) fnName = nm;
     } else continue;
     const close = matchAt(struct, i);
     if (close < 0) continue;
-    spans.push({ open: i, close, params, binds: new Set(), head: params ? params[0] : i });
+    spans.push({ open: i, close, params, binds: new Set(), head: params ? params[0] : i, fnName });
   }
   /* AN EXPRESSION-BODIED ARROW IS A FUNCTION BODY TOO, and reading only the braced form made this walk answer
      one spelling of a construct and not its twin — the asymmetry that hides rather than errs. `arr.map(e =>
@@ -1209,6 +1283,33 @@ function functionScopes(struct, code) {
     inits.set(key, code.slice(from, e).replace(/\s+/g, " ").trim());
   }
 
+  /* A BINDING DECLARED EMPTY AND WRITTEN EXACTLY ONCE IS DECLARED BY THAT WRITE, and reading only the
+     `= <expr>` spelling answered one form of a construct and not its twin — the asymmetry that hides rather
+     than errs, the same one the expression-bodied arrow above records. `var parsed; try { parsed = new URL(x) }
+     catch { return … }` states what `parsed` is as flatly as `const parsed = new URL(x)` does; the only reason
+     the initializer moved is that the construction can THROW and the catch returns. Nothing here is followed
+     through a call, a parameter or a promise — the write IS the construct, and the SAME unambiguity rule
+     decides it: more than one write and the binding has no single declaration, exactly as a name declared twice
+     has none. A compound or increment write (`rhs < 0`) derives a value from the old one and declares nothing,
+     so it disqualifies the binding rather than being read as its initializer. */
+  const BARE = /\b(?:let|var)\s+([A-Za-z_$][\w$]*)\s*(?=[;,)\]}\n])/g;
+  while ((q = BARE.exec(struct))) {
+    const s = innermost(q.index);
+    const key = `${s ? s.open : "file"}\0${q[1]}`;
+    if (inits.has(key)) { inits.set(key, null); continue; }
+    const span = s ? [s.open, s.close] : [0, struct.length];
+    const writes = assignmentSites(struct, q[1], span[0], span[1]);
+    if (writes.length !== 1 || writes[0].rhs < 0) { inits.set(key, null); continue; }
+    let e = writes[0].rhs, d = 0;
+    for (; e < struct.length; e++) {
+      const ch = struct[e];
+      if (PAIRS[ch]) d++;
+      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
+      else if ((ch === ";" || ch === ",") && !d) break;
+    }
+    inits.set(key, code.slice(writes[0].rhs, e).replace(/\s+/g, " ").trim());
+  }
+
   /* The binder of `name` at `off`: the innermost enclosing body that binds it, or the file when none does. */
   const binderOf = (name, off) => {
     for (let s = innermost(off); s; s = innermost(s.open)) if (s.binds.has(name)) return String(s.open);
@@ -1225,7 +1326,53 @@ function functionScopes(struct, code) {
     }
     return null;
   };
-  return { binderOf, paramSlot, initOf: (name, off) => inits.get(`${binderOf(name, off)}\0${name}`) ?? null };
+
+  /* A PARAMETER OF A FUNCTION THIS FILE DECLARES IS TYPED BY THE ARGUMENTS THIS FILE PASSES IT, which is the
+   * same kind of fact as `paramSlot` one line up and read at the same place — a CALL SITE — with the type
+   * coming from the argument's own construct instead of from an IDL argument list. Nothing is followed through
+   * an assignment, a return or a promise. It is the missing half of that rule rather than a new one: the IDL
+   * types a parameter the PLATFORM hands a value to, and there was no way at all to type a parameter the FILE
+   * hands a value to, so a `URL` and a `Response` this gate decides two dozen times at their constructors were
+   * undecidable one call deep — a type-INFERENCE gap, not a gap in the authority.
+   *
+   * EVERY CALL SITE MUST ANSWER, AND ALL OF THEM MUST AGREE. A helper called with a URL at one site and with
+   * something this cannot read at another has no single parameter type, and taking the sites that happen to
+   * resolve would be reporting the ones that were easy — a plausible answer assembled out of a subset, which is
+   * exactly the false COMPLETE idl_installed.mjs was rewritten to remove. One disagreement, one unreadable
+   * argument or one call with too few arguments leaves the parameter undecided, which is AMBIGUOUS: the same
+   * under-crediting direction the cross-file rethrow rule chooses.
+   *
+   * NOT COVERED: a function bound by `const f = (…) => …` or `const f = function (…) …`. Only the
+   * `function NAME(` spelling carries its name where this walk already reads one; the bound spellings put the
+   * name in a DECLARATOR whose initializer is the literal, so the next diff joins `inits` to the span that
+   * initializer opens and hands `fnName` over from there. ITS ABSENCE SHOWS as a receiver in AMBIGUOUS whose
+   * reads are all members of one interface and whose enclosing function is arrow-bound — the same row this
+   * rule removes for `function`-declared helpers, still standing beside them. */
+  const localParamSlot = (name, off) => {
+    for (let s = innermost(off); s; s = innermost(s.open)) {
+      if (!s.binds.has(name)) continue;
+      if (!s.fnName || !s.paramList) return null;
+      const at = s.paramList.indexOf(name);
+      /* The declaration's own parameter list is not a call of it — `function f(a, b)` matches `f\s*(` exactly
+         as `f(x, y)` does, and reading it as one would resolve the parameter FROM ITSELF. */
+      return at < 0 ? null : { fnName: s.fnName, param: at, declParen: s.params[0] - 1 };
+    }
+    return null;
+  };
+  const callArgsOf = (fnName, index, declParen) => {
+    const out = [];
+    for (const c of callSites(struct, fnName)) {
+      if (c.open === declParen) continue;
+      if (struct[c.at - 1] === ".") continue;      /* `o.fnName(…)` is some other object's member */
+      if (!c.args) return null;                    /* an unbalanced call — the argument cannot be delimited */
+      const a = c.args[index];
+      if (!a || !code.slice(a[0], a[1]).trim()) return null;   /* called with fewer arguments than this slot */
+      out.push({ text: code.slice(a[0], a[1]).replace(/\s+/g, " ").trim(), at: a[0] });
+    }
+    return out;
+  };
+  return { binderOf, paramSlot, localParamSlot, callArgsOf,
+           initOf: (name, off) => inits.get(`${binderOf(name, off)}\0${name}`) ?? null };
 }
 
 function scanJS(file, src) {
@@ -1241,7 +1388,7 @@ function scanJS(file, src) {
      text stays the display, because that is what a reader opens the file to find; the key is what decides
      which reads are reads of one object. A receiver whose base is not a bare identifier (`a().b`) has no
      binder to ask about and keys under its text alone, exactly as before. */
-  const { binderOf, initOf, paramSlot } = functionScopes(struct, code);
+  const { binderOf, initOf, paramSlot, localParamSlot, callArgsOf } = functionScopes(struct, code);
   const keyOf = (recv, off) => {
     const base = /^[A-Za-z_$][\w$]*/.exec(recv);
     return base ? `${recv}@${binderOf(base[0], off)}` : recv;
@@ -1257,7 +1404,8 @@ function scanJS(file, src) {
     const optional = m[1] === "?.";
     const nameAt = m.index + m[0].length - m[2].length;
     if (struct[m.index - 1] === "." || struct[m.index - 1] === "?") continue;   /* `...spread`, `?.` already taken */
-    const recv = receiverBefore(struct, code, m.index);
+    const at0 = {};
+    const recv = receiverBefore(struct, code, m.index, at0);
     const after = sig(struct, m.index + m[0].length, struct.length);
     const nxt = struct.slice(after, after + 3);
     const isWrite = /^=[^=>]/.test(nxt) || /^=$/.test(nxt);
@@ -1279,13 +1427,17 @@ function scanJS(file, src) {
        only ever have been ambiguous. */
     const meth = awaitedMethod(recv);
     if (meth) { mojoReplyReads.push({ file, line: lineOf(src, m.index), method: meth, name: m[2] }); continue; }
-    let form = null;
+    let form = null, consumed = null;
     if (optional) form = "?.";
     else if (/^\?\./.test(nxt)) form = "?. on the value";
-    else if (/^\|\|/.test(nxt)) form = "|| default";
-    else if (/^\?\?/.test(nxt)) form = "?? default";
+    else if (/^(\|\||\?\?)/.test(nxt)) {
+      const op = nxt.slice(0, 2);
+      consumed = at0.start === undefined ? null : boolConsumer(struct, code, at0.start);
+      if (!consumed) form = `${op} default`;
+      else consumed = { form: `${op} default`, by: consumed };
+    }
     else if (inSpan(swallow, m.index)) form = "inside a swallowing try/catch";
-    localReads.push({ name: m[2], recv, key: keyOf(recv, m.index), off: nameAt, form });
+    localReads.push({ name: m[2], recv, key: keyOf(recv, m.index), off: nameAt, form, consumed });
     if (isRMW) localWrites.push({ name: m[2], off: nameAt });
   }
 
@@ -1296,17 +1448,22 @@ function scanJS(file, src) {
     if (struct[at] !== "[" && !(m[1] && struct[at] === "?")) continue;
     const name = m[3];
     if (!/^[A-Za-z_$][\w$]*$/.test(name)) continue;
-    const recv = receiverBefore(struct, code, at);
+    const at1 = {};
+    const recv = receiverBefore(struct, code, at, at1);
     if (!recv) continue;   /* an index on a literal, or a receiver this cannot normalize */
     const after = sig(struct, at + m[0].length, struct.length);
     const nxt = struct.slice(after, after + 3);
     if (/^=[^=>]/.test(nxt) || /^=$/.test(nxt)) { localWrites.push({ name, off: at }); continue; }
-    let form = null;
+    let form = null, consumed = null;
     if (m[1]) form = "?.[]";
-    else if (/^\|\|/.test(nxt)) form = "|| default";
-    else if (/^\?\?/.test(nxt)) form = "?? default";
+    else if (/^(\|\||\?\?)/.test(nxt)) {
+      const op = nxt.slice(0, 2);
+      consumed = at1.start === undefined ? null : boolConsumer(struct, code, at1.start);
+      if (!consumed) form = `${op} default`;
+      else consumed = { form: `${op} default`, by: consumed };
+    }
     else if (inSpan(swallow, at)) form = "inside a swallowing try/catch";
-    localReads.push({ name, recv, key: keyOf(recv, at), off: at, form });
+    localReads.push({ name, recv, key: keyOf(recv, at), off: at, form, consumed });
   }
 
   /* --- braces: object literal (writes), destructuring pattern (reads), or a block ------------------------- */
@@ -1458,7 +1615,8 @@ function scanJS(file, src) {
   collectDomainsJS(file, src, code, struct);
   collectAbiJS(file, src, code, struct);
 
-  return { file, src, localReads, localWrites, wholeDefaults, site, initOf, binderOf, paramSlot };
+  return { file, src, localReads, localWrites, wholeDefaults, site, initOf, binderOf, paramSlot,
+           localParamSlot, callArgsOf };
 }
 
 /* ---- the RETURN-DOMAIN namespace: the one place a plausible datum is a VALUE rather than a NAME ------------ */
@@ -1633,19 +1791,25 @@ function comparisonsOn(struct, code, id, from, to) {
 
 /* How many times `id` is ASSIGNED inside [from,to). One is what makes the binding's value the call's; two is a
    binding whose value at a comparison is not decidable here, and that is a refusal rather than a guess. */
-function assignmentsTo(struct, id, from, to) {
-  let n = 0;
+/* EVERY WRITE TO `id` INSIDE [from,to), each with the offset its right-hand side begins at — `-1` for a
+   compound or increment form, which writes a value derived from the old one and therefore declares nothing. The
+   COUNT is what tells a binding with one declaration from one this cannot name at the read; the POSITIONS are
+   what let a binding declared empty and written once be read AT that write. Two consumers, one walk — a second
+   copy of this regex is the hand-kept list this whole file argues against. */
+function assignmentSites(struct, id, from, to) {
+  const out = [];
   const re = new RegExp(`(^|[^\\w$.])${id}(?![\\w$])`, "g");
   re.lastIndex = from;
   let m;
   while ((m = re.exec(struct)) && m.index < to) {
     let j = m.index + m[1].length + id.length;
     while (j < to && /\s/.test(struct[j])) j++;
-    if (struct[j] === "=" && struct[j + 1] !== "=" && struct[j + 1] !== ">") n++;
-    else if (/^(\+\+|--|\+=|-=|\|=|&=|\^=|\*=|\/=|%=)/.test(struct.slice(j, j + 2))) n++;
+    if (struct[j] === "=" && struct[j + 1] !== "=" && struct[j + 1] !== ">") out.push({ at: m.index, rhs: j + 1 });
+    else if (/^(\+\+|--|\+=|-=|\|=|&=|\^=|\*=|\/=|%=)/.test(struct.slice(j, j + 2))) out.push({ at: m.index, rhs: -1 });
   }
-  return n;
+  return out;
 }
+function assignmentsTo(struct, id, from, to) { return assignmentSites(struct, id, from, to).length; }
 
 /* A `switch (id) {` inside [from,to): its top-level case constants and whether it carries a `default`. A switch
    WITHOUT a default is the one branching construct that claims to enumerate, so it is the only one besides an
@@ -2354,15 +2518,38 @@ function ifaceOfExpr(text, off, scan, seen) {
        picks one. Nothing is followed through an assignment or a return — a call site is a construct, and this
        is the same kind of fact as a binding's initializer, read at the other end of the call. */
     const slot = scan.paramSlot(t, off);
-    if (!slot) return null;
-    const m2 = /^(.*)\.([A-Za-z_$][\w$]*)$/.exec(slot.callee);
-    if (!m2) return null;
-    const on = ifaceOfExpr(m2[1], slot.calleeAt, scan, s);
-    if (!on || on.startsWith(CTOR)) return null;
-    const cbType = argTypeName(on, m2[2], slot.arg);
-    const args = cbType && callbackArgs(cbType);
-    const a2 = args && args[slot.param];
-    return a2 ? ifaceOfType(a2.idlType) : null;
+    if (slot) {
+      const m2 = /^(.*)\.([A-Za-z_$][\w$]*)$/.exec(slot.callee);
+      if (!m2) return null;
+      const on = ifaceOfExpr(m2[1], slot.calleeAt, scan, s);
+      if (!on || on.startsWith(CTOR)) return null;
+      const cbType = argTypeName(on, m2[2], slot.arg);
+      const args = cbType && callbackArgs(cbType);
+      const a2 = args && args[slot.param];
+      return a2 ? ifaceOfType(a2.idlType) : null;
+    }
+    /* …and a parameter of a function THIS FILE declares is typed by the arguments this file passes it — see
+       §localParamSlot. The cycle guard is keyed on the FUNCTION AND SLOT rather than on the name, because a
+       recursive helper reaches its own parameter through a different binding and the name key would not see it. */
+    const lp = scan.localParamSlot(t, off);
+    if (!lp) return null;
+    const fnKey = `${scan.file}\0fn:${lp.fnName}#${lp.param}`;
+    if (s.has(fnKey)) return null;
+    s.add(fnKey);
+    const passed = scan.callArgsOf(lp.fnName, lp.param, lp.declParen);
+    if (!passed || !passed.length) return null;
+    let one = null;
+    for (const a of passed) {
+      /* EACH CALL SITE GETS ITS OWN COPY OF THE GUARD, because two sites passing the SAME identifier are not a
+         cycle and reading them as one answered the whole question `null`. `_urlList(parsed.href, resp)` appears
+         four times in one body; with a shared set the first `resp` resolved, added its key, and the second read
+         its own answer as a loop — so a helper called consistently was decided only when its callers happened
+         to spell the argument differently, which is the tokenizer deciding, not the constructs. */
+      const got = ifaceOfExpr(a.text, a.at, scan, new Set(s));
+      if (!got || (one !== null && one !== got)) return null;
+      one = got;
+    }
+    return one;
   }
   /* A trailing `(…)` is a CALL and a trailing `.name` is a member; both are stripped right to left, so
      `document.getElementById(i)` is Document's `getElementById` and nothing has to be parsed forward. */
@@ -2481,6 +2668,7 @@ for (const s of jsScans) {
       const site = { ...s.site(r.off), recv, shape: best };
       rec(fields, r.name).reads.push(site);
       if (r.form) defaulted.push({ ...site, name: r.name, form: r.form });
+      else if (r.consumed) decidedOperand.push({ ...site, name: r.name, ...r.consumed });
     }
   }
 }
@@ -2733,6 +2921,19 @@ if (defaulted.length) {
   for (const [form, n] of [...dByForm].sort((a, b) => b[1] - a[1])) log(`  ${String(n).padStart(5)}  ${form}`);
   for (const d of defaulted.slice(0, 20)) log(`    ${place(d)}  ${d.recv}.${d.name}  (${d.form})`);
   if (defaulted.length > 20) log(`    … and ${defaulted.length - 20} more`);
+}
+
+if (decidedOperand.length) {
+  const byOp = new Map();
+  for (const d of decidedOperand) byOp.set(d.by, (byOp.get(d.by) || 0) + 1);
+  log(`── DECIDED, NOT DEFAULTED — ${decidedOperand.length} read(s) a \`||\`/\`??\` FOLLOWS without defaulting: a ` +
+      `boolean-producing operator consumed the value first, so the disjunction joins booleans and substitutes ` +
+      `nothing for the field. \`if (!r.f || typeof r.f !== 'object') throw\` is the assertion this gate's verdict ` +
+      `asks for, and reporting it as concealment would say the reverse of what it does — decided, not passed ──`);
+  log(`  by the operator that consumed it: ${[...byOp].sort((a, b) => b[1] - a[1]).map(([o, n]) => `${o}×${n}`).join(", ")}`);
+  for (const d of decidedOperand.slice(0, 20))
+    log(`    ${place(d)}  ${d.recv}.${d.name}  (${d.form} — consumed by \`${d.by}\` first)`);
+  if (decidedOperand.length > 20) log(`    … and ${decidedOperand.length - 20} more`);
 }
 
 if (wholeDefaulted.length) {
