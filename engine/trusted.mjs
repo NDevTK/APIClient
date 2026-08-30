@@ -394,6 +394,22 @@ async function main() {
     child.stdout.setEncoding('utf8');   /* a StringDecoder, so a multi-byte character split across two chunk
                                            boundaries is not two replacement characters — the @RESULT line is
                                            the engine's own JSON and carries whatever a page put in it */
+    /* A CHILD THAT ABORTS CLOSES THIS PIPE UNDER A ROUND THAT IS ALREADY BEING WRITTEN, and an unhandled
+       `error` on a Node stream is a PROCESS-LEVEL throw — so the zone died of `write EPIPE` with a Node stack
+       standing exactly where the child's own `@WHY` had just explained itself. That is the worst possible
+       ordering: the engine names the invariant it broke, and the party whose job is to report it replaces the
+       naming with an IO symptom of the naming. The race is not orderable away either — `live` goes false when
+       the child's STDOUT ends, and a round queued before that arrives after it — so it is handled rather than
+       avoided. The instance is marked dead and the reason RECORDED, never swallowed: the per-instance report
+       at the bottom is what says an instance produced no `@RESULT`, and this is why. */
+    child.stdin.on('error', (err) => {
+      e.live = false;
+      e.channelError = err;
+      console.error(`[trusted] the channel to instance [${e.tag}] at ${e.docUrl} failed while this zone was ` +
+                    `writing a round to it: ${err.code || err.message}. The instance's own words are above ` +
+                    'this line — its stderr is this process\'s — and they are the diagnosis; this is the ' +
+                    'pipe noticing afterwards.');
+    });
     e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts].join('\t'));
     instances.push(e);
     loops.push(drive(e));
@@ -761,9 +777,18 @@ async function main() {
         askOperation(e, id, op);
       } else if (op.startsWith('document.fetch\t')) {
         /* §7.4.5's load for a document THIS instance holds — answered here rather than routed, because
-           routing a same-origin load to a peer would be answering it out of another agent. */
+           routing a same-origin load to a peer would be answering it out of another agent.
+           THE PROVENANCE IS `null` AND IT IS STATED, which is `navigate`'s own word for "the record does not
+           state it": a `document.fetch` names an ADDRESS and nothing else, exactly as a `navigable.create`
+           does, so the two callers of that function reach the same decision from the same standing — this
+           one is the SAME-AGENT half of the act whose cross-agent half is provisioned above it, and it would
+           be incoherent for the agent boundary to change what a person had authorized. It was OMITTED here,
+           which is not the same mistake as passing the wrong word and is a worse one: `undefined` is neither
+           `null` nor one of the three tokens, so the check written to stop an unknown provenance THREW on the
+           first same-origin child navigable of any session — the one shape it was never meant to be about. */
         track(e, key, (async () => {
-          const loaded = await navigate(op.slice('document.fetch\t'.length), e.docUrl, 'document.fetch');
+          const loaded = await navigate(op.slice('document.fetch\t'.length), e.docUrl, 'document.fetch',
+                                        null);
           if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
              byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would
