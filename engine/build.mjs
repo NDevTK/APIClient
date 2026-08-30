@@ -296,6 +296,15 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        discriminator that can rule a cause out and cannot name the alternative sends the reader
                        back to a census it did not read. */
                     "svcMax", "svcMin", "svcFamMax", "svcFamMin", "visMin", "visMax", "distMax",
+                    /* AND THE MOST SERVICE ANY ONE @S CANDIDATE HAS CONSUMED, which the census has emitted
+                       since the candidate rows were added and which no reader took. Without it this
+                       discriminator names TWO of the three states solver/flow.h says the candidate rows exist
+                       to separate — served-and-progressing (a distance problem: build the fitness) and
+                       never-served (a starvation problem: the ordering) — and is silent about the third,
+                       SERVED WHILE PINNED AT ZERO, which is a candidate being RESTARTED rather than resumed
+                       and which no amount of thread time fixes. Three states behind one silence is the defect
+                       §@S names about a search's own instrument. */
+                    "candSvcMax",
                     /* AND HOW MANY FORK FAMILIES THE PAIR ABOVE ARE THE ENDS OF, which is the row that turns
                        `svcFamMin === svcFamMax` from an ambiguity into a reading. The engine has emitted it
                        since the census learned to count it and this list did not read it, so the verdict below
@@ -391,6 +400,26 @@ function wfqReading(out) {
       ? `${w.families} fork families, spread ${rangeFam.toFixed(3)} — the family half is ordering`
       : `${w.families} fork families whose services are level at this instant — the family half orders but is ` +
         `not ordering here, which is not the same as the one-family case above`;
+  /* WHICH OF THE THREE STATES THE @S SEARCH IS IN — solver/flow.h says the candidate rows exist to separate
+     them and that they take different work, and this reader could name only two. `candSvcMax` is the row that
+     splits the pair `candUnrun`/`candDecMax` cannot: a candidate that HAS been charged for the thread and
+     still stands on no gates is being restarted from the baseline rather than resumed, which more scheduling
+     does not fix, while one that has never been charged is starving in the order and more scheduling is
+     exactly the fix. Zero candidates is a fourth statement and it is about the RUN's @S population rather
+     than about the search — flow.h: `cands: 0` puts `distMax` at 0 by construction, so the fitness term is
+     ordering nothing and that is not a finding about the term. */
+  const cand = w.cands === 0
+    ? "no @S candidate is live, so the fitness term is ordering nothing — a fact about this run's @S " +
+      "population and not about the term"
+    : w.candUnrun === w.cands
+      ? `every one of the ${w.cands} candidates is STARVED — not one has ever been charged for the thread, ` +
+        `so the ordering is what is costing this search`
+      : w.candDecMax === 0 && w.candSvcMax > 0
+        ? `candidates have been served (${w.candSvcMax} notches at the most) and the deepest still stands on ` +
+          `ZERO gates — they are being RESTARTED from the baseline rather than resumed, which no amount of ` +
+          `thread time fixes`
+        : `candidates are being served (${w.candSvcMax} notches at the most) and are progressing — the ` +
+          `deepest stands on ${w.candDecMax} gates, so what limits this search is DISTANCE rather than turns`;
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
@@ -410,7 +439,7 @@ function wfqReading(out) {
           `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread; ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
           `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate; ` +
-          terms,
+          `${cand}; ` + terms,
   };
 }
 
