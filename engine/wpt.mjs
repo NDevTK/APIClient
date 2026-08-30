@@ -1536,6 +1536,27 @@ for (const { file: f, kind, variant } of runs) {
       abortRun(area, "corpus", rel, `a <script src> the corpus does not serve: ${noscript[1]}`);
       continue;
     }
+    /* AND THE RUN'S OWN FILE, WHICH IS THE SAME FACT ABOUT THE ONE INPUT THAT MATTERS MOST. The runner GETs the
+       test off wptserve — a `.sub.` file is a TEMPLATE, so its bytes on disk are not the test — and a server
+       that answers nothing leaves it with nothing to run. It used to say so with an always-fatal `CHECK`, which
+       is a claim about the ENGINE, and the cost was a whole run's tail: this driver's last whole-corpus run
+       came back with storage, streams, url, wai-aria, webidl, webmessaging and xhr at 100 % aborted — 935 files
+       — after wptserve stopped answering part-way through shadow-dom, and every one of them was reported as an
+       engine crash. Re-running those files against a live server with the SAME binary passes them.
+       READING THE MARKER IS NOT THE FIX AND MUST NOT BE MISTAKEN FOR IT: `@E` now lands in `fatal`, whose own
+       row tells the reader to build an engine invariant that is not missing. The runner names which of the
+       three states this is, at the site that knows; this line is the column it names.
+       IT IS NOT GUARDED BY `!abortedHere` LIKE THE ONE ABOVE, and the difference is a fact about the emitter
+       rather than a preference: the runner reports this and STOPS, so there is no test left to abort and no
+       partial result to preserve — a file carrying both markers is a contract break, not a second diagnosis. */
+    const unservedTest = out.match(/^@WPTERR (.*): the corpus server did not serve this run's own file$/m);
+    if (unservedTest) {
+      abortRun(area, "corpus", rel,
+               `the corpus server did not serve this run's own file: ${unservedTest[1]} — nothing about the ` +
+               "engine was measured. If a whole tail of this run says the same thing, wptserve stopped " +
+               `answering (its log: ${SERVER_LOG}) and every row after that point is about the server`);
+      continue;
+    }
     /* WHAT THE RUNNER STREAMED, AND IT IS TWO POPULATIONS BECAUSE THE DIFFERENCE BETWEEN THEM IS THE DIAGNOSIS.
        `@WPTSTART` is a subtest testharness REGISTERED; `@WPT` is one whose RESULT is known. Registered-minus-
        resolved is exactly "the subtests this run left hanging", which is the sentence the no-@WPTDONE report used

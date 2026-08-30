@@ -2285,6 +2285,42 @@ static char *wpt_get(const char *url, size_t *plen)
     return wpt_get_headers(url, plen, NULL);
 }
 
+/* THE RUN'S OWN FILE DID NOT ARRIVE, WHICH IS A FACT ABOUT THE CORPUS AND NOT AN INVARIANT OF THIS ENGINE.
+ *
+ * Both sites below used to say it with `CHECK(… != NULL, "wpt: the corpus server did not serve …")` — an
+ * ALWAYS-FATAL assert, which check.h reserves for "we must not PROCEED even in production": OOM, a physical
+ * floor, a security boundary, data integrity. A server that answered nothing is none of those. It is this
+ * program's INPUT being absent, and this file already has the shape for that at its other three inputs — a
+ * `<script src>` the server does not have, a META script it cannot read, an argv that is not the corpus's
+ * testharness.js — every one of which REPORTS and stops rather than asserting.
+ *
+ * WHAT IT COST WAS AN ENTIRE RUN'S TAIL, READ AS 935 ENGINE CRASHES. `@E` is a MARKER the driver reads to
+ * pick a column, and at the revision that measured it the driver matched only `@WHY` — so every one of these
+ * fell to its final `else` and printed "died on SIGABRT and named NOTHING". Seven areas came back 100 % dead
+ * in one report (storage, streams, url, wai-aria, webidl, webmessaging, xhr), and the engine was FINE: the
+ * same binary, re-run against a live server, passes those files. Reading the marker fixes the wording and NOT
+ * the verdict — `fatal` says "the ENGINE named an invariant it must not PROCEED past; build it" — so the
+ * false red survives the driver's fix and dies only here, at the site that knows which of the two it is.
+ *
+ * THREE STATES MUST NOT SHARE ONE ANSWER: the engine named a capability it lacks, the corpus could not
+ * present the test, and a resource backstop fired. engine/wpt.mjs already has a column for the middle one and
+ * reads it off a MARKER rather than off prose (prose is displayed and may never move a run between columns),
+ * so this emits the marker and the driver counts it as `corpus`.
+ *
+ * IT IS ONE FUNCTION BECAUSE IT IS ONE QUESTION ASKED AT TWO ENTRIES — a document run fetches the test file
+ * inside wpt_build_document and a script run fetches it beside its programs — and an entry that answered it
+ * differently is exactly how one missing capability comes to wear two names. */
+static void wpt_unserved_test_file(void)
+{
+    fprintf(report_out(), "@WPTERR %s: the corpus server did not serve this run's own file\n", g_test_url);
+    /* NOTHING WAS MEASURED, so there is nothing to tear down and no result to print. Exiting HERE rather than
+       threading a failure back is the same statement main's `usage:` arm makes: a program whose input is
+       absent has no work to do. `exit` flushes stdio, which is what puts the line above in front of the
+       driver. The status is 0 deliberately — a signal or a non-zero code is how this driver recognises its OWN
+       interventions, and claiming one would put the run back in a column it does not belong in. */
+    exit(0);
+}
+
 static void wpt_derive_addresses(int argc, char **argv)
 {
     const char *h = argv[1], *tail = strstr(h, "/resources/testharness.js");
@@ -2626,7 +2662,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
         html_n = sizeof DOC - 1;
         if (g_html_mode) {
             fetched = wpt_get_headers(g_test_url, &html_n, &response_headers);
-            CHECK(fetched != NULL, "wpt: the corpus server did not serve the HTML test file");
+            if (!fetched) wpt_unserved_test_file();
             src = fetched;
             response = &response_headers;
         }
@@ -3279,7 +3315,7 @@ int main(int argc, char **argv)
             if (!failed) {
                 size_t len = 0;
                 char *src = wpt_get(g_test_url, &len);
-                CHECK(src != NULL, "wpt: the corpus server did not serve the test file");
+                if (!src) wpt_unserved_test_file();
                 /* AND THIS ONE DOES HAVE AN ADDRESS: these bytes came off the corpus server at g_test_url, so
                    that is §8.1.4.1's "URL from which the script was obtained" and what a relative
                    `import('./helper.js')` inside the test resolves against. */
