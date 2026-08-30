@@ -399,35 +399,35 @@
         params: [],
         reply: [
           { name: "requests", type: "string",
-            why: "the REQUESTS flows are parked on — one `METHOD<TAB>INITIATOR<TAB>URL` line each, " +
+            why: "the REQUESTS flows are parked on — one " +
+                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` line each, " +
                  "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +
-                 "two, and both settled with whichever body the zone fetched first. TAB can occur in neither " +
-                 "half — URL Standard §4.4 URL parsing has the basic URL parser remove every ASCII tab or " +
-                 "newline from its input before anything else, and Fetch §2.2.1 Methods makes a method a byte " +
+                 "two, and both settled with whichever body the zone fetched first. TAB can occur in none of " +
+                 "them — URL Standard §4.4 URL parsing has the basic URL parser remove every ASCII tab or " +
+                 "newline from its input before anything else, Fetch §2.2.1 Methods makes a method a byte " +
                  "sequence matching the method token production, whose tchar (RFC 9110 §5.6.2 Tokens) is " +
-                 "VCHAR-only and excludes HTAB — and the INITIATOR between them is one of two fixed tokens " +
-                 "(`parser`/`script`, solver/engine.h), HTML §4.12.1 \"The script element\"'s parser-inserted " +
+                 "VCHAR-only and excludes HTAB, and the three middle fields are fixed tokens. The " +
+                 "DESTINATION is Fetch §2.2.5 \"Requests\"' destination, verbatim, and it is what this zone " +
+                 "decides the CORB class from: §2.2.5's own SCRIPT-LIKE predicate over it says whether the " +
+                 "reply may be ingested as CODE. It replaced a SECOND METHOD on this interface (`GetChunks`, " +
+                 "ordinal 8) which answered that from the module loader's register of specifiers and so knew " +
+                 "only about dynamic `import()` — a document's own `<script src>` was fetched with no class " +
+                 "at all. Its EMPTY value is a real answer (§2.2.5's default, what `fetch()` has) and means " +
+                 "DATA. The INITIATOR is HTML §4.12.1 \"The script element\"'s parser-inserted " +
                  "flag, which says whether the BYTES THIS ZONE FETCHED named the request or whether running " +
                  "code did. It is the grammar GetHostRequests already answers in, and an " +
                  "empty list is the empty string and never a NULL pointer turned into the four characters " +
                  "\"null\" and then into one bogus record" },
           WORKING_SET] },
 
-      { ordinal: 8, name: "GetChunks",
-        params: [],
-        reply: [
-          { name: "urls", type: "string",
-            why: "the addresses the module loader is loading CODE from — a CLASSIFICATION of the GetPending " +
-                 "list and not a second owed list, which is why it is still addresses and carries no method. " +
-                 "Every one was recorded by module_load at the moment it PARKED the load, so each is already a " +
-                 "GetPending line; fetching it a second time and providing it again answers a request that " +
-                 "carries a reply, which is engine_provide's answered-twice DFAIL. What it decides is the CORB " +
-                 "class — a body that becomes executable code is fetched `as:\"script\"` (SECURITY.md " +
-                 "§Network), and a cross-origin HTML/JSON body must never be read as code. A record dropped " +
-                 "here is a lazy chunk fetched as data, and CLAUDE.md calls that surface the headline moat" },
-          WORKING_SET] },
-
+      /* ORDINAL 8 WAS `GetChunks` AND IS NOT REUSED. It answered the module loader's register of specifiers,
+         which the CORB class was read out of — a CLASSIFICATION of the GetPending list, filled by one producer
+         and therefore silent about every other park: a document's own `<script src>` was fetched with no class
+         at all and a cross-origin HTML/JSON body served for it was ingested as data and compiled. Fetch §2.2.5
+         "Requests"' DESTINATION is that fact, it is a property of the REQUEST, and GetPending now carries it.
+         An ordinal is a method's IDENTITY on the wire (mojo.js asserts uniqueness and never contiguity), so a
+         deleted one leaves a hole rather than renumbering the methods after it. */
       { ordinal: 9, name: "Provide",
         params: [
           { name: "method", type: "string", retained: false,

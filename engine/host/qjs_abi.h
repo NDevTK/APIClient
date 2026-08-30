@@ -65,7 +65,6 @@ QJS_EXPORT void qjs_teardown(void);
 
 /* WHAT THE TRUSTED ZONE OWES THE FRONTIER, and how it pays. */
 QJS_EXPORT const char *qjs_pending(void);
-QJS_EXPORT const char *qjs_chunks(void);
 QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *reply, const char *body,
                             unsigned body_len);
 QJS_EXPORT const char *qjs_host_requests(void);

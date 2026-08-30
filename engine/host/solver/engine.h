@@ -791,49 +791,77 @@ void engine_perform(JSContext *ctx, const char *token, const char *record);
 void engine_unload_document(uint32_t doc);
 
 /* WHO ASKED FOR THE REQUEST, AS A FACT ABOUT THE PARK AND NEVER AS A POLICY. HTML §4.12.1 "The script element"
- * gives every `script` element a PARSER-INSERTED flag and a parser document, and that flag is the whole of the
- * difference the trusted zone has to be able to see: a parser-inserted script is named by the BYTES THE ZONE
- * ITSELF FETCHED, so a real load of that document makes exactly that request; every other park is made by
- * RUNNING CODE, and this engine runs code on forced arms. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE calls the
- * first OBSERVED and makes the second DERIVED or FORCED — a distinction this register cannot yet draw, because
- * nothing on a flow records whether its path took a forced arm.
- * SO THE ENGINE STATES THE FLAG AND THE ZONE DECIDES, which is the split CLAUDE.md names in as many words:
- * "the engine holds no network policy by construction, so `safeFetch` decides, from the provenance the request
- * declares beside its method and credential state". A branch here that refused to LIST a park would be that
- * policy inside the engine, and the flow it silenced would wait forever with nothing saying so.
- * THE TWO TOKENS ARE THE SAME LENGTH ON PURPOSE and the join asserts it: a duplicate pair whose members
- * disagree is UPGRADED in place to `parser` (see engine_pending_fetches), because a parser-inserted park is a
- * request a real load makes whatever else parked on the same address — and an upgrade that had to re-length the
- * line would have to rebuild the join. */
+ * gives every `script` element a PARSER-INSERTED flag and a parser document: a parser-inserted script is named
+ * by the BYTES THE ZONE ITSELF FETCHED; every other park is made by RUNNING CODE.
+ * IT IS NOT THE PROVENANCE AND IT NEVER WAS — it is ONE OF THE TWO FACTS the provenance is composed from, and
+ * this comment used to call it "the whole of the difference the trusted zone has to be able to see" only
+ * because the other fact did not exist: it said so in its own next sentence ("a distinction this register
+ * cannot yet draw, because nothing on a flow records whether its path took a forced arm"). A flow records it
+ * now (solver/flow.h's `path_forced`), the park composes the two at the moment it is made (pending.h's
+ * PROV_*), and PENDING_PROVENANCE_* below is what a request IS. This field says only who asked.
+ * THE TWO TOKENS ARE THE SAME LENGTH, and that is now a coincidence rather than a load-bearing property: the
+ * join used to upgrade a duplicate's initiator by overwriting it in place and asserted the widths to make that
+ * sound. It shifts the field instead (engine_pending_fetches' join_set_tokens), because the provenance beside
+ * it has a VOCABULARY rather than a pair and choosing three tokens of equal length would be picking the words
+ * to fit a memcpy. */
 #define PENDING_INITIATOR_PARSER "parser"   /* HTML §4.12.1's parser-inserted script of the loaded document */
 #define PENDING_INITIATOR_SCRIPT "script"   /* a park made by running code: fetch(), import(), an injected src */
 
-/* WHAT AN OUTBOUND REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names, as the
- * words that cross to the trusted zone. THE ENGINE STATES AND THE ZONE DECIDES, which is the same split the
- * flag above is governed by: "the engine holds no network policy by construction, so `safeFetch` decides, from
- * the provenance the request declares beside its method and credential state". A branch here that refused to
- * STATE one would be that policy inside the engine.
- *   OBSERVED — a real load of this document makes exactly this request.
- *   DERIVED  — the page's own code computed it from real inputs. No session sent it; it is still a fact about
- *              the app, and it is the surface forced execution exists to find.
- *   FORCED   — the path took an arm its own concrete example contradicts, so a value in it exists only because
- *              a gate was forced. A reply to one is evidence about what a server says to a request no client
- *              makes, and §@H forbids it ever being reported as OBSERVED — the danger is that it is PLAUSIBLE,
- *              since one invented field is the example that shapes the next endpoint.
- * THEY LIVE HERE AND NOT BESIDE THE ONE RECORD THAT USES THEM, because a request is a request whether it
- * becomes a fetch or a NAVIGATION. solver/route_seed.h's `document.seed` states one of these words for an
- * address an application declared is a page of itself; the pending line beside it states one for every park.
- * Two spellings of one vocabulary would be a zone reading two sets of words for one decision, which is the
- * defect this file's initiator pair is already written against one rule up.
- * WHICH OF THE THREE A RECORD CAN CARRY IS THE RECORD'S OWN QUESTION and is answered where that record is
- * written: a declaration can never be `observed` (no load of anything produces a pushState), and its reader
- * asserts exactly that rather than accepting the whole vocabulary from every producer. */
+/* WHAT THE REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names, stated by the
+ * engine and acted on by nobody here. The values and the composition are pending.h's (PROV_*), which is where
+ * the park stamps them; these are their spelling on the wire.
+ * THE ENGINE STATES AND THE ZONE DECIDES, which is the split CLAUDE.md names in as many words: "the engine
+ * holds no network policy by construction, so `safeFetch` decides, from the provenance the request declares
+ * beside its method and credential state". A branch here that refused to LIST a park would be that policy
+ * inside the engine, and the flow it silenced would wait forever with nothing saying so.
+ * A DEDUPED SET STATES THE MOST OBSERVED OF ITS MEMBERS, for the initiator's reason exactly and with the
+ * argument spelled out at the join: the set is ONE request, so if any member's path stood on no contradicted
+ * arm then a real client makes it and a reply to it is evidence about the app. */
 #define PENDING_PROVENANCE_OBSERVED "observed" /* a real load of this document makes exactly this request */
 #define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
 #define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
 
-/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>INITIATOR<TAB>URL` line per
- * outstanding request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
+/* WHAT THE BYTES ARE FOR, WHICH IS A DIFFERENT QUESTION FROM WHO ASKED — Fetch §2.2.5 "Requests"' DESTINATION,
+ * stated verbatim off the request record the park carried (core/fetch/fetch.h) and never derived here.
+ * THE TWO FIELDS ARE NOT TWO SPELLINGS OF ONE FACT, and reading them as one is what left a live hole. The
+ * INITIATOR is HTML §4.12.1.1 "Processing model"'s parser-inserted flag and says whether a REAL LOAD of this
+ * document makes this request; the DESTINATION says whether the reply may be ingested as CODE. An injected
+ * `<script src>`, a dynamic `import()` and a plain `fetch()` all report `script` as initiators — they are all
+ * parks made by running code — and the first two are code loads while the third is not, so the initiator can
+ * never answer the CORB question and a zone that asked it anyway got the answer right for one of the three.
+ * ITS VOCABULARY IS THE SPEC'S AND NOT THIS ENGINE'S, which is the point: §2.2.5's destination type is one of
+ * "", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe", "image", "json", "manifest",
+ * "object", "paintworklet", "report", "script", "serviceworker", "sharedworker", "style", "text", "track",
+ * "video", "webidentity", "worker" or "xslt", and this seam carries whichever one the request has rather than
+ * a two-valued summary of it — a `<link rel=preload as=font>` says `font` because that is what it is. The
+ * EMPTY STRING is a value and not an omission: §2.2.5's "unless stated otherwise it is the empty string" is
+ * what `fetch()` and XMLHttpRequest have, so an empty field on the line is the positive statement "data".
+ * THE CONSUMER READS IT FOR §2.2.5's SCRIPT-LIKE PREDICATE — "audioworklet", "paintworklet", "script",
+ * "serviceworker", "sharedworker" or "worker" — and that predicate is the CORB class. Anything else is data.
+ * A THIRD PARK KIND, OR A NEW DESTINATION, THEREFORE COSTS NOTHING HERE AND CRASHES AT THE PRODUCER: the join
+ * asserts the value is a destination type, so a park that states something outside the enumeration stops
+ * rather than travelling to a zone that would read it as "not script-like" and ingest its reply as data. */
+/* THE ONE TOKEN THIS FILE'S OWN PARKS EMIT, and the only one declared. §8.1.4.2 "Fetching scripts"' classic
+   and module script fetches all create their request with `script`, and the three script parks below are in
+   the solver, so they name it through this. Every OTHER destination is stated by the browser component whose
+   own algorithm names it — `image` at HTML §4.8.4.3.5's potential-CORS request, `document` at a navigation,
+   the EMPTY STRING at `fetch()` and XMLHttpRequest — as the literal that algorithm's step contains, which is
+   where a citation can be checked against the text beside it. A macro for a value this file never writes would
+   be a vocabulary entry with no producer here. */
+#define PENDING_DESTINATION_SCRIPT "script"
+/* THE ENUMERATION AND THE SCRIPT-LIKE PREDICATE ARE BOTH STATICS OF solver/engine.c AND NEITHER IS EXPORTED,
+   for `method_is_token`'s reason: every use either has is inside that file. The enumeration answers two
+   asserts (the join refuses to WRITE a value §2.2.5 does not define; the split refuses to BELIEVE one), and
+   script-like answers the join's FOLD — a deduped set states the destination of its strictest member, because
+   one reply satisfies every park in it. That fold is not a policy: it decides what the LINE says, never what
+   is fetched. The CORB DECISION itself is the trusted zone's alone — the engine holds no network policy by
+   construction — and asks the same §2.2.5 predicate once more, in `extension/lib/safe-fetch.js`, over the
+   bytes it actually read. The two are the same question asked by the two parties that each have to answer it,
+   which is not a duplicated table: neither party can take the other's answer, since the engine has no bytes
+   and the zone has no register. */
+
+/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>URL`
+ * line per outstanding request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
  *
  * THE METHOD IS PART OF THE REQUEST'S IDENTITY, and this seam used to answer an ADDRESS ALONE. The register
  * has carried the method since the day it carried the whole request (PEND_METHOD), and it was dropped at
@@ -843,22 +871,36 @@ void engine_unload_document(uint32_t doc);
  * was derived from a response the page never received. It is the same defect the XHR path was corrected for
  * (SECURITY.md §Network: "a wrong answer, which is worse than an absent one"), one seam over.
  *
- * WHY A TAB, AND WHY THAT IS NOT AN INVENTED DELIMITER. Neither field can contain one. A serialized URL cannot:
+ * THE DESTINATION IS ON IT FOR THE SAME REASON THE METHOD IS, and it arrived by the same route: this seam
+ * answered the CORB question out of a SIDE LIST that one producer filled — the module loader's chunk register,
+ * which named dynamic `import()` targets and nothing else — so a document's own `<script src>` reached the
+ * chokepoint with no load class at all and a cross-origin HTML or JSON body served for it was ingested as data
+ * and then COMPILED. A list filled by one caller cannot answer for the others, and nothing about it could say
+ * so; the destination is a property of the REQUEST (Fetch §2.2.5), every park states it, and the side list is
+ * gone rather than kept beside this one.
+ *
+ * WHY A TAB, AND WHY THAT IS NOT AN INVENTED DELIMITER. No field can contain one. A serialized URL cannot:
  * URL Standard §4.4 URL parsing removes all ASCII tab or newline from its input before anything else, so no
  * URL record can hold one and no serialization can produce one. A method cannot: Fetch §2.2.1 Methods says a
  * method "is a byte sequence that matches the method token production", and RFC 9110 §5.6.2 Tokens excludes
- * HTAB from tchar. The join ASSERTS both rather than trusting them, and it is the same shape
+ * HTAB from tchar. A destination cannot: §2.2.5 ENUMERATES its values, and every one of them is ASCII
+ * lowercase letters. The join ASSERTS all three rather than trusting them, and it is the same shape
  * engine_host_requests already answers in (`id<TAB>op`) — one seam, one grammar.
  *
  * The buffer is this function's and is valid until the next call. */
 const char *engine_pending_fetches(void);
 /* ONE LINE, SPLIT WHERE IT WAS JOINED — because three hosts each deriving the pair is three places to get it
    wrong, which is the hand-copy 59d0e42d abolished. `line` is the host's own mutable copy of one line (no
-   newline); each TAB is overwritten with a NUL and the three fields are handed back pointing into it.
-   THE INITIATOR IS AN OUT-PARAMETER AND NOT OPTIONAL, deliberately: a host that did not want it could pass
-   NULL and would then be a host reading a request whose provenance it never asked about, which is the
-   defaulted-field defect wearing a convenience. It costs a caller one local and one membership assert. */
-void engine_pending_split(char *line, const char **method, const char **initiator, const char **url);
+   newline); each TAB is overwritten with a NUL and the five fields are handed back pointing into it.
+   THE DESTINATION, THE INITIATOR AND THE PROVENANCE ARE OUT-PARAMETERS AND NONE IS OPTIONAL, deliberately: a
+   host that did not want one could pass NULL and would then be a host reading a request whose LOAD CLASS — or
+   whose PROVENANCE — it never asked about, which is the defaulted-field defect wearing a convenience. Two of
+   them are sharp in different ways: a host that skips the load class fetches a script as data, which is the
+   state that field was added to end; a host that skips the provenance fires a request no client makes and
+   carries its reply as an observation, which is what CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE forbids in as
+   many words. It costs a caller three locals and three membership asserts. */
+void engine_pending_split(char *line, const char **method, const char **destination,
+                          const char **initiator, const char **provenance, const char **url);
 /* DELIVER A BODY FOR ONE REQUEST — keyed on `(method, url)`, which is what the flow parked on. Returns how many
    entries it filled; 0 with nothing matched is the host's pairing being off (or a sale — engine_take_paged_owed),
    and it is the CALLER that tells those apart because the caller owns the credit. */

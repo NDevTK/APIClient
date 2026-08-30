@@ -688,8 +688,16 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
            reader in this engine: Fetch's initiator is read by service workers and by §4.8.4.3.13 "Reacting to
            environment changes", and neither exists here. A field a producer writes and nothing reads is the
            mirror of the defect CLAUDE.md counts seven of, so it arrives with its first consumer. */
+        /* …AND THE DESTINATION IS THAT SENTENCE COMING TRUE FOR THE FIELD BESIDE IT. §4.8.4.3.5's step is "Let
+           request be the result of creating a potential-CORS request given urlString, `image`, and the current
+           state of the element's crossorigin content attribute", and §2.5.1 "Terminology"'s create a
+           potential-CORS request returns "a new request whose URL is url, destination is destination" — so
+           that second operand IS Fetch §2.2.5 "Requests"' destination. Its reader is the trusted zone's CORB
+           class, which asks only whether the destination is SCRIPT-LIKE; `image` is not, so this reply is data,
+           and that is an answer this park states rather than a question it leaves to a default. */
         req.method = "GET";
         req.url = abs;
+        req.destination = "image";
         req.headers = NULL;
         req.body = NULL;
         req.body_len = 0;

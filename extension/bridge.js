@@ -1246,7 +1246,12 @@ async function frontierRederive(e) {
          "bytes this store already has, and the round would pay a network round trip to learn nothing");
   let r = null;
   if (frontierRederivable(e)) {
+    /* A DOCUMENT, WHICH IS Fetch §2.2.5's `document` DESTINATION — the row of that section's own
+       initiator/destination table whose feature is "HTML's navigate algorithm (top-level only)". Not
+       script-like, so no CORB: this is a document being re-fetched to rebuild a shed frontier entry, and the
+       parser that will read it is the engine's own. */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
+                                                  destination: "document",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
@@ -1707,7 +1712,12 @@ async function navigationLoad(u, base, principalUrl, principalOrigin) {
        member defect this project has already paid for once. Until it exists the deny list stays armed:
        being over-broad is its cheap direction (one unfired request, reported with its token) and loosening
        a security gate as a side effect of turning cookies on is its expensive one. */
+    /* Fetch §2.2.5's `document` DESTINATION — HTML §7.4.5 "Populating a session history entry" is the
+       navigate algorithm's own fetch, and §2.2.5's table gives that row the destination `document`. It is not
+       script-like, so this load takes no CORB: what reads these bytes is the HTML parser, which is what they
+       are. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
+                                          destination: "document",
                                           credentialed: navigationCarriesSession(abs, principalOrigin) });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
@@ -2274,17 +2284,28 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      and ANY object is built into a Response, so a status-0 record would RESOLVE `fetch()` with a status no
      server returns — a reply this zone fabricated. `if (r.status === 0) return null` below already says exactly
      that about every other refusal safeFetch makes (blocked-scheme, blocked-cors-credentialed, CORB). */
-  const fetched = async (method, u, asScript) => {
+  /* AND THE REQUEST'S DESTINATION TRAVELS WITH IT, FOR A REASON THE METHOD'S PARAGRAPH ALREADY STATES ABOUT
+     ITSELF: it is half of what this zone must know to perform the request correctly, not a hint. Fetch §2.2.5
+     "Requests" gives every request one; `safe-fetch.js` decides the CORB class from §2.2.5's own script-like
+     predicate over it. It is passed THROUGH rather than reduced to a boolean here, because a boolean is a
+     second vocabulary for a spec field and the zone that decides is the one that should read the value. */
+  const fetched = async (method, u, destination) => {
+    DCHECK(typeof destination === "string",
+           "a pending request reached the chokepoint with no DESTINATION — GetPending answers " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and Fetch §2.2.5 makes the " +
+           "destination part of the request, so a caller that omits it is one whose code load would be " +
+           "fetched as data and compiled. The empty string is a real destination and means DATA");
     DCHECK(typeof method === "string" && method !== "",
            "a pending request reached the chokepoint with no method — GetPending answers " +
-           "`METHOD<TAB>INITIATOR<TAB>URL` and the pair is what the flow parked on, so a request whose method is unknown can be neither refused " +
-           "nor issued");
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and the (method, url) pair is what " +
+           "the flow parked on, so a request whose method is unknown can be neither refused nor issued");
     if (method !== "GET") return null;
     if (!canFetch || hasHole(u)) return null;
     try {
       const abs = new URL(u, msg.sourceUrl).href;
-      // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
-      // logged-in reply (the moat headline), gated by safeFetch's own SOP/CORS + GET-only. Default off.
+      // a CODE load: classified by its destination (CORB), never credentialed. Every other destination: opt-in
+      // credentialed -> the AUTHENTICATED logged-in reply (the moat headline), gated by safeFetch's own
+      // SOP/CORS + GET-only. Default off.
       /* @security-finding  NO `pageOrigin` REACHES THE CHOKEPOINT FROM *HERE*, AND ONE MUST BEFORE
          `credentialed` IS EVER TURNED ON FOR A LEARNED GET. The DOCUMENT-LOAD path now passes one
          (`navigationLoad`, from `msg.origin`) and carries the person's session; this path — the reply to a
@@ -2301,8 +2322,17 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          origin, ordinary-looking address) same-origin access to the EMBEDDER's authenticated bytes. Wiring
          it also loosens CORB for a genuinely same-origin chunk, which is spec-correct and is a deliberate
          decision to take at that time, not a side effect of this line. */
-      const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
-                            : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
+      /* ONE SHAPE FOR EVERY PARK, AND THE BRANCH THAT USED TO BE HERE IS GONE WITH THE KEYWORD IT SELECTED.
+         It read `asScript ? {as:"script"} : {credentialed:…}`, which made this zone decide two things it does
+         not own: WHICH RULE the chokepoint applies (now the request's own destination decides, so a park this
+         loop has never seen is classified without anything here being taught about it) and WHETHER a code load
+         may carry the session. The second was not even faithful — HTML §8.1.4.2's classic script fetch has
+         credentials mode `same-origin`, so a same-origin script load in a browser DOES carry them — and it is
+         a POLICY, which CLAUDE.md puts at the one chokepoint with the firing decision and the deny list. Both
+         facts are handed over and `safe-fetch.js` decides. Nothing changes today: `msg.credentialed` is still
+         never written (see the finding above), so every read here is still uncredentialed. */
+      const opts = { pageUrl: msg.sourceUrl, destination,
+                     credentialed: !!(msg && msg.credentialed) };
       const r = await self.safeFetch(abs, opts);
       /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
          on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`
@@ -2462,7 +2492,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          it is why safeFetch's "analyzer probe headers only" comment is no longer the whole truth, and it must
          be re-decided the day credentialed mode is turned on. Only what the chokepoint reads is passed, so
          there is nothing left here for it to drop in silence. */
-      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, headers: q.headers });
+      /* XMLHttpRequest's destination is Fetch §2.2.5's EMPTY STRING — its row of that section's own table,
+         the `connect-src` one it shares with `fetch()`. Stated rather than left off: "" is the answer, and a
+         call that says nothing is a call whose CORB class was decided by silence. */
+      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "", headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
@@ -2845,30 +2878,53 @@ async function engineProvide(eng, method, url, rep) {
    A line this splitter cannot take apart is delivered against a method nobody asked for — the wrong answer this
    whole seam exists to make impossible — and NEVER against an assumed `GET`, which is the one guess that looks
    right for as long as the page issues nothing else. */
+/* IT SPLITS ON THE TAB RATHER THAN COUNTING INDEXES, because one field of this line is legitimately EMPTY:
+   Fetch §2.2.5 "Requests" makes the destination "" unless stated otherwise, and that is what a `fetch()` has.
+   A test written as `tab2 > tab + 1` reads an empty field as a malformed line, which would refuse every plain
+   fetch the engine ever parked — so the shape assert is over the FIELD COUNT and the two ends, which is what
+   the grammar actually promises. */
 function pendingRequest(line) {
-  const tab = line.indexOf("\t");
-  const tab2 = tab < 0 ? -1 : line.indexOf("\t", tab + 1);
-  CHECK(tab > 0 && tab2 > tab + 1 && tab2 < line.length - 1,
-        "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>INITIATOR<TAB>URL`: `" +
-        line + "` — the engine joins the three and this zone must deliver against the (method, url) pair, so " +
-        "a line missing a field puts an initiator token where the address belongs and keys a reply on a " +
-        "request nothing parked on");
-  const initiator = line.slice(tab + 1, tab2);
-  /* THE FIELD IS HTML §4.12.1's PARSER-INSERTED FLAG (solver/engine.h), and this zone reads it for ONE of the
-     two things it decides. It classifies the CORB load type below — a parser-inserted `<script src>` is a code
-     load, which `GetChunks` alone could never say. It does NOT yet decide whether the request is FIRED: that
-     is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's OBSERVED / DERIVED / FORCED split, this zone still fires
-     every line uncredentialed, and SECURITY.md §Network already names that as its own standing open item
-     ("that vocabulary … is the next subproblem"). Turning it into a per-origin policy is that subproblem and
-     not a side effect of the field arriving; `engine/trusted.mjs` is the zone that decides it today, for the
-     native host, and its narrowness is stated there rather than copied here.
-     THE MEMBERSHIP CHECK IS THE CONTRACT'S READER and fires the day the vocabulary drifts — which matters more
-     now that a value this zone does not know would silently take the non-script CORB arm. */
+  const f = line.split("\t");
+  CHECK(f.length === 5 && f[0] !== "" && f[4] !== "",
+        "content.mojom.Renderer.GetPending answered a line that is not " +
+        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL`: `" + line + "` — the engine joins the " +
+        "five and this zone must deliver against the (method, url) pair, so a line missing a field puts a " +
+        "token where the address belongs and keys a reply on a request nothing parked on");
+  const destination = f[1];
+  const initiator = f[2];
+  const provenance = f[3];
+  /* THREE FIELDS AND THREE QUESTIONS, AND THE ONE THIS ZONE ACTS ON IS THE DESTINATION. Fetch §2.2.5
+     "Requests" gives every request one, the engine states it at each park off the request record, and
+     `safe-fetch.js` decides the CORB class by asking §2.2.5's own SCRIPT-LIKE predicate of it. That question
+     used to be answered from the INITIATOR, and before that from a side list of module specifiers, and neither
+     could answer it: an injected `<script src>`, a dynamic `import()` and a plain `fetch()` all report the
+     initiator `script`, and the side list named only the third kind of park its own producer created.
+     THE INITIATOR IS HTML §4.12.1.1 "Processing model"'s parser-inserted flag (solver/engine.h) and it says
+     something else entirely — whether a REAL LOAD of this document makes this request — which is a question
+     about evidence and not about ingestion. Nothing here branches on it now that the destination has arrived.
+     THE PROVENANCE IS CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's OBSERVED / DERIVED / FORCED, composed at
+     the park from that same flag and from whether the parking flow's path had taken an arm its own concrete
+     example contradicts (solver/flow.h's `path_forced`). This comment used to say that split was a thing the
+     line could not state; it states it now, and what remains is the DECISION — this zone still fires every
+     line uncredentialed, and SECURITY.md §Network names that as its own standing open item ("that vocabulary
+     … is the next subproblem"). The per-origin policy belongs in `safe-fetch.js` with every other risk
+     decision, never here and never in the engine; `engine/trusted.mjs` is the zone that decides it today, for
+     the native host, and its narrowness is stated there rather than copied here.
+     THE MEMBERSHIP CHECKS ARE THE CONTRACT'S READER and fire the day a vocabulary drifts — for the two fixed
+     token fields, whose vocabularies are two and three values long. The DESTINATION's is Fetch §2.2.5's own
+     enumeration of two dozen, and it is NOT restated here: the engine refuses to emit a value outside it (its
+     join and its splitter both assert it against one table) and `safe-fetch.js` asks the only question this
+     zone puts to it — §2.2.5's script-like predicate, which is stated once, where the CORB decision is. A
+     fourth copy of a spec table in a zone that does not decide from it is a table that goes stale. */
   CHECK(initiator === "parser" || initiator === "script",
         "GetPending stated an initiator this zone does not know: `" + initiator + "` — solver/engine.h " +
         "declares exactly `parser` and `script`, and a third value would be answered by whichever arm a " +
         "consumer happened to write first");
-  return { method: line.slice(0, tab), initiator, url: line.slice(tab2 + 1) };
+  CHECK(provenance === "observed" || provenance === "derived" || provenance === "forced",
+        "GetPending stated a provenance this zone does not know: `" + provenance + "` — solver/engine.h " +
+        "declares exactly `observed`, `derived` and `forced`, and a fourth value would be answered by " +
+        "whichever arm the firing policy happens to be written with as its else");
+  return { method: f[0], destination, initiator, provenance, url: f[4] };
 }
 async function engineServiceFetch(eng) {   // one round: answer every parked REQUEST, then the engine is hot again
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
@@ -2877,36 +2933,22 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      because JSON can say none of the 256 values a byte has without first running an algorithm over them, and
      the algorithm this zone used to run (Fetch §5.2's `text()`, a UTF-8 decode) destroyed exactly the evidence
      HTML §8.1.4.2's classic-script decode exists to read. */
-  /* THE CHUNK LIST CLASSIFIES THE PENDING LIST, IT DOES NOT ADD TO IT — so it is read FIRST and answered never.
-     Every address the module loader reports was recorded by `module_load` at the moment it PARKED the load
-     (engine_pending_module_url, which states its own `GET`), so each is already a GetPending line; fetching it
-     again and providing it a second time answers a request that already carries a reply, which is
-     engine_provide's answered-twice DFAIL — a live abort on every dynamic `import()` for as long as this loop
-     provided both lists. What the list decides is the CORB class: a body that becomes executable code is
-     fetched `as:"script"` so a cross-origin HTML/JSON body is never read as code (SECURITY.md §Network), and
-     that is a property of the REQUEST — Fetch §2.2.5 Requests gives a request a destination — which belongs on
-     the pending line beside the method, after which this list has nothing left to say. Until it is there, the
-     register keeps a specifier after its load settled, so a later PLAIN fetch of that same address is classified
-     as code: strictly a CORB narrowing (a cross-origin non-JS body is refused where a browser would have read
-     it as data), and the residual that the destination is being read out of a second list instead of off the
-     request. */
-  /* AND THE CHUNK LIST WAS NEVER THE WHOLE CORB CLASS, WHICH THE PENDING LINE'S INITIATOR NOW CLOSES HALF OF.
-     `module_loader_chunks` is filled by `module_load` and by nothing else, so it names DYNAMIC `import()`
-     targets alone — a document's own `<script src>` was fetched with no `as` at all, and a cross-origin body
-     served for it was ingested as data and then COMPILED. The pending line states HTML §4.12.1's
-     parser-inserted flag (solver/engine.h), and a parser-inserted `<script src>` IS a code load by that
-     token's definition, so it takes the class it always should have had.
-     THE RESIDUAL IS NAMED RATHER THAN CLOSED: an INJECTED `<script src>` and a dynamic `import()` both report
-     `script`, which is also what a plain `fetch()` reports, so this field cannot separate the two. What
-     separates them is Fetch §2.2.5 Requests' DESTINATION, which is the field this line and `GetChunks` are
-     both standing in for and which belongs on the pending line beside the method — after which the chunk list
-     has nothing left to say and deletes. */
-  const asScript = new Set(owedList("GetChunks", (await eng.r.renderer.getChunks()).urls));
+  /* THERE IS ONE OWED LIST AND IT CARRIES ITS OWN CLASS. This loop used to read a SECOND list beside it —
+     `GetChunks`, the module loader's register of specifiers — to decide which replies were CODE, and the
+     second list is deleted with the question it half-answered. It could only ever name the parks ITS OWN
+     producer created, so a document's own `<script src>` and an injected one reached the chokepoint with no
+     class at all and a cross-origin HTML or JSON body served for one of them was ingested as data and then
+     COMPILED. Fetch §2.2.5 "Requests" gives a request a DESTINATION; it is on the pending line beside the
+     method, every park states it, and `safe-fetch.js` asks §2.2.5's script-like predicate of it.
+     THE SECOND LIST WAS ALSO A HAZARD IN ITS OWN RIGHT, which is why "read it but never answer it" had to be
+     written down: every address in it was already a GetPending line (the loader recorded the specifier at the
+     moment it PARKED the load), so paying it would have answered a request that already carries a reply —
+     engine_provide's answered-twice DFAIL, a live abort on every dynamic `import()`. A fact about a request
+     belongs on the request. */
   const requests = owedList("GetPending", (await eng.r.renderer.getPending()).requests);
   for (const line of requests) {
-    const { method, initiator, url } = pendingRequest(line);
-    await engineProvide(eng, method, url,
-                        await eng.fetched(method, url, asScript.has(url) || initiator === "parser"));
+    const { method, destination, url } = pendingRequest(line);
+    await engineProvide(eng, method, url, await eng.fetched(method, url, destination));
   }
   await engineServiceHostRequests(eng);
 }

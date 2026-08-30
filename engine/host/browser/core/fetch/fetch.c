@@ -93,8 +93,18 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
            "a request was owed to the host without stating its METHOD — Fetch §2.2 Requests gives every "
            "request one (`GET` unless stated otherwise), so a component that reached this seam unnamed "
            "dropped a field rather than made a request that lacks it");
+    /* AND ITS DESTINATION, ASSERTED HERE AS WELL AS AT THE PARK because THIS is where the component that
+       dropped it is still on the stack. Fetch §2.2.5 "Requests" gives every request a destination, and the
+       trusted zone decides from it whether the reply may be ingested as CODE — so a component that reaches
+       this seam without one is not making a request that lacks the field, it is making one whose reply will be
+       classified by silence. The EMPTY STRING is §2.2.5's own default and passes: what does not is NULL. */
+    DCHECK(req->destination != NULL,
+           "a request was owed to the host without stating its DESTINATION — Fetch §2.2.5 Requests gives every "
+           "request one (\"unless stated otherwise it is the empty string\"), and the CORB class is read off "
+           "it. State the destination the algorithm creating this request names (`image` at §4.8.4.3.5, "
+           "`script` at §8.1.4.2, the empty string at §5.6's fetch())");
     /* §4.3 SCHEME FETCH, FIRST. A scheme this agent answers is answered here and the host is never told about
-       it; only what §4.3 hands to HTTP fetch reaches the provider. The blob URL entry is JS_UNDEFINED because no
+       it; only §4.3's "HTTP(S) scheme" arm reaches the provider. The blob URL entry is JS_UNDEFINED because no
        standard but §5.4's Request constructor has one to have captured (core/fetch/scheme_fetch.h). */
     if (scheme_fetch_answer(ctx, deliver, req, JS_UNDEFINED))
         return;
@@ -672,6 +682,14 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
                parsed form: a concolic's shape, and a relative reference in a document with no address at all
                (fetch_parse_url is absolute-only then, which is the honest answer for a platform-less build). */
             req.url = abs ? abs : u;
+            /* AND ITS DESTINATION IS THE EMPTY STRING, WHICH IS A VALUE AND NOT AN OMISSION. Fetch §2.2.5
+               "Requests" gives a request a destination and says "unless stated otherwise it is the empty
+               string"; §5.4's Request constructor states nothing otherwise, and §2.2.5's own table puts
+               `fetch()` and XMLHttpRequest on the row whose destination is "" and whose CSP directive is
+               `connect-src`. So this is the request's real destination — the positive statement "these bytes
+               are data, not a resource of a type", which is what makes the trusted zone's CORB class a fact
+               read off the request rather than a guess made about the address. */
+            req.destination = "";
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;

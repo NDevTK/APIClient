@@ -648,15 +648,26 @@ try {
     const st = await opener.renderer.step();
     steps++;
     /* THE REQUESTS FLOWS ARE PARKED ON, ANSWERED THE WAY THE PRODUCTION CONSUMER ANSWERS THEM — one
-       `METHOD<TAB>INITIATOR<TAB>URL` line each, and the reply record crossing as JSON with the BODY BESIDE
+       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` line each, and the reply record crossing
+       as JSON with the BODY BESIDE
        IT as bytes, because §2.2.5 makes a response's body a byte sequence and every way of putting one inside JSON is an
        encode or a decode run by the zone that fetched. `computedType` is this zone's own decision and is
        asserted rather than defaulted at the far end: this zone minted the two characters below and
-       `application/json` is what it computed them to be. */
+       `application/json` is what it computed them to be.
+       IT SPLITS EVERY FIELD, AND IT DID NOT. This reader took the FIRST tab and called the whole remainder the
+       URL, so from the moment the line grew a middle field it delivered against an address beginning with a
+       token — matching no park, which is `qjs_provide`'s "a reply was provided for a request no flow is parked
+       on" abort, and leaving the flow that IS parked waiting for the rest of the session. It was invisible
+       because this phase's opener happens to park nothing on most runs: a reader that is wrong only when it is
+       exercised is the shape a grammar change leaves behind, which is why the split is over the field COUNT.
+       The DESTINATION may legitimately be EMPTY (Fetch §2.2.5's default, which is what a `fetch()` has), so
+       the two fields tested for content are the ends. */
     for (const line of (await opener.renderer.getPending()).requests.split('\n').filter(Boolean)) {
-      const tab = line.indexOf('\t');
-      if (tab <= 0) fail(`a pending line carries no METHOD, which is half the request's identity: ${line}`);
-      const method = line.slice(0, tab), u = line.slice(tab + 1);
+      const t = line.split('\t');
+      if (t.length !== 5 || t[0] === '' || t[4] === '')
+        fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL`, and the ' +
+             `reply is delivered against the (method, url) pair it names: ${line}`);
+      const method = t[0], u = t[4];
       console.log(`${TAG}   pending: ${method} ${u}`);
       await opener.renderer.provide({
         method, url: u,

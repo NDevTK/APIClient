@@ -370,8 +370,8 @@ static char g_wpt_root[512];
  * A `fetch()` PARKS the flow that issued it (engine_pending_fetch_url): the flow keeps its snapshot, reports
  * itself host-owed, and its continuation resumes with the reply. That register records the WHOLE request —
  * method, headers and body — and the seam the HOST is offered now names TWO of those: engine_pending_fetches
- * lists `METHOD<TAB>INITIATOR<TAB>URL` and engine_provide delivers against the pair. The corpus still asks
- * this host for
+ * lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and engine_provide delivers against the
+ * pair. The corpus still asks this host for
  * POSTs whose answer depends on the BODY sent (`echo-content.py`) and for probes whose answer is the HEADERS it
  * was given (`inspect-headers.py`), and neither is on the line.
  *
@@ -1466,7 +1466,7 @@ static int wpt_issue_pending(void)
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
-        const char *method, *initiator, *url;
+        const char *method, *destination, *initiator, *provenance, *url;
         FetchRequest req;
         HeaderList none = { 0 };
         int i, rec = -1;
@@ -1475,14 +1475,19 @@ static int wpt_issue_pending(void)
         *end = 0;
         /* SPLIT WHERE IT WAS JOINED, by the engine's own splitter — three hosts each finding the TAB for
            themselves is three places for the grammar to drift.
-           THIS RUNNER ISSUES EVERY PARK WHATEVER ITS INITIATOR, and that is a property of its network rather
-           than a policy it is skipping: it serves the CHECKED-OUT CORPUS off wptserve's own loopback socket, so
-           there is no third party to spend anything at and no session to spend. The field's consumer is the
-           zone that talks to the real web (engine/trusted.mjs); what is owed here is the vocabulary assert,
-           because a runner that read a field it never checked would be the first to see the producer drift. */
-        engine_pending_split(p, &method, &initiator, &url);
+           THIS RUNNER ISSUES EVERY PARK WHATEVER IT SAYS ABOUT ITSELF, and that is a property of its network
+           rather than a policy it is skipping: it serves the CHECKED-OUT CORPUS off wptserve's own loopback
+           socket, so there is no third party to spend anything at and no session to spend. The consumer of
+           WHO ASKED and of WHAT THE REQUEST IS EVIDENCE OF is the zone that talks to the real web
+           (engine/trusted.mjs); what is owed here is the vocabulary assert, because a runner that read a field
+           it never checked would be the first to see the producer drift. */
+        engine_pending_split(p, &method, &destination, &initiator, &provenance, &url);
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
+        DCHECK(!strcmp(provenance, PENDING_PROVENANCE_OBSERVED) ||
+               !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
+               !strcmp(provenance, PENDING_PROVENANCE_FORCED),
+               "the pending join stated a provenance that is none of the three tokens engine.h declares");
         /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this host now visits the list at every slice rather
            than once per answer — so without this the page's one `fetch` would become one REQUEST PER SLICE at
            the server, which is a different question asked repeatedly rather than the one the flow parked on. */
@@ -1491,6 +1496,11 @@ static int wpt_issue_pending(void)
             if (!strcmp(g_owed[i].url, url) && !strcmp(g_owed[i].method, method)) { rec = i; break; }
         req.method = method;
         req.url = url;
+        /* THE DESTINATION THE LINE STATED, PUT BACK ON THE REQUEST IT BELONGS TO. This runner does no CORB —
+           it serves the checked-out corpus off wptserve's loopback socket, where there is no cross-origin data
+           body to keep out of a compiler — but the record it builds is core/fetch/fetch.h's request and a
+           field left unwritten in it is an uninitialised read waiting for the first consumer that grows one. */
+        req.destination = destination;
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;
@@ -2073,6 +2083,10 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             if (!wpt_request_asked_id(id)) {
                 req.method = "GET";
                 req.url = strchr(op, '\t') + 1;
+                /* §7.4.5's navigation request, whose destination is Fetch §2.2.5's `document` — HTML's
+                   navigate algorithm is the `document` row of §2.2.5's own initiator/destination table. It is
+                   not script-like, which is the whole of what a consumer reads it for. */
+                req.destination = "document";
                 req.headers = &none;
                 req.body = NULL;
                 req.body_len = 0;
@@ -2126,6 +2140,10 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             }
             req.method = method ? method : "GET";
             req.url = url ? url : "";
+            /* XMLHttpRequest's destination is Fetch §2.2.5's EMPTY STRING — its own row of that section's
+               initiator/destination table, the `connect-src` one it shares with `fetch()`. A value, not a
+               hole: these bytes are data. */
+            req.destination = "";
             req.headers = &hdrs;
             req.body = bodys;
             req.body_len = blen;

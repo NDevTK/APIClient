@@ -49,11 +49,15 @@
  *   · A PARSER-INSERTED `<script src>` OF THE SEEDED DOCUMENT — the pending line's `parser` initiator, which
  *     is HTML §4.12.1 "The script element"'s parser-inserted flag (solver/engine.h). It is named by the BYTES
  *     THIS ZONE ITSELF FETCHED, so a real load of that document makes exactly that request.
- * EVERYTHING ELSE IS REFUSED, WITH THE REASON. A park made by RUNNING CODE — a page `fetch()`, an injected
- * `<script src>`, a dynamic `import()` — is DERIVED or FORCED, and this engine runs code on forced arms; the
- * register cannot yet tell those two apart, and the per-origin widening that would let a person say "fire them
- * at this host" does not exist. Its absence is a CRASH and not a default: the refusal travels to the child,
- * which prints it at the stall. That this zone is stricter than `bridge.js` — which fires every pending line
+ * EVERYTHING ELSE IS REFUSED, WITH THE REASON, AND THE REASON IS NO LONGER THAT THE TWO LOOK ALIKE. A park
+ * made by RUNNING CODE — a page `fetch()`, an injected `<script src>`, a dynamic `import()` — is DERIVED or
+ * FORCED, and the pending line now SAYS which: the engine composes it at the park from the parser-inserted
+ * flag and from whether the parking flow's path had taken an arm its own concrete example contradicts
+ * (solver/flow.h's `path_forced`). What is missing is the AUTHORISATION for a DERIVED fetch — the per-origin
+ * widening that lets a person say "at this host, fire what the bundle derives", which exists here for
+ * NAVIGATIONS and not yet for fetches — and, for a FORCED one, nothing is missing at all: it is refused by
+ * the rule. See PROVENANCE_DECLINE, which states the two separately. Neither refusal is a default: the reason
+ * travels to the child, which prints it at the stall. That this zone is stricter than `bridge.js` — which fires every pending line
  * uncredentialed — is not a second policy: it is a hole SECURITY.md §Network already names as its own standing
  * open item ("that vocabulary … is the next subproblem"), and a zone written after the rule does not get to
  * inherit one that predates it.
@@ -177,14 +181,41 @@ const UNSTATED_PROVENANCE =
   '§A-REQUEST-CARRIES-THE-PROVENANCE splits an outbound request into OBSERVED / DERIVED / FORCED and makes a ' +
   'reply to a FORCED one evidence about what a server says to a request no client makes — plausible, ' +
   'unattributable, and it PROPAGATES, because one invented field is the example that shapes the next ' +
-  'endpoint. The pending register states HTML §4.12.1\'s parser-inserted flag (solver/engine.h) and nothing ' +
-  'finer, so a page fetch(), an injected <script src> and a dynamic import() are one class here and this zone ' +
-  'fires none of them. TWO THINGS WOULD LIFT IT, in order: a flow that RECORDS whether its path took a forced ' +
-  'arm, which is what separates DERIVED from FORCED; and the per-origin configuration CLAUDE.md requires ' +
-  'before a forced request may be fired at all. The SECOND now exists and covers NAVIGATIONS only ' +
-  '(`--explore <origin>`, see NAVIGATION_WIDENING); a fetch cannot join it while the pending line carries no ' +
-  'DESTINATION, because a body that becomes executable code is fetched `as:"script"` and that is the CORB ' +
-  'class — firing a running-code park without knowing which it is would read a cross-origin HTML body as code';
+  'endpoint. The pending register STATES which of the three this park is (solver/engine.h\'s ' +
+  'PENDING_PROVENANCE_*, composed at the park from HTML §4.12.1\'s parser-inserted flag and whether the ' +
+  'parking flow\'s path had taken an arm its own concrete example contradicts), so a page fetch() and a ' +
+  'forced arm\'s fetch() are no longer one class — and this zone still fires neither, for the reasons below ' +
+  'rather than because it cannot tell them apart. TWO THINGS WOULD LIFT IT, in order: a flow that RECORDS ' +
+  'whether its path took a forced arm, which is what separates DERIVED from FORCED; and the per-origin ' +
+  'configuration CLAUDE.md requires before a forced request may be fired at all. The FIRST now exists ' +
+  '(solver/flow.h\'s `path_forced`). The SECOND now exists and covers NAVIGATIONS only ' +
+  '(`--explore <origin>`, see NAVIGATION_WIDENING). What a FETCH is still waiting for is that same widening ' +
+  'said about fetches: the pending line now carries the CORB class too (Fetch §2.2.5\'s destination), so the ' +
+  'reason a running-code park is refused here is no longer that this zone could not classify it — it is that ' +
+  'nobody has said "at this host, fire what the bundle derives", and CLAUDE.md makes that a person\'s ' +
+  'sentence rather than an inference';
+
+/* WHY A PARK THIS ZONE CAN CLASSIFY IS STILL NOT FIRED, IN ITS OWN WORDS AND PER CLASS. Three states behind
+ * one answer is the defect CLAUDE.md names at §@S ("a rung whose ABSENCE and whose ZERO read alike"), and a
+ * refusal that reads the same for a DERIVED park and a FORCED one is that defect performed on the one seam
+ * whose whole subject is telling them apart. The two are refused for genuinely different reasons: a DERIVED
+ * request is one a person may authorise per origin and has not; a FORCED one is refused by the rule itself,
+ * and would be under any widening short of a sentence about forcing specifically. */
+const PROVENANCE_DECLINE = {
+  derived:
+    'a DERIVED park — the page\'s own code computed this address from real inputs, so it is a fact about the ' +
+    'app and firing it is the ACTIVE DISCOVERY CLAUDE.md §Attacker-sources calls REQUIRED. What is missing is ' +
+    'the authorisation: §Attacker-sources makes firing configurable and PER ORIGIN, "default conservative, ' +
+    'widened deliberately per origin, never inferred from a site looking like a test", and this zone\'s ' +
+    '`--explore <origin>` says that about NAVIGATIONS only. Saying it about fetches is the next diff here',
+  forced:
+    'a FORCED park — a value in this request exists only because a gate was forced, so a reply to it is ' +
+    'evidence about what a server says to a request no client makes. CLAUDE.md §@H forbids such a reply ever ' +
+    'being carried as OBSERVED, and the danger is that it is PLAUSIBLE: a 401 body parses as JSON and yields ' +
+    'fields that exist nowhere, and one invented field is the example that shapes the next endpoint. The ' +
+    'request is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap in the report but IS ' +
+    'the report — that surface is what forced execution finds and a sniffer cannot',
+};
 
 /* THE PER-ORIGIN WIDENING, WHICH IS A PERSON'S SENTENCE AND NOT AN INFERENCE — `--explore <origin>`, repeated.
  * CLAUDE.md §Attacker-sources: "It is CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG
@@ -276,7 +307,8 @@ async function main() {
      decision taken here.
      UNCREDENTIALED, STATED — see this file's header: there is no cookie jar in this process, so the mode
      would name a person who is not present. */
-  const seed = await ZONE.safeFetch(target, { pageUrl: target, credentialed: false });
+  const seed = await ZONE.safeFetch(target, { pageUrl: target, destination: 'document',
+                                              credentialed: false });
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
     throw new Error(`the chokepoint refused the seed: ${seed.statusText} — the document a session is rooted ` +
@@ -467,7 +499,10 @@ async function main() {
     const established = provenance === 'observed' || provenance === 'derived';
     if (!established && !NAVIGATION_WIDENING.has(new URL(abs).origin))
       return { declined: `${what} ${abs} — ${provenance === 'forced' ? FORCED_NAVIGATION : UNWIDENED_NAVIGATION}` };
-    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, credentialed: false }),
+    /* Fetch §2.2.5's `document` DESTINATION — this is HTML's navigate algorithm's own fetch, which is that
+       section's own `document` row. Not script-like, so no CORB: an HTML parser is what reads these bytes. */
+    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
+                                                        credentialed: false }),
                             `${what} ${abs}`);
     /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
        result of determining the origin given response's URL" — and Fetch §2.2.5 "Requests" makes that the LAST
@@ -479,16 +514,36 @@ async function main() {
              bytes: rec.bytes };
   }
 
-  const workFetch = async (e, method, initiator, url) => {
+  const workFetch = async (e, method, destination, initiator, provenance, url) => {
     const abs = new URL(url, e.docUrl).href;
-    /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two tokens,
-       and a third would be routed by whichever arm of the test below happened to be written as the else —
-       which is the defaulted-field defect landing on a firing decision. */
+    /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two initiator
+       tokens and exactly three provenance tokens, and an unknown one would be routed by whichever arm of the
+       tests below happened to be written as the else — which is the defaulted-field defect landing on a
+       firing decision. */
     if (initiator !== 'parser' && initiator !== 'script')
       throw new Error(`the pending line states the initiator \`${initiator}\`, which is neither token ` +
-                      'solver/engine.h declares — this zone\'s firing decision reads that field, so an ' +
-                      'unknown value must stop it rather than fall to a default');
-    if (initiator !== 'parser') { e.ready.push(decline(`${method} ${abs} — ${UNSTATED_PROVENANCE}`)); return; }
+                      'solver/engine.h declares — this zone reads that field, so an unknown value must stop ' +
+                      'it rather than fall to a default');
+    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
+      throw new Error(`the pending line states the provenance \`${provenance}\`, which is none of the three ` +
+                      'tokens solver/engine.h declares — this zone\'s firing decision reads that field, so ' +
+                      'an unknown value must stop it rather than fall to a default');
+    /* THE DECISION IS READ OFF THE FIELD NOW, AND THE FIELD IS THE ENGINE'S FACT AND NOT THIS ZONE'S GUESS.
+       `observed` is "a real load of this document makes exactly this request", composed at the park from the
+       parser-inserted flag and the parking flow's path; it is what this zone performs. The other two are
+       declined for reasons that are no longer "this zone cannot tell them apart" — see PROVENANCE_DECLINE,
+       which states each of the two separately because they are refused by different things. */
+    if (provenance !== 'observed') {
+      e.ready.push(decline(`${method} ${abs} — ${PROVENANCE_DECLINE[provenance]}`));
+      return;
+    }
+    /* AND `observed` IMPLIES PARSER-INSERTED, because that flag is one of the two facts it is composed from.
+       Asserted rather than assumed: the two are stated independently on the line, so a provenance that
+       reached `observed` by some other route is the composition having drifted from the flag it is made of. */
+    if (initiator !== 'parser')
+      throw new Error(`${method} ${abs} is OBSERVED and was not parser-inserted — the two are composed from ` +
+                      'one flag (solver/pending.h), so this zone is being told two things about one park ' +
+                      'that cannot both be true');
     if (method !== 'GET') {
       /* §Attacker-sources: a state-mutating request is NEVER fired to learn. `safe-fetch.js` enforces this by
          ABSENCE (it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`), so issuing one
@@ -500,10 +555,14 @@ async function main() {
                            'missing one'));
       return;
     }
-    /* A BODY THAT BECOMES EXECUTABLE CODE IS FETCHED `as:"script"`, which is the CORB class: a cross-origin
-       HTML/JSON body must never be read as code. It is decided HERE from the initiator the engine stated,
-       which is a parser-inserted `script` element by definition of that token. */
-    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: e.docUrl, as: 'script', credentialed: false }),
+    /* THE CORB CLASS IS THE REQUEST'S OWN DESTINATION, PASSED THROUGH — never a keyword decided here. Fetch
+       §2.2.5 "Requests" gives every request a destination and the engine states it at each park; the
+       chokepoint asks §2.2.5's SCRIPT-LIKE predicate of it, so a body that becomes executable code must be
+       JS-typed or same-origin and everything else is data. This line used to hardcode `as: 'script'` on the
+       strength of the INITIATOR — sound only because this zone fires nothing but parser-inserted parks, and
+       wrong the moment it fires anything else, which is exactly what the provenance work above is heading
+       toward. Reading it off the field costs nothing and cannot go stale. */
+    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, credentialed: false }),
                             `the parser-inserted script ${abs}`);
     e.ready.push(['provide', method, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
                   rec ? b64(rec.bytes) : ABSENT].join('\t'));
@@ -758,14 +817,16 @@ async function main() {
     if (line.startsWith('@RESULT ')) { e.result = line.slice('@RESULT '.length); return; }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 4)
-        throw new Error(`the host announced a fetch that is not \`fetch<TAB>METHOD<TAB>INITIATOR<TAB>URL\`: ` +
-                        `${line} — the bill is the pending line verbatim and this zone splits it where the ` +
-                        'engine joined it, so a short record is the two grammars having parted');
-      const [, method, initiator, url] = f;
+      if (f.length !== 6)
+        throw new Error('the host announced a fetch that is not ' +
+                        '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL`: ' +
+                        `${line} — the bill is ` +
+                        'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
+                        'short record is the two grammars having parted');
+      const [, method, destination, initiator, provenance, url] = f;
       const key = `${method}\t${url}`;
       if (e.answered.has(key)) return;
-      track(e, key, workFetch(e, method, initiator, url));
+      track(e, key, workFetch(e, method, destination, initiator, provenance, url));
     } else if (f[0] === 'request') {
       const id = Number(f[1]), op = f.slice(2).join('\t');
       const key = `req:${f[1]}`;

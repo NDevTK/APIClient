@@ -95,11 +95,12 @@
 // is the stale-pointer failure mode: it reads as authoritative while describing a tree that no longer exists,
 // and here it also describes the wrong ENVIRONMENT — the DCHECK below is only defined because check.js is the
 // FIRST script that page loads, and a worker reached by importScripts would have had none.
-// CORB/ORB for a SCRIPT load (opts.as==="script"): a chunk/import becomes
-// executable code under QuickJS control, so the response must be JS-typed (or
-// same-origin) — never a cross-origin HTML/JSON/etc. DATA body read as code.
-// Lives here (the chokepoint) so every code-loader gets it and a new one can't
-// forget it (the chunk path previously had none).
+// CORB/ORB for a SCRIPT-LIKE destination (Fetch §2.2.5): a `<script src>`, an
+// injected script or an import() becomes executable code under QuickJS control, so
+// the response must be JS-typed (or same-origin) — never a cross-origin HTML/JSON/etc.
+// DATA body read as code. Lives here (the chokepoint) so every code-loader gets it and
+// a new one can't forget it — and the class is now read off the REQUEST rather than
+// from a keyword the caller had to remember, which is what a caller did forget.
 //
 // TYPE SNIFFING LIVES HERE, AND IT IS THE ONLY PLACE IN THE EXTENSION THAT SNIFFS.
 // CLAUDE.md §Architecture states it by name: "TYPE SNIFFING STAYS IN JAVASCRIPT, in
@@ -231,6 +232,38 @@ function _corbSameOrigin(scriptUrl, pageOrigin) {
 // return rather than kept over it: a function called "allows" that answers a deny
 // reason reads correctly at exactly zero of its call sites. Every rule below is the
 // one that stood in that function, in the order it stood in.
+// IS THIS REQUEST'S DESTINATION SCRIPT-LIKE — Fetch §2.2.5 "Requests": "A request's
+// destination is script-like if it is `audioworklet`, `paintworklet`, `script`,
+// `serviceworker`, `sharedworker`, or `worker`." That predicate IS the CORB question
+// this file asks, so it is asked in the spec's own words instead of being restated as
+// a bespoke load-type keyword: the caller passes the destination the ENGINE put on
+// the request (solver/engine.h), and this decides.
+// `xslt` IS DELIBERATELY NOT IN IT, and the spec's own note is why rather than an
+// oversight: it says algorithms using script-like "should also consider `xslt` as that
+// too can cause script execution", and considering it here yields exclusion — the rule
+// below is "the body must be JAVASCRIPT-TYPED or same-origin", and an XSLT stylesheet
+// is XML, so requiring a JS MIME of one would refuse every correct response. The day
+// this engine loads an XSLT stylesheet it needs its own rule, not this one.
+function _isScriptLike(d) {
+  return d === "audioworklet" || d === "paintworklet" || d === "script" ||
+    d === "serviceworker" || d === "sharedworker" || d === "worker";
+}
+// AND EVERY CALLER MUST STATE ONE — the read is a DCHECK and not a `|| ""`, because
+// those two spellings differ exactly where it matters. Fetch §2.2.5's default IS the
+// empty string, so a caller CAN legitimately answer "" and mean data; what must not
+// happen is a caller that never thought about it reading as though it had, since the
+// arm it silently takes is "not script-like" and the bytes it silently accepts are a
+// cross-origin body a compiler is about to be handed. That is the shape this file
+// already had once under another name, when the class rode a keyword a caller could
+// forget. A destination is a property of a request, so every request has one.
+function _destinationOf(opts) {
+  DCHECK(typeof opts.destination === "string",
+         "safeFetch was called without a DESTINATION — Fetch §2.2.5 \"Requests\" gives every request one " +
+         "(\"unless stated otherwise it is the empty string\") and this file decides the CORB class from it. " +
+         "A caller that omits it takes the `not script-like` arm by silence, which is how a code load gets " +
+         "fetched as data; state \"\" and mean it, or state what the request is for");
+  return opts.destination;
+}
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   // same-origin: the page's own data is its to read, and the only thing refused is
   // that data reaching a CODE loader — a load that could not have executed anyway.
@@ -306,8 +339,14 @@ function _isPrivateHost(host) {
 //               The learned-GET replay path (`fetched`) passes no pageOrigin and is
 //               still uncredentialed — a learned address may be FORCED, which is a
 //               per-origin decision that does not exist yet.
-//   opts.as:    "script"          -> + CORB (cross-origin must be JS-typed)
-//               "sourcemap"/other -> data, no CORB (not executed as code)
+//   opts.destination:
+//               Fetch §2.2.5 "Requests"' DESTINATION, verbatim from the request the
+//               engine parked (solver/engine.h puts it on the pending line). A
+//               SCRIPT-LIKE one ("script", "worker", …) -> + CORB (cross-origin must
+//               be JS-typed); every other value, "" included, is data and takes no
+//               CORB. Absent is NOT a synonym for data — the assert at the rule says
+//               so, because a caller that does not state a destination is a caller
+//               whose code load would be fetched as data.
 //   answers:    computedType — the ONE type decision made about this response, the
 //               same one CORB was decided from, stamped on the record for the
 //               renderer so no downstream zone repeats it.
@@ -409,6 +448,15 @@ function _urlList(requested, resp) {
 
 async function safeFetch(url, opts) {
   opts = opts || {};
+  /* THE REQUEST'S SHAPE IS CHECKED BEFORE THE REQUEST IS MADE, which is the difference between an abort and a
+     network round trip followed by an abort. Both of these are about the CORB class — the one thing a caller
+     can get wrong here that ends with a cross-origin data body reaching a compiler — so they are asked at the
+     entry rather than beside the rule they feed, which runs only after the bytes are already back. */
+  DCHECK(!("as" in opts),
+         "safeFetch was passed the deleted `as` option — the CORB class is now the REQUEST'S DESTINATION " +
+         "(Fetch §2.2.5), stated by the engine on the pending line and passed as opts.destination. Ignoring " +
+         "`as` would fetch a code load as data, which is the defect the destination exists to end");
+  _destinationOf(opts);
   var parsed;
   try { parsed = new URL(String(url)); }
   // No URL at all, so there is no URL list either — « » is the honest report, and
@@ -526,12 +574,24 @@ async function safeFetch(url, opts) {
   try { if (resp.url) _finalHref = String(resp.url); } catch (e) {}
   var _finalOrigin = "";
   try { _finalOrigin = new URL(_finalHref).origin; } catch (e) {}
-  // CORB policy by LOAD TYPE (opts.as). "script" = bytes that will RUN as code
-  // (chunk/import, under QuickJS control) -> must be JS-typed/same-origin. Other
-  // loads ("sourcemap"/"config"/data — not executed) are exempt. Whether the
-  // result later REACHES QuickJS is the caller's documented contract, not
-  // enforced here (safeFetch returns bytes; the engine boundary is downstream).
-  if (opts.as === "script" && resp.ok) {
+  // CORB policy BY THE REQUEST'S DESTINATION (opts.destination, Fetch §2.2.5). A
+  // SCRIPT-LIKE destination is bytes that will RUN as code under QuickJS control, so
+  // the body must be JS-typed or same-origin; every other destination ("" for a
+  // `fetch()`, "image", "font", "style" …) is data and is exempt. Whether the result
+  // later REACHES QuickJS is the caller's documented contract, not enforced here
+  // (safeFetch returns bytes; the engine boundary is downstream).
+  //
+  // IT USED TO BE `opts.as === "script"` OVER A LOAD-TYPE KEYWORD THIS FILE INVENTED
+  // ("script"/"sourcemap"/other), AND THE KEYWORD WAS THE HOLE. A caller had to KNOW a
+  // load was code and say so, which meant the classification lived wherever a caller
+  // happened to compute it — for the extension, in a side list only the module loader
+  // filled, so a document's own `<script src>` arrived here with no `as` at all and a
+  // cross-origin HTML or JSON body served for it was returned to be compiled. The
+  // destination is a property of the request that the engine states at every park, so
+  // there is no longer a caller that can forget to classify: `opts.as` is GONE rather
+  // than accepted alongside, and the entry asserts on a caller still passing it,
+  // because silently ignoring the old key is exactly a code load fetched as data.
+  if (_isScriptLike(_destinationOf(opts)) && resp.ok) {
     // The DECLARED essence is what CORB's two tables are stated over — the rule is
     // "was this labelled as data", and the sniff is the separate confirmation step
     // for a body whose label lied.

@@ -571,6 +571,14 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         CHECK(!JS_IsException(deliver), "§4.6.8.20: OOM allocating a preload's processResponse steps");
         req.method = "GET";
         req.url = abs;
+        /* THE DESTINATION §4.6.8.20 STEP 3 ALREADY COMPUTED, carried to the host rather than recomputed there.
+           `translate_preload_destination` above returns Fetch §2.2.5 "Requests"' destination string (its own
+           comment says why the two spellings are one), and the trusted zone reads it for exactly one decision:
+           a SCRIPT-LIKE destination is bytes that will run as code, so its reply must be JS-typed or
+           same-origin. `<link rel=preload as=script>` is therefore a code load and is classified as one at the
+           chokepoint — which is the whole reason this field rides the request: the KIND of park cannot say it,
+           because a preload and a `fetch()` park identically and mean different things about the same bytes. */
+        req.destination = destination;
         req.headers = NULL;
         req.body = NULL;
         req.body_len = 0;

@@ -217,7 +217,8 @@ int pending_owed_replies(JSValueConst reg)
         int kind = (int)pending_get_int(e, PEND_KIND);
         if (kind != FLOW_PENDING_HOSTREQ && pend_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
-               lists `METHOD<TAB>INITIATOR<TAB>URL` and engine_provide delivers against the pair, so an owed
+               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and engine_provide delivers
+               against the pair, so an owed
                entry missing either is one the host was never shown and never will be — counting it credits a reply nobody is
                going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at
                the origin of the DEBT rather than on the register's hot path: pending_blocked runs at every
@@ -260,7 +261,24 @@ static void pend_put(JSValueConst obj, int field, JSValue v)
    Side-effect-free (it enumerates and frees the enumeration), which is what lets a DCHECK's condition call it. */
 static int pend_own_count(JSValueConst e);
 
-JSValue pending_push(JSValue *reg, int kind)
+/* See pending.h. TWO FACTS, TWO OWNERS, ONE COMPOSITION — and the conjunction is the whole content: a
+   parser-inserted park is a request a real load makes ONLY while the path that produced the row has stood on
+   no contradicted arm, because a `document.write` on a forced arm produces a parser-inserted row of that
+   flow's own sequence and of nothing else. Taking either fact alone reports the other one's answer. */
+int pending_prov_compose(int kind, int path_forced)
+{
+    DCHECK(path_forced == 0 || path_forced == 1,
+           "a park stated a forced-path mark that is neither set nor clear — it comes from flow_path_forced, "
+           "which asserts the same thing at the other end, so a third value is a caller that computed this "
+           "somewhere else");
+    DCHECK(kind >= FLOW_PENDING_RESOLVE && kind <= FLOW_PENDING_MODULE,
+           "a park stated a kind this register does not define — the provenance is composed from it, so an "
+           "unknown kind would be answered by whichever arm of the test below happens to be the else");
+    if (path_forced) return PROV_FORCED;
+    return kind == FLOW_PENDING_DOCSCRIPT ? PROV_OBSERVED : PROV_DERIVED;
+}
+
+JSValue pending_push(JSValue *reg, int kind, int path_forced)
 {
     JSValue e;
 

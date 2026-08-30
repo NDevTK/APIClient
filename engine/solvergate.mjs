@@ -322,7 +322,7 @@ async function child(docPath, schedName) {
        classic-script decode had never once seen the bytes whose charset it exists to honour. The mock body is
        written as source text here, so this is an ENCODE. */
     /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers
-       `METHOD<TAB>INITIATOR<TAB>URL` and the reply is delivered against both halves, so a GET and a POST to one address are two questions here. */
+       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and the reply is delivered against the (method, url) pair, so a GET and a POST to one address are two questions here. */
     const provide = (method, u, reply, body) => {
       const b = new TextEncoder().encode(body);
       const p = M._malloc(b.length + 1);
@@ -378,20 +378,31 @@ async function child(docPath, schedName) {
                  : policy.reply === "stuck" && !stalled ? []
                  : pending;
     for (const line of answer) {
-      const tab = line.indexOf("\t");
-      const tab2 = tab < 0 ? -1 : line.indexOf("\t", tab + 1);
-      if (tab <= 0 || tab2 <= tab + 1)
-        gateFail("a pending line is not `METHOD<TAB>INITIATOR<TAB>URL` — qjs_pending joins the three and the " +
-                 "reply is delivered against the (method, url) pair, so a short line makes an initiator token " +
-                 "the address");
-      const method = line.slice(0, tab), initiator = line.slice(tab + 1, tab2), u = line.slice(tab2 + 1);
-      /* THIS GATE ANSWERS EVERY PARK WHATEVER ITS INITIATOR, and that is what it MUST do: its subject is that
-         one document's finding set is the same under several schedules, so a reply policy that varied with a
-         request's provenance would be a fourth schedule the comparison cannot see. The field is checked for
-         its VOCABULARY only — a producer that drifts is a differential this gate would otherwise report as a
-         solver disagreement. Firing policy is engine/trusted.mjs's. */
+      const t = line.split("\t");
+      if (t.length !== 5 || t.some((x, i) => i !== 1 && x === ""))
+        gateFail("a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` — " +
+                 "qjs_pending joins the five and the reply is delivered against the (method, url) pair, so a " +
+                 "short line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default " +
+                 "and is the one field that may be empty");
+      /* THE DESTINATION IS NOT NAMED, for route.mjs's reason: it is the class a reply may be INGESTED under
+         and this gate ingests nothing — MOCK_BODY is minted here. Its vocabulary is asserted where it is
+         written, at the join. */
+      const [method, , initiator, provenance, u] = t;
+      /* THIS GATE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF, and that is what it MUST do: its subject
+         is that one document's finding set is the same under several schedules, so a reply policy that varied
+         with a request's provenance would be a fourth schedule the comparison cannot see. The fields are
+         checked for their VOCABULARY only — a producer that drifts is a differential this gate would
+         otherwise report as a solver disagreement. Firing policy is engine/trusted.mjs's.
+         AND THE PROVENANCE IS PART OF WHAT THIS GATE MEASURES, WHICH IS WHY IT IS PARSED HERE RATHER THAN
+         SKIPPED. It is composed at the park from the parking flow's own path (solver/flow.h's `path_forced`),
+         so it is a per-flow fact reaching the wire — exactly the class of thing a schedule must not be able to
+         change. Two schedules that disagree about it would disagree about which requests a zone may fire, and
+         the differential's whole claim is that the schedule decides nothing. */
       if (initiator !== "parser" && initiator !== "script")
         gateFail(`a pending line states the initiator \`${initiator}\`, which is neither token ` +
+                 "solver/engine.h declares — the vocabulary moved under every host that reads it");
+      if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced")
+        gateFail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
                  "solver/engine.h declares — the vocabulary moved under every host that reads it");
       /* `computedType` IS THIS ZONE'S DECISION, AND WITHOUT IT THIS GATE COULD NOT MEASURE A REPLY AT ALL.
          The sniff belongs to whoever READ the bytes, so fetch_reply_computed_type asserts the field rather

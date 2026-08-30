@@ -82,7 +82,6 @@
 #include "browser/core/rendering/rendering.h"
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
-#include "browser/core/loader/module_loader.h"
 #include "browser/core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 #include "solver/absent.h"
 #include "solver/concolic.h"
@@ -1363,33 +1362,21 @@ QJS_EXPORT void qjs_teardown(void)
  * engine that reports no pending fetches while a flow is parked on one that never arrives — the protocol would
  * run to completion over the hole and the result would look finished. */
 
-/* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>INITIATOR<TAB>URL` lines — the same grammar
-   qjs_host_requests answers in, and the method is there because it is half the request's IDENTITY. This list
-   was addresses alone and the reply edge matched on one, so a page issuing a GET and a POST to one address had
-   both promises settled with whichever the zone fetched first (solver/engine.h states the whole of it). The
-   zone must issue each line with the method it names and hand BOTH halves back to qjs_provide. */
+/* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>
+   URL` lines — the same grammar qjs_host_requests answers in, and the method is there because it is half the
+   request's IDENTITY. This list was addresses alone and the reply edge matched on one, so a page issuing a GET
+   and a POST to one address had both promises settled with whichever the zone fetched first (solver/engine.h
+   states the whole of it). The zone must issue each line with the method it names and hand BOTH halves back to
+   qjs_provide.
+   AND THE DESTINATION IS WHY THIS ENTRY NO LONGER HAS A SECOND LIST BESIDE IT. `qjs_chunks` answered the CORB
+   class out of the module loader's own register of specifiers, so it classified dynamic `import()` and nothing
+   else: a document's own `<script src>` reached the chokepoint with no class at all and a cross-origin HTML or
+   JSON body served for it was ingested as data and then compiled. Fetch §2.2.5 Requests makes the destination
+   part of the request; it is on this line beside the method, and the register it stood in for is deleted. */
 QJS_EXPORT const char *qjs_pending(void)
 {
     DCHECK(g_begun, "qjs_pending was asked of an engine that never ran");
     return engine_pending_fetches();
-}
-
-/* The lazily-loaded SCRIPT URLs — the headline moat surface, and a separate list from qjs_pending only because
-   the host fetches them differently (a JS body is executed, a data body is handed back). The script-load edge
-   that fills this is core/loader's, and it is the next component: until it exists a page's lazy chunk arrives
-   through fetch like any other URL, which is honest but misses `import()` and an injected <script>.
-   IT IS NOT A SECOND REPLY CHANNEL, AND A HOST THAT ANSWERS IT AS ONE NOW CRASHES SAYING SO. Every address here
-   was recorded by the module loader at the same moment it PARKED the load, so each is already an entry of the
-   pending register with its own method and is already listed by qjs_pending; providing a reply for it a second
-   time answers a request that carries one, which is engine_provide's answered-twice DFAIL. What this list is
-   FOR is the CORB class — a body that becomes executable code is fetched `as:"script"` — so it classifies the
-   pending list rather than duplicating it. That the destination is not on the pending line yet is the same
-   defect the method was: Fetch §2.2.5 Requests makes destination part of the request, and it belongs on that
-   line beside the method, after which this entry deletes. */
-QJS_EXPORT const char *qjs_chunks(void)
-{
-    DCHECK(g_begun, "qjs_chunks was asked of an engine that never ran");
-    return module_loader_chunks();
 }
 
 /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRIES ITS TYPE — JSON, exactly as qjs_host_answer's does and for
@@ -1419,8 +1406,8 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
        target (RFC 9112 §3 Request Line). A zone still calling this with four operands lands its URL in `method`
        and engine_provide's token assert names exactly that. */
     DCHECK(method != NULL, "a reply was provided with no METHOD — qjs_pending answers "
-                           "`METHOD<TAB>INITIATOR<TAB>URL` and this entry takes the pair; a host sending the "
-                           "address alone is answering a request it cannot name");
+                           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this entry takes "
+                           "the pair; a host sending the address alone is answering a request it cannot name");
     DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
                           "which is a value the engine's delivery distinguishes from a reply it never got");
     DCHECK(body != NULL || body_len == 0,

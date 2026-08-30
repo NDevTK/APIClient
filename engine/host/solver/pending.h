@@ -60,6 +60,36 @@
    differs, which is what the kind is for. */
 #define FLOW_PENDING_MODULE    4
 
+/* WHAT THIS REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three provenances, recorded
+ * on the record at the PUSH because a park is a work item and its provenance is one of the inputs it has to
+ * take with it (§scheduler: "anything it reads back off the object it acts on is read at the wrong TIME"). A
+ * flow that parks a request and takes a contradicted arm afterwards built that request on the path it had
+ * THEN; asking the flow when the join runs would file it under a path it reached later.
+ *   OBSERVED — a real load of this document makes exactly this request. It is the conjunction of two facts and
+ *              neither alone is it: HTML §4.12.1 "The script element"'s parser-inserted flag (this register's
+ *              FLOW_PENDING_DOCSCRIPT, whose address came out of bytes the trusted zone itself fetched) AND a
+ *              path that has stood on no contradicted arm. A `document.write` on a forced arm produces a
+ *              parser-inserted row too, in that flow's own sequence and in no real load of anything.
+ *   DERIVED  — the page's own code computed it from real inputs. No session sent it; it is still a fact about
+ *              the app, and it is the surface forced execution exists to find.
+ *   FORCED   — the path took an arm the concrete example contradicts, so a value in this request exists only
+ *              because a gate was forced. A reply to it is evidence about what a server says to a request no
+ *              client makes, and §@H forbids it ever being reported as OBSERVED.
+ * THE ORDER IS THE JOIN'S, and it is why these are numbered rather than named-only: engine_pending_fetches
+ * dedups over the (method, url) pair and has to state the fact that survives every member of the set, which is
+ * the MOST OBSERVED of them — the same rule, and the same reasoning, as the initiator's.
+ * IT IS `PEND_SHARE`, for `doc`'s reason exactly: an arm forked while the load is in flight is the same
+ * request, built on the prefix both arms share and before either of them had taken the branch. A sibling that
+ * recomputed it from its OWN path would re-date the request to the fork. */
+#define PROV_OBSERVED 0
+#define PROV_DERIVED  1
+#define PROV_FORCED   2
+/* THE COMPOSITION, IN ONE PLACE, FROM THE TWO FACTS AND THEIR TWO OWNERS. The KIND is the record's own (only
+   this register knows what a park is), and the forced mark is the FLOW's (only the solver knows what a path
+   stood on); a caller states the half it owns and this states the other. It is not a policy — the engine
+   decides nothing about firing here, it names what the request IS, and the trusted zone decides. */
+int pending_prov_compose(int kind, int path_forced);
+
 /* THE RECORD'S FIELDS, IN ONE PLACE, WITH WHAT THE FORK DOES WITH EACH.
  *   SHARE  — the sibling takes a REFERENCE. Right for an immutable value (a JS string, the request body's
  *            bytes, a number) and for the two values both arms genuinely observed: the resolve capability is
@@ -143,8 +173,10 @@
  * ran on a record of the affected kinds. A latent hole plus an unreachable check reads exactly like a healthy
  * subsystem.
  * SO THE DEFAULT IS DECLARED HERE, WITH THE FIELD, and pending_push expands this list instead of restating it.
- * The expressions are evaluated in pending_push's scope — `kind` is its argument and `pend_ctx()` is the
- * session's context — which is the one place this column is ever expanded with a value; that coupling is the
+ * The expressions are evaluated in pending_push's scope — `kind` and `path_forced` are its arguments and
+ * `pend_ctx()` is the session's context — which is the one place this column is ever expanded with a value;
+ * a field whose default is a fact only the CALLER holds becomes a parameter there rather than a second write
+ * the push sites are each asked to remember, which is the same "no list beside a list" rule one line up; that coupling is the
  * price of there being no second list, and it is stated rather than left to be discovered. Each default is a
  * POSITIVE statement of "nothing yet" (§Architecture: a consumer never defaults a producer's field, so the
  * producer states the absence), never a hole a reader fills in. */
@@ -161,12 +193,17 @@
     X(URL,        "url",       PEND_SHARE,  JS_NULL)                                   \
     X(HAVE_VALUE, "haveValue", PEND_SHARE,  JS_FALSE)                                  \
     X(KIND,       "kind",      PEND_SHARE,  JS_NewInt32(pend_ctx(), kind))             \
+    /* what this request is evidence of, composed from the kind and the pusher's path */ \
+    X(PROV,       "prov",      PEND_SHARE,                                             \
+      JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced)))                \
     X(SCRIPT_I,   "scriptI",   PEND_SHARE,  JS_NewInt32(pend_ctx(), -1))               \
     /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the delivery */ \
     X(SCRIPT_TYPE, "scriptType", PEND_SHARE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE))  \
     X(REQ,        "req",       PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
     X(OP,         "op",        PEND_SHARE,  JS_NULL)                                   \
     X(METHOD,     "method",    PEND_SHARE,  JS_NULL)                                   \
+    /* no DESTINATION STATED, which the join refuses to list rather than classifying */ \
+    X(DESTINATION,"destination",PEND_SHARE, JS_NULL)                                   \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* 0 is "this park's reply is not a program", which is every kind but the injected <script src> */ \
@@ -270,8 +307,12 @@ int  pending_outstanding(JSValueConst reg);
 int  pending_outstanding_kind(JSValueConst reg, int kind);
 
 /* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptI -1, req 0).
-   Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller. */
-JSValue pending_push(JSValue *reg, int kind);
+   Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller.
+   `path_forced` IS THE PUSHING FLOW'S OWN (flow_path_forced), and it is a PARAMETER rather than a lookup for
+   two reasons that both matter: this file is below flow.c and must not reach up into it, and the provenance is
+   a fact about the path AT THE PUSH — a parameter is what makes "read it now, not later" a thing the compiler
+   enforces at every park site instead of a rule each one is asked to remember. */
+JSValue pending_push(JSValue *reg, int kind, int path_forced);
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones. */
 void pending_set(JSValueConst e, int field, JSValue v);

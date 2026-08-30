@@ -31,9 +31,24 @@ void fetch_free(JSRuntime *rt);
    (its corpus's `echo-content.py` and `inspect-headers.py` answer exactly those), and the extension's host has
    always needed them to satisfy a real request through the trusted zone. `headers` is the request's own list,
    borrowed; `body`/`body_len` are its bytes, NULL for a request that has none. */
+/* …AND ITS DESTINATION, WHICH IS WHAT THE BYTES ARE FOR. Fetch §2.2.5 "Requests": "A request has an associated
+   destination, which is a destination type. Unless stated otherwise it is the empty string", the type being one
+   of "", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe", "image", "json", "manifest",
+   "object", "paintworklet", "report", "script", "serviceworker", "sharedworker", "style", "text", "track",
+   "video", "webidentity", "worker" or "xslt". It is as much a part of the request as the METHOD is, and it is
+   carried for the same reason: the party that will ISSUE it cannot decide about a property it was never told.
+   ITS READER IS THE CORB CLASS, and until that reader existed this field would have been the mirror of the
+   defect core/html/html_image.c names at its own park — a producer writing what nothing reads. §2.2.5 makes
+   a destination SCRIPT-LIKE if it is "audioworklet", "paintworklet", "script", "serviceworker", "sharedworker"
+   or "worker", and script-like is exactly "these bytes will RUN as code", which is the one question the trusted
+   zone's chokepoint asks of a reply before it hands it back (SECURITY.md §Network). A request that does not
+   state one cannot be classified, and a body that is not classified as code and then compiled is the hole this
+   field closes: a cross-origin HTML or JSON body ingested as data and handed to the compiler.
+   BORROWED like `method` and `url` — the park copies it into the flow's register (solver/pending.h). */
 typedef struct {
     const char   *method;
     const char   *url;
+    const char   *destination;
     const HeaderList *headers;
     const char   *body;
     size_t        body_len;

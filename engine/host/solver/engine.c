@@ -107,7 +107,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
                       "above this line: the callers that HAVE a flow are script and enqueued jobs, and the "
                       "caller that does not is the pre-boot baseline tree walk performing a step HTML defines "
                       "over tree construction. Issue it from the boot flow, not from the walk");
-    e = pending_push(&f->pending, FLOW_PENDING_RESOLVE);
+    e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
     if (url) pending_set(e, PEND_URL, JS_NewString(ctx, url));
@@ -121,6 +121,18 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
            "(engine.h), so an unnamed method would park this request under another one's identity and settle "
            "it with that request's body. Name the method at the component that built the request");
     if (req && req->method) pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
+    /* AND THE DESTINATION, WHICH THIS PARK CANNOT DERIVE AND MUST BE TOLD. Every entry of this kind is a
+       `fetch()` to one component and a `<link rel=preload as=script>` or an `<img>` to another, and those are
+       the same PARK with different answers to "may this reply be ingested as code" — so the KIND cannot say
+       it and the request record does (Fetch §2.2.5 "Requests"). The empty string is a real destination and a
+       real answer; a NULL is a producer that stated none, which the join refuses to list. */
+    DCHECK(!url || (req && req->destination),
+           "a request parked on an ADDRESS without stating its DESTINATION — Fetch §2.2.5 Requests gives every "
+           "request one (\"unless stated otherwise it is the empty string\"), and the trusted zone reads it to "
+           "decide whether the reply may be ingested as CODE. A park that does not say would have its reply "
+           "classified by whichever arm the zone happens to write first, which is how a cross-origin HTML body "
+           "gets compiled. Name the destination at the component that built the request");
+    if (req && req->destination) pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
     if (req && req->headers && req->headers->n > 0) {
         JSValue hl = pending_list_new();
         int hi;
@@ -141,10 +153,17 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char 
     JSValue e;
     DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
-    e = pending_push(&f->pending, FLOW_PENDING_MODULE);
+    e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
     pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));   /* a chunk load states its own method */
+    /* …AND ITS DESTINATION IS `script`, WHICH IS WHAT MAKES A CHUNK A CODE LOAD AT THE CHOKEPOINT. HTML
+       §8.1.6.7.3 HostLoadImportedModule: "Let destination be `script`" — and for a dynamic `import()` nothing
+       overrides it (loadState is undefined outside a worklet or service worker), so this is the destination
+       the fetch carries. It is STATED on the record rather than reported through a register of specifiers
+       beside it: a side list one producer fills answers for that producer and is silently absent for every
+       other, which is how a document's own `<script src>` reached the trusted zone with no load class at all. */
+    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, PENDING_DESTINATION_SCRIPT));
     JS_FreeValue(ctx, e);
 }
 
@@ -162,12 +181,19 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
         JS_FreeValue(ctx, p);
         if (dup) return;
     }
-    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT);
+    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
     /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
        a method, so it is Fetch §2.2's `GET`. STATED, because the seam is keyed on the pair and a park that does
        not say is a park the join cannot list. */
     pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
+    /* …AND THE DESTINATION THAT SAME ALGORITHM SETS, which is the field this park was missing and the reason a
+       shipped extension compiled cross-origin data. "Fetch a classic script" is "Let request be the result of
+       creating a potential-CORS request given url, `script`, and corsSetting", and §2.5.1 "Fetching resources"'
+       create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
+       so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
+       list only the module loader wrote, which named dynamic imports and never this. */
+    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, PENDING_DESTINATION_SCRIPT));
     pending_set_int(e, PEND_SCRIPT_I, script_i);
     JS_FreeValue(ctx, e);
 }
@@ -201,11 +227,17 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
            "a <script src> was parked on for an element whose type executes nothing — §4.12.1.1 fires an error "
            "event at an `importmap` or `speculationrules` element with a `src` and returns without fetching, "
            "so no such element ever reaches a park");
-    e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
+    e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f));
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* §8.1.4.2's fetch, whose decode and whose evaluation entry the type above decides. */
     pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
+    /* …AND ITS DESTINATION IS `script` FOR BOTH TYPES THE PARK CARRIES. A classic external script is "fetch a
+       classic script", whose request is created with `script`; a `<script type=module src>` is "fetch an
+       external module script graph", which fetches a single module script with the destination `script` too.
+       So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
+       reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
+    pending_set(e, PEND_DESTINATION, JS_NewString(ctx, PENDING_DESTINATION_SCRIPT));
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
        chokepoint was entered with is that tree's document — the reply is compiled there rather than in
        whichever realm the session happens to be rooted at. */
@@ -535,7 +567,7 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     DCHECK(f != NULL, "a synchronous host request was issued outside a flow — there would be nothing to "
                       "suspend and nothing to resume with the answer");
     DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
-    e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ);
+    e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f));
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
     id = mint_req();   /* the ASK half of the rate above — counted at the mint, which is the only place it is */
     pending_set_int(e, PEND_REQ, id);
@@ -2283,6 +2315,115 @@ static inline int method_is_token(const char *m) {
     return 1;
 }
 
+/* FETCH §2.2.5 "Requests"' DESTINATION TYPE, ENUMERATED — "the empty string, `audio`, `audioworklet`,
+   `document`, `embed`, `font`, `frame`, `iframe`, `image`, `json`, `manifest`, `object`, `paintworklet`,
+   `report`, `script`, `serviceworker`, `sharedworker`, `style`, `text`, `track`, `video`, `webidentity`,
+   `worker`, or `xslt`". It is the PRODUCER'S CONTRACT and it is asked in both directions — the join will not
+   write a value the spec does not define, and the split will not believe one — because the field's consumer
+   decides from it whether a reply may be ingested as CODE, and a value it does not recognise is answered by
+   whichever of its arms was written first. A `static` beside `method_is_token` for that entry's reason: this
+   engine's only two uses of the vocabulary are those two asserts, and an export with no caller is the mirror
+   of the field nothing reads. */
+static int destination_is_type(const char *d) {
+    static const char *const TYPES[] = {
+        "", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe", "image", "json",
+        "manifest", "object", "paintworklet", "report", "script", "serviceworker", "sharedworker",
+        "style", "text", "track", "video", "webidentity", "worker", "xslt"
+    };
+    size_t i;
+    if (!d) return 0;
+    for (i = 0; i < sizeof TYPES / sizeof *TYPES; i++)
+        if (!strcmp(d, TYPES[i])) return 1;
+    return 0;
+}
+
+/* IS THIS DESTINATION SCRIPT-LIKE — §2.2.5: "A request's destination is script-like if it is `audioworklet`,
+   `paintworklet`, `script`, `serviceworker`, `sharedworker`, or `worker`." The ENGINE does not decide CORB
+   with it (that is the trusted zone's, and it asks the same question in safe-fetch.js); what this decides is
+   which member of a deduped SET the line must state, and that is a fact about the join's own output. */
+static int destination_is_script_like(const char *d, size_t n) {
+    static const char *const SCRIPT_LIKE[] = {
+        "audioworklet", "paintworklet", "script", "serviceworker", "sharedworker", "worker"
+    };
+    size_t i;
+    for (i = 0; i < sizeof SCRIPT_LIKE / sizeof *SCRIPT_LIKE; i++)
+        if (n == strlen(SCRIPT_LIKE[i]) && !memcmp(d, SCRIPT_LIKE[i], n)) return 1;
+    return 0;
+}
+
+/* REPLACE ONE FIELD OF AN ALREADY-JOINED LINE, SHIFTING WHAT FOLLOWS IT — the dedup's ONE write half, for
+   every token field on the line.
+   AN IN-PLACE OVERWRITE IS NOT AVAILABLE FOR ANY OF THEM, and it was only ever available for one. The
+   destination's vocabulary is the SPEC's, so `` -> `script` grows the line by six bytes and every later line
+   moves; the provenance's is a three-token vocabulary (`observed`/`derived`/`forced`) of three widths. Only
+   the initiator's pair happens to be one width, and the join used to overwrite it in place and ASSERT that
+   coincidence — the assert's own message naming exactly what has since happened ("a third token of another
+   length added to engine.h would rewrite six bytes of a URL"). Answering that by choosing tokens of equal
+   length would be picking a vocabulary to fit a memcpy, so there is one general rewriter and no coincidence
+   left to assert.
+   A CALLER REWRITING SEVERAL FIELDS OF ONE LINE GOES BACK TO FRONT, because a rewrite shifts everything after
+   the field it touches: a later field's offset survives an earlier field's growth and not the other way round.
+   `off` is an OFFSET rather than a pointer because the growth may realloc the buffer out from under the
+   caller's line pointers. */
+static void join_set_field(char **join, size_t *n_out, size_t *cap, size_t off, size_t old_len,
+                           const char *tok) {
+    size_t tl = strlen(tok), tail_at = off + old_len, tail_len;
+
+    DCHECK(tail_at <= *n_out, "the join was asked to rewrite a field that ends past the text it has written — "
+                              "the offset came from a line in another buffer");
+    tail_len = *n_out - tail_at;
+    /* GUARDED ON GROWTH RATHER THAN WRITTEN AS ONE EXPRESSION: `*n_out + tl - old_len` is size_t arithmetic
+       and a SHRINKING field makes the middle term wrap, which happens to come back to the right value and is
+       a thing the next reader has to prove rather than see. A field that shrinks needs no room. */
+    while (tl > old_len && *n_out + (tl - old_len) + 1 > *cap) {
+        *cap *= 2;
+        *join = realloc(*join, *cap);
+        CHECK(*join, "engine: OOM widening a pending line's field");
+    }
+    if (tl != old_len) memmove(*join + off + tl, *join + tail_at, tail_len + 1);   /* +1 carries the NUL */
+    memcpy(*join + off, tok, tl);
+    *n_out += tl - old_len;
+}
+
+/* THE PROVENANCE'S WIRE SPELLING — the one place the record's number becomes the token the line carries, so
+   the vocabulary engine.h declares and the values pending.h numbers cannot drift apart in two files. */
+static const char *prov_token(int prov) {
+    switch (prov) {
+    case PROV_OBSERVED: return PENDING_PROVENANCE_OBSERVED;
+    case PROV_DERIVED:  return PENDING_PROVENANCE_DERIVED;
+    case PROV_FORCED:   return PENDING_PROVENANCE_FORCED;
+    }
+    /* A `CHECK`, NOT A DCHECK, for engine_pending_split's reason: what is at stake is the FIRING DECISION a
+       trusted zone makes off this field, and a release build that fell through here would emit a line whose
+       provenance field is whatever the compiler left in the register. */
+    CHECK_FAILF("engine: a park's provenance is %d, which is none of the three pending.h defines — the trusted "
+                "zone's firing decision reads this field", prov);
+}
+
+/* …AND THE SAME TRIP BACK, for a token already written into the join. Length-delimited because the caller
+   holds a field of a line and not a NUL-terminated string. */
+static int prov_of_token(const char *tok, size_t n) {
+    if (n == sizeof PENDING_PROVENANCE_OBSERVED - 1 && !memcmp(tok, PENDING_PROVENANCE_OBSERVED, n))
+        return PROV_OBSERVED;
+    if (n == sizeof PENDING_PROVENANCE_DERIVED - 1 && !memcmp(tok, PENDING_PROVENANCE_DERIVED, n))
+        return PROV_DERIVED;
+    if (n == sizeof PENDING_PROVENANCE_FORCED - 1 && !memcmp(tok, PENDING_PROVENANCE_FORCED, n))
+        return PROV_FORCED;
+    CHECK_FAILF("engine: a line this join wrote carries the provenance token `%.*s`, which it cannot have "
+                "written — the buffer is this function's alone", (int)n, tok);
+}
+
+/* IS THIS INITIATOR TOKEN THE PARSER-INSERTED ONE — asked of a field of a line and of the entry's own token
+   through the same two comparisons, so the join cannot decide the question one way in one place and another
+   way in the other. It is a MEMBERSHIP test and not a length test: reading "six bytes" as "parser" was sound
+   only while both tokens were six bytes, which is the coupling this file has just stopped relying on. */
+static int ini_is_parser(const char *tok, size_t n) {
+    if (n == sizeof PENDING_INITIATOR_PARSER - 1 && !memcmp(tok, PENDING_INITIATOR_PARSER, n)) return 1;
+    if (n == sizeof PENDING_INITIATOR_SCRIPT - 1 && !memcmp(tok, PENDING_INITIATOR_SCRIPT, n)) return 0;
+    CHECK_FAILF("engine: a pending line carries the initiator token `%.*s`, which is neither token engine.h "
+                "declares", (int)n, tok);
+}
+
 const char *engine_pending_fetches(void) {
     static char *join;
     static size_t cap;
@@ -2295,13 +2436,6 @@ const char *engine_pending_fetches(void) {
        the host provide twice and the second call finds nothing left. Deduping over the URL alone did the
        opposite of that and worse — it deleted the POST from a list that already held the GET, so the host never
        issued it and the engine settled the POST's promise with the GET's body. */
-    /* THE IN-PLACE UPGRADE BELOW IS ONLY SOUND WHILE THE TWO TOKENS ARE ONE WIDTH, so the assumption is
-       asserted rather than remembered: a third token of another length added to engine.h would otherwise
-       rewrite six bytes of a URL and the host would fetch an address no flow parked on. */
-    DCHECK(sizeof PENDING_INITIATOR_PARSER == sizeof PENDING_INITIATOR_SCRIPT,
-           "the pending line's initiator tokens are no longer one width — the join upgrades a duplicate's "
-           "initiator by overwriting it in place, which is a rewrite of the following field the moment the two "
-           "differ in length");
     if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending requests"); }
     join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
@@ -2309,14 +2443,27 @@ const char *engine_pending_fetches(void) {
             JSValue pe = pending_entry(f->pending, i);
             JSValue uv = pending_get(pe, PEND_URL);
             JSValue mv = pending_get(pe, PEND_METHOD);
-            size_t ul = 0, ml = 0;
+            JSValue dv = pending_get(pe, PEND_DESTINATION);
+            size_t ul = 0, ml = 0, dl = 0;
             const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
             const char *m = JS_IsString(mv) ? JS_ToCStringLen(pending_ctx(), &ml, mv) : NULL;
+            /* FETCH §2.2.5's DESTINATION, off the record the park stamped it on. It is NOT derived from the
+               KIND here, and that is the whole correction: a `<link rel=preload as=script>` and a `fetch()`
+               are one kind of park and opposite answers to "may this reply be compiled", so a kind-to-class
+               table would be a second producer of a fact the request already carries. */
+            const char *d = JS_IsString(dv) ? JS_ToCStringLen(pending_ctx(), &dl, dv) : NULL;
             /* HTML §4.12.1's PARSER-INSERTED FLAG, read off the kind the park already carries — see
                engine.h's tokens for why the engine states it and does not act on it. */
             const char *ini = pending_get_int(pe, PEND_KIND) == FLOW_PENDING_DOCSCRIPT
                               ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
-            const size_t il = sizeof PENDING_INITIATOR_PARSER - 1;
+            /* …AND WHAT THE REQUEST IS EVIDENCE OF, read off the record and never recomputed from the flow.
+               The park stamped it (pending.h's PROV field) at the instant the request was built, which is the
+               only instant at which it is true: this walk runs arbitrarily later, over a flow that may have
+               taken a contradicted arm since, and asking `flow_path_forced(f)` here would file every request
+               a flow ever made under the path it reached last. */
+            int prov_v = (int)pending_get_int(pe, PEND_PROV);
+            const char *prov = prov_token(prov_v);
+            size_t il = strlen(ini), pl = strlen(prov);
             int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
             if (!skip) {
                 char *q = join, *stop = join + n_out;
@@ -2347,11 +2494,41 @@ const char *engine_pending_fetches(void) {
                 DCHECK(method_is_token(m),
                        "an outstanding request's METHOD is not a token — Fetch §2.2.1 Methods, and RFC 9110 "
                        "§5.6.2 Tokens is the production; the joined line would not split back into the pair");
+                /* AND THE OTHER HALF OF THE PRODUCER'S CONTRACT, asserted where the record is read for the
+                   same reason the method is. An entry that states no destination cannot be classified at the
+                   chokepoint, and the failure is not that the request goes unfetched — it is fetched, as
+                   DATA, and if it is a script park its cross-origin body is then compiled. */
+                DCHECK(d != NULL,
+                       "an outstanding request carries an ADDRESS and no DESTINATION — Fetch §2.2.5 Requests "
+                       "gives every request one and the trusted zone reads it to decide whether the reply may "
+                       "be ingested as CODE. The park that created it must state it (core/fetch/fetch.h's "
+                       "request record carries the field; `` is a real answer and means DATA)");
+                DCHECK(destination_is_type(d),
+                       "an outstanding request's DESTINATION is not one Fetch §2.2.5 Requests enumerates — the "
+                       "consumer decides the CORB class by asking whether this value is SCRIPT-LIKE, so a "
+                       "value outside the enumeration is read as `not code` by default and a script's reply is "
+                       "ingested as data");
                 while (q < stop) {
                     char *e = memchr(q, '\n', (size_t)(stop - q));
-                    size_t l = e ? (size_t)(e - q) : (size_t)(stop - q);
-                    if (l == ml + 1 + il + 1 + ul && !memcmp(q, m, ml) && q[ml] == '\t' &&
-                        q[ml + 1 + il] == '\t' && !memcmp(q + ml + 1 + il + 1, u, ul)) {
+                    char *lend = e ? e : stop;
+                    /* THE LINE IS SPLIT WHERE IT WAS JOINED rather than measured against this entry's widths.
+                       The old test computed every field boundary from `ml`, a fixed `il` and `ul`, which is
+                       only a comparison at all while every line's token fields are the same length as this
+                       one's — true of two six-byte initiators and false the moment a field has a vocabulary
+                       (`observed`/`derived`/`forced`) rather than a pair. Scanning the TABs asks the line what
+                       its fields are; neither a method (RFC 9110 §5.6.2 Tokens) nor a URL (URL Standard §4.4
+                       URL parsing) can contain one, which is what makes the scan exact. */
+                    char *t1 = memchr(q, '\t', (size_t)(lend - q));
+                    char *t2 = t1 ? memchr(t1 + 1, '\t', (size_t)(lend - t1 - 1)) : NULL;
+                    char *t3 = t2 ? memchr(t2 + 1, '\t', (size_t)(lend - t2 - 1)) : NULL;
+                    char *t4 = t3 ? memchr(t3 + 1, '\t', (size_t)(lend - t3 - 1)) : NULL;
+                    DCHECK(t4 != NULL,
+                           "a line already in this join carries fewer than four TABs — the buffer is this "
+                           "function's alone and every line it writes is `METHOD<TAB>DESTINATION<TAB>"
+                           "INITIATOR<TAB>PROVENANCE<TAB>URL`, so this is the writer and the reader having "
+                           "parted");
+                    if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
+                        (size_t)(lend - (t4 + 1)) == ul && !memcmp(t4 + 1, u, ul)) {
                         /* THE SET'S INITIATOR IS THE MOST OBSERVED OF ITS MEMBERS, and that is a statement
                            about the REQUEST rather than a preference. The dedup is over the pair because the
                            pair is the request's identity and one reply fills every entry parked on it — so
@@ -2359,9 +2536,55 @@ const char *engine_pending_fetches(void) {
                            the line has to state the fact that survives them both: a real load of this document
                            makes this request. Taking whichever flow happened to be walked first would make a
                            zone's firing decision a function of scheduler order, which is the same value read
-                           two ways on two runs. The upgrade is monotone and never runs downward. */
-                        if (!memcmp(ini, PENDING_INITIATOR_PARSER, il))
-                            memcpy(q + ml + 1, PENDING_INITIATOR_PARSER, il);
+                           two ways on two runs. The upgrade is monotone and never runs downward.
+                           AND THE PROVENANCE IS JOINED THE SAME WAY, WHICH IS THE MOST OBSERVED AND NOT THE
+                           MOST FORCED. The hazard reads the other way round at first — "a forced arm's request
+                           hiding behind an observed one" — but the set's members are one REQUEST, and if any
+                           member's path stood on no contradicted arm then a real client makes exactly this
+                           request and the server's answer to it is evidence about the app. Labelling that set
+                           FORCED would state "no client makes this request" of a request one does, which is the
+                           false claim §@H forbids pointing the other way, and it would cost the tool the
+                           active-discovery its own §Attacker-sources calls REQUIRED. What a forced flow does
+                           with the reply is a fact about THAT FLOW's path, which its own `path_forced` already
+                           carries into everything it emits; it is not a property of the bytes.
+                           TAKEN OVER THE WHOLE PAIR IN ONE WRITE, so a duplicate that improves only one of the
+                           two fields does not leave the other stale. */
+                        /* AND THE SET'S DESTINATION IS ITS STRICTEST MEMBER, WHICH IS A DIFFERENT RULE FROM
+                           THE TWO ABOVE AND MUST NOT BE READ AS THE SAME ONE. The other two fields fold
+                           toward what is MOST OBSERVED, which is a claim about evidence. This one folds
+                           toward what may be INGESTED MOST NARROWLY, which is a claim about the reply: one
+                           response satisfies every park in the set, so if any member will COMPILE it, the
+                           bytes have to pass the code rule — a cross-origin non-JS body refused for a
+                           `fetch()` that would have read it as data is a narrowing, and the same body
+                           accepted for a `<script src>` is arbitrary code execution. §2.2.5's SCRIPT-LIKE is
+                           exactly that line, so the fold is `script-like wins` and nothing else.
+                           WHERE NEITHER MEMBER IS SCRIPT-LIKE THE LINE KEEPS WHAT IT HAS, and that is stated
+                           rather than left as an accident of walk order: `image` and `font` for one address
+                           impose the same ingestion rule, so no consumer of this seam can tell them apart and
+                           there is nothing for an order to change. The day one can — a consumer that reads
+                           the destination for something other than the code question — the register has to be
+                           keyed on the destination instead of folded over it, and that is the change to make
+                           then rather than a tie-break invented now to look deterministic. */
+                        /* EVERY OFFSET AND EVERY VERDICT IS TAKEN BEFORE THE FIRST WRITE, and the three writes
+                           then run BACK TO FRONT — provenance, initiator, destination. A rewrite shifts
+                           everything after the field it touches, so a later field's offset survives an earlier
+                           field's growth and not the other way round; writing the destination first would
+                           leave the two after it measured against a line that had moved. */
+                        size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
+                        size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
+                        size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
+                        int mo_prov = prov_of_token(t3 + 1, p_len);
+                        int mo_parser = ini_is_parser(t2 + 1, i_len) || ini_is_parser(ini, il);
+                        int widen_dst = destination_is_script_like(d, dl) &&
+                                        !destination_is_script_like(join + d_at, d_len);
+                        if (prov_v < mo_prov) mo_prov = prov_v;
+                        join_set_field(&join, &n_out, &cap, p_at, p_len, prov_token(mo_prov));
+                        join_set_field(&join, &n_out, &cap, i_at, i_len,
+                                       mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
+                        if (widen_dst) join_set_field(&join, &n_out, &cap, d_at, d_len, d);
+                        /* THE BUFFER MAY HAVE MOVED — both rewrites can realloc — so every pointer this scan
+                           holds (`q`, `stop`, `t1`..`t4`) is dead from here. The break is what makes that
+                           safe, and it is stated rather than left to be noticed. */
                         skip = 1; break;
                     }
                     if (!e) break;
@@ -2369,14 +2592,18 @@ const char *engine_pending_fetches(void) {
                 }
             }
             if (!skip) {
-                while (n_out + ml + il + ul + 4 > cap) {
+                while (n_out + ml + dl + il + pl + ul + 6 > cap) {
                     cap *= 2;
                     join = realloc(join, cap);
                     CHECK(join, "engine: OOM growing the pending-request join");
                 }
                 memcpy(join + n_out, m, ml); n_out += ml;
                 join[n_out++] = '\t';
+                memcpy(join + n_out, d, dl); n_out += dl;
+                join[n_out++] = '\t';
                 memcpy(join + n_out, ini, il); n_out += il;
+                join[n_out++] = '\t';
+                memcpy(join + n_out, prov, pl); n_out += pl;
                 join[n_out++] = '\t';
                 memcpy(join + n_out, u, ul); n_out += ul;
                 join[n_out++] = '\n';
@@ -2384,6 +2611,8 @@ const char *engine_pending_fetches(void) {
             }
             if (u) JS_FreeCString(pending_ctx(), u);
             if (m) JS_FreeCString(pending_ctx(), m);
+            if (d) JS_FreeCString(pending_ctx(), d);
+            JS_FreeValue(pending_ctx(), dv);
             JS_FreeValue(pending_ctx(), mv);
             JS_FreeValue(pending_ctx(), uv);
             JS_FreeValue(pending_ctx(), pe);
@@ -2391,10 +2620,12 @@ const char *engine_pending_fetches(void) {
     return join;
 }
 
-void engine_pending_split(char *line, const char **method, const char **initiator, const char **url) {
-    char *tab, *tab2;
+void engine_pending_split(char *line, const char **method, const char **destination, const char **initiator,
+                          const char **provenance, const char **url) {
+    char *tab, *tab2, *tab3, *tab4;
 
-    DCHECK(line && method && initiator && url, "a pending line was split with nowhere to put its fields");
+    DCHECK(line && method && destination && initiator && provenance && url,
+           "a pending line was split with nowhere to put its fields");
     tab = strchr(line, '\t');
     /* A `CHECK`, NOT A DCHECK, because the release path has no defined answer: the fields are what a reply
        is delivered against, and a line that is not the shape this engine joined would key a delivery on a method
@@ -2402,7 +2633,7 @@ void engine_pending_split(char *line, const char **method, const char **initiato
        nothing else would say so. */
     CHECK(tab != NULL,
           "engine: a host split a pending line that carries no TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>INITIATOR<TAB>URL` lines and this one is none of that");
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` lines and this one is none of that");
     tab2 = strchr(tab + 1, '\t');
     /* THE SECOND TAB IS THE ONE A HOST WRITTEN AGAINST THE OLD GRAMMAR WOULD NOT FIND, and it is a CHECK for
        the same sentence as the first with the failure one field over: without it the INITIATOR silently becomes
@@ -2412,17 +2643,58 @@ void engine_pending_split(char *line, const char **method, const char **initiato
        the URL is the remainder of the line. */
     CHECK(tab2 != NULL,
           "engine: a host split a pending line carrying one TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>INITIATOR<TAB>URL` and this host is reading the two-field grammar that preceded it, so "
-          "its address is about to be an initiator token");
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this host is reading a shorter "
+          "grammar that preceded it, so its address is about to be a destination");
+    tab3 = strchr(tab2 + 1, '\t');
+    /* THE THIRD TAB IS THE ONE A HOST WRITTEN AGAINST THE THREE-FIELD GRAMMAR WOULD NOT FIND, and it is a
+       CHECK for the same sentence as the two above with the failure one field further over: without it the
+       PROVENANCE silently becomes the address, so the zone would fetch the eight characters `observed` and
+       every flow parked on the real URL would wait for a reply keyed on a request nothing made. The
+       three-field grammar was the shape that could not say whether a running-code park was DERIVED or FORCED
+       — nothing on a flow recorded whether its path took a forced arm — so a host still reading it is one
+       whose firing decision cannot see the distinction it is supposed to be made on. */
+    CHECK(tab3 != NULL,
+          "engine: a host split a pending line carrying two TABs — engine_pending_fetches joins "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this host is reading a shorter "
+          "grammar that preceded it, so its address is about to be an initiator token");
+    tab4 = strchr(tab3 + 1, '\t');
+    /* THE FOURTH TAB IS THE ONE A HOST WRITTEN AGAINST THE FOUR-FIELD GRAMMAR WOULD NOT FIND, and it is a
+       CHECK for the same sentence as the three above with the failure one field further over. The grammar
+       that preceded it could not say what a set of bytes was FOR: a host read the CORB class out of a side
+       list only the module loader wrote, so a document's own `<script src>` was fetched with no class at all
+       and a cross-origin HTML body served for it was ingested as data and compiled. A host still reading that
+       grammar is one whose ingestion decision is made on a field that is not there. */
+    CHECK(tab4 != NULL,
+          "engine: a host split a pending line carrying three TABs — engine_pending_fetches joins "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and this host is reading the "
+          "four-field grammar that preceded it, so its address is about to be a provenance token and its CORB "
+          "class is about to be decided on a field that is not there");
     *tab = 0;
     *tab2 = 0;
+    *tab3 = 0;
+    *tab4 = 0;
     *method = line;
-    *initiator = tab + 1;
-    *url = tab2 + 1;
+    *destination = tab + 1;
+    *initiator = tab2 + 1;
+    *provenance = tab3 + 1;
+    *url = tab4 + 1;
+    /* FETCH §2.2.5's ENUMERATION, ASKED OF THE LINE — the same test the join asked before writing it, at the
+       other end, because a field is a contract and a contract is checked by both parties. The EMPTY STRING
+       passes and must: §2.2.5's default is a destination like any other and it is what `fetch()` has. */
+    DCHECK(destination_is_type(*destination),
+           "a pending line's DESTINATION is not one Fetch §2.2.5 Requests enumerates — the host decides from "
+           "it whether this reply may be ingested as CODE, and a value it does not know takes the `not "
+           "script-like` arm, which is how a script's cross-origin body gets read as data and compiled");
     DCHECK(!strcmp(*initiator, PENDING_INITIATOR_PARSER) || !strcmp(*initiator, PENDING_INITIATOR_SCRIPT),
-           "a pending line's INITIATOR is neither of the two tokens engine.h declares — the trusted zone's "
-           "firing decision reads this field, and a value it does not know would be answered by whichever of "
-           "its arms happened to be the default");
+           "a pending line's INITIATOR is neither of the two tokens engine.h declares — a zone reads this "
+           "field for what a REAL LOAD of the document makes, and a value it does not know would be answered "
+           "by whichever of its arms happened to be the default");
+    DCHECK(!strcmp(*provenance, PENDING_PROVENANCE_OBSERVED) ||
+           !strcmp(*provenance, PENDING_PROVENANCE_DERIVED) ||
+           !strcmp(*provenance, PENDING_PROVENANCE_FORCED),
+           "a pending line's PROVENANCE is none of the three tokens engine.h declares — the trusted zone's "
+           "FIRING decision reads this field, and CLAUDE.md forbids a reply to a FORCED request ever being "
+           "reported as OBSERVED, which a defaulted fourth value is exactly how it would be");
 }
 
 /* IS ANYTHING OUTSTANDING ON THE WHOLE FRONTIER — the third answer over the same two walks above, and the one
@@ -2594,8 +2866,10 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
        from `n == 0` with nothing matched at all, which is the host's pairing being off and is the CALLER's
        assert (it owns the paged-sale credit that legitimately explains it). This one no credit can excuse: a
        request leaves the join the moment it is answered, so the host was never shown it a second time. The
-       shape it catches is a host with TWO lists that overlap — the extension's `GetChunks` names URLs that are
-       already parked module loads and would answer each of them again. */
+       shape it catches is a host with TWO OVERLAPPING LISTS: a side list of addresses that are already parked
+       requests, which a host reads as a second thing to answer and pays twice. That shape is why a fact about
+       a request belongs ON the request — the destination arrived on the pending line for exactly this reason,
+       and the chunk register that used to carry it is gone rather than kept beside the join. */
     if (matched && !n)
         DFAILF("a reply was provided for a request every parked entry has ALREADY been answered for — the "
                "join drops a request as soon as it carries a value, so the host is answering one it was shown "
