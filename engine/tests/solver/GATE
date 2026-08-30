@@ -1,0 +1,21 @@
+# WHO COLLECTS THIS DIRECTORY, said out loud rather than left to the shape of a filename.
+#
+# engine/features.mjs runs everything under engine/tests that run-test262 collects — recursive, `.js`, not
+# `_FIXTURE.js` — and asserts that the number it RAN equals the number on disk, so a fixture dropped in this
+# tree cannot be green without having run. Everything that rule does not reach must say who reaches it, or it
+# is an excluded test and features.mjs fails naming the file. §Testing: "A TEST FILE THE GATE DOES NOT COLLECT
+# IS AN EXCLUDED TEST … worse, because the total LOOKS complete."
+#
+# These are the solver differential's documents, not ECMAScript fixtures. Each is a page whose frontier drains,
+# run under several schedules by engine/solvergate.mjs; it enumerates them with
+# `readdirSync(CORPUS).filter(f => f.endsWith(".html"))`, which is the claim below.
+#
+# THAT ENUMERATION IS ONE DIRECTORY DEEP, AND THIS CLAIM IS THEREFORE ABOUT THIS DIRECTORY ONLY. A GATE does
+# not speak for a subdirectory, precisely because the runner it names need not descend and this one does not:
+# a document at solver/<anything>/x.html would be claimed by a claim that inherits and enumerated by nobody —
+# an excluded test whose exclusion is stated nowhere, reached THROUGH the accounting that exists to end it. So
+# a subdirectory here writes its own GATE, or its content is .js and run-test262 collects it recursively.
+#
+# Format: <runner path from the repo root>  <suffix or exact filename>
+
+engine/solvergate.mjs  .html
