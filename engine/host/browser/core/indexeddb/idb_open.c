@@ -37,8 +37,12 @@
  * export ten of this file's internals — the entry accessors, the queue, the blocked list, the shared step
  * state, the enqueue — which is a wider seam than the thing it separates, and each of those exports is a
  * second way to reach a queue whose whole contract is that there is one. So the file's contract is §2.8.2's
- * QUEUE and everything processed in it, and what distinguishes §5.1's entry from §5.3's is one field (E_KIND)
- * that three places read: the rendezvous that resumes a parked entry, and the completion task's two arms.
+ * QUEUE and everything processed in it, and what distinguishes §5.1's entry from §5.3's is one field (E_KIND).
+ * THE RULE THAT FIELD CARRIES, and the one thing sharing a record for two algorithms costs: every question of
+ * the form "which of the two is this" is answered from E_KIND and from nothing else — which machine STARTS an
+ * entry, which machine RESUMES a parked one, and which arm of §4.3's completion task settles it. A caller that
+ * supplies its own answer to any of the three has made the record describe a request nobody made, and the
+ * shape of that failure is that it SUCCEEDS: §5.1's steps run to completion over a delete's entry.
  *
  * §5.3 IS §5.1 WITH THREE DIFFERENCES AND NOT A COPY OF IT: its openConnections is ALL of the database's
  * connections (there is no connection of its own to except), its two version change events carry a NULL new
@@ -70,11 +74,13 @@
 /* §5.1's AND §5.3's OWN LOCALS, on the record that carries them across the algorithm's hand-offs. */
 #define E_REQUEST      "request"          /* §2.8.1's open request */
 /* WHICH OF §4.3's TWO ALGORITHMS THIS ENTRY IS. §2.8.1's open request is "used when opening a connection OR
-   deleting a database", so the queue holds both and three places have to tell them apart: the rendezvous that
-   decides which machine resumes a parked entry, and §4.3's completion task, whose success arm is a connection
-   and a plain `success` for one and undefined and an IDBVersionChangeEvent for the other. It is on the ENTRY
-   rather than derived from which fields are set, because "E_CONNECTION is null" is also true of an open that
-   has not reached step 8 yet. */
+   deleting a database", so §2.8.2's queue holds both interleaved and every place that has to tell them apart
+   asks THIS: which machine starts an entry, which machine resumes a parked one, and which arm of §4.3's
+   completion task settles it — whose success arm is a connection and a plain `success` for one and undefined
+   and an IDBVersionChangeEvent for the other. It is on the ENTRY rather than derived from which fields are
+   set, because "E_CONNECTION is null" is also true of an open that has not reached step 8 yet — and, the
+   other way about, a delete entry that HAS one is not a delete that acquired a connection but an entry that
+   was run through the wrong algorithm, which is what entry_enqueue's pairing assertion makes unreachable. */
 #define E_KIND         "kind"
 #define E_NAME         "name"             /* the database name, which is also this entry's queue */
 #define E_VERSION      "version"          /* §5.1's `version` once step 5 has decided it */
@@ -234,11 +240,50 @@ static void entry_assert_head(JSContext *ctx, JSValueConst e)
     JS_FreeValue(ctx, q);
 }
 
-/* Enqueue one of this file's machines over `entry`. Every hand-off in §5.1 is one of these. */
+/* WHICH OF THIS FILE'S MACHINES MAY RUN FOR WHICH KIND OF ENTRY. Four of the five perform a span of exactly
+   ONE of the two standards — §5.1 Opening a database connection's steps 4-10.6 and §5.7 Upgrading a database
+   serve an open, §5.3 Deleting a database's steps 4-9 and its steps 10-12 serve a delete — and the fifth is
+   §4.3 The IDBFactory interface's two completion tasks, which are one machine BECAUSE they differ in one
+   sentence. So (machine, kind) is a total function with one answer, and it is written down HERE rather than
+   re-decided at each hand-off. */
+static inline bool machine_serves(JSContext *ctx, int stepid, JSValueConst e)
+{
+    if (stepid == g_open_stepid || stepid == g_upgrade_stepid)
+        return entry_kind(ctx, e) == IDB_REQ_OPEN;
+    if (stepid == g_delete_stepid || stepid == g_delete_finish_stepid)
+        return entry_kind(ctx, e) == IDB_REQ_DELETE;
+    return stepid == g_result_stepid;   /* §4.3's completion tasks, the one machine both kinds end in */
+}
+
+/* WHICH MACHINE STARTS AN ENTRY — the same question entry_wait_continuation asks about a RESUMED one, and the
+   same answer: a fact about which algorithm the entry IS, so it is read off E_KIND and never supplied by the
+   caller. THE DEFECT SHAPE IT EXISTS TO END: two places answered this question independently, and the one that
+   answered it at a HAND-OFF rather than from the entry named §5.1's machine as a constant — so a queue holding
+   `open(n)` ahead of `deleteDatabase(n)`, which is how half of this standard's fixtures begin, dequeued the
+   open and started §5.3's request into §5.1's steps. Those steps do not reject a delete; they look a name up,
+   default a version, RE-CREATE the database the request was asked to remove, and open a connection to it, so
+   the request succeeded at the wrong standard and nothing until §4.3's completion task had cause to look. */
+static int entry_start_machine(JSContext *ctx, JSValueConst e)
+{
+    int id = entry_kind(ctx, e) == IDB_REQ_OPEN ? g_open_stepid : g_delete_stepid;
+
+    DCHECK(id >= 0, "an open request was started before idb_open_init registered its algorithm's machine");
+    return id;
+}
+
+/* Enqueue one of this file's machines over `entry`. Every hand-off in §5.1 is one of these — which is what
+   makes this the ONE place the pairing above can be asserted, at the instant the task is MINTED rather than
+   wherever the wrong machine's writes are first noticed. A machine that runs the other algorithm's steps over
+   an entry does not fail; it SUCCEEDS at the wrong standard, so nothing downstream is obliged to notice. */
 static void entry_enqueue(JSContext *ctx, int stepid, JSValueConst entry)
 {
-    JSValue fn = JS_NewStepClosure(ctx, stepid, 0, 1, &entry);
+    JSValue fn;
 
+    DCHECK(machine_serves(ctx, stepid, entry),
+           "an §2.8.1 open request was handed to a machine that performs the OTHER algorithm's steps — §5.1 "
+           "Opening a database connection and §5.3 Deleting a database share §2.8.2's queue and this entry "
+           "record, and nothing else, so which machine runs an entry is decided by its kind and by no caller");
+    fn = JS_NewStepClosure(ctx, stepid, 0, 1, &entry);
     CHECK(!JS_IsException(fn), "IndexedDB: an §5.1 task could not be minted");
     JS_EnqueueCallTask(ctx, fn, 0, NULL);
     JS_FreeValue(ctx, fn);
@@ -384,6 +429,14 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     STEP_ARM(OPN_FIND);
         JS_FreeValue(ctx, cb_result);
         entry_assert_head(ctx, entry);
+        /* THE MIRROR OF DEL_FIND's, AND ITS ABSENCE IS WHY THIS FILE HAD A DEFECT. A delete entry started here
+           does not fail — §5.1's steps 4-6 look a name up, default a version and CREATE the database, all of
+           which succeed for any entry — so it ran four stages, opened a connection at OPN_CONNECT and was
+           first noticed at §4.3's completion task, by which point the record no longer described any request
+           the page made. entry_enqueue's pairing makes it unreachable; this is what says so where the steps
+           are. */
+        DCHECK(entry_kind(ctx, entry) == IDB_REQ_OPEN,
+               "§5.1's machine ran for an entry that is not an open request");
         {
             JSValue nv = entry_get(ctx, entry, E_NAME);
             const char *name = JS_ToCString(ctx, nv);
@@ -1124,11 +1177,17 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         entry_assert_head(ctx, entry);
         req = entry_get(ctx, entry, E_REQUEST);
         conn = entry_get(ctx, entry, E_CONNECTION);
-        /* §5.1's steps 10.7-10.8 are about a CONNECTION, and §5.3 never makes one — so the delete arm falls
-           through both tests below rather than being branched around them, and this is what says so. */
+        /* §5.1's steps 10.7-10.8 are about a CONNECTION, and §5.3 Deleting a database's twelve steps make
+           none — so the delete arm falls THROUGH both tests below rather than being branched around them, and
+           this is what says so. Which also makes the converse assertable: an entry that is a delete and holds
+           a connection is not a delete that acquired one, it is an entry driven through §5.1's step 8, and its
+           KIND is not what is wrong (E_KIND is written once, by the entry's own constructor, from which of
+           §4.3's two members the page called). entry_start_machine and entry_enqueue's pairing make that
+           unreachable at the MINT; this is the consumer that would otherwise hand a `deleteDatabase` a
+           connection as its result. */
         DCHECK(entry_kind(ctx, entry) == IDB_REQ_OPEN || JS_IsNull(conn),
                "a §5.3 delete request reached §4.3's completion task holding a connection — §5.3 has no step "
-               "that makes one, so an entry with both is an open request mislabelled as a delete");
+               "that makes one, so this entry ran §5.1's steps instead of its own");
         err = idb_request_error(ctx, req);
         if (JS_IsNull(err) && !entry_flag(ctx, entry, E_ABORTED) && idb_connection_is(conn)) {
             /* Step 10.7: "If connection was closed, return a newly created AbortError DOMException." A
@@ -1243,7 +1302,11 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
             if (n > 1) {
                 JSValue next = JS_GetPropertyUint32(ctx, q, 0);
 
-                entry_enqueue(ctx, g_open_stepid, next);
+                /* THE NEXT ENTRY'S OWN ALGORITHM, not this one's. §2.8.1 Open requests is one request type
+                   "used when opening a connection or deleting a database", so the queue interleaves both and
+                   what a dequeue starts is whatever the next entry IS — asked of entry_start_machine, which
+                   is the only thing that answers it. */
+                entry_enqueue(ctx, entry_start_machine(ctx, next), next);
                 JS_FreeValue(ctx, next);
             }
             JS_FreeValue(ctx, q);
@@ -1262,11 +1325,12 @@ static const JSTrampStepDef js_idb_result_def = {
 /* THE ONE PLACE AN OPEN REQUEST IS FILED IN §2.8.2's QUEUE. §5.1 steps 1-3 and §5.3 steps 1-3 are the same
    three sentences — "let queue be the connection queue for storageKey and name; add request to queue; wait
    until all previous requests in queue have been processed" — and a second copy of them would be a second
-   answer to "who is the head", which is the invariant every machine in this file asserts on entry. `stepid`
-   is which algorithm the entry starts, and it is a parameter rather than a branch on `kind` for the one reason
-   the entry cannot be asked yet: it is what this function is building.
-   Returns the REQUEST, owned; the member hands it straight back to the page. */
-static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, int stepid, double version,
+   answer to "who is the head", which is the invariant every machine in this file asserts on entry. Which
+   algorithm the entry starts is NOT a parameter: E_KIND is placed below, before the enqueue, so by the time
+   step 3 has anything to start there is an entry to ask — and a `stepid` argument here would be a SECOND
+   answer to a question entry_start_machine already answers, which is exactly how the dequeue came to answer
+   it wrong. Returns the REQUEST, owned; the member hands it straight back to the page. */
+static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, double version,
                                     bool has_version)
 {
     JSValue req, entry, q;
@@ -1302,7 +1366,7 @@ static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, 
        followed by `open(n, 1)`, which is how half this standard's fixtures begin, run in that order without
        either of them knowing the other exists. */
     if (n == 0)
-        entry_enqueue(ctx, stepid, entry);
+        entry_enqueue(ctx, entry_start_machine(ctx, entry), entry);
     JS_FreeValue(ctx, entry);
     return req;   /* "Return a new IDBOpenDBRequest object for request." */
 }
@@ -1313,7 +1377,7 @@ JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool 
     DCHECK(!has_version || version >= 1, "§4.3's open reached §5.1 with a zero version — its first step is "
                                          "\"if version is 0 (zero), throw a TypeError\", reported by the "
                                          "member before this");
-    return open_request_enqueue(ctx, name, IDB_REQ_OPEN, g_open_stepid, version, has_version);
+    return open_request_enqueue(ctx, name, IDB_REQ_OPEN, version, has_version);
 }
 
 JSValue idb_delete_request(JSContext *ctx, const char *name)
@@ -1322,7 +1386,7 @@ JSValue idb_delete_request(JSContext *ctx, const char *name)
     /* §5.3 takes NO version — the algorithm's `version` is its own step 10, read off the database it is about
        to delete — so the entry's requested version is absent and E_HAS_VERSION is false. §5.1's step 5 is the
        only reader of that pair and it is not on any path a delete takes. */
-    return open_request_enqueue(ctx, name, IDB_REQ_DELETE, g_delete_stepid, 0, /*has_version*/ false);
+    return open_request_enqueue(ctx, name, IDB_REQ_DELETE, 0, /*has_version*/ false);
 }
 
 void idb_open_init(JSContext *ctx)
