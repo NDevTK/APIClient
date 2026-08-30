@@ -1113,17 +1113,129 @@ const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"],
    cannot be a literal anywhere and the server is the only thing that can state it.
    THE NEWLINE IS PART OF THE MATCH: this reads a file another process is appending to, and a pattern that can
    match a half-written line would resolve with the port and no origin. */
+/* THE ONE EXIT LISTENER, INSTALLED BEFORE ANYTHING WAITS ON IT AND LIVE FOR THE WHOLE RUN.
+   IT USED TO BE REGISTERED INSIDE THE READY PROMISE'S EXECUTOR, WHICH MADE IT INERT THE MOMENT THE PROMISE
+   SETTLED — a listener that calls `reject` on a settled promise is a no-op, so a wptserve that died at any
+   point after READY was a death NOTHING IN THIS PROCESS OBSERVED. That is not a small hole and it is not
+   hypothetical: this driver's last whole-corpus run had wptserve stop answering part-way through `shadow-dom`
+   and then spawned 935 more children against a dead socket — storage, streams, url, wai-aria, webidl,
+   webmessaging and xhr all read 100 % aborted, seven areas whose engine the same binary passes. The run did not
+   end; it stopped MEASURING and kept REPORTING, which is §Testing's own defect at corpus scale.
+   IT RECORDS AND DECIDES NOTHING, for the reason the quantum's signal handler decides nothing: the exit is an
+   asynchronous fact and the verdict is a question somebody asks later, at a site that knows what it was doing
+   when the answer came back. */
+let g_serverExit = null;
+server.on("exit", (code, signal) => { g_serverExit = { code, signal }; });
 const ready = await new Promise((resolve, reject) => {
   const fail = setTimeout(() => reject(new Error("wptserve did not report READY within 60s")), 60_000);
   const poll = setInterval(() => {
+    /* ASKED OF THE ONE RECORD ABOVE rather than of a second listener: two listeners for one event is two
+       places for this file to disagree with itself about whether the server is up. */
+    if (g_serverExit) {
+      clearTimeout(fail); clearInterval(poll);
+      reject(new Error(`wptserve exited (${serverEnded()}) before it reported READY`));
+      return;
+    }
     const m = /READY (\d+) (\S+)\n/.exec(readFileSync(SERVER_LOG, "utf8"));
     if (m) { clearTimeout(fail); clearInterval(poll); resolve({ addr: "127.0.0.1:" + m[1], origin: m[2] }); }
   }, 50);
-  server.on("exit", (c) => { clearTimeout(fail); clearInterval(poll); reject(new Error("wptserve exited with " + c)); });
 }).catch((e) => { console.error("[wpt] " + e.message); process.exit(1); });
 const serverAddr = ready.addr, serverOrigin = ready.origin;
 console.log(`[wpt] wptserve on ${serverAddr}, serving the corpus as ${serverOrigin}; its log: ${SERVER_LOG}`);
 process.on("exit", () => server.kill());
+
+function serverEnded() {
+  if (!g_serverExit) return "still running";
+  return g_serverExit.signal ? `killed by ${g_serverExit.signal}` : `exit code ${g_serverExit.code}`;
+}
+
+/* WHY A `fetch` DID NOT HAPPEN, IN THE MOST SPECIFIC TERMS THE ERROR CARRIES. node's fetch rejects with a bare
+   `TypeError: fetch failed` and puts every fact in `cause`, so reading `e.message` first prints that string and
+   nothing else — measured: a refused connection and a rejected port number are both "fetch failed" at the top
+   level and are `ECONNREFUSED` and "bad port" one level down. The order is code, then the cause's own message,
+   then the top one; each step is a strictly less specific answer and the last is only reached when there is no
+   cause at all, so this chain never stands in for a fact the error was carrying. */
+function transportReason(e) {
+  if (e && e.cause && e.cause.code) return String(e.cause.code);
+  if (e && e.cause && e.cause.message) return String(e.cause.message);
+  return String((e && e.message) || e);
+}
+
+/* IS THE CORPUS SERVER STILL SERVING? — ASKED OF THE SERVER, NEVER INFERRED FROM THE SYMPTOM.
+ *
+ * A run that could not get its own file off the corpus server is TWO facts wearing one shape, and the whole
+ * value of this gate rests on telling them apart. Either the CORPUS cannot supply this file — a support path
+ * the sparse checkout does not have, a handler that faults, a `.sub` template wptserve refuses — which is one
+ * honest `corpus` row and the run carries on; or the SERVER IS GONE, in which case this row and every row after
+ * it is about the server and nothing about the engine was measured by any of them. Guessing between them from
+ * the text of the symptom is the recognizer shape: it goes stale, and its failure mode is the expensive one —
+ * 935 rows of a confident wrong answer.
+ *
+ * SO THE DISCRIMINATOR IS A REQUEST. Any HTTP response at all — 200, 404, 500 — proves the server is accepting
+ * connections and answering, which is the only property in question; the STATUS is not read, because a server
+ * that 404s the corpus root is still a server. Three outcomes and all three are written out, because a driver
+ * that cannot distinguish "the process exited" from "the port refuses" from "it accepted and said nothing"
+ * hands the reader one number for three different pieces of work — the collapsed verdict §Testing refuses.
+ *
+ * AND THE `await` IS WHAT MAKES THE EXIT LISTENER ABOVE RELIABLE. This run is a sequence of `spawnSync` calls,
+ * each of which blocks node's event loop for the whole of a test, so an `exit` event can sit undelivered in
+ * libuv for minutes; awaiting the probe is a turn of the loop, so a death that has already happened is recorded
+ * by the time the probe answers. The listener is what NAMES the death; the probe is what makes it arrive.
+ *
+ * ITS DEADLINE IS WALL TIME AND THAT IS CORRECT HERE, which is worth saying because §Testing bans a wall clock
+ * as a verdict about the ENGINE. This measures neither the engine nor a test: it measures whether a socket on
+ * loopback answers, and "it did not answer for twenty seconds" is the whole of the fact being reported. It is
+ * also never the last word on a test — the run it interrupts already has its own verdict. */
+const SERVER_PROBE_MS = 20_000;
+async function serverHealth() {
+  let answered = false, transport = null;
+  try {
+    const r = await fetch("http://" + serverAddr + "/", { signal: AbortSignal.timeout(SERVER_PROBE_MS) });
+    /* THE BODY IS READ AND DROPPED so the connection is not left half-consumed for the next probe; the STATUS
+       is deliberately not looked at — see above. */
+    await r.arrayBuffer();
+    answered = true;
+  } catch (e) {
+    transport = e && e.name === "TimeoutError" ? "timeout" : transportReason(e);
+  }
+  if (answered) return { serving: true, said: `the server answered this driver's probe (${serverEnded()})` };
+  if (g_serverExit)
+    return { serving: false,
+             said: `wptserve is GONE — the process this driver spawned ${serverEnded()}, and its probe of ` +
+                   `http://${serverAddr}/ then failed with ${transport}` };
+  if (transport === "timeout")
+    return { serving: false,
+             said: `wptserve is RUNNING AND NOT ANSWERING — the process is still alive and did not answer a ` +
+                   `request for http://${serverAddr}/ within ${SERVER_PROBE_MS / 1000}s. That is the wedge this ` +
+                   "file's own header describes: a handler thread blocked with the connection it was serving " +
+                   "still open" };
+  return { serving: false,
+           said: `wptserve is NOT ANSWERING — the process is still alive and a request for http://${serverAddr}/ ` +
+                 `failed with ${transport}, so it is not accepting connections on the port it declared READY` };
+}
+
+/* THE RUN STOPPED MEASURING, SAID SO, AND KEPT ITS ROWS — the three halves of a truncated report.
+ *
+ * STOPPING IS THE CHOICE AND HERE IS THE ARGUMENT FOR IT. The alternative — carry on and label every remaining
+ * row `corpus` — was measured: it produced 935 spawns of a 14 MB binary against a socket that answers nothing,
+ * on a four-core box this project SHARES with every other gate, and §Testing's own loaded-machine incidents are
+ * all one machine under load corrupting somebody's number. Those rows measure nothing by construction, so the
+ * CPU they burn is spent making every concurrent measurement worse in exchange for no information at all.
+ * RESTARTING THE SERVER WOULD BE WORSE STILL, and it is the tempting one: it is a recovery that hides the root
+ * (why did wptserve die?), it straddles one run's rows across two servers on two ephemeral ports, and it is the
+ * legacy-fallback shape — a mechanism that lets the report look complete while the thing it reports on is
+ * broken.
+ * WHAT IS KEPT is everything already measured: the areas that finished keep their rows, the area interrupted
+ * mid-way prints its partial row and its held failure lines, and the summary runs. A truncated run that SAYS it
+ * is truncated is more useful than one that dies — but only if the total below cannot be mistaken for a corpus,
+ * which is what the shortfall on the last line and the exit status are for. */
+let g_truncated = null;
+async function serverGone(rel) {
+  const h = await serverHealth();
+  if (h.serving) return null;
+  g_truncated = { rel, said: h.said };
+  return h;
+}
 
 /* WPT's server does not serve every path from a file of that name. This is its rewrite table (tools/serve's
    `rewrites`), reproduced for the entries the corpus actually asks for: /resources/WebIDLParser.js is the
@@ -1181,8 +1293,20 @@ async function substituted(dep) {
   if (!/\.sub\.[a-z]+$/.test(dep)) return dep;
   if (g_subbed.has(dep)) return g_subbed.get(dep);
   const path = "/" + relative(WPT, dep).split(sep).join("/");
-  const r = await fetch("http://" + serverAddr + path);
-  if (!r.ok) { g_unserved.set(path, r.status); g_subbed.set(dep, null); return null; }
+  /* A TRANSPORT FAILURE IS NOT AN HTTP STATUS, AND LETTING IT THROW OUT OF HERE ENDED THE RUN WITH A BARE
+     `TypeError: fetch failed` — no area rows, no summary, no revision, which is strictly worse than the tail it
+     replaces. It is recorded as the third thing it is: the server gave no answer at all. The caller asks
+     `serverGone` about it, because "the corpus server would not serve this helper" and "there is no corpus
+     server" are two different pieces of work and only one of them is about this file. */
+  let r;
+  try {
+    r = await fetch("http://" + serverAddr + path);
+  } catch (e) {
+    g_unserved.set(path, "no HTTP answer at all — " + transportReason(e));
+    g_subbed.set(dep, null);
+    return null;
+  }
+  if (!r.ok) { g_unserved.set(path, "HTTP " + r.status); g_subbed.set(dep, null); return null; }
   const out = join(dirname(bin), relative(WPT, dep).split(sep).join("__"));
   writeFileSync(out, await r.text());
   g_subbed.set(dep, out);
@@ -1190,6 +1314,11 @@ async function substituted(dep) {
 }
 
 let pass = 0, fail = 0, notrun = 0, aborted = 0, unread = 0, errored = 0;
+/* HOW MANY OF `runs` THIS RUN ACTUALLY REACHED. It is the same number as `runs.length` for every run that ends
+   normally, and the two differing is the ONLY thing that makes a truncated total unmistakable — printing
+   `runs 5483` for a run that attempted 4548 of them is the "total that LOOKS complete" defect this gate exists
+   to catch, performed by the gate itself. */
+let attempted = 0;
 const g_abKind = new Map();
 /* THE ONE PLACE AN ABORT IS COUNTED, so that naming its kind is not a thing a site can forget: there is no
    `aborted++` left to write. The kind is checked against the table rather than trusted, because a typo at a call
@@ -1276,6 +1405,7 @@ for (const { file: f, kind, variant } of runs) {
   const area = byArea(path);
   const failures = area.lines;   /* held until this AREA finishes, not until the run does */
   area.runs++;
+  attempted++;
   try {
     /* THE FILE ITSELF, BEFORE ANYTHING IT NAMES. This is where the driver used to die: `metaScripts` read the
        collected file with no containment, so one file the corpus no longer had took the whole area's number
@@ -1305,11 +1435,17 @@ for (const { file: f, kind, variant } of runs) {
     const unserved = deps.map((d, i) => (d === null ? meta[i] : null)).filter(Boolean)
                          .map((d) => "/" + relative(WPT, d).split(sep).join("/"));
     if (unserved.length) {
+      /* AND WHETHER THERE IS STILL A SERVER TO HAVE REFUSED IT. A helper that 500s is a wptserve config fact
+         about this file; a helper that got no answer at all is the whole run, and the two arrive here as the
+         same empty `deps` slot. */
+      const gone = await serverGone(rel);
       abortRun(area, "corpus", rel,
                "a .sub META script the corpus server would not serve: " +
-               unserved.map((p) => `${p} (HTTP ${g_unserved.get(p)})`).join(", ") +
+               unserved.map((p) => `${p} (${g_unserved.get(p)})`).join(", ") +
                "\n         it is a TEMPLATE, so its bytes on disk are not the file this test is written " +
-               "against — see the wptserve log named above for the traceback");
+               "against — see the wptserve log named above for the traceback" +
+               (gone ? `\n         AND ${gone.said}` : ""));
+      if (gone) break;
       continue;
     }
     const missing = deps.filter((d) => !existsSync(d));
@@ -1470,10 +1606,17 @@ for (const { file: f, kind, variant } of runs) {
         cause = reason.slice(0, 160);
       } else if (timedOut) {
         kind = "killed";
+        /* "LOOK AT THE OTHER END" IS AN INSTRUCTION THIS DRIVER CAN CARRY OUT ITSELF, and the other end is
+           nearly always the corpus server: a runner blocked with zero CPU is blocked in `read()` on a socket,
+           and the only socket it has is wptserve's. Asked ONLY on the block arm — a STARVED test consumed real
+           CPU and its diagnosis is the load average, which no probe improves. */
+        const gone = cpuUsed < 1 ? await serverGone(rel) : null;
         cause = cpuUsed < 1
           ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(2)}s of CPU — ` +
             `that is a BLOCK, not load: the process was asleep waiting for something that never came. ` +
-            `Attach to it (gdb -p, /proc/PID/syscall) and look at the OTHER end`
+            (gone ? `AND ${gone.said} — that is the other end, and THIS RUN IS TRUNCATED HERE`
+                  : "The corpus server ANSWERED this driver's probe, so the other end is not wptserve being " +
+                    "gone: attach to it (gdb -p, /proc/PID/syscall) and look at what it is waiting on")
           : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of CPU, ` +
             `load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not blocked; RE-RUN THIS FILE ALONE`;
       } else if (r.signal === "SIGXCPU") {
@@ -1516,6 +1659,9 @@ for (const { file: f, kind, variant } of runs) {
          move it at all. This is what tells the difference. */
       const census = out.split("\n").filter((l) => /^\[(gcleak|gcroot|stepleak|atomleak)\]/.test(l));
       abortRun(area, kind, rel, cause + census.map((l) => `\n         ${l}`).join(""));
+      /* THE ROW IS RECORDED FIRST AND THE RUN STOPS SECOND — a truncation must never cost the report of the
+         file it was discovered on, which is the one row that names where the server went. */
+      if (g_truncated) break;
     }
     /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
        back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which
@@ -1551,12 +1697,21 @@ for (const { file: f, kind, variant } of runs) {
        IT IS NOT GUARDED BY `!abortedHere` LIKE THE ONE ABOVE, and the difference is a fact about the emitter
        rather than a preference: the runner reports this and STOPS, so there is no test left to abort and no
        partial result to preserve — a file carrying both markers is a contract break, not a second diagnosis. */
+    /* AND THE TAIL IS NO LONGER LEFT FOR A READER TO NOTICE. "If a whole tail of this run says the same thing,
+       wptserve stopped answering" was the whole of the old remedy, and it is an instruction to a human to do
+       what this driver can do in one request: ASK THE SERVER. A live server means this is a fact about the FILE
+       and the run carries on; a dead one means this row and every row after it is about the server, and the run
+       stops rather than spending the corpus on it. */
     const unservedTest = out.match(/^@WPTERR (.*): the corpus server did not serve this run's own file$/m);
     if (unservedTest) {
+      const gone = await serverGone(rel);
       abortRun(area, "corpus", rel,
                `the corpus server did not serve this run's own file: ${unservedTest[1]} — nothing about the ` +
-               "engine was measured. If a whole tail of this run says the same thing, wptserve stopped " +
-               `answering (its log: ${SERVER_LOG}) and every row after that point is about the server`);
+               "engine was measured. " +
+               (gone ? gone.said + " — THIS RUN IS TRUNCATED HERE"
+                     : `The server ANSWERED this driver's probe straight afterwards, so it is up and this file ` +
+                       `is the fact: the corpus cannot supply it (wptserve's log: ${SERVER_LOG})`));
+      if (gone) break;
       continue;
     }
     /* WHAT THE RUNNER STREAMED, AND IT IS TWO POPULATIONS BECAUSE THE DIFFERENCE BETWEEN THEM IS THE DIAGNOSIS.
@@ -1732,14 +1887,43 @@ for (const { file: f, kind, variant } of runs) {
    run readable. Every area must have finished — each file passes through the accounting above exactly once —
    so an unflushed area at this point is this driver miscounting, and it says so rather than printing a table
    that quietly disagrees with the rows above it. */
+/* THE TRUNCATION, STATED WHERE THE ROWS END AND AGAIN ON THE LAST LINE — because the block a reader quotes is
+   never the one they scrolled past. It carries the REVISION PAIR and the CORPUS revision beside the verdict,
+   for the reason §Testing gives: a result quoted without the revision it came from is not a measurement, and a
+   TRUNCATED result quoted without one is worse, since the number it carries is not even about a whole corpus.
+   It names the run it reached, which is what turns "the tail is all corpus rows" into a place to look. */
+if (g_truncated) {
+  console.log("");
+  console.log("  ================ THIS RUN IS TRUNCATED — IT IS NOT A MEASUREMENT OF THE CORPUS ================");
+  console.log(`  ${g_truncated.said}`);
+  console.log(`  it reached ${g_truncated.rel} — run ${attempted} of ${runs.length}, so ` +
+              `${runs.length - attempted} run(s) were NEVER ATTEMPTED and are absent from every column below`);
+  console.log(`  engine ${REV_AT_START.head}` +
+              (REV_AT_START.qjsHead ? `   qjs ${REV_AT_START.qjsHead}` : "") +
+              `   corpus ${CORPUS_AT_START.head}`);
+  console.log(`  wptserve's own log is at ${SERVER_LOG} — its last lines are why it stopped`);
+  console.log("  the rows below are the runs that DID happen; nothing here says anything about the rest");
+  console.log("  ===============================================================================================");
+}
+
 console.log("  ---- summary");
 {
   const names = [...areas.keys()].sort();
   for (const n of names) {
     const a = areas.get(n);
-    if (a.done !== a.expected || a.lines.length)
-      throw new Error(`[wpt] area ${n} finished ${a.done} of ${a.expected} runs with ${a.lines.length} ` +
-                      "unreported line(s) — the per-area accounting is wrong, so this table cannot be trusted");
+    /* AN UNFINISHED AREA IS THIS DRIVER MISCOUNTING — UNLESS THE RUN WAS TRUNCATED, in which case it is exactly
+       what a truncated run looks like and reporting it as broken accounting would be a confident wrong
+       diagnosis of the gate's own making. Its held failure lines are flushed here rather than dropped: they are
+       results the run already had, and losing them to the truncation would be the "same failures with the count
+       hidden" shape twice over. */
+    if (a.done !== a.expected || a.lines.length) {
+      if (!g_truncated)
+        throw new Error(`[wpt] area ${n} finished ${a.done} of ${a.expected} runs with ${a.lines.length} ` +
+                        "unreported line(s) — the per-area accounting is wrong, so this table cannot be trusted");
+      for (const l of a.lines) console.log(l);
+      a.lines.length = 0;
+      console.log(`  ${n} — PARTIAL: ${a.done} of ${a.expected} runs, the rest never attempted`);
+    }
     areaRow(a);
   }
 }
@@ -1892,9 +2076,18 @@ for (const l of revisionLines(REV_AT_START)) console.log(l);
    above scrolls with everything else; what ends up in a report, a commit message or a message to another agent is
    this one, and a bare sum there re-creates the defect one line below the fix — two runs whose 25 are 21/2/2 and
    4/19/2 compare equal on it. Same order as the block, same assert. */
-console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
+/* `runs` IS WHAT WAS ATTEMPTED, NOT WHAT WAS COLLECTED, AND THE SHORTFALL RIDES THE SAME LINE. This is the line
+   that gets quoted into a report, a commit message or another agent's context, so a truncated run whose last
+   line reads like a whole corpus is the defect back at full strength however loud the block above it was. */
+console.log(`  files ${files.length}   runs ${attempted}${attempted === runs.length ? "" : ` of ${runs.length}`}` +
+            `   subtests ${pass + fail}   pass ${pass}` +
             `   fail ${fail}   notrun ${notrun}   aborted-runs ${aborted}${abortSplit(g_abKind, aborted)}` +
             `   errored-runs ${errored}` +
-            `   unreadable-runs ${unread}   undecided-files ${g_undecided}`);
+            `   unreadable-runs ${unread}   undecided-files ${g_undecided}` +
+            (g_truncated ? `   *** TRUNCATED at ${g_truncated.rel}: ${runs.length - attempted} run(s) never ` +
+                           "attempted — this is NOT a corpus measurement ***" : ""));
 console.log("===========================================================");
-process.exit(fail || aborted || unread || g_undecided ? 1 : 0);
+/* A TRUNCATED RUN FAILS THE GATE WHATEVER ITS COLUMNS SAY. Its numbers are a strict subset of a corpus and the
+   thing that stopped it is a defect in how this gate is being run, so a green exit here would be the gate
+   certifying a measurement it did not take. */
+process.exit(fail || aborted || unread || g_undecided || g_truncated ? 1 : 0);

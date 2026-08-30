@@ -183,9 +183,30 @@ static JSValue js_wpt_test_complete(JSContext *ctx, JSValueConst this_val, int a
     DCHECK(g_report == NULL, "a CHILD document declared the measurement over — the file under test is the one "
                              "this process was started to run, and a child navigable's own harness ending "
                              "would take the parent's session down with a verdict nobody printed");
-    DCHECK(!g_test_complete, "the harness declared this file complete TWICE — testharness reports completion "
-                             "once and refuses results afterwards, so a second arrival is a second harness in "
-                             "this process claiming to end a measurement that is not its own");
+    /* IT IS IDEMPOTENT, AND THE ASSERT THAT SAID IT COULD NOT BE WAS A CONFIDENT WRONG DIAGNOSIS.
+     *
+     * A DCHECK stood here reading "a second arrival is a second harness in this process claiming to end a
+     * measurement that is not its own". MEASURED, on `xhr/open-url-worker-simple.htm`: this process installs
+     * the report hook exactly ONCE — wpt_insert_report runs once per run and `break`s on the first program
+     * named `/resources/testharness.js`, of which a document has one — and the run printed TWO byte-identical
+     * `@WPTDONE` lines carrying the same `count`, with the second emitting no `@WPT` because the hook's own
+     * `reported` closure had already marked that subtest. One harness, one registered callback, called twice.
+     * The assert's sentence was false about the only thing it ever caught.
+     *
+     * AND EXACTLY-ONCE IS NOT A CONTRACT testharness OFFERS. `Tests.prototype.complete()` returns early only on
+     * `phase === COMPLETE`, and it assigns that phase inside `all_complete`, at the END of an ASYNCHRONOUS path
+     * (`all_async` over the tests still incomplete, each of which is driven through `Test.prototype.cleanup`).
+     * A second `complete()` inside that window passes the entry guard, runs its own `all_async`, and reaches
+     * its own `all_complete` — so `notify_complete` runs twice and every entry of `all_done_callbacks` with it.
+     * That is upstream code at the pinned corpus revision; a vendor hook may not assert a guarantee the harness
+     * does not make.
+     *
+     * WHAT IT COST IS THE POINT. The file's actual finding was `Worker is not defined` — an honestly absent
+     * capability, already printed on its own `@WPTERR` line, and exactly the work item this gate exists to
+     * surface. The assert converted that into an ABORT filed under `gap` whose message sent the reader looking
+     * for a second harness that does not exist. A duplicate NOTIFICATION is the notifier's business; ending an
+     * already-ended measurement is a no-op and is written as one. What is NOT a no-op — a second completion
+     * carrying a DIFFERENT verdict — is named by WPT_REPORT, which is where the verdict lives. */
     g_test_complete = 1;
     return JS_UNDEFINED;
 }
@@ -262,7 +283,7 @@ static const char WPT_PROLOGUE[] =
  * what makes a re-announced or re-reported subtest one fact rather than two. */
 static const char WPT_REPORT[] =
     "(function () {\n"
-    "  var announced = [], reported = [];\n"
+    "  var announced = [], reported = [], verdict = null;\n"
     "  function emit(t) {\n"
     "    reported[t.index] = 1;\n"
     "    print('@WPT ' + JSON.stringify({ i: t.index, name: t.name, status: t.status, message: t.message }));\n"
@@ -277,8 +298,18 @@ static const char WPT_REPORT[] =
     "  add_result_callback(emit);\n"
     "  add_completion_callback(function (tests, status) {\n"
     "    for (var i = 0; i < tests.length; i++) if (!reported[tests[i].index]) emit(tests[i]);\n"
-    "    print('@WPTDONE ' + JSON.stringify({ status: status.status, message: status.message,\n"
-    "                                         count: tests.length }));\n"
+    "    var v = JSON.stringify({ status: status.status, message: status.message, count: tests.length });\n"
+    "    print('@WPTDONE ' + v);\n"
+    /* A SECOND COMPLETION IS THE HARNESS RE-NOTIFYING AND IS NOT ITSELF A FINDING — see
+       js_wpt_test_complete for why `Tests.prototype.complete()` can be re-entered. What IS a finding is a
+       second completion whose VERDICT DISAGREES with the one already printed, because the driver reads the
+       PRESENCE of @WPTDONE and would then be holding two answers to one question with nothing to say so. Every
+       line is printed either way: the duplicate is the harness's own behaviour and hiding it would put two
+       states behind one output. */
+    "    if (verdict !== null && verdict !== v)\n"
+    "      print('@WPTERR the harness completed again with a DIFFERENT verdict than the one already printed: '\n"
+    "            + verdict);\n"
+    "    verdict = v;\n"
     /* AND THE MEASUREMENT ENDS HERE, after the verdict is out — see js_wpt_test_complete. */
     "    wptTestComplete();\n"
     "  });\n"
@@ -1190,21 +1221,34 @@ static void wpt_conn_advance(WptConn *c)
             return;
         }
         /* THE MESSAGE ENDED WITH THE CONNECTION STILL OPEN — which is the whole point of §9.3's persistence.
-           What is left in the buffer is the beginning of the next response, and with no pipelining there is no
-           next response, so anything left is a length this reader computed wrong.
-           A FRAMING ERROR TAKES THE CONNECTION WITH IT: §6.3 rule 5 and §8 both say the recipient closes,
-           because after a message whose end nobody could find, every later octet on it is unattributable. */
+           What is left in the buffer is not attributable to any request: this runner does not pipeline, so
+           there is no next response for it to be the beginning of.
+           A FRAMING ERROR TAKES THE CONNECTION WITH IT: RFC 9112 §6.3 "Message Body Length" rule 5 and §8
+           "Handling Incomplete Messages" both say the recipient closes, because after a message whose end
+           nobody could find, every later octet on it is unattributable. */
         r->state = WPT_REQ_DONE;
         c->owner = 0;
         r->conn = 0;
         if (r->failed || !r->persist || c->in_n) {
-            /* §9.2 "Associating a Response to a Request": once octets on a connection cannot be attributed to a
-               request, "message delimitation is now ambiguous" and the client closes — so residue takes the
-               connection with it in EVERY build, and the assert below is what names the cause in a dev one. */
-            DCHECK(r->failed || !r->persist,
-                   "a reply ended with octets left on its connection and no request behind it — this runner "
-                   "does not pipeline, so either the reader above stopped SHORT of where §6.3 Message Body "
-                   "Length puts the end of this body, or the server sent more than the framing it declared");
+            /* RESIDUE IS DISCARDED WITH THE CONNECTION, AND ASSERTING AGAINST IT WAS A CLAIM ABOUT THE SERVER
+               WEARING A CLAIM ABOUT THIS READER. A DCHECK stood here saying residue meant either this reader
+               stopped short of §6.3's end or the server overran its own framing — and RFC 9112 §6.3 "Message
+               Body Length" answers that in its own closing paragraph: "If the final response to the last
+               request on a connection has been completely received and there remains additional data to read,
+               a user agent MAY discard the remaining data or attempt to determine if that data belongs as part
+               of the prior message body, which might be the case if the prior message's Content-Length value is
+               incorrect. A client MUST NOT process, cache, or forward such extra data as a separate response."
+               So residue is a state the protocol ANTICIPATES; the client's obligation is to discard it and
+               never to attribute it, which is exactly what closing the connection here does, and no client can
+               guarantee the property the assert demanded.
+               MEASURED, NOT ARGUED: the corpus's own `xhr/resources/redirect.py` answers `?code=304` with
+               `Content-Length: 4` and the four octets `TEST`, which RFC 9112 §6.3 rule 1 says a 304 cannot
+               carry ("always terminated by the first empty line after the header fields, regardless of the
+               header fields present in the message") and RFC 9110 §15.4.5 "304 Not Modified" says a server has
+               no representation to transfer for. wptserve suppresses a body only for HEAD (its Response's
+               `write_content` checks the method and nothing else), so every `xhr/send-redirect.htm` run reached
+               this line with four octets left and aborted the file — a §6.3-correct reader reporting the SERVER
+               as its own bug, and burying the file's real subtests behind it. */
             wpt_conn_release(c);
             return;
         }
