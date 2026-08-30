@@ -995,6 +995,46 @@ static const char *park_comma(const char *p)
     return p + 1;
 }
 
+/* THE ONE NUMBER THE RESUMED FRONTIER IS ORDERED BY, READ THROUGH ONE SPELLER SO BOTH KINDS ARE CHECKED BY ONE
+   SENTENCE — the same reason park_comma is one speller for the separator and park_flow_add is one landing for
+   every record that names a flow.
+   IT WAS STATED AT THE WRITE AND NOWHERE AT THE READ, WHICH IS THE HALF THAT DECIDES ANYTHING. cold_park_flow
+   refuses to write a reward that is not a number the WFQ can order by, and every OTHER field of this grammar is
+   refused AGAIN on the way back in: the arms are 0 or 1, the question keys and both text encodings are
+   lower-case hex, the segment ordinals are dense and ascending over a base already read, the sink class is a
+   name this build's table holds, the locator is sixteen digits wide, the commitment carries RECEIVED or
+   FORECLOSED. The reward was the one field with a writer-side invariant and no reader-side counterpart, and it
+   is the field that can least afford one: it is the whole of what §Time-travel-resume's "a high-value flow
+   suspended last week resumes ahead of a low-value fresh one today" is made of, and park_flow_add assigns it
+   over the arrival rank rather than beside it.
+   THE FAILURE HAS NO SYMPTOM OF ITS OWN, which is why the check belongs here rather than only at the write. A
+   NaN compares false in both directions, so a rebuilt flow carrying one is neither above nor below any member
+   of the frontier and `flow_weight` orders the whole resumed residue by registry position — the ONE global
+   value order silently gone, for every flow the document carried, in a run that otherwise looks exactly like a
+   resume that worked. A residue can carry one honestly: a release build compiles the write-side check out, and
+   this engine is expected to read a residue a release session wrote.
+   THE ADVANCE IS CHECKED BESIDE THE VALUE, because strtod's answer for a field it could not read at all is
+   0.0 — which is precisely the reward a flow that has emitted nothing legitimately carries, so an ABSENT field
+   and a real zero are otherwise one number. */
+static double park_reward(const char *p, char **ep)
+{
+    double v = strtod(p, ep);
+
+    DCHECK(*ep != p,
+           "a park record carries no reward where the grammar puts one — an 'f' or 'c' record writes the "
+           "flow's accumulated WFQ reward straight after its segment ordinal, and a field strtod could not "
+           "read at all answers 0.0, which is the reward a flow that emitted nothing legitimately carries. "
+           "Absent and zero would be the same number, and the flow would resume ranked as one that found "
+           "nothing rather than as one whose record this reader could not parse");
+    DCHECK(v == v && v >= 0.0 && v < 1e300,
+           "a parked flow's reward is not a number the WFQ can order by — cold_park_flow refuses to WRITE one "
+           "(a NaN compares false in both directions; an infinity does not survive the round trip as a number "
+           "at all), so a residue carrying one came from another writer or from a session whose write-side "
+           "check was compiled out. Standing it on the frontier makes the ONE global value order registry "
+           "position for every flow this document carried, and nothing else in the run would say so");
+    return v;
+}
+
 /* ONE REBUILT FLOW, LANDED AND CHECKED. Every record kind that names a flow goes through this, because the
    thing that has to be true of all of them is the same thing and it is §scheduler's razor: a resume APPENDS.
    It was three copies of these four lines when there were three kinds, which is exactly where a fourth kind
@@ -1190,7 +1230,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             if (*q == '-') { sid = -1; q++; }
             else { sid = strtol(q, &ep, 10); q = ep; }
             q = park_comma(q);
-            val = strtod(q, &ep); q = ep;
+            val = park_reward(q, &ep); q = ep;
             DCHECK(sid < seg_n,
                    "a parked flow stands on a decision segment this document never wrote — it would resume "
                    "from the baseline instead of from its own path");
@@ -1320,7 +1360,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             if (*q == '-') { sid = -1; q++; }
             else { sid = strtol(q, &ep, 10); q = ep; }
             q = park_comma(q);
-            val = strtod(q, &ep); q = ep;
+            val = park_reward(q, &ep); q = ep;
             q = park_comma(q);
             for (sb = q; q < end && *q != ','; q++)
                 ;
