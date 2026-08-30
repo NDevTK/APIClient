@@ -364,12 +364,13 @@ const ageQuantum = () =>
 function wfqReading(out) {
   const s = [];
   for (const m of out.matchAll(/^@WFQ (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
-  /* AND AN ABSENT CENSUS CARRIES THE SAME TWO FIELDS AS A PRESENT ONE, because the caller renders
-     `orderedBy` on every arm where `ordered` is false — this arm used to carry only `text`, so a run that
-     printed no census at all rendered "What IS ordering it is the undefined term", a sentence with the shape
-     of a verdict and a producer's hole where the answer goes. */
+  /* AND AN ABSENT CENSUS CARRIES THE SAME FIELDS AS A PRESENT ONE, because the caller renders `orderedBy` on
+     every arm where `ordered` is false and `whose` on the arm where it is true — this arm used to carry only
+     `text`, so a run that printed no census at all rendered "What IS ordering it is the undefined term", a
+     sentence with the shape of a verdict and a producer's hole where the answer goes. */
   if (!s.length)
     return { ordered: false, orderedBy: "nothing this run said — it printed no census at all",
+             whose: "nothing — there is no census to say whose reward the order is",
              text: "no @WFQ census in this run's output" };
   const w = s[s.length - 1];
   /* AN EMPTY FRONTIER IS A DIFFERENT FACT FROM AN UNORDERED ONE, AND THE CENSUS SAYS WHICH BY OMISSION.
@@ -386,6 +387,7 @@ function wfqReading(out) {
                     "census, so its absence is the composer having changed rather than an empty frontier.");
   if (w.members === 0)
     return { ordered: false, orderedBy: "nothing was standing — this census was taken over an empty frontier",
+             whose: "nobody's — no flow was standing when this census was taken",
              text: `@WFQ: 0 members. The last census of this run was taken with no flow standing, so it ` +
                    `reports no order — which is a fact about WHEN it was taken and says nothing about how ` +
                    `the run was ordered. Read a census from while the frontier was live.` };
@@ -454,8 +456,32 @@ function wfqReading(out) {
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
                 `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}`;
+  /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
+     one the verdict's own sentence makes a claim about. `selfEmit` counts members with `val > val_born` — the
+     ones that emitted something THEMSELVES — so the difference is how many are ranked entirely on an ancestor's
+     findings, which is precisely what the aging term's family half exists to cancel and precisely what the
+     reader wants when the spread is wide. Stated on every arm of this function for the reason `orderedBy` is:
+     the caller renders it, so an arm without it renders a hole. */
+  const inherited = w.members - w.selfEmit;
+  const whose = `${inherited} of the ${w.members} members have earned NONE of the reward they are ranked on ` +
+                `(${w.selfEmit} have emitted since birth), so the spread between the ends is an ANCESTRY's`;
   return {
-    ordered: w.valMax - w.valMin > 1 && w.valZero > 0,
+    /* THE DISCRIMINATOR IS THE REWARD SPREAD AGAINST THE OPTIMISM TERM'S WHOLE RANGE, AND IT USED TO CARRY A
+       SECOND CONJUNCT THAT THE ENGINE HAS SINCE MADE PERMANENTLY FALSE. It read `&& w.valZero > 0`, on the
+       reasoning solver/flow.h stated beside the row: a from-baseline flow "enters at reward 0", so `valZero`
+       was the population sitting under the spread and its being non-empty was what made the spread matter.
+       flow.c's flow_arrive_at_virtual_time assigns the REWARD among the four tags a newcomer arrives at, so a
+       from-baseline flow now enters at the incumbent's reward and NOTHING is at zero inside a busy period —
+       `valZero` can be non-zero only before the first pick. The conjunct therefore stopped selecting a state
+       and started selecting an impossibility, and the arm it gated is the one that names the reward term: a
+       smoke run standing at reward 14..182 with `valZero: 0` took the `else` and had its verdict say "its ends
+       are within one optimism bonus of each other" about a frontier whose ends are 168 points apart. A
+       reader's discriminator outliving the population it names is the stale-DFAIL shape wearing a boolean —
+       true when written, and afterwards a confident statement of the opposite of the measurement. What the
+       conjunct was reaching for is reported instead of gating: `whose` above says how much of that spread any
+       member actually earned, which is the fact that decides what to do about it. */
+    ordered: w.valMax - w.valMin > 1,
+    whose,
     /* WHICH TERM THE ORDER ACTUALLY IS, named from the ranges rather than inferred. A term that cannot move
        two members apart is not ordering them however large it is, so the biggest RANGE is the answer and a
        frontier whose ranges are all zero is one the pick cannot distinguish at all — which is a true and
@@ -977,9 +1003,10 @@ function hungCauseCensus(out) {
     return `WORK THAT ADVANCES NO STATEMENT${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — flows retired steadily and not ` +
            `one probe row reached 1 across the window, so more time buys more of the same. ` +
            (wfq.ordered
-             ? `The reward spread is wider than the optimism term's whole range and members are sitting at ` +
-               `reward 0, so the ORDER is the inherited reward's: those members are reached only as the aging ` +
-               `term gives back about one point per second of unproductive thread time, per member ahead of them.`
+             ? `The reward spread is wider than the optimism term's whole range, so the ORDER is the reward's ` +
+               `and no other term can reorder its ends — and ${wfq.whose}, so the bottom of it is reached only ` +
+               `as the aging term gives back about one point per second of unproductive thread time, per ` +
+               `member ahead of them.`
              : `The @WFQ census does NOT show a reward-ordered frontier — its ends are within one optimism ` +
                `bonus of each other — so the reward term is not what is holding this run. What IS ordering it ` +
                `is the ${wfq.orderedBy} term, read from the ranges above rather than from the magnitudes: a ` +
@@ -1037,7 +1064,15 @@ function hungCauseCensus(out) {
                `flow of this document has a terminating shape rather than why these ones do not.`
              : `finished last rose at census ${lastRetire} of ${n}, so the silence is the ` +
                `${n - 1 - lastRetire} census(es) — ${(n - 1 - lastRetire) * PROGRESS_EVERY} units of engine ` +
-               `work — since then, and THAT is the number two runs of one revision must agree on.`);
+               `work — since then, and THAT is the number two runs of one revision must agree on.`) +
+           /* AND WHOSE REWARD THE ADMITTED WORK IS RANKED ON, which is the one thing this arm can say about the
+              ORDER and used to leave inside `wfq.text` for the reader to derive. A frontier that admits and
+              does not retire is ranked almost entirely on inheritance — every arm carries its parent's `val`
+              (flow_fork_inherit) and every from-baseline newcomer carries the incumbent's
+              (flow_arrive_at_virtual_time) — so this number is what separates "the members ahead are the ones
+              that produced the findings" from "the members ahead produced nothing and are standing on an
+              ancestor that did", and the two take different work. */
+           ` ${wfq.whose}.`;
   /* THE UNMODELLED ARM CARRIES THE MOST EVIDENCE, NOT THE LEAST, which is the inversion it used to be. It
      said "the two censuses above are the measurement to start from" and printed neither the heap, the delta
      chains nor the fork table — the three streams that model precisely the causes the frontier counts do not.

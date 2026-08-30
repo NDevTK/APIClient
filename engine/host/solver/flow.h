@@ -842,11 +842,26 @@ void flow_credit_visit(Flow *f);
  * flow AND its chain burn without emitting. The reward SPREAD over the frontier is the whole of whether the
  * optimism term can still order anything, and nothing measured it.
  *
- * `val_zero` IS THE ROW THAT NAMES A POPULATION rather than a statistic. A from-baseline flow enters at reward
- * 0 (flow_add's zeros) — a candidate session, a joined document's boot flow, the first flow — so its weight is
- * at most 1.0 for its whole life, and a candidate records no endpoints by design (endpoint_suppress) so the
- * only thing that can raise its reward is the very sink it is trying to reach. Beside `val_max` the pair says
- * exactly where those members sit in the order.
+ * `val_zero` NAMES A POPULATION THE ARRIVAL RULE DELETED, AND THE ROW IS KEPT PRECISELY TO SAY SO. It used to
+ * be the from-baseline population — a candidate session, a joined document's boot flow, the first flow — on
+ * the reasoning that such a flow "enters at reward 0 (flow_add's zeros), so its weight is at most 1.0 for its
+ * whole life". That stopped being true the moment flow.c's flow_arrive_at_virtual_time began assigning the
+ * REWARD among the four tags a newcomer arrives at: a from-baseline flow now enters at the INCUMBENT's reward,
+ * ties with it, and is placed by flow_pick's strict comparison rather than held under a ceiling. So inside a
+ * busy period this row is 0 BY CONSTRUCTION — it can be non-zero only before the first pick, where SFQ's v(0)
+ * is 0 — and a reader that tests it for "is there a population down at the bottom" is testing for a set the
+ * arrival rule made empty. That is not a hypothetical reading. The pairing this file cites the other way round
+ * one screen up (`valZero:12` beside `cands:12`, the twelve candidate sessions that were never picked) reads
+ * `valZero:0` beside `cands:2997` on that same fixture now, with the reward SPREAD at 168 points and every
+ * other term's range at or below 1.0 — so the one discriminator that could have named the reward term as the
+ * order was permanently false on the run where it was the answer.
+ *
+ * THE POPULATION IS `members - self_emit` INSTEAD, and the two rows are not interchangeable. That difference
+ * is how many members have earned NONE of the reward they are ranked on — the inheritance the aging term's
+ * family half exists to cancel — and it is what a reader wants when it asks WHOSE reward the order is. A
+ * candidate is in that set for the reason it used to be in `val_zero`'s: it records no endpoints by design
+ * (endpoint_suppress), so the only thing that can raise its reward above what it inherited is the very sink it
+ * is trying to reach.
  *
  * AND IT REPORTS THE WEIGHTS THEMSELVES, which is a reversal of what this comment used to say. It said the
  * census "calls flow_weight for nothing at all — it reports the two terms, never their sum", on the reasoning
@@ -1009,8 +1024,12 @@ typedef struct {
      * question with no arithmetic in front of it.
      *
      * WATCH `cand_w_max` ACROSS SERVICE, because that is where the term this engine calls aging stops behaving
-     * like one. A candidate records no endpoints by design (endpoint_suppress) so its reward is 0 until it
-     * fires, and flow_weight for reward 0 is `1/(1+v) - (s+F)*Q*RATE`. The arithmetic that stood here was
+     * like one. A candidate records no endpoints by design (endpoint_suppress), so nothing it does raises its
+     * reward above the one it ARRIVED at until it fires, and flow_weight is then `R + 1/(1+v) - (s+F)*Q*RATE`
+     * with `R` fixed — the whole of the movement is in the two charged terms. `R` was written here as 0 on the
+     * strength of `val_zero`'s paragraph above, and it is the incumbent's reward now; the arithmetic below is
+     * unchanged by that because it is a DIFFERENCE across service and `R` cancels out of it. The arithmetic
+     * that stood here was
      * written when the optimism term read `s` as well, and it is corrected rather than kept: it said a
      * candidate at reward 0 was worth 1.000 unserved, 0.488 after ONE quantum and -0.029 after ten, so being
      * handed the thread ten times cost it MORE THAN THE ENTIRE OPTIMISM RANGE. Both halves of that penalty were
