@@ -1411,6 +1411,54 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     detect_sink(arg, SINK_EVAL);   /* record the source; breakout SEARCHED at verify */
 }
 
+/* …AND THE HOST'S OWN STRING-TO-CODE STEP — see solve.h for why HTML §8.7 Timers's substeps 9.8.2-9.8.8 are one
+   of these and why they are not an ECMAScript eval.
+   THE ANNOUNCEMENT IS FIRST AND IS UNCONDITIONAL, and that ordering is the whole content of this function. The
+   detection arm needs the value that is NOT a program (unknown external input names no bytes, and that read is
+   how the sink is found at all) and the candidate arm needs the value that IS one (a re-run substitutes a
+   concrete breakout at the source, and these are the bytes solve_js.c scans for its locator and its §12 lexical
+   state). A caller that announced only the arm it happened to be standing in had one of the two, and which one
+   it kept decided which half of the ladder existed: keep the first and every candidate run is invisible, keep
+   the second and the sink is never detected to have candidates at all. */
+/* THE HOST SEAM'S COVERAGE — see solve_eval_sink_announced. It is a claim about ADJACENCY, exactly as the
+   engine's per-compile latch is: it means "the program the caller is holding right now came out of the call
+   below", so nothing that turns a string into a program may stand between the two. */
+static int g_host_sink_announced;
+
+int solve_eval_sink_announced(void) {
+    int a = g_host_sink_announced;
+
+    g_host_sink_announced = 0;
+    return a;
+}
+
+JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler) {
+    JSValue text = JS_UNINITIALIZED;
+
+    solve_eval_sink(ctx, handler);
+    if (JS_IsString(handler)) {
+        text = JS_DupValue(ctx, handler);
+    } else if (concolic_is(handler)) {
+        /* concolic.h: `concolic_example` answers JS_UNDEFINED when the operand carries no example yet, and an
+           example of any other type is a value nobody holds program text for — which is §19.2.1.1 PerformEval
+           step 2's arm exactly as a number written in the source position would be. Asked rather than assumed
+           absent, because §solver's example is what makes `setTimeout(cfg.body)` over a LOADED config a program
+           this engine runs instead of a read it shrugs at, and the engine already answers `eval` that way. */
+        JSValue ex = concolic_example(ctx, handler);
+
+        if (JS_IsString(ex)) text = ex;
+        else                 JS_FreeValue(ctx, ex);
+    }
+    DCHECK(JS_IsUninitialized(text) || JS_IsString(text),
+           "the host's string-to-code step answered with something that is not program TEXT and is not the "
+           "absence of it — its caller compiles whatever comes back, so a third answer here is a value handed "
+           "to a compiler that has no bytes to read");
+    /* RAISED ONLY WHERE THERE IS A PROGRAM, because that is the state the consumer's assert is about: an arm
+       that names no bytes queues nothing, so there is nothing downstream for it to cover. */
+    g_host_sink_announced = !JS_IsUninitialized(text);
+    return text;
+}
+
 /* HTML firing oracle: re-parse the sink output with the REAL Lexbor parser and FIRE the auto-firing event
    handlers (svg/body onload, img/script onerror) by eval'ing their JS — X9 fires iff a breakout placed
    executable JS in an auto-firing position. innerHTML does NOT run <script>, so those never fire (correct). */

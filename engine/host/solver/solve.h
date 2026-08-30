@@ -27,8 +27,8 @@ void solve_free(void);
    detector directly. `eval` is not: 19.2.1 "eval ( source )" and 20.2.1.1.1 CreateDynamicFunction are
    ECMAScript intrinsics inside the engine, so this function is REGISTERED with it (JS_SetEvalSinkHook, from
    solve_init) and the engine announces every value offered to a program evaluation — direct eval in both its
-   spellings, indirect eval, `new Function`, ShadowRealm.prototype.evaluate — beside HTML 8.6's string handler,
-   which timer.c announces because that arm is the host's. Before that registration existed this function had
+   spellings, indirect eval, `new Function`, ShadowRealm.prototype.evaluate — beside HTML §8.7 Timers's string
+   handler, which timer.c announces because that arm is the host's. Before that registration existed this function had
    ONE caller in the whole tree and it was the fixture, so solve_js.c's entire ECMAScript 12 derivation ran
    only when a test asked for it and a real page's `eval(prefix + attackerInput)` produced no finding.
    IT IS HANDED BOTH ARMS OF 19.2.1.1 STEP 2 and it needs both: unknown external input is not a String, so
@@ -39,6 +39,54 @@ void solve_free(void);
 void solve_eval_sink(JSContext *ctx, JSValueConst arg);
 void solve_html_sink(JSContext *ctx, JSValueConst arg);
 void solve_url_sink(JSContext *ctx, JSValueConst arg);
+
+/* …AND THE SAME PAIR OF DECISIONS FOR A HOST ALGORITHM THAT TURNS A STRING INTO CODE ITSELF. Announces `handler`
+   at the JS-context sink UNCONDITIONALLY and returns the program TEXT (owned) that algorithm should compile, or
+   JS_UNINITIALIZED when there is no program in it.
+   THEY ARE ONE OPERATION BECAUSE SPELLING THEM APART IS THE DEFECT. Announcing and "is there a program here"
+   are the same question asked twice, and a caller that asks them separately answers them differently: the arm
+   that had no program announced and queued nothing, the arm that HAD one queued it and announced nothing, and
+   the result was exactly half a search — detection worked and every candidate run after it was invisible, so
+   the ladder's own honest record read `witnessed:0` for ever and the search parked at probes == payloads with
+   nothing left to try. That is the same shape the engine's own seam states in reverse ("the announcement is
+   unconditional and is not the alternative to running the program"), and the only way a caller cannot get it
+   half right is for the program text to come OUT of the announcing operation.
+   WHY A HOST ALGORITHM IS A STRING-TO-CODE SINK WITHOUT BEING AN ECMAScript EVAL. HTML §8.7 Timers's timer
+   initialization steps put the whole string arm in step 9's task: substep 9.8.2 asserts the handler is a
+   string, substep 9.8.3 performs "EnsureCSPDoesNotBlockStringCompilation(realm, « », handler, handler, timer,
+   « », handler)" — the CSP gate a page opts into with `unsafe-eval` and the same one `eval` passes — and
+   substeps 9.8.7-9.8.8 create a classic script from it and run it. The spec says the equivalence itself, in the
+   note under substep 9.8.6.2: "The effect of these steps ensures that the string compilation done by
+   setTimeout() and setInterval() behaves equivalently to that done by eval()." So the value is a JS-context
+   sink for the same reason `eval`'s argument is, and it is the SINK_EVAL class: same CSP question, and
+   substep 9.8.1.4's get-trusted-type-compliant-string over TrustedScript is the same Trusted Types question.
+   AND IT IS NOT THE ECMAScript SEAM, WHICH IS WHY IT IS A SEPARATE ENTRY RATHER THAN A CALL INTO ONE. What
+   §19.2.1.2 HostEnsureCanCompileStrings covers is §19.2.1.1 PerformEval step 5 and §20.2.1.1.1
+   CreateDynamicFunction step 11, and §8.7 performs neither — it reaches CSP directly and then runs a plain
+   classic script, whose compile is JS_EVAL_TYPE_GLOBAL. The engine's per-compile announcement latch is an
+   ADJACENCY claim (the compile immediately following the announcement is the one that took the text), and a
+   host algorithm queues a task between the two, so raising that latch here would hand this announcement to
+   whatever compiled next and make the innocent compile the one that aborts. This entry therefore announces and
+   returns text and touches no latch — the engine's two-sided `is_sink`/`announced` assert is unmoved by it.
+   STEP 2's DECISION IS THE SOLVER'S TOO. A concolic carrying a STRING example is a source (§solver: the triple
+   rides the value and every operator runs the real operation on the concrete), so a handler this engine has an
+   example for names a real program and is returned as one — the same answer the engine gives `eval`, which is
+   what the note above requires. A concolic with no example, or one whose example is not a string, names no
+   program: nothing is compiled and there is nothing to drop. */
+JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler);
+
+/* …AND THAT SEAM'S COVERAGE, TAKEN ONCE PER PROGRAM THE HOST QUEUES OUT OF A STRING. Answers 1 iff the bytes
+   about to be queued are the ones the call above just returned, and CLEARS itself in the answering — so it is
+   read into a local and asserted, never spelled inside a DCHECK, whose condition a release build does not
+   evaluate at all and would leave raised for the next program.
+   IT EXISTS BECAUSE THE ARM IS ABOUT TO MOVE. §8.7 Timers puts the whole string arm inside step 9's task —
+   substep 9.8.3's CSP gate and substeps 9.8.7-9.8.8's create-and-run are the fire's steps, not the set's — and
+   a component that performs them at the SET is a component whose next diff relocates them. That relocation is
+   exactly the shape in which an announcement gets left behind: the queue call travels, the detector call does
+   not, and nothing breaks — the timer still fires, the page still runs, and every candidate run after it is
+   silently invisible again. Asserting at the CONSUMER is what makes a route added later FIRE instead of
+   quietly widening the old wrong answer, and the consumer is whoever turns those bytes into a program. */
+int solve_eval_sink_announced(void);
 
 /* After detection, SEARCH breakout candidates for every recorded source: inject each at the source, re-run the
    REAL program (`rerun`), and record the first that FIRES as the replay-verified PoC. */

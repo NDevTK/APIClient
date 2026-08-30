@@ -4907,9 +4907,33 @@ static lxb_dom_element_t *flow_dyn_el(const Flow *f) {
    length goes end to end there or not at all: a `setTimeout("\0…")` is still read to the first NUL. The
    `strlen` is written HERE, once, rather than left implicit in engine_queue, so that the site carrying the
    remaining gap is the site that names it. */
+/* AND IT IS THE CONSUMER OF THE @S HOST SEAM'S COVERAGE (solver/solve.h's solve_eval_sink_announced), which is
+   a DIFFERENT question from the one JS_EvalInternal asks of a compile and is asked HERE for that reason.
+   §19.2.1.2 HostEnsureCanCompileStrings covers §19.2.1.1 PerformEval step 5 and §20.2.1.1.1
+   CreateDynamicFunction step 11 and nothing else, so the engine's own latch is silent about a program HTML
+   turns a string into — §8.7 Timers's substep 9.8.3 reaches CSP directly and substeps 9.8.7-9.8.8 create and
+   run an ordinary classic script, which compiles as JS_EVAL_TYPE_GLOBAL and announces nothing. That is correct
+   and must stay correct: a `<script>` element's program announcing itself would report every page script as a
+   code-execution sink. What it costs is that the ONE program in this file that IS a string-to-code sink has no
+   engine-side assert standing over it, so the assert stands here, where those bytes become a program. */
 void engine_queue_timer_script(uint32_t doc, const char *body) {
+    /* TAKEN INTO A LOCAL, NEVER SPELLED INSIDE THE DCHECK: the take CLEARS the seam, and a DCHECK's condition
+       is not evaluated in a release build — a consuming read there would leave the latch raised for whatever
+       queued next and turn a dev-only assert into a release-only state divergence. */
+    int announced = solve_eval_sink_announced();
+
     DCHECK(body != NULL, "a §8.7 Timers string handler was queued with no source at all — the sink is called "
                          "with the handler's DOMString and there is no program in a null one");
+    DCHECK(announced,
+           "a §8.7 Timers string handler became a program without passing the @S host seam — substep 9.8.3's "
+           "EnsureCSPDoesNotBlockStringCompilation is what makes these bytes a JS-context sink, and "
+           "solve_eval_sink_source is where they are announced and where the program TEXT comes from, in one "
+           "operation so the two cannot be spelled apart again. A caller that queues bytes it obtained some "
+           "other way fails SILENTLY in the worst direction there is: the timer fires, the page runs, the sink "
+           "is still DETECTED by the concolic arm, and every candidate run after it is invisible — no witness "
+           "is learned, no ECMAScript §12 escape is derived, and the search parks for ever reporting that it "
+           "tried. Take the text from solve_eval_sink_source at the new site; never relax this");
+    (void)announced;
     engine_queue(doc, body, strlen(body), DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
 }
 
