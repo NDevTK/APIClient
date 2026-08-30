@@ -521,6 +521,30 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     d->response_object_failure = 0;
 }
 
+/* THE ARGUMENT THE DECLARATION CONVERTED, which is the only one a declared member's body may read.
+ *
+ * Web IDL §3.7.7 "Operations" — create an operation function — runs "the method steps of operation, with
+ * idlObject as this and VALUES as the argument values", where `values` is what §3.6 "Overload resolution
+ * algorithm" produced out of `args`. `args` is what the effective overload set was SIZED by; it is never what
+ * the steps read. core/idl_args.c hands `values` to a step body as its own (argc, argv) pair, while
+ * `step_arg` reads the MACHINE's operands — which for a declared member is `args`.
+ *
+ * READING `step_arg` HERE SKIPPED THE WHOLE CONVERSION, and it did so silently for every call this component
+ * ever served: §3.2.11 "ByteString"'s ToString and its "if the value of any element of x is greater than 255,
+ * then throw a TypeError" never ran on `method`, and §3.2.12 "USVString"'s "converting string to a sequence of
+ * scalar values" never ran on `url`, `username` or `password`. The visible half was an ABORT: a page object
+ * reached §7.1.19 ToString ( arg ) at the byte consumer below, from a C activation with no flow base under it,
+ * so `xhr.open({toString(){…}}, {toString(){…}})` ended the document. Step 8's own comment two screens down
+ * asserts the opposite of what the code did — "the declaration converts `USVString?` null and undefined to the
+ * IDL null" — which is exactly true of `values` and false of `args`.
+ *
+ * Out of range reads undefined, for the reason step_arg's does: that is what an optional argument means at
+ * this level, and §3.6's required-arity TypeError has already run, so positions 0 and 1 are always present. */
+static JSValueConst xhr_idl_arg(int argc, JSValueConst *argv, int i)
+{
+    return i < argc ? argv[i] : JS_UNDEFINED;
+}
+
 static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -534,6 +558,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         UrlRecord rec;
         bool ok;
         bool async = true;
+        int i;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
@@ -541,11 +566,29 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         d = xhr_receiver(ctx, hdr->this_val);
         if (!d) return JS_STEP_ABRUPT;
+        /* THE DECLARATION'S PROMISE, ASSERTED WHERE THE BODY RELIES ON IT AND NOT AT THE CONSUMER THAT DIES.
+           OPEN_ARGS declares ByteString, USVString, any, USVString? and USVString?, so after §3.6 every string
+           position holds a real String, the IDL null, or the undefined an absent optional argument means. The
+           one exception is unknown external input, which core/idl_args.h's IDL_CONCOLIC_CROSSES passes through
+           UNCONVERTED on purpose so that opacity survives a coercion. Anything else means this body is reading
+           the machine's raw `args` instead of §3.6's `values` — and that defect is INVISIBLE for a plain
+           string and only aborts at the first page object several steps later, in a file that is not this one,
+           which is exactly why the check belongs at the read rather than at the byte consumer.
+           POSITION 2 IS EXEMPT BY ITS TYPE: `async` is declared `any` so that step 7's rule can be the argument
+           COUNT (see below), and `any` crosses as itself. */
+        for (i = 0; i < argc; i++) {
+            JSValueConst a = xhr_idl_arg(argc, argv, i);
+            DCHECK(i == 2 || JS_IsString(a) || JS_IsNull(a) || JS_IsUndefined(a) || concolic_is(a),
+                   "a declared XMLHttpRequest.open() argument reached §3.5.1's steps unconverted — Web IDL "
+                   "§3.7.7 Operations' create an operation function runs the method steps over §3.6 Overload "
+                   "resolution algorithm's `values`, so a body reading the machine's raw `args` has skipped "
+                   "§3.2.11 ByteString and §3.2.12 USVString for every call it ever served");
+        }
         /* Step 1: a Window whose document is not fully active. */
         if (!document_fully_active(ctx))
             return JS_ThrowDOMException(ctx, "InvalidStateError",
                                         "open() on an XMLHttpRequest whose document is not fully active"), -1;
-        m = JS_ToCString(ctx, step_arg(hdr, 0));
+        m = JS_ToCString(ctx, xhr_idl_arg(argc, argv, 0));
         if (!m) return JS_STEP_ABRUPT;
         /* Steps 2-4 as ONE operation, through the implementation Fetch §5.3 step 25 already uses: not a method
            is a SyntaxError here where Fetch throws a TypeError, and a forbidden one is a SecurityError — so the
@@ -562,7 +605,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         }
         JS_FreeCString(ctx, m);
         /* Steps 5-6: encoding-parse the URL against the relevant settings object's API base URL. */
-        u = xhr_arg_cstring(ctx, step_arg(hdr, 1), NULL);
+        u = xhr_arg_cstring(ctx, xhr_idl_arg(argc, argv, 1), NULL);
         if (!u) { js_free(ctx, norm); return JS_STEP_ABRUPT; }
         url_record_init(&rec);
         ok = fetch_parse_url(ctx, &rec, u, strlen(u));
@@ -574,12 +617,12 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         }
         /* Step 7: an OMITTED async argument is true; an `undefined` one is not omitted, which is the legacy
            note §3.5.1 makes explicitly — so the count decides, never the value. */
-        if (argc > 2) async = JS_ToBool(ctx, step_arg(hdr, 2)) != 0;
+        if (argc > 2) async = JS_ToBool(ctx, xhr_idl_arg(argc, argv, 2)) != 0;
         /* Step 8: the credentials, set into the parsed URL when it has a host. Step 7 already left them null
            for the omitted-argument call, and the declaration converts `USVString?` null and undefined to the
            IDL null — so the two tests below ARE step 8's two conditions and there is no third to add. */
         {
-            JSValueConst user = step_arg(hdr, 3), pass = step_arg(hdr, 4);
+            JSValueConst user = xhr_idl_arg(argc, argv, 3), pass = xhr_idl_arg(argc, argv, 4);
             if (rec.host.kind != URL_HOST_NULL) {
                 if (!JS_IsNull(user) && !JS_IsUndefined(user)) {
                     const char *v = JS_ToCString(ctx, user);
@@ -617,7 +660,8 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            when it carries something the serialization does not: a plain string IS its own parse, so storing
            one would make every endpoint carry a second copy of its own address. */
         JS_FreeValue(ctx, d->url_src);
-        d->url_src = concolic_is(step_arg(hdr, 1)) ? JS_DupValue(ctx, step_arg(hdr, 1)) : JS_NULL;
+        d->url_src = concolic_is(xhr_idl_arg(argc, argv, 1))
+                   ? JS_DupValue(ctx, xhr_idl_arg(argc, argv, 1)) : JS_NULL;
         url_record_free(&rec);
         d->synchronous = async ? 0 : 1;
         /* Step 12: only a state that is not already opened fires. */
@@ -2007,9 +2051,13 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     JSValue in = cb_result;
     int r;
 
-    (void)argc; (void)argv;
     if (hdr->stage == SEND_CHECKS) {
-        JSValueConst body = step_arg(hdr, 0);
+        /* §3.5.6's `optional Document or XMLHttpRequestBodyInit? body = null`, declared IDL_ANY because every
+           arm of that union crosses as itself. It is read from §3.6's `values` and not from the machine's raw
+           `args` for the reason xhr_idl_arg records: `(void)argc; (void)argv;` stood here, discarding the very
+           vector the declaration exists to produce, and the two happen to be the same VALUE only for as long
+           as the declared type stays `any` — a silence that would end the day SEND_ARGS names a real type. */
+        JSValueConst body = xhr_idl_arg(argc, argv, 0);
         const char *m;
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
