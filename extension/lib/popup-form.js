@@ -64,6 +64,16 @@ function buildFormFields(schema, initialData = null) {
   if (schema.parameters && Object.keys(schema.parameters).length > 0) {
     const section = el("div", "form-section");
     section.innerHTML = '<div class="form-section-label">URL Parameters</div>';
+    /* EVERY `param.*` BELOW IS READ AS ITSELF, because lib/send.js's `resolveEndpointSchema` now declares the
+       WHOLE parameter record from BOTH of its producers — the discovery-doc branch and the AST-learned
+       path-segment branch — instead of one shape from one and five fields from the other. The `|| null` /
+       `?? null` that used to stand on `enum`, `_range`, `_defaultValue`, the confidences and the example
+       source were reading that disagreement, and they answered it with the same bytes the doc-derived branch
+       uses for "unconstrained": so a path parameter, about whose domain that branch says NOTHING, rendered
+       identically to a parameter a discovery document declared as unconstrained. Two different claims, one
+       appearance — §@S's own rule about a shape that carries provenance and drops the domain, performed on
+       the panel that renders it. `null` now MEANS "no such constraint was observed", from either producer,
+       and an absent field means the producer is broken. */
     for (const [name, param] of Object.entries(schema.parameters)) {
       section.appendChild(
         createFieldInput(
@@ -86,20 +96,20 @@ function buildFormFields(schema, initialData = null) {
             number: null,
             messageType: null,
             children: null,
-            enum: param.enum || null,
+            enum: param.enum,
             location: param.location,
             parentSchema: "params",
-            _astValidValues: param._astValidValues || null,
+            _astValidValues: param._astValidValues,
             /* NO `_astValueSource`. lib/send.js stopped projecting it (its only writer wrote it onto its own
                path-param entries, and nothing ever rendered it), so this line carried undefined into the
                field def and no reader looked. */
-            _detectedEnum: param._detectedEnum || false,
-            _defaultValue: param._defaultValue ?? null,
-            _defaultConfidence: param._defaultConfidence ?? null,
-            _requiredConfidence: param._requiredConfidence ?? null,
+            _detectedEnum: param._detectedEnum,
+            _defaultValue: param._defaultValue,
+            _defaultConfidence: param._defaultConfidence,
+            _requiredConfidence: param._requiredConfidence,
             _exampleValue: param._exampleValue === undefined ? null : param._exampleValue,
-            _exampleValueSource: param._exampleValueSource || null,
-            _range: param._range || null,
+            _exampleValueSource: param._exampleValueSource,
+            _range: param._range,
             /* THE DOMAIN THE CODE'S OWN GATES STATED, beside the range the observations spanned. The two are
                different measurements of the same kind of fact and both are constraints, never values: an
                `_excludedValues` entry is a token the forced execution PROVED this parameter is not on every

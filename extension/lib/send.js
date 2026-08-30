@@ -205,9 +205,31 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          does not produce a URL at all, and `type` is "string" because a path segment IS the URL's own bytes.
          Each is a fact about a path parameter rather than a guess about this one — §RUN, DON'T MATCH: what
          is surfaced is what merge.js observed plus what the URL grammar determines. */
+      /* AND IT DECLARES THE WHOLE RECORD, NOT THE FIVE FIELDS IT HAS AN INTERESTING ANSWER FOR. This literal
+         and the discovery-doc literal above are the map's TWO producers, and they were writing two different
+         shapes: everything the doc-derived branch says about a parameter's domain — `enum`, `format`,
+         `_range`, `_bounds`, `_excludedValues`, the three confidences, the example and its source — was
+         simply absent here. The consumers papered over the disagreement rather than reporting it
+         (`param.enum || null`, `param._range || null`, `param._defaultValue ?? null` in lib/popup-form.js),
+         which is the §Architecture defect exactly: a default is what stops a producer's silence being a
+         crash, and here the silence was STRUCTURAL — one of the two producers had never written the field
+         at all, so the panel could never tell "this parameter is unconstrained" from "this branch does not
+         speak about constraints".
+         NULL IS A POSITIVE STATEMENT AND IT IS THE TRUE ONE. A path parameter's domain is not unknown, it is
+         EMPTY: nothing observed a discovery declaration for this segment, so there is no enum, no format, no
+         range, no ordering bound and no disproved-value list to report — the same `null` lib/merge.js writes
+         for a claim nothing has filled. `_astValidValues` is deliberately not here: the loop below assigns it
+         unconditionally out of `pp.values`, and pre-declaring it would only give that assignment something to
+         overwrite. */
       const declared = Object.prototype.hasOwnProperty.call(parameters, pp.name);
       const cur = declared ? parameters[pp.name]
-                           : { name: pp.name, type: "string", location: "path", required: true, description: "AST-learned path segment" };
+                           : { name: pp.name, customName: false, type: "string", location: "path",
+                               required: true, description: "AST-learned path segment",
+                               format: null, enum: null,
+                               _requiredConfidence: null, _detectedEnum: false,
+                               _defaultValue: null, _defaultConfidence: null, _range: null,
+                               _exampleValue: null, _exampleValueSource: null,
+                               _excludedValues: null, _bounds: null };
       DCHECK(cur && typeof cur === "object",
              "the resolved schema declares `" + pp.name + "` as something that is not a parameter record — " +
              "resolveEndpointSchema builds this map out of parameter declarations, so a non-object here is " +
