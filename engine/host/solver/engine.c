@@ -1944,7 +1944,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
 /* AND WHAT THE STEP NAMES ITSELF, whose definition is with the scheduler below. A refusal is a step that
    consumed a record and delivered nothing, and it says so: a mechanism whose work is indistinguishable from
    the work it replaces is one no reader can tell has ever run. */
-static const char *g_step_unit;
+static StepUnit g_step_unit;
 
 static void deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
 {
@@ -2088,7 +2088,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            the two readings of a delivery count that is lower than a host expected, and they take opposite
            actions (engine.h). */
         g_routed_refused++;
-        g_step_unit = "routed-delivery-not-this-timeline";
+        g_step_unit = STEP_UNIT_ROUTED_NOT_MINE;
         return;
     }
     /* THE ARM THAT DOES NOT RECEIVE IT, MINTED BEFORE IT IS RECEIVED — and this timeline's commitment to
@@ -4519,15 +4519,15 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
 
 /* WHAT THAT STEP JUST DID, for the seam assertion — which can say a step ran too long but not what it was
    doing, so a label naming one of three unrelated things is not the localisation it exists to be. */
-static const char *engine_orphan_unit(int r) {
+static StepUnit engine_orphan_unit(int r) {
     switch (r) {
-    case ORPHAN_STEP_SEEDED:  return "seed-one-orphan-flow";
-    case ORPHAN_STEP_ROUTED:  return "hand-a-parked-drive-its-function";
-    case ORPHAN_STEP_RESUMED: return "resume-a-parked-orphan-drive";
+    case ORPHAN_STEP_SEEDED:  return STEP_UNIT_ORPHAN_SEED;
+    case ORPHAN_STEP_ROUTED:  return STEP_UNIT_ORPHAN_ROUTE;
+    case ORPHAN_STEP_RESUMED: return STEP_UNIT_ORPHAN_RESUME;
     }
     DFAIL("the orphan step reported an outcome it does not have — the caller returns PROGRESS on anything "
           "non-zero, so a fourth outcome is a step whose work nothing in the run can name");
-    return NULL;
+    return STEP_UNIT_NONE;
 }
 
 
@@ -5703,7 +5703,7 @@ static int flow_checkpoint_due(const Flow *f) {
 /* WHICH UNIT, when one of them turns out to have no suspend point. The scheduler's assertion can say that a
    flow ran too long but not what it was doing, and "one of seven branches" is not a localisation — the label is
    set by the branch that is about to run, so a step with no seam names itself. */
-static const char *g_step_unit = "(none)";
+static StepUnit g_step_unit = STEP_UNIT_NONE;
 
 /* NO COMPLETION CROSSES A SCHEDULER BOUNDARY — ONE STATEMENT, ASKED AT EVERY BOUNDARY THERE IS.
  *
@@ -5753,7 +5753,7 @@ static void engine_no_stray_completion(JSContext *ctx, const char *where, int de
            "evaluation that produced it. Take it where it is produced: a program's through JS_FlowResume's "
            "`pres`, a job's at the job, a parked continuation's through JS_ResumeParkedFlow's `pres`, a "
            "delivery's at JS_CallAsFlow. parked=%d detail=%d. The throw was: %s",
-           where, g_step_unit, JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, detail,
+           where, step_unit_name(g_step_unit), JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, detail,
            *et ? et : "(a throw this engine could not describe)");
 }
 #define ENGINE_NO_STRAY(ctx, where, detail) engine_no_stray_completion((ctx), (where), (detail))
@@ -5834,6 +5834,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
            "a flow is being stepped with the flow stamp or the DOM capture off — the objects it creates would "
            "be stamped baseline and its DOM writes would be captured into no delta, so its state would leak "
            "into every sibling and its rewind would restore something that never existed");
+    /* AND THE STEP HAS NOT NAMED ITSELF YET. Every exit below declares which arm it is (solver/step_unit.h),
+       and the ONLY thing that can make that a rule rather than a habit is starting from a value that is not an
+       arm: the scheduler asserts at its convergence point that a step which returned left a name behind, so an
+       arm added without one crashes there instead of silently inheriting whatever the PREVIOUS step did. It is
+       reset per step and not per flow because the question is about this step, and a flow that is stepped
+       twice through two different arms must read as the second. */
+    g_step_unit = STEP_UNIT_NONE;
     for (;;) {
         /* ONE ARM PER DISTINCT ANSWER, BEFORE ANYTHING ELSE THIS FLOW COULD DO — because everything else it
            could do consumes the very thing the arm is made of. A peer document's state IS its flows, so a
@@ -5841,14 +5848,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
            SUSPENDED in, and the first resume below takes the answer off the register and leaves that call site
            behind. It is also the first moment in the whole round at which a fork is even meaningful: the flow
            is switched in, so its delta, its DOM head and its decision state are the ones an arm inherits. */
-        g_step_unit = "fork-over-a-peer-answer";
+        g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
         if (flow_answer_fork(ctx, f)) return 0;
         /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
            contract: a forced preempt must be transparent to observable ordering, so the flow resumes BEFORE any
            job it has queued. Yielding after one resume keeps the scheduler in charge of fairness; the park (if
            it parks again immediately) rides the switch-out with the flow. Without this the solver host never
            pumped the slot at all: the continuation sat there until a second flow parked and asserted. */
-        g_step_unit = "resume-parked-continuation";
+        g_step_unit = STEP_UNIT_RESUME_PARKED;
         /* Resuming a parked continuation is progress ONLY if the flow can still get somewhere: a flow blocked
            on the host resumes into the same wait, so reporting progress spins it against the park. */
         /* AND ITS COMPLETION IS TAKEN HERE, which is the ONE place it can be. A parked continuation is the LATE
@@ -5914,17 +5921,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                what lets a document installed LATER — a child navigable's — be served by the timeline that
                created it without this arm having to be told that one appeared. */
             if (g_link_connected_hook && g_link_connected_hook(ctx)) {
-                g_step_unit = "link-connected-time"; return 0; }
+                g_step_unit = STEP_UNIT_LINK_CONNECTED; return 0; }
             /* THE ROUTED DELIVERIES THIS FLOW HAS BEEN HANDED, and they are first because the task each one
                enqueues is what every branch below then finds on the queue. ONE PER STEP, oldest first: each
                becomes a §9.3.3 task at the receiving Window and the step returns, so the tasks are enqueued in
                the order the messages were posted and the scheduler re-ranks between them. The queue empties as
                they are taken, so a flow with none left falls through to its jobs. */
-            if (flow_deliver_pending(f)) { g_step_unit = "routed-delivery"; flow_deliver(ctx, f); return 0; }
+            if (flow_deliver_pending(f)) { g_step_unit = STEP_UNIT_ROUTED_DELIVERY; flow_deliver(ctx, f); return 0; }
             /* AND THE OPERATION A PEER IS PARKED ON, before this flow's own programs for the reason the
                delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
                flow's programs — after which the loop below runs it like any other. */
-            if (flow_perform_pending(f)) { g_step_unit = "cross-agent-operation"; flow_perform(ctx, f); return 0; }
+            if (flow_perform_pending(f)) { g_step_unit = STEP_UNIT_CROSS_AGENT_OP; flow_perform(ctx, f); return 0; }
             /* THE MICROTASK CHECKPOINT, BEFORE THE NEXT PROGRAM AND NOT AFTER THE LAST ONE — HTML §8.1.4.4
                "Calling scripts" step 3 of clean up after running script, decided by flow_checkpoint_due above.
                It is the FIRST thing the flow does with an empty stack because that is what the sentence says:
@@ -5939,7 +5946,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                has no work, whatever it just did. OWED is the register the scheduler already has for
                waiting-not-finished. */
             if (flow_checkpoint_due(f)) {
-                g_step_unit = "microtask-checkpoint";
+                g_step_unit = STEP_UNIT_MICROTASK;
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
@@ -5971,7 +5978,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        work in this function: if several are answered the flow comes back here for the next,
                        and the row this arm is waiting on is filled by whichever delivery names it. */
                     if (flow_pending_ready(f)) {
-                        g_step_unit = "deliver-one-reply";
+                        g_step_unit = STEP_UNIT_DELIVER_REPLY;
                         flow_deliver_one_reply(ctx, f);
                         return 0;
                     }
@@ -5984,7 +5991,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        shown. The scheduler asserts exactly that at the mark (`pending_outstanding`), which is
                        why this is a re-read of the register and not an `if` on which scheme it was. Progress
                        instead, and the next pass takes the arm above and delivers. */
-                    if (flow_pending_ready(f)) { g_step_unit = "scheme-fetch-answered"; return 0; }
+                    if (flow_pending_ready(f)) { g_step_unit = STEP_UNIT_SCHEME_FETCH; return 0; }
+                    /* …AND THE RECORD THE HOST REALLY DOES OWE NAMES ITSELF TOO. This return performs no work,
+                       so it used to leave the PREVIOUS arm's name standing and the step was attributed to
+                       whatever this flow last did — the census then reported a member parked on a fetch under
+                       `run-a-task` or `microtask-checkpoint`, which is the one attribution an instrument
+                       separating waiting from working must not get wrong. */
+                    g_step_unit = STEP_UNIT_AWAIT_FETCH_RECORD;
                     return FLOW_STEP_OWED;
                 }
                 /* AND A ROW THAT REACHES THE COMPILE HOLDS A PROGRAM, not an address. The branch above is what
@@ -6006,7 +6019,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence, so reaching the end of the sequence with one "
                        "outstanding means a program ran in front of the checkpoint it owed");
-                g_step_unit = "run-a-task";
+                g_step_unit = STEP_UNIT_RUN_TASK;
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
@@ -6017,7 +6030,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    (we are switched in, flow_running == f) — and the step ends there. The checkpoint arm above
                    runs that reaction on the next pass and this arm delivers the next reply after it, which is
                    §8.1.7.3 "Processing model"'s task-then-checkpoint and not a pass that settles them all. */
-                g_step_unit = "deliver-one-reply";
+                g_step_unit = STEP_UNIT_DELIVER_REPLY;
                 flow_deliver_one_reply(ctx, f);
                 return 0;
             }
@@ -6049,8 +6062,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                below inherits it instead of having to remember it.
                IT RETURNS OWED because only the host can change it: the peer's answer arrives through
                engine_host_answer and nothing this flow does can produce it. */
-            else if (flow_blocked(f))
+            else if (flow_blocked(f)) {
+                g_step_unit = STEP_UNIT_HOST_BLOCKED;   /* suspended mid-expression on a synchronous request */
                 return FLOW_STEP_OWED;
+            }
             /* A DOCUMENT FINISHED LOADING, in this flow's world — DOMContentLoaded across the agent's
                documents in tree order, then `load` innermost-first, one per turn. It comes BEFORE the two
                clock-driven sources and that is the spec's order rather than a preference: the parser
@@ -6087,7 +6102,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
             else if (!pending_outstanding_kind(f->pending, FLOW_PENDING_SCRIPT) &&
                      !pending_outstanding_kind(f->pending, FLOW_PENDING_DOCSCRIPT) &&
                      g_docdone_hook && g_docdone_hook(ctx)) {
-                g_step_unit = "document-lifecycle-stage"; return 0; }
+                g_step_unit = STEP_UNIT_LIFECYCLE; return 0; }
             /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
                that can defer: it compares the next rendering opportunity with the earliest timer expiry and
                yields when the timer is earlier. Without a rendering opportunity there is no
@@ -6095,11 +6110,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                scroll/resize/pagereveal and no Web Animations microtask checkpoint — a large fraction of a real
                page's code hangs off exactly those. */
             else if (g_rendering_hook && g_rendering_hook(ctx)) {
-                g_step_unit = "queue-rendering-opportunity"; return 0; }
+                g_step_unit = STEP_UNIT_RENDERING; return 0; }
             /* AND THE TIMER TASK SOURCE — §8.7 "Timers"'s timer initialization steps end by "queues a global
                task on the timer task source given global to run task", so a due timer IS a runnable task and
                §8.1.7.3 step 2 runs it. */
-            else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = "fire-due-timer"; return 0; }
+            else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = STEP_UNIT_TIMER; return 0; }
             /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished.
              *
              * BELOW THE TWO CLOCK-DRIVEN SOURCES, which is the same sentence the lifecycle arm makes one rung
@@ -6120,8 +6135,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * AND IT IS STILL ABOVE THE TWO ARMS BELOW, for the reason the preamble gives: those two claim the
              * run is FINISHED (no handler will ever be attached; nothing ever called this function) and an
              * outstanding reply's continuation can still attach the handler and still make the call. */
-            else if (pending_count(f->pending) > 0)
+            else if (pending_count(f->pending) > 0) {
+                g_step_unit = STEP_UNIT_AWAIT_OWED_REPLY;   /* every task source is empty; a reply is not */
                 return FLOW_STEP_OWED;
+            }
             /* HTML §8.1.4.7 "Unhandled promise rejections" — its "notify about rejected promises". The flow
                has nothing left to run, so every rejection still on its list is one no handler will ever be
                attached to. The browser half keeps
@@ -6129,7 +6146,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                the loop picks them up like any other. Only what the page did not cancel comes back through the
                report hook — and what it means then is this half's answer, the same thing a script that threw
                means: a capability the page needed. Notifying clears the list, so the next pass finds none. */
-            else if ((g_step_unit = "unhandled-rejection-notify", unhandled_rejection_notify(ctx))) return 0;
+            else if ((g_step_unit = STEP_UNIT_REJECTION, unhandled_rejection_notify(ctx))) return 0;
             /* AND THE CODE THE PAGE SHIPPED AND NEVER RAN. Everything above this line is work the page ARRANGED
                — a program, a job, a lifecycle event, a timer, a frame — and it is all done, which makes this
                the first instant at which "nothing called this function" is a fact about this timeline rather
@@ -6156,7 +6173,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    something; it is waiting on the host for the next operation, which is exactly what OWED
                    means. The flow keeps its snapshot, its delta and its rank and is out of the pick until the
                    host has something for it. */
-                if (g_referenced) return FLOW_STEP_OWED;
+                if (g_referenced) { g_step_unit = STEP_UNIT_AWAIT_PEER; return FLOW_STEP_OWED; }
                 /* …AND A RESUMED DRIVE THAT NEVER GOT ITS BODY BACK SAYS SO ON ITS WAY OUT. The line above it
                    has just established that this document holds no untaken orphan, so the body this flow's
                    recipe named is not in this session's heap: the bundle moved under the residue, or the
@@ -6166,9 +6183,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    distinguished from a drive that ran. Without the count a residue whose every drive missed
                    looks exactly like one whose every drive landed. */
                 if (f->orphan_want && JS_IsUndefined(f->fn)) g_orphan_claims_unmet++;
+                g_step_unit = STEP_UNIT_FINISHED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
-            g_step_unit = "compile-program";
+            g_step_unit = STEP_UNIT_COMPILE_PROGRAM;
             /* NO REPLAY, asserted at the only place a program can start. A flow compiles each entry of its
                sequence once and thereafter RESUMES the suspended frame; reaching this line again for an index
                it already started means the resume path lost the frame and the flow is re-executing a program —
@@ -6405,7 +6423,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                a row queued by the running call moves the cursor back inside the sequence while the call frame
                is still live. */
             int is_call = JS_FlowIsCall((JSValue *)f->frame);
-            g_step_unit = "resume-program";
+            g_step_unit = STEP_UNIT_RESUME_PROGRAM;
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
             /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED FIRST because the two readings
                of a throw are mutually exclusive: this program is another agent's operation, so its throw
@@ -7592,6 +7610,20 @@ static int engine_sched_slice(void) {
             ENGINE_NO_STRAY(ctx, "pre-step: the scheduler's pick, the context switch and the delta swap",
                             g_switches);
             int r = flow_step(ctx, cur);
+            /* WHERE THE STEP'S ANSWER GOES ONTO THE FLOW — the ONE point every arm of flow_step converges on,
+               so a new arm cannot forget to be recorded and there is no route to remember. What the arm
+               declares is its own NAME; where that name is KEPT is here. It decides nothing: `r` is the
+               scheduler's answer and this is the record beside it, read by the `@COLD` histogram and by the
+               seamless-stretch aborts below.
+               AND THE ASSERT IS WHAT MAKES THE DECLARATION A RULE. flow_step resets to NONE at its entry, so a
+               step that returned without naming its arm is one whose exit was added and never declared, and it
+               crashes HERE with the flow in hand rather than being attributed to the previous step — which is
+               exactly the misattribution this record exists to end (solver/step_unit.h). */
+            DCHECK(g_step_unit != STEP_UNIT_NONE,
+                   "a scheduler step returned without naming the arm it took — flow_step resets to NONE at its "
+                   "entry and every exit declares itself, so this is an exit added without a name and the "
+                   "member's step-unit row would report whatever the PREVIOUS step did");
+            cur->step_unit = g_step_unit;
             engine_reclaim_set(prev_reclaim);
             ENGINE_NO_STRAY(ctx, "post-step: the arm flow_step just ran", r);
             /* HTML §8.1.7.3's END OF A MICROTASK CHECKPOINT. The flow has run a unit of work — a script, a
@@ -7796,7 +7828,7 @@ static int engine_sched_slice(void) {
                     DFAILF("%d ms of THREAD CPU consumed in one step with NO suspend point offered (measure: "
                            "%s; %ld units of work, which is why the work verdict cannot see this one) — this "
                            "stretch has no suspend/resume seam; unit=%s script_i=%d",
-                           (int)((now - t0) / 1000), quantum_measure(), work, g_step_unit,
+                           (int)((now - t0) / 1000), quantum_measure(), work, step_unit_name(g_step_unit),
                            cur ? cur->script_i : -1);
                 }
                 if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
@@ -7875,7 +7907,7 @@ static int engine_sched_slice(void) {
                            (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
                            (int)steps_ms, steps_n, wrap_n, wrap_cap,
                            (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
-                           g_step_unit, si, sk, pl_txt, body_txt);
+                           step_unit_name(g_step_unit), si, sk, pl_txt, body_txt);
                 }
             }
 #endif

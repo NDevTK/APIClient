@@ -424,16 +424,52 @@ char *result_swap_json(void) {
 char *result_cold_json(void) {
     /* The format string's widest expansion, as terms rather than as a sum somebody typed. `COLD_LITERAL` is the
        string with every conversion specifier removed. */
-    enum { COLD_LITERAL = 596, COLD_LONGS = 41, COLD_INTS = 4 };
+    enum { COLD_LITERAL = 609, COLD_LONGS = 41, COLD_INTS = 4 };
     ColdCensus c;
+    /* THE PER-ARM HISTOGRAM, COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Its width is
+       STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens this
+       automatically — which is the one thing the hand-counted terms above must not be asked to do.
+       EVERY ROW IS EMITTED, INCLUDING THE ZEROES, and that is the contract rather than a courtesy: an ABSENT
+       row and a ZERO row are different facts (this composer changed, against this frontier had nobody in that
+       arm), and a reader that cannot tell them apart is the defect that made `@RESUMED` read 0 for every
+       session there has ever been. The consumer asserts the row's presence and reads its value; neither side
+       may default the other's hole. */
+    char hist[STEP_UNITS_JSON_MAX];
     ColdResumed resumed;
     EngineFrontierCensus e;
-    size_t n = COLD_LITERAL + COLD_LONGS * 20 + COLD_INTS * 11 + 1;
+    /* …plus the histogram's own width, which is the ONE term here that is not a hand count: it is an
+       expansion of solver/step_unit.h's list, so adding an arm cannot silently truncate this document. */
+    size_t n = COLD_LITERAL + COLD_LONGS * 20 + COLD_INTS * 11 + STEP_UNITS_JSON_MAX + 1;
     char *out;
     int ran;
     int m;
 
     cold_census(&c);
+    {
+        int hi = 0, k;
+        long seen = 0;
+        hist[hi++] = '{';
+        for (k = 0; k < STEP_UNIT_N; k++) {
+            int w = snprintf(hist + hi, sizeof hist - (size_t)hi, "%s\"%s\":%ld",
+                             k ? "," : "", step_unit_name((StepUnit)k), c.step_units[k]);
+            DCHECK(w > 0 && (size_t)w < sizeof hist - (size_t)hi,
+                   "the step-unit histogram did not fit the width its own list derives — STEP_UNITS_JSON_MAX "
+                   "is computed from solver/step_unit.h's names, so a row that does not fit means a count "
+                   "wider than a `long`'s 20 digits or a name that reached this buffer from somewhere else");
+            hi += w;
+            seen += c.step_units[k];
+        }
+        hist[hi++] = '}';
+        hist[hi] = 0;
+        /* THE PARTITION IS THE POINT, SO IT IS ASSERTED. Every live member carries exactly one arm, so these
+           counts SUM to the frontier — an inequality is the walk having missed a member or a member having
+           been counted twice, and either makes every reading composed from this row a statement about a
+           frontier that is not the one standing. */
+        DCHECK(seen == c.flows,
+               "the step-unit histogram does not account for every member of the frontier — each live flow "
+               "carries exactly one arm, so a total that is not `flows` means the census walk and the "
+               "histogram disagree about who is standing");
+    }
     cold_resumed(&resumed);
     engine_frontier_census(&e);
     ran = resumed.flows + resumed.cands > 0;
@@ -475,7 +511,8 @@ char *result_cold_json(void) {
                  "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
                  "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
-                 "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld}",
+                 "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
+                 "\"stepUnits\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.deepest, e.completed, e.sold, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
@@ -490,7 +527,8 @@ char *result_cold_json(void) {
                  c.pin_seg_count, c.pin_seg_entries, c.pin_seg_bytes / 1024,
                  c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
                  c.dyn_count, c.dyn_bytes / 1024,
-                 (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024);
+                 (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
+                 hist);
     DCHECK(m > 0 && (size_t)m < n,
            "the cold/frontier census did not fit its buffer — a truncation here loses the closing brace, so "
            "the document that embeds it will not parse and every finding for this page is discarded. Re-do "

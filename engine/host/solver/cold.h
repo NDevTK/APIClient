@@ -40,6 +40,16 @@ typedef struct {
     long framed;
     long blocked;            /* … holding an unanswered host request */
 
+    /* WHY THE MEMBERS ARE NOT FINISHING — one count per arm of flow_step, over the whole frontier. It is the
+       row `finished`/`live` could never carry: those two say work is being ADMITTED and not RETIRED, and this
+       says what the members that are not retiring are DOING, which is the difference between four different
+       diffs (solver/step_unit.h names them). It is a PARTITION and not a selection — every live member is in
+       exactly one bucket, so the counts sum to `flows` and that identity is what says the walk saw everybody.
+       PER-FLOW BECAUSE THE QUESTION IS PER-FLOW. The scheduler's own `g_step_unit` is the LAST step ANY flow
+       took, which answers about the instant the census was taken and not about the frontier; the flow carries
+       its own (solver/flow.h) and this counts them. */
+    long step_units[STEP_UNIT_N];
+
     /* PER-FLOW rows — these multiply by the number of parked flows, so they are what a pager pays for. */
     long dec_entries;        /* decision-vector slots the flows STAND ON — a chain total, so this counts the
                                 same shared prefix once per flow that references it and is deliberately NOT a

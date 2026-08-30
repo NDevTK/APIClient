@@ -33,6 +33,15 @@ void cold_census(ColdCensus *out)
         out->flows++;
         if (f->frame) out->framed++;
         if (flow_blocked(f)) out->blocked++;
+        /* …AND WHICH ARM OF flow_step THIS MEMBER LAST RETURNED THROUGH. Asserted in range rather than
+           trusted: the field is written at one place from an enum, so a value outside the list is a cast or a
+           corrupted Flow, and indexing on it would then scribble past the histogram inside the census that
+           exists to explain the frontier. */
+        DCHECK((unsigned)f->step_unit < (unsigned)STEP_UNIT_N,
+               "a member carries a step unit that is not one of solver/step_unit.h's arms — the field is only "
+               "ever written from that enum at the scheduler's convergence point, so this is a corrupted Flow "
+               "and the index below would write outside the census");
+        out->step_units[f->step_unit]++;
 
         /* THE DECISION VECTOR, in BOTH of the two places one flow's can be. A parked flow's lives in its
            suspend blob — which is where a COLD-RESUMED flow's rebuilt chain lives too, so a resumed flow is

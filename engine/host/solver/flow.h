@@ -23,6 +23,8 @@
 #include "solver/world.h"
 #include "solver/pending.h"   /* the replies the host still owes this flow — a JS Array, not a malloc'd list */
 #include "solver/dyn_body.h"  /* …and the program text its sequence holds — shared, because no flow writes it */
+#include "solver/step_unit.h" /* …and which arm of flow_step it last returned through — a NAMED value, not a
+                                 free-form string, so the census row and the abort text are one list */
 
 /* A NODE OF THE FORK TREE, AND THE ONLY THING IN A FLOW THAT OUTLIVES IT. It exists for one sentence: the thread
    time a DEPARTING flow burned has to reach the flow that FORKED it, because §scheduler prices the aging term
@@ -312,6 +314,17 @@ typedef struct Flow {
        two are deliberately one state: a resumed flow is not a third kind of flow, it is a flow whose decision
        state was rebuilt somewhere other than a fork. */
     int   started;
+    /* WHICH ARM OF flow_step THIS MEMBER LAST RETURNED THROUGH — solver/step_unit.h owns the list and says why
+       the answer had to move onto the flow. The scheduler stamps it at the ONE point every step converges on,
+       so it cannot go missing when an arm is added; what the arm itself declares is only its own name. It
+       decides NOTHING — a pure record, read by the `@COLD` histogram and by the seamless-stretch aborts — and
+       it is `STEP_UNIT_NONE` on a calloc'd member, which is the true answer for a flow the pick has never
+       reached rather than a hole a reader has to guess at.
+       IT DOES NOT CROSS THE COLD TIER, and that is the same decision `cand_surv` records two screens down: it
+       is an observation of a step THIS session took, so a rebuilt flow reads `none` until this session steps
+       it — which is the honest answer and not a lost field. A parked unit carried forward would report a
+       resumed frontier under the arms of the session that parked it. */
+    StepUnit step_unit;
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
     /* IS THAT FRAME THE ROW'S PROGRAM, OR THE REPORT THE ROW'S PROGRAM OWES?
      *

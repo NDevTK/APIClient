@@ -499,6 +499,58 @@ function wfqReading(out) {
   };
 }
 
+/* WHY THE MEMBERS ARE NOT FINISHING — the `stepUnits` histogram, which is the row `finished` and `live` could
+   never carry. Those two say work is being ADMITTED and not RETIRED; this says what the members that are not
+   retiring are DOING, and the arms take opposite work: `compile-program`/`resume-program` is a frontier that
+   legitimately holds more script than it used to, `queue-rendering-opportunity`/`fire-due-timer`/
+   `document-lifecycle-stage` is unbounded periodic work, the orphan arms are seeding drives, and
+   `host-blocked`/`await-owed-reply`/`await-fetch-record`/`await-peer-operation` are four distinct kinds of
+   waiting. One verdict covered all of them.
+
+   IT READS NO LIST OF ITS OWN, and that is deliberate. solver/step_unit.h is the only place an arm is named —
+   the enum, the diagnostic string and this row are three expansions of one macro — so a copy of the names here
+   would be the second list that eventually disagrees. The rows are taken from the census as it emits them and
+   the CONTRACT is checked instead of the spelling.
+
+   THE CONTRACT IS THE PARTITION, AND IT IS WHAT MAKES AN ABSENT ROW DIFFERENT FROM A ZERO ONE. Every live
+   member carries exactly one arm, so the values SUM to `live`. A missing row therefore cannot hide behind a
+   plausible rendering: the sum falls short and this throws, naming the composer. A row that reads 0 is a
+   MEASUREMENT — that frontier had nobody in that arm — and is reported as one. Neither is ever defaulted into
+   the other, which is the defect this whole instrument exists to end. */
+function stepUnitReading(b) {
+  const u = b.stepUnits;
+  if (u === null || typeof u !== "object" || Array.isArray(u))
+    throw new Error("[build] the @COLD census carries no `stepUnits` object — solver/result.c composes it " +
+                    "from solver/step_unit.h's list on every census, so its absence is that composer having " +
+                    "changed rather than a frontier with nothing in any arm. An absent histogram and an " +
+                    "all-zero one are different facts and this reader will not average them.");
+  const rows = Object.entries(u);
+  if (!rows.length)
+    throw new Error("[build] the @COLD census's `stepUnits` is empty — the histogram is emitted with EVERY " +
+                    "row including the zeroes, so an empty object is a composer that stopped listing them.");
+  for (const [k, v] of rows)
+    if (typeof v !== "number")
+      throw new Error(`[build] the @COLD census's \`stepUnits.${k}\` is not a number — the histogram is a ` +
+                      `count per arm and a non-numeric row cannot be summed against \`live\`.`);
+  const total = rows.reduce((t, r) => t + r[1], 0);
+  if (total !== b.live)
+    throw new Error(`[build] the @COLD census's \`stepUnits\` sums to ${total} over ${rows.length} arms ` +
+                    `against \`live\` ${b.live} — every member carries exactly one arm, so the two sides ` +
+                    `disagree about who is standing and no reading composed from this row is about the ` +
+                    `frontier that was there. The engine asserts the same identity at the walk ` +
+                    `(solver/cold.c); a difference visible HERE and not there is a row lost between the ` +
+                    `census and this document.`);
+  const live = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
+  const zero = rows.length - live.length;
+  /* AN EMPTY FRONTIER IS A SENTENCE AND NOT AN EMPTY LIST, for the same reason wfqReading has an arm for
+     `members: 0`: rendering nothing there reads as a histogram that failed rather than as a census taken with
+     nobody standing, and the two take opposite work. */
+  return live.length === 0
+    ? `step units at the last census: no member was standing, so all ${rows.length} arms read 0`
+    : `step units at the last census: ` + live.map((r) => `${r[1]} ${r[0]}`).join(", ") +
+      ` (${zero} of the ${rows.length} arms read 0, which is a measurement and not an absence)`;
+}
+
 /* THE COLD ROUND TRIP, PER RECORD KIND — @COLDPARK from session ONE against @COLDRESUME from session TWO, and
    `orphansMet`/`orphansUnmet` beside them, which is the round trip's own VERDICT and which nothing has ever
    read. §Time-travel-resume rests entirely on this pair of sessions, and until now the only thing said about
@@ -1003,7 +1055,12 @@ function hungCauseCensus(out) {
                `${mark(lastSale, n)}` +
                (h.length ? `, and the probe table last flipped a row at sample ${mark(lastFlip, h.length)}` : ``) +
                ` — those are the landmarks two runs of one revision are compared on, and `+
-               `blocked/owed/live above are readings of the LAST census alone`;
+               `blocked/owed/live above are readings of the LAST census alone; ` +
+               /* AND WHAT THE MEMBERS THAT DID NOT RETIRE WERE DOING, on EVERY arm rather than on the one that
+                  happens to name a cause. `span` is where it goes for that reason: the arms below disagree
+                  about why the run ended and none of them disagrees about this, so putting it in one of them
+                  would make the answer depend on the verdict it is supposed to inform. */
+               stepUnitReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while
