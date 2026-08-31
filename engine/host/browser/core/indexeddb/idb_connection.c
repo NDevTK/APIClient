@@ -243,9 +243,9 @@ static void conn_become_closed(JSContext *ctx, JSValueConst connection)
 void idb_connection_close(JSContext *ctx, JSValueConst connection)
 {
     DCHECK(idb_connection_is(connection), "§5.2 was given something that is not a connection");
-    /* Step 1: "Set connection's close pending flag to true." §2.1.1's note is what makes this the whole of the
-       member's synchronous effect: "once a connection's close pending flag has been set to true, no new
-       transactions can be created using the connection". */
+    /* Step 1: "Set connection's close pending flag to true." §5.2's own note is what makes this the whole of
+       the member's synchronous effect: "Once a connection's close pending flag has been set to true, no new
+       transactions can be created using the connection." */
     conn_set(ctx, connection, CONN_PENDING, JS_TRUE);
     conn_become_closed(ctx, connection);
 }
@@ -454,7 +454,7 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
         }
     }
 
-    /* §2.2's "if keyPath is not null, set the created object store's key path to keyPath" — the value ITSELF,
+    /* §4.4's "If keyPath is not null, set the created object store's key path to keyPath." — the value ITSELF,
        string or list, and not a re-derived copy of it. It is engine-owned (the union built it), so the page
        holds no reference to what the record now names — the other half of §4.5's note, whose first sentence is
        that the value its getter answers with "is not the same instance that was used when the object store
@@ -634,8 +634,8 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
     } else {
         JS_FreeValue(ctx, upgrade);
     }
-    /* Step 2 — §2.1.1's note: "once a connection's close pending flag has been set to true, no new transactions
-       can be created using the connection". */
+    /* Step 2 — §5.2's note: "Once a connection's close pending flag has been set to true, no new
+       transactions can be created using the connection." */
     if (idb_connection_close_pending(ctx, this_val)) {
         JS_FreeValue(ctx, db);
         return JS_ThrowDOMException(ctx, "InvalidStateError",

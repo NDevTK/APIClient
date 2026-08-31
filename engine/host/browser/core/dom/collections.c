@@ -497,13 +497,14 @@ static JSValue js_coll_length(JSContext *ctx, JSValueConst this_val, int magic)
 
    THE INDEX IS `unsigned long`, AND THE BODY NO LONGER RE-STATES THAT. This read used to be `JS_ToInt64` plus
    `if (i < 0) return JS_NULL`, under a declaration of `long` — a signed type Web IDL §3.2.4.5 long converts
-   with ConvertToInt(V, 32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1),
-   then return x − 2^bitLength". So `item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long's
-   ConvertToInt(V, 32, "unsigned") denotes 2147483648, and the body's negative branch is what turned that back
-   into the null a browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: it made the declaration's
-   error unobservable through this member (a collection cannot hold 2^31 nodes, so every value ≥ 2^31 is past
-   the end under either sign), so nothing ever fired. The declaration is the spec of the conversion; a body
-   re-deriving the sign is the second copy of §3.2.4.9's arithmetic that idl_args.c exists to prevent. */
+   with §3.2.4.9 Abstract operations' ConvertToInt(V, 32, "signed"), whose final step is "If signedness is
+   'signed' and x ≥ 2^(bitLength−1), then return x − 2^bitLength". So `item(2**31)` denoted −2147483648 where
+   §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned") denotes 2147483648, and the body's negative branch
+   is what turned that back into the null a browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: it
+   made the declaration's error unobservable through this member (a collection cannot hold 2^31 nodes, so every
+   value ≥ 2^31 is past the end under either sign), so nothing ever fired. The declaration is the spec of the
+   conversion; a body re-deriving the sign is the second copy of §3.2.4.9's arithmetic that idl_args.c exists to
+   prevent. */
 static JSValue js_coll_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     uint32_t i = 0;

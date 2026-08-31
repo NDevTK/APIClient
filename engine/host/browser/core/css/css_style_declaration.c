@@ -2808,16 +2808,16 @@ static JSValue js_cssd_length(JSContext *ctx, JSValueConst this_val, int magic)
    CSS declaration at position index. If there is no indexth object in the collection, then the method must
    return the empty string."
 
-   THE INDEX IS `unsigned long`, AND THE ARRAY'S OWN LENGTH IS THEREFORE THE ONLY BOUND. §6.6.1 writes
-   `getter CSSOMString item(unsigned long index)`; this was declared `long`, and under that declaration the
-   `idx >= 0` half of the guard was LOAD-BEARING rather than defensive — Web IDL §3.2.4.5 long converts with
-   ConvertToInt(V, 32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1), then
-   return x − 2^bitLength", so the converted value reaches −2147483648, and `d.v` is a REAL ARRAY of exactly
-   `d.n` CssDecl entries. Deleting that half without fixing the type is an out-of-bounds READ, which is why the
-   type and the guard move in ONE diff and neither is a separate step. §3.2.4.6 unsigned long's
-   ConvertToInt(V, 32, "unsigned") produces [0, 2**32−1] and `d.n` is an `unsigned`, so `i < d.n` is a single
-   unsigned comparison covering the whole converted range: the negative arm is unreachable BY TYPE, not by a
-   check, and there is nothing left for a second test to catch.
+   THE INDEX IS `unsigned long`, AND THE ARRAY'S OWN LENGTH IS THEREFORE THE ONLY BOUND. §6.6.1 writes `getter
+   CSSOMString item(unsigned long index)`; this was declared `long`, and under that declaration the `idx >= 0`
+   half of the guard was LOAD-BEARING rather than defensive — Web IDL §3.2.4.5 long converts with §3.2.4.9
+   Abstract operations' ConvertToInt(V, 32, "signed"), whose final step is "If signedness is 'signed' and x ≥
+   2^(bitLength−1), then return x − 2^bitLength", so the converted value reaches −2147483648, and `d.v` is a
+   REAL ARRAY of exactly `d.n` CssDecl entries. Deleting that half without fixing the type is an out-of-bounds
+   READ, which is why the type and the guard move in ONE diff and neither is a separate step. §3.2.4.6 unsigned
+   long's ConvertToInt(V, 32, "unsigned") produces [0, 2**32−1] and `d.n` is an `unsigned`, so `i < d.n` is a
+   single unsigned comparison covering the whole converted range: the negative arm is unreachable BY TYPE, not
+   by a check, and there is nothing left for a second test to catch.
    THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: a declaration block cannot hold 2**31 declarations, so
    every value at or past 2**31 is past the end under either sign and the empty string is the answer both ways
    — the declaration's error had no discriminating input through this member. The declaration is the spec of

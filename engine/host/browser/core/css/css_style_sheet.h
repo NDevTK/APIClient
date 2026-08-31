@@ -38,15 +38,15 @@ void css_style_sheet_install_proto(JSContext *ctx);
 void css_style_sheet_install(JSContext *ctx, JSValueConst global);
 void css_style_sheet_free(JSRuntime *rt);
 
-/* §6.1's "CREATE A CSS STYLE SHEET" — step 1, "create a new CSS style sheet object and set its properties as
-   specified". The arguments ARE §6.1's state items, spelled out one per parameter rather than gathered into a
-   struct on purpose: a state item this engine starts modelling must become a compile error at every creator,
-   and a zero-initialised struct field is the opposite of that.
-   `location` is a USVString or JS_NULL (null for an embedded sheet); the other three are the wrapper or rule
-   object, or JS_NULL. The disabled flag is not a parameter because §6.1 gives it no creator-specified value —
-   it is "either set or unset. Unset by default", and every creator leaves it there.
-   Step 2's "run the add a CSS style sheet steps" is NOT here: that adds the sheet to the document's list, which
-   belongs to the component that owns the list. OWNED: the caller frees. */
+/* §6.2 CSS Style Sheet Collections' "CREATE A CSS STYLE SHEET" — step 1, "Create a new CSS style sheet object
+   and set its properties as specified." The arguments ARE §6.1's state items, spelled out one per parameter
+   rather than gathered into a struct on purpose: a state item this engine starts modelling must become a
+   compile error at every creator, and a zero-initialised struct field is the opposite of that. `location` is a
+   USVString or JS_NULL (null for an embedded sheet); the other three are the wrapper or rule object, or
+   JS_NULL. The disabled flag is not a parameter because §6.1 gives it no creator-specified value — it is
+   "either set or unset. Unset by default", and every creator leaves it there.
+   Step 2's "run the add a CSS style sheet steps" (also §6.2's) is NOT here: that adds the sheet to the
+   document's list, which belongs to the component that owns the list. OWNED: the caller frees. */
 JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
                                JSValueConst owner_rule, JSValueConst location);
 
@@ -65,10 +65,11 @@ lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet);
 
 /* CSS Syntax's "PARSE A STYLESHEET'S CONTENTS" over `text`, with the result becoming this sheet's CSS RULES —
    the operation §6.1.2's `replaceSync` is stated over, minus the constructed-flag check that member adds.
-   HTML §4.2.6's create-a-CSS-style-sheet table says the CSS rules are "left uninitialized", and its own note
-   says that "doesn't seem right. Presumably we should be using the element's child text content?" (whatwg/html
-   issue #2997). Every engine uses the child text content, §4.2.6 further down REQUIRES it — "the style rules
-   must be immediately made available to script" — and a sheet whose rules were genuinely uninitialised would
+   HTML §4.2.6 The style element's create-a-CSS-style-sheet table says the CSS rules are "left
+   uninitialized", and its own note says that "doesn't seem right. Presumably we should be using the element's
+   child text content?" (whatwg/html issue #2997). Every engine uses the child text content, and HTML §4.2.7
+   Interactions of styling and scripting REQUIRES it — "the style rules must be immediately made available to
+   script" — and a sheet whose rules were genuinely uninitialised would
    make `document.styleSheets[0].cssRules` empty for every page. So this is what the creator calls. */
 void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, const char *text, size_t len);
 

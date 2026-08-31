@@ -1,5 +1,5 @@
-/* FETCH §2.9 PORT BLOCKING — "should request be blocked due to a bad port?" and the table it reads. See
-   port_blocking.c. */
+/* FETCH §2.9 PORT BLOCKING — "To determine whether fetching a request request should be blocked due to a
+   bad port" and the table it reads. See port_blocking.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_PORT_BLOCKING_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_PORT_BLOCKING_H
 #include "core/url/url.h"

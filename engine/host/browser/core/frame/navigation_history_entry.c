@@ -271,7 +271,7 @@ static JSValue js_nhe_get(JSContext *ctx, JSValueConst this_val, int magic)
    primitive, entry.getState() !== entry.getState()". That is why this is a METHOD and `history.state` is an
    attribute — the classic API's state is a field the history object holds (§7.4.6.2's restore-the-history-
    object-state writes it), and this one is bytes deserialized on demand. The two are unrelated stores over one
-   entry, which the standard says in as many words: "This state is unrelated to the classic history API's
+   entry, which §7.2.6.5 says in as many words: "This state is unrelated to the classic history API's
    history.state." */
 static JSValue js_nhe_get_state(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {

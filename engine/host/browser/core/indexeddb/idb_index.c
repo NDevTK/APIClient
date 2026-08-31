@@ -89,9 +89,10 @@ static JSValue idb_irec_field(JSContext *ctx, JSValueConst records, uint32_t i, 
     return v;
 }
 
-/* §2.6's ORDERING, as ONE comparison: "sorted primarily on the records keys, and secondarily on the records
-   values, in ascending order". Both halves are §2.4's compare, which is why this is one function and not a
-   cascade written out at each of the four sites that needs it. */
+/* §2.6's ORDERING, as ONE comparison — §6.1's store-a-record-into-an-index writes it: "the list is sorted
+   primarily on the records keys, and secondarily on the records values, in ascending order". Both halves are
+   §2.4's compare, which is why this is one function and not a cascade written out at each of the four sites
+   that needs it. */
 static int idb_irec_compare(JSContext *ctx, JSValueConst records, uint32_t i, JSValueConst key,
                             JSValueConst value)
 {
@@ -388,14 +389,14 @@ JSValue idb_index_key_path_value(JSContext *ctx, JSValueConst index)
     uint32_t i, n;
 
     /* A string key path converts to ITSELF — Web IDL §3.2.9 is the identity on an immutable JS string — and a
-       list becomes a PLAIN Array per §3.2.24, for the reason idb_database.h states for §4.5's keyPath. */
+       list becomes a PLAIN Array per Web IDL §3.2.21, for the reason idb_database.h states for §4.5's keyPath. */
     if (!JS_IsArray(path))
         return path;
     n = idb_index_list_len(ctx, path);
     DCHECK(n > 0, "an index's key path is an EMPTY list — §2.5's last bullet is \"a non-empty list\", which "
                   "§4.5's createIndex reports as a SyntaxError before an index is created");
     out = JS_NewArray(ctx);
-    CHECK(!JS_IsException(out), "IndexedDB: §4.6's keyPath could not allocate the Array Web IDL §3.2.24 makes");
+    CHECK(!JS_IsException(out), "IndexedDB: §4.6's keyPath could not allocate the Array Web IDL §3.2.21 makes");
     for (i = 0; i < n; i++)
         JS_DefinePropertyValueUint32(ctx, out, i, JS_GetPropertyUint32(ctx, path, i), JS_PROP_C_W_E);
     JS_FreeValue(ctx, path);

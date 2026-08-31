@@ -573,8 +573,8 @@ int fetch_reply_status(JSContext *ctx, JSValueConst reply)
           "fetch: a reply record's `status` refused an integer coercion — the field is written as a number by "
           "every producer, so a value that throws out of ToNumber is not a status this seam can report");
     DCHECK(st >= 0 && st <= 999,
-           "the host's reply record carries a `status` outside Fetch §2.2.6 \"Responses\"' own range — \"A "
-           "status is an integer in the range 0 to 999, inclusive\" — so a number beyond it is a producer "
+           "the host's reply record carries a `status` outside Fetch §2.2.3 \"Statuses\"' own range — \"A "
+           "status is an integer in the range 0 to 999, inclusive.\" — so a number beyond it is a producer "
            "inventing one rather than a server having sent it");
     return st;
 }

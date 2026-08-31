@@ -98,8 +98,9 @@ bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx);
 void    idb_transaction_record_change(JSContext *ctx, JSValueConst tx, JSValue change);
 JSValue idb_transaction_changes(JSContext *ctx, JSValueConst tx);
 
-/* HOW MANY CHANGES THE TRANSACTION HAS RECORDED SO FAR — §5.6 step 5.4's WATERMARK, read before an operation
-   is performed so that "revert all changes made by OPERATION" names the tail the operation appended and not
+/* HOW MANY CHANGES THE TRANSACTION HAS RECORDED SO FAR — a WATERMARK for §5.6 step 5.4, read before an
+   operation is performed so that its "revert all changes made by operation" names the tail the operation
+   appended and not
    the transaction's whole list. It is a count and not a cursor object because the list only grows while an
    operation runs: §2.7.2 gives one store to one read/write transaction at a time, and an operation is one
    task, so nothing else appends to or removes from this list across one. */

@@ -677,9 +677,9 @@ static int header_is_privileged_no_cors(const char *lower_name)
 }
 
 /* §5.1 "remove privileged no-CORS request-headers": every append, set and delete under the "request-no-cors"
-   guard ends with it — "This is called when headers are modified by unprivileged code", and the spec's own
-   note beside the privileged list says such a header is "preserved if their associated request object is
-   copied, but will be removed if the request is modified by unprivileged APIs". */
+   guard ends with it — "This is called when headers are modified by unprivileged code", and §2.2.2 Headers'
+   own note beside the privileged list says such headers "will be preserved if their associated request object
+   is copied, but will be removed if the request is modified by unprivileged APIs". */
 static void header_remove_privileged_no_cors(HeaderList *l)
 {
     size_t i;
@@ -843,9 +843,10 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         /* §5.1 delete steps 1-5, and step 2 IS NOT WHAT STOOD HERE. It reads: "If this's guard is
            'request-no-cors', name is not a no-CORS-safelisted request-header name, AND name is not a
            privileged no-CORS request-header name, then return." A privileged name is one of the two that get
-           THROUGH — the note beside the privileged list says such a header "will be removed if the request is
-           modified by unprivileged APIs", so `delete("Range")` is exactly the call that must succeed. This
-           refused that one call and let every OTHER unsafelisted name through, which is both halves inverted.
+           THROUGH — §2.2.2 Headers' note beside the privileged list says such headers "will be removed if
+           the request is modified by unprivileged APIs", so `delete("Range")` is exactly the call that must
+           succeed. This refused that one call and let every OTHER unsafelisted name through, which is both
+           halves inverted.
            Step 1 validates with the DUMMY value ``, which is why the method-override names are deletable. */
         char *lower = header_lower(name);
         int allow = headers_guard_allows(ctx, h->guard, name, "");

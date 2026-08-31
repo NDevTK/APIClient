@@ -1608,6 +1608,21 @@ function audit(argv, opts = {}) {
    * doctrine for a site it cannot decide is to refuse the guess, and the cost is one operand of a bare-written
    * span — whose left operand is still read, and whose §-written spelling is read by CITE regardless. */
   const RANGE_OPERAND = /[0-9](?:\.[0-9]+)*\s*[-‐-―]\s*$/;
+  /* AND NEITHER IS A NUMBER THE WORD `step` INTRODUCES — the same defect as the range operand, at SIXTY-ONE
+   * PERCENT of this reader's candidates rather than five. CLAUDE.md fixes the convention this rests on: a
+   * SECTION is written `§10.2` and a STEP is written `step 10.2`, so a bare number whose lead-in is the word
+   * `step` or `steps` is not a section number anybody wrote, and admitting it is the tool inventing the
+   * citation it then judges — the sentence the range-operand paragraph above already uses about itself.
+   * IT IS NOT MERELY NOISE IN A COUNT, BECAUSE AN INVENTED CITATION GOVERNS THE PROSE AFTER IT. --quotes
+   * attributes a quotation to the nearest citation BEFORE it, so `§5.6 step 5.1's "wait until request is the
+   * first item …"` charged Indexed Database §5.1 with §5.6's own sentence and reported a WRONG-SECTION against
+   * a citation that is exactly right. Measured at the revision this landed: 2284 of 3759 bare candidates under
+   * engine/host sit in this position, and the shape is every stage label and every step-quoting comment in the
+   * tree (`HTML §4.10.5.1.14 step 4.2's rounding`, `CSP §6.7.3.3 step 5.2.2`, `console.c`'s `step 4.3`).
+   * A `§`-WRITTEN NUMBER AFTER `step` IS STILL READ, and that asymmetry is the point: `step §7.4.5` is an
+   * author naming a section, and the exclusion is only ever about a number with no § in front of it — which is
+   * precisely the population this reader admits on a guess. */
+  const STEP_LEAD = /(?:^|[^\w])steps?\s+$/i;
 
   /* Look a phrase up in every index at once. Returns the LONGEST phrase any standard knows, the standards
    * that know it, and — per standard — whether the cited number is its definition site or a prominent use. */
@@ -1731,6 +1746,7 @@ function audit(argv, opts = {}) {
     for (let m; (m = BARE.exec(src)); ) {
       if (seen.has(m.index) || !inSpans(spans, m.index)) continue;
       if (RANGE_OPERAND.test(src.slice(Math.max(0, m.index - 24), m.index))) continue;
+      if (STEP_LEAD.test(src.slice(Math.max(0, m.index - 24), m.index))) continue;
       cites.push({ at: m.index, len: m[0].length, no: m[1], anchor: null, bare: true });
     }
     cites.sort((a, b) => a.at - b.at);

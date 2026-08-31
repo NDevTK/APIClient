@@ -38,7 +38,7 @@ void style_sheet_list_install_mixin(JSContext *ctx, JSValueConst proto);
 void style_sheet_list_free(JSRuntime *rt);
 
 /* §6.2's "ADD A CSS STYLE SHEET" step 1 — "add the CSS style sheet to the list of document or shadow root CSS
-   style sheets AT THE APPROPRIATE LOCATION", which is tree order over the owner nodes. Invoked by §6.1's
+   style sheets AT THE APPROPRIATE LOCATION", which is tree order over the owner nodes. Invoked by §6.2's
    create-a-CSS-style-sheet step 2. `owner_node` is the sheet's own, passed rather than read back off the sheet
    so the create states what it is adding. Steps 2-5 (the script-blocking set, and the disabled flag the
    preferred CSS style sheet set name decides) are NOT here — see the assertion at the call site. */

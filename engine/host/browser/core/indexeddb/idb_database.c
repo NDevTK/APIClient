@@ -601,7 +601,7 @@ JSValue idb_object_store_key_path_value(JSContext *ctx, JSValueConst store)
     DCHECK(n > 0, "an object store's key path is an EMPTY list — §2.5's last bullet is \"a non-empty list\", "
                   "which §4.4's createObjectStore reports as a SyntaxError before a store is created");
     out = JS_NewArray(ctx);
-    CHECK(!JS_IsException(out), "IndexedDB: §4.5's keyPath could not allocate the Array Web IDL §3.2.24 makes");
+    CHECK(!JS_IsException(out), "IndexedDB: §4.5's keyPath could not allocate the Array Web IDL §3.2.21 makes");
     for (i = 0; i < n; i++)
         JS_DefinePropertyValueUint32(ctx, out, i, JS_GetPropertyUint32(ctx, path, i), JS_PROP_C_W_E);
     JS_FreeValue(ctx, path);

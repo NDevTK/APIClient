@@ -2206,8 +2206,8 @@ static int idl_bytestring_check(JSContext *ctx, JSValueConst str)
     return 0;
 }
 
-/* WEB IDL § 3.2.26 Buffer source types' TWO REFUSALS, WHICH EVERY ONE OF ITS FOUR CONVERSIONS STATES AND WHICH
- * THIS ENGINE'S TWO BUFFER-SOURCE POSITIONS BOTH OWE. Each of § 3.2.26's algorithms — for ArrayBuffer, for
+/* WEB IDL §3.2.26 Buffer source types' TWO REFUSALS, WHICH EVERY ONE OF ITS FOUR CONVERSIONS STATES AND WHICH
+ * THIS ENGINE'S TWO BUFFER-SOURCE POSITIONS BOTH OWE. Each of §3.2.26's algorithms — for ArrayBuffer, for
  * SharedArrayBuffer, for DataView and for the twelve typed arrays — is a brand test followed by these two and
  * then a return, and they are asked of the buffer UNDER the value: of V for a buffer, of
  * V.[[ViewedArrayBuffer]] for a view. The submodule's pair answers both arms, which is why this reads as one
@@ -2216,40 +2216,40 @@ static int idl_bytestring_check(JSContext *ctx, JSValueConst str)
  *     and IsSharedArrayBuffer(V.[[ViewedArrayBuffer]]) is true, then throw a TypeError."
  *   - RESIZABLE: "If the conversion is not to an IDL type associated with the [AllowResizable] extended
  *     attribute, and IsFixedLengthArrayBuffer(V.[[ViewedArrayBuffer]]) is false, then throw a TypeError."
- * EACH CONDITION IS THE POSITION'S TO STATE, WHICH IS WHAT § 3.2.26 WRITES — "if the conversion is not to an
+ * EACH CONDITION IS THE POSITION'S TO STATE, WHICH IS WHAT §3.2.26 WRITES — "if the conversion is not to an
  * IDL type associated with the […] extended attribute" — so the two flags come from the DECLARATION and never
- * from this function's opinion. § 4.1 ArrayBufferView carries no extended attribute and § 4.2 BufferSource
+ * from this function's opinion. §4.1 ArrayBufferView carries no extended attribute and §4.2 BufferSource
  * says in its own note that [AllowShared] "cannot be used with BufferSource as ArrayBuffer does not support
- * it" (§ 4.3 AllowSharedBufferSource is the typedef for that), so both of those rows pass false and false and
+ * it" (§4.3 AllowSharedBufferSource is the typedef for that), so both of those rows pass false and false and
  * both refusals are unconditional at them. A SPECIFIC typed array position states its own pair: Encoding
- * § 7.4 Interface TextEncoder declares `[AllowShared] Uint8Array destination`, which switches the SHARED
+ * §7.4 Interface TextEncoder declares `[AllowShared] Uint8Array destination`, which switches the SHARED
  * refusal off at that one position and leaves the resizable one standing. Hard-coding either answer here was
  * right only while no member in the platform wrote an attribute, and a rule that is true by the accident of
  * what has been built is the one that goes wrong silently the day something is.
  * THE REFUSAL IS NOT PEDANTRY, IT IS THE MEMORY-SAFETY BOUNDARY THIS CONVERSION EXISTS TO DRAW. A
  * length-tracking view over a resizable buffer reports a byte length that is recomputed at every read, so a
  * component that took its window and then let page code run — a `toString`, a getter, a promise resolution —
- * holds a window that no longer describes the allocation. § 3.2.26 answers that by keeping such a view out of
+ * holds a window that no longer describes the allocation. §3.2.26 answers that by keeping such a view out of
  * every position that has not asked for one, which is why the check belongs HERE and not at each fill site:
  * a fill site can only assert that the window it was handed is still inside the buffer, and an assert that
  * fires is a defect that already reached the algorithm.
  * Returns -1 with a TypeError live, or 0. The value has already passed its position's brand test, which is the
- * order § 3.2.26 states and is what lets the predicates below require a buffer source. */
+ * order §3.2.26 states and is what lets the predicates below require a buffer source. */
 static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *type_name,
                                     bool allow_shared, bool allow_resizable)
 {
     if (!allow_shared && JS_IsSharedBufferSource(v)) {
         JS_ThrowTypeError(ctx,
-                          "§ 3.2.26 Buffer source types refuses a SharedArrayBuffer to a `%s`: the position "
-                          "carries no [AllowShared] extended attribute, and § 4.2 BufferSource cannot carry "
+                          "§3.2.26 Buffer source types refuses a SharedArrayBuffer to a `%s`: the position "
+                          "carries no [AllowShared] extended attribute, and §4.2 BufferSource cannot carry "
                           "one at all — a member that wants a shared buffer declares AllowSharedBufferSource",
                           type_name);
         return -1;
     }
     if (!allow_resizable && !JS_IsFixedLengthBufferSource(v)) {
         JS_ThrowTypeError(ctx,
-                          "§ 3.2.26 Buffer source types refuses a resizable buffer to a `%s`: the position "
-                          "carries no § 3.3.1 [AllowResizable] extended attribute, so IsFixedLengthArrayBuffer "
+                          "§3.2.26 Buffer source types refuses a resizable buffer to a `%s`: the position "
+                          "carries no §3.3.1 [AllowResizable] extended attribute, so IsFixedLengthArrayBuffer "
                           "of the buffer under it must be true",
                           type_name);
         return -1;

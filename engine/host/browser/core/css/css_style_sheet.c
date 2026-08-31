@@ -291,7 +291,7 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
     return sheet_title_concept(ctx, s);
 }
 
-/* ---- §6.1's "create a CSS style sheet" and §6.2's "remove a CSS style sheet" ------------------------------ */
+/* ---- §6.2's "create a CSS style sheet" and "remove a CSS style sheet" ------------------------------------ */
 
 JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
                                JSValueConst owner_rule, JSValueConst location)
@@ -327,7 +327,8 @@ JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueC
        and this asserts it rather than leaving the reader to work out that a zeroed bool means unset. */
     DCHECK(!s->disabled, "a newly created CSS style sheet came out with its disabled flag already set");
     JS_SetOpaque(obj, s);
-    /* §6.1's create step 2 — "then run the add a CSS style sheet steps for the newly created CSS style sheet".
+    /* §6.2's create-a-CSS-style-sheet step 2 — "Then run the add a CSS style sheet steps for the newly
+       created CSS style sheet."
        The sheet is COMPLETE before this line: the add reads the owner node to decide where in tree order the
        sheet belongs, and reads the title to decide what the style-sheet-set steps have to say about it. */
     style_sheet_list_add(ctx, obj, owner_node);

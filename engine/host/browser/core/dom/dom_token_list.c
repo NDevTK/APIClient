@@ -299,17 +299,17 @@ static JSValue js_tl_set_value(JSContext *ctx, JSValueConst this_val, JSValueCon
    numbers in the range zero to object's token set's size − 1", so `list[size]` is undefined where
    `list.item(size)` is null.
 
-   THE INDEX IS `unsigned long`, AND THE BODY NO LONGER RE-STATES THAT. §7.1 writes
-   `getter DOMString? item(unsigned long index)` — the comment above tl_item already quoted that line while the
-   declaration below said `long`, which is how the disagreement was readable at all. This read used to be
-   `JS_ToInt64` plus `if (want < 0) return JS_NULL`: Web IDL §3.2.4.5 long converts with
-   ConvertToInt(V, 32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1), then
-   return x − 2^bitLength", so `item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long's
-   ConvertToInt(V, 32, "unsigned") denotes 2147483648 — and the body's negative branch is what turned that back
-   into the null a browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: a token set cannot hold
-   2**31 tokens, so every value at or past 2**31 is past the end under either sign and nothing a page can write
-   observes the difference. The declaration is the spec of the conversion; a body re-deriving the sign is the
-   second copy of §3.2.4.9 Abstract operations' arithmetic that idl_args.c exists to prevent. */
+   THE INDEX IS `unsigned long`, AND THE BODY NO LONGER RE-STATES THAT. §7.1 writes `getter DOMString?
+   item(unsigned long index)` — the comment above tl_item already quoted that line while the declaration below
+   said `long`, which is how the disagreement was readable at all. This read used to be `JS_ToInt64` plus `if
+   (want < 0) return JS_NULL`: Web IDL §3.2.4.5 long converts with §3.2.4.9 Abstract operations' ConvertToInt(V,
+   32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1), then return x −
+   2^bitLength", so `item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long's ConvertToInt(V, 32,
+   "unsigned") denotes 2147483648 — and the body's negative branch is what turned that back into the null a
+   browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: a token set cannot hold 2**31 tokens, so
+   every value at or past 2**31 is past the end under either sign and nothing a page can write observes the
+   difference. The declaration is the spec of the conversion; a body re-deriving the sign is the second copy of
+   §3.2.4.9 Abstract operations' arithmetic that idl_args.c exists to prevent. */
 static JSValue js_tl_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     const char *attr, *v, *p, *end, *t;

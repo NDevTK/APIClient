@@ -288,9 +288,9 @@ void idb_database_record_index_records_removed(JSContext *ctx, JSValueConst tx, 
  *
  * IT IS A COPY AND THAT IS THE POINT — the standard's own note is "the returned value is not the same instance
  * that was used when the object store was created ... changing the properties of the object has no effect on
- * the object store", and the record above is state a page must not be handed a reference to. Web IDL §3.2.24
- * is the conversion and it is exactly what a list gets here: "let A be a new Array object created as if by the
- * expression []", then CreateDataPropertyOrThrow for each entry. A PLAIN Array — extensible, writable,
+ * the object store", and the record above is state a page must not be handed a reference to. Web IDL §3.2.21
+ * Sequences is the conversion and it is exactly what a list gets here: "Let A be a new Array object created
+ * as if by the expression []." — then CreateDataPropertyOrThrow for each entry. A PLAIN Array — extensible, writable,
  * configurable. It is NOT a frozen array: `FrozenArray<T>` is a different parameterized type (§3.2.27) that
  * neither this attribute's declaration (`readonly attribute any keyPath`) nor the prose above names, and
  * freezing what the spec says is a sequence would be a property no page can otherwise observe on an Array.
@@ -347,7 +347,7 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx);
 void idb_database_revert_operation(JSContext *ctx, JSValueConst tx, uint32_t from);
 
 /* §5.5 step 2's "any object stores ... WHICH WERE CREATED DURING THE TRANSACTION", asked of one store — which
-   is the question §5.8 step 5.1 branches on ("if handle's object store was not newly created during
+   is the question §5.8 step 5.1 branches on ("If handle's object store was not newly created during
    transaction"). It is answered out of the SAME list the revert runs, because that list is the record of what
    this transaction did and a second flag on the store would be a second answer to it. Asked only BETWEEN §5.5's
    step 2 and its step 4: the list is emptied when the transaction reaches FINISHED, which this asserts rather

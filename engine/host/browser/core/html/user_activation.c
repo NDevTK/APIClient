@@ -317,8 +317,9 @@ static void ua_activate(JSContext *rctx)
     /* Step 5.1 — and this is the write that turns the unknown into a fact. Once a trusted input event has
        reached this Window, this engine has OBSERVED the activation and its timestamp is an ordinary number, so
        every one of §6.4.1's three questions is arithmetic from here and nothing forks over it again.
-       THE MOMENT IS THIS WINDOW'S OWN, and that is why it is read here rather than passed in. Step 5.1 sets
-       "window's last activation timestamp to THE CURRENT HIGH RESOLUTION TIME", which HR-TIME §4 defines only
+       THE MOMENT IS THIS WINDOW'S OWN, and that is why it is read here rather than passed in. §6.4.2
+       Processing model's step 5.1 sets "window's last activation timestamp to THE CURRENT HIGH RESOLUTION
+       TIME", which HR-TIME §4 defines only
        given a global object — and §6.4.1 then reads it back through `ua_now` given that same Window. Each
        Window in this walk has its own environment and therefore its own TIME ORIGIN, so one number computed in
        the initiating document and written into every frame of the page would be a duration measured from one
@@ -445,9 +446,9 @@ void user_activation_notify(JSContext *ctx)
    and writing the walk twice would be two chances to get the SET wrong — and the set is the half of this that
    is a security property.
    `sticky` IS THE ANSWER §6.4.1's STICKY-ACTIVATION QUESTION WAS GIVEN, asked ONCE by the caller before the
-   walk begins. Step 5's condition — "if window's last activation timestamp is not positive infinity" — is that
-   question said the other way round for a Window whose timestamp is UNKNOWN, and every Window in this agent
-   shares the one source, so one answer serves the whole walk and the walk itself asks nothing and cannot
+   walk begins. §6.4.2's step 5 condition — "if window's last activation timestamp is not positive infinity" —
+   is that question said the other way round for a Window whose timestamp is UNKNOWN, and every Window in this
+   agent shares the one source, so one answer serves the whole walk and the walk itself asks nothing and cannot
    suspend. A Window whose timestamp this engine WROTE is decided by the arithmetic instead, because there is
    nothing unknown left about it.
    `probe` reports whether any Window in the set still holds the unknown, WITHOUT writing anything — it is how
@@ -608,6 +609,7 @@ static void ua_assert_this_window(JSContext *ctx, JSValueConst this_val)
  * Handing the page a concolic instead would have keyed its own `if` by the bare source, which is a DIFFERENT
  * predicate from the engine's, and the two would disagree in half the worlds.
  *
+ *   §6.4.4 The UserActivation interface states both:
  *   "The hasBeenActive getter steps are to return true if this's relevant global object has sticky activation,
  *    and false otherwise."
  *   "The isActive getter steps are to return true if this's relevant global object has transient activation,

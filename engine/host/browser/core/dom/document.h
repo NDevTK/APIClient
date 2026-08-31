@@ -153,7 +153,8 @@ JSValueConst document_object(JSContext *ctx);
    the algorithm and the object are core/dom/selection.c's. `doc` must be a Document wrapper — a receiver that
    is not one is Web IDL §3.7.5's TypeError, thrown here. OWNED. */
 JSValue document_selection(JSContext *ctx, JSValueConst doc);
-/* HTML §8.1.5.1's API BASE URL of this realm — "return the current BASE URL of window's associated Document",
+/* HTML §8.1.3.2 Environment settings objects' API BASE URL of this realm, which §7.2.2.6 Script settings for
+   Window objects answers — "Return the current base URL of window's associated Document." —
    which HTML §2.4.2's parse a URL resolves every relative reference against. It is §2.4.3's DOCUMENT BASE URL
    and NOT the document's address: this header used to say the address, the code used to return it, and both
    were wrong for every page shipping a `<base href>`. ONE component owns it, so two answers cannot drift. */

@@ -1374,9 +1374,9 @@ static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, 
 JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool has_version)
 {
     DCHECK(name != NULL, "§4.3's open was given no database name");
-    DCHECK(!has_version || version >= 1, "§4.3's open reached §5.1 with a zero version — its first step is "
-                                         "\"if version is 0 (zero), throw a TypeError\", reported by the "
-                                         "member before this");
+    DCHECK(!has_version || version >= 1, "§4.3's open reached §5.1 with a zero version — §4.3's open(name, "
+                                         "version) method steps begin \"If version is 0 (zero), throw a "
+                                         "TypeError.\", reported by the member before this");
     return open_request_enqueue(ctx, name, IDB_REQ_OPEN, version, has_version);
 }
 

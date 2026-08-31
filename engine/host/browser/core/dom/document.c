@@ -1830,8 +1830,8 @@ static int document_readiness(JSContext *ctx);
    the queue is at the CALLER: §13.2.7 "The end" step 9 runs "update the current document readiness to
    'complete'" (step 9.1) and the `load` fire (step 9.5) inside ONE queued global task. That fire is event_target_fire_run's shape
    and not this one, and it stays this one only because document_done_stage below is a plain C body the
-   scheduler drives rather than a step machine — which is the same statement as "the readiness transition
-   cannot suspend on a `readystatechange` listener", and it is what has to change. */
+   scheduler drives rather than a step machine — which is the same statement as saying the readiness
+   transition cannot suspend on a `readystatechange` listener, and it is what has to change. */
 static void document_set_ready(JSContext *ctx, int stage)
 {
     Document *d = doc_here(ctx);

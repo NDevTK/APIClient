@@ -1671,9 +1671,9 @@ static JSValue js_media_set_src_object(JSContext *ctx, JSValueConst this_val, JS
     return JS_UNDEFINED;
 }
 
-/* §4.8.11.8's `volume` setter: "if the given value is not in the range 0.0 to 1.0 inclusive, then throw an
-   IndexSizeError", then set the playback volume — which fires `volumechange` when the value CHANGES and does
-   nothing at all when it does not. */
+/* §4.8.11.13 User interface's `volume` setter: "If the given value is not in the range 0.0 to 1.0 inclusive,
+   then throw an `IndexSizeError` DOMException." — then set the playback volume, which fires `volumechange`
+   when the value CHANGES and does nothing at all when it does not. */
 static JSValue js_media_set_volume(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     JSValue st = media_state_of(ctx, this_val, "volume");
@@ -1694,7 +1694,7 @@ static JSValue js_media_set_volume(JSContext *ctx, JSValueConst this_val, JSValu
     return JS_UNDEFINED;
 }
 
-/* §4.8.11.8's `muted` setter: "set the muted state of this to the given value", which is the three-valued
+/* §4.8.11.13's `muted` setter: "set the muted state of this to the given value", which is the three-valued
    state going to true or false and a `volumechange` when it changed. */
 static JSValue js_media_set_muted(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {

@@ -13,7 +13,8 @@ void    response_free(JSContext *ctx);   /* the prototype this component holds *
 /* §2.2.6's URL LIST, from the SERIALIZED URLs a host observed — "a list of zero or more URLs", of which only
    the FIRST and the LAST are ever exposed to script (the spec says so, and it is why atomic HTTP redirect
    handling holds). `n == 0` is « ». Every item must be an ABSOLUTE URL: `url` runs the URL parser back over
-   the last one to answer "serialized with exclude fragment set to true". */
+   the last one to answer §5.5's url getter — "otherwise this's response's URL, serialized with exclude
+   fragment set to true". */
 JSValue response_url_list(JSContext *ctx, const char *const *urls, int n);
 /* A Response over the host's reply. The body is a BYTE SEQUENCE and carries its length: `arrayBuffer()` and
    `bytes()` hand those bytes back, and a strlen would have truncated the reply at its first interior NUL.

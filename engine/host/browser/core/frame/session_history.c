@@ -400,10 +400,11 @@ static void sh_length_and_index(JSContext *ctx, JSValueConst entries, uint32_t s
     *pindex = step;
 }
 
-/* §7.4.1.4's GET THE TARGET HISTORY ENTRY given a navigable and a step: "return the item in entries that has the
-   GREATEST STEP LESS THAN OR EQUAL TO step". The "less than or equal to" is not slack — the standard's own Jake
-   diagram shows a child navigable whose entries stop at step 1 answering step 3 with its step-1 entry — and over
-   this traversable's run 0..n-1 it collapses to entries[step], which is asserted rather than assumed. OWNED. */
+/* §7.4.6.1 Updating the traversable's GET THE TARGET HISTORY ENTRY given a navigable and a step: "return the
+   item in entries that has the GREATEST STEP LESS THAN OR EQUAL TO step". The "less than or equal to" is not
+   slack — the standard's own Jake diagram shows a child navigable whose entries stop at step 1 answering step 3
+   with its step-1 entry — and over this traversable's run 0..n-1 it collapses to entries[step], which is
+   asserted rather than assumed. OWNED. */
 static JSValue sh_target_history_entry(JSContext *ctx, JSValueConst entries, uint32_t step)
 {
     JSValue e;

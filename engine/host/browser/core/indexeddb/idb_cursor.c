@@ -871,8 +871,8 @@ static JSValue js_cu_advance(JSContext *ctx, JSValueConst this_val, int argc, JS
 
 /* ---- §4.9's CONTINUE and CONTINUEPRIMARYKEY ---------------------------------------------------------------
  *
- * BOTH ARE MACHINES, AND §7.4 IS WHY. "Let r be the result of converting a value to a key with key" over an
- * Array exotic object runs the PAGE'S OWN CODE — one `? HasOwnProperty` and one `? Get` per element, over a
+ * BOTH ARE MACHINES, AND §7.4 IS WHY. §4.9's "Let r be the result of converting a value to a key with key" over
+ * an Array exotic object runs the PAGE'S OWN CODE — one `? HasOwnProperty` and one `? Get` per element, over a
  * structure the page sized and nested — so the conversion exists in exactly one form, the parkable walk
  * (core/indexeddb/idb_key_array.h), and these members drive it exactly as §4.5's `get` drives it.
  *
@@ -1352,7 +1352,7 @@ static JSValue js_cu_get_direction(JSContext *ctx, JSValueConst this_val, int ma
  * §5.9 fires with `request.result` null, where a page reads it to decide the iteration is over.
  *
  * §7.3 IS NOT REACHED FOR AN ABSENT KEY, because §7.3 is stated over a key and "undefined" is the absence of
- * one — §2.10's own wording, "set cursor's key to undefined". */
+ * one — §6.7's own wording, "Set cursor's key to undefined." */
 static JSValue js_cu_get_key(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue k, v;

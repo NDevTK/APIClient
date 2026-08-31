@@ -56,7 +56,7 @@ bool idb_index_is_unpopulated(JSContext *ctx, JSValueConst index);
 void idb_index_set_populated(JSContext *ctx, JSValueConst index);
 
 /* §2.6's FIELDS. The name and key path are OWNED; `idb_index_key_path_value` is §4.6's keyPath getter's Web IDL
-   §3.2.24 conversion, minted per call for the reason idb_database.h states for the store's. */
+   §3.2.21 conversion, minted per call for the reason idb_database.h states for the store's. */
 JSValue idb_index_name(JSContext *ctx, JSValueConst index);
 JSValue idb_index_key_path(JSContext *ctx, JSValueConst index);
 JSValue idb_index_key_path_value(JSContext *ctx, JSValueConst index);

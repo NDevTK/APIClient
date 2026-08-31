@@ -681,7 +681,7 @@ static CspMatch csp_path_part_match(CspToken a, const char *b, size_t bn)
 
 /* ---- §6.7.2.8 and §6.7.2.7 ------------------------------------------------------------------------------ */
 
-/* Fetch §2.5: "An HTTP(S) scheme is `http` or `https`" — §6.7.2.8 step 1's first condition, and the same
+/* Fetch §2.1 URL: "An HTTP(S) scheme is `http` or `https`" — §6.7.2.8 step 1's first condition, and the same
    sentence core/fetch/port_blocking.c reads for §2.9. */
 static bool csp_http_scheme(const char *scheme)
 {

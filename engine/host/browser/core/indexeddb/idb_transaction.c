@@ -890,8 +890,8 @@ static int js_idb_tx_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSV
     STEP_ARM(TXA_RELEASE);
         JS_FreeValue(ctx, cb_result);
         /* §5.5 step 7.3: the open request's transaction, result, processed flag and done flag are all put
-           back — "in some cases, the request's done flag will be set to false, then set to true again", which
-           §2.8's own note names and which is why an open request is the one request that walks backwards. */
+           back — §2.8's own note names it, "in some cases, the request's done flag will be set to false, then
+           set to true again", and it is why an open request is the one request that walks backwards. */
         tx_release_open_request(ctx, tx, /*aborted*/ true);
         return JS_STEP_DONE;
 }
@@ -970,7 +970,8 @@ void idb_transaction_set_cleanup_loop(JSContext *ctx, JSValueConst tx)
 /* "To cleanup Indexed Database transactions, run the following steps. They will return true if any
    transactions were cleaned up, or false otherwise."
    THERE IS ONE EVENT LOOP PER AGENT HERE, so "with cleanup event loop matching the current event loop" is
-   membership of this set, and step 2.2's "clear transaction's cleanup event loop" is removal from it. The
+   membership of this set, and §2.7.1's step 2.2 — "Clear transaction's cleanup event loop." — is removal from
+   it. The
    whole set is taken and emptied BEFORE the first deactivation, which is the same reason DOM §3.2's abort
    snapshots its algorithm list: a deactivation is an ordinary property write and nothing this file does can
    add to the set from inside the walk, but a walk over the live Array would be the shape that breaks the day
@@ -1216,8 +1217,9 @@ void idb_transaction_start(JSContext *ctx, JSValueConst tx)
     tx_set_int(ctx, tx, TX_START, TX_START_YES);
     /* §2.7: "until the transaction is started the implementation must not execute these requests; however, the
        implementation must keep track of the requests and their order." This is the release of that order —
-       every held task, oldest first, into the ONE queue, so §5.6 step 5.1's "wait until request is the first
-       item in transaction's request list that is not processed" stays discharged by the queue. */
+       every held task, oldest first, into the ONE queue, so the wait §5.6 step 5.1 states — "Wait until
+       request is the first item in transaction's request list that is not processed." — stays discharged by
+       the queue. */
     held = tx_field(ctx, tx, TX_HELD);
     DCHECK(JS_IsArray(held), "a transaction carried no list of held request tasks");
     n = tx_array_len(ctx, held);

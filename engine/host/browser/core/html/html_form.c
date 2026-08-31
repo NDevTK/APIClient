@@ -530,8 +530,9 @@ static void fb_value(JSContext *ctx, FormBuf *b, JSValueConst v)
  * browsers answer `UTF-8` for.
  *
  * THE ANSWER IS §4.2 Names and labels' NAME COLUMN and not §7.1's ASCII-lowercased form, because the one place
- * it is observable — §4.10.22.4 step 5.9's `_charset_` entry, "a value consisting of the submission character
- * encoding" — is a name: a `Shift_JIS` submission carries `Shift_JIS`, not `shift_jis`. */
+ * it is observable — §4.10.22.4 step 5.9's `_charset_` entry, which §4.10.19.1 Naming form controls: the
+ * name attribute says is "automatically given a value consisting of the submission character encoding" — is a
+ * name: a `Shift_JIS` submission carries `Shift_JIS`, not `shift_jis`. */
 static const char *form_pick_encoding(lxb_dom_element_t *form)
 {
     size_t len = 0, i;
@@ -705,10 +706,11 @@ static bool form_target_is_self(const char *t, size_t len)
     return !t || len == 0 || ascii_ci_is(t, len, "_self");
 }
 
-/* §4.6.5's "CANNOT NAVIGATE", which steps 1, 5.9 and 9 each ask: "an element cannot navigate if its node
-   document is not FULLY ACTIVE, or it is not an `a` element and is not CONNECTED". A form is not an `a`, so
-   both clauses apply to it — and the reason the spec asks three times is that the page's code runs in between
-   and can detach the form or its document, which is exactly what this machine's stages park across. */
+/* §4.6.5 Following hyperlinks' CANNOT NAVIGATE, which steps 1, 5.9 and 9 each ask: "An element element cannot
+   navigate if any of the following are true: element's node document is not fully active; or element is not an
+   a element and is not connected." A form is not an `a`, so both clauses apply to it — and the reason the spec
+   asks three times is that the page's code runs in between and can detach the form or its document, which is
+   exactly what this machine's stages park across. */
 static bool form_cannot_navigate(JSContext *ctx, JSValueConst form)
 {
     return !document_fully_active(ctx) || !node_is_connected(node_of(form));

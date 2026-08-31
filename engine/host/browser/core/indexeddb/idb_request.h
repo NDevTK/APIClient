@@ -22,8 +22,8 @@ void idb_request_free(JSRuntime *rt);
  *
  * `operation` is the DATABASE OPERATION, as a callable this engine built (a step closure over its own
  * operands, so it parks and time-travels like anything else). Its CONTRACT is §5.6's own: it either answers
- * with the operation's result, or it THROWS the DOMException the algorithm names ("this operation failed with
- * a ConstraintError DOMException"), which arrives here as a value because this machine catches an abrupt
+ * with the operation's result, or it THROWS the DOMException the algorithm names (§6.1's "this operation failed
+ * with a `ConstraintError` DOMException"), which arrives here as a value because this machine catches an abrupt
  * request result.
  *
  * IT NEED NOT BE ATOMIC, AND THIS PARAGRAPH USED TO SAY IT WAS. The claim was that §5.6 step 5.4's "revert all

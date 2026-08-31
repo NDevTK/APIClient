@@ -618,7 +618,7 @@ static JSValue js_ix_get_object_store(JSContext *ctx, JSValueConst this_val, int
 }
 
 /* "The keyPath getter steps are to return this's index's key path", converted per Web IDL — and the note is
-   §4.5's exactly: "it returns the same object instance every time it is inspected", which §3.2.24 alone does
+   §4.5's exactly: "it returns the same object instance every time it is inspected", which Web IDL §3.2.21 alone does
    not give, since its own steps mint a new Array per conversion. So the first inspection converts and the
    HANDLE remembers; two handles for one index answer with two Arrays. */
 static JSValue js_ix_get_key_path(JSContext *ctx, JSValueConst this_val, int magic)

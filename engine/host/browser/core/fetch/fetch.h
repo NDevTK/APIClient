@@ -173,8 +173,8 @@ void fetch_reply_header_list(JSContext *ctx, JSValueConst reply, HeaderList *out
    must distinguish from "" — "this address answered nothing" against "it answered, and named nothing". */
 char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply);
 
-/* WHAT THE SERVER ANSWERED WITH — Fetch §2.2.6 "Responses"' status, whose vocabulary that section fixes: "A
-   status is an integer in the range 0 to 999, inclusive."
+/* WHAT THE SERVER ANSWERED WITH — Fetch §2.2.6 "Responses"' status, whose vocabulary Fetch §2.2.3
+   "Statuses" fixes: "A status is an integer in the range 0 to 999, inclusive."
    IT IS A READER BECAUSE THE FIELD HAD TWO HAND-WRITTEN ONES AND BOTH OF THEM DEFAULTED IT. This is
    `fetch_reply_header_list`'s argument about the same record — "a record shape known in more than one place is
    a record shape that drifts from its writer" — arriving at the one field whose absence is INDISTINGUISHABLE

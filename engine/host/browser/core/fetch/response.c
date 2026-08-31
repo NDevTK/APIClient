@@ -66,9 +66,10 @@ static JSValue response_json_stringify(JSContext *ctx)
  * "A response has an associated URL list (a list of zero or more URLs). Unless stated otherwise, it is « »."
  * and "A response has an associated URL. It is a pointer to the last URL in response's URL list and null if
  * response's URL list is empty." There was ONE `char *url` here, so every question that is really about the
- * LIST had to be answered by something else: `redirected` — "return true if this's response's URL list's size
- * is greater than 1" — was the literal `false`, which is not a value this file computed but a value it
- * asserted, and a bundle's `if (r.redirected)` never forked the arm that handles one.
+ * LIST had to be answered by something else: `redirected` — §5.5's "The redirected getter steps are to return
+ * true if this's response's URL list's size is greater than 1; otherwise false." — was the literal `false`,
+ * which is not a value this file computed but a value it asserted, and a bundle's `if (r.redirected)` never
+ * forked the arm that handles one.
  *
  * IT IS A JS VALUE for the reason CLAUDE.md §State-isolation gives: a list that must PARK to the cold tier and
  * FORK per-flow gets both for free from a JS Array — the snapshot machinery already carries it, and the

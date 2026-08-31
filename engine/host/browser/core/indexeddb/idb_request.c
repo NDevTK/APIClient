@@ -132,7 +132,8 @@ static bool rq_flag(JSContext *ctx, JSValueConst req, const char *field)
     return b;
 }
 
-/* §2.8's "a new request with source as source", built with both flags false and neither value accessible.
+/* §5.6's "let request be a new request with source as source", built with both flags false and neither
+   value accessible.
    `source` is BORROWED. `cls` is which of §4.1's two interfaces it wears — the RECORD is the same either way,
    which is §2.8.1's own sentence. OWNED. */
 static JSValue rq_new(JSContext *ctx, JSValueConst source, JSClassID cls)

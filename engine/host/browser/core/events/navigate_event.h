@@ -21,8 +21,9 @@
  * whose other arm has to be written.
  *
  * THE ABORT CONTROLLER IS HELD AS ITS SIGNAL. §7.2.6.10.1 gives the event "an abort controller", and the only
- * two things the standard ever does with it are "signal abort on event's abort controller" and "event's abort
- * controller's signal". core/dom/abort.h states signal abort over the SIGNAL — it is one operation, and
+ * two things the standard ever does with it are §7.2.6.8's "Signal abort on event's abort controller" and
+ * "event's abort controller's signal". core/dom/abort.h states signal abort over the SIGNAL — it is one
+ * operation, and
  * Streams §5.4's WritableStreamDefaultController reaches it the same way — so the controller object would be an
  * allocation nothing reads. `signal` is the IDL attribute over it, so the two are the same object.
  *

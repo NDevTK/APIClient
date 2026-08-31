@@ -1308,10 +1308,10 @@ static JSValue js_os_get_name(JSContext *ctx, JSValueConst this_val, int magic)
 /* Indexed Database §4.5 The IDBObjectStore interface: "The keyPath getter steps are to return this's object
    store's key path, or null if none. The key path is converted as a DOMString (if a string) or a
    sequence<DOMString> (if a list of strings), per [WEBIDL]." THE CONVERSION IS THE STORE'S (idb_database.h
-   states what Web IDL §3.2.24 makes of a list, and why it is a plain Array and not a frozen one); WHAT IS HERE
+   states what Web IDL §3.2.21 makes of a list, and why it is a plain Array and not a frozen one); WHAT IS HERE
    IS THE IDENTITY §4.5's OWN NOTE REQUIRES — "The returned value is not the same instance that was used when
    the object store was created. However, if this attribute returns an object (specifically an Array), it
-   returns the same object instance every time it is inspected." — a requirement §3.2.24 alone does not meet,
+   returns the same object instance every time it is inspected." — a requirement Web IDL §3.2.21 alone does not meet,
    since its own steps mint a new Array per conversion. So the first inspection converts and the handle
    remembers, which is also the half of the note about the STORE: two handles for one store answer with two
    Arrays, because the cache is the handle's. */

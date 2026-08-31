@@ -261,8 +261,8 @@ static JSValue js_idb_delete_database(JSContext *ctx, JSValueConst this_val, int
  * IT IS THE ONE MEMBER OF §4.3 THAT NEEDS NEITHER THE CONNECTION QUEUE NOR A REQUEST. There is no connection to
  * wait for, no `versionchange` to fire and nothing to block on — it reads §2.1's set and answers — so it is a
  * member here rather than an algorithm in idb_open.c, and filing it in §2.8.2's queue would give it an ordering
- * against opens that the standard pointedly does not give it ("there are no guarantees about the sequencing of
- * the collection of the data ... with respect to requests to create, upgrade, or delete databases").
+ * against opens that §4.3 pointedly does not give it ("there are no guarantees about the sequencing of the
+ * collection of the data ... with respect to requests to create, upgrade, or delete databases").
  *
  * TWO MACHINES because the standard puts a task boundary in the middle of one member. Step 4 is "in parallel"
  * and its last step is "queue a database task to resolve p with result", so the SET IS READ AFTER THE MEMBER
