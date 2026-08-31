@@ -1591,6 +1591,21 @@ static const char *HTML =
     "cl.setAttribute('class', 'x y'); "
     "fetch('/api/clview?v=' + (cll.length === 2 && cll.contains('y') && String(cll) === 'x y'"
     " ? 'isview' : 'wrong'));"
+    /* DOM §7.1 Interface DOMTokenList's `contains` OVER UNKNOWN EXTERNAL INPUT, which is the one question
+       about this member no browser corpus can ask. That section states the steps whole — "The contains(token) method
+       steps are to return true if this's token set[token] exists; otherwise false" — and a membership test
+       against a token nobody knows has BOTH answers open, so the honest result is an unknown NAMING ITS
+       SOURCE. A concrete `false` here is the collapse §solver forbids: `if (el.classList.contains(x))` then
+       takes one arm for the flow and the gated branch behind the other is never explored, which is the exact
+       shape §Attacker-sources calls a bundle gating a whole branch of its UI.
+       THREE PARAMS ON ONE FETCH, because one of them cannot separate the three states this row is about.
+       `c` is the member answering a KNOWN token, so it says the statement RAN and DOM §7.1 Interface
+       DOMTokenList is right where the
+       answer is determined. `h` is the control `idb-record`'s own `h` is: the same source reaching the same
+       param list with no DOMTokenList in between, so a `v` with no shape in it can be charged to this member
+       rather than to a source that never reaches an @H param at all. `v` is the claim. */
+    "fetch('/api/clunknown?v=' + cll.contains(location.hash)"
+    " + '&c=' + cll.contains('x') + '&h=' + location.hash);"
     "var m1 = cl.matches('div.x'); var m2 = cl.matches('span');"
     "var inner = document.createElement('b'); cl.appendChild(inner);"
     "var c1 = inner.closest('div'); var c2 = inner.closest('nav');"
@@ -2354,6 +2369,36 @@ static const char *HTML =
     " var _pm = _pp.createIndex('by_tag', 'tags', { multiEntry: true });"
     " var _pg = _px.get('ben'); _pg.onsuccess = function(){ _ix += ':pop' + _pg.result.name; };"
     " var _pc = _pm.count('x'); _pc.onsuccess = function(){ _ix += ':back' + _pc.result; };"
+    /* §5.12 Creating a request to retrieve multiple items' `count`, ASKED OF A VALUE NOBODY KNOWS — the one
+       question about this member a browser's own corpus structurally cannot ask, because it has no unknown to
+       ask it with. §4.5's declaration is `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned
+       long count)`, and Web IDL passes unknown external input through a declared type AS ITSELF, so the number
+       §5.12 hands its operation does not exist. §6.2 Object store retrieval operations' retrieve multiple
+       items from an object store opens with the arm that is the honest answer — "If count is not given or is 0
+       (zero), let count be infinity" — and that is a SUPERSET a later example can only narrow, which is what
+       makes it explored rather than decided.
+       `k` IS THE CONTROL AND IT IS NOT OPTIONAL, because `u` alone cannot fail: a `getAll` that ignored its
+       count entirely would answer all three records for the unknown AND satisfy the row. Two records for a
+       count of two is that member honouring a count it HAS, on the same store in the same transaction, so the
+       pair says the not-given arm was CHOSEN rather than being the only arm there is.
+       AND THE THIRD FACT IS AN ORDER, not a value. `count` is `[EnforceRange] unsigned long` in
+       `IDBGetAllOptions` too, and Web IDL §3.2.17 Dictionary types reads members "in lexicographical order"
+       (step 4.1) and converts each at step 4.1.4.1 — so `count` is refused BEFORE `direction` is even read off
+       the object, and the page's `toString` never runs. Deferred to the consumer instead, the refusal lands
+       after every member the standard orders behind `count`, and a page observes the difference through its
+       own side effects. `e` and `d` are two rows because a TypeError raised after `direction` was read is a
+       different defect from no TypeError at all, and one boolean over them names neither. */
+    " var _ga = _r.result.createObjectStore('ga');"
+    " _ga.put('g1', 1); _ga.put('g2', 2); _ga.put('g3', 3);"
+    " var _gr = IDBKeyRange.lowerBound(0), _gs = '', _gd = 0, _ge = 'nothrow';"
+    " var _gu = _ga.getAll(_gr, location.hash.length);"
+    " var _gk = _ga.getAll(_gr, 2);"
+    " _gu.onsuccess = function(){ _gs = _gu.result.join(''); };"
+    " try { _ga.getAllRecords({ count: -1,"
+    "  direction: { toString: function(){ _gd = 1; return 'next'; } } }); }"
+    " catch (_gx) { _ge = _gx.name; }"
+    " _gk.onsuccess = function(){ fetch('/api/idbcount?u=' + _gs + '&k=' + _gk.result.join('')"
+    "  + '&e=' + _ge + '&d=' + (_gd ? 'READ' : 'unread')); };"
     " var _xc = _mx.count('b');"
     " _xc.onsuccess = function(){ fetch('/api/idbidx?v=' + _ix + ':multi' + _xc.result); }; };"
     "_r.onsuccess = function(){"
@@ -5354,9 +5399,11 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
     if (!*why) *why = what;
 }
 /* THE CALLER'S ROOM FOR THE SELECTED ROWS — a buffer size with an abort behind it (probes_eval's `n < cap`),
-   never a limit on how many statements a document may make. Raised with the @S stage rows: the table is 107
-   and the full document selects nearly all of them, so the old 128 left a margin the next lane to add a row
-   would have spent without meaning to. */
+   never a limit on how many statements a document may make. Raised with the @S stage rows, and NOT to a
+   number derived from the table's current length: the full document selects nearly all of the rows, so a cap
+   sized to fit today is a cap the next lane to add a row spends without meaning to — which is what the old
+   128 was. It is deliberately far above the table so that adding a statement is an edit to the table alone,
+   and the abort behind it is what says so if that ever stops being true. */
 #define PROBE_MAX 192
 
 /* WHAT THIS INVOCATION IS: the document whose statements are being answered, which of the three sessions it is,
@@ -6097,6 +6144,43 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        macro now: a probe cannot ask about a spelling the component does not have. */
     int lochash_tt = param_value_has(js, "/api/idbrec", "h", LOCATION_HASH_SHAPE);
 
+    /* §5.12's `count` OVER A VALUE NOBODY KNOWS, AND THE ORDER ITS TYPE DECIDES — four rows, because these are
+       four independent facts and a conjunction over them would name none of them.
+       `idb-count-known` is the CONTROL and it is read first for that reason: two records out of three for a
+       count of 2 is §6.2 Object store retrieval operations' "first count of store's list of records whose key
+       is in range" honouring a count it HAS. Without it `idb-count-unknown` cannot fail, since a `getAll` that
+       ignored `count` altogether answers all three for both.
+       `idb-count-unknown` is the claim: the unknown crossed `[EnforceRange] unsigned long` as itself, carried
+       no example, and §6.2 step 1's "If count is not given or is 0 (zero), let count be infinity" was the arm
+       taken — the SUPERSET, which is exploration. Its two other readings are the ones this row exists to
+       refuse: an invented number (one record, or two) is §RUN-DON'T-MATCH's fabricated observation, and a
+       coercion that decided the completion takes the endpoint away entirely.
+       EACH IS `param_value_only` AND NOT `_has`: nothing on this path branches on an unknown, so a second
+       value means the walk forked where this statement says it cannot, which is a finding and not a match.
+       `idb-range-throw` and `idb-range-order` are the dictionary half, and they are two rows because a
+       TypeError raised AFTER the page's `toString` ran is a different defect from no TypeError at all — the
+       first is a refusal in the wrong place (the consumer's, not the type's), the second is no refusal. Web
+       IDL §3.2.17 Dictionary types reads members "in lexicographical order" and converts each one where it
+       reads it, so `count` is refused before `direction` is fetched off the object at all. */
+    int idbcount_known_tt = param_value_only(js, "/api/idbcount", "k", "g1g2");
+    int idbcount_unk_tt   = param_value_only(js, "/api/idbcount", "u", "g1g2g3");
+    int idbrange_throw_tt = param_value_only(js, "/api/idbcount", "e", "TypeError");
+    int idbrange_order_tt = param_value_only(js, "/api/idbcount", "d", "unread");
+
+    /* DOM §7.1 Interface DOMTokenList's `contains` OVER AN UNKNOWN TOKEN, in the three rows the three states
+       need. `cl-unknown-ran` is
+       the member answering a token the document DETERMINED, so its 0 is "this statement did not run" and
+       nothing else. `cl-unknown-src` is the control `loc-hash-param` is for `idb-record-taint`: the same
+       source reaching the same param list with no DOMTokenList in between, so a `v` carrying no shape is
+       charged to DOM §7.1 Interface DOMTokenList rather than to a source that reaches no @H param at all. `cl-unknown` is the claim —
+       the answer is an unknown NAMING ITS SOURCE, which is what keeps `if (classList.contains(x))` a fork.
+       A COLLAPSE IS NOT AN ABSENCE HERE, and that is why the SHAPE is the term rather than the endpoint: a
+       decided answer emits a perfectly healthy record whose `v` reads `false`, so a row asking only whether
+       the endpoint arrived would read 1 for the defect it exists to catch. */
+    int clunk_ran_tt = param_value_only(js, "/api/clunknown", "c", "true");
+    int clunk_src_tt = param_value_has(js, "/api/clunknown", "h", LOCATION_HASH_SHAPE);
+    int clunk_tt     = param_value_has(js, "/api/clunknown", "v", LOCATION_HASH_SHAPE);
+
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
        arm and the sibling is never reached. Both arms present is the whole claim. */
@@ -6763,6 +6847,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE },
         { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE },
         { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE },
+        /* THE SAME QUESTION ONE MEMBER OVER: a gate the bundle asks of the DOM rather than of the navigator. */
+        { "cl-unknown-ran", clunk_ran_tt, "/api/clunknown", SESS_EXPLORE },
+        { "cl-unknown-src", clunk_src_tt, "/api/clunknown", SESS_EXPLORE },
+        { "cl-unknown", clunk_tt, "/api/clunknown", SESS_EXPLORE },
         { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE },
         { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE },
         { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE },
@@ -6818,6 +6906,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },
         { "loc-hash-param", lochash_tt, "/api/idbrec", SESS_EXPLORE },
+        { "idb-count-known", idbcount_known_tt, "/api/idbcount", SESS_EXPLORE },
+        { "idb-count-unknown", idbcount_unk_tt, "/api/idbcount", SESS_EXPLORE },
+        { "idb-range-throw", idbrange_throw_tt, "/api/idbcount", SESS_EXPLORE },
+        { "idb-range-order", idbrange_order_tt, "/api/idbcount", SESS_EXPLORE },
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
         { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
