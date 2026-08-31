@@ -352,38 +352,79 @@ void viewport_scroll(JSContext *ctx, double x, double y)
 
 /* The client window's size, in CSS pixels, and its position relative to §2.3's Web-exposed screen area origin.
    The position is DERIVED and not a second UA choice: an ordinary desktop window sits in the middle of the
-   space the operating system leaves for it, and screen.c already states what that space is. That derivation is
-   why `screenX`/`screenY` are the two §4 members that stay concrete — see viewport.h.
-   BOTH ASSERTS BELOW ARE OVER THE MODELLED EXAMPLE, which is the only value that reaches them: the size is a
+   space the operating system leaves for it, and screen.c already states what that space is. It is DERIVED and
+   still a SOURCE, which is not a contradiction and is the distinction viewport.h now draws — a joint over the
+   two members it is a function of, minted at `vp_screen_pos` below.
+   EVERY ASSERT BELOW IS OVER THE MODELLED EXAMPLE, which is the only value that reaches them: the size is a
    `double` this file computes and screen.c's is a `double` it computes, so neither can be a concolic and a C
    `if` here cannot pick an arm. What they assert is that the MODEL is coherent — a window a UA could actually
-   open — at the one place an incoherent one would produce a negative coordinate. */
+   open, at a coordinate on the screen the coordinate is measured from.
+   THE TWO ASSERTS PER AXIS ARE TWO DIFFERENT AREAS AND NEITHER IMPLIES THE OTHER. §4's sentence measures the
+   coordinate "relative to the origin of the Web-exposed SCREEN area" while §2.3's AVAILABLE area is the
+   sub-area the window is positioned inside, so the model has to be coherent in both: a window wider than the
+   available area yields a NEGATIVE coordinate, and one whose far edge passes the screen area's own extent
+   yields a coordinate for a window hanging off the display. The second is what would fire the day the reserved
+   strip is modelled at the TOP of the display rather than at its bottom — the available area's origin would
+   then no longer be the screen area's, and this file's arithmetic, which measures from the available area and
+   reports from the screen area, would be off by the strip with nothing else to say so. */
 static double viewport_client_width(void)  { return VIEWPORT_TOP_WIDTH; }
 static double viewport_client_height(void) { return VIEWPORT_TOP_HEIGHT + VIEWPORT_CHROME_HEIGHT; }
 
 static double viewport_client_screen_x(void)
 {
+    double x;
+
     DCHECK(viewport_client_width() <= screen_avail_width(),
            "the modelled client window is wider than the Web-exposed available screen area it is positioned "
            "inside — a window a UA could not open, and `screenX` would come out negative");
-    return (double)(int)((screen_avail_width() - viewport_client_width()) / 2.0);
+    x = (double)(int)((screen_avail_width() - viewport_client_width()) / 2.0);
+    DCHECK(x >= 0.0 && x + viewport_client_width() <= screen_width(),
+           "CSSOM VIEW §4 measures `screenX` from the origin of the Web-exposed SCREEN area, and the modelled "
+           "client window at the position this derives does not lie within that area — so the number a page "
+           "would read names a window hanging off the display. The available area's origin is the screen "
+           "area's ONLY while the space the OS reserves is not taken off the left edge; take it off the left "
+           "and this arithmetic, which measures from the available area, must add that offset back");
+    return x;
 }
 
 static double viewport_client_screen_y(void)
 {
+    double y;
+
     DCHECK(viewport_client_height() <= screen_avail_height(),
            "the modelled client window is taller than the Web-exposed available screen area it is positioned "
            "inside — a window a UA could not open, and `screenY` would come out negative");
-    return (double)(int)((screen_avail_height() - viewport_client_height()) / 2.0);
+    y = (double)(int)((screen_avail_height() - viewport_client_height()) / 2.0);
+    DCHECK(y >= 0.0 && y + viewport_client_height() <= screen_height(),
+           "CSSOM VIEW §4 measures `screenY` from the origin of the Web-exposed SCREEN area, and the modelled "
+           "client window at the position this derives does not lie within that area — so the number a page "
+           "would read names a window hanging off the display. The available area's origin is the screen "
+           "area's ONLY while the space the OS reserves is a taskbar at the BOTTOM; model it as a menu bar at "
+           "the top and this arithmetic, which measures from the available area, must add that offset back");
+    return y;
 }
 
 /* ---- CSSOM VIEW §4's Window extensions ------------------------------------------------------------------- */
 
-/* THE MEMBERS, AS ONE LIST, and the aliases are IN it rather than being a second install: §4 states
-   `pageXOffset` as "the value returned by the scrollX attribute" and `screenLeft` as `screenX`'s, so the two
-   names share one magic and there is no second body that could ever answer differently. Every one of them is
-   [Replaceable] readonly — assigning replaces the accessor with an ordinary data property, which is what
-   idl_install_replaceable performs. */
+/* THE MEMBERS, AS ONE LIST, and the aliases are IN it rather than being a second install, so each pair shares
+   one magic and there is no second body that could ever answer differently.
+   §4 SPELLS THE TWO PAIRS DIFFERENTLY, AND THIS SAID THEY WERE SPELLED ALIKE. `pageXOffset` IS stated as
+   another attribute's value — "The pageXOffset attribute must return the value returned by the scrollX
+   attribute" — and `screenLeft` is NOT: §4 gives it and `screenX` ONE sentence naming both attributes ("The
+   screenX and screenLeft attributes must return the x-coordinate, relative to the origin of the Web-exposed
+   screen area, of the left of the client window as number of CSS pixels, or zero if there is no such thing").
+   The word alias for that pair is in §17 "Changes", under its UNNUMBERED subsection headed "Changes since the
+   17 March 2016 Working Draft" — named in the standard's own words because there is no number to cite it by,
+   and citegen.mjs indexes numbered sections, so that one quotation is beyond what any instrument here can
+   confirm and the reader is owed the heading instead.
+   THE CLAIM THAT §4 STATES `screenLeft` AS `screenX`'s VALUE WAS WRITTEN HERE and was repeated once, from
+   this comment, when the canonical-name helper below was added. It is corrected at the site it was made
+   rather than only at the newer one, because a reader who re-derives the retired reason re-introduces it.
+   Nothing about the shared magic changes — it was the right structure resting on a sentence the standard does
+   not contain, which is exactly the fabricated quotation CLAUDE.md §Browser-half calls worse than a wrong
+   number: the number resolved, the title matched, and only reading the section's words found it.
+   Every one of them is [Replaceable] readonly — assigning replaces the accessor with an ordinary data
+   property, which is what idl_install_replaceable performs. */
 typedef enum {
     VP_INNER_W, VP_INNER_H, VP_OUTER_W, VP_OUTER_H,
     VP_SCROLL_X, VP_SCROLL_Y, VP_SCREEN_X, VP_SCREEN_Y, VP_DPPX
@@ -429,11 +470,85 @@ static JSValue vp_long(JSContext *ctx, double v)
     return JS_NewInt32(ctx, (int32_t)v);
 }
 
+/* THE CANONICAL NAME OF A §4 MEMBER — the FIRST name the one X-list gives that magic. Which of a pair is
+   first is this file's choice among equals rather than the standard's ranking of them; the X-list's own
+   comment above reads §4's two spellings and says why neither name is defined in terms of the other, and that
+   is the one place the question is answered.
+   Read OUT of the list rather than written a second time: a joint below names a member by this, and a name
+   spelled twice is a joint naming a hole whose mint spells it differently — which composes a key no emission
+   can look up.
+   IT IS A `CHECK` AND NOT A `DFAIL`, WHICH IS THE ONE THING ABOUT IT THAT IS NOT ORDINARY. Every other
+   should-never-happen in this file returns a VALUE past its abort, so a release build that compiles the abort
+   out still answers something. This one returns a POINTER its caller hands to `snprintf`, so a dev-only abort
+   would leave the dereference standing in exactly the build the guard is gone from — CLAUDE.md §Offensive
+   programming's promotion rule, and the promotion belongs to the line that created the dereference rather than
+   to a later reading of the assert. */
+static const char *vp_member_name(ViewportMember m)
+{
+    int i;
+
+    for (i = 0; i < VP_NAMES; i++)
+        if (VP_MAGIC[i] == (int)m) return VP_NAME[i];
+    CHECK_FAIL("a CSSOM VIEW §4 member has no name in the one list the install walks — the magic IS the "
+               "member, so a member with no row is one this file answers for and never installs");
+    return NULL;
+}
+
 /* A `long` member that reports the environment: the modelled answer as the EXAMPLE of a concolic keyed on this
    document's answer for this member. */
 static JSValue vp_env_long(JSContext *ctx, const char *member, double v)
 {
     return viewport_env_value(ctx, member, vp_long(ctx, v));
+}
+
+/* THE CLIENT WINDOW'S POSITION, AS A VALUE A PAGE CAN FORK ON — §4's `screenX`/`screenLeft` and
+ * `screenY`/`screenTop`, and the one place in this file where a member is DERIVED and is still a source.
+ *
+ * WHY IT IS NOT `viewport_env_value`. A scalar source is a fact the model PICKED; this is a fact the model
+ * COMPUTED out of two it picked — §2.3's available screen area and §4's client window size — and neither of
+ * those two identities can answer for it. THE NEXT QUOTATION IS THIS TREE'S OWN PROSE AND NOT THE STANDARD'S:
+ * solver/concolic.h, in the paragraph over `concolic_source_wrap_joint`, says that keeping one operand's
+ * identity "reports a narrowing over the ICB the page never made". So the identity is the SET's, composed from
+ * the two members' own identities, and the example is the real arithmetic this file already ran.
+ *
+ * WHY IT IS NOT CONCRETE, WHICH IS WHAT IT WAS. The argument it replaces is quoted from viewport.h — again
+ * THIS TREE'S PROSE, not §4's — and said the position is derived from "two facts already forkable at their own
+ * members … so a third independent source reaches no arm those two do not".
+ * The premise is right and the conclusion does not follow, in two separate places. (1) A JOINT IS NOT A
+ * THIRD INDEPENDENT SOURCE — it introduces no free parameter, carries one example, and is exactly the
+ * mechanism the premise asks for; the old argument refuted a design nobody was proposing. (2) THE ARMS ARE NOT
+ * THE SAME ARMS. `if (window.screenX < 100)` is its own predicate with its own constraint key, so against a
+ * bare `double` it does not fork AT ALL — one arm runs and the other's code is never reached. A flow that
+ * narrowed `screen.availWidth` has said nothing about this predicate and cannot decide it, which is the very
+ * non-composition the joint's own paragraph calls the sound direction. §Headless's rule is the whole of it: a
+ * modelable value collapsed to bare-concrete deletes the fork and its coverage, and `screenX` is what a
+ * multi-monitor gate and a popup-placement routine branch on.
+ *
+ * IT PERMITS NO WORLD WHERE THE WINDOW SITS OFF THE SCREEN, which was the old argument's other half. A
+ * concolic is opaque for CONTROL FLOW and carries the one concrete example this model computes; the asserts in
+ * `viewport_client_screen_x`/`_y` run over that example and are untouched. */
+static JSValue vp_screen_pos(JSContext *ctx, bool vertical, double v)
+{
+    const char *shapes[2], *srcs[2];
+    const char *outer = vp_member_name(vertical ? VP_OUTER_H : VP_OUTER_W);
+    char key[VIEWPORT_SRC_MAX], hole[VIEWPORT_SRC_MAX];
+
+    /* MEMBER 0 — §2.3's available screen area, named by the component that mints it, so the joint names the
+       very hole `screen.availWidth` reaches the page as. */
+    screen_avail_source(vertical, &shapes[0], &srcs[0]);
+    /* MEMBER 1 — this document's client-window size, which is `outerWidth`/`outerHeight`: the SAME fact, so
+       the same source identity `vp_env_long` mints it under and not a second one for the same window. */
+    viewport_src_key(ctx, outer, key, sizeof key);
+    DCHECK(strlen(outer) + 3 <= sizeof hole, "a CSSOM VIEW §4 member name is too long to brace");
+    snprintf(hole, sizeof hole, "{%s}", outer);
+    shapes[1] = hole;
+    srcs[1] = key;
+    DCHECK(strcmp(srcs[0], srcs[1]) != 0,
+           "the client window's size and the Web-exposed available screen area composed the SAME source "
+           "identity, so this position would be keyed as a function of one fact twice over — the two are "
+           "different facts (`availWidth < width` is the taskbar question) and one key for both would let a "
+           "branch over either decide the other");
+    return concolic_source_wrap_joint(ctx, shapes, srcs, 2, vp_long(ctx, v));
 }
 
 static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -473,10 +588,13 @@ static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
     case VP_SCROLL_Y: return JS_NewFloat64(ctx, viewport_window_scroll(ctx, /*vertical*/ true));
     /* "The screenX and screenLeft attributes must return the x-coordinate, relative to the origin of the
        Web-exposed screen area, of the left of the client window as number of CSS pixels, or zero if there is
-       no such thing." CONCRETE: a position derived from screen.c's available area and the client window's
-       size, both of which a page can already explore at their own members. */
-    case VP_SCREEN_X: return vp_long(ctx, presented ? viewport_client_screen_x() : 0.0);
-    case VP_SCREEN_Y: return vp_long(ctx, presented ? viewport_client_screen_y() : 0.0);
+       no such thing." A JOINT source over the two facts it is a function of — see `vp_screen_pos` for why a
+       derivation is still a source and why the old concrete answer deleted an arm. The no-client-window zero
+       stays concrete on this file's own rule: §4 states that answer, so nothing was chosen. */
+    case VP_SCREEN_X: return presented ? vp_screen_pos(ctx, /*vertical*/ false, viewport_client_screen_x())
+                                       : vp_long(ctx, 0.0);
+    case VP_SCREEN_Y: return presented ? vp_screen_pos(ctx, /*vertical*/ true, viewport_client_screen_y())
+                                       : vp_long(ctx, 0.0);
     /* §4's DETERMINE THE DEVICE PIXEL RATIO: with no output device return 1; otherwise the CSS pixel size
        divided by the device pixel size. This engine models an output device (screen.c), so it is the ratio —
        and it is a source, because `devicePixelRatio > 1` is the retina gate. */

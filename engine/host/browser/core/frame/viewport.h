@@ -40,10 +40,20 @@
  *     scrolled code in a document that cannot scroll. It is also the half of this file that acquires a WRITER
  *     the moment there is a layout (CSSOM VIEW §3's perform-a-scroll), and a fact with a writer is per-flow
  *     STATE in the COW delta, never an environment source; minting one now would leave the writer and the
- *     source both answering it. And `screenX`/`screenY`, which are a POSITION derived from two facts already
- *     forkable at their own members — screen.c's available area and the client window's size — so a third
- *     independent source reaches no arm those two do not, while permitting a world where the window sits off
- *     the screen, which is the state `viewport_client_screen_x` asserts a UA cannot present.
+ *     source both answering it.
+ *   - DERIVED FROM PICKED FACTS, so a JOINT SOURCE — a THIRD answer, and the one this test used to be missing.
+ *     `screenX`/`screenY` are a POSITION computed from screen.c's available area and this window's own size,
+ *     both of which are picked and forkable at their own members. That used to be read as a reason to answer
+ *     CONCRETE, in this header's own words and not in CSSOM VIEW's — "a third independent source reaches no
+ *     arm those two do not" — and the premise is right while the conclusion is wrong twice.
+ *     A joint (solver/concolic.h's `concolic_source_wrap_joint`) is NOT a third
+ *     independent source: it adds no free parameter and carries the one example the arithmetic produced, so
+ *     the objection was to a design nobody proposed. And the arms are NOT the same arms: `window.screenX < 100`
+ *     is its own predicate with its own constraint key, so against a bare `double` it does not fork at all,
+ *     and a flow that narrowed `screen.availWidth` has said nothing that could decide it — which is exactly
+ *     the non-composition the joint's own paragraph calls the sound direction. So the test is not two-way but
+ *     three: a fact the model PICKED is a scalar source; a fact the model COMPUTED FROM PICKED FACTS is a
+ *     joint over them; and only a fact the rest of the model leaves ONE value for is concrete.
  *
  * THE C SIDE ANSWERS THE EXAMPLE, DELIBERATELY, and that is the media_query.h layering for the reason it gives:
  * a C `if` over a concolic silently picks one arm. Every geometry function below answers a `double` — the

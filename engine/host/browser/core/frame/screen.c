@@ -29,8 +29,6 @@
  * own interface with its own state machine, and Window Management's two are [SecureContext] members of a
  * partial interface that makes Screen an EventTarget. The IDL audit names all three until they exist. */
 #include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -74,6 +72,21 @@
 enum { SCREEN_MEMBERS(SCREEN_ENUM_ONE) SCR_N };
 static const char *const SCR_NAME[] = { SCREEN_MEMBERS(SCREEN_NAME_ONE) };
 
+/* A MEMBER'S SOURCE IDENTITY AND ITS DISPLAY SHAPE, spelled from the SAME X-list token the name is — the
+   fourth and fifth reads of that one list, and they are here rather than composed at each use for the reason
+   the list itself exists. Two consumers need them and they must agree exactly: the record builder below, whose
+   concolic IS the member, and a component whose own value is a JOINT function of a Screen member and must name
+   this member as one of the joint's members (core/frame/viewport.c's `screenX`/`screenY`). A `snprintf` at
+   each of those is two spellings of one fact, and the one that would go wrong is silent — a joint naming
+   `{screen.availWidth}` where the mint named something else composes a key no report can look up, which is
+   the defaulted-field defect standing between an observed constraint and an emitted domain.
+   THE SHAPE IS THE SOURCE IN BRACES, which is what concolic_new asserts of a source and what makes
+   `concolic_hole_key` able to answer for it at all. */
+#define SCREEN_SRC_ONE(id, str)  "screen." str,
+#define SCREEN_HOLE_ONE(id, str) "{screen." str "}",
+static const char *const SCR_SRC[]  = { SCREEN_MEMBERS(SCREEN_SRC_ONE) };
+static const char *const SCR_HOLE[] = { SCREEN_MEMBERS(SCREEN_HOLE_ONE) };
+
 /* THE CLASS IS THE BRAND. Web IDL §3.7.5's check on every getter is "does esValue implement the interface", and
    the one object per realm WEARS the class, so the check is a class-id comparison a page cannot forge. It
    carries no per-object data — the values are the realm's — so it needs no finalizer and no gc_mark. */
@@ -90,6 +103,21 @@ double screen_width(void)        { return SCREEN_WIDTH; }
 double screen_height(void)       { return SCREEN_HEIGHT; }
 double screen_avail_width(void)  { return SCREEN_AVAIL_WIDTH; }
 double screen_avail_height(void) { return SCREEN_AVAIL_HEIGHT; }
+
+/* THE MEMBER THE TWO NUMBERS ABOVE ARE THE EXAMPLE OF, NAMED — see screen.h. The pair comes out of the same
+   X-list row the getter's own concolic is minted from, so the joint a caller composes names the very hole this
+   file mints and there is no second spelling to drift. */
+void screen_avail_source(bool vertical, const char **shape, const char **src)
+{
+    int idx = vertical ? SCR_AVAIL_HEIGHT : SCR_AVAIL_WIDTH;
+
+    DCHECK(shape != NULL && src != NULL,
+           "CSSOM VIEW §2.3's available screen area was asked for its source identity with nowhere to put half "
+           "of it — a caller composing a joint needs the SHAPE and the SOURCE together, and one without the "
+           "other is a joint member whose display form and whose key would come from two different reads");
+    *shape = SCR_HOLE[idx];
+    *src   = SCR_SRC[idx];
+}
 
 /* WEB IDL §3.7.5's BRAND CHECK. `Screen.prototype.width` read off a plain object is a TypeError, and a page
    tells that apart from `undefined` — a feature detector that probes the descriptor and applies the getter
@@ -156,15 +184,11 @@ static JSValue js_screen_get(JSContext *ctx, JSValueConst this_val, int magic)
    arm's endpoint reported a parameter nothing had narrowed. */
 static void screen_env(JSContext *ctx, JSValueConst rec, int idx, JSValue example)
 {
-    char path[64], hole[66];
     JSValue v;
 
     DCHECK(idx >= 0 && idx < SCR_N, "a Screen environment value was minted for a non-member index");
-    DCHECK(strlen(SCR_NAME[idx]) + 8 < sizeof(path), "a Screen member name longer than any in the IDL");
     CHECK(!JS_IsException(example), "a Screen member's example could not be allocated");
-    snprintf(path, sizeof(path), "screen.%s", SCR_NAME[idx]);
-    snprintf(hole, sizeof(hole), "{%s}", path);
-    v = concolic_new(ctx, hole, path, example);
+    v = concolic_new(ctx, SCR_HOLE[idx], SCR_SRC[idx], example);
     CHECK(!JS_IsException(v), "minting a Screen environment value failed");
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }
