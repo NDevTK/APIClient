@@ -395,15 +395,42 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
       doc.resources[resourceName].methods[methodName] = m;
 
       // Parameters: merge path-level + operation-level, skip body params (Swagger 2.0)
-      const allParams = [...pathParams, ...(opDef.parameters || [])];
-      for (const p of allParams) {
+      /* EVERY READ BELOW IS A REFUSAL, because this is a spec file the researcher was handed and the trusted
+         zone must not abort on it — nor fabricate out of it. Four of these were TypeErrors thrown straight
+         out of this loop (`parameters: [null]` read `.in` off null) and three were silent inventions that
+         reached the Send panel indistinguishable from declared facts: a parameter with no `name` was keyed
+         `"undefined"`, one whose `name` was an object was keyed `"[object Object]"`, and one with no `in` was
+         placed in the QUERY STRING — which is §@S's wrong report exactly, a fabricated placement rendered
+         identically to a stated one, and it decided where a value would actually be SENT. */
+      const allParams = [...(fdDocList(pathParams) === null ? [] : pathParams),
+                         ...(fdDocList(opDef.parameters) === null ? [] : opDef.parameters)];
+      for (const rawP of allParams) {
+        /* A NON-RECORD IS NOT A PARAMETER OBJECT. Refusing it whole is the true statement about it; the
+           alternative read `.in` off whatever it was. */
+        const p = fdDocRecord(rawP);
+        if (p === null) continue;
         if (p.in === "body") continue;
-        m.parameters[p.name] = {
-          type: p.schema?.type || p.type || "string",
-          location: p.in || "query",
-          required: !!p.required,
-          description: p.description || "",
-          enum: p.schema?.enum || p.enum || null,
+        /* `name` AND `in` ARE BOTH **REQUIRED** — OpenAPI Specification 3.1.1 §Parameter Object states it of
+           each, and Swagger 2.0 §Parameter Object likewise. An object missing either is not a parameter, so
+           there is nothing here to render and nothing to invent: it is SKIPPED, which is what the document
+           said. `fdDocLocation` also refuses an `in` neither spec defines. */
+        const pName = fdDocString(p.name);
+        if (pName === null) continue;
+        const pLoc = fdDocLocation(p.in);
+        if (pLoc === null) continue;
+        const pSchema = fdDocRecord(p.schema) === null ? {} : p.schema;
+        /* "string" IS THE TYPE OF A PROPERTY WHOSE DOCUMENT SAYS NOTHING ELSE — the same answer
+           lib/discovery.js's `mapJsonSchemaType` gives for exactly that case, so it is a stated fact and not
+           a hole. `enum`/`description` have declared absences and take them. */
+        const pType = fdDocString(pSchema.type) === null ? fdDocString(p.type) : fdDocString(pSchema.type);
+        const pEnum = fdDocList(pSchema.enum) === null ? fdDocList(p.enum) : fdDocList(pSchema.enum);
+        const pDesc = fdDocString(p.description);
+        m.parameters[pName] = {
+          type: pType === null ? "string" : pType,
+          location: pLoc,
+          required: p.required === true,
+          description: pDesc === null ? "" : pDesc,
+          enum: pEnum,
         };
       }
 
@@ -434,7 +461,9 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
         }
       } else if (isSwagger2) {
         // Swagger 2.0: body parameter
-        const bodyParam = allParams.find((p) => p.in === "body");
+        // Same refusal as the loop above — `parameters: [null]` reaches here too, and `.in` off null is the
+        // identical TypeError one branch over.
+        const bodyParam = allParams.find((p) => fdDocRecord(p) !== null && p.in === "body");
         if (bodyParam?.schema) reqSchema = bodyParam.schema;
       }
 
@@ -443,17 +472,32 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
       // m.parameters (which is what strict roundtrip + popup rendering
       // rely on). Without this, a form-POST method loses its field list
       // on IMPORT because the import only produces a schema ref.
-      if (reqSchema && reqIsFormEncoded && !reqSchema.$ref && reqSchema.properties) {
-        const requiredSet = new Set(reqSchema.required || []);
-        const fieldNums = reqSchema["x-field-numbers"] || {};
-        for (const [fName, fDef] of Object.entries(reqSchema.properties)) {
+      /* THE SAME REFUSALS, AND THE SAME TWO FAILURES, one line apart. `properties: "ab"` is not a property
+         map, and `Object.entries` on a STRING yields index keys — so that document minted two body
+         parameters named "0" and "1" that it had never declared. `required: "ab"` is not a required list, and
+         `new Set("ab")` is a set of CHARACTERS — so a field named `a` came back REQUIRED because the string
+         happened to contain the letter, a fabricated cardinality claim the panel renders as a badge. Both
+         are refused whole: a document that stated no property map declares no body fields. */
+      const reqProps = reqSchema && reqIsFormEncoded && !reqSchema.$ref ? fdDocRecord(reqSchema.properties) : null;
+      if (reqProps !== null) {
+        const reqRequired = fdDocList(reqSchema.required);
+        const requiredSet = new Set(reqRequired === null ? [] : reqRequired);
+        const fieldNums = fdDocRecord(reqSchema["x-field-numbers"]) === null ? {} : reqSchema["x-field-numbers"];
+        for (const [fName, rawF] of Object.entries(reqProps)) {
           if (m.parameters[fName]) continue; // don't clobber a named param
+          /* `{"a": null}` NAMED A PROPERTY AND DESCRIBED NOTHING — the key is still a field the document
+             declared, so it is kept and every value it did not state takes its absence. Reading `.type`
+             straight off it was a TypeError out of the trusted zone, the same one lib/discovery.js's
+             property walker was already fixed for. */
+          const fDef = fdDocRecord(rawF) === null ? {} : rawF;
+          const fType = fdDocString(fDef.type);
+          const fDesc = fdDocString(fDef.description);
           m.parameters[fName] = {
-            type: fDef.type || "string",
+            type: fType === null ? "string" : fType,
             location: "body",
             required: requiredSet.has(fName),
-            description: fDef.description || "",
-            enum: fDef.enum || null,
+            description: fDesc === null ? "" : fDesc,
+            enum: fdDocList(fDef.enum),
           };
           /* THE IMPORTED FIELD NUMBER IS REFUSED, NOT TAKEN. This is a file the researcher was handed, and
              the number reaches the Send panel's own record (lib/field-def.js), which asserts a scalar-or-

@@ -286,14 +286,21 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
               };
               /* NO DEFAULT. `endpoint.c` emits a `location` per param and `learn.js` writes it onto every
                  parameters entry, so an absent one means a record older than that producer — a stale IDB
-                 entry, which must say so rather than be exported as a query param it may not be. */
-              DCHECK(pDef.location === "path" || pDef.location === "query" || pDef.location === "body" ||
-                     pDef.location === "form" || pDef.location === "formData",
+                 entry, which must say so rather than be exported as a query param it may not be.
+
+                 THE LIST IS `PARAM_LOCATIONS` AND IS NOT RESTATED HERE. It used to be five literals on this
+                 line, and a second copy of a vocabulary is wrong in whichever direction nobody checked — this
+                 one managed both. It omitted `header` and `cookie`, which OpenAPI 3.1.1 §Parameter Object
+                 defines and which `openapi-import.js` writes through verbatim, so one `X-Api-Key` header
+                 parameter in a handed spec imported clean and then aborted the trusted zone HERE, on the way
+                 back out. And it admitted `form`, which nothing has ever written. */
+              DCHECK(PARAM_LOCATIONS.indexOf(pDef.location) >= 0,
                      "a discovery parameter reached the OpenAPI export with location " + pDef.location +
-                     " — endpoint.c states path/query/body and openapi-import.js writes p.in; an absent one is " +
-                     "a record persisted before that producer existed");
+                     " — lib/field-def.js's PARAM_LOCATIONS is the one vocabulary, spanning endpoint.c's " +
+                     "query/path/body and the `in` both OpenAPI 3.1.1 and Swagger 2.0 define; an absent one " +
+                     "is a record persisted before that producer existed");
               const loc = pDef.location;
-              if (loc === "body" || loc === "form" || loc === "formData") {
+              if (loc === "body" || loc === "formData") {
                 // Form-body params → accumulate into requestBody schema.
                 formBodyProps[paramName] = paramSchema;
                 if (pDef.required) formBodyRequired.push(paramName);

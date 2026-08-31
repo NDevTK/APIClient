@@ -70,6 +70,40 @@ function fdDocRecord(v) {
   return (v && typeof v === "object" && !Array.isArray(v)) ? v : null;
 }
 
+/* WHERE A PARAMETER GOES — ONE VOCABULARY, because `location` is ONE field with THREE producers that each
+   knew a different list, and nothing sat between them to notice. `endpoint.c` mints query/path/body and
+   asserts exactly those at the mint AND at the emit. `openapi-import.js` writes an imported spec's `in`
+   VERBATIM, which is OpenAPI Specification 3.1.1 §Parameter Object's four — "query", "header", "path" or
+   "cookie", both `name` and `in` REQUIRED — or Swagger 2.0 §Parameter Object's five, "query", "header",
+   "path", "formData" or "body". `openapi-export.js` then asserted a five-name list of its own.
+
+   THAT LIST WAS WRONG IN BOTH DIRECTIONS AT ONCE, which is what a second copy of a vocabulary buys. It
+   OMITTED `header` and `cookie`, so an ordinary spec-valid file — one `X-Api-Key` header parameter — was
+   imported without complaint and then ABORTED THE TRUSTED ZONE on the way back out, a DCHECK firing on
+   bytes the researcher was handed, which is the one thing CLAUDE.md §Offensive programming says an assert
+   must never do. And it ADMITTED `form`, which no producer anywhere writes — a read with no writer sitting
+   inside the very assert that was supposed to make this field falsifiable.
+
+   So the list lives HERE, next to the record whose `location` it types, and the export asserts against it
+   rather than restating it. A producer that learns a sixth spelling adds it once. */
+const PARAM_LOCATIONS = Object.freeze([
+  "query",    // OAS 3.1.1 + Swagger 2.0 + endpoint.c
+  "path",     // OAS 3.1.1 + Swagger 2.0 + endpoint.c
+  "header",   // OAS 3.1.1 + Swagger 2.0
+  "cookie",   // OAS 3.1.1
+  "body",     // Swagger 2.0 + endpoint.c (a request-body field)
+  "formData", // Swagger 2.0
+]);
+
+/* A THIRD-PARTY DOCUMENT'S PARAMETER LOCATION, or nothing. A REFUSAL and not a default: `in: "sideband"` is
+   a document naming a place this panel cannot put a value, and `in` absent is not a Parameter Object at all
+   (both specs above make it REQUIRED) — neither is a query parameter, and answering both with "query" is
+   the §@S wrong report, a fabricated placement rendered exactly like a declared one. The caller decides
+   what a refusal means for it; what it must not do is invent a location the document never stated. */
+function fdDocLocation(v) {
+  return (typeof v === "string" && PARAM_LOCATIONS.indexOf(v) >= 0) ? v : null;
+}
+
 /* THE RECORD. Every name the Send panel reads is here, with the value that MEANS "the producer observed
    nothing of this kind". `name`, `type`, `label` and `required` have no absent value: a field with no wire
    key, no type, no cardinality or no requiredness is not a field, and a producer that cannot state one has
