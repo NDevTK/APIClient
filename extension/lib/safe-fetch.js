@@ -485,10 +485,31 @@ function _destructiveIn(form) {
    named before, and only then each successive decoding — a server that decodes once sees
    the first, one that decodes what its own framework already decoded sees a later one, and
    this gate does not have to know which kind it is talking to. */
+/* AND THE ARGUMENT IS ASSERTED RATHER THAN GUARDED, BECAUSE THE GUARD'S ARM WAS A PERMIT.
+   This read stood inside `try { … } catch (e) { return ""; }`, and `""` is this function's
+   POSITIVE statement that nothing in the list matched — so the one thing the catch could
+   ever do was turn "the gate could not be evaluated" into "the gate said yes", which is the
+   defaulted-read defect standing exactly where a refusal belongs. It could not even do that
+   much: `u` is a `URL` at both call sites, and URL Standard §6.1 "URL class" gives those two
+   getters no failure step at all — "The pathname getter steps are to return the result of URL
+   path serializing this's URL", and the `search` getter returns either the empty string or
+   `?` followed by the query — so the arm was UNREACHABLE, hiding an assumption not stating it.
+   WHAT IS REACHABLE IS THE SHAPE, AND IT FAILS OPEN IN SILENCE. Hand this a plain object and
+   no exception happens at all: `String(undefined)` is the six characters `undefined`, which
+   match no token, and a credentialed request goes out with the deny list never evaluated.
+   THEREFORE `CHECK` AND NOT `DCHECK`, on the one discriminator that separates them here.
+   §Offensive programming names "a security/authorization boundary" among the invariants that
+   must hold in production, and the tiebreak "when unsure it is a DCHECK" does not apply
+   because the release behaviour is not unknown: with the assert compiled out this composes
+   `"undefined&undefined"` and PERMITS. A gate that fails open in release is what CHECK is
+   for. It is `u && …` so a null argument reaches the assert rather than a TypeError. */
 function _destructiveToken(u) {
-  var form;
-  try { form = String(u.pathname) + "&" + String(u.search); }
-  catch (e) { return ""; }
+  CHECK(!!u && typeof u.pathname === "string" && typeof u.search === "string",
+        "the destructive-path deny list was handed something that is not a URL — this gate is the last thing " +
+        "between a credentialed GET and a path that ends the person's session, it reads `pathname` and " +
+        "`search` off a URL this zone itself parsed, and anything else composes a form that matches no token " +
+        "and permits the request in silence");
+  var form = u.pathname + "&" + u.search;
   for (;;) {
     var t = _destructiveIn(form);
     if (t) return t;
@@ -512,11 +533,18 @@ function _destructiveToken(u) {
   }
 }
 
-function _urlList(requested, resp) {
-  var redirected = false, final = requested;
-  try { redirected = !!(resp && resp.redirected); } catch (e) {}
-  try { if (resp && resp.url) final = String(resp.url); } catch (e) {}
-  return redirected ? [requested, final] : [requested];
+/* §2.2.6's URL LIST, OVER THE FINAL HREF ITS CALLER ALREADY COMPUTED — not over `resp`, and
+   that is the same "one question, one answer" rule the fetch below is built on rather than a
+   tidying. This took the Response and re-read `resp.url` for itself inside two swallowing
+   catches, so the address the ENGINE decides a document's origin from (`bridge.js` reads this
+   list's last item and keys an agent cluster on it) was a SECOND reading of the same fact,
+   arrived at separately from the one every gate in this file judges. Two strings for one
+   question is how they come to disagree, and the swallows meant a disagreement would have
+   read as "nothing redirected". Both catches were unreachable besides — Fetch §5.5 "Response
+   class" gives neither getter a failure step: "The redirected getter steps are to return true
+   if this's response's URL list's size is greater than 1; otherwise false." */
+function _urlList(requested, finalHref, redirected) {
+  return redirected ? [requested, finalHref] : [requested];
 }
 
 async function safeFetch(url, opts) {
@@ -576,16 +604,74 @@ async function safeFetch(url, opts) {
   if (opts.headers) init.headers = opts.headers;
   if (opts.signal) init.signal = opts.signal;
   var resp = await fetch(parsed.href, init);
+  /* THE URL THE BYTES CAME FROM, PARSED ONCE, ABOVE EVERY GATE THAT JUDGES IT. Fetch §2.2.5
+     "Requests": "A request has an associated current URL. It is a pointer to the last URL in
+     request's URL list" — and §4.1 "Main fetch" gives a response the readable "basic" tainting
+     on "request's current URL's origin is same origin with request's origin", never on the
+     address that was merely requested. `redirect: "follow"` means the chain has already been
+     walked by the time this line runs, so "where we asked" and "where it came from" are two
+     different facts, and FOUR readers below need the second one.
+     THEY EACH USED TO DERIVE IT FOR THEMSELVES, INSIDE A `try`/`catch` OF THEIR OWN, AND THAT
+     IS THE DEFECT THIS BLOCK EXISTS TO END. The private-host re-check parsed `resp.url` under
+     `catch (e) {}`, the destructive-path re-check parsed it again under another, and
+     `_finalHref`/`_finalOrigin` were computed a third and fourth time under two more, seventy
+     lines further down. Every one of those arms was a SKIP: an address this zone could not
+     parse silently disabled the gate standing over it, so a credentialed reply arrived with
+     no `blocked-` row anywhere and read exactly like an address that legitimately matched
+     nothing. Fail-open, four times, for one unanswerable question.
+     AND THE SECOND CATCH SWALLOWED AN INVARIANT ABORT. `_destructiveToken` asserts its own
+     percent-decode termination; on this side an assert is a THROW, so `catch (e) {}` around
+     the call turned a broken decoder into a permitted request — which is precisely the defect
+     `check.js` wrote `RETHROW_FATAL` for and records having already paid for once.
+     SO IT IS ASKED ONCE, AND AN UNANSWERABLE ANSWER IS A REFUSAL RATHER THAN A SKIP. An empty
+     `resp.url` is not unanswerable and is not a hole: §5.5 "Response class" gives `url` "the
+     empty string if response's URL is null", i.e. no redirect information at all, so the URL
+     the bytes came from IS the address requested — which the pre-request deny list and the
+     initial private-host check have already judged. That is a positive statement, so `parsed`
+     is the answer rather than a default filling a gap.
+     WHY A REFUSAL AND NOT AN ASSERT, WHICH IS THE WHOLE OF THE FAILURE-MODE QUESTION: the
+     discriminator is WHO DETERMINES THE VALUE. `_destructiveToken`'s argument is determined by
+     this zone's own code, so a bad one is our contract broken and CHECK is right. `resp.url`
+     is determined by the SERVER's redirect chain, and SECURITY.md says what an assert on a
+     value the other side picks costs — "a DCHECK on a hostile input hands any web renderer an
+     abort of the only trusted zone in the extension". Both directions fail closed; only one of
+     them lets a server end the analysis. The request is already sent by the time this runs, so
+     refusing costs an ingest and nothing else. */
+  var _finalUrl = parsed;
+  if (resp.url) {
+    var _fu = null;
+    /* A URL that will not parse is a REAL OUTCOME the constructor is defined to report this
+       way — URL Standard §6.1 "URL class": "Let parsedURL be the result of running the API URL
+       parser on url with base, if given. If parsedURL is failure, then throw a TypeError" — so
+       this catch HAS a job and is not a swallow. It opens by letting an invariant abort travel
+       on, which is the one thing a catch in this zone must never absorb. */
+    try { _fu = new URL(resp.url); }
+    catch (e) { RETHROW_FATAL(e); _fu = null; }
+    if (!_fu)
+      return { ok: false, status: 0, statusText: "blocked-final-url-unparseable", headers: {},
+               body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+    _finalUrl = _fu;
+  }
+  /* AND THE HREF IS TAKEN OFF THAT SAME RECORD RATHER THAN OFF `resp.url` AGAIN, which is
+     what makes "one answer" true of the string that LEAVES this function and not only of the
+     gates inside it: `bridge.js` reads the URL list's last item and decides a Document's
+     agent cluster from it, so a second reading of `resp.url` would be a different string
+     deciding a principal from the one the gates judged. It is the SAME bytes either way —
+     Fetch §5.5 "Response class" hands back the response's URL "serialized with exclude
+     fragment set to true", and re-serializing an already-serialized fragment-less URL is
+     the identity — which is why this is a structural guarantee rather than a normalization. */
+  var _finalHref = _finalUrl.href;
+  var _finalOrigin = _finalUrl.origin;
   // SSRF-via-redirect: the initial-URL check can't see a 30x to the intranet.
   // Re-validate the FINAL url (redirects were followed) BEFORE reading the body,
   // so a public page's request that landed on a private host never feeds internal
   // data into the analysis. (Modern Chrome's Private Network Access also gates the
   // request itself for extension fetches; this stops the data from being ingested.)
-  try {
-    if (resp.url && _isPrivateHost(new URL(resp.url).hostname) && !_pagePrivate)
-      return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {},
-               body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
-  } catch (e) {}
+  // Where nothing redirected `_finalUrl` IS `parsed`, so this re-asks a question already
+  // answered above rather than skipping one — the same answer, never an unasked gate.
+  if (_isPrivateHost(_finalUrl.hostname) && !_pagePrivate)
+    return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {},
+             body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
   /* THE DENY LIST AGAIN ON THE FINAL URL, AND WHAT IT CAN AND CANNOT DO. `redirect:
      "follow"` means a 30x into a destructive path was ALREADY followed by the time this
      runs, so unlike the pre-request check this one cannot un-send anything — it refuses
@@ -597,15 +683,23 @@ async function safeFetch(url, opts) {
      request the person never would, and that decision is the pre-request check. What is
      left here is refusing to build analysis on the reply. */
   if (credentialed) {
-    try {
-      var _rtok = resp.url ? _destructiveToken(new URL(resp.url)) : "";
-      if (_rtok)
-        return { ok: false, status: 0, statusText: "blocked-destructive-redirect:" + _rtok,
-                 headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, resp), computedType: "" };
-    } catch (e) {}
+    var _rtok = _destructiveToken(_finalUrl);
+    if (_rtok)
+      return { ok: false, status: 0, statusText: "blocked-destructive-redirect:" + _rtok,
+               headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected),
+               computedType: "" };
   }
+  /* THE HEADERS, WITH NOTHING BETWEEN THEM AND THE TWO GATES THAT READ THEM. This walk stood
+     inside `catch (e) {}`, whose arm was an EMPTY header map — and an empty map is not an
+     absent input to the rules below, it is a wrong one: CORB then judges a body labelled with
+     nothing, and the credentialed CORS check reads an absent `Access-Control-Allow-Origin`.
+     Fetch §5.5 "Response class" — "The headers getter steps are to return this's headers" —
+     hands back the `Headers` of §5.1 "Headers class", whose iteration can throw only what the
+     callback throws, and this callback lowercases a string; so the arm was unreachable as well
+     as wrong. Unwrapped, a producer that ever stopped answering one aborts here instead of
+     handing a security decision a header map this zone invented. */
   var headers = {};
-  try { resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; }); } catch (e) {}
+  resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
   /* §2.2.5's BODY, READ AS THE BYTE SEQUENCE IT IS — after both SSRF checks (the
      initial URL above, and the post-redirect final URL immediately above this), which
      is where they were and where they must stay: nothing internal is ingested before
@@ -626,27 +720,14 @@ async function safeFetch(url, opts) {
   var _nosniff = _determineNosniff(headers["x-content-type-options"]);
   var _sn = _sniff(body);
   var _computed = _computedType(headers["content-type"], _nosniff, _sn);
-  /* THE URL THE BYTES CAME FROM, WHICH IS WHAT EVERY GATE BELOW IS ACTUALLY ABOUT.
-     Fetch §2.2.5 "Requests": "A request has an associated current URL. It is a pointer
-     to the last URL in request's URL list" — and §4.1 "Main fetch" gives a response the
-     readable "basic" tainting on "request's CURRENT URL's origin is same origin with
-     request's origin", never on the address that was merely requested. `redirect:
-     "follow"` means the chain has already been walked by the time this line runs, so
-     "where we asked" and "where it came from" are two different facts.
-     THIS FILE ANSWERED THAT QUESTION TWO WAYS, AND THE SPLIT WAS A HOLE. The two
-     post-fetch gates above — the private-host re-check and the destructive-path
-     re-check — both read `resp.url`, for the reason each states: a 30x is followed
-     before either can see it, so the only defensible thing left is to refuse to INGEST
-     what came back. The two gates BELOW read `parsed`, the requested address. So a
-     SAME-ORIGIN request that 302'd to another host was CORB-exempt as "same-origin"
-     and passed the credentialed SOP as same-origin, and the other host's cookie-bearing
-     reply was handed back readable. That was harmless only while `opts.credentialed`
-     had no caller; a navigation that carries the session makes it live. One question,
-     one answer, computed once. */
-  var _finalHref = parsed.href;
-  try { if (resp.url) _finalHref = String(resp.url); } catch (e) {}
-  var _finalOrigin = "";
-  try { _finalOrigin = new URL(_finalHref).origin; } catch (e) {}
+  /* THE TWO GATES BELOW READ `_finalHref` / `_finalOrigin`, WHICH THE BLOCK ABOVE THE
+     FIRST POST-FETCH GATE COMPUTED — and that placement is the fix, not a preference.
+     They used to be derived HERE, below the two post-fetch gates, while those gates each
+     re-derived the same fact for themselves; the two gates below then read `parsed`, the
+     requested address, so a SAME-ORIGIN request that 302'd to another host was CORB-exempt
+     as "same-origin" and passed the credentialed SOP as same-origin, and the other host's
+     cookie-bearing reply was handed back readable. One question, one answer, computed once
+     — and computed ABOVE the first reader, so no gate can be reached before it exists. */
   // CORB policy BY THE REQUEST'S DESTINATION (opts.destination, Fetch §2.2.5). A
   // SCRIPT-LIKE destination is bytes that will RUN as code under QuickJS control, so
   // the body must be JS-typed or same-origin; every other destination ("" for a
@@ -677,7 +758,7 @@ async function safeFetch(url, opts) {
     // (`blocked-scheme:https:`).
     if (_deny)
       return { ok: false, status: 0, statusText: "blocked-corb:" + _deny + ":" + _computed,
-               headers: headers, body: _NO_BYTES(), urlList: _urlList(parsed.href, resp),
+               headers: headers, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected),
                computedType: "" };
   }
   // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
@@ -717,9 +798,15 @@ async function safeFetch(url, opts) {
            else comes out of, and "blocked" with no ground sends its reader hunting
            which of three rules fired. Every other refusal in this file already names
            one (`blocked-scheme:https:`, `blocked-corb:<rule>:<type>`,
-           `blocked-destructive:<token>`); this was the last that did not. */
-        return { ok: false, status: 0, statusText: "blocked-cors-credentialed:" + (_finalOrigin || "unparseable"),
-                 headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, resp), computedType: "" };
+           `blocked-destructive:<token>`); this was the last that did not.
+           AND THE `|| "unparseable"` THAT STOOD HERE IS GONE WITH THE STATE IT NAMED. It was
+           written when `_finalOrigin` came out of a `catch (e) {}` that could leave it empty;
+           an address this zone cannot parse is now its own refusal above
+           (`blocked-final-url-unparseable`) and never reaches this line, so the default's arm
+           is unreachable and keeping it would be a second name for a state that no longer
+           exists — the one thing a reader of a refusal message must not be handed. */
+        return { ok: false, status: 0, statusText: "blocked-cors-credentialed:" + _finalOrigin,
+                 headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: "" };
     }
   }
   /* AND THE TYPE THIS ZONE COMPUTED TRAVELS WITH THE BYTES. `computedType` is the
@@ -729,6 +816,6 @@ async function safeFetch(url, opts) {
      engine/host/solver/reply_decode.c reads this field and DCHECKs its presence — an
      absent stamp is a producer that failed, never a type called "unknown". */
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
-           urlList: _urlList(parsed.href, resp), computedType: _computed };
+           urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed };
 }
 if (typeof self !== "undefined") self.safeFetch = safeFetch;

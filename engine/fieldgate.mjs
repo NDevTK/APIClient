@@ -2765,10 +2765,14 @@ function identityOfBinding(t, off, scan, s) {
   let one = null;
   for (const a of passed) {
     /* EACH CALL SITE GETS ITS OWN COPY OF THE GUARD, because two sites passing the SAME identifier are not a
-       cycle and reading them as one answered the whole question `null`. `_urlList(parsed.href, resp)` appears
-       four times in one body; with a shared set the first `resp` resolved, added its key, and the second read
-       its own answer as a loop — so a helper called consistently was decided only when its callers happened
-       to spell the argument differently, which is the tokenizer deciding, not the constructs. */
+       cycle and reading them as one answered the whole question `null`. THE MEASURED CASE was
+       `_urlList(parsed.href, resp)` in `safe-fetch.js`, four times in one body: with a shared set the first
+       `resp` resolved, added its key, and the second read its own answer as a loop — so a helper called
+       consistently was decided only when its callers happened to spell the argument differently, which is the
+       tokenizer deciding, not the constructs. That helper now takes `(requested, finalHref, redirected)` and
+       the `resp` it re-read is gone (the chokepoint parses the landed URL once, above every gate that judges
+       it), so the four repeated sites are `_urlList(parsed.href, _finalHref, resp.redirected)` and the rule
+       they demonstrated is unchanged — a fixed illustration, not a fixed defect. */
     const got = ifaceOfExpr(a.text, a.at, scan, new Set(s));
     if (!got || (one !== null && one !== got)) return null;
     one = got;
