@@ -2047,7 +2047,15 @@ function hungCauseCensus(out) {
    not carry. The separator is "; " for exactly the reason the landmarks use it — it is neither cut. The full
    sentence goes to the detail line, which `runNumbers` prints at EVERY outcome including the pass.
    ONLY WHERE IT IS FALSE, because a mark on every verdict is a mark that stops being read. `cpu=1` is a
-   positive statement that this caveat does not apply, and it is stated in the detail rather than in silence. */
+   positive statement that THIS caveat does not apply — the wall-time charge landing on whichever flow the OS
+   left running — and it is stated in the detail rather than in silence.
+   AND IT IS NOT A STATEMENT THAT THE DIFFERENCE BETWEEN TWO RUNS IS READABLE, which is the reading this mark
+   would otherwise invite by its own absence. A CPU-clocked host still slices in CPU, and the work a
+   microsecond of it buys is a property of the machine — see quantumText and quantum_measure_is_cpu()'s
+   declaration — so the samples this discriminator compares move between two runs of one artifact on BOTH
+   hosts. What the mark separates is the SOURCE of that movement, which is what decides where to look; the
+   instruction to take two runs of one revision is unconditional and is printed by quantumText at every
+   outcome. */
 function hungCause(out) {
   const cause = hungCauseCensus(out);
   const q = quantumDenomination(out);
