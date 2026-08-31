@@ -186,6 +186,7 @@ function renderDiscoveryPanel() {
         html += ' <span class="badge badge-source">probe is POST-only</span>';
       }
       html += "</div>";
+      html += _discHolesHtml(ep, key);
       html += _discResultHtml(key, ep);
     }
     html += _discAutoProbesHtml(svc);
@@ -233,6 +234,96 @@ function _discSvcInfoHtml(label, svcInfo) {
          (bits.length ? "<code>" + esc(bits.join(" | ")) + "</code>"
                       : "the endpoint answered, and its error envelope named no service, method or scope") +
          "</div>";
+}
+
+/* WHAT THE RUN LEARNED TO PUT IN THIS ADDRESS'S TEMPLATED SEGMENTS — BOTH POOLS, ON TWO ROWS, IN THE ONE
+   SURFACE THAT LISTS ADDRESSES.
+
+   THE ENDPOINT RECORD HAS CARRIED THIS AND NO LIST HAS EVER SHOWN IT. `pathParams` and `pathParamsForced` had
+   exactly two readers — lib/merge.js's moat fold and lib/send.js's Send-panel schema — so a hole this run
+   could only fill by FORCING a gate was stated on the record, carried across documents and sessions, and
+   reached a human only if that human opened the Send panel for that one method. The row here printed the
+   address and nothing else, which made a run whose whole logged-in surface was forced look exactly like a run
+   that learned nothing to put in it. CLAUDE.md §What-the-tool-produces makes that the headline rather than a
+   nicety: the surface the bundle ships to a logged-out visitor and never fires is what forcing a gate reaches,
+   so the endpoints whose segments were filled ONLY on a forced arm are disproportionately the ones this tool
+   exists to find, and the list was reporting them as the ones it learned least about.
+
+   TWO ROWS, NOT ONE LIST, AND THE SPLIT IS THE SAME ONE lib/popup-form.js DRAWS ONE RECORD DOWN.
+   lib/endpoint-record.js's `provenanceOffersExample` states the line: a value every sighting of which stood on
+   a forced arm may never be OFFERED as an example of what this app computes, and the way that is made
+   impossible rather than discouraged is that the two pools are separate lists with separate readers. A single
+   row of segment values here would be one bag a reviewer copies out of, which is §@H's fabrication with a
+   server behind it — plausible, and rejected only after it is sent. So the forced row says what it is, in the
+   same words and the same colour the field panel uses (`.ast-forced-label`), and it says it BESIDE the values
+   rather than instead of them: §@H's shape states PROVENANCE and DOMAIN, and a row carrying one of the two is
+   a wrong report and not a thin one.
+
+   NOTHING IS PREFILLED AND NOTHING IS CLICKABLE. `.ast-value-chip` carries a cursor and a click handler in the
+   Send form because a value there lands in an input; there is no input on this panel, so these are plain
+   `<code>` and the reader is told what was learned without being handed it.
+
+   A NAME IN BOTH ROWS IS CORRECT AND IS THE RECORD SPEAKING. lib/endpoint-record.js: one `{orgId}` can have a
+   real example from one path and a forced one from another; what may NOT repeat is a VALUE, which
+   `checkEndpointRecord` asserts on every record `_discServices` passed before this runs.
+
+   NAMED RESIDUAL — an address whose templated segments were ALL unfilled renders exactly like an address that
+   has none, because this function speaks only from the record's two lists and neither of them mentions a hole
+   nothing filled.
+     WHAT IS NOT COVERED: "this address has a segment and the run learned nothing for it" is a fact a reader
+       gets only by looking at the braces in the address printed above, never as a sentence.
+     WHAT THE NEXT DIFF BUILDS: the hole GRAMMAR minted once — what `{name}` means inside a learned path — so
+       the segments of the address can be enumerated and each one stated as filled, forced, or empty. It is
+       not done here because that grammar already has a spelling (lib/popup-form.js's `applyPathParams`
+       substitution regex) and a second copy of it is exactly the defect lib/endpoint-record.js's key section
+       records happening twice in one file; minting it means that substitution consuming the same walk, which
+       is a change to what the Send panel actually sends.
+     HOW ITS ABSENCE SHOWS: an endpoint carrying `{orgId}` with both pools empty prints one bare address line,
+       the same line a hole-free address prints. */
+function _discHolesHtml(ep, endpointKey) {
+  const holes = endpointHolePairs(ep, "the discovery panel's endpoint row, key " + JSON.stringify(endpointKey));
+  if (!holes.size) return "";   // both lists stated their absence: no segment was filled at either grade
+  const offered = [], forced = [];
+  for (const [name, pools] of holes) {
+    /* A NAME WITH TWO EMPTY POOLS WOULD PRINT A SEGMENT AS LEARNED WITH NOTHING BEHIND IT. `endpointHolePairs`
+       mints an entry only from a list entry it has already asserted carries at least one value, so an empty
+       pair is that walk having changed under this row — and what it renders is the claim this panel is here
+       to stop making: a templated segment reported as filled by a run that filled nothing. */
+    DCHECK(pools.valid.length > 0 || pools.forced.length > 0,
+           "a templated segment reached the discovery panel with both pools empty (`" + name + "`, key " +
+           JSON.stringify(endpointKey) + ") — `endpointHolePairs` builds a pair only out of a {name, values} " +
+           "entry it asserted non-empty, so this is that walk broken and the row would report a segment as " +
+           "learned while naming no value for it");
+    if (pools.valid.length) offered.push(_discHoleValuesHtml(name, pools.valid));
+    if (pools.forced.length) forced.push(_discHoleValuesHtml(name, pools.forced));
+  }
+  let html = "";
+  if (offered.length) {
+    /* THE LABEL NAMES THE GRADE AND NOT MERELY THE FACT THAT SOMETHING WAS LEARNED. Both rows are things the
+       run learned, so "learned" on one of them and "forced" on the other reads as a scale of confidence
+       rather than as the two different claims they are — this row says a real path of the app's own code
+       computed the value, which is what `provenanceOffersExample` admits and the forced row denies. */
+    html += '<div class="card-meta"><span class="ast-values-label" title="values this run computed for the ' +
+            'templated segments of this address on a path that forced nothing — what the app itself puts ' +
+            'here">path segments the app&#39;s own code computes:</span> ' + offered.join(" &middot; ") +
+            "</div>";
+  }
+  if (forced.length) {
+    html += '<div class="card-meta"><span class="ast-forced-label" title="every sighting of these values ' +
+            'stood on an arm the forced execution took, so a real client is not known to compose this ' +
+            'address — a reply to it is evidence about a request no client makes">path segments reached ' +
+            'only by FORCING a gate (a request no client makes):</span> ' + forced.join(" &middot; ") +
+            "</div>";
+  }
+  return html;
+}
+
+/* ONE SEGMENT'S NAME AND THE VALUES OF ONE POOL. The name is printed as the record spells it, with no braces
+   added around it: writing `{name}` would be this file asserting how a hole appears inside a path, which is
+   the grammar the residual above declines to copy. The address in the row above carries the braces. */
+function _discHoleValuesHtml(name, values) {
+  return "<code>" + esc(name) + "</code> = " +
+         values.map((v) => "<code>" + esc(String(v)) + "</code>").join(", ");
 }
 
 // Per ENDPOINT: the two on-demand answers, plus the automatic service-info probe, which lib/response-decode.js
