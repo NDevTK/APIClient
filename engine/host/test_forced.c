@@ -5726,23 +5726,27 @@ static int param_value_is(const char *js, const char *url, const char *pname, co
  * `!strstr(js,"wrong")` is the one row that means every statement in the fixture. So the discriminator is the
  * SIGN, not the spelling — scope every positive world clause, and leave the negatives whole.
  *
- * HOW TO RE-DERIVE WHICH POSITIVES ARE STILL BARE, because the answer changes with every statement added and
- * nothing here recomputes it: collect every `strstr(js, "…")` literal in this file with comments stripped
- * (a needle wrapped in its own JSON quotes, `"\"X\""`, is a whole-token match and is not at risk), collect
- * from the three document literals every token the run can emit — each `/api/…` path, each `?`/`&` parameter
- * NAME, each single-quoted value, and each `{state}.…` source shape — and report any needle that is a proper
- * substring of one of those tokens, or that equals one of them in a DIFFERENT field (a needle `live` matches
- * `"name":"live"` as readily as a value). Every collision fixed here was found that way and none of them was
- * visible in a passing run's output.
+ * WHICH POSITIVES ARE STILL BARE IS NOT A QUESTION ANYBODY ANSWERS BY HAND ANY MORE — `engine/probegate.mjs`
+ * answers it, and the paragraph that used to stand here telling the next reader how to run the scan by eye is
+ * deleted with the residual it belonged to. It collects every `strstr(js, "…")` literal in this file with
+ * comments stripped (a needle wrapped in its own JSON quotes, `"\"X\""`, is a whole-token match and is not at
+ * risk, because `json_buf_str` escapes an embedded quote), collects from the fixture's own document literals
+ * every token the run can emit — each path, each `?`/`&` parameter NAME, each quoted value, and each source
+ * shape composed from this file's own `concolic_new` roots — and reports any needle a document token contains
+ * or that equals one in a DIFFERENT field. Neither side is a list anybody types: the document variable is read
+ * off `param_value_is`'s own signature, and a fourth fixture document would be audited without editing it.
  *
- * NAMED RESIDUAL — NOT COVERED: nothing in this program enforces the paragraph above. The positives that are
- * still bare are unique in HTML/HTML_MIN/HTML_COLD only by that scan having been run by hand, and the scan is
- * re-run by nobody. WHAT MUST EXIST AFTERWARD: a gate that reads this file's own `strstr(js, …)` literals and
- * this file's own three document literals — deriving both from the code that owns them, never from a list
- * somebody typed — and FAILS on a needle that a document token contains. HOW ITS ABSENCE SHOWS: a two-world
- * row reading 1 on a world it never observed, which is how `mapmutfork` (`gone` ⊂ four earlier statements'
- * values), `afromfork` (`afA`/`afP` ⊂ `pafA`/`pafP`) and the nine fixed here were each found — one at a time,
- * by a lane that had already lost a session to the row it was reading.
+ * WHAT THE GATE STILL CANNOT SEE, so that its zero is read for what it is: its token universe is built from
+ * the fixture SOURCE, so a token the ENGINE synthesises — a normalised URL template, an error string, a value
+ * built by concatenating a loop counter — is outside it, and it prints the count of needles it could not
+ * resolve to a literal at all rather than passing over them in silence. A needle that only a synthesised token
+ * contains is therefore still found the way `next` (⊂ `{state}.next`) nearly was: by a lane reading the row.
+ *
+ * A DELIBERATE PREFIX SAYS SO AT ITS OWN CALL, in a `probegate:prefix` comment immediately after the closing
+ * paren of the `strstr` it declares — at the CALL and never on the line, because a row is several `strstr`s
+ * on one line and a line-scoped marker would exempt neighbours nobody meant to exempt. The declaration is CHECKED
+ * rather than obeyed — it holds only while exactly one token extends the needle, so a second endpoint sharing
+ * the prefix reddens the row again instead of hiding behind the marker.
  *
  * WHY A MACRO AND NOT A CALL: the ADDRESS of the failure is what the reader needs, and here the address is
  * the ENDPOINT rather than a file:line — one helper called from twenty rows would stamp one line for all of
@@ -6234,8 +6238,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int orphan_clamp  = strstr(js, "\"/api/orphan/clamp\"") != NULL;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
-       API-value learning, through the Response the shipped fetch component actually hands back. */
-    int fetch_await = (strstr(js, "\"/api/user\"") && strstr(js, "us-west-2"));
+       API-value learning, through the Response the shipped fetch component actually hands back.
+       THE REGION CLAUSE WAS UNSCOPED AND ITS REFUTATION WAS TWELVE LINES BELOW IT. `us-west-2` is the field
+       of the reply this fixture's own host serves, so EVERY statement that reads that reply carries it:
+       `/api/chain`'s `chain2-us-west-2`, and `/api/bodyiso`'s `us-west-2-bodyADMIN` / `us-west-2-bodyPUBLIC`.
+       The `then_chain` comment below says so in as many words — "an unscoped match would find
+       `chain2-us-west-2` in any other statement that happens to carry the region" — and this row WAS that
+       other statement. So the term could not fail while any sibling reply-reader emitted, and what it appeared
+       to assert (that json()'s field reached THIS endpoint) was never measured. Scoped to the one param of the
+       one endpoint, which is what the claim was always about. */
+    int fetch_await = (strstr(js, "\"/api/user\"") &&
+                       param_value_is(js, "/api/user", "region", "us-west-2"));
     /* THE SECOND REACTION OF `.then(r => r.json()).then(…)` — and the row is the PAIR, because either half
        alone is a term that cannot localise. `chain1` alone says the reply was delivered and the first handler
        ran; `chain2` is the only thing that says json()'s own promise ever SETTLED, and its absence beside a
@@ -6950,9 +6963,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `v19200998080` — the quoted match is exact, so the old answer cannot satisfy it, which is why the
        constant is one the two arms spell differently. `addstr` is the string arm, required to stay byte-for-
        byte what it was: a String on either side takes step 1.c whatever the other side's example is. */
+    /* THE TWO PATH-PREFIX NEEDLES BELOW ARE DELIBERATELY OPEN AT THE RIGHT, AND SAY SO AT THE CALL. The
+       endpoint's LAST SEGMENT is the value under test (`/api/addnum/v1000000` vs `/api/addnum/v19200998080`),
+       so the row must match the prefix and let the quoted value clause decide the rest — a whole-token needle
+       here would be the answer written into the question. `engine/probegate.mjs` reports a needle a document
+       token contains, and these two are contained by `/api/addnum/v` and `/api/addstr/r`; the marker says the
+       containment is the intended match. It is CHECKED rather than obeyed: the gate still reddens the day a
+       SECOND endpoint shares the prefix, which is the day the row stops naming one statement. */
     int addfork_tt  = (strstr(js, "\"/api/addfork\"") && strstr(js, "addpos") && strstr(js, "addneg"));
-    int addnum_tt   = (strstr(js, "/api/addnum/")     && strstr(js, "\"v1000000\""));
-    int addstr_tt   = (strstr(js, "/api/addstr/")     && strstr(js, "\"r1920\""));
+    int addnum_tt   = (strstr(js, "/api/addnum/") /*probegate:prefix*/    && strstr(js, "\"v1000000\""));
+    int addstr_tt   = (strstr(js, "/api/addstr/") /*probegate:prefix*/    && strstr(js, "\"r1920\""));
     /* §4.12.1.1's "immediately execute the script element" AT A POSITION INSIDE THE DOCUMENT'S OWN SEQUENCE.
        The match is EXACT and the near-miss is the whole point: `ABXC` is the injected program at the slot after
        the <script> that injected it, and `ABC` is that same program pushed to the TAIL — the only place a
