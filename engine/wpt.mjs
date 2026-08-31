@@ -712,10 +712,100 @@ function readCorpus(p) {
    The strip is the same correction twice, and this file's own header already names it: a comment that NAMES
    the harness, and now a script that WRITES it. Both are content the parser does not read as markup, so both
    come out before the question is asked — the opening tag is kept, because the opening tag is the thing being
-   matched. This mirrors `codeOnly()`'s rule for JS: strip what is not code before reading it as code. */
+   matched. This mirrors `codeOnly()`'s rule for JS: strip what is not code before reading it as code.
+   THAT SENTENCE NAMED A FUNCTION THIS TREE DID NOT CONTAIN, in every revision that has carried it — `codeOnly`
+   occurred EXACTLY ONCE in the whole repository, here, describing itself as the established rule this one
+   mirrors. It is the stale-claim failure in its quietest form: not a crash sending a reader to build what
+   exists, but prose asserting a convention, so a reader looking for the JS-side rule finds nothing and cannot
+   tell whether they have missed it or it was never written. It is answered the way that class is answered —
+   by BUILDING the named thing rather than deleting the sentence, because the rule the sentence states is
+   correct and the scan below needs exactly it. */
+/* ONE PATTERN FOR THE SCRIPT ELEMENT, READ TWO WAYS. `markupOnly` throws the body away and keeps the tag;
+   `inlineScripts` keeps the body and throws the tag away. They are the same question about the same bytes, so
+   they are the same pattern — two copies would be free to disagree about what a script element is, which is
+   the defect this file spends its length avoiding elsewhere. */
+const SCRIPT_EL = "(<(?:[A-Za-z][\\w.-]*:)?script\\b[^>]*>)([\\s\\S]*?)<\\/(?:[A-Za-z][\\w.-]*:)?script\\s*>";
 function markupOnly(src) {
-  return src.replace(/<!--[\s\S]*?-->/g, "")
-            .replace(/(<(?:[A-Za-z][\w.-]*:)?script\b[^>]*>)[\s\S]*?<\/(?:[A-Za-z][\w.-]*:)?script\s*>/gi, "$1");
+  return src.replace(/<!--[\s\S]*?-->/g, "").replace(new RegExp(SCRIPT_EL, "gi"), "$1");
+}
+/* THE BODIES OF A DOCUMENT'S INLINE SCRIPTS — what a document's JavaScript actually is, for a reader that wants
+   to read it AS JavaScript. A document's `idl_test(...)` call lives in one of these and nowhere else, and
+   handing the whole file to a JS reader instead would have it tokenize markup: an unbalanced apostrophe in
+   prose (`Ms2ger's`) opens a string literal that swallows the rest of the file. */
+function inlineScripts(src) {
+  return [...src.replace(/<!--[\s\S]*?-->/g, "").matchAll(new RegExp(SCRIPT_EL, "gi"))].map((m) => m[2]);
+}
+/* WHAT IS CODE IN A JAVASCRIPT FILE — the rule `markupOnly`'s comment above has claimed for three revisions.
+ *
+ * COMMENTS COME OUT AND STRING LITERALS STAY, and that asymmetry is the whole specification of this function
+ * rather than an implementation detail of it. A caller reads this to find a CALL and the ARGUMENTS of that
+ * call, and in `idl_test(['cssom'], ['dom'])` the arguments ARE string literals — so a stripper that blanked
+ * them would delete the answer along with the noise. A comment, by contrast, can spell any call at all and
+ * means none of them.
+ *
+ * IT IS A SCANNER AND NOT A CHAIN OF `replace`s, because the two constructs are mutually quoting: a STRING can
+ * contain comment syntax (`'// not a comment'`) and a COMMENT can contain quote syntax (a block comment whose
+ * text is `"not a string"`), so whichever regex runs first corrupts the other's input. One left-to-right pass
+ * has no such order to get wrong.
+ *
+ * A `/` IS DIVISION UNLESS THE PRECEDING SIGNIFICANT CHARACTER SAYS OTHERWISE — the standard heuristic, and it
+ * is used here for exactly one purpose: to avoid reading the inside of a regexp literal as code. Getting it
+ * wrong cannot fabricate a call, because the fallback is to treat the text AS CODE, which is what a reader
+ * that skipped this function entirely would have done. Every ambiguity therefore resolves toward the answer
+ * this function was introduced to improve on, never past it. */
+function codeOnly(src) {
+  let out = "", i = 0;
+  /* THE LAST CHARACTER OF CODE EMITTED, which is what decides the `/` above. Kept as we go rather than
+     re-derived by scanning backwards, so its cost does not depend on how far the last token was. */
+  let prev = "";
+  const REGEXP_MAY_FOLLOW = "(,=:[!&|?{};+-*%~^<>";
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {                       /* a line comment: to the newline */
+      while (i < src.length && src[i] !== "\n") i++;
+      out += " ";
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {                       /* a block comment: to its close */
+      const end = src.indexOf("*/", i + 2);
+      i = end < 0 ? src.length : end + 2;
+      out += " ";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {                   /* a string: KEPT, escapes honoured */
+      const q = c;
+      let j = i + 1;
+      for (; j < src.length; j++) {
+        if (src[j] === "\\") { j++; continue; }
+        if (src[j] === q) break;
+      }
+      out += src.slice(i, Math.min(j + 1, src.length));
+      prev = q;
+      i = j + 1;
+      continue;
+    }
+    if (c === "/" && (prev === "" || REGEXP_MAY_FOLLOW.includes(prev))) {   /* a regexp literal: skipped whole */
+      let j = i + 1, cls = false;
+      for (; j < src.length && src[j] !== "\n"; j++) {
+        if (src[j] === "\\") { j++; continue; }
+        if (src[j] === "[") cls = true;
+        else if (src[j] === "]") cls = false;
+        else if (src[j] === "/" && !cls) break;
+      }
+      /* AN UNTERMINATED ONE WAS NEVER A REGEXP. A `/` that reaches the end of its line with no closing slash is
+         division after all, and the heuristic simply guessed wrong; emitting the `/` as code and carrying on is
+         the reading that cannot lose a call. */
+      if (j >= src.length || src[j] === "\n") { out += c; prev = c; i++; continue; }
+      out += " ";
+      prev = "/";
+      i = j + 1;
+      continue;
+    }
+    out += c;
+    if (!/\s/.test(c)) prev = c;
+    i++;
+  }
+  return out;
 }
 function isTestDocument(p) {
   const src = readCorpus(p);
@@ -1518,6 +1608,92 @@ function metaScripts(file) {
     return ref.startsWith("/") ? join(WPT, ref.slice(1)) : join(dirname(file), ref);
   });
 }
+
+/* THE `.idl` FILES A TEST DECLARES — THE OTHER HALF OF "WHAT THIS FILE NEEDS BEFORE IT CAN MEASURE ANYTHING".
+ *
+ * A META script is a fixture the DRIVER hands over, and the block in the run loop below has always checked that
+ * one. An `.idl` is a fixture the TEST FETCHES, and nothing checked it — which is how the whole idlharness
+ * family came to collect, run, report, and pass every check this gate makes about its own collection while
+ * never executing a single IDL assertion. `resources/idlharness.js` defines the mechanism in four lines:
+ *
+ *     function fetch_spec(spec) {
+ *         var url = '/interfaces/' + spec + '.idl';
+ *         return fetch(url).then(function (r) {
+ *             if (!r.ok) { throw new IdlHarnessError("Error fetching " + url + "."); }
+ *
+ * and `idl_test(srcs, deps, setup)` does `Promise.all(srcs.concat(deps).map(globalThis.fetch_spec))`, so BOTH
+ * array arguments are fetched and either one being absent rejects the whole setup. A missing `.idl` therefore
+ * does not announce itself as a checkout gap: it lands in the FAIL column as a subtest named `idl_test setup`,
+ * or — for the twenty-two files whose harness never got that far — as a TIMEOUT, which is the shape that hid
+ * it. One `existsSync` per declared spec, asked here, turns a per-file harness timeout into a named entry.
+ *
+ * WHY THE ANSWER IS NOT "THE FAMILY IS ON NOW, SO THIS IS SILENT". It is silent today and that is the point of
+ * having it: the family's fixtures were reachable through no mechanism, only through a list entry that nothing
+ * asserted, so the day `interfaces` leaves WPT_PATHS — or a corpus bump renames a spec — the family returns to
+ * its two-subtest floor and the total looks complete again. The check is what makes that a named abort instead
+ * of a rediscovery.
+ *
+ * IT READS THE SOURCE, NEVER THE FILENAME. `FileAPI/idlharness.worker.js` declares no `// META: script=` line
+ * at all — it calls `importScripts("/resources/WebIDLParser.js", "/resources/idlharness.js")` — so a detector
+ * keyed on META misses it, and a detector keyed on the name `idlharness` would both miss a future test that
+ * calls `idl_test` under another name and claim one that merely mentions it.
+ *
+ * WHAT IT CANNOT ANSWER, IT SAYS. A spec argument that is not a string literal cannot be resolved without
+ * running the file, and reporting nothing for one would be this gate asserting reachability it never checked —
+ * an absent measurement wearing the shape of a clean one. It is returned separately and reported separately. */
+function idlFixtures(file, kind) {
+  const raw = readCorpus(file);
+  if (raw === null) return null;   /* readCorpus recorded WHY; the run loop reports it */
+  /* THE CHEAP QUESTION FIRST, AND IT IS SOUND RATHER THAN MERELY FAST. `codeOnly` is a character scan, and this
+     runs for every collected file in the corpus — thousands of them, most with no IDL in sight — so asking it
+     of all of them would spend real CPU on a shared box to learn nothing, which §Testing names as the way a
+     measurement becomes an artifact of the machine it ran on. The guard is exact and not a heuristic: `codeOnly`
+     only ever REMOVES text, so a name absent from the raw bytes is absent from its output, and a file that
+     passes this cannot have had a call that the scan below would have found. */
+  if (!raw.includes("idl_test") && !raw.includes("fetch_spec")) return { specs: [], dynamic: [] };
+  /* A DOCUMENT'S JAVASCRIPT IS ITS INLINE SCRIPT BODIES; a `.js` test's is the whole file. Either way what is
+     read as code is put through `codeOnly` first, so a call spelled inside a comment cannot mint a fixture. */
+  const code = (kind === "document" ? inlineScripts(raw) : [raw]).map(codeOnly).join("\n");
+  const specs = new Set(), dynamic = [];
+  /* `fetch_spec('x')` CALLED DIRECTLY, which `idl_test` is a wrapper over and which a test may use on its own. */
+  for (const m of code.matchAll(/\bfetch_spec\s*\(\s*(['"])([^'"]+)\1\s*\)/g)) specs.add(m[2]);
+  for (const m of code.matchAll(/\bidl_test\s*\(/g)) {
+    /* THE CALL'S OWN EXTENT, by balancing from its `(` — an `idl_test` call's third argument is a setup
+       FUNCTION whose body routinely holds arrays and braces of its own, so anything that stopped at the first
+       `)` or `]` would read a fragment of that body as a spec list. */
+    let depth = 0, end = -1;
+    for (let k = m.index + m[0].length - 1; k < code.length; k++) {
+      const ch = code[k];
+      if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ")" || ch === "]" || ch === "}") { depth--; if (!depth) { end = k; break; } }
+    }
+    if (end < 0) { dynamic.push("an idl_test call whose parentheses do not balance"); continue; }
+    const call = code.slice(m.index + m[0].length, end);
+    /* THE FIRST TWO TOP-LEVEL ARRAY LITERALS ARE `srcs` AND `deps`, in idl_test's own parameter order, and the
+       nested scan skips any parenthesised or braced argument whole so a setup function's arrays are never
+       mistaken for them. */
+    const arrays = [];
+    for (let k = 0, d = 0, st = -1; k < call.length; k++) {
+      if (call[k] === "[") { if (d === 0) st = k; d++; }
+      else if (call[k] === "]") { d--; if (d === 0 && st >= 0) { arrays.push(call.slice(st + 1, k)); st = -1; } }
+      else if (d === 0 && (call[k] === "(" || call[k] === "{")) {
+        for (let dd = 0; k < call.length; k++) {
+          if ("([{".includes(call[k])) dd++;
+          else if (")]}".includes(call[k])) { dd--; if (!dd) break; }
+        }
+      }
+    }
+    for (const a of arrays.slice(0, 2))
+      for (const part of a.split(",")) {
+        const t = part.trim();
+        if (!t) continue;
+        const q = /^(['"])([^'"]+)\1$/.exec(t);
+        if (q) specs.add(q[2]);
+        else dynamic.push(t.length > 60 ? t.slice(0, 60) + "…" : t);
+      }
+  }
+  return { specs: [...specs], dynamic };
+}
 /* A `.sub.js` META SCRIPT IS NOT ITS BYTES ON DISK. wptserve SUBSTITUTES `{{host}}`, `{{ports[http][0]}}`
    and friends when it serves one, and the whole point of common/get-host-info.sub.js is to hand a test the
    REAL alternate hosts and ports of the server it is running against. Read off disk it hands back the
@@ -1737,6 +1913,43 @@ for (const { file: f, kind, variant } of runs) {
                                     said.join("\n         "));
       continue;
     }
+    /* AND THE `.idl` FIXTURES THE TEST ITSELF WILL FETCH — the same question as the block above, asked about the
+       other kind of fixture, answered through the same `corpusHas` so the two cannot come to disagree about
+       which revision they ask at. See `idlFixtures` for why this is not the runtime path's job: a missing `.idl`
+       arrives as a FAIL or a TIMEOUT on the file, in the column that reads as a result about the engine.
+       IT IS A DISK QUESTION AND SAYS SO. What is checked is that the byte-source exists in this checkout; that
+       wptserve then SERVES it is the run's own affair and shows up in `trafficEvidence` under a file that did
+       not complete. Naming the axis is the point — a check that quietly meant something narrower than it read
+       would be the concealment this block exists to remove. */
+    const idl = idlFixtures(f, kind);
+    if (idl && idl.specs.length) {
+      const absent = idl.specs.filter((s) => !existsSync(join(WPT, "interfaces", s + ".idl")));
+      if (absent.length) {
+        const said = absent.map((s) => {
+          const p = `interfaces/${s}.idl`;
+          const has = corpusHas(p);
+          if (!has.known) return `${p} — and ${has.why}`;
+          return has.present
+            ? `${p} — it EXISTS at ${has.at} and this checkout does not have it, so WPT_PATHS is short of ` +
+              "interfaces: add that entry and this file's IDL assertions run"
+            : `${p} — it does NOT EXIST at ${has.at} at all, so no WPT_PATHS entry can supply it. The test ` +
+              `names a spec the pinned corpus does not carry under that name`;
+        });
+        abortRun(area, "corpus", rel,
+                 "an .idl fixture this test fetches is not in the checkout:\n         " + said.join("\n         ") +
+                 "\n         idlharness.js fetches every name in BOTH of idl_test's array arguments and rejects " +
+                 "the whole setup if one is absent, so this file would report its floor of two subtests and " +
+                 "nothing about the engine");
+        continue;
+      }
+    }
+    /* A SPEC NAME THIS DRIVER COULD NOT RESOLVE STATICALLY IS AN ABSENT ANSWER, NOT A CLEAN ONE, and it is
+       printed rather than counted: the file is runnable and must not be aborted over it, but a reader who takes
+       the silence above as "every fixture checked" would be trusting a check that skipped this file. */
+    if (idl && idl.dynamic.length)
+      failures.push(`  IDLDYN  ${rel}\n         ${idl.dynamic.length} idl_test spec argument(s) are not string ` +
+                    `literals (${idl.dynamic.join(", ")}), so their reachability was NOT checked — this is an ` +
+                    "absent measurement for this file, not a fixture that was found");
     /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
        file name — `.html`, and only `.html` — which is a second copy of the rule above and drifted from it the
        moment the first `.htm` was collected: the driver would have handed the runner a document and the runner
