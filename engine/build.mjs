@@ -2657,8 +2657,19 @@ if (NATIVE) {
       "not write, and the moment it was taken at is `fixture_want_park` in engine/host/test_forced.c.");
     /* SESSION TWO IS SKIPPED AND NOT MERELY UNREPORTED. This is a real data dependency and not a door — the
        resume reads the residue session ONE writes, so with no residue there is nothing for it to be a test OF
-       — and it is stated as a skip with that reason so the report never has a silent hole in it. */
-    const v2 = v1.code
+       — and it is stated as a skip with that reason so the report never has a silent hole in it.
+       THE DEPENDENCY IS THE RESIDUE, SO THE RESIDUE IS WHAT IS ASKED. This read `v1.code`, and an exit code is
+       not that fact: it folds session ONE's six park rows — and every other probe in the fixture — into one
+       door, so a run that wrote a full residue and failed a row named an arm it did not exercise was reported
+       under a sentence claiming it had written nothing. That is the shape this file warns about elsewhere,
+       three states behind one answer, with the printed REASON being the part that was false. Session ONE still
+       FAILS on its own rows and the report below still fails with it; what changes is that the read half is no
+       longer gated on the write half being perfect, which is the whole reason the round trip is two spawns. */
+    /* READ RATHER THAN STAT'D, and not for want of `statSync`: cold.c's rule is that "an engine with no members
+       writes no bytes at all", so ABSENT and EMPTY are the same non-residue and a size is one of the two ways to
+       ask. Reading it asks both at once and costs nothing at this size — the document is a few hundred bytes. */
+    const residue = existsSync(store) && readFileSync(store, "utf8").trim().length > 0;
+    const v2 = !residue
       ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
       : runChild("session TWO (--cold-resume)", bin, ["--cold-resume", store],
                  "the round-trip line below says what it rebuilt out of the residue; a kind session one " +

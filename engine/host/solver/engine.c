@@ -6254,7 +6254,20 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * AND IT IS STILL ABOVE THE TWO ARMS BELOW, for the reason the preamble gives: those two claim the
              * run is FINISHED (no handler will ever be attached; nothing ever called this function) and an
              * outstanding reply's continuation can still attach the handler and still make the call. */
-            else if (pending_count(f->pending) > 0) {
+            /* AND IT ASKS `pending_outstanding`, NOT `pending_count`, WHICH IS THE SAME QUESTION THE MARK IT
+             * LEADS TO ALREADY ASSERTS. This arm SELECTS the OWED verdict and flow_set_host_owed's own DCHECK
+             * is `pending_outstanding(cur->pending) || g_referenced`, so a count here made the selecting
+             * predicate strictly weaker than the asserting one two seams later — and pending.h says in its own
+             * words what the count cannot answer: "A register holding one ANSWERED entry has a non-zero count
+             * while the host owes it nothing, so a flow stuck on such an entry passes a count test and is
+             * marked 'waiting on the host' forever: the mark is cleared only by a host event, and no host event
+             * is coming." A deliverable answered entry is taken by the delivery arm above this one, so what
+             * reached here on a count was an entry the host had already settled and nothing would settle again.
+             * THE FAILURE IS ASYMMETRIC ACROSS BUILDS, which is why it survived: in dev the DCHECK at the mark
+             * fires, so the crash lands one seam away from the wrong predicate and reads as a bad mark rather
+             * than as a bad selection; in release that check is compiled out and the flow is simply never
+             * picked again, which §scheduler's razor calls a CAP. */
+            else if (pending_outstanding(f->pending)) {
                 g_step_unit = STEP_UNIT_AWAIT_OWED_REPLY;   /* every task source is empty; a reply is not */
                 return FLOW_STEP_OWED;
             }

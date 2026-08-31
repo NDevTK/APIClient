@@ -761,10 +761,17 @@ void        engine_retract_operations(JSContext *ctx);
 void        engine_retract_census(long *flows, long *started, long *handed_back);
 
 /* HOW MANY OF THIS FRONTIER'S MEMBERS ARE MID-ANSWER — program rows still carrying a peer's rendezvous token.
- * It is the state a park used to refuse, asked of the frontier while it is live, so a host CHOOSING a moment
- * to evict at can choose one that contains it rather than hope one does; the same number after the fact is
- * engine_retract_census's `started`. A live 0 is a positive statement: every question this instance was asked
- * is either still queued on the arrival slots or already answered. */
+ * It is the state a park used to refuse, asked of the frontier while it is live; the same number after the fact
+ * is engine_retract_census's `started`. A live 0 is a positive statement: every question this instance was
+ * asked is either still queued on the arrival slots or already answered.
+ * AND WHICH HOSTS CAN ACT ON A NON-ZERO ANSWER IS PART OF THE QUESTION, which the sentence here used to leave
+ * out: it said a host "CHOOSING a moment to evict at can choose one that contains it rather than hope one
+ * does", and that is false for a host whose slices can only end at the stall or at exhaustion. flow_perform
+ * appends the operation's program to a RUNNABLE row, so a member mid-answer is in neither of those exits and
+ * the started state never survives a slice — a single-document host asking this between two slices reads 0
+ * however it picks its moment, and no ask timing changes that. The exits that CAN end a slice over a started
+ * operation are the CPU quantum and the level-1 yield floor, so this number is actionable for a host that
+ * orders several engines and hopeful for one that does not. */
 long        engine_operations_started(void);
 
 /* …AND THE INBOUND HALF OF IT: a peer says one of ITS worlds is gone, so the segment this instance holds for

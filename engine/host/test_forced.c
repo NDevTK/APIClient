@@ -8191,8 +8191,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* AND THE QUESTION A PEER ASKED, HANDED BACK RATHER THAN CARRIED. `park-remoteop` is the row about the
        refusal that used to abort here: a park that MET a STARTED cross-agent operation — a program mid-run with
        the zone's rendezvous token on its row — and returned it. A 0 is not a flake and not a reason to soften
-       the row: it says the park moment did not contain one, and the moment is chosen in fixture_cold_moment,
-       which is where a fix for it belongs.
+       the row, AND IT IS NOT A MOMENT THAT WAS CHOSEN BADLY EITHER, which is what this comment used to say and
+       what sent a reader to fixture_cold_moment to fix something that is not there. NO MOMENT THIS HOST CAN
+       NAME CONTAINS ONE: the hook is asked between two slices, flow_perform appends the operation's program to
+       a RUNNABLE row, and a runnable member is in neither the stall nor the exhausted exit — so the started
+       state is strictly intra-slice and the only exits that could end a slice over one are the CPU quantum and
+       the level-1 yield floor. The moment's own paragraph carries the argument in full.
+       SO THIS ROW IS NARROWER THAN engine_retract_span, BY EXACTLY ONE LOOP, and that is what a 0 here says.
+       WHAT IS NOT COVERED: the `dyn_token` strip — the `g_retract_started++` loop — which no park this fixture
+       takes has ever reached. WHAT THE NEXT DIFF BUILDS: a provider payment that asks the operation and does
+       NOT answer the replies its members are parked on, so each member converts the arrival to a row and then
+       re-blocks at the cursor it was already owed a reply at, leaving the token on an un-run appended row while
+       every member is host-owed — which is the stall exit, and the one slice end that is a statement rather
+       than a race. HOW ITS ABSENCE SHOWS: this row reads 0 while `park-remoteop-once` reads 1, which is the
+       arrival-slot half of the same call having run without the row half.
        `park-remoteop-once` is the LAST-HOLDER rule, and it is the only one of the two that a per-flow hand-back
        would fail. engine_perform attaches one question to EVERY live timeline, so a notice per holder would be
        one hand-back repeated once per member — and worse than noisy: the zone would be told to forget a token
@@ -8872,10 +8884,24 @@ static int fixture_have_answers(void) {
  * property of a LIVE frontier — a candidate set drains — so a park that waits for two independent facts to be
  * true at the same instant can wait forever, and the run then hangs rather than failing a row. Once the residue
  * has been seen to hold what the park is a statement about, that stays a fact about this run.
- * IT IS ASKED AT THE MOMENT AND PARKED TWO CONSULTATIONS LATER, and the gap is what makes the exercise real
- * rather than hoped: engine_perform attaches the question to EVERY live timeline, the scheduler turns it into a
- * program on whichever flow it picks next, and only then does a member hold a STARTED operation. Parking on the
- * ask alone would meet the QUEUED half — the one that was already handed back — and never the started one. */
+ * IT IS ASKED AT THE MOMENT AND PARKED AT THE NEXT CONSULTATION, and what the park meets there is the QUEUED
+ * half. The sentence that stood here said "two consultations later", and reasoned that the gap would let the
+ * scheduler turn the arrival into a program so that a member held a STARTED operation by the time the host was
+ * asked again. That reasoning is wrong, and it is wrong about the SCHEDULE rather than about the timing — which
+ * is why no ask moment repairs it and why the conjunct it justified is gone from fixture_want_park.
+ * THE HOST IS CONSULTED ONCE PER SLICE, AND A STARTED OPERATION CANNOT SURVIVE ONE. The hook is asked at the top
+ * of the host's loop and engine_request_park is honoured at the top of the very next engine_sched_slice, so the
+ * state the predicate reads IS the state the park will walk — there is no gap for the scheduler to work in. The
+ * gap it needs would have to be INSIDE a slice, and a slice does not end there: flow_perform moves the token
+ * onto a program's row and APPENDS that program (DYN_POS_APPEND), which leaves the flow RUNNABLE, so a member
+ * holding a started operation can never be part of a stall (engine_host_owes) and never reaches the exhausted
+ * exit. Of the slice's exits only the CPU quantum and the level-1 yield floor can end one mid-operation, and
+ * neither is a thing this fixture states — the quantum is a race, which §Testing names as the shape a loaded
+ * machine falsifies, so a row resting on it would be a flaky green rather than a measurement.
+ * WHAT THE PARK THEREFORE EXERCISES HERE is engine_retract_span's ARRIVAL-SLOT half over every timeline the one
+ * question was attached to, plus the last-holder rule that decides how many notices leave — which is
+ * `park-remoteop-once`, and which the row comment above the census says is the half a per-flow hand-back would
+ * fail. The `dyn_token` half is named where its row is. */
 static int g_cold_moment, g_op_asked;
 
 static int fixture_cold_moment(void) {
@@ -8930,8 +8956,15 @@ static void fixture_ask_remote_op(JSContext *ctx) {
     engine_perform(ctx, "tf-remoteop", rec);
 }
 
+/* THE MOMENT IS THE WHOLE PREDICATE, and the second conjunct that stood beside it is deleted rather than
+   latched. It asked `engine_operations_started() > 0`, and the paragraph above the latch says why no spelling of
+   that question can be answered here: a started operation lives strictly inside one slice, and this hook is only
+   ever asked between two. Latching it would have been worse than leaving it, in two independent ways — the
+   sampled value is never true, so a latch over it latches nothing; and even a latch that HAD caught one would
+   park after the operation completed, when engine_retract_span has no token left to strip, so the row it was
+   protecting would still read 0 with the park now claiming to have exercised it. */
 static int fixture_want_park(void) {
-    return fixture_cold_moment() && engine_operations_started() > 0;
+    return fixture_cold_moment();
 }
 
 /* XML 1.0 (Fifth Edition) §2.2 Characters, §2.3 Common Syntactic Constructs' [3] `S`, and §2.11 End-of-Line
