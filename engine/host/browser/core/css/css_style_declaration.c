@@ -106,6 +106,7 @@
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
+#include "solver/concolic.h"   /* §6.6.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "solver/dom_cow.h"
 
 /* TWO PRIVATE KEYS, BOTH SYMBOLS, AND THEY ARE TWO BECAUSE A SLOT IS A BRAND. `g_decl_key` hangs a block's own
@@ -2770,6 +2771,10 @@ static void cssd_declared_decls(JSContext *ctx, JSValueConst block, CssDecls *ou
     free(text);
 }
 
+/* §6.6.1 `readonly attribute unsigned long length` — "the number of CSS declarations in the declarations". It
+   is minted UNSIGNED because the IDL says the type is, not because a block could hold 2**31 declarations: a
+   `long` spelling of an `unsigned long` is the same disagreement between a declaration and its member that
+   `item` carried below, and it is worth nothing to leave one of the pair right and the other wrong. */
 static JSValue js_cssd_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue block = cssd_block(ctx, this_val);
@@ -2782,22 +2787,56 @@ static JSValue js_cssd_length(JSContext *ctx, JSValueConst this_val, int magic)
     n = d.n;
     cssd_decls_free(&d);
     JS_FreeValue(ctx, block);
-    return JS_NewInt32(ctx, (int32_t)n);
+    return JS_NewUint32(ctx, n);
 }
 
+/* CSSOM §6.6.1 The CSSStyleDeclaration Interface: "The item(index) method must return the property name of the
+   CSS declaration at position index. If there is no indexth object in the collection, then the method must
+   return the empty string."
+
+   THE INDEX IS `unsigned long`, AND THE ARRAY'S OWN LENGTH IS THEREFORE THE ONLY BOUND. §6.6.1 writes
+   `getter CSSOMString item(unsigned long index)`; this was declared `long`, and under that declaration the
+   `idx >= 0` half of the guard was LOAD-BEARING rather than defensive — Web IDL §3.2.4.5 long converts with
+   ConvertToInt(V, 32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1), then
+   return x − 2^bitLength", so the converted value reaches −2147483648, and `d.v` is a REAL ARRAY of exactly
+   `d.n` CssDecl entries. Deleting that half without fixing the type is an out-of-bounds READ, which is why the
+   type and the guard move in ONE diff and neither is a separate step. §3.2.4.6 unsigned long's
+   ConvertToInt(V, 32, "unsigned") produces [0, 2**32−1] and `d.n` is an `unsigned`, so `i < d.n` is a single
+   unsigned comparison covering the whole converted range: the negative arm is unreachable BY TYPE, not by a
+   check, and there is nothing left for a second test to catch.
+   THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: a declaration block cannot hold 2**31 declarations, so
+   every value at or past 2**31 is past the end under either sign and the empty string is the answer both ways
+   — the declaration's error had no discriminating input through this member. The declaration is the spec of
+   the conversion; a body re-deriving the sign is the second copy of §3.2.4.9 Abstract operations' arithmetic
+   that idl_args.c exists to prevent. */
 static JSValue js_cssd_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue block = cssd_block(ctx, this_val), r;
     CssDecls d = { 0 };
-    int64_t idx = 0;
+    uint32_t i = 0;
 
     (void)magic;
     if (JS_IsException(block)) return block;
     DCHECK(argc >= 1, "§6.6.1's `item` reached its body with no index — its IDL argument is required");
-    JS_ToInt64(ctx, &idx, argv[0]);   /* a real number by now: the declaration converted it */
     cssd_declared_decls(ctx, block, &d);
-    /* "If there is no indexth object in the collection, then the method must return the empty string." */
-    r = (idx >= 0 && idx < (int64_t)d.n) ? JS_NewString(ctx, d.v[idx].name) : JS_NewStringLen(ctx, "", 0);
+    if (concolic_is(argv[0])) {
+        /* AN UNKNOWN INDEX, and it reaches the body unconverted because §3.2's conversion is a boundary
+           unknown external input crosses AS ITSELF (idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every
+           integer type). The EMPTY block is the one length at which that has an answer rather than a fork:
+           §6.6.1 returns the empty string for every index at or past the number of declarations, and at zero
+           declarations that is every index there is.
+           READING IT WITH `JS_ToInt64` INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
+           NAME: a concolic is a real JSObject, so ToNumber reaches ToPrimitive and runs a getter from a plain
+           C frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
+        DCHECK(d.n == 0,
+               "§6.6.1's `item` was given an UNKNOWN index into a NON-EMPTY declaration block — every property "
+               "name in it is a distinct answer, so the read must FORK one flow per supported index (plus the "
+               "empty-string arm for an index past the end) instead of deciding it here");
+        r = JS_NewStringLen(ctx, "", 0);
+    } else {
+        JS_ToUint32(ctx, &i, argv[0]);   /* the declaration ran §3.2.4.6 unsigned long: already [0, 2**32-1] */
+        r = i < d.n ? JS_NewString(ctx, d.v[i].name) : JS_NewStringLen(ctx, "", 0);
+    }
     cssd_decls_free(&d);
     JS_FreeValue(ctx, block);
     return r;
@@ -3027,7 +3066,11 @@ void cssom_init(JSContext *ctx)
     g_ready = 1;
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
-        static const IdlArgType ONE_LONG[1] = { IDL_LONG };
+        /* §6.6.1 writes `getter CSSOMString item(unsigned long index)` and carries NO [EnforceRange], so
+           §3.2.4.9 Abstract operations' ConvertToInt modulo IS the specified behaviour and there is nothing
+           here to throw. The type states the SIGN, which is the whole of what it decides — see js_cssd_item
+           for the array bound that used to be spelled twice because of it. */
+        static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
         static const IdlArgType THREE_STR[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
         g_set_css_text_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_set_css_text, 0);
         /* Web IDL §3.3.10's [PutForwards=cssText], which BOTH `style` attributes carry — CSSOM §7.1
@@ -3043,7 +3086,7 @@ void cssom_init(JSContext *ctx)
         g_set_prop_id = idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0);
         /* §6.6.1: `setProperty(CSSOMString property, CSSOMString value, optional CSSOMString priority = "")` */
         idl_optional_from(2);
-        g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_cssd_item, 0);
+        g_item_id = idl_method_id(ctx, ONE_ULONG, 1, js_cssd_item, 0);
         {
             /* CSSOM §7.2 Extensions to the Window Interface: `getComputedStyle(elt, optional pseudoElt)`.
                DECLARED HERE with the rest — the member lives on the WINDOW, which is per realm, and the
