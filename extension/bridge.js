@@ -1450,6 +1450,61 @@ function _atRamFloor() {
    work item: the tab's engine resumes that residue itself, and rehydrating it beside the tab would replay one
    document's flows in two instances. The exclusion is by ADDRESS rather than by key precisely because the key
    is not yet known for the live half — and it is exact only because the address is now IN the key. */
+/* THE KINDS OF WORK ITEM WITH NO INSTANCE, DECLARED ONCE, BECAUSE FOUR PLACES ASK WHAT THEY ARE AND A HAND
+   LIST AT EACH IS THREE COPIES A NEW KIND DOES NOT JOIN. The walk below ranks them, `_candRanked` counts one
+   into the reading, `_level1Record` asserts that the reading's populations account for its total, and the
+   admission dispatches on the pick's `kind`. Those were four independently written enumerations, and the
+   third kind reached exactly two of them: the walk ranked a DECLARED ROUTE into `cands` while the record's
+   accounting assert still read `cands === candDocs + candCold`, so the FIRST application whose bundle named a
+   route it does not link aborted that assert — out of the round's own `finally`, which is every exit — and
+   took the whole Level-1 scheduler down as `_hostDead`. An instrument built so a frozen rank could not hide
+   killed the loop it was measuring, and it did it on correct code.
+   THE DEFECT SHAPE IS THE ONE §scheduler NAMES ABOUT A FORK'S WEIGHT — "assert the equality over the whole
+   thing rather than over a list of fields, so the assertion is what forces the next term to be carried". A
+   census whose total is checked against a hand-written sum of the kinds somebody remembered is a census that
+   goes silent (or, here, LOUD AND WRONG) on the kind added next. So the kinds are a table: `kind` is the tag
+   the pick carries and the admission dispatches on, `pop` is the population row a human reads, `wMax` is the
+   extremum over that population. The plurals are irregular on purpose — these are the names already on the
+   wire to the popup, and renaming a row to make a rule prettier is the rename this file's own gate exists to
+   catch. A kind added HERE reaches all four sites; a kind added to the walk and not here fails at the count. */
+const CAND_KINDS = [
+  { kind: "doc",  pop: "candDocs",  wMax: "candDocWMax" },    // a document waiting for an instance
+  { kind: "seed", pop: "candSeeds", wMax: "candSeedWMax" },   // an address an application declared is a page of itself
+  { kind: "cold", pop: "candCold",  wMax: "candColdWMax" },   // a parked frontier in the cold tier
+];
+/* THE ZEROED READING — the ONE statement of which rows a candidate walk produces, so that "the walk ran" is a
+   fact a consumer can check without keeping its own copy of the row names. Populations and exclusions start at
+   0 because a count of zero is a READING; the extrema are absent because an extremum over nothing is not a
+   number, and `_candRanked` attaches each on its population's first member. */
+function _candCensus() {
+  const cen = { cands: 0, exclSub: 0, exclSeedLive: 0, exclSeedParked: 0,
+                exclLive: 0, exclHeld: 0, exclStranded: 0 };
+  for (const k of CAND_KINDS) cen[k.pop] = 0;
+  return cen;
+}
+/* THE ONE SITE THAT COUNTS A RANKED CANDIDATE, so a kind's total, its population and its extrema cannot part.
+   Each arm of the walk used to do this itself in five lines, which is three copies of one rule and is exactly
+   how the total came to count a kind that the accounting had never heard of. PRESENCE IS THE FIRST-MEMBER
+   TEST rather than a zero sentinel: `candWMax` and each `wMax` exist from the moment their population has a
+   member and not before, which is the record's presence rule enforced where the number is produced instead of
+   restored by an attach pass afterwards. */
+function _candRanked(cen, kind, w) {
+  const d = CAND_KINDS.find((k) => k.kind === kind);
+  DCHECK(d !== undefined,
+         "the Level-1 candidate walk ranked a work item of a kind that is not declared (`" + kind + "`) — " +
+         "CAND_KINDS is what the record's accounting, the popup's columns and the admission's dispatch are " +
+         "all read from, so a kind ranked outside it is a work item that would be counted into the total, " +
+         "accounted for by no population, and built by whichever admission arm happened to be the fallback");
+  DCHECK(typeof w === "number" && Number.isFinite(w),
+         "the Level-1 candidate walk ranked a work item at a non-finite weight — every candidate's weight is " +
+         "`frontierWeight` over a reward and a visit count, so a non-finite one is that weight's own " +
+         "invariants having been bypassed, and it would win this order against every real number in it");
+  cen[d.pop]++;
+  cen.cands++;
+  if (!(d.wMax in cen) || w > cen[d.wMax]) cen[d.wMax] = w;
+  if (!("candWMax" in cen) || w > cen.candWMax) cen.candWMax = w;
+  if (!("candWMin" in cen) || w < cen.candWMin) cen.candWMin = w;
+}
 /* THE PICK IS SYNCHRONOUS, AND THE INDEX IS WHY IT CAN BE. Its caller must not suspend between choosing a
    candidate and building its instance: a cluster can be rooted by a concurrent service round (hostNotice's
    create arm), so a pick made before a suspension and acted on after it would reach engineCreate's
@@ -1524,9 +1579,7 @@ function _bestCandidate(idx) {
   /* THE READING, ACCUMULATED BY THE SAME WALK THAT PICKS. Every `w` below is counted into it exactly once and
      at the point it is computed, so a candidate the pick considers and the census does not is not a shape this
      function can be in. */
-  const cen = { cands: 0, candDocs: 0, candSeeds: 0, candCold: 0,
-                exclSub: 0, exclSeedLive: 0, exclSeedParked: 0, exclLive: 0, exclHeld: 0, exclStranded: 0 };
-  let wMax = 0, wMin = 0, docMax = 0, seedMax = 0, coldMax = 0;
+  const cen = _candCensus();
   for (const job of _waiting) {
     /* A SUB-FRAME NEVER ROOTS A CLUSTER — its embedder names it (see admit), so it is not admissible and is
        therefore not a candidate. It keeps its place in `_waiting` and is answered by the instance that
@@ -1540,10 +1593,7 @@ function _bestCandidate(idx) {
        input this weight takes. The two arms are different facts about the address and say so separately. */
     const known = byAddress.get(job.msg.sourceUrl);
     const w = frontierWeight(known !== undefined ? known : FRONTIER_UNSERVED);
-    if (cen.candDocs === 0 || w > docMax) docMax = w;
-    if (cen.cands === 0 || w > wMax) wMax = w;
-    if (cen.cands === 0 || w < wMin) wMin = w;
-    cen.candDocs++; cen.cands++;
+    _candRanked(cen, "doc", w);
     if (!best || w > best.w) best = { kind: "doc", job, w };
   }
   /* AND THE ADDRESSES AN APPLICATION DECLARED ARE PAGES OF ITSELF — the third kind of work item, ranked by the
@@ -1574,10 +1624,7 @@ function _bestCandidate(idx) {
        fills, and it is the one legitimate zero-visit input this weight takes. That is the same reading the
        waiting arm above gives an address with no rows, reached here by exclusion instead of by lookup. */
     const w = frontierWeight(FRONTIER_UNSERVED);
-    if (cen.candSeeds === 0 || w > seedMax) seedMax = w;
-    if (cen.cands === 0 || w > wMax) wMax = w;
-    if (cen.cands === 0 || w < wMin) wMin = w;
-    cen.candSeeds++; cen.cands++;
+    _candRanked(cen, "seed", w);
     if (!best || w > best.w) best = { kind: "seed", addr, w };
   }
   for (const row of idx.values()) {
@@ -1608,20 +1655,13 @@ function _bestCandidate(idx) {
        reads recipes and never bytes. */
     if (row.stranded) { cen.exclStranded++; continue; }
     const w = frontierWeight(row);
-    if (cen.candCold === 0 || w > coldMax) coldMax = w;
-    if (cen.cands === 0 || w > wMax) wMax = w;
-    if (cen.cands === 0 || w < wMin) wMin = w;
-    cen.candCold++; cen.cands++;
+    _candRanked(cen, "cold", w);
     if (!best || w > best.w) best = { kind: "cold", row, w };
   }
-  /* THE EXTREMA, ATTACHED ONLY WHERE THERE IS A POPULATION TO HAVE THEM — see the rule above this function.
-     `candDocWMax`, `candSeedWMax` and `candColdWMax` are kept apart deliberately: the Level-1 question
-     §scheduler asks is whether a WAITING DOCUMENT, a DECLARED ROUTE or a PARKED FRONTIER is worth the next
-     instance, and one merged extremum states the answer while erasing the comparison that produced it. */
-  if (cen.cands > 0) { cen.candWMax = wMax; cen.candWMin = wMin; }
-  if (cen.candDocs > 0) cen.candDocWMax = docMax;
-  if (cen.candSeeds > 0) cen.candSeedWMax = seedMax;
-  if (cen.candCold > 0) cen.candColdWMax = coldMax;
+  /* THE EXTREMA ARE ATTACHED BY `_candRanked` AT THE MEMBER THAT EARNS THEM, not restored by a pass here.
+     `candDocWMax`, `candSeedWMax` and `candColdWMax` stay apart deliberately: the Level-1 question §scheduler
+     asks is whether a WAITING DOCUMENT, a DECLARED ROUTE or a PARKED FRONTIER is worth the next instance, and
+     one merged extremum states the answer while erasing the comparison that produced it. */
   /* A WALK THAT RANKED MEMBERS AND PICKED NOTHING IS A COMPARISON THAT NEVER HAPPENED, and it is asserted here
      rather than left to the caller: `best` is the whole output of this order, so the two disagreeing means the
      order silently declined to admit an item it had already found admissible. */
@@ -4244,22 +4284,39 @@ function _level1Record(pool, rd) {
   DCHECK(!("wTop" in r) || r.wMin <= r.wTop,
          "the Level-1 census reports a resident order whose bottom outranks its top — these are the extrema " +
          "of one scan over one array of weights, so an inversion is two scans over two sets");
-  DCHECK(("cands" in r) === ("exclLive" in r) && ("cands" in r) === ("exclSub" in r) &&
-         ("cands" in r) === ("candAsk" in r),
-         "the Level-1 census carries part of the non-resident order — the counts of what was RANKED and the " +
-         "counts of what was EXCLUDED are one walk's output and arrive together, so a census holding one " +
-         "half would report an order with no exclusions as one that excluded nothing");
+  /* THE NON-RESIDENT HALF ARRIVES WHOLE, ASSERTED AGAINST THE WALK'S OWN ROW SET RATHER THAN AGAINST A LIST
+     KEPT HERE. This named two of the eight rows `_candCensus` declares — the two somebody thought of — so it
+     was a check that passed for exactly the shapes it was meant to reject: an exclusion row added to the walk
+     and dropped on the way here would have been an order reporting that it excluded nothing. `_candCensus()`
+     is the one statement of which rows a walk that RAN produces, so this cannot go stale. */
+  for (const k of Object.keys(_candCensus()))
+    DCHECK(("cands" in r) === (k in r),
+           "the Level-1 census carries part of the non-resident order — `" + k + "` and the total are one " +
+           "walk's output and arrive together, so a census holding one half would report an order with no " +
+           "exclusions as one that excluded nothing, or a population as an order that was never asked");
+  DCHECK(("cands" in r) === ("candAsk" in r),
+         "the Level-1 census holds a non-resident order without saying which of the round's two arms asked " +
+         "it (or says so with no order to qualify) — under the floor the comparison against `wMin` is " +
+         "admission's and at it it is eviction's, so a reading with no ask is two instants presented as one");
   DCHECK(!("candAsk" in r) || (r.candAsk === 1 || r.candAsk === 2),
          "the Level-1 census says the non-resident order was asked " + r.candAsk + " time(s) in one round — " +
          "there are exactly two arms that ask it (admission under the floor, eviction at it) and each asks " +
          "at most once, so anything else is an ask this record did not see and whose reading it is not holding");
-  DCHECK(!("cands" in r) || r.cands === r.candDocs + r.candCold,
-         "the Level-1 census ranked " + r.cands + " candidate(s) that are neither a waiting document nor a " +
-         "parked frontier — those are the only two kinds of work item with no instance, and a third would be " +
-         "ranked by whichever arm of the admission below happened to be the fallback");
+  /* THE POPULATIONS ACCOUNT FOR THE TOTAL, SUMMED OVER THE DECLARED KINDS AND NEVER OVER A SUM WRITTEN HERE.
+     `cands === candDocs + candCold` stood here after a THIRD kind — an address an application declared is a
+     page of itself — was already being ranked into the total, so this assert fired on healthy code at the
+     first bundle that named a route it does not link, from the round's own `finally`, which is every exit:
+     the instrument built so a frozen rank could not hide killed the scheduler it was measuring. A sum over
+     CAND_KINDS is the same statement that cannot be left behind, and it is still a real check — a kind
+     counted into the total by something other than `_candRanked` has no population and fails here. */
+  DCHECK(!("cands" in r) || r.cands === CAND_KINDS.reduce((n, k) => n + r[k.pop], 0),
+         "the Level-1 census ranked " + r.cands + " candidate(s) and its populations account for " +
+         CAND_KINDS.map((k) => k.pop).join(" + ") + " of them — every work item with no instance is one of " +
+         "the declared kinds, so a total that outruns them is an item counted into the order and accounted " +
+         "for by no population, which the admission would then build through whichever arm is the fallback");
   DCHECK(("candWMax" in r) === ("cands" in r && r.cands > 0) &&
-         ("candDocWMax" in r) === ("cands" in r && r.candDocs > 0) &&
-         ("candColdWMax" in r) === ("cands" in r && r.candCold > 0),
+         ("candWMin" in r) === ("cands" in r && r.cands > 0) &&
+         CAND_KINDS.every((k) => (k.wMax in r) === ("cands" in r && r[k.pop] > 0)),
          "the Level-1 census reports an extremum over an empty candidate population, or omits one over a " +
          "population that has members — the ABSENCE of a weight is how this record says there was nothing to " +
          "rank, so a `candWMax: 0` beside `cands: 0` is a rank fabricated for an order with no members and a " +
@@ -4952,11 +5009,12 @@ const _hostOps = {
     const pick = _admissionHasHeadroom() ? _bestCandidate(_coldRanking) : null;
     const cand = pick ? pick.best : null;
     if (cand) {
-      DCHECK(cand.kind === "doc" || cand.kind === "seed" || cand.kind === "cold",
+      DCHECK(CAND_KINDS.some((k) => k.kind === cand.kind),
              "the admission order produced a candidate of a kind this zone has no way to build (`" +
-             cand.kind + "`) — every work item that is not resident is a document waiting for an instance, an " +
-             "address an application declared is a page of itself, or a parked frontier, and a fourth would " +
-             "be silently skipped by whichever of the three arms below happened to be the fallback");
+             cand.kind + "`) — every work item that is not resident is one of the kinds CAND_KINDS declares " +
+             "(a document waiting for an instance, an address an application declared is a page of itself, a " +
+             "parked frontier), and one outside that table would be silently skipped by whichever of the " +
+             "arms below happened to be the fallback");
       /* AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF — HTML §7.4.4's URL and history update steps
          ran in some engine and it announced the route (solver/route_seed.h). This is where its ONE fetch is
          spent, and spending it HERE rather than at the notice is the whole reason the register exists: the
