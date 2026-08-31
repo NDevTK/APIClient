@@ -6258,14 +6258,20 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 g_step_unit = STEP_UNIT_AWAIT_OWED_REPLY;   /* every task source is empty; a reply is not */
                 return FLOW_STEP_OWED;
             }
-            /* HTML §8.1.4.7 "Unhandled promise rejections" — its "notify about rejected promises". The flow
-               has nothing left to run, so every rejection still on its list is one no handler will ever be
-               attached to. The browser half keeps
-               the lists and fires `unhandledrejection`; those fires are JOBS, so the flow has work again and
-               the loop picks them up like any other. Only what the page did not cancel comes back through the
-               report hook — and what it means then is this half's answer, the same thing a script that threw
-               means: a capability the page needed. Notifying clears the list, so the next pass finds none. */
-            else if ((g_step_unit = STEP_UNIT_REJECTION, unhandled_rejection_notify(ctx))) return 0;
+            /* HTML §8.1.4.7 "Unhandled promise rejections"'S "notify about rejected promises" IS NOT AN ARM OF
+               THIS LADDER, and the arm that stood here is DELETED rather than moved down or guarded. It read
+               "the flow has nothing left to run, so every rejection still on its list is one no handler will
+               ever be attached to" — which is the shape §scheduler names outright: a justification RESTING ON A
+               DRAIN is not a guarantee, and "on a frontier that grows it is the same starvation with a reason
+               attached". Everything above this line has to be empty before a flow gets here, so on any page
+               that keeps queueing work the notify never ran at all and every unhandled rejection of the run was
+               silent.
+               WHERE IT WENT IS WHERE HTML PUTS IT: "perform a microtask checkpoint" runs the queue to empty and
+               then, as its own next step, notifies about rejected promises for every settings object of the
+               event loop. engine_sched_slice already asks that exact emptying (no live frame, no parked
+               continuation, no microtask) for the consumer registered one step LATER in the same algorithm, so
+               the notify is called there, in front of it. It is not a scheduler step any more, so it costs no
+               pick and no arm — which is why STEP_UNIT_REJECTION is gone from solver/step_unit.h with it. */
             /* AND THE CODE THE PAGE SHIPPED AND NEVER RAN. Everything above this line is work the page ARRANGED
                — a program, a job, a lifecycle event, a timer, a frame — and it is all done, which makes this
                the first instant at which "nothing called this function" is a fact about this timeline rather
@@ -6302,6 +6308,32 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    distinguished from a drive that ran. Without the count a residue whose every drive missed
                    looks exactly like one whose every drive landed. */
                 if (f->orphan_want && JS_IsUndefined(f->fn)) g_orphan_claims_unmet++;
+                /* …AND IT MAY NOT FINISH HOLDING AN UN-NOTIFIED REJECTION, which is the OTHER half of the job
+                   assertion above and the invariant that REPLACES the arm this ladder used to carry. HTML
+                   §8.1.4.7 Unhandled promise rejections' notify runs at the end of every microtask checkpoint
+                   now (engine_sched_slice), and that seam is reached by every step that ends a unit of work —
+                   strictly more often than the deleted arm could ever have been — so a non-empty list HERE
+                   means this flow reached the one exit that declares its timeline OVER without ever ending a
+                   unit, and the fires that would have queued (they are §8.1.4.7 step 4 TASKS, so they are work
+                   this flow would still have had) die with it. That is an error the PAGE reported and this
+                   engine never saw, which reads exactly like a flow that ran and did nothing.
+                   BELOW THE REFERENCED RETURN, because the message is about FINISHING and a referenced flow
+                   does not finish — an assert whose text names an event that did not happen sends its reader
+                   somewhere the crash is not.
+                   COUNTED OUTSIDE THE CONDITION AND UNDER THE DEV GUARD: the read interns `length`, which is a
+                   side effect, and check.h forbids one inside a DCHECK — the same rule and the same shape as
+                   engine_host_take's pending_extra_count. */
+#if APICLIENT_DEV
+                {
+                    int unnotified = unhandled_rejection_pending(ctx);
+                    DCHECK(unnotified == 0,
+                           "a flow finished still holding rejections nobody has been notified about — HTML "
+                           "§8.1.4.7 Unhandled promise rejections' notify runs at the end of every microtask "
+                           "checkpoint, and that seam is reached by every step that ends a unit of work, so a "
+                           "non-empty list at the one exit that declares a timeline OVER means the checkpoint "
+                           "seam and this exit have stopped agreeing about when a flow's turn ends");
+                }
+#endif
                 g_step_unit = STEP_UNIT_FINISHED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
@@ -7897,8 +7929,46 @@ static int engine_sched_slice(void) {
                transaction active" check and the step that places its request. `JS_HasParkedFlow` is the other
                half of the same sentence, asked of the runtime because the flow is switched IN here and the
                queue is its own (JS_TakeParkedFlows/JS_PutParkedFlows carry it across a switch). */
-            if (g_checkpoint_hook && r != FLOW_STEP_DONE && !cur->frame &&
-                !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur))
+            /* THE EMPTYING ITSELF, READ ONCE. Three lines in this function ask the identical three-term
+               question — this checkpoint, the notify below it and the visit credit further down — and each
+               used to spell it out, with a paragraph beside two of them saying they are one sentence. Two
+               spellings of one predicate is the drift solver/pending.h refuses for the word "owed", and the
+               same argument holds here: what may differ between these readers is what they DO, never what
+               "this flow's turn ended" means. */
+            int unit_ended = !cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur);
+
+            /* …AND THE STEP OF "PERFORM A MICROTASK CHECKPOINT" THAT COMES FIRST, WHICH WAS NOT HERE AT ALL.
+               The algorithm runs the microtask queue to empty and then, verbatim: "For each environment
+               settings object settingsObject whose responsible event loop is this event loop, notify about
+               rejected promises given settingsObject's global object" — and the Cleanup-Indexed-Database-
+               transactions step the hook below serves is the step DIRECTLY AFTER it in that same list. So the
+               two are one algorithm's two tails in the standard's own order, and they are now written in it.
+               WHERE IT USED TO BE was an arm at the BOTTOM of flow_step's ladder, reachable only by a flow with
+               no program, no job, no reply, no lifecycle stage, no rendering opportunity, no due timer and no
+               outstanding request — a per-flow DRAIN, which §scheduler forbids as a justification in terms.
+               MEASURED, AND STATED AT THE STRENGTH IT WAS MEASURED AT: six runs of the native fixture at
+               3ca1e281 (nine to a hundred and forty-one `@COLD` censuses each, 213 in all, five of them cut off
+               by a wall-clock kill rather than by draining) put a member on the old arm in NINE censuses — all
+               of them inside the single deepest run, none before its 126th — and on the microtask-checkpoint
+               seam this now rides in 178. The arm was not unreachable; it was reached about one twentieth as
+               often as the position HTML actually specifies, and only on a run that got far. `finished` was 0
+               in all 213, which is the other half of the same sentence: the drain the old position waited for
+               has not once happened on this fixture.
+               THE DEV-BUILD ASSERT AT THE OTHER END IS WHAT KEEPS THIS HONEST: flow_step's finished arm now
+               refuses to declare a timeline over while its list is non-empty, so a flow that never reaches this
+               seam crashes by name instead of dropping the page's own error report.
+               IT IS IDEMPOTENT, exactly as the hook below is and for a stronger reason: the notify CLEARS the
+               list as it queues (unhandled_rejection.h says so at its own declaration), so a second call at a
+               second checkpoint queues nothing. Running it more often than a browser would is free; the
+               position is not earlier than a browser's, because this predicate IS the emptying HTML §8.1.4.4
+               Calling scripts' clean up after running script step 3 triggers the checkpoint on.
+               A FINISHED FLOW IS NOT ASKED, for the identical reason the hook is not: what this queues are
+               §8.1.4.7 step 4 TASKS on the flow's own queue, and a task enqueued on a flow that has finished is
+               a dropped work item — §scheduler's razor. The assert named above is what makes that safe rather
+               than merely consistent. */
+            if (r != FLOW_STEP_DONE && unit_ended)
+                unhandled_rejection_notify(ctx);
+            if (g_checkpoint_hook && r != FLOW_STEP_DONE && unit_ended)
                 g_checkpoint_hook(ctx);
             /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
                says is running, and that is only the flow this step advanced while nothing between the switch-in
@@ -7957,8 +8027,10 @@ static int engine_sched_slice(void) {
                this one bills only a step that finished what it was doing.
                THE PREDICATE IS HTML §8.1.4.4 "Calling scripts"'s, step 3 of clean up after running script: "if
                the JavaScript execution context stack is now empty". `Flow::frame` is that stack for a page
-               script and the runtime's parked slot is the other half of it (solver/flow.h, and the checkpoint
-               hook three lines above asks the identical pair for the identical reason), so a flow preempted in
+               script and the runtime's parked slot is the other half of it (solver/flow.h) — and it is READ
+               here rather than re-spelled, from the one `unit_ended` the checkpoint and the rejection notify
+               above read, because what differs between these three is what they DO and never what the question
+               means. So a flow preempted in
                the middle of a program is NOT credited — it is the same trial, still running. That is the whole
                of the fix: charged per quantum instead, a flow was strictly outranked by every arm it had forked
                as soon as it crossed one, so no flow ever reached the end of a program, and flow_step can only
@@ -7983,8 +8055,7 @@ static int engine_sched_slice(void) {
                and every job arm of flow_step is under this same `frame == NULL`: the flow then had to win the
                whole frontier again to run its own checkpoint. flow_credit_visit asserts it at the origin so no
                future credit site can reintroduce it; this is the predicate that satisfies the assert. */
-            if (!cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur)) {
-                flow_credit_visit(cur); g_units_done++; }
+            if (unit_ended) { flow_credit_visit(cur); g_units_done++; }
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
                suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
                within the quantum, which is what makes the frontier parkable at all. A path with NO suspend

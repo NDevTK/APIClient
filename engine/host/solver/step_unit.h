@@ -55,7 +55,12 @@
     X(LIFECYCLE,          "document-lifecycle-stage")                             \
     X(RENDERING,          "queue-rendering-opportunity")                          \
     X(TIMER,              "fire-due-timer")                                       \
-    X(REJECTION,          "unhandled-rejection-notify")                           \
+    /* NO `unhandled-rejection-notify` ROW, AND ITS ABSENCE IS A STATEMENT. HTML  */ \
+    /* §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is */ \
+    /* a step of "perform a microtask checkpoint", which HTML §8.1.7.3 Processing */ \
+    /* model defines and the scheduler runs at its own seam — so it is not an arm */ \
+    /* of flow_step and costs no pick. It WAS one, at the bottom of this ladder   */ \
+    /* behind a per-flow drain that this fixture has never once completed.        */ \
     X(ORPHAN_SEED,        "seed-one-orphan-flow")                                 \
     X(ORPHAN_ROUTE,       "hand-a-parked-drive-its-function")                     \
     X(ORPHAN_RESUME,      "resume-a-parked-orphan-drive")                         \

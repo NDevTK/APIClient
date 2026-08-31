@@ -34,4 +34,14 @@ void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst
    a second checkpoint notify about nothing twice. */
 int unhandled_rejection_notify(JSContext *ctx);
 
+/* HOW MANY ARE STILL ON THE LIST — the READ the line above cannot be used for, because that one TAKES. It
+   counts exactly what `notify` would queue, through the same live-entry test, so the two cannot disagree about
+   what "still unhandled" means.
+   THE CALLER IS AN ASSERTION AND THAT IS WHY IT EXISTS. The scheduler notifies at the end of every microtask
+   checkpoint and a flow may then not FINISH holding an un-notified rejection — a dropped one is an error the
+   page reported and this engine never saw, which is indistinguishable from a flow that ran and did nothing.
+   Reading it is not free (it interns `length`), so a caller inside a DCHECK computes it OUTSIDE the condition,
+   under the dev guard, exactly as engine_host_take does with pending_extra_count. */
+int unhandled_rejection_pending(JSContext *ctx);
+
 #endif

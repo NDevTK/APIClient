@@ -22,11 +22,42 @@
  * a C-global list would report one flow's rejection against another's world. A baseline Array carries all of
  * that through the heap COW with no new primitive.
  *
- * THE CHECKPOINT IS THE FLOW'S END, not HTML's per-microtask-checkpoint. HTML notifies after every microtask
- * checkpoint and then fires `rejectionhandled` to RETRACT a report whose promise was handled afterwards; this
- * engine has no drain to hang a checkpoint on (the scheduler IS the job pump), and reporting once the flow has
- * no work left is strictly the same set minus the retractions. That is why there is no rejectionhandled here:
- * there is no early report for it to retract.
+ * THE CHECKPOINT IS THE END OF A MICROTASK CHECKPOINT, WHICH IS WHERE HTML PUTS IT. "Perform a microtask
+ * checkpoint" — the algorithm HTML §8.1.7.3 "Processing model" defines — runs the queue to empty and then, as
+ * its own next step, "For each environment settings object settingsObject whose responsible event loop is this
+ * event loop, notify about rejected promises given settingsObject's global object". So the notify is a step of
+ * that algorithm and not a thing that happens when a page is over, and the Cleanup-Indexed-Database-
+ * transactions step is the one directly AFTER it in the same list. The scheduler calls both there, in that
+ * order (solver/engine.c's slice).
+ *
+ * THE PARAGRAPH THAT STOOD HERE SAID THE OPPOSITE AND ITS PREMISE WAS FALSE ABOUT THIS TREE, which is why it
+ * is written out rather than deleted: in its own words (this file's, not any standard's) the notify belonged
+ * at the flow's end because this engine had no drain to hang a checkpoint on, the scheduler being the job
+ * pump. The scheduler has had that seam — the point at which a step ends with no live frame, no parked
+ * continuation and no microtask left, which IS the emptying HTML §8.1.4.4 "Calling scripts"' clean up after
+ * running script step 3 triggers on — and the consumer registered there cites this very algorithm. A reader
+ * who re-derives the retired reason will re-introduce it, so the reason is recorded as retired.
+ *
+ * WHAT IT COST, and it is not a rounding difference: the flow's end was an ARM at the BOTTOM of flow_step's
+ * ladder, below the sequence, the jobs, the replies, the lifecycle, the rendering opportunity, the timer and
+ * the host-owed return. A flow reaches it only by running out of every one of those, and CLAUDE.md §scheduler
+ * says in terms that a justification resting on a drain is not a guarantee: on a frontier that grows it is the
+ * same starvation with a reason attached. This file's own retired claim — that the flow's end is strictly the
+ * same set minus the retractions — is therefore true only of a flow that ENDS; for one that does not it is the
+ * EMPTY set, and every unhandled rejection of the run is silent — the exact failure the paragraph above this
+ * one calls the worst possible for this tool. Measured on the native fixture, which stages rejecting chunks, over six runs
+ * and 213 `@COLD` censuses: a member stood on that arm in nine of them, all inside the one deepest run and
+ * none before its 126th census, while the seam this now rides carried one in 178 — and no flow FINISHED in
+ * any census of any run, which is the drain the old position was waiting for.
+ *
+ * NAMED RESIDUAL — `rejectionhandled` IS STILL NOT FIRED, and the reason it used to be absent is now gone.
+ * NOT COVERED: §8.1.4.7's retraction edge. Notifying per checkpoint means a promise handled AFTER its report
+ * now has an early report to retract, which is precisely what the old position did not produce. The handled
+ * edge is already tracked (the tracker empties the slot in place), so what the next diff builds is the FIRE:
+ * a `rejectionhandled` PromiseRejectionEvent at the global for a promise the outstanding set holds, queued on
+ * the same task source as the `unhandledrejection` fire beside it. HOW ITS ABSENCE SHOWS: a page whose
+ * `unhandledrejection` handler records an error and whose `rejectionhandled` handler would erase it reports an
+ * error it went on to handle — one report too many, where the old position gave none at all.
  *
  * THE EVENT IS THE PAGE'S CHANCE TO ANSWER, and it is CANCELABLE, so the report is not this component's to
  * make: §8.1.4.7 fires `unhandledrejection` at the global and reports only if nothing called preventDefault.
@@ -35,9 +66,7 @@
  * Firing is a REQUEST (dispatch is synchronous and its listeners are the page's code), so each notification is
  * a step machine on the flow's queue rather than a call from C.
  *
- * WHAT IS HONESTLY ABSENT: `rejectionhandled`. It exists to RETRACT a report made at a per-microtask
- * checkpoint whose promise was handled afterwards, and this engine notifies at the flow's end instead, where
- * there is no early report to retract. */
+ */
 #include <string.h>
 
 #include "check.h"
@@ -315,6 +344,25 @@ int unhandled_rejection_notify(JSContext *ctx)
     /* CLEARED HERE, not when the fires complete: the list is "about to be notified about", and these now are. */
     JS_SetPropertyStr(ctx, g_list, "length", JS_NewInt32(ctx, 0));
     return queued;
+}
+
+int unhandled_rejection_pending(JSContext *ctx)
+{
+    uint32_t n, i;
+    int live = 0;
+
+    DCHECK(g_ready, "the rejected-promise list was counted before the tracker was installed");
+    n = list_len(ctx);
+    /* THE SAME LIVE-ENTRY TEST `notify` USES, and it is the whole content of this function: a slot the handled
+       edge emptied is `undefined` IN PLACE (the identity of a slot is what that edge finds it by, so the list
+       is never compacted), and counting those would report a rejection somebody already caught. One predicate,
+       two readers, so a caller asserting "nothing is owed" and the loop that owes it cannot drift. */
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, g_list, i);
+        if (JS_IsObject(e)) live++;
+        JS_FreeValue(ctx, e);
+    }
+    return live;
 }
 
 void unhandled_rejection_init(JSContext *ctx)
