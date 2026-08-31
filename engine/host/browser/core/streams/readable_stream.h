@@ -54,12 +54,12 @@ JSValue readable_stream_ctrl_op(JSContext *ctx, ReadableControllerOp which);
 /* §4.5's controller for a stream this component built. BORROWED. */
 JSValueConst readable_stream_controller(JSValueConst stream);
 
-/* §4.5's ReadableStreamDefaultControllerCanCloseOrEnqueue and …HasBackpressure — the two predicates §6.3 reads
+/* §4.9.4's ReadableStreamDefaultControllerCanCloseOrEnqueue and …HasBackpressure — the two predicates §6.3 reads
    off the readable half before it enqueues and after it has. Both answer false for a non-controller. */
 bool readable_ctrl_can_close_or_enqueue(JSContext *ctx, JSValueConst ctrl);
 bool readable_ctrl_has_backpressure(JSContext *ctx, JSValueConst ctrl);
 
-/* §4.5's ReadableStreamDefaultControllerGetDesiredSize — the VALUE, not the member. §6.4's `desiredSize` is
+/* §4.9.4's ReadableStreamDefaultControllerGetDesiredSize — the VALUE, not the member. §6.4's `desiredSize` is
    defined as this operation on the readable half's controller, and a getter is the one thing a host may not
    reach for: reading the accessor from C runs page code off the tramp chain, which the engine aborts on. The
    answer is the spec's number-or-null, already a JSValue because null is one of the two answers. */

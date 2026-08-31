@@ -1120,7 +1120,7 @@ enum { BC_ENQUEUE = 0, BC_CLOSE, BC_ERROR };
                "the waiting reader directly rather than being queued)") \
     X(BS_COMMIT, "Streams §4.9.5 ReadableByteStreamControllerCommitPullIntoDescriptor (each filled pull-into " \
                  "answers one parked read-into request)") \
-    X(BS_SETTLE, "Streams §4.9.1 ReadableStreamClose / ReadableStreamError (the reader's `closed` promise and " \
+    X(BS_SETTLE, "Streams §4.9.2 ReadableStreamClose / ReadableStreamError (the reader's `closed` promise and " \
                  "every parked request)") \
     X(BS_RETHROW, "Streams §4.9.5 ReadableByteStreamControllerClose step 4.1.3 (a close at a misaligned fill " \
                   "errors the stream and then throws the same TypeError at its caller)") \
@@ -1473,7 +1473,7 @@ enum { BQ_RESPOND = 0, BQ_RESPOND_VIEW };
                 "ReadableByteStreamControllerRespondInternal, up to its first run of the page's code") \
     X(BQ_COMMIT, "Streams §4.9.5 ReadableByteStreamControllerCommitPullIntoDescriptor (each filled pull-into " \
                  "answers one parked read-into request)") \
-    X(BQ_SETTLE, "Streams §4.9.1 ReadableStreamError (a respond whose remainder could not be cloned errors " \
+    X(BQ_SETTLE, "Streams §4.9.2 ReadableStreamError (a respond whose remainder could not be cloned errors " \
                  "the stream before it throws)") \
     X(BQ_PULL, "Streams §4.9.5 ReadableByteStreamControllerRespondInternal step 6 (CallPullIfNeeded)")
 enum { BQ_STAGES(JS_STEP_STAGE_ENUM) };

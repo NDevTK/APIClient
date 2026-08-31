@@ -59,15 +59,15 @@ typedef struct {
     uint8_t byob;
 } ReaderData;
 
-/* The settle sequence's states — §4.9.1's ReadableStreamClose, ReadableStreamError and §4.9.3's
+/* The settle sequence's states — §4.9.2's ReadableStreamClose, ReadableStreamError and §4.9.3's
    GenericRelease, which are one sequence with several entry points. S_INTO_LOOP is ReadableStreamCancel's own
    step 6: a BYOB reader's read-into requests are NOT answered by Close (which is why the close loop skips
    them) and ARE answered by a cancel, with the backing memory deliberately dropped. */
 enum { S_IDLE = 0,
-       S_CLOSE_SET, S_CLOSE_CLOSED, S_CLOSE_LOOP,   /* §4.9.1's ReadableStreamClose */
-       S_ERR_SET,   S_ERR_CLOSED,   S_ERR_LOOP,     /* §4.9.1's ReadableStreamError */
+       S_CLOSE_SET, S_CLOSE_CLOSED, S_CLOSE_LOOP,   /* §4.9.2's ReadableStreamClose */
+       S_ERR_SET,   S_ERR_CLOSED,   S_ERR_LOOP,     /* §4.9.2's ReadableStreamError */
        S_REL_CLOSED, S_REL_LOOP,                    /* §4.9.3's release: the reader loses, the stream survives */
-       S_INTO_LOOP };                               /* §4.9.1's ReadableStreamCancel step 6 */
+       S_INTO_LOOP };                               /* §4.9.2's ReadableStreamCancel step 6 */
 enum { P_IDLE = 0, P_TEST, P_CALL, P_RESOLVE, P_REJECT, P_THEN };
 
 /* The records behind the class opaques, CAPTURED INTO THE RUNNING FLOW'S DELTA on the way — see the note in
@@ -86,12 +86,12 @@ void rs_stream_set(JSContext *ctx, StreamData *d, JSValue *slot, JSValue v);
    CONSUMED. */
 JSValue rs_read_result(JSContext *ctx, JSValue value, bool done);
 
-/* §4.9.1's ReadableStreamGetNumReadRequests / ReadableStreamGetNumReadIntoRequests — one operation, because
+/* §4.9.2's ReadableStreamGetNumReadRequests / ReadableStreamGetNumReadIntoRequests — one operation, because
    the two lists are one pair of arrays. */
 uint32_t rs_read_pending(JSContext *ctx, StreamData *d);
 /* TAKE the next parked request's resolve (or reject), or JS_UNDEFINED when none is parked. */
 JSValue rs_take_read(JSContext *ctx, StreamData *d, int reject);
-/* §4.9.1's ReadableStreamAddReadRequest / …AddReadIntoRequest: park a capability's resolving functions, which
+/* §4.9.2's ReadableStreamAddReadRequest / …AddReadIntoRequest: park a capability's resolving functions, which
    are CONSUMED. */
 void rs_park_read(JSContext *ctx, StreamData *d, JSValue *funcs);
 

@@ -683,9 +683,12 @@ run:
         }
 
         case S_HWM_W: case S_HWM_R: {
-            /* §6.2's ExtractHighWaterMark is `? ToNumber(...)`, and ToNumber on an object runs the page's
-               `valueOf` — so it is a request, not a JS_ToFloat64 from C. Two marks, two stages, because the
-               coercion sub-sequence keeps one phase on the header and a second would overwrite it. */
+            /* THE `ToNumber` IS WEB IDL'S, NOT THE STREAMS OPERATION'S. Streams §7.4 "Abstract operations"'s
+               ExtractHighWaterMark reads `strategy["highWaterMark"]` and only compares it; the coercion
+               happens one layer up, converting that dictionary member to an IDL `double` — Web IDL §3.2.7
+               "double": "Let x be ? ToNumber(V)". ToNumber on an object runs the page's `valueOf`, so it is a
+               request, not a JS_ToFloat64 from C. Two marks, two stages, because the coercion sub-sequence
+               keeps one phase on the header and a second would overwrite it. */
             int w = (ts_stage(s) == S_HWM_W);
             JSValueConst v = s->strat[w ? 0 : 2];
             if (!JS_IsUndefined(v)) {

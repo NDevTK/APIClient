@@ -6,7 +6,7 @@
  * settling is the page's code, so it is a machine like every other member that touches one.
  *
  * WHAT IS HERE. The stream, the default reader, §4.5's default controller with its PULL loop, and a source that
- * is the HOST'S BYTES. §4.5's ReadableStreamDefaultControllerCallPullIfNeeded reacts to the promise the page's
+ * is the HOST'S BYTES. §4.9.4's ReadableStreamDefaultControllerCallPullIfNeeded reacts to the promise the page's
  * `pull` returned by calling `pull` AGAIN and, on rejection, by erroring the controller — so its reactions are
  * MACHINES (rejecting a parked read request settles a promise) that know their controller only by CAPTURE, and
  * they are attached with PerformPromiseThen rather than a `.then` read because that is what the spec performs.
@@ -50,7 +50,7 @@ typedef struct {
     JSValue cancel_fn;        /* the page's `cancel`, or JS_UNDEFINED */
     /* §4.9.4 builds each algorithm with CreateAlgorithmFromUnderlyingMethod, which INVOKES the method on the
        underlying source — so `start`, `pull` and `cancel` see it as their receiver, and a source written with
-       methods that use `this` works. (The strategy's `size` is the exception: §4.2's ExtractSizeAlgorithm
+       methods that use `this` works. (The strategy's `size` is the exception: §7.4's ExtractSizeAlgorithm
        Calls it with undefined, which is why it is not held here.) */
     JSValue source;
     JSValue size_fn;          /* the strategy's `size`, or JS_UNDEFINED for the implicit one-per-chunk */
@@ -237,7 +237,7 @@ static uint32_t stream_queued(JSContext *ctx, StreamData *d)
     return n - d->head;
 }
 
-/* §4.5's ResetQueue: the chunks, their sizes and the total go together, so they are dropped together. Every
+/* §8.1's ResetQueue: the chunks, their sizes and the total go together, so they are dropped together. Every
    site that empties the queue calls this — an error, a cancel, a fresh stream — because a total left behind
    makes desiredSize answer for chunks that are gone. Returns -1 with an exception live. */
 static int stream_queue_reset(JSContext *ctx, StreamData *d)
@@ -255,7 +255,7 @@ static int stream_queue_reset(JSContext *ctx, StreamData *d)
     return 0;
 }
 
-/* §4.5's EnqueueValueWithSize, minus its own RangeError — the caller checks that, because the check's failure
+/* §8.1's EnqueueValueWithSize, minus its own RangeError — the caller checks that, because the check's failure
    is what errors the stream. */
 static void stream_enqueue(JSContext *ctx, StreamData *d, JSValueConst chunk, double size)
 {
@@ -268,7 +268,7 @@ static void stream_enqueue(JSContext *ctx, StreamData *d, JSValueConst chunk, do
     d->queue_total += size;
 }
 
-/* §4.5's DequeueValue: the chunk leaves and the total loses its size. The clamp at zero is the spec's own,
+/* §8.1's DequeueValue: the chunk leaves and the total loses its size. The clamp at zero is the spec's own,
    for the floating-point arithmetic a page can arrange with fractional sizes. */
 static JSValue stream_dequeue(JSContext *ctx, StreamData *d)
 {
@@ -283,7 +283,7 @@ static JSValue stream_dequeue(JSContext *ctx, StreamData *d)
     return chunk;
 }
 
-/* §4.9.1's ReadableStreamGetNumReadRequests / …GetNumReadIntoRequests. */
+/* §4.9.2's ReadableStreamGetNumReadRequests / …GetNumReadIntoRequests. */
 uint32_t rs_read_pending(JSContext *ctx, StreamData *d)
 {
     JSValue len_v = JS_GetPropertyStr(ctx, d->read_resolve, "length");
@@ -439,7 +439,7 @@ bool readable_stream_disturbed(JSValueConst v)
  * because exactly one call is ever in flight. The two enumerations are readable_stream_impl.h's, because §4.7's
  * controller runs the same two sequences. */
 
-/* §4.9.1's ReadableStreamAddReadRequest / …AddReadIntoRequest. */
+/* §4.9.2's ReadableStreamAddReadRequest / …AddReadIntoRequest. */
 void rs_park_read(JSContext *ctx, StreamData *d, JSValue *funcs)
 {
     uint32_t at = rs_read_pending(ctx, d) + d->rhead;
@@ -509,7 +509,7 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
     return 0;
 }
 
-/* §4.2's ReadableStreamClose and ReadableStreamError and §4.3's release, which are ONE sequence with three
+/* §4.9.2's ReadableStreamClose and ReadableStreamError and §4.3's release, which are ONE sequence with three
  * entry points: move the stream's state (or, for a release, none), settle the reader's `closed` promise, then
  * answer EVERY parked read request. All three say "for each readRequest", and answering one is a CALL of the
  * page's code — so the tail is a LOOP OF CALL REQUESTS, one suspension per request. Answering only the first,
@@ -529,7 +529,7 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
             d->state = RS_ERRORED;
             rs_stream_set(ctx, d, &d->stored_error, w->err);   /* HANDED OVER: the stream owns it from here */
             w->err = JS_UNDEFINED;
-            /* §4.5's ResetQueue: an errored stream has no chunks left to give */
+            /* §8.1's ResetQueue: an errored stream has no chunks left to give */
             if (stream_queue_reset(ctx, d) < 0) { JS_FreeValue(ctx, in); return -1; }
         } else {
             JS_FreeValue(ctx, w->err);
@@ -563,7 +563,7 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
     DCHECK(w->settle == S_CLOSE_LOOP || w->settle == S_ERR_LOOP || w->settle == S_REL_LOOP ||
            w->settle == S_INTO_LOOP, "the settle sequence resumed in a state it never parks in");
 
-    /* §4.9.1's ReadableStreamClose answers a DEFAULT reader's read requests and says nothing about a BYOB
+    /* §4.9.2's ReadableStreamClose answers a DEFAULT reader's read requests and says nothing about a BYOB
        reader's read-into requests — they stay parked, because the memory they were given has not come back
        yet. Only a CANCEL returns them (with the memory deliberately dropped), and that is S_INTO_LOOP. */
     if (w->settle == S_CLOSE_LOOP && rd && rd->byob) {
@@ -616,7 +616,7 @@ enum { RXN_START_OK = 0, RXN_START_ERR, RXN_PULL_OK, RXN_PULL_ERR };
     X(RXN_DECIDE, "Streams §4.9.4 SetUpReadableStreamDefaultController steps 11-12 / §4.5 " \
                   "ReadableStreamDefaultControllerCallPullIfNeeded steps 6-7 (which reaction this is: the " \
                   "controller is started, a pull may repeat, or an error is to be reported)") \
-    X(RXN_RUN, "Streams §4.5 ReadableStreamDefaultControllerCallPullIfNeeded steps 2-7 / §4.2 " \
+    X(RXN_RUN, "Streams §4.9.4 ReadableStreamDefaultControllerCallPullIfNeeded steps 2-7 / §4.2 " \
                "ReadableStreamError (the pull the reaction asks for, or the error it reports)")
 enum { RXN_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RXN_STEPS[] = { RXN_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -707,13 +707,13 @@ static int ctrl_forward(JSContext *ctx, JSValueConst promise, JSValueConst on_ok
     return 0;
 }
 
-/* §4.5's ReadableStreamDefaultControllerCanCloseOrEnqueue. */
+/* §4.9.4's ReadableStreamDefaultControllerCanCloseOrEnqueue. */
 static bool ctrl_can_close_or_enqueue(ControllerData *c, StreamData *d)
 {
     return !c->close_requested && d->state == RS_READABLE;
 }
 
-/* §4.5's ReadableStreamDefaultControllerShouldCallPull. The default strategy's high-water mark is 1, so the
+/* §4.9.4's ReadableStreamDefaultControllerShouldCallPull. The default strategy's high-water mark is 1, so the
    desired size is 1 minus what is queued — which is why a source with an empty queue is pulled once even
    though nobody is reading, and why a source with a chunk in hand is not. */
 static bool ctrl_should_pull(JSContext *ctx, ControllerData *c, StreamData *d)
@@ -869,17 +869,17 @@ static const JSTrampStepDef js_rxn_defs[4] = {
  * It also performs §4.5's PullSteps, which is where a stream's `pull` is asked for on demand — and the spec's
  * ORDER is that the close-or-pull happens BEFORE the read request is answered, so those are stages ahead of the
  * settle rather than after it. */
-/* WHERE THIS MACHINE RESTS. §4.3's read() is three steps over §4.7's ReadableStreamDefaultReaderRead, whose
+/* WHERE THIS MACHINE RESTS. §4.3's read() is three steps over §4.9.3's ReadableStreamDefaultReaderRead, whose
    step 6.2 is §4.5's [[PullSteps]] — and the close-or-pull that operation performs runs BEFORE the read
    request is answered, which is why those are stages ahead of the settle rather than after it. */
 #define RD_STAGES(X) \
-    X(RD_START, "Streams §4.3 read() steps 1-3 and §4.7 ReadableStreamDefaultReaderRead steps 1-6 (the brand, " \
+    X(RD_START, "Streams §4.3 read() steps 1-3 and §4.9.3 ReadableStreamDefaultReaderRead steps 1-6 (the brand, " \
                 "the released refusal, the promise, and what the stream's state answers with)") \
     X(RD_CLOSE, "Streams §4.5 [[PullSteps]] step 3.3 (draining the last chunk of a stream whose close was " \
                 "requested performs ReadableStreamClose)") \
     X(RD_PULL, "Streams §4.5 [[PullSteps]] step 3.4 / step 4 (CallPullIfNeeded, because the drain made room " \
                "or because the request parked)") \
-    X(RD_SETTLE, "Streams §4.7 ReadableStreamDefaultReaderRead steps 4-6 (the read request's close, error or " \
+    X(RD_SETTLE, "Streams §4.9.3 ReadableStreamDefaultReaderRead steps 4-6 (the read request's close, error or " \
                  "chunk steps — settling the promise is the page's code)")
 enum { RD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RD_STEPS[] = { RD_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -1051,7 +1051,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
 
 static const JSTrampStepDef js_read_def = {
     sizeof(JSReadState), js_read_step, js_read_fini, 0, .catches_abrupt = 1, .visit = js_read_visit,
-    .algorithm = "Streams §4.3 read(), through §4.7 ReadableStreamDefaultReaderRead", .steps = RD_STEPS
+    .algorithm = "Streams §4.3 read(), through §4.9.3 ReadableStreamDefaultReaderRead", .steps = RD_STEPS
 };
 
 /* §4.3's `releaseLock()`. A MACHINE, because releasing is not just dropping the lock: it REJECTS the reader's
@@ -1315,7 +1315,7 @@ static const IdlStepDecl js_get_reader_decl = {
     "Streams §4.7 SetUpReadableStreamDefaultReader (getReader() and the reader constructor both)", GR_STEPS
 };
 
-/* §4.2's ReadableStreamCancel, reached from the stream's `cancel(reason)` and from the reader's — §4.3 says
+/* §4.9.2's ReadableStreamCancel, reached from the stream's `cancel(reason)` and from the reader's — §4.3 says
  * a reader cancels the stream it holds, so the two ARE one operation and one machine.
  *
  * IT CALLS THE SOURCE'S OWN `cancel`, and the promise it hands back settles when the SOURCE'S does: §4.2 step 7
@@ -1331,16 +1331,16 @@ static const IdlStepDecl js_get_reader_decl = {
 enum { CANCEL_ON_STREAM = 0, CANCEL_ON_DEFAULT, CANCEL_ON_BYOB };
 
 #define CN_STAGES(X) \
-    X(CN_START, "Streams §4.9.1 ReadableStreamCancel steps 1-3 (disturbed, then the closed/errored " \
+    X(CN_START, "Streams §4.9.2 ReadableStreamCancel steps 1-3 (disturbed, then the closed/errored " \
                 "short-circuits)") \
-    X(CN_CLOSE, "Streams §4.9.1 ReadableStreamCancel step 4's ReadableStreamClose (the reader's `closed` " \
+    X(CN_CLOSE, "Streams §4.9.2 ReadableStreamCancel step 4's ReadableStreamClose (the reader's `closed` " \
                 "resolves and its parked read requests are answered)") \
-    X(CN_CLOSE_INTO, "Streams §4.9.1 ReadableStreamCancel step 6 (a BYOB reader's read-into requests are " \
+    X(CN_CLOSE_INTO, "Streams §4.9.2 ReadableStreamCancel step 6 (a BYOB reader's read-into requests are " \
                      "answered with undefined — the backing memory they lent is discarded)") \
-    X(CN_CALL, "Streams §4.9.1 ReadableStreamCancel step 7 (the controller's [[CancelSteps]] — the source's " \
+    X(CN_CALL, "Streams §4.9.2 ReadableStreamCancel step 7 (the controller's [[CancelSteps]] — the source's " \
                "own `cancel` algorithm over the reason)") \
-    X(CN_RESOLVE, "Streams §4.2 ReadableStreamCancel step 8 (PromiseResolve over what the source answered)") \
-    X(CN_THEN, "Streams §4.2 ReadableStreamCancel step 8 (reacting to sourceCancelPromise with a fulfilment " \
+    X(CN_RESOLVE, "Streams §4.9.2 ReadableStreamCancel step 8 (PromiseResolve over what the source answered)") \
+    X(CN_THEN, "Streams §4.9.2 ReadableStreamCancel step 8 (reacting to sourceCancelPromise with a fulfilment " \
                "step that returns undefined)") \
     X(CN_SETTLE, "Streams §4.2 cancel(reason) steps 1-2 (settling this member's own answer — a rejected " \
                  "promise for a locked stream, or undefined)")
@@ -1566,17 +1566,17 @@ enum { CTRL_ENQUEUE = 0, CTRL_CLOSE, CTRL_ERROR };
    pull — and each stage names the step of whichever member reached it. */
 #define CS_STAGES(X) \
     X(CS_START, "Streams §4.5 enqueue/close/error steps 1-2 (the brand and CanCloseOrEnqueue)") \
-    X(CS_SIZE, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 3.1 (the strategy's size algorithm " \
+    X(CS_SIZE, "Streams §4.9.4 ReadableStreamDefaultControllerEnqueue step 3.1 (the strategy's size algorithm " \
                "over the chunk)") \
-    X(CS_ENQUEUE, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 3.2 (EnqueueValueWithSize, whose " \
+    X(CS_ENQUEUE, "Streams §4.9.4 ReadableStreamDefaultControllerEnqueue step 3.2 (EnqueueValueWithSize, whose " \
                   "own throw errors the controller)") \
-    X(CS_SETTLE, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 2 (a waiting reader is answered " \
+    X(CS_SETTLE, "Streams §4.9.4 ReadableStreamDefaultControllerEnqueue step 2 (a waiting reader is answered " \
                  "with the chunk instead of it being queued)") \
-    X(CS_SETTLE_ALL, "Streams §4.2 ReadableStreamClose / ReadableStreamError (settling `closed` and every " \
+    X(CS_SETTLE_ALL, "Streams §4.9.2 ReadableStreamClose / ReadableStreamError (settling `closed` and every " \
                      "parked read request, for `close()` and `error()`)") \
-    X(CS_PULL, "Streams §4.5 ReadableStreamDefaultControllerCallPullIfNeeded (asked after every one of the " \
+    X(CS_PULL, "Streams §4.9.4 ReadableStreamDefaultControllerCallPullIfNeeded (asked after every one of the " \
                "three members, because each changes what ShouldCallPull answers)") \
-    X(CS_RETHROW, "Streams §4.5 ReadableStreamDefaultControllerEnqueue step 3.1's abrupt completion (the " \
+    X(CS_RETHROW, "Streams §4.9.4 ReadableStreamDefaultControllerEnqueue step 3.1's abrupt completion (the " \
                   "size algorithm's OWN throw is re-raised while the stream keeps the reason it was errored " \
                   "with)")
 enum { CS_STAGES(JS_STEP_STAGE_ENUM) };
@@ -1672,7 +1672,7 @@ static int js_ctrl_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         s->size = 0;
         if (JS_ToFloat64(ctx, &s->size, out) < 0) { JS_FreeValue(ctx, out); goto size_bad; }
         JS_FreeValue(ctx, out);
-        /* §4.5's EnqueueValueWithSize: a size that is not a FINITE NON-NEGATIVE number is a RangeError, and
+        /* §8.1's EnqueueValueWithSize: a size that is not a FINITE NON-NEGATIVE number is a RangeError, and
            §4.5 answers both that and a throwing size the same way — error the stream, then re-raise, so the
            caller of enqueue() sees the failure AND every reader sees the stream die. */
         if (!isfinite(s->size) || s->size < 0) {
@@ -1747,7 +1747,7 @@ static JSValue js_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValu
     return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
-/* §4.5's ReadableStreamDefaultControllerGetDesiredSize. With the default strategy the high-water mark is 1, so
+/* §4.9.4's ReadableStreamDefaultControllerGetDesiredSize. With the default strategy the high-water mark is 1, so
    it is 1 minus what is queued — a page uses it to decide whether to enqueue more, and answering a constant
    would make that decision wrong. An errored stream has no room to describe, which is why null is a value here
    and not an error. */
@@ -4053,7 +4053,7 @@ void readable_stream_init(JSContext *ctx)
     g_reader_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_get_reader_decl, GR_CTOR);
     g_byob_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_get_reader_decl, GR_CTOR_BYOB);
 
-    /* §4.2.4's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
+    /* §4.9.1's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
        another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
        the prototype they go on. The declaration is piping's; the placement is this interface's. */
     pipe_init(ctx);
@@ -4096,7 +4096,7 @@ void readable_stream_install_protos(JSContext *ctx)
        object), §3.7.10.1's iterator and §3.7.10.2's prototype under this realm's %AsyncIteratorPrototype%. All
        of it Web IDL's, installed here because the two halves are installed together or not at all. */
     idl_async_iter_install(ctx, stream_p, g_rs_iter_handle);
-    /* §4.2.4's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
+    /* §4.9.1's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
        another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
        the prototype they go on. The declaration is piping's; the placement is this interface's. */
     pipe_install(ctx, stream_p);

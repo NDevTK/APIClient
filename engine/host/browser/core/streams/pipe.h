@@ -1,4 +1,4 @@
-/* §4.2.4's ReadableStreamPipeTo, and the two ReadableStream members over it. See pipe.c. */
+/* §4.9.1's ReadableStreamPipeTo, and the two ReadableStream members over it. See pipe.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_STREAMS_PIPE_H
 #define ENGINE_HOST_BROWSER_CORE_STREAMS_PIPE_H
 
