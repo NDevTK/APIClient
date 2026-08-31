@@ -528,14 +528,18 @@ static void subtle_crypto_install_realm(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "SubtleCrypto.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "SubtleCrypto");
-    /* §14's interface is `[SecureContext]` as a whole, and Web IDL §3.3.13 REMOVES a member in a non-secure
-       realm rather than making it throw — `'digest' in crypto.subtle` is what a bundle feature-detects with,
-       and absent, throwing and undefined are three different branches. */
+    /* §14's interface is `[SecureContext]` as a whole, and Web IDL §3.3.13 [SecureContext] REMOVES a member in
+       a non-secure realm rather than making it throw — `'digest' in crypto.subtle` is what a bundle
+       feature-detects with, and absent, throwing and undefined are three different branches. */
     idl_install_method_exposed(ctx, proto, "digest", g_id_digest, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_subtle_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "SubtleCrypto", idl_interface_object(ctx, "SubtleCrypto", proto));
+    /* THE OTHER HALF OF THAT ONE ANNOTATION — §3.3.13's example states it in the same sentence as the members
+       ("In such a context, there will be no \"HeartbeatSensor\" property on Window") — so the interface object
+       carries the SAME IdlExposure the member above does, and `'SubtleCrypto' in window` is false over plain
+       http exactly as `crypto.subtle` is undefined there. */
+    idl_install_interface_object_exposed(ctx, global, "SubtleCrypto", proto, IDL_SECURE_CONTEXT);
     JS_FreeValue(ctx, global);
 
     obj = JS_NewObjectProtoClass(ctx, proto, g_subtle_class);

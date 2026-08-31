@@ -5068,6 +5068,22 @@ JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst prot
     return ctor;
 }
 
+/* §3.7 Interfaces' "corresponding property … on the realm's global object", asked through §3.3.7 [Exposed]'s
+   one gate — see idl_args.h for why the exposure is the install's argument and never a caller's `if`.
+   THE MINT IS INSIDE THE GATE. Building the interface object and then declining to install it would leave a
+   §3.7.1 function object with this realm's prototype on it, reachable from nothing and freed immediately — a
+   thing that exists in a realm the standard says it does not exist in, and the kind of half-state a later
+   reader takes for a cache. Not exposed means not built. */
+void idl_install_interface_object_exposed(JSContext *ctx, JSValueConst target, const char *name,
+                                          JSValueConst proto, IdlExposure exposure)
+{
+    DCHECK(name != NULL && *name, "an interface object was installed with no identifier — §3.7 names the "
+                                  "global's property after the interface, and there is nothing else to key it "
+                                  "by");
+    if (!idl_exposed(ctx, exposure)) return;   /* §3.3.13: "there will be no \"X\" property on Window" */
+    JS_SetPropertyStr(ctx, (JSValue)target, name, idl_interface_object(ctx, name, proto));
+}
+
 /* WEB IDL §3.11.1 "Legacy callback interface object". "For every callback interface that is exposed in a given
    realm and on which constants are defined, a corresponding property exists on the realm's global object …
    its value is an object called the legacy callback interface object", and that object is created by "Let

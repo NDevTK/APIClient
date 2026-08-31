@@ -289,15 +289,10 @@ static void crypto_key_install_realm(JSContext *ctx)
     idl_interface_tag(ctx, proto, "CryptoKey");
     /* §13's INTERFACE IS `[SecureContext]` AS A WHOLE, so Web IDL §3.3.13 [SecureContext] removes each member
        in a non-secure realm rather than making it throw — its own example says so of an interface-level
-       annotation: "HeartbeatSensor will not be exposed in a non-secure context, nor will its members".
-       A NAMED RESIDUAL RIDES WITH THAT, and it is the OTHER half of the same sentence: §3.3.13 also removes
-       the interface OBJECT ("there will be no 'HeartbeatSensor' property on Window"), and core/idl_args.h has
-       no exposed form of idl_interface_object to state that with — the only installers carrying an
-       IdlExposure are the accessor's and the method's. THE NEXT DIFF adds `idl_install_interface_object_exposed`
-       there, taking the same IdlExposure and asking the same one `idl_exposed`, and both §13 and §14 pass
-       IDL_SECURE_CONTEXT to it. ITS ABSENCE SHOWS as `'CryptoKey' in window` and `'SubtleCrypto' in window`
-       answering true over plain http, where real Chrome answers false — a feature-detect branch a bundle
-       really writes, taken the wrong way. */
+       annotation: "HeartbeatSensor will not be exposed in a non-secure context, nor will its members". The
+       SAME SENTENCE'S other half is the interface object ("In such a context, there will be no
+       \"HeartbeatSensor\" property on Window"), which the global install below states with the same
+       IdlExposure; the two are one annotation and are read from one place. */
     idl_install_accessor_exposed(ctx, proto, "type", js_ck_get, CK_M_TYPE, -1, IDL_SECURE_CONTEXT);
     idl_install_accessor_exposed(ctx, proto, "extractable", js_ck_get, CK_M_EXTRACTABLE, -1,
                                  IDL_SECURE_CONTEXT);
@@ -309,7 +304,7 @@ static void crypto_key_install_realm(JSContext *ctx)
     /* §13 DECLARES NO CONSTRUCTOR, so the interface object's [[Call]] and [[Construct]] both throw — a key
        comes into existence only through §14.3's minting methods, which is what "an opaque reference to keying
        material that is managed by the user agent" means. */
-    JS_SetPropertyStr(ctx, global, "CryptoKey", idl_interface_object(ctx, "CryptoKey", proto));
+    idl_install_interface_object_exposed(ctx, global, "CryptoKey", proto, IDL_SECURE_CONTEXT);
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
 }

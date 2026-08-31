@@ -1485,6 +1485,26 @@ void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const cha
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
 
+/* AN INTERFACE OBJECT THAT STATES ITS IDL'S EXPOSURE — the same IdlExposure and the same one gate the two
+ * member installers ask, applied to the OTHER half of what Web IDL §3.3.13 [SecureContext] removes.
+ *
+ * §3.3.13's own example says both halves in one breath, of an interface-level annotation: "HeartbeatSensor will
+ * not be exposed in a non-secure context, nor will its members. In such a context, there will be no
+ * \"HeartbeatSensor\" property on Window." The members half is what `idl_install_accessor_exposed` and
+ * `idl_install_method_exposed` already perform; this is the property on the global, and §3.7 Interfaces is what
+ * makes it the same question — "For every interface that is exposed in a given realm … a corresponding property
+ * exists on the realm's global object", so an interface that is NOT exposed has no such property to have.
+ *
+ * NOTHING IS MINTED WHEN IT IS NOT EXPOSED, exactly as the attribute form states: the interface object is not
+ * built, the property is not defined, and `"X" in globalThis` is false. Absent, undefined and throwing are three
+ * different branches of a page's feature detection and only the first is what §3.3.13 asks for.
+ *
+ * `proto` is BORROWED — this installs a reference to an object the caller still owns and still frees, which is
+ * how every call site already holds a prototype it goes on to use. The interface object it builds is handed to
+ * `target`, which owns it from then on. */
+void idl_install_interface_object_exposed(JSContext *ctx, JSValueConst target, const char *name,
+                                          JSValueConst proto, IdlExposure exposure);
+
 /* THE SAME ATTRIBUTE, WITH ITS GETTER DECLARING THAT ITS BODY RUNS NONE OF THE PAGE'S CODE.
  *
  * WHY THERE IS ANYTHING TO DECLARE. A property read that lands on an accessor may not invoke it from C:
