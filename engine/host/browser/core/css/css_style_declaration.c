@@ -3247,15 +3247,21 @@ void cssom_install_proto(JSContext *ctx)
     idl_install_method(ctx, base, "getPropertyPriority", g_get_priority_id);
     idl_install_method(ctx, base, "setProperty", g_set_prop_id);
     idl_install_method(ctx, base, "item", g_item_id);
-    /* Web IDL §3.7.9 Iterable declarations' define the iteration methods, step 1: "If definition has an indexed
+    /* Web IDL §3.7.9 Iterable declarations' define the iteration methods, step 1.1: "If definition has an indexed
        property getter, then: Perform DefineMethodProperty(target, %Symbol.iterator%, %Array.prototype.values%,
        false)." §6.6.1 has one, and an integer `length` beside it, so `[...el.style]` and `for (const p of
        el.style)` are ordinary code — which is how a bundle enumerates the properties it set.
-       THE NUMBER IS §3.7.9 AND NOT THE §3.7.10 EVERY OTHER CALLER OF THIS FUNCTION WRITES, verified against
-       the fetched Web IDL text rather than against them: §3.7.10 is "Asynchronous iterable declarations", the
-       clause that owns `async_iterable<>` and that idl_async_iter.c cites CORRECTLY, and the indexed-getter
-       @@iterator sentence quoted above is under §3.7.9. Nothing mechanical says so — citegen resolves a number
-       that EXISTS, and none of those sites states the title that would have made the mismatch visible.
+       THIS SITE WAS ONCE THE ONLY CALLER OF THIS FUNCTION WITH THE RIGHT NUMBER, and its note said so; the
+       other callers have since been corrected to §3.7.9 and the note would now be describing a tree that no
+       longer exists, so what survives is the REASON rather than the census. §3.7.10 is "Asynchronous iterable
+       declarations", the clause that owns `async_iterable<>` and that idl_async_iter.c cites CORRECTLY, and it
+       forecloses this clause in its own words — its step 2 asserts a definition reaching it "does not have an
+       indexed property getter or an iterable declaration". The wrong number survived here because nothing
+       mechanical could see it: citegen resolves a number that EXISTS, and a bare number with no title or
+       algorithm beside it gives it nothing to compare. That is why every citation of this clause in the engine
+       now names the algorithm — and it has to, because §2.5.9 carries the SAME TITLE as §3.7.9 (the
+       declaration and its terminology, against this section's binding steps), so a title alone would not have
+       disambiguated it either.
        IT IS ON THE BASE and not on CSSStyleProperties.prototype because §3.7.9 defines the iteration methods
        on the interface prototype object of the interface that DECLARES the getter, which is
        CSSStyleDeclaration; the other three prototypes inherit from this one.

@@ -157,7 +157,7 @@ void css_rule_list_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "CSSRuleList");
     idl_install_accessor_no_user_code(ctx, proto, "length", js_crl_length, 0, -1);
     idl_install_method(ctx, proto, "item", g_id_item);
-    /* Web IDL §3.7.10: an indexed property getter plus an integer `length` gets %Array.prototype.values% as
+    /* Web IDL §3.7.9 step 1.1: an indexed property getter plus an integer `length` gets %Array.prototype.values% as
        @@iterator, which is what makes `[...sheet.cssRules]` work. §6.4.1 declares no `iterable<>`, so it gets
        that and NOT `entries`/`keys`/`forEach` — two different clauses. */
     idl_indexed_install_iterable(ctx, proto);

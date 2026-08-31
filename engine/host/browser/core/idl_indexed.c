@@ -16,8 +16,8 @@
  * the key enumeration, `in`, and @@iterator — is written once here. Four copies would be four chances to
  * disagree about what `list[-1]` or `list['01']` means, and the answer to both is "not an index".
  *
- * ITERATION IS THE SPEC'S OWN ANSWER: §3.7.10 gives an interface with an indexed getter
- * %Array.prototype.values% as its @@iterator. Not a lookalike — the actual function, which works because the
+ * ITERATION IS THE SPEC'S OWN ANSWER: §3.7.9 Iterable declarations' define the iteration methods, step 1.1
+ * gives an interface with an indexed getter %Array.prototype.values% as its @@iterator. Not a lookalike — the actual function, which works because the
  * object is array-like by construction. `for (const c of el.classList)` is ordinary code that had nothing. */
 #include <string.h>
 #include <stdlib.h>
@@ -211,10 +211,10 @@ void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
     JSValue ap = JS_GetPropertyStr(ctx, arr, "prototype");
     JSValue values = JS_GetPropertyStr(ctx, ap, "values");
 
-    DCHECK(JS_IsFunction(ctx, values), "Array.prototype.values is missing — §3.7.10 names it as the @@iterator "
-                                       "an interface with an indexed getter is given, so there is nothing to "
-                                       "install in its place");
-    /* THE ACTUAL FUNCTION, not a lookalike: §3.7.10 states %Array.prototype.values%, and it works because the
+    DCHECK(JS_IsFunction(ctx, values), "Array.prototype.values is missing — §3.7.9 step 1.1 names it as the "
+                                       "@@iterator an interface with an indexed getter is given, so there is "
+                                       "nothing to install in its place");
+    /* THE ACTUAL FUNCTION, not a lookalike: §3.7.9 step 1.1 states %Array.prototype.values%, and it works because the
        object is array-like by construction. A private copy would be a second array iterator to keep in step. */
     {
         JSValue sym_ctor = JS_GetPropertyStr(ctx, global, "Symbol");
@@ -233,9 +233,10 @@ void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
     JS_FreeValue(ctx, global);
 }
 
-/* THE VALUE-ITERATOR MEMBERS ARE A DIFFERENT CLAUSE, AND THEY ARE NOT EVERY INDEXED INTERFACE'S. §3.7.10 gives
+/* THE VALUE-ITERATOR MEMBERS ARE A DIFFERENT CLAUSE, AND THEY ARE NOT EVERY INDEXED INTERFACE'S. §3.7.9's
+   step 1.1 gives
    @@iterator to any interface with an indexed getter and an integer `length`; `entries`, `keys`, `values` and
-   `forEach` come from an `iterable<V>` DECLARATION, which NodeList and DOMTokenList carry and HTMLCollection and
+   `forEach` are its step 1.2 and come from an `iterable<V>` DECLARATION, which NodeList and DOMTokenList carry and HTMLCollection and
    NamedNodeMap do not. Installing all four unconditionally put `paragraphs.forEach` on an HTMLCollection, which
    WPT asserts is absent — so the interface that declares the iterable is the one that calls this. */
 void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto)
@@ -248,7 +249,7 @@ void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto)
 
     for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++) {
         JSValue f = JS_GetPropertyStr(ctx, ap, NAMES[k]);
-        DCHECK(JS_IsFunction(ctx, f), "an Array.prototype iterator member named by §3.7.10 is missing");
+        DCHECK(JS_IsFunction(ctx, f), "an Array.prototype iterator member named by §3.7.9 step 1.2 is missing");
         JS_SetPropertyStr(ctx, (JSValue)proto, NAMES[k], f);
     }
     JS_FreeValue(ctx, ap);

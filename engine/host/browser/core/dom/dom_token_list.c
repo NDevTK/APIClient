@@ -763,7 +763,7 @@ void dom_token_list_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "replace", g_replace_id);
     idl_install_method(ctx, proto, "supports", g_supports_id);
     idl_install_method(ctx, proto, "toString", g_to_string_id);
-    /* §3.7.10: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
+    /* §3.7.9 step 1.1: an interface with an indexed getter is iterable through %Array.prototype.values%, which is why
        `for (const c of el.classList)` is ordinary code — and had nothing. */
     idl_indexed_install_iterable(ctx, proto);
     idl_indexed_install_value_iterator(ctx, proto);   /* §7.1 `iterable<DOMString>` */

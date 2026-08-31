@@ -83,7 +83,17 @@ int  record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCon
                        int (*key_ok)(JSContext *ctx, JSValueConst key, void *user), void *user,
                        JSValue **out_cb, int *out_argc);
 
-/* ---- §3.7.10's DEFAULT ITERATOR OBJECT, for an interface declaring `iterable<K, V>` ----------------------
+/* ---- §3.7.9.1's DEFAULT ITERATOR OBJECT, for an interface declaring `iterable<K, V>` ----------------------
+ *
+ * WHICH NUMBERS THESE ARE, STATED ONCE. Web IDL carries the name "Iterable declarations" TWICE and the title
+ * does not tell the two apart: §2.5.9 is the `iterable<>` DECLARATION and the terms it mints ("value pairs to
+ * iterate over", "pair iterator", "value iterator"), and §3.7.9 is the JavaScript binding — the "define the
+ * iteration methods" algorithm that puts members on a prototype, with §3.7.9.1 Default iterator objects and
+ * §3.7.9.2 Iterator prototype object beneath it. Citations here name the ALGORITHM beside the number for that
+ * reason. §3.7.10 is "Asynchronous iterable declarations" and owns none of this: its own step 2 asserts that
+ * a definition reaching it "does not have an indexed property getter or an iterable declaration".
+ * SUB-NUMBERS ARE TOP-LEVEL `<li>`s WITH LIST DEPTH TRACKED, counted off the fetched text, and every step
+ * cited below holds exactly one list.
  *
  * `keys()`, `values()`, `entries()`, `forEach()`, `@@iterator` and the iterator object they hand out are the
  * same six things for every such interface — Headers and URLSearchParams differ only in WHAT the pairs are.
@@ -91,7 +101,8 @@ int  record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCon
  * %IteratorPrototype%, its `next` is writable+enumerable+configurable and its @@toStringTag is the interface
  * name plus " Iterator", and getting any of that wrong once per interface is how a surface drifts.
  *
- * `pair` yields the i-th pair AS OF NOW: §3.7.10's "value pairs to iterate over" is recomputed at every step,
+ * `pair` yields the i-th pair AS OF NOW: the "value pairs to iterate over" §2.5.9 mints are re-read at every
+ * step by §3.7.9's forEach step 8.3 ("Set pairs to idlObject's current list of value pairs to iterate over"),
  * so a callback that appends during forEach is seen by the steps after it, and `count` is asked again each
  * time. `count` returns -1 when `target` is not an instance of the interface, which is the receiver check. */
 typedef struct {
@@ -99,8 +110,11 @@ typedef struct {
     /* Fills *key and *value (owned by the caller). Only called with 0 <= i < count. */
     void (*pair)(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value);
     const char *iface;   /* the interface's identifier, for the @@toStringTag and the class name */
-    /* IS THIS A `setlike<V>` RATHER THAN AN `iterable<K, V>`? §3.7.10 makes @@iterator the same function object
-       as `entries` for the second and as `values` for the first, so `for (const s of set)` yields the VALUES
+    /* IS THIS A `setlike<V>` RATHER THAN AN `iterable<K, V>`? TWO SECTIONS ANSWER, one per declaration, and
+       neither answers for the other: §3.7.9's define-the-iteration-methods step 2.1 builds ONE function object
+       F and makes it both @@iterator and `entries` for an `iterable<K, V>`, while §3.7.12.2 %Symbol.iterator%
+       gives a `setlike<V>` a @@iterator "whose value is the function object that is the value of the values
+       property". So `for (const s of set)` yields the VALUES
        and not « v, v » pairs. It is declared here, beside the members, because it is a fact about the
        DECLARATION — a caller passing a flag to the install would be the same fact asked at the wrong place,
        and the interface that forgot to pass it would silently iterate pairs. */
@@ -109,11 +123,12 @@ typedef struct {
 
 /* DECLARE the iterator class, its prototype and the forEach machine for one interface. Returns a handle. */
 int  idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops);
-/* INSTALL keys/values/entries/forEach/@@iterator on the interface's prototype. §3.7.10 makes @@iterator the
-   SAME function object as `entries`, which this does. */
+/* INSTALL keys/values/entries/forEach/@@iterator on the interface's prototype. §3.7.9 step 2.1 makes @@iterator
+   the SAME function object as `entries` (one `F`, defined twice), which this does — and §3.7.12.2 makes it the
+   `values` object for a `setlike<V>`. */
 void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle);
 /* Release the iterator prototype the declaration minted. */
-/* §3.7.10's iterator prototype objects for ONE realm, declared into core/realm.h's list by the first
+/* §3.7.9.2's iterator prototype objects for ONE realm, declared into core/realm.h's list by the first
    idl_pair_iter_declare — one install builds every declared interface's. */
 void idl_pair_iter_install_protos(JSContext *ctx);
 

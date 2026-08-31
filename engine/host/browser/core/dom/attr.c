@@ -648,7 +648,7 @@ void attr_install_protos(JSContext *ctx)
        installed twice, because the IDL declares two members and a page may call either. */
     idl_install_method(ctx, nnm_p, "setNamedItem", g_set_named_id);
     idl_install_method(ctx, nnm_p, "setNamedItemNS", g_set_named_id);
-    /* §3.7.10: an interface with an indexed getter gets %Array.prototype.values% as its @@iterator, which is
+    /* §3.7.9 step 1.1: an interface with an indexed getter gets %Array.prototype.values% as its @@iterator, which is
        what makes `for (const a of el.attributes)` — the loop this gap was really about — ordinary code. */
     idl_indexed_install_iterable(ctx, nnm_p);   /* §4.9.1 declares no iterable<>, so no value iterator */
     JS_SetClassProto(ctx, g_nnm_class, nnm_p);

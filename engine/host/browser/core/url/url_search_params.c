@@ -318,7 +318,8 @@ static JSValue js_usp_get_size(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewInt32(ctx, u->list.n);
 }
 
-/* §3.7.10's two operations, over the pair list as it stands right now. */
+/* The two operations §3.7.9's binding needs of an `iterable<K, V>` interface — the count and the i-th of
+   §2.5.9's "value pairs to iterate over" — over the pair list as it stands right now. */
 static int usp_pair_count(JSContext *ctx, JSValueConst target)
 {
     UspObj *u = JS_GetOpaque(target, g_usp_class);

@@ -55,11 +55,26 @@ int idl_indexed_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
 int idl_indexed_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj,
                                    const IdlIndexedDecl *decl);
 
-/* Web IDL §3.7.10: an interface with an indexed property getter and an integer `length` gets
-   %Array.prototype.values% as its @@iterator. Installed on the PROTOTYPE, which is where the IDL puts it. */
+/* Web IDL §3.7.9 Iterable declarations' define the iteration methods, step 1.1: an interface with an indexed
+   property getter and an integer `length` gets %Array.prototype.values% as its @@iterator. Installed on the
+   PROTOTYPE, which is where the IDL puts it.
+   TWO SECTIONS CARRY THIS TITLE AND THE TITLE DOES NOT TELL THEM APART, so every citation of it in this
+   engine names the ALGORITHM beside the number: §2.5.9 Iterable declarations is the `iterable<>` DECLARATION
+   and the terminology it mints ("value pairs to iterate over", "pair iterator", "value iterator"), while
+   §3.7.9 Iterable declarations is the JavaScript binding — the "define the iteration methods" algorithm whose
+   steps put members on a prototype. A bare title matches both, and a term resolves to whichever section mints
+   it rather than to the one whose steps the code runs.
+   IT IS NOT §3.7.10, WHICH SAYS SO ITSELF: that section is "Asynchronous iterable declarations", and its own
+   step 2 asserts that a definition reaching it "does not have an indexed property getter or an iterable
+   declaration" — so no arm of it can ever be the clause implemented here.
+   STEP NUMBERS IN THIS FILE AND IN core/idl_iter.* ARE TOP-LEVEL `<li>`s WITH LIST DEPTH TRACKED, counted off
+   the fetched text. The count matters here because this algorithm's shape is not the one a flat reading
+   gives: step 1 holds a nested list, so the value-iterator clause below is 1.2 and NOT a step 2. */
 void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto);
 
-/* §3.7.10's OTHER clause, which is a DIFFERENT statement about a different set of interfaces: an interface that
+/* §3.7.9's OTHER clause — its step 1.2, NESTED INSIDE step 1 rather than beside it, which is itself the
+   statement that these four members belong only to an interface that ALSO has an indexed property getter.
+   It is a DIFFERENT statement about a different set of interfaces: an interface that
    declares `iterable<V>` also gets `entries`, `keys`, `values` and `forEach`. NodeList and DOMTokenList declare
    one; HTMLCollection and NamedNodeMap do not, and one answer for all four gave an HTMLCollection a `forEach`
    the standard says it has no such member.

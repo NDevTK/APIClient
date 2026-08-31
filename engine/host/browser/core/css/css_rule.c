@@ -2994,8 +2994,8 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
         return r ? rule_css_rules(ctx, r) : JS_EXCEPTION;
     /* CSS Animations §6.3.2: "This attribute is the number of keyframes in the list." It is the length of the
-       child list itself and never a second count, which is also what makes it the `length` Web IDL §3.7.10
-       pairs with the indexed getter below. */
+       child list itself and never a second count, which is also what makes it the `length` Web IDL §3.7.9's
+       step 1.1 pairs with the indexed getter below. */
     case CR_KEYFRAMES_LENGTH:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
         return r ? JS_NewUint32(ctx, array_len(ctx, r->child_rules)) : JS_EXCEPTION;
@@ -3424,7 +3424,7 @@ static JSValue js_rule_find_rule(JSContext *ctx, JSValueConst this_val, int argc
 /* §6.3.3's INDEXED PROPERTY GETTER — "returns the CSSKeyframeRule from the list of keyframes at the indicated
  * position ... The found rule or UNDEFINED if there is no rule at the specific index", which is Web IDL §3.9's
  * supported property indices exactly and is why this is core/idl_indexed.h's mechanism rather than a second
- * index parse. The `length` beside it is the attribute above, so §3.7.10 also gives the prototype
+ * index parse. The `length` beside it is the attribute above, so §3.7.9's step 1.1 also gives the prototype
  * %Array.prototype.values% as its @@iterator.
  *
  * IT LIVES ON THE RULE CLASS AND NOT ON A COLLECTION OBJECT, which is the whole reason the mechanism had to be
@@ -4243,7 +4243,7 @@ void css_rule_install_proto(JSContext *ctx)
        are absent here, and the `deleteRule` that IS here takes a keyframe SELECTOR.
        ITS INDEXED GETTER IS ON THE CLASS, not on this prototype: §6.3.3 declares
        `getter CSSKeyframeRule (unsigned long index)`, which Web IDL §3.9 makes an object's own-property
-       behaviour rather than a member. §3.7.10's @@iterator IS a prototype member and goes here, because this
+       behaviour rather than a member. §3.7.9 step 1.1's @@iterator IS a prototype member and goes here, because this
        interface has both an indexed getter and an integer `length`. */
     keyframes = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(keyframes), "CSSKeyframesRule.prototype could not be allocated");

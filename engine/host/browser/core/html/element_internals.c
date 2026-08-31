@@ -283,7 +283,11 @@ static int ei_set_count(JSContext *ctx, JSValueConst target)
     return n;
 }
 
-/* §3.7.10's pair for a SETLIKE: the value is the key, which is what makes `entries()` yield « v, v ». */
+/* §3.7.12's pair for a SETLIKE — NOT §3.7.9's, and not the §3.7.10 this line read before a depth-tracked
+   count against the fetched text: a `setlike<V>` is Web IDL §3.7.12 Setlike declarations, whose §3.7.12.3
+   `entries` creates a set iterator of kind "key+value", and §3.7.12.2's create-a-set-iterator is where the
+   « v, v » comes from ("Else, let result be CreateArrayFromList(« entry, entry »)"). The value IS the key,
+   which is what this fills. */
 static void ei_set_pair(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
 {
     JSValue items = ei_set_items(ctx, target);
@@ -327,7 +331,7 @@ static JSValue js_states_member(JSContext *ctx, JSValueConst this_val, int argc,
         break;
     case SET_ADD:
         /* A set: a value already in it is not appended again, and the ORDER of the ones already there is the
-           insertion order §3.7.10 iterates in. */
+           insertion order §3.7.12.2's create-a-set-iterator walks in ("For each entry of set"). */
         if (at < 0) JS_SetPropertyUint32(ctx, items, ei_array_len(ctx, items), JS_DupValue(ctx, argv[0]));
         r = JS_DupValue(ctx, this_val);   /* `add` returns the set itself */
         break;

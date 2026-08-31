@@ -233,7 +233,7 @@ int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCons
     }
 }
 
-/* ---- §3.7.10's default iterator object ------------------------------------------------------------------- */
+/* ---- §3.7.9.1's default iterator object ------------------------------------------------------------------- */
 
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -247,7 +247,7 @@ typedef struct {
     const IdlPairIterOps *ops;
     JSClassID class_id;
     int       foreach_stepid;
-    /* §3.7.10's THREE OPERATIONS, declared with the interface rather than minted at each install. A pool entry
+    /* §3.7.9's THREE OPERATIONS (its step 2.1-2.3 `entries`, `keys` and `values`), declared with the interface rather than minted at each install. A pool entry
        is an AGENT registration and the pool is SEALED once the agent's realms start building: minting here per
        realm aborted the second realm with the member's name ("keys"), which is the seal doing its job. */
     int       id_keys, id_values, id_entries;
@@ -256,7 +256,7 @@ typedef struct {
 static IdlPairIface g_pair[IDL_PAIR_ITER_MAX];
 static int g_pair_n;
 
-/* §3.7.10's iterator object: the TARGET and an INDEX, not a snapshot, so a list mutated between steps is seen. */
+/* §3.7.9.1's iterator object: the TARGET and an INDEX, not a snapshot, so a list mutated between steps is seen. */
 typedef struct { JSValue target; int index; int kind; int iface; } IdlPairIter;
 
 static void idl_pair_iter_finalizer(JSRuntime *rt, JSValue val)
@@ -334,7 +334,7 @@ static JSValue js_idl_pair_make(JSContext *ctx, JSValueConst this_val, int argc,
     if (f->ops->count(ctx, this_val) < 0)
         return JS_ThrowTypeError(ctx, "not a %s", f->ops->iface);
     {
-        /* §3.7.10's ITERATOR PROTOTYPE OBJECT IS THIS REALM'S — it inherits %IteratorPrototype%, which is a
+        /* §3.7.9.2's ITERATOR PROTOTYPE OBJECT IS THIS REALM'S — it inherits %IteratorPrototype%, which is a
            per-realm intrinsic, so one shared object would give a child document's `h.entries()` the parent's
            iterator helpers and answer `instanceof` across a boundary. */
         JSValue iproto = JS_GetClassProto(ctx, f->class_id);
@@ -353,7 +353,7 @@ static JSValue js_idl_pair_make(JSContext *ctx, JSValueConst this_val, int argc,
     return obj;
 }
 
-/* §3.7.10 forEach(callback, thisArg): the callback is the PAGE'S CODE, called once per pair with
+/* §3.7.9 forEach(callback, thisArg): the callback is the PAGE'S CODE, called once per pair with
    (value, key, this) — so this is a step machine with a call request, exactly like an event dispatch. Running
    it from a C loop is the drive-to-completion the engine aborts on. The pairs are recomputed at each step, so
    a callback that appends is seen by the steps after it. */
@@ -376,12 +376,17 @@ static void js_idl_pair_foreach_visit(JSContext *ctx, void *st, JSStepVisit *v)
         v->val(ctx, &s->cb[k]);
 }
 
-/* WHERE THIS MACHINE RESTS. §3.7.10's forEach is four steps and only one of them can suspend — step 4.2's
-   invocation of the callback — so the whole walk is that one stage, with `i` as its cursor. Step 4.3's
-   re-read of the pairs is why `count` is asked again on every entry rather than once. */
+/* WHERE THIS MACHINE RESTS. §3.7.9's forEach is EIGHT steps whose last is a While loop of four, and only one
+   of those four can suspend — step 8.2's invocation of the callback — so the whole walk is that one stage,
+   with `i` as its cursor. Step 8.3's re-read of the pairs is why `count` is asked again on every entry rather
+   than once.
+   THE SUB-NUMBERS ARE THE While's, counted off the fetched text with list depth tracked: the loop is step 8
+   and holds exactly one list, so 8.1-8.4 name one thing each. They read 4.1-4.4 here until a depth-tracked
+   count was run against the spec — a flat `<li>` count promotes the four sub-items to peers and shifts every
+   number after them. */
 #define PAIR_FOREACH_STAGES(X) \
     X(PAIR_FOREACH_INVOKE, \
-      "Web IDL §3.7.10 forEach(callback, thisArg) steps 4.1-4.4 (invoke callback with the pair's value, its " \
+      "Web IDL §3.7.9 forEach(callback, thisArg) steps 8.1-8.4 (invoke callback with the pair's value, its " \
       "key and the object; the pairs are re-read afterwards because the callback may have changed them)")
 enum { PAIR_FOREACH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const PAIR_FOREACH_STEPS[] = { PAIR_FOREACH_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -399,7 +404,7 @@ static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result,
     int r, k, n;
 
     DCHECK(s->hdr.stage == PAIR_FOREACH_INVOKE,
-           "an iterable<>'s forEach resumed at a stage §3.7.10 does not have");
+           "an iterable<>'s forEach resumed at a stage §3.7.9 does not have");
     if (s->cphase == 0 && s->i == 0)
         for (k = 0; k < PAIR_FOREACH_CB_SLOTS; k++) s->cb[k] = JS_UNDEFINED;   /* a zeroed state reads as INTEGER 0 */
     if (!f) {
@@ -436,7 +441,7 @@ static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result,
         cb_result = JS_UNDEFINED;
         if (r > 0) return r;          /* parked ON THIS PAIR; the callback's own body suspends and resumes */
         if (r < 0) return JS_STEP_ABRUPT;
-        JS_FreeValue(ctx, ignored);   /* §3.7.10 discards the callback's return value */
+        JS_FreeValue(ctx, ignored);   /* §3.7.9 forEach step 8.2 discards the callback's return value */
         s->i++;
     }
 }
@@ -452,7 +457,7 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     static JSTrampStepDef foreach_def = {
         sizeof(IdlPairForEachState), js_idl_pair_foreach_step, NULL, 0,   /* forEach returns undefined */
         .visit = js_idl_pair_foreach_visit,
-        .algorithm = "Web IDL §3.7.10 forEach(callback, thisArg) of an iterable<> interface",
+        .algorithm = "Web IDL §3.7.9 forEach(callback, thisArg) of an iterable<> interface",
         .steps = PAIR_FOREACH_STEPS
     };
 
@@ -485,14 +490,14 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     return handle;
 }
 
-/* §3.7.10's ITERATOR PROTOTYPE OBJECTS, FOR ONE REALM — one per declared iterable<>. */
+/* §3.7.9.2's ITERATOR PROTOTYPE OBJECTS, FOR ONE REALM — one per declared iterable<>. */
 void idl_pair_iter_install_protos(JSContext *ctx)
 {
     int i;
 
     for (i = 0; i < g_pair_n; i++) {
         IdlPairIface *f = &g_pair[i];
-        /* §3.7.10: the ITERATOR PROTOTYPE OBJECT inherits from %IteratorPrototype%. That is where `@@iterator`
+        /* §3.7.9.2: the ITERATOR PROTOTYPE OBJECT inherits from %IteratorPrototype%. That is where `@@iterator`
            returning `this` comes from (so `for (const e of h.entries())` works) and where the ES2025 iterator
            helpers come from, so none of that is re-declared here. */
         JSValue intrinsic = JS_GetIteratorPrototype(ctx);
@@ -502,7 +507,7 @@ void idl_pair_iter_install_protos(JSContext *ctx)
         JS_FreeValue(ctx, intrinsic);
         CHECK(!JS_IsException(proto), "an iterator prototype object could not be allocated");
         snprintf(name, sizeof name, "%s Iterator", f->ops->iface);
-        /* §3.7.10 gives it all three attributes — ENUMERABLE included, unlike an interface prototype's. */
+        /* §3.7.9.2 gives `next` all three attributes — ENUMERABLE included, unlike an interface prototype's. */
         JS_DefinePropertyValueStr(ctx, proto, "next",
                                   JS_NewCFunction(ctx, js_idl_pair_next, "next", 0),
                                   JS_PROP_WRITABLE | JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
@@ -522,7 +527,7 @@ void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle)
     idl_install_method(ctx, proto, "entries", g_pair[handle].id_entries);
     /* ONE forEach def serves every interface; `arg` is which one, read off the header by the step. */
     idl_install_step_method(ctx, proto, "forEach", 1, g_pair[handle].foreach_stepid);
-    /* §3.7.10: @@iterator on the interface IS `entries` for an `iterable<K, V>` and `values` for a
+    /* §3.7.9 step 2.1 and §3.7.12.2: @@iterator on the interface IS `entries` for an `iterable<K, V>` and `values` for a
        `setlike<V>` — the SAME function object either way, so `h[Symbol.iterator] === h.entries` (or
        `=== s.values`) the way the spec states it. Which one comes off the declaration, not off the caller. */
     entries = JS_GetPropertyStr(ctx, proto, g_pair[handle].ops->setlike ? "values" : "entries");

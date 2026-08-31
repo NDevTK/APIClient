@@ -678,7 +678,8 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
     return r;
 }
 
-/* §3.7.10's two operations, over the entry list as it stands right now. */
+/* The two operations §3.7.9's binding needs of an `iterable<K, V>` interface — the count and the i-th of
+   §2.5.9's "value pairs to iterate over" — over the entry list as it stands right now. */
 static int form_data_pair_count(JSContext *ctx, JSValueConst target)
 {
     FormDataObj *d = JS_GetOpaque(target, g_fd_class);
