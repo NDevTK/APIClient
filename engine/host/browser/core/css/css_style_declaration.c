@@ -690,6 +690,79 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
     for (i = 0; i < n; i++) cssd_decls_collect(d, lh[i], values[i], important);
 }
 
+/* IS THIS LEXBOR RULE A DECLARATION THIS ENGINE HOLDS, AND WHAT ARE ITS NAME AND VALUE — asked ONCE, by every
+ * path that turns lexbor's output into a declaration of a block.
+ *
+ * IT IS A COMPONENT AND NOT AN `if` AT ONE CALLER, because the question has TWO askers and they answered it
+ * DIFFERENTLY. The READ path (cssd_decls_from_list, and therefore every style="" attribute, every style rule
+ * and every `cssText` assignment) re-judged a `__UNDEF` through cssd_undef_is_declaration and kept it; the
+ * WRITE path (cssd_parse_value, and therefore `setProperty`, every §6.6.1 per-property IDL attribute and
+ * `cssFloat`) tested `d->type != LXB_CSS_PROPERTY__UNDEF` and dropped it. Lexbor's value grammar has no math
+ * functions AT ALL — no `calc` token exists in its registry — so every math function is a `__UNDEF`, and the
+ * consequence was that `el.style.width = "calc(100% - 20px)"` did NOTHING while `el.setAttribute("style",
+ * "width: calc(100% - 20px)")` worked. Not a dropped declaration a page could see thrown: §6.6.1's setProperty
+ * step after the parse says "If component value list is null, then return", so the assignment left the block
+ * ALONE and the next read answered the property's initial value. Two answers to one question is the defect;
+ * one function both callers go through is the fix, and a third asker cannot now disagree because there is
+ * nothing left for it to re-derive.
+ *
+ * WHAT IT ANSWERS IS CSSOM §6.7.1 "Parsing CSS Values"' step 3 — "If the above step failed, return null" —
+ * over lexbor's output rather than over the text: false is that null, and true carries the `list` its step 4
+ * returns ("Return list"), serialized.
+ *
+ * CSS Syntax's INVALID DECLARATION is not in the block, so it is not in the block's declarations either.
+ * Lexbor keeps one in the list as a `__UNDEF` holding the property id and the RAW UNPARSED TOKENS so that a
+ * serializer can round-trip the block it came from — and a cascade that read it back without this test handed
+ * those tokens on as if they were a value: `display: bogus` won the cascade and
+ * `getComputedStyle(el).display` answered "bogus", a string no property's grammar admits.
+ * EXCEPT WHEN THOSE TOKENS ARE A CSS-WIDE KEYWORD, WHICH IS A VALID DECLARATION OF EVERY PROPERTY.
+ * css-cascade-5 §7.3 "Explicit Defaulting": "As specified in CSS Values and Units, ALL CSS PROPERTIES CAN
+ * ACCEPT THESE VALUES." Lexbor's value grammar carries `initial`, `inherit`, `unset` and `revert` and predates
+ * css-cascade-5 §7.3.5 "Rolling Back Cascade Layers: the revert-layer keyword" and §7.3.6 "Rolling Back Rules:
+ * the revert-rule keyword", so `height: revert-layer` fails that grammar and arrives here as an invalid
+ * declaration while `translate: revert-layer` — a property the grammar does not type at all — arrives as a
+ * value. Dropping the first would make a CSS-wide keyword mean something different depending on which
+ * properties the vendored parser happens to know, which is a wrong answer per property rather than a missing
+ * capability. `undef->type` carries the real property id and `undef->value` the raw source span (the
+ * `!important` is a separate offset and is already on the declaration), so both halves survive.
+ * AND THE SAME IS TRUE OF A MATH FUNCTION, FOR THE SAME REASON ONE LEVEL WIDER. The CSS-wide keyword arm was
+ * written because a value's validity was being decided by which properties the vendored parser happens to
+ * type; a `calc()` is that defect at the scale of the whole modern web, because the parser types `width`,
+ * `height` and `font-size` and has no math functions at all. Both arms are one question — is this a value a
+ * LATER LEVEL OF CSS defines than the grammar that refused it — and cssd_undef_is_declaration is where it is
+ * asked.
+ *
+ * ON TRUE, `*pname` and `*pvalue` are OWNED by the caller. `*pvalue` may be NULL: CSS Syntax admits a
+ * declaration whose value is empty, which is why §6.6's step 4 is conditional — and a `__UNDEF` can never be
+ * that, because the re-judge is asked ABOUT the raw span and there is none to ask about.
+ * ON FALSE NEITHER OUT-PARAMETER IS WRITTEN, so a caller cannot free what it never received. */
+static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, char **pname, char **pvalue)
+{
+    char *name, *value;
+
+    DCHECK(d != NULL && pname != NULL && pvalue != NULL,
+           "CSSOM §6.7.1's parse a CSS value was asked about no declaration, or with nowhere to report the "
+           "name and value it produces — this entry answers a rule lexbor already parsed, so an absent one is "
+           "a caller that lost it rather than a declaration that never had it");
+    if (d->type == LXB_CSS_PROPERTY__UNDEF) {
+        value = cssd_decl_value(d);
+        name = value ? cssd_decl_name(d) : NULL;   /* NULL when lexbor has no id for the property either */
+        if (name && cssd_undef_is_declaration(name, value)) {
+            *pname = name;
+            *pvalue = value;
+            return true;
+        }
+        free(name);
+        free(value);
+        return false;
+    }
+    name = cssd_decl_name(d);
+    if (!name) return false;
+    *pname = name;
+    *pvalue = cssd_decl_value(d);   /* the trimmed value — see its note */
+    return true;
+}
+
 /* §6.6's PARSE A CSS DECLARATION BLOCK, from what lexbor's parser produced: every declaration expanded to its
    longhands and collapsed to one per property. This is the ONE builder — the serialization, `length`, `item`,
    every property read and every write go through it, so no two of them can disagree about what the block
@@ -703,41 +776,7 @@ static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, Cs
         char *name, *value;
 
         if (r->type != LXB_CSS_RULE_DECLARATION) continue;
-        /* CSS Syntax's INVALID DECLARATION is not in the block, so it is not in the block's declarations
-           either. Lexbor keeps one in the list as a `__UNDEF` holding the property id and the RAW UNPARSED
-           TOKENS so that a serializer can round-trip the block it came from — and a cascade that read it back
-           without this test handed those tokens on as if they were a value: `display: bogus` won the cascade
-           and `getComputedStyle(el).display` answered "bogus", a string no property's grammar admits.
-           EXCEPT WHEN THOSE TOKENS ARE A CSS-WIDE KEYWORD, WHICH IS A VALID DECLARATION OF EVERY PROPERTY.
-           css-cascade-5 §7.3: "As specified in CSS Values and Units, ALL CSS PROPERTIES CAN ACCEPT THESE
-           VALUES." Lexbor's value grammar carries `initial`, `inherit`, `unset` and `revert` and predates
-           css-cascade-5 §7.3.5's `revert-layer` and css-cascade-5 §7.3.6's `revert-rule`,
-           so `height: revert-layer` fails that grammar and arrives here as an invalid declaration
-           while `translate: revert-layer` — a property the grammar does not type at all — arrives as a value.
-           Dropping the first would make a CSS-wide keyword mean something different depending on which
-           properties the vendored parser happens to know, which is a wrong answer per property rather than a
-           missing capability. `undef->type` carries the real property id and `undef->value` the raw source
-           span (the `!important` is a separate offset and is already on the declaration), so both halves of
-           the declaration survive.
-           AND THE SAME IS TRUE OF A MATH FUNCTION, FOR THE SAME REASON ONE LEVEL WIDER. The CSS-wide keyword
-           arm was written because a value's validity was being decided by which properties the vendored parser
-           happens to type; a `calc()` is that defect at the scale of the whole modern web, because the parser
-           types `width`, `height` and `font-size` and has no math functions at all. Both arms are one
-           question — is this a value a LATER LEVEL OF CSS defines than the grammar that refused it — and
-           cssd_undef_is_declaration is where it is asked. */
-        if (d->type == LXB_CSS_PROPERTY__UNDEF) {
-            char *raw = cssd_decl_value(d);
-
-            name = raw ? cssd_decl_name(d) : NULL;   /* NULL when lexbor has no id for the property either */
-            if (name && cssd_undef_is_declaration(name, raw))
-                cssd_decls_collect_declaration(out, name, raw, d->important);
-            free(name);
-            free(raw);
-            continue;
-        }
-        name = cssd_decl_name(d);
-        if (!name) continue;
-        value = cssd_decl_value(d);   /* the trimmed value — see its note */
+        if (!cssd_decl_take(d, &name, &value)) continue;
         cssd_decls_collect_declaration(out, name, value, d->important);
         free(name);
         free(value);
@@ -2021,8 +2060,13 @@ static void cssd_declarations_write(JSContext *ctx, JSValueConst block, const ch
 }
 
 /* §6.6.1's "let component value list be the result of parsing value for property property", asked of THE
-   PARSER: the declaration `name: value` goes through exactly the parse a declaration in a block goes through,
-   and what comes back is the canonical serialization of its value, or NULL.
+   PARSER: the declaration `name: value` goes through exactly what a declaration in a block goes through —
+   cssd_decl_take, the ONE answer to CSSOM §6.7.1 "Parsing CSS Values" — and what comes back is the canonical
+   serialization of its value, or NULL.
+   IT IS THE SAME FUNCTION THE READ PATH CALLS, and that is the whole of why it is not written out here. The
+   version that tested `d->type != LXB_CSS_PROPERTY__UNDEF` for itself asked the same question and gave the
+   other answer, so `el.style.width = "calc(100% - 20px)"` set nothing while the identical declaration in a
+   `style=""` attribute set it — see cssd_decl_take for why lexbor makes every math function a `__UNDEF`.
    NULL IS "IF COMPONENT VALUE LIST IS NULL, THEN RETURN" — the whole call is abandoned and the block is left
    alone, which is what makes `style.color = 'unknown color'` leave a standing `color: red` standing. Storing
    the unparseable text instead was not a smaller version of that: the next read dropped the declaration as
@@ -2048,12 +2092,22 @@ static char *cssd_parse_value(const char *name, const char *value)
     if (list && list->first && list->first->next == NULL &&
         list->first->type == LXB_CSS_RULE_DECLARATION) {
         lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(list->first);
+        char *dname, *dvalue;
 
-        if (d->type != LXB_CSS_PROPERTY__UNDEF && !d->important) {
-            char *dname = cssd_decl_name(d);
-
-            if (dname && strcmp(dname, name) == 0) out = cssd_decl_value(d);
+        /* §6.7.1's Note — "\"!important\" declarations are not part of the property value space and will
+           therefore cause parse a CSS value to return null" — asked of the DECLARATION rather than of the
+           text, because that is where lexbor records the flag and it records it for a `__UNDEF` too. */
+        if (!d->important && cssd_decl_take(d, &dname, &dvalue)) {
+            DCHECK(dname != NULL,
+                   "cssd_decl_take answered TRUE with no property name — a declaration this engine holds is "
+                   "one whose name §6.6.1's set a CSS declaration compares case-sensitively, so a nameless "
+                   "one could not be stored, read back or removed");
+            if (strcmp(dname, name) == 0) {
+                out = dvalue;
+                dvalue = NULL;
+            }
             free(dname);
+            free(dvalue);
         }
     }
     if (mem) lxb_css_memory_destroy(mem, true);
