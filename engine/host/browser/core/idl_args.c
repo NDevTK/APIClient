@@ -2420,9 +2420,22 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     if (s->hdr.stage == 0) {
         /* A RECORD NOBODY OWNS. Every tree mutation happens inside a declared member's body and is drained
            before that member returns, so anything still waiting here was written by something that is not a
-           declared member — a raw JS_CFUNC_DEF that mutates the tree, which is the one shape this machine
-           cannot reach. Its insertion steps would never run: an inserted <script> would not execute and a
-           custom element would not upgrade, with nothing to show for it. */
+           declared member — a raw JS_CFUNC_DEF that mutates the tree. Its insertion steps would never run: an
+           inserted <script> would not execute and a custom element would not upgrade, with nothing to show
+           for it.
+           THIS COMMENT SAID THAT WAS "the one shape this machine cannot reach", AND THERE WAS A SECOND ONE.
+           An HTML §7.5.3 "Loading XML documents" load builds its tree through core/dom/node.h's `insert`, so
+           every construct it placed was recorded — and a document LOAD is not a member, so the remedy this
+           message states named no site at all for it: there was nothing to declare. It fired on every `.xhtml`
+           document, script or no script, where the byte-identical `.html` one passed. The entries then sat in
+           the chokepoint's scratch until the page called its first declared member, whose `take` below would
+           have run a whole document's insertion and post-connection steps inside an unrelated call — which is
+           what a release build, with this DCHECK compiled out, actually did.
+           THE LOAD IS RULED OUT AT THE RECORD AND NOT HERE, by core/dom/element.c's tree_steps_can_run: the
+           walk runs a node's steps in the NODE'S document's realm, and this engine installs that realm AFTER
+           the parse, so a load's node has none and is not recorded. That is a fact about the node, which is
+           what lets it survive a load resting between constructs while sibling flows run. So the remedy below
+           is once again the only shape that can reach here, and a member is once again the only answer. */
         DCHECK(!g_tree || !g_tree->recorded(),
                "a DOM mutation recorded tree steps outside any declared member — declare that member so it "
                "converges on this machine, which is the only thing that drains them");

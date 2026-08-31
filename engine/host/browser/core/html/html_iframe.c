@@ -593,9 +593,12 @@ void iframe_run_load_event_steps(JSContext *ctx, JSValueConst wrap)
 
 /* §4.8.5 FOR THE ELEMENTS THE PARSER INSERTED. A browser runs the insertion steps during tree construction, so
  * an `<iframe>` in the page's own markup has a navigable before the first script runs — `window.length` is 1 on
- * a document that never scripted anything. This engine's tree comes from a Lexbor parse that does not pass
- * through the DOM chokepoint, so the parsed tree's iframes get their step here, once, when the document is
- * installed. Everything a script appends afterwards goes through the chokepoint and needs nothing from this. */
+ * a document that never scripted anything. No document load in this engine reaches those steps — HTML §7.5.2
+ * "Loading HTML documents"' Lexbor parse never reaches the DOM chokepoint, and §7.5.3 "Loading XML documents"'
+ * parse reaches it and is refused at the record by core/dom/element.c's tree_steps_can_run, because the steps
+ * run in the node's document's realm and this engine installs that realm after the parse — so the parsed
+ * tree's iframes get their step here, once, when the document is installed. Everything a script appends
+ * afterwards goes through the chokepoint and needs nothing from this. */
 void iframe_document_parsed(JSContext *ctx)
 {
     lxb_dom_node_t *root = document_root_node(ctx), *n = root;

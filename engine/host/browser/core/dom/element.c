@@ -1725,6 +1725,62 @@ static void element_moving_steps(JSContext *ctx, lxb_dom_node_t *n, bool is_subt
     JS_FreeValue(ctx, wrap);
 }
 
+/* CAN §4.2.3's STEPS FOR THIS NODE EVER RUN? — THE RECORDERS' HALF OF THE WALK'S OWN PRECONDITION, AND THE ONE
+ * QUESTION THAT SEPARATES A MUTATION FROM A PARSE.
+ *
+ * A recorded entry is drained by the machine every declared IDL member converges on, and the walk resolves the
+ * NODE'S document's realm per entry (both of `element_tree_steps_step`'s resolutions do it, and both abort on a
+ * NULL) because §4.2.3's steps run there and not in the mutating member's realm. So a node whose document has
+ * no realm has no realm for its steps to run in, and recording one records work nothing can perform.
+ *
+ * WHAT THE UNRECORDABLE ENTRY DID INSTEAD IS WHY THIS IS A FIX AND NOT A FILTER. It OUTLIVED whatever wrote it:
+ * `g_ts` is the chokepoint's scratch and is emptied only by a member's `take`, so a whole document's worth of
+ * entries sat there until the page called its first declared member, whose drain then ran that document's
+ * insertion and post-connection steps in the middle of an unrelated call. In dev that take is preceded by a
+ * DCHECK naming a member to declare — the right remedy for the shape it was written for, a raw JS_CFUNC_DEF
+ * that mutates the tree, and no remedy at all for this one, because there is no member to declare. In RELEASE
+ * that DCHECK is compiled out and the misplaced drain is simply what happens.
+ *
+ * THE ONE PRODUCER IS A DOCUMENT LOAD, AND THIS IS A FACT ABOUT THE NODE RATHER THAN ABOUT AMBIENT STATE —
+ * WHICH IS WHY IT IS THIS AND NOT A FLAG. Every Document a running member can reach has a record and every
+ * record names a realm (core/dom/document.c's doc_rec_new writes it beside the record), so the only connected
+ * node in a realm-less document is one an HTML §7.5 "Document lifecycle" load is parsing into: this engine
+ * parses and THEN installs the realm, where HTML §7.5.1 "Shared document creation infrastructure" creates the
+ * agent, the realm and the Window BEFORE the Document that §7.5.3 "Loading XML documents" hands to a parser. A
+ * load RESTS between constructs and sibling flows run in between, so a "a load is in progress" global would be
+ * read by a member of a DIFFERENT flow standing in a DIFFERENT document — the interleaving this scheduler
+ * exists for is exactly what makes an ambient answer wrong, and a per-node one right.
+ *
+ * IT IS ALSO WHAT MAKES THE TWO PARSERS AGREE, WHICH IS THE DEFECT THIS CLOSES. §7.5.2 "Loading HTML
+ * documents"' load reaches lexbor's own tree construction and routes through none of DOM §4.2.3 "Mutation
+ * algorithms" at all, so it records nothing; §7.5.3's XML load builds its tree through core/dom/node.h's
+ * `insert` (core/xml/xml_tree.c's DOM_PARSE_ROOT_SHARED arm) and recorded every construct it placed. One
+ * question asked at two entries with two answers, and the XML entry's answer was a list no machine could
+ * drain — which is why an `.xhtml` document with no script in it at all aborted where the byte-identical
+ * `.html` one did not.
+ *
+ * NAMED RESIDUAL. WHAT IS NOT COVERED: a load's parse runs none of §4.2.3's per-insert steps, so the work
+ * those steps do for the markup's own elements is done by document_install's parsed-walk family over the
+ * FINISHED tree instead — html_base_element_parsed, html_script_parsed, declarative_shadow_parsed,
+ * media_element_parsed, html_image_parsed, html_link_parsed, html_style_element_parsed,
+ * iframe_document_parsed and autofocus_document_parsed, with document_policy_new collecting §4.2.5.3 "Pragma
+ * directives"' `<meta http-equiv>` — so the ORDER within the parse is lost while the effects are not, and
+ * §14.2 "Parsing XML documents"' `script` preparation stays at its own end tag in
+ * core/loader/xml_document.c. That is the
+ * state §7.5.2's HTML load has always been in, so this makes the two agree rather than narrowing one of them.
+ * WHAT THE NEXT DIFF BUILDS: §7.5.1's own order — the agent, realm and Window built BEFORE the Document is
+ * handed to a parser — after which a load's parse records like every other write, the LOAD is the machine
+ * that drains it, this predicate is true of every connected node, and it and the whole parsed-walk family
+ * delete together. HOW ITS ABSENCE WOULD SHOW: a document whose markup writes a `<base href>` AFTER a
+ * `<link rel=stylesheet href=relative>` resolves that link against the base, where a browser's tree
+ * construction had not yet seen the `<base>` when it fetched the sheet; and, once §4.13.5 "Upgrades"' upgrade
+ * can reach a definition that exists during a load, a markup custom element gets no connectedCallback from
+ * the parse. */
+static bool tree_steps_can_run(const lxb_dom_node_t *n)
+{
+    return document_realm_of(n) != NULL;
+}
+
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)
 {
     int inserted = phase == NODE_TREE_INSERTED;
@@ -1733,6 +1789,7 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
        not one of them: it exists for §4.2.2's slot steps, which are a different component's. */
     if (phase == NODE_TREE_REMOVED) return;
     if (!root || !node_is_connected(root)) return;
+    if (!tree_steps_can_run(root)) return;
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
         TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
@@ -1766,6 +1823,11 @@ void element_post_connection_record(lxb_dom_node_t *n)
            "§4.12.1.1's children changed steps recorded a node that is not connected — their step 1 is \"if "
            "the script element is not connected, then return\", so the test belongs to the caller and a "
            "disconnected node here means it was not made");
+    /* THE SAME QUESTION THE INSERT SIDE ASKS, because this is the same list and the same drain. A `<script>`
+       whose character data an XML parse is filling in is a connected node in a document with no realm, so its
+       children-changed entry is as undrainable as its insertion one — and §14.2 "Parsing XML documents"'
+       preparation for that element is owed at its end tag by core/loader/xml_document.c rather than here. */
+    if (!tree_steps_can_run(n)) return;
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
         TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
@@ -1945,8 +2007,10 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
 
         DCHECK(dctx != NULL,
                "a tree write reached §4.2.3's post-connection steps in a document no realm was installed for "
-               "— a document that can hold a connected node is a document a flow can run steps in, so build "
-               "its realm rather than borrowing whichever one performed the write");
+               "— tree_steps_can_run asks this same question at the RECORD, so the entry that produced this "
+               "node was written for a document that had a realm and does not now: either the document was "
+               "released while a flow held an undrained entry into it, or a second recorder was added that "
+               "does not ask. It is NOT the load's parse, which that predicate already refuses");
         /* HTML §4.8.5 "The iframe element": "The iframe HTML element POST-CONNECTION steps, given insertedNode,
            are: 1. If insertedNode has a sandbox attribute, then parse the sandboxing directive… 2. Create a
            new child navigable for insertedNode. 3. Process the iframe attributes for insertedNode, with
@@ -2047,9 +2111,11 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
        document. The mutating ctx answered the parent's realm for every one of them. */
     ctx = document_realm_of(n);
     DCHECK(ctx != NULL,
-           "a tree write reached §4.2.3's steps in a document no realm was installed for — a document that can "
-           "hold a connected node is a document a flow can run steps in, so build its realm rather than "
-           "borrowing whichever one performed the write");
+           "a tree write reached §4.2.3's steps in a document no realm was installed for — tree_steps_can_run "
+           "asks this same question at the RECORD, so the entry holding this node was written for a document "
+           "that had a realm and does not now: either the document was released while a flow held an undrained "
+           "entry into it, or a second recorder was added that does not ask. It is NOT the load's parse, which "
+           "that predicate already refuses");
     /* HTML §4.12.1.1's CHILDREN CHANGED STEPS CONTRIBUTE THEIR ONE NODE AND NOTHING ELSE. There are no
        insertion steps to run for them — the tree did not change under this element, its TEXT did — so the
        entry's whole business in the first phase is to take its place in staticNodeList, and the second phase

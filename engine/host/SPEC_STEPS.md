@@ -4299,9 +4299,14 @@ per `id` write is not that index.
 OTHER THAN NULL.** All four triggers above sit inside `custom_elements.c`, behind
 `ce_upgradable_name`, so an `<input>` reaches none of them — and the reason is not that nobody added
 the call. HTML's TREE BUILDER associates a parsed control through the **form element pointer** as it
-builds, and this engine's Lexbor parse routes through none of DOM §4.2.3's insertion steps at all
-(`element_tree_changed` records a walk only for a *connected* root, and the initial parse produces no
-such record). So for a parsed document there is no moment at which a reset *could* have run, and
+builds, and no document load in this engine routes through DOM §4.2.3's insertion steps at all. The
+reason is not the same for the two parsers, and the sentence here used to give only the first, which
+made it a claim about §7.5.2 wearing the shape of a claim about every load. §7.5.2's Lexbor HTML
+parse never reaches `core/dom/node.h`'s `insert`, so nothing is recorded to begin with. §7.5.3's XML
+parse *does* reach it — `core/xml/xml_tree.c`'s `DOM_PARSE_ROOT_SHARED` arm — and is refused one step
+later by `element_tree_changed`'s `tree_steps_can_run`, because §4.2.3's steps run in the **node's
+document's realm** and this engine installs that realm after the parse. So for a parsed document
+there is no moment at which a reset *could* have run, and
 reading an absent slot as "the owner is null" would empty `form.elements` and every entry list for
 every page the tool exists to look at.
 

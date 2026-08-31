@@ -81,8 +81,11 @@ void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrapper);
    just finished. Handing the child's realm here would enqueue the parent's listeners onto the child's queue. */
 void iframe_run_load_event_steps(JSContext *ctx, JSValueConst wrapper);
 /* §4.8.5 for the iframes the PARSER inserted: a browser runs the insertion steps during tree construction, and
-   this engine's tree comes from a parse that does not pass through the DOM chokepoint. Run once, when the
-   document is installed; anything a script appends afterwards goes through the chokepoint instead. */
+   no document load in this engine reaches them — HTML §7.5.2's Lexbor parse never reaches the DOM chokepoint,
+   and §7.5.3's XML parse reaches it and is refused at the record by core/dom/element.c's tree_steps_can_run,
+   because those steps run in the node's document's realm and this engine installs that realm after the parse.
+   Run once, when the document is installed; anything a script appends afterwards goes through the chokepoint
+   instead. */
 void iframe_document_parsed(JSContext *ctx);
 
 /* §7.2.2.2's DOCUMENT-TREE CHILD NAVIGABLES, in tree order: what `window.length` counts and `window[i]` indexes.

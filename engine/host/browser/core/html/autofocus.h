@@ -41,8 +41,10 @@ int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_
 
 /* THE SAME STEPS FOR THE ELEMENTS THE PARSER INSERTED. A browser runs the insertion steps during tree
    construction, so `<input autofocus>` in the page's own markup is a candidate before the first script runs;
-   this engine's tree comes from a Lexbor parse that does not pass through the DOM chokepoint, so the parsed
-   tree gets its steps here, once, when the document is installed — exactly as §4.8.5's child navigables do.
+   no document load in this engine reaches those steps (HTML §7.5.2's Lexbor parse never reaches the DOM
+   chokepoint; §7.5.3's XML parse reaches it and is refused at the record by core/dom/element.c's
+   tree_steps_can_run, the realm not existing until after the parse), so the parsed tree gets its steps here,
+   once, when the document is installed — exactly as §4.8.5's child navigables do.
    It is NOT a request: document install runs at the pre-boot COW baseline, where there is no flow to snapshot,
    so it hands the steps no header and the allow focus steps assert against the one document whose parsed tree
    would need the fork (a cross-origin-embedded one) rather than picking an arm for it. */

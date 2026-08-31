@@ -1509,8 +1509,12 @@ static const JSTrampStepDef js_reqsubmit_def = {
  * A RESET IS TRIGGERED for a form-associated CUSTOM element at its insertion, its removal, its own `form`
  * write and §4.13.5 step 10. NOTHING triggers one for a BUILT-IN control, and that is not an oversight this
  * file can fix by adding a call: HTML's tree builder associates a parsed control through the "form element
- * pointer" as it builds, and this engine's Lexbor parse routes through none of DOM §4.2.3's insertion steps at
- * all — so for a parsed document there is no moment at which a reset could have run. An ABSENT slot therefore
+ * pointer" as it builds, and NO document load in this engine reaches DOM §4.2.3's insertion steps — HTML
+ * §7.5.2 "Loading HTML documents"' Lexbor parse never reaches core/dom/node.h's `insert` at all, and §7.5.3
+ * "Loading XML documents"' parse reaches it and is refused at the record by core/dom/element.c's
+ * tree_steps_can_run, because those steps run in the NODE'S document's realm and this engine installs that
+ * realm after the parse — so for a parsed document there is no moment at which a reset could have run. An
+ * ABSENT slot therefore
  * means "no reset has run", which is a different fact from "the owner is null", and form_derive_owner answers
  * it by running steps 3-5 as they stand. The derivation is the SAME code the reset uses, so there is one
  * §4.10.18.3 here and not two, and a STORED owner always wins — which is what keeps

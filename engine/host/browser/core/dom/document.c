@@ -4436,8 +4436,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         JS_FreeValue(ctx, dp);
     }
     /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an
-       <iframe> the page's own markup contains has a child navigable before the first script runs — this
-       engine's tree comes from a Lexbor parse that does not pass through the DOM chokepoint, so the parsed
+       <iframe> the page's own markup contains has a child navigable before the first script runs — and no
+       document load in this engine reaches those steps (§7.5.2's Lexbor parse never reaches the DOM
+       chokepoint; §7.5.3's XML parse reaches it and is refused at the record by core/dom/element.c's
+       tree_steps_can_run, the realm this install builds not existing until after the parse), so the parsed
        tree's iframes get their step here. It is LAST, after every wrapper and prototype exists, because
        creating a navigable wraps the element and stores a WindowProxy on it. */
     /* HTML tree construction produces attributes in the NULL namespace; lexbor stamps them with the element's
