@@ -1371,6 +1371,14 @@ function functionScopes(struct, code) {
     return null;
   };
 
+  /* EVERY NAME THIS FILE DECLARES ANYWHERE, WHICH IS A DIFFERENT QUESTION FROM WHICH SCOPE BINDS IT AT A POINT
+     — and reading one off the other is §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS. `binderOf` answers "file" both
+     for a name declared at the top level and for a name this file never declares at all, and the second is the
+     only one that can be an import whose constant is spelled somewhere this cannot look. Collapsing them made
+     every top-level `for (let i = …)` index — declared twice in one file, so its declaration is doubtful and
+     `initOf` answers null — refuse as if it were an import, which is 77 rows of the language rather than of the
+     corpus. The bit is DECLARED-HERE and the two questions are asked of it separately. */
+  const bound = new Set();
   const ID = /[A-Za-z_$][\w$]*/g;
   for (const s of spans) {
     if (!s.params) continue;
@@ -1381,6 +1389,7 @@ function functionScopes(struct, code) {
       if (t[m.index - 1] === ".") continue;                                  /* a member of a default's operand */
       if (/^\s*\(/.test(t.slice(m.index + m[0].length))) continue;           /* a call in a default value */
       s.binds.add(m[0]);
+      bound.add(m[0]);
     }
     /* THE PARAMETERS IN ORDER, which is what an IDL argument list is indexed by. A pattern, a rest and a
        default all occupy a POSITION whatever they bind, so a slot this cannot name is held as null rather than
@@ -1392,26 +1401,59 @@ function functionScopes(struct, code) {
      the innermost enclosing FUNCTION body rather than to the innermost block: a `const` in a loop body and a
      read of it after the loop are one binding by any reading, and splitting them would cost an anchor for
      nothing. Two same-named declarations inside ONE function body still merge, which is the residue. */
-  const DECL = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)|\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)|\bclass\s+([A-Za-z_$][\w$]*)|\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/g;
+  /* A DECLARATION IS A LIST, AND READING ONLY ITS FIRST DECLARATOR LEFT EVERY LATER NAME FREE. `let out = "", i
+     = 0, n = src.length` declares three bindings and a first-name-only walk saw one, so `i` and `n` were names
+     NO scope in this file bound — which is the answer reserved for an IMPORT, and it is the one answer that
+     must never be invented: §receiver scope's own worked example is a binding spelled `location` or `event`
+     being read as the global of that name and every read on it credited to Location or Event. The list is
+     split at its top-level commas, which is also what folds the destructuring arm in: a second regex for the
+     pattern spelling only ever matched the FIRST declarator either, so `const a = 1, { ok } = f()` bound
+     neither `ok` nor anything after it. */
+  const declaratorsAt = (from) => {
+    /* The list runs to the first `;` or unmatched closer at depth zero — `for (let i = 0; …)` ends at the
+       semicolon and `for (const x of xs)` at the `)`, which is where each of those declarations ends. */
+    let e = from, dd = 0;
+    for (; e < struct.length; e++) {
+      const ch = struct[e];
+      if (PAIRS[ch]) dd++;
+      else if (ch === ")" || ch === "]" || ch === "}") { if (!dd) break; dd--; }
+      else if (ch === ";" && !dd) break;
+    }
+    const out = [];
+    for (const [a, b] of splitTop(struct, from, e)) {
+      const lead = /^\s*([A-Za-z_$][\w$]*)(?![\w$])/.exec(code.slice(a, b));
+      if (lead) { out.push({ name: lead[1], at: a + lead[0].length - lead[1].length }); continue; }
+      /* A destructuring declarator binds every name in its pattern — `const { ok, out } = f()` binds both, and
+         missing them merges those receivers with any same-named binding elsewhere in the file. */
+      const ob = sig(struct, a, b);
+      if (struct[ob] !== "{" && struct[ob] !== "[") continue;
+      const cb = matchAt(struct, ob);
+      if (cb < 0 || cb - 1 > b) continue;
+      const pt = code.slice(ob + 1, cb - 1);
+      let m2;
+      ID.lastIndex = 0;
+      while ((m2 = ID.exec(pt))) if (pt[m2.index - 1] !== ".") out.push({ name: m2[0], at: ob + 1 + m2.index, pattern: true });
+    }
+    return out;
+  };
+  const VAR = /\b(?:const|let|var)\s+/g;
+  const declSites = [];   // {name, at, kwAt} — every binding a `const`/`let`/`var` in this file introduces
   let d;
-  while ((d = DECL.exec(struct))) {
-    const name = d[1] || d[2] || d[3] || d[4];
+  while ((d = VAR.exec(struct))) {
     const s = innermost(d.index);
-    if (s) s.binds.add(name);
+    for (const n of declaratorsAt(d.index + d[0].length)) {
+      declSites.push({ ...n, kwAt: d.index });
+      bound.add(n.name);
+      if (s) s.binds.add(n.name);
+    }
   }
-  /* A destructuring declarator binds every name in its pattern — `const { ok, out } = f()` binds both, and
-     missing them merges those receivers with any same-named binding elsewhere in the file. */
-  const PAT = /\b(?:const|let|var)\s*(?=[[{])/g;
-  while ((d = PAT.exec(struct))) {
-    const open = sig(struct, d.index + d[0].length, struct.length);
-    const close = matchAt(struct, open);
-    if (close < 0) continue;
+  /* The name a `function`/`class` declaration and a `catch` binding introduce, which are not lists. */
+  const NAMED = /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)|\bclass\s+([A-Za-z_$][\w$]*)|\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/g;
+  while ((d = NAMED.exec(struct))) {
+    const name = d[1] || d[2] || d[3];
     const s = innermost(d.index);
-    if (!s) continue;
-    const t = code.slice(open + 1, close - 1);
-    let m;
-    ID.lastIndex = 0;
-    while ((m = ID.exec(t))) if (t[m.index - 1] !== ".") s.binds.add(m[0]);
+    bound.add(name);
+    if (s) s.binds.add(name);
   }
 
   /* A BINDING'S DECLARATION IS EVERY WRITE THAT NAMES IT, AND A DECLARATOR'S INITIALIZER IS NOT A SPECIAL KIND
@@ -1444,14 +1486,18 @@ function functionScopes(struct, code) {
      with all the others. A declaration with no write at all — `for (const n of xs)`, whose binding is the loop's
      and not an assignment's — has no declaration text and is doubtful, which is what it was before this had a
      construct that could see it. */
-  const DECL_NAME = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?![\w$])/g;
-  let q;
-  while ((q = DECL_NAME.exec(struct))) {
-    const s = innermost(q.index);
-    const key = `${s ? s.open : "file"}\0${q[1]}`;
+  for (const q of declSites) {
+    const s = innermost(q.kwAt);
+    const key = `${s ? s.open : "file"}\0${q.name}`;
     if (inits.has(key)) { inits.set(key, null); continue; }   /* two declarations of one name — doubtful */
+    /* A DESTRUCTURED NAME'S OWN INITIALIZER IS NOT READABLE HERE — `const { ok } = f()` declares `ok` out of a
+       field of `f()`'s answer, which is not an expression this walk can hand back. Its LATER assignments are
+       readable, and taking those alone would be a declaration set assembled out of the subset that happened to
+       be easy: the false COMPLETE this file refuses everywhere. Doubtful, which is what it was before the walk
+       could see the name at all. */
+    if (q.pattern) { inits.set(key, null); continue; }
     const span = s ? [s.open, s.close] : [0, struct.length];
-    const writes = assignmentSites(struct, q[1], span[0], span[1]);
+    const writes = assignmentSites(struct, q.name, span[0], span[1]);
     if (!writes.length || writes.some((w) => w.rhs < 0)) { inits.set(key, null); continue; }
     inits.set(key, writes.map((w) => {
       let e = w.rhs, d = 0;
@@ -1526,7 +1572,7 @@ function functionScopes(struct, code) {
     }
     return out;
   };
-  return { binderOf, paramSlot, localParamSlot, callArgsOf,
+  return { binderOf, paramSlot, localParamSlot, callArgsOf, declaredHere: (name) => bound.has(name),
            initOf: (name, off) => inits.get(`${binderOf(name, off)}\0${name}`) ?? null };
 }
 
@@ -1543,7 +1589,7 @@ function scanJS(file, src) {
      text stays the display, because that is what a reader opens the file to find; the key is what decides
      which reads are reads of one object. A receiver whose base is not a bare identifier (`a().b`) has no
      binder to ask about and keys under its text alone, exactly as before. */
-  const { binderOf, initOf, paramSlot, localParamSlot, callArgsOf } = functionScopes(struct, code);
+  const { binderOf, initOf, paramSlot, localParamSlot, callArgsOf, declaredHere } = functionScopes(struct, code);
   const keyOf = (recv, off) => {
     const base = /^[A-Za-z_$][\w$]*/.exec(recv);
     return base ? `${recv}@${binderOf(base[0], off)}` : recv;
@@ -1564,34 +1610,72 @@ function scanJS(file, src) {
    *
    * THREE ANSWERS, AND THE THIRD IS THE ONLY REFUSAL. A literal, or an identifier whose every declaration in
    * this file is the SAME literal, NAMES that string. An expression the program COMPUTES — a call, a member, a
-   * template, an operator, or an identifier a scope binds without a `const`/`let`/`var` declaration (a
-   * parameter, a catch binding, a destructured name) — names no string in this file: its value is supplied at
-   * run time by a caller or by a computation, and `[expr]:` is the syntax that says so. That is DECIDED, not
-   * unreadable, exactly as a receiver bottoming out on a literal is. What stays REFUSED is an identifier NO
-   * scope here binds — an import or an ambient global — because the constant it names can be declared in
-   * another file and the name would then be hiding in the one place this cannot look.
+   * template, an operator, or an identifier a scope binds without a declaration this can read — names no string
+   * in this file: its value is supplied at run time by a computation, and `[expr]` is the syntax that says so.
+   * That is DECIDED, not unreadable, exactly as a receiver bottoming out on a literal is. What stays REFUSED is
+   * an identifier NO scope here binds — an import or an ambient global — because the constant it names can be
+   * declared in another file and the name would then be hiding in the one place this cannot look.
+   *
+   * A PARAMETER IS NOT A RUN-TIME VALUE WHEN THIS FILE IS THE ONE THAT SUPPLIES IT, and an earlier form of this
+   * paragraph said it was — it listed "a parameter" among the things whose value "is supplied at run time by a
+   * caller", which is true of the parameter and FALSE of the callers when every one of them is in this file and
+   * passes a literal. §localParamSlot already reads exactly that construct one arm away, to type a receiver from
+   * the arguments its own file hands it; the same reading answers a KEY, and refusing it here made the gate
+   * blind to a reader in the one shape a census reader takes. Measured: `stepUnitRows(b, name, totalName)` reads
+   * `b[name]` and is called twice with `"stepUnits"` and `"stepUnitRuns"`, so both histograms the C engine emits
+   * read as fields NOBODY CONSUMES while their reader stood in the corpus, asserted their partition and threw on
+   * a short sum. The gate's own subject is a contract with two sides, and it was reporting a disagreement
+   * between one side and its own blind spot.
+   *
+   * AND SEVERAL CALL SITES ARE NOT DOUBT HERE, WHICH IS THE ONE PLACE THIS DIVERGES FROM THE TYPE RULE BESIDE
+   * IT — because a TYPE is one fact about one parameter, so two answers contradict, while a KEY is a VALUE and a
+   * parameter legitimately takes a different one per call. Each site is a real call that really does read that
+   * field off the receiver, so the answer is the SET and not a refusal. What still leaves it undecided is a site
+   * passing something that is not a literal: the set is then INCOMPLETE, and an incomplete set of names would
+   * credit some reads and silently drop the rest.
    *
    * THE UNDER-CREDITING DIRECTION, STATED SO IT CAN BE ARGUED WITH: deciding a computed key declares no field
    * loses a WRITE that only ever happens through one, whose name is also spelled statically at some read. That
    * read is then reported READ-NO-WRITER with its file and line — a louder row than a refusal and one a person
    * can open — where the refusal it replaces named a construct and no name at all. */
   const STRING_LIT = /^(["'])((?:[^\\]|\\.)*)\1$/;
-  const constStringOf = (expr, off) => {
+  const litText = (t) => { const l = STRING_LIT.exec((t || "").trim()); return l ? l[2] : null; };
+  const keyNamesOf = (expr, off) => {
     const t = (expr || "").trim();
-    const lit = STRING_LIT.exec(t);
-    if (lit) return { name: lit[2] };
+    const lit = litText(t);
+    if (lit !== null) return { names: [lit] };
     if (!/^[A-Za-z_$][\w$]*$/.test(t)) return { computed: true };
     const decls = initOf(t, off);
     if (decls) {
       let one = null;
       for (const d of decls) {
-        const l = STRING_LIT.exec(d.trim());
-        if (!l || (one !== null && one !== l[2])) return { computed: true };
-        one = l[2];
+        const l = litText(d);
+        /* A BINDING'S WRITES ARE ONE IDENTITY AND ARE HELD TO THE STRICTER STANDARD, unlike the call sites
+           below: which of two assignments reaches this use is a fact about a PATH, and this file follows no
+           paths. Two disagreeing writes are therefore undecided, exactly as two disagreeing declarations leave
+           a receiver's type undecided. */
+        if (l === null || (one !== null && one !== l)) return { computed: true };
+        one = l;
       }
-      return one === null ? { computed: true } : { name: one };
+      return one === null ? { computed: true } : { names: [one] };
     }
-    return binderOf(t, off) === "file" ? null : { computed: true };
+    /* …and a parameter of a function THIS FILE declares is named by the arguments this file passes it. */
+    const lp = localParamSlot(t, off);
+    if (lp) {
+      const passed = callArgsOf(lp.fnName, lp.param, lp.declParen);
+      if (!passed || !passed.length) return { computed: true };
+      const names = new Set();
+      for (const a of passed) {
+        const l = litText(a.text);
+        if (l === null) return { computed: true };   /* one unreadable site, and the SET is incomplete */
+        names.add(l);
+      }
+      return { names: [...names] };
+    }
+    /* NO SCOPE IN THIS FILE DECLARES THE NAME — an import or an ambient global, and the ONLY answer here that
+       can be hiding a field name somewhere this cannot look. A name the file declares but whose declaration
+       this cannot read to a single literal is DECIDED computed, exactly as an unreadable expression is. */
+    return declaredHere(t) ? { computed: true } : null;
   };
 
   const localReads = [];   // {name, recv, key, off, form}
@@ -1665,6 +1749,47 @@ function scanJS(file, src) {
     }
     else if (inSpan(swallow, at)) form = "inside a swallowing try/catch";
     localReads.push({ name, recv, key: keyOf(recv, at), off: at, form, consumed });
+  }
+
+  /* --- bracketed member expressions whose key is a NAME THIS FILE STATES ---------------------------------- */
+  /* THE SAME CONSTRUCT AS THE BLOCK ABOVE, ONE DECLARATION FURTHER OUT. `o["f"]` and `o[F]` with `const F =
+     "f"` are one fact written two ways, and so is `o[k]` inside a helper every caller in this file hands a
+     literal — §keyNamesOf resolves all three and DECIDES the rest. Matched in `struct` so an identifier inside
+     a string or a comment is not one, and disjoint from the literal block by construction: that regex requires
+     a quote where this one requires a bare identifier. */
+  const COMPUTED_KEY = /(\?\.)?\[\s*([A-Za-z_$][\w$]*)\s*\]/g;
+  while ((m = COMPUTED_KEY.exec(struct))) {
+    const at = m.index;
+    const at2 = {};
+    const recv = receiverBefore(struct, code, at, at2);
+    if (!recv) continue;   /* an index on a literal, or a receiver this cannot normalize */
+    const ans = keyNamesOf(m[2], at);
+    if (!ans) {
+      refuse(file, lineOf(src, at), "a computed member key naming an identifier no scope in this file binds — the constant it names can be declared in another one", struct.slice(Math.max(0, at - 40), at + m[0].length));
+      continue;
+    }
+    if (ans.computed) continue;   /* the program computes this key, so the read names no field statically */
+    const after = sig(struct, at + m[0].length, struct.length);
+    const nxt = struct.slice(after, after + 3);
+    /* A COMPUTED MEMBER IMMEDIATELY CALLED IS AN OPERATION, for §MEMBER's reason exactly: a record on this seam
+       is JSON text and JSON carries no functions, so `o[m]()` is a dispatch and never a field of a record. */
+    if (nxt[0] === "(") continue;
+    const isWrite = /^=[^=>]/.test(nxt) || /^=$/.test(nxt);
+    let form = null, consumed = null;
+    if (!isWrite) {
+      if (m[1]) form = "?.[]";
+      else if (/^(\|\||\?\?)/.test(nxt)) {
+        const op = nxt.slice(0, 2);
+        consumed = at2.start === undefined ? null : boolConsumer(struct, code, at2.start);
+        if (!consumed) form = `${op} default`;
+        else consumed = { form: `${op} default`, by: consumed };
+      } else if (inSpan(swallow, at)) form = "inside a swallowing try/catch";
+    }
+    for (const nm of ans.names) {
+      if (!/^[A-Za-z_$][\w$]*$/.test(nm)) continue;
+      if (isWrite) localWrites.push({ name: nm, off: at });
+      else localReads.push({ name: nm, recv, key: keyOf(recv, at), off: at, form, consumed });
+    }
   }
 
   /* --- braces: object literal (writes), destructuring pattern (reads), or a block ------------------------- */
@@ -1755,7 +1880,7 @@ function scanJS(file, src) {
         if (/^\s*\[/.test(t)) {
           const ob = a + t.indexOf("[");
           const cb = matchAt(struct, ob);
-          const ans = cb < 0 ? null : constStringOf(code.slice(ob + 1, cb - 1), ob);
+          const ans = cb < 0 ? null : keyNamesOf(code.slice(ob + 1, cb - 1), ob);
           if (!ans) {
             refuse(file, lineOf(src, a), `a computed ${kind === "literal" ? "object-literal key" : "destructuring key"} naming an identifier no scope in this file binds — the constant it names can be declared in another one`, t);
             continue;
@@ -1763,9 +1888,11 @@ function scanJS(file, src) {
           if (ans.computed) continue;   /* the program computes this key, so the entry declares no field name */
           /* Resolved, and a resolved name that is not identifier-shaped declares no field — the same answer a
              quoted `"application/json":` key already gets one branch below, reached by one more construct. */
-          if (!/^[A-Za-z_$][\w$]*$/.test(ans.name)) continue;
-          if (kind === "literal") { localWrites.push({ name: ans.name, off: ob }); litKeys.push(ans.name); }
-          else localReads.push({ name: ans.name, recv, key: keyOf(recv, i), off: ob, form: null });
+          for (const nm of ans.names) {
+            if (!/^[A-Za-z_$][\w$]*$/.test(nm)) continue;
+            if (kind === "literal") { localWrites.push({ name: nm, off: ob }); litKeys.push(nm); }
+            else localReads.push({ name: nm, recv, key: keyOf(recv, i), off: ob, form: null });
+          }
           continue;
         }
         if (kind === "literal") refuse(file, lineOf(src, a), "an object-literal entry whose key this cannot read", t);
