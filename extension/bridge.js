@@ -1477,12 +1477,35 @@ function _atRamFloor() {
    the pick carries and the admission dispatches on, `pop` is the population row a human reads, `wMax` is the
    extremum over that population. The plurals are irregular on purpose — these are the names already on the
    wire to the popup, and renaming a row to make a rule prettier is the rename this file's own gate exists to
-   catch. A kind added HERE reaches all four sites; a kind added to the walk and not here fails at the count. */
+   catch. A kind added HERE reaches all five sites; a kind added to the walk and not here fails at the count.
+   AND `from` IS THE FIFTH SITE — the member of the POPULATION that kind's arm walks, which is what makes the
+   walk answerable rather than a reader of whatever this module happens to hold. It closes the one hole the
+   four sites above cannot: a caller that hands a population with `seeds` missing produces `candSeeds: 0`, and
+   a count of zero is a READING — "no route was declared" — so an order that never LOOKED at a kind and an
+   order that looked and found none arrive at `_level1Record` as the same record, its accounting assert agrees
+   with itself, and a whole kind of work item leaves the Level-1 order with nothing anywhere to say so. That is
+   §Architecture's defaulted-field defect performed on the order's own inputs. `shape` is the container that
+   member must be, checked by SHAPE and never by `instanceof`: a driver hands populations minted in its own
+   realm (engine/trusted.mjs states the same rule about values crossing a vm context), so a realm-identity test
+   would reject a legitimate caller — which is a false abort, strictly worse than the wrong answer it is
+   guarding against. */
 const CAND_KINDS = [
-  { kind: "doc",  pop: "candDocs",  wMax: "candDocWMax" },    // a document waiting for an instance
-  { kind: "seed", pop: "candSeeds", wMax: "candSeedWMax" },   // an address an application declared is a page of itself
-  { kind: "cold", pop: "candCold",  wMax: "candColdWMax" },   // a parked frontier in the cold tier
+  // a document waiting for an instance
+  { kind: "doc",  pop: "candDocs",  wMax: "candDocWMax",  from: "waiting", shape: "list" },
+  // an address an application declared is a page of itself
+  { kind: "seed", pop: "candSeeds", wMax: "candSeedWMax", from: "seeds",   shape: "map" },
+  // a parked frontier in the cold tier
+  { kind: "cold", pop: "candCold",  wMax: "candColdWMax", from: "idx",     shape: "map" },
 ];
+/* THE TWO CONTAINER SHAPES A POPULATION MEMBER CAN BE, WRITTEN AS WHAT THE WALK CALLS ON IT. `map` names
+   `get`/`keys`/`values`/`size` together rather than one of them, because an ARRAY answers `keys()` — with
+   INDICES — so a `seeds` handed as a list would rank the numbers 0..n-1 as declared routes and the failure
+   would land two suspensions later, in the admission, on an address nothing named. */
+const CAND_SHAPES = {
+  list: (v) => Array.isArray(v),
+  map:  (v) => v !== null && typeof v === "object" && typeof v.get === "function" &&
+               typeof v.keys === "function" && typeof v.values === "function" && typeof v.size === "number",
+};
 /* THE SPREAD ROWS — the readings taken over the RANKED SET as a whole, declared once because they are attached
    at the member that earns them and asserted at the record, and because the answer to "can this census show a
    constant" is exactly this list. A spread over the WEIGHT can say that every candidate ties; it cannot say
@@ -1557,6 +1580,45 @@ function _candRanked(cen, kind, row) {
   }
   return t.w;
 }
+/* THE POPULATION THE ORDER IS TAKEN OVER, COMPOSED IN ONE PLACE AND HANDED IN. This walk used to read three
+   of its four inputs off module state (`_pool`, `_waiting`, `_seeds`) and take only the cold index as an
+   argument, and the consequence was not a style one: the Level-1 order is composed ENTIRELY in this zone —
+   no engine can see another engine, so no result document can ever carry it — and a walk that reads its own
+   inputs off a module nothing can populate is an order NOTHING CAN ASK A QUESTION OF. Both Level-1 defects
+   found this session were ranks frozen at a constant, both lived in this walk, and neither was visible to
+   anything; a third would be equally invisible for exactly as long as the walk stays unaskable.
+   IT IS A COMPOSER AND NOT AN ACCESSOR PAIR. The privates stay private — exporting them would hand a driver
+   the state and leave the ORDER just as unaskable, since what is under test is the walk over a population and
+   not the fields it reads. Stated once here means the two production call sites cannot disagree about what
+   the Level-1 order is taken over, which was previously true only because both of them took none of it. */
+function _candPopulation(idx) {
+  return { resident: _pool, waiting: _waiting, seeds: _seeds, idx: idx };
+}
+/* THE POPULATION'S OWN CONTRACT, ASSERTED AT THE DOOR AND AGAINST THE KIND TABLE RATHER THAN A LIST WRITTEN
+   HERE — the same discipline `_level1Record` learned when its accounting assert named two of three kinds and
+   fired on correct code. A member this walk is not handed cannot be distinguished downstream from a member
+   that is empty (see CAND_KINDS' `from`), so the completeness of the population is the one thing that must be
+   checked BEFORE the walk rather than inferred from its census afterwards. */
+function _candPopulationCheck(pop) {
+  DCHECK(pop !== null && typeof pop === "object",
+         "the Level-1 candidate order was asked over no population at all — it ranks the work items that have " +
+         "no instance, and the set of them is an input rather than something this walk knows");
+  /* THE RESIDENT SET IS NOT A KIND AND IS ASSERTED APART, because it is not walked FOR candidates — it is
+     what every kind is excluded BY (a live document holds an address; an instance holds a frontier key), so
+     an absent one would not empty the order, it would WIDEN it: every excluded item would silently become a
+     candidate and the exclusion counts that say so would read zero. */
+  DCHECK(CAND_SHAPES.list(pop.resident),
+         "the Level-1 candidate order was asked with no resident set — it is what a candidate is excluded BY, " +
+         "so without it a parked frontier whose page a tab already holds is rehydrated beside that tab and " +
+         "`exclLive` reports that nothing left the order");
+  for (const k of CAND_KINDS)
+    DCHECK(CAND_SHAPES[k.shape](pop[k.from]),
+           "the Level-1 candidate order was asked without the `" + k.from + "` half of its population, or " +
+           "with one that is not a " + k.shape + " — the `" + k.kind + "` arm walks it, so what reaches the " +
+           "census is `" + k.pop + ": 0`, which is a READING (nothing of this kind was waiting) and not the " +
+           "absence it actually is: a whole kind of work item leaves the order and the record agrees with " +
+           "itself about a walk that never looked");
+}
 /* THE PICK IS SYNCHRONOUS, AND THE INDEX IS WHY IT CAN BE. Its caller must not suspend between choosing a
    candidate and building its instance: a cluster can be rooted by a concurrent service round (hostNotice's
    create arm), so a pick made before a suspension and acted on after it would reach engineCreate's
@@ -1573,13 +1635,11 @@ function _candRanked(cen, kind, row) {
    rule for every conditional row in this record and it is the same rule solver/result.c's `_wfq` states for
    `members`: a count of zero is a READING (nothing was waiting), while an extremum over nothing is not a
    number at all, so emitting `candWMax: 0` there would fabricate a rank for an order that had no members. */
-function _bestCandidate(idx) {
-  DCHECK(idx instanceof Map,
-         "the Level-1 pick was asked without the cold tier's ranking view — its caller awaits frontierIndex() " +
-         "so that this pick and the instance it leads to are one uninterrupted turn, and a pick that fetched " +
-         "its own would suspend in the middle of that");
+function _bestCandidate(pop) {
+  _candPopulationCheck(pop);
+  const { resident, waiting, seeds, idx } = pop;
   const live = new Set();
-  for (const e of _pool) if (e.msg && e.msg.sourceUrl) live.add(e.msg.sourceUrl);
+  for (const e of resident) if (e.msg && e.msg.sourceUrl) live.add(e.msg.sourceUrl);
   /* WHAT THIS STORE ALREADY KNOWS ABOUT THE ADDRESSES THAT ARE WAITING — the rank a waiting document is
      entitled to, and the thing this arm used to answer with a constant.
      WHY THE CONSTANT WAS THE WHOLE ANSWER TO THE SEEDING QUESTION, AND WHY IT WAS "NOTHING". Every waiting
@@ -1608,14 +1668,14 @@ function _bestCandidate(idx) {
      ONE PASS, AND ONLY OVER THE ADDRESSES IN QUESTION: the cold loop below already walks this index once, so
      the aggregate is the same order of work and never a per-job scan of the store. */
   const waitingAddrs = new Set();
-  for (const job of _waiting)
+  for (const job of waiting)
     if (!(job.msg.frameId && _isRealOrigin(job.msg.origin))) waitingAddrs.add(job.msg.sourceUrl);
   /* AND EVERY ADDRESS AN APPLICATION HAS DECLARED IS A PAGE OF ITSELF, which asks this index a question of its
      own: does this profile ALREADY hold a parked frontier at that address? A declared route with a residue is
      already a work item — the residue's own admission fetches that document back and resumes its flows against
      today's server — so the aggregate below is what lets the seed walk leave it to that item instead of
      spending a second fetch on one address. Same set, same one pass, different question. */
-  for (const addr of _seeds.keys()) waitingAddrs.add(addr);
+  for (const addr of seeds.keys()) waitingAddrs.add(addr);
   const byAddress = new Map();
   if (waitingAddrs.size) for (const row of idx.values()) {
     if (!waitingAddrs.has(row.sourceUrl)) continue;
@@ -1632,7 +1692,7 @@ function _bestCandidate(idx) {
      at the point it is computed, so a candidate the pick considers and the census does not is not a shape this
      function can be in. */
   const cen = _candCensus();
-  for (const job of _waiting) {
+  for (const job of waiting) {
     /* A SUB-FRAME NEVER ROOTS A CLUSTER — its embedder names it (see admit), so it is not admissible and is
        therefore not a candidate. It keeps its place in `_waiting` and is answered by the instance that
        creates it; nothing here drops it. COUNTED rather than merely skipped: a pool with documents waiting and
@@ -1659,7 +1719,7 @@ function _bestCandidate(idx) {
      than skipped, because "no route was declared" and "every declared route is already being explored" are two
      different states and a single zero cannot say which. NOTHING IS DROPPED — the entry stays in `_seeds` and
      is offered again the moment that document is gone. */
-  for (const addr of _seeds.keys()) {
+  for (const addr of seeds.keys()) {
     if (live.has(addr)) { cen.exclSeedLive++; continue; }
     /* AND AN ADDRESS THIS PROFILE ALREADY HOLDS A PARKED FRONTIER FOR LEAVES IT TOO, for the same sentence one
        tier down. That residue's own admission IS a visit to this address — it is rehydrated by the arm below,
@@ -1696,7 +1756,7 @@ function _bestCandidate(idx) {
       cen.exclLive++;
       continue;
     }
-    if (_pool.some((p) => p.fkey === row.key)) { cen.exclHeld++; continue; }
+    if (resident.some((p) => p.fkey === row.key)) { cen.exclHeld++; continue; }
     /* A STRANDED RESIDUE IS NOT ADMISSIBLE AND IS THEREFORE NOT A CANDIDATE — the same sentence the sub-frame
        above is excluded by, and the same non-loss. Its document was shed against a proof and its re-derivation
        has since stopped answering, so there are no bytes for an instance to be built over; offering it here
@@ -4761,7 +4821,7 @@ const _hostOps = {
      than assuming there was one. */
   evictee: async (hot) => {
     if (!_atRamFloor()) return { evict: null, cand: null };   // there is room: nothing has to give anything up
-    const pick = _bestCandidate(await frontierIndex());
+    const pick = _bestCandidate(_candPopulation(await frontierIndex()));
     if (!pick.best) return { evict: null, cand: pick.census };   // nothing is waiting for the memory
     let worst = null;
     for (const e of hot) if (!worst || engineWeight(e) < engineWeight(worst)) worst = e;
@@ -5073,7 +5133,7 @@ const _hostOps = {
        (no headroom — a reservation in flight, or the floor, which `evictee` then asks it at instead), and
        `pick.best` is null where it was asked and had no members. Those are two different facts and the census
        carries them as two, which is why this is not one `cand` variable any more. */
-    const pick = _admissionHasHeadroom() ? _bestCandidate(_coldRanking) : null;
+    const pick = _admissionHasHeadroom() ? _bestCandidate(_candPopulation(_coldRanking)) : null;
     const cand = pick ? pick.best : null;
     if (cand) {
       DCHECK(CAND_KINDS.some((k) => k.kind === cand.kind),
@@ -5907,6 +5967,26 @@ self.astDispatch = async function astDispatch(msg) {
 
 console.debug("[ast-worker v2] bridge ready (self.astDispatch + self.rendererPoolProbe installed)");
 
-/* Node-only: expose the PURE host-WFQ policy (no wasm) for deterministic unit tests of ordering/
-   eviction/non-blocking-fetch. Never runs in the worker (no `module`). */
-if (typeof module !== "undefined" && module.exports) module.exports = { hostSchedule, engineWeight };
+/* ─── THE DOOR `engine/level1.mjs` DRIVES THE LEVEL-1 ORDER THROUGH ──────────────────────────────────────
+   Node-only, and never present in a browser realm: `module` is undefined in `ast-worker.html`, so what this
+   guard opens exists for exactly one caller and adds nothing to what ships.
+   IT IS NOT A CONVENIENCE, AND THE LINE THAT USED TO STAND HERE SAID IT WAS — "for deterministic unit tests
+   of ordering/eviction/non-blocking-fetch", an affordance no file in this tree had ever taken up. §Testing's
+   subject is the measurement: Level-2's census RIDES the result document because the engine composes it, and
+   Level-1's cannot — this order is `engineWeight` per hot instance against `frontierWeight` per waiting
+   address and cold row, and no engine can see another engine. So the Level-1 order is the one part of this
+   scheduler whose only possible reader is a driver in this zone, and both defects found in it this session
+   (a rank frozen at the constant 1.0, and a weight silently deleted from the order) were invisible to every
+   gate there is. This is what makes them askable.
+   WHAT IS EXPORTED IS THE ORDER, NEVER THE STATE. `_bestCandidate` takes its whole population as an argument
+   and `_candPopulation` is the one composer of it out of this module's privates, so a driver hands its own
+   population and the privates stay private — an export of `_pool`/`_waiting`/`_seeds` would hand a driver the
+   fields and leave the WALK exactly as unaskable as it was.
+   THE DECLARATIONS TRAVEL WITH IT because the census's contract is stated in them: `CAND_KINDS` is what the
+   accounting sums over, `CAND_SPREAD` is which readings a non-empty ranked set must carry, and `_candCensus`
+   is the one statement of which rows a walk that RAN produces. A driver that kept its own copy of those lists
+   would be the second hand-maintained copy §Testing names as the banned shape, and it would go stale in the
+   direction that matters — silently agreeing with a walk that had dropped a row. */
+if (typeof module !== "undefined" && module.exports)
+  module.exports = { hostSchedule, engineWeight, frontierWeight, frontierReward,
+                     _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD };
