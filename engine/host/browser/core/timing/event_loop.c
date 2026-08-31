@@ -378,6 +378,28 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
     return sp[0];
 }
 
+/* THE JUMP'S PREMISE — see event_loop.h for the whole of why this is a question and what falsifies it.
+   IT TAKES NO CONTEXT because it is not a question about a realm: the clock is the AGENT's and the debt is
+   the RUNNING FLOW's, and neither is reached through a JSContext. */
+int event_loop_may_advance(void)
+{
+    Flow *f = flow_running();
+
+    /* ASKED ONLY BETWEEN A FLOW'S TASKS, which is where both callers stand — the scheduler's idle ladder,
+       inside a flow's own step. With no flow running there is no timeline to move and no register to ask, so
+       an answer here would be a claim about nobody's clock.
+       A `CHECK` AND NOT A `DCHECK`, because this operation is the FIRST RELEASE DEREFERENCE of the running
+       flow in this file. event_loop_work_advance asserts the same pointer non-null and never follows it, so a
+       DCHECK was the whole guard there; here the pointer is followed to its register, and the callers reach
+       this through ordinary control flow rather than through an assert — so in a release build a DCHECK would
+       be compiled out in exactly the build where the dereference happens, trading a dev abort for a segfault. */
+    CHECK(f != NULL,
+          "the event loop was asked whether its clock may jump with NO FLOW RUNNING — the clock's fields ride "
+          "the per-flow COW delta and the debt that licenses the jump is the running flow's own register, so "
+          "outside a flow this question has no timeline to be about and no register to read it from");
+    return !pending_outstanding(f->pending);
+}
+
 void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
 {
     /* AGAINST THE MOMENT THE LOOP STANDS AT, which is the base PLUS the work retired since it — not the bare
@@ -403,6 +425,23 @@ void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
            "an earlier one runs the page's work in an order the page did not write, which is exactly what "
            "virtual time makes easy to get wrong (a long timeout landing in the middle of the work it was set "
            "to outlast)");
+    /* THE THIRD INVARIANT — THE JUMP'S PREMISE, READ THE SAME WAY THE OTHER TWO ARE. A move to a moment the
+       clock ALREADY STANDS AT retires work and manufactures nothing, so it is always allowed; a move to a
+       moment AHEAD of it is the substitution event_loop.h describes, and it is licensed only while nothing
+       outside this flow's program can queue work into it. Which of the two this is comes from the CALLER's
+       own ask (`now < when`), read and never re-evaluated: over an unknown expiry a comparison is an arm to
+       take, and an assertion that forks manufactures the world in which it holds. -1 is "never asked", which
+       is a caller that did not go through the ordering at all and is caught by the monotonicity read above. */
+    DCHECK(event_loop_before_decided(ctx, now, when) != 1 || event_loop_may_advance(),
+           "the event loop's clock was jumped FORWARD to a moment it has not reached while the host still "
+           "owes this flow a reply — HTML has no step that moves a clock (every read of the unsafe shared "
+           "current time in §8.1.7.3 Processing model is a read, and both task sources become due by a WAIT), "
+           "so this jump is a SUBSTITUTION for that wait and it is sound only while nothing outside this "
+           "flow's own program can put a task on one of its queues. With a reply in flight it is not a model "
+           "of the wait but a decision of it, always the same way: a virtual deadline of any size arrives "
+           "instantly and beats the network deterministically. The caller must not move the clock here — it "
+           "reports NO SOURCE DUE (a task whose expiry the clock has not reached is not a runnable task under "
+           "§8.1.7.3 step 2) and the flow parks host-owed until the host pays");
     JS_FreeValue(ctx, now);
     el_set(ctx, g_atom_now, when);
     /* THE MOVE IS ABSOLUTE, SO THE WORK IT SUBSUMED IS SPENT. `when` is at or after the moment the loop stood

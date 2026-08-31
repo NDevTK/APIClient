@@ -24,8 +24,17 @@
  * moment still run in the order they were set.
  *
  * TIME IS VIRTUAL, AND THAT IS THE SPEC'S OWN MODEL. HTML orders the timer task source by expiry, and this
- * engine has no wall clock to wait on: nothing else advances while a timer is outstanding, so the clock jumps to
- * the next expiry. Ordering is therefore (when, insertion order) — `setTimeout(f, 0)` runs before
+ * engine has no wall clock to wait on, so the clock JUMPS to the next expiry where a wait would have sat.
+ * THAT JUMP IS A SUBSTITUTION AND IT CARRIES A PREMISE, WHICH THIS PARAGRAPH USED TO STATE AS A FACT: it said
+ * "nothing else advances while a timer is outstanding", and that is FALSE of a flow the host still owes a
+ * reply. §8.7's own wait runs "in parallel" ("wait until global's associated Document has been fully active
+ * for a further milliseconds milliseconds"), so a reply in flight can land first — and the jump cannot
+ * represent that race, it DECIDES it, always for the timer, by more the longer the deadline. Measured: every
+ * corpus document whose body awaits a `fetch()` reported "Test timed out" from testharness.js's own
+ * `setTimeout(…, 10000)` while the answer sat unread in the socket. So the premise is now ASKED at the jump
+ * (core/timing/event_loop.h's event_loop_may_advance) and where it does not hold the clock does not move and
+ * no source is due — the flow parks host-owed and resumes when the host pays, which is the wait itself.
+ * Ordering is therefore (when, insertion order) — `setTimeout(f, 0)` runs before
  * `setTimeout(g, 100)`, and two timers with equal delay run in the order they were set, which is exactly what a
  * browser does. Modelling the ORDER is the point: a page that sequences work across two delays gets the
  * sequence it wrote. The clock itself is the EVENT LOOP's and lives there (core/timing/event_loop.c).
@@ -933,6 +942,12 @@ static const JSTrampStepDef TT_DEF = {
  * the air — for ever, where nothing is going to answer — and the flow keeps the timer while never being
  * picked again, which is the razor's "starves" and so a cap. The order is stated at the driver
  * (solver/engine.c's step ladder); what this file owes it is only the honest "there is none" below.
+ * AND "DUE" IS THE WORD THAT PARAGRAPH RESTS ON, WHICH IS WHY IT DOES NOT REACH THE CLOCK. Everything above
+ * is about a timer that IS due: it runs ahead of the debt, unchanged. What a debt does decide is whether the
+ * clock may MOVE to make one due, because that move is this engine's substitute for a wait rather than a step
+ * any standard has — see the clock block below and core/timing/event_loop.h. A timer whose expiry the clock
+ * has not reached is not a runnable task, so declining to move is not the park this paragraph forbids; it is
+ * this file's own honest "there is none", reached one question earlier.
  *
  * AND IT IS THE RUNNING FLOW'S TIMER, WITHOUT ASKING WHICH FLOW THAT IS. The driver calls this from inside a
  * flow's step, so that flow's COW delta is the one applied: every map it walks holds exactly the entries that
@@ -942,7 +957,10 @@ static const JSTrampStepDef TT_DEF = {
  * idle branch, which is the one system CLAUDE.md allows: no timer wheel beside the frontier, no cross-flow
  * wakeup, nothing to re-rank.
  *
- * Returns 1 when a timer fired (the driver has work again), 0 when there is none. */
+ * Returns 1 when a timer fired (the driver has work again), 0 when NO TIMER TASK IS DUE — which covers both
+ * an empty map and an entry whose expiry the clock has not reached and may not jump to (event_loop.h's
+ * event_loop_may_advance). The two are one answer on purpose: §8.1.7.3 Processing model step 2 asks only
+ * whether the loop "has a task queue with at least one runnable task", and neither of them is one. */
 int timer_run_due(JSContext *ctx)
 {
     JSValue whenv = JS_UNDEFINED;
@@ -969,15 +987,53 @@ int timer_run_due(JSContext *ctx)
        of re-evaluating it, because re-evaluating a comparison over an unknown is a fork, and an assertion
        that forks manufactures the world in which it holds.
        DO NOT clamp, and do not read the example either — this entry reached the front of the queue precisely
-       because a FORK put it there, so an example would answer a question an arm has already decided. */
+       because a FORK put it there, so an example would answer a question an arm has already decided.
+       AND WHETHER IT MAY MOVE *FORWARD* IS A SECOND QUESTION, WHICH THIS USED TO ANSWER YES BY ASSUMPTION.
+       The premise the jump rests on is that nothing else advances while a timer is outstanding — this file's
+       banner stated it as a fact until the paragraph that now qualifies it — and it is FALSE for a flow the
+       host still owes a reply. A reply in flight is precisely something else that will advance: its continuation
+       enqueues a job into this flow's own queue, at a moment this clock cannot order because the reply has no
+       moment on it at all. Jumped anyway, a `setTimeout(f, 10000)` is satisfied instantly and beats the
+       network DETERMINISTICALLY — not sometimes, always, and by more the longer the deadline. That is what
+       testharness.js's own per-file timeout is, so every corpus document whose body awaits a `fetch()`
+       reported "Test timed out" while the answer sat unread in the socket.
+       So the move is split THREE ways rather than two, and the split is not a preference: a move to the
+       moment the clock ALREADY STANDS AT manufactures no time and is always allowed (which keeps the
+       zero-delay completion timer this file was written for firing under a live request), while a move AHEAD
+       of it is the substitution and asks event_loop_may_advance for its licence. Both directions of the
+       strict order are ASKED, which is what leaves BOTH of advance_to's reads with a decision to discharge —
+       its monotonicity invariant reads `when < now` and its premise invariant reads `now < when`, and a
+       relation's key is composed of its name and BOTH operands, so the two are different predicates and
+       neither answers for the other. */
     {
         JSValue now = event_loop_now(docctx);
 
         /* It is the ONE source that is due, so nothing else constrains the move — `due` is this same moment.
            On the arm where the expiry is already behind the clock the loop does not move at all: the task is
            due NOW, and winding the clock back to the expiry is the one thing §8.1.7's order forbids. */
-        if (!event_loop_before(docctx, whenv, now))
+        if (event_loop_before(docctx, whenv, now)) {
+            /* Behind the clock: due now, at the moment the loop stands at, and nothing moves. */
+        } else if (!event_loop_before(docctx, now, whenv)) {
+            /* Neither is before the other, so the expiry IS the moment the loop stands at: the task is due
+               now and the move retires the work that got here without manufacturing any time. */
             event_loop_advance_to(docctx, whenv, whenv);
+        } else if (!event_loop_may_advance()) {
+            /* STRICTLY AHEAD, AND THE CLOCK MAY NOT MANUFACTURE THIS TASK'S DUENESS. Under HTML §8.7 Timers
+               the wait that makes this task due runs "in parallel" with everything else, so a reply the host
+               owes this flow can land first; this engine's jump cannot represent that and would decide it.
+               NOTHING IS DROPPED AND NOTHING IS CAPPED. The entry stays in the map at its own expiry, and the
+               honest answer to the driver is the one this function already has a spelling for: no source is
+               due, because §8.1.7.3 Processing model step 2 runs a task only where the loop "has a task queue
+               with at least one runnable task" and a task whose expiry the clock has not reached is not one.
+               The ladder below this hook then finds the flow's outstanding reply and reports it host-owed, so
+               the flow suspends at its own weight until the host pays and asks again — which is the wait the
+               spec states and this engine was substituting for. */
+            JS_FreeValue(docctx, now);
+            JS_FreeValue(docctx, whenv);
+            return 0;
+        } else {
+            event_loop_advance_to(docctx, whenv, whenv);
+        }
         JS_FreeValue(docctx, now);
     }
     JS_FreeValue(docctx, whenv);

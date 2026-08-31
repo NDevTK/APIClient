@@ -6133,7 +6133,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * up, said about the clock instead of about `load`: a debt no task source waits on must not decide
              * when a task source runs. §8.1.7.3 step 2 conditions the whole loop on "a task queue with at
              * least one runnable task" and on nothing else; a `fetch()` runs in parallel and is not on a queue
-             * until it completes. Held ABOVE them, ONE request in the air took a flow out of the pick — a
+             * until it completes.
+             * AND THAT SENTENCE IS ABOUT RUNNABILITY, NOT ABOUT DUENESS — a distinction it did not have to
+             * make while the clock jumped unconditionally, and the one place a debt legitimately does decide.
+             * Whether a task source's task is DUE is a question about the clock, and this engine has no real
+             * time, so it substitutes a JUMP for the wait HTML §8.1.7.3 and §8.7 Timers both state in words.
+             * A jump forward past an outstanding reply does not model that wait, it decides it — always for
+             * the deadline, however long. So the two hooks above ask core/timing/event_loop.h's
+             * event_loop_may_advance before moving the clock and answer 0 where it does not hold: no source
+             * became due, which is exactly what this arm is then reporting. A DUE task still runs ahead of
+             * this return, unchanged, which is what the sentence above protects.
+             * Held ABOVE them, ONE request in the air took a flow out of the pick — a
              * marked flow is not picked again until a HOST EVENT clears it — and with it went every due timer,
              * every rendering opportunity, and therefore every requestAnimationFrame and observer delivery,
              * for the rest of the session.

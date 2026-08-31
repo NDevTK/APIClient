@@ -199,11 +199,63 @@ void event_loop_work_advance(JSContext *ctx, uint64_t units);
  *     this clock, are 0 for a one-line document and 0 for a ten-megabyte one alike. Two agents whose documents
  *     differ by megabytes of parsing stamp the same numbers. */
 
+/* MAY THE CLOCK BE MOVED TO A MOMENT IT HAS NOT REACHED — THE JUMP'S OWN PREMISE, ASKED RATHER THAN ASSUMED.
+ *
+ * HTML HAS NO STEP THAT MOVES A CLOCK, AND THAT IS THE WHOLE OF WHY THIS QUESTION EXISTS. Every appearance of
+ * the unsafe shared current time in HTML §8.1.7.3 Processing model is a READ — step 2.2's "Set taskStartTime
+ * to the unsafe shared current time", step 3's "Let taskEndTime be the unsafe shared current time", the idle
+ * arm's "Set this event loop's last idle period start time to the unsafe shared current time", and the
+ * in-parallel list's "Set eventLoop's last render opportunity time to the unsafe shared current time". What
+ * makes a source DUE in the standard is not an advance but a WAIT, stated in those words at both of the
+ * sources this engine has: §8.1.7.3's in-parallel list step 1 is "Wait until at least one navigable ... might
+ * have a rendering opportunity", and §8.7 Timers's run steps after a timeout runs "in parallel" and there
+ * says "wait until global's associated Document has been fully active for a further milliseconds
+ * milliseconds". A real browser's timer is due when REAL TIME reaches it.
+ *
+ * THIS ENGINE HAS NO REAL TIME, SO IT SUBSTITUTES A JUMP FOR THE WAIT — a substitution, not a model, and it
+ * carries a premise: that nothing OUTSIDE this flow's own program can put a task on one of its queues at a
+ * moment the jump would step over. Where that holds the jump IS the wait, because a wait with nothing to wait
+ * for returns at once. Where it does not hold, the jump does not model the wait — it DECIDES it, and always
+ * the same way: a virtual deadline of any size is reached instantly and therefore beats every real event
+ * deterministically, however long the deadline and however near the event.
+ *
+ * WHAT FALSIFIES IT IS A DEBT AND NOT A REACHABILITY. The premise is false exactly while the host still owes
+ * this flow something (solver/pending.h's `pending_outstanding`): a reply in flight is an event that HAS
+ * happened or will, whose continuation enqueues a job into THIS flow's queue, and the clock cannot order it
+ * because it has no moment on this clock at all. A peer merely HOLDING a reference to this document is not
+ * that — nothing is in flight, so there is nothing for the jump to step over — which is why this asks the
+ * register and not `engine_set_referenced`.
+ *
+ * IT IS THE RUNNING FLOW'S DEBT, because it is the running flow's CLOCK: both fields of this record ride the
+ * per-flow COW delta, so an advance lands in that flow's timeline and a SIBLING's outstanding reply is
+ * delivered into the sibling's own register and its own delta. Asking the frontier instead would hold one
+ * flow's timer behind another flow's network, which starves work for a debt its own timeline does not carry.
+ *
+ * WHERE IT ANSWERS 0 THE CALLER DOES NOT MOVE THE CLOCK AND REPORTS NO SOURCE DUE — which is the honest
+ * answer and not a deferral: §8.1.7.3 step 2 runs a task only when the loop "has a task queue with at least
+ * one runnable task", and a task whose expiry the clock has not reached is not runnable. The flow then has
+ * nothing left to run, reports itself host-owed, and the scheduler suspends it until the host pays — the
+ * ordinary park, at its own weight, holding every work item it had. Nothing is dropped, capped or reordered.
+ *
+ * RESIDUAL — NARROWER THAN HTML §8.7 Timers, AND NAMED BECAUSE THE CODE IS RIGHT AND NOT UNFINISHED.
+ *   WHAT IS NOT COVERED: a timer a real browser fires WHILE a request is still in the air. Real time passes
+ *     during the wait and reaches the expiry; this clock's two movers are a flow's own retired work and this
+ *     jump, and a flow parked on the host retires none — so an expiry ahead of the clock is reached by the
+ *     reply arriving first, never by the waiting itself.
+ *   WHAT THE NEXT DIFF BUILDS: a duration the HOST contributes to the waiting flow's timeline — time the flow
+ *     spent owed, entering this clock as an amount the flow did not compute — so that an expiry can be
+ *     reached by waiting as well as by working, and the order between a deadline and a reply is decided by
+ *     two moments rather than by which mechanism happens to move.
+ *   HOW ITS ABSENCE SHOWS: a page that arms `setTimeout(() => controller.abort(), N)` around a `fetch()`
+ *     never aborts — the abort runs after the reply lands, or not at all if no reply ever does. */
+int event_loop_may_advance(void);
+
 /* MOVE THE CLOCK to the moment a task source becomes due. `due` is the earliest moment ANOTHER source is
    already due at, or JS_UNDEFINED when none is — the caller has it, because it is what decided this move.
-   Both invariants are asserted here rather than trusted to the caller: time may not run backwards, and the
-   loop may not step OVER a source that becomes due first. Both are read from what the caller's own ask
-   decided (see the header note); neither is re-evaluated, because over an unknown that is a fork.
+   THREE invariants are asserted here rather than trusted to the caller: time may not run backwards, the
+   loop may not step OVER a source that becomes due first, and a move to a moment the clock HAS NOT REACHED
+   may only be made while event_loop_may_advance holds. All three are read from what the caller's own ask
+   decided (see the header note); none is re-evaluated, because over an unknown that is a fork.
    IT IS AN ABSOLUTE MOVE, so it also RETIRES the work counted since the last one: `when` is a moment on this
    clock that the caller has already established is at or after the moment the loop stands at, and the work
    that got the loop there is subsumed by it rather than added to it. */

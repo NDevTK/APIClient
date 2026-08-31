@@ -859,6 +859,29 @@ int rendering_run_opportunity(JSContext *ctx)
         JS_FreeValue(ctx, now);
         return 0;
     }
+    /* AND THE OTHER SOURCE IS NOT ON THIS CLOCK AT ALL — the jump's own premise, asked because the frame is
+       reached by MOVING the clock and §8.1.7.3 Processing model reaches it by WAITING: its in-parallel list
+       step 1 is "Wait until at least one navigable ... might have a rendering opportunity", and every read of
+       the unsafe shared current time in that section is a read. A reply the host still owes this flow is an
+       event the wait would have been interrupted by and the jump cannot order, because it has no moment here;
+       jumped anyway, the frame wins deterministically and the page's animation callbacks run at a moment
+       manufactured ahead of an answer already in the socket. core/timing/event_loop.h owns the whole of that
+       reasoning and this asks it.
+       THE STRICTLY-AHEAD QUESTION IS ASKED RATHER THAN INFERRED, for the reason the clamp above gives about
+       itself: over an unknown moment `next == now` and `next > now` are two different programs, and only the
+       second manufactures time. Where the clamp fired, `next` IS `now` and this costs no predicate (a moment
+       is not before itself). Where it did not, this is the read that discharges advance_to's premise
+       invariant — a relation's key is its name and BOTH operands, so the clamp's `next < now` is a different
+       predicate and cannot answer for it.
+       NOTHING IS DROPPED: the frame is not consumed, `last render opportunity time` is not moved, and the
+       honest answer is the one this function already spells for a timer that is due first — no opportunity
+       ran. The ladder below finds the flow's outstanding reply and parks it host-owed, and the frame is taken
+       on a later pass at its own moment, which is the wait the section states. */
+    if (event_loop_before(ctx, now, next) && !event_loop_may_advance()) {
+        JS_FreeValue(ctx, next);
+        JS_FreeValue(ctx, now);
+        return 0;
+    }
     /* The timer source is the other thing due on this clock and it is NOT due before `next` — which is what
        the question above established, so nothing is already due to move past and the assert is told so
        (JS_UNDEFINED is "no other source is due", which the `-1` sentinel used to say). */
