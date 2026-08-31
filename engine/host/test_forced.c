@@ -5691,6 +5691,89 @@ static int param_value_is(const char *js, const char *url, const char *pname, co
     return 0;
 }
 
+/* ---- A MULTI-WORLD ROW IS N+1 FOLDED CLAUSES SCOPED TO ITS OWN ENDPOINT, NEVER A CONJUNCTION OF `strstr`s ---
+ *
+ * THE READING DEFECT IS THE EXPENSIVE HALF AND IT HAS NOW COST THREE LANES. A row spelled
+ * `strstr(js,"\"/api/x\"") && strstr(js,"needleA") && strstr(js,"needleB")` prints ONE byte for three findings
+ * that send a reader to three different places: the frontier never reached the statement, one world reached
+ * the sink and its sibling did not, or the isolation leaked. CLAUDE.md's @S rule names exactly this — "a
+ * candidate killed by a gate must be distinguishable from one a filter ate and from one that was never
+ * scheduled" — and this file already recorded, at the sort block, that conflating them "COST A LANE A
+ * SESSION". It then cost a second lane a bisect and dispatched a third: a smoke that ABORTED 40.6 s into a
+ * 900 s CPU budget produced 0 on every two-world row at once, one revision later than a run that had spent
+ * its whole budget, and the adjacent pair read as a clean localisation of a regression that was not there.
+ * Four probes that go to 0 TOGETHER are the signature of a run that stopped, and the only thing that can say
+ * so is the row itself.
+ *
+ * THE MATCHING DEFECT IS THE OTHER HALF, AND IT IS WHY THE FIX IS ONE COMPONENT RATHER THAN A `why` PER ROW.
+ * An unscoped `strstr` for a world token is satisfied by ANY byte of the whole result document, so a row can
+ * read 1 on a world it never observed. `afromfork` searched for `afA`/`afP` and six statements later
+ * `paffork` emits `pafA`/`pafP`, which CONTAIN them: that row asserted "the afromfork statement ran at all,
+ * and paffork produced both of ITS worlds", under a name that claims the JSIterConsume clone. The comment
+ * that fixed the neighbouring `mapmutfork` row wrote the opposite as its reason for leaving the siblings
+ * alone — "Every other member of this family names its two worlds with a pair minted for it alone (afA/afP,
+ * …), so an unscoped `strstr` for one of those can only match the statement that emits it" — and `pafA` sits
+ * 31 lines below that sentence. A mint is not a guarantee of uniqueness; SCOPING is, and the scoping
+ * primitive was already in this file. `param_value_is` compares the WHOLE value of ONE param of ONE
+ * endpoint, so a world token that happens to be a substring of another statement's value cannot satisfy it,
+ * and no future statement can silently make a row unfalsifiable by choosing a longer name.
+ *
+ * WHY A MACRO AND NOT A CALL: the ADDRESS of the failure is what the reader needs, and here the address is
+ * the ENDPOINT rather than a file:line — one helper called from twenty rows would stamp one line for all of
+ * them, which is the defect CLAUDE.md names at length. The endpoint, the param and the world token are
+ * composed INTO the message, so the remedy has an object. The world list is bounded by
+ * `sizeof/sizeof` at the expansion, which is the one place the size is known — never a NULL terminator a
+ * caller can forget, which the optimiser is entitled to turn into a self-jump.
+ *
+ * THE BUFFER IS STATIC AND THE POINTER IS NOT, which is the distinction `fold_row`'s comment above turns on.
+ * `why` is the caller's local and is reset to NULL at every sample of a live run, so a statement that becomes
+ * true stops reporting; the buffer is only storage for the text of THIS sample's first failing clause, and it
+ * is rewritten on every sample. One buffer per expansion, so no two rows share it. */
+static void fork_row_impl(const char *js, int *row, const char **why,
+                          const char *url, const char *pname, const char *subject,
+                          const char *const *worlds, int nworlds, char *buf, size_t bufsz)
+{
+    char q[128];
+    int i;
+
+    DCHECK(nworlds >= 2, "a fork row was declared with fewer than two worlds — a row naming one world makes no "
+                         "two-world claim and cannot say that a sibling was lost, so it must not be spelled as "
+                         "one; give it the worlds it asserts or use fold_row directly");
+    DCHECK(strlen(url) + 3 <= sizeof q,
+           "a fork row's endpoint does not fit the quoted-URL needle buffer — raise q[] here rather than "
+           "shortening the endpoint, which is what the emitted record is keyed by");
+    snprintf(q, sizeof q, "\"%s\"", url);
+    if (!strstr(js, q)) {
+        *row = 0;
+        if (!*why) {
+            snprintf(buf, bufsz,
+                     "NOT REACHED: there is no %s record at all, so this run did not answer the statement. "
+                     "That is the SCHEDULE and says nothing about %s — read it against the other multi-world "
+                     "rows and against how far this run got: all of them 0 at once is a run that stopped",
+                     url, subject);
+            *why = buf;
+        }
+        return;
+    }
+    for (i = 0; i < nworlds; i++) {
+        if (param_value_is(js, url, pname, worlds[i])) continue;
+        *row = 0;
+        if (!*why) {
+            snprintf(buf, bufsz,
+                     "the statement RAN and %s's `%s` never carried `%s`: THAT WORLD WAS LOST — a sibling "
+                     "reached the sink and this one did not survive %s", url, pname, worlds[i], subject);
+            *why = buf;
+        }
+    }
+}
+#define FORK_ROW(js_, row_, why_, url_, pname_, subject_, ...)                                          \
+    do {                                                                                                \
+        static const char *const fr_worlds_[] = { __VA_ARGS__ };                                        \
+        static char fr_why_[448];                                                                       \
+        fork_row_impl((js_), (row_), (why_), (url_), (pname_), (subject_), fr_worlds_,                  \
+                      (int)(sizeof fr_worlds_ / sizeof fr_worlds_[0]), fr_why_, sizeof fr_why_);        \
+    } while (0)
+
 /* ONE PARAM OF ONE ENDPOINT CARRIES EXACTLY ONE VALUE AND IT IS `val` — the claim the three rows above were
    trying to make, and the one an `strstr` up to a literal `]` was standing in for. Exactly-one is the whole
    assertion for a statement whose value the code DETERMINED: a second entry means the flow forked where the
@@ -6228,48 +6311,112 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* FLOW-LOCAL post-fork isolation: an object created before a concolic fork (flow_local at creation) is SHARED
        by the snapshot; each arm's mutation must be per-flow. Both values present ⇒ cow_delta_fork's forked=1 keeps
        post-fork flow_local mutations captured — no leak (the older 'snapshot shares flow_local (unsound)' claim). */
-    int floc_iso = (strstr(js, "\"/api/floc\"") && strstr(js, "flocADMIN") && strstr(js, "flocPUBLIC"));
+    const char *floc_iso_why = NULL; int floc_iso = 1;
+    FORK_ROW(js, &floc_iso, &floc_iso_why, "/api/floc", "x",
+             "cow_delta_fork's forked=1, which is what keeps a post-fork mutation of a flow_local object captured",
+             "flocADMIN", "flocPUBLIC");
     /* CONCOLIC FORK inside a forEach CALLBACK: the branch forks deep (base->iter-callback frame); clone_deep_flow
        clones the JSArrayEvery cont_state so the sibling continues the iteration on its own. All four combinations
-       (feADMIN/fePUBLIC × elements 1,2) ⇒ both arms iterated independently over the full array. */
-    int fefork_tt = (strstr(js, "\"/api/fefork\"") && strstr(js, "feADMIN") && strstr(js, "fePUBLIC")
-                     && strstr(js, "1feADMIN") && strstr(js, "2feADMIN") && strstr(js, "1fePUBLIC") && strstr(js, "2fePUBLIC"));
-    /* SHARED-ARRAY append isolation: each arm's push into the pre-fork array must be COW-isolated. STRICT (quoted)
-       values — 'pushA' and 'pushB' must appear as COMPLETE join results; the contaminated 'pushA,pushB' would
-       have NO standalone "pushB" JSON value, so this fails on any leak. */
-    int pushfork_tt = (strstr(js, "\"/api/pushfork\"") && strstr(js, "\"pushA\"") && strstr(js, "\"pushB\""));
-    int owfork_tt = (strstr(js, "\"/api/owfork\"") && strstr(js, "\"owA\"") && strstr(js, "\"owB\""));
-    /* MAP fork: clean per-arm result arrays, no dropped element. Require the two canonical arms AND the absence
-       of any leading-dash join (a dropped element0 like "-mA2"). */
-    int mapfork_tt = (strstr(js, "\"/api/mapfork\"") && strstr(js, "mA1-mA2") && strstr(js, "mP1-mP2") && !strstr(js, "\"-m"));
+       (feADMIN/fePUBLIC × elements 1,2) ⇒ both arms iterated independently over the full array.
+       FOUR WORLDS AND NOT TWO, so the row names all four: the old spelling also asked for the bare `feADMIN`
+       and `fePUBLIC`, which are substrings of the four it already required and asserted nothing on top of
+       them. What the four say is that EACH arm walked the WHOLE array — an arm that forked and then stopped
+       iterating shows up as its element-2 world missing, and the message names which. */
+    const char *fefork_why = NULL; int fefork_tt = 1;
+    FORK_ROW(js, &fefork_tt, &fefork_why, "/api/fefork", "e",
+             "clone_deep_flow's clone of the JSArrayEvery cont_state, which is what lets a sibling forked "
+             "inside the callback go on iterating on its own",
+             "1feADMIN", "2feADMIN", "1fePUBLIC", "2fePUBLIC");
+    /* SHARED-ARRAY append isolation: each arm's push into the pre-fork array must be COW-isolated. The values
+       are matched WHOLE, so the contaminated join `pushA,pushB` satisfies neither world and the row says which
+       one it could not find — the quoted-`strstr` spelling was reaching for whole-value equality and this is
+       it, scoped to this endpoint's own param as well. */
+    const char *pushfork_why = NULL; int pushfork_tt = 1;
+    FORK_ROW(js, &pushfork_tt, &pushfork_why, "/api/pushfork", "a",
+             "the fast-array-append capture, which is what isolates each arm's push into the pre-fork array "
+             "(a leak joins both arms into one value and neither world is then found)",
+             "pushA", "pushB");
+    const char *owfork_why = NULL; int owfork_tt = 1;
+    FORK_ROW(js, &owfork_tt, &owfork_why, "/api/owfork", "a",
+             "the in-bounds element-overwrite capture, which is what isolates two arms writing the SAME slot",
+             "owA", "owB");
+    /* MAP fork: clean per-arm result arrays, no dropped element. The two canonical arms are matched WHOLE, so
+       a dropped element0 (`-mA2`) is no longer that arm's value and the row names the world it lost. The
+       leading-dash clause stays as its own fold because it is a claim about the WHOLE document — a third,
+       contaminated record existing beside two correct ones — which no per-endpoint value test can make. */
+    const char *mapfork_why = NULL; int mapfork_tt = 1;
+    FORK_ROW(js, &mapfork_tt, &mapfork_why, "/api/mapfork", "r",
+             "clone_deep_flow's clone of the JSArrayEvery cont_state over the shared result array",
+             "mA1-mA2", "mP1-mP2");
+    fold_row(&mapfork_tt, &mapfork_why, !strstr(js, "\"-m"),
+             "a map-callback value BEGINNING with the join separator exists somewhere in this document: an arm "
+             "lost element 0 of the shared result array, which is the contamination the two world clauses "
+             "above cannot see because each of them is satisfied by a correct sibling");
     /* CONCOLIC FORK inside a synchronously-driven GENERATOR body: the branch forks the tramp-driven generator
        activation (the named nested-activation hold-out). Both ggADMIN and ggPUBLIC present ⇒ a branch inside a
        generator body snapshot-forks per arm, never DFAILs / drives to completion. */
-    int genfork_tt = (strstr(js, "\"/api/genfork\"") && strstr(js, "ggADMIN") && strstr(js, "ggPUBLIC"));
+    const char *genfork_why = NULL; int genfork_tt = 1;
+    FORK_ROW(js, &genfork_tt, &genfork_why, "/api/genfork", "v",
+             "the snapshot fork of a tramp-driven generator activation (the alternative is a DFAIL or a "
+             "drive-to-completion, and neither leaves a second world)",
+             "ggADMIN", "ggPUBLIC");
     /* TWO-BRANCH generator fork: the dedup-REPLACE path (a sibling with a gen_data swap re-forks the same
        generator). All four gate combinations present ⇒ each fork advanced its own per-flow generator state. */
-    int gen2fork_tt = (strstr(js, "\"/api/gen2fork\"") && strstr(js, "g2:AX") && strstr(js, "g2:AY") && strstr(js, "g2:PX") && strstr(js, "g2:PY"));
+    const char *gen2fork_why = NULL; int gen2fork_tt = 1;
+    FORK_ROW(js, &gen2fork_tt, &gen2fork_why, "/api/gen2fork", "v",
+             "the dedup-REPLACE path, which is what lets a sibling carrying a gen_data swap re-fork the same "
+             "generator so each of the four gate combinations advances its own per-flow state",
+             "g2:AX", "g2:AY", "g2:PX", "g2:PY");
     /* FOR-OF generator-body fork: the generator object is recovered from the caller stack (caller_sp[forof_off]),
        not a held frame ref. Both ofA and ofP present ⇒ a branch inside a for-of-driven generator body forks per arm. */
-    int genofork_tt = (strstr(js, "\"/api/genofork\"") && strstr(js, "ofA") && strstr(js, "ofP"));
+    const char *genofork_why = NULL; int genofork_tt = 1;
+    FORK_ROW(js, &genofork_tt, &genofork_why, "/api/genofork", "v",
+             "recovery of the generator object from the caller stack rather than from a held frame reference",
+             "ofA", "ofP");
     /* Array.from(GEN) consumer fork: the gen body branches while CONSUMED by Array.from on the tramp
-       (CONT_ITER_CONSUME). Both afA and afP present ⇒ clone_deep_flow's gen-branch cloned the JSIterConsume state
-       so each fork arm accumulated its own result independently. */
-    int afromfork_tt = (strstr(js, "\"/api/afromfork\"") && strstr(js, "afA") && strstr(js, "afP"));
-    /* [...GEN] spread consumer fork: the SPREAD-sink variant of CONT_ITER_CONSUME. Both spA and spP present ⇒ the
-       spread consumer forked mid-consume and each arm appended to its own COW-isolated array. */
-    int spreadfork_tt = (strstr(js, "\"/api/spreadfork\"") && strstr(js, "spA") && strstr(js, "spP"));
-    /* SHARED-SET record isolation: a pre-fork Set, each arm adds a different record. Both sadA and sadP present ⇒
-       the map_add capture isolated each arm's Set.add (JS_MapDeleteRecord on unapply, JS_MapAddRecord on apply). */
-    int setaddfork_tt = (strstr(js, "\"/api/setaddfork\"") && strstr(js, "sadA") && strstr(js, "sadP"));
-    /* new Set(GEN) consumer fork: the Set iterator-consumer (SET sink) forks mid-consume — now fork-safe via the
-       map_add COW capture. Both seA and seP present ⇒ each arm consumed into its own COW-isolated Set. */
-    int setfork_tt = (strstr(js, "\"/api/setfork\"") && strstr(js, "seA") && strstr(js, "seP"));
+       (CONT_ITER_CONSUME) ⇒ clone_deep_flow's gen-branch cloned the JSIterConsume state so each fork arm
+       accumulated its own result independently.
+       THIS ROW WAS THE SECOND `mapmutfork`, AND THE COMMENT BELOW NAMED IT AS THE COUNTEREXAMPLE TO ITSELF.
+       `afA` and `afP` were matched with an unscoped `strstr` over the whole result document, and `/api/paffork`
+       — six statements after this one — emits `pafA` and `pafP`, which CONTAIN them. So both world clauses
+       were satisfiable by a DIFFERENT statement's records, and all this row asserted was that an
+       `/api/afromfork` record existed at all while `paffork` had produced both of ITS worlds. It could report
+       1 with the JSIterConsume clone broken. The token was minted; uniqueness was never a property of minting
+       it, only of SCOPING the comparison, which is what param_value_is does. */
+    const char *afromfork_why = NULL; int afromfork_tt = 1;
+    FORK_ROW(js, &afromfork_tt, &afromfork_why, "/api/afromfork", "v",
+             "clone_deep_flow's clone of the JSIterConsume state Array.from holds across the generator's branch",
+             "afA", "afP");
+    /* [...GEN] spread consumer fork: the SPREAD-sink variant of CONT_ITER_CONSUME ⇒ the spread consumer forked
+       mid-consume and each arm appended to its own COW-isolated array. */
+    const char *spreadfork_why = NULL; int spreadfork_tt = 1;
+    FORK_ROW(js, &spreadfork_tt, &spreadfork_why, "/api/spreadfork", "v",
+             "the SPREAD-sink variant of CONT_ITER_CONSUME, whose arms append to their own COW-isolated array",
+             "spA", "spP");
+    /* SHARED-SET record isolation: a pre-fork Set, each arm adds a different record ⇒ the map_add capture
+       isolated each arm's Set.add (JS_MapDeleteRecord on unapply, JS_MapAddRecord on apply). */
+    const char *setaddfork_why = NULL; int setaddfork_tt = 1;
+    FORK_ROW(js, &setaddfork_tt, &setaddfork_why, "/api/setaddfork", "v",
+             "the map_add capture, which is what isolates two arms adding to one pre-fork Set",
+             "sadA", "sadP");
+    /* new Set(GEN) consumer fork: the Set iterator-consumer (SET sink) forks mid-consume — fork-safe via the
+       map_add COW capture ⇒ each arm consumed into its own COW-isolated Set. */
+    const char *setfork_why = NULL; int setfork_tt = 1;
+    FORK_ROW(js, &setfork_tt, &setfork_why, "/api/setfork", "v",
+             "the SET-sink variant of CONT_ITER_CONSUME over the map_add capture",
+             "seA", "seP");
     /* SHARED-MAP overwrite/delete isolation: one arm overwrites a pre-fork Map key, the other deletes it. Both mmA
        and gone present ⇒ the map_mutate undo-log capture isolated each arm's mutation (restored on unapply).
-       THIS ROW IS A FOLD AND ITS SIBLINGS ABOVE ARE NOT, FOR A REASON THAT IS ABOUT ITS TOKENS AND NOT ITS STYLE.
-       Every other member of this family names its two worlds with a pair minted for it alone (afA/afP, spA/spP,
-       sadA/sadP, seA/seP), so an unscoped `strstr` for one of those can only match the statement that emits it.
+       WHAT STOOD HERE SAID THIS ROW WAS THE ONLY ONE OF THE FAMILY THAT NEEDED SCOPING, AND THAT SENTENCE IS
+       REFUTED 31 LINES BELOW ITSELF. It read: "Every other member of this family names its two worlds with a
+       pair minted for it alone (afA/afP, spA/spP, sadA/sadP, seA/seP), so an unscoped `strstr` for one of
+       those can only match the statement that emits it." `/api/paffork` emits `pafA` and `pafP`, which CONTAIN
+       `afA` and `afP` — so `afromfork`'s BOTH world clauses were satisfiable by another statement's records,
+       and the row that sentence certified was broken in exactly the way this one was. The lesson is not that
+       one more token needed minting: A MINT IS NOT A UNIQUENESS PROOF, because it is a claim about every
+       token this document will ever emit, including the ones a later statement adds. Scoping is the proof,
+       and the whole family now goes through FORK_ROW, which composes the endpoint, the param and the world
+       into the message so the remedy has an object.
        `gone` is an ENGLISH WORD this fixture already emits from four earlier statements — `/api/cegone?v=isgone`,
        `&removed=gone`, `&del=gone` and the IDB record's `made77gone` — and all four sit EARLIER in this document
        than the Map statement does. So the delete-arm clause was satisfied by whichever of those ran first and
@@ -6293,27 +6440,50 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the else arm deleted the pre-fork key and still found one — the delete's undo-log entry re-added "
              "the baseline value into the deleting arm's own delta, or the arms shared one Map");
     /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer
-       (CONT_ASYNC_FROM_SYNC). Both afsA and afsP present ⇒ clone_deep_flow cloned the JSAsyncFromSync state with a
-       fresh wrapper promise per arm, so each for-await arm delivered its OWN value. */
-    int afsfork_tt = (strstr(js, "\"/api/afsfork\"") && strstr(js, "afsA") && strstr(js, "afsP"));
-    /* Promise.all(GEN) consumer fork at index==0: the gen branches during the FIRST .next() before any element .then
-       is attached (CONT_PROMISE_ALL). Both pafA and pafP present ⇒ clone_deep_flow cloned the JSPromiseAll aggregate
-       fresh per arm, so each arm's aggregate resolved with its OWN element. */
-    int paffork_tt = (strstr(js, "\"/api/paffork\"") && strstr(js, "pafA") && strstr(js, "pafP"));
-    /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 (p0) THEN branches. Both p0-pf2A and
-       p0-pf2P present ⇒ the retained pre-fork element wrapper was RE-ATTACHED to the sibling aggregate (each arm's
-       a[0]=='p0' shared, a[1] its own) — the deep async-COW re-attach path, not just the index==0 base case. */
-    int paf2fork_tt = (strstr(js, "\"/api/paf2fork\"") && strstr(js, "p0-pf2A") && strstr(js, "p0-pf2P"));
-    /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold. Both pure-path
-       accumulators r:rA1rA2 and r:rP1rP2 present ⇒ clone_deep_flow cloned the JSArrayReduce state so each arm
-       threaded its OWN accumulator across both elements (never a shared/contaminated acc). */
-    int redfork_tt = (strstr(js, "\"/api/redfork\"") && strstr(js, "r:rA1rA2") && strstr(js, "r:rP1rP2"));
-    int rerepfork_tt = (strstr(js, "\"/api/rerepfork\"") && strstr(js, "xrrA1yrrA2") && strstr(js, "xrrP1yrrP2"));
+       (CONT_ASYNC_FROM_SYNC) ⇒ clone_deep_flow cloned the JSAsyncFromSync state with a fresh wrapper promise
+       per arm, so each for-await arm delivered its OWN value. */
+    const char *afsfork_why = NULL; int afsfork_tt = 1;
+    FORK_ROW(js, &afsfork_tt, &afsfork_why, "/api/afsfork", "v",
+             "clone_deep_flow's clone of the JSAsyncFromSync state, with a fresh wrapper promise per arm",
+             "afsA", "afsP");
+    /* Promise.all(GEN) consumer fork at index==0: the gen branches during the FIRST .next() before any element
+       .then is attached (CONT_PROMISE_ALL) ⇒ clone_deep_flow cloned the JSPromiseAll aggregate fresh per arm,
+       so each arm's aggregate resolved with its OWN element. */
+    const char *paffork_why = NULL; int paffork_tt = 1;
+    FORK_ROW(js, &paffork_tt, &paffork_why, "/api/paffork", "v",
+             "clone_deep_flow's fresh-per-arm clone of the JSPromiseAll aggregate at index 0, before any "
+             "element .then is attached",
+             "pafA", "pafP");
+    /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 (p0) THEN branches ⇒ the retained
+       pre-fork element wrapper was RE-ATTACHED to the sibling aggregate (each arm's a[0]=='p0' shared, a[1] its
+       own) — the deep async-COW re-attach path, not just the index==0 base case. */
+    const char *paf2fork_why = NULL; int paf2fork_tt = 1;
+    FORK_ROW(js, &paf2fork_tt, &paf2fork_why, "/api/paf2fork", "v",
+             "the deep async-COW RE-ATTACH of a retained pre-fork element wrapper onto the sibling aggregate, "
+             "which is the index>0 case and not paffork's base case",
+             "p0-pf2A", "p0-pf2P");
+    /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold ⇒
+       clone_deep_flow cloned the JSArrayReduce state so each arm threaded its OWN accumulator across both
+       elements (never a shared/contaminated acc). */
+    const char *redfork_why = NULL; int redfork_tt = 1;
+    FORK_ROW(js, &redfork_tt, &redfork_why, "/api/redfork", "v",
+             "clone_deep_flow's clone of the JSArrayReduce accumulator, which is what threads a separate fold "
+             "through each arm rather than one contaminated accumulator through both",
+             "r:rA1rA2", "r:rP1rP2");
+    const char *rerepfork_why = NULL; int rerepfork_tt = 1;
+    FORK_ROW(js, &rerepfork_tt, &rerepfork_why, "/api/rerepfork", "v",
+             "the JSReRep machine's three per-arm holdings across a @@replace callback — the collected match "
+             "array, the captures List and the StringBuffer with its nextSourcePosition",
+             "xrrA1yrrA2", "xrrP1yrrP2");
     /* MACHINE-MODE ToPrimitive fork: the JSToPrim driving the page's toString has an OUTER requester (the
        JSArrayJoin machine coercing its separator), and that machine owns no frame — it is reachable only
-       through `outer`, so nothing but the requester walk clones it. Both xtpAy and xtpPy present ⇒ each arm
-       finished its own join with its own separator off its own machine. */
-    int toprimfork_tt = (strstr(js, "\"/api/toprimfork\"") && strstr(js, "xtpAy") && strstr(js, "xtpPy"));
+       through `outer`, so nothing but the requester walk clones it. Each arm must finish its own join with
+       its own separator off its own machine. */
+    const char *toprimfork_why = NULL; int toprimfork_tt = 1;
+    FORK_ROW(js, &toprimfork_tt, &toprimfork_why, "/api/toprimfork", "v",
+             "the requester walk, which is the only thing that clones a frameless JSArrayJoin machine reached "
+             "as the OUTER requester of the JSToPrim running the page's toString",
+             "xtpAy", "xtpPy");
     /* SORT'S COMPARISON OVER UNKNOWN EXTERNAL INPUT, COLLAPSED RATHER THAN FORKED OR PROPAGATED. Each needle is
        a string that can ONLY be composed from a real Array of real elements, so it is false in both directions
        the collapse can be got wrong: the comparison forking (two arms, neither of which is the identity order)
@@ -6405,12 +6575,23 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* generator .next() driven via .call (gci.next.call(gci)): the reflection bypass that previously DFAILed as a
        drive-to-completion is now routed onto do_generator_tramp at do_forward_call. Both gcA and gcP present ⇒ the
        branch inside the .call-driven generator body snapshot-forks per arm, never drives to completion. */
-    int gcallfork_tt = (strstr(js, "\"/api/gcallfork\"") && strstr(js, "gcA") && strstr(js, "gcP"));
+    const char *gcallfork_why = NULL; int gcallfork_tt = 1;
+    FORK_ROW(js, &gcallfork_tt, &gcallfork_why, "/api/gcallfork", "v",
+             "do_forward_call's reshape of `gci.next.call(gci)` onto do_generator_tramp — the alternative is "
+             "the drive-to-completion this bypass used to DFAIL as, which leaves one world",
+             "gcA", "gcP");
     /* generator .next() via Function.prototype.apply and via Reflect.apply — the two apply-reflection bypasses,
        reshaped at OP_call_method to the [this=gen, next, arg0] shape and routed onto do_generator_tramp. Both arms
        of each ⇒ the apply-driven generator body snapshot-forks per arm, never drives to completion. */
-    int gapplyfork_tt = (strstr(js, "\"/api/gapplyfork\"") && strstr(js, "gapA") && strstr(js, "gapP"));
-    int grefapplyfork_tt = (strstr(js, "\"/api/grefapplyfork\"") && strstr(js, "graA") && strstr(js, "graP"));
+    const char *gapplyfork_why = NULL; int gapplyfork_tt = 1;
+    FORK_ROW(js, &gapplyfork_tt, &gapplyfork_why, "/api/gapplyfork", "v",
+             "OP_call_method's reshape of Function.prototype.apply to [this=gen, next, arg0] onto "
+             "do_generator_tramp",
+             "gapA", "gapP");
+    const char *grefapplyfork_why = NULL; int grefapplyfork_tt = 1;
+    FORK_ROW(js, &grefapplyfork_tt, &grefapplyfork_why, "/api/grefapplyfork", "v",
+             "OP_call_method's reshape of Reflect.apply to [this=gen, next, arg0] onto do_generator_tramp",
+             "graA", "graP");
     /* OPAQUE ITERATION over unknown injected state. `state.items` has no length, so LengthOfArrayLike has no
        answer and every length is a world: the walk is a CHAIN of per-position outcome forks. Two facts are
        asserted and both are the point. (1) The two element reads are INDEPENDENT SOURCES — {state}.items.0 and
@@ -7298,7 +7479,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "promise-state", promise_state, "/api/shared", SESS_EXPLORE },
         { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE },
         { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE },
-        { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE },
+        { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE, floc_iso_why },
         { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE },
         { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE },
         /* THE SAME QUESTION ONE MEMBER OVER: a gate the bundle asks of the DOM rather than of the navigator. */
@@ -7321,9 +7502,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE },
         { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE },
         { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
-        { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE },
-        { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE },
-        { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE },
+        { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
+        { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
+        { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
         { "add-fork", addfork_tt, "/api/addfork", SESS_EXPLORE },
         { "add-number", addnum_tt, "/api/addnum", SESS_EXPLORE },
         { "add-string", addstr_tt, "/api/addstr", SESS_EXPLORE },
@@ -7331,21 +7512,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE },
         { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE },
         { "current-script-inject", csinject_tt, "/api/csinj", SESS_EXPLORE },
-        { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE },
-        { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE },
-        { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE },
-        { "genofork", genofork_tt, "/api/genofork", SESS_EXPLORE },
-        { "afromfork", afromfork_tt, "/api/afromfork", SESS_EXPLORE },
-        { "spreadfork", spreadfork_tt, "/api/spreadfork", SESS_EXPLORE },
-        { "setaddfork", setaddfork_tt, "/api/setaddfork", SESS_EXPLORE },
-        { "setfork", setfork_tt, "/api/setfork", SESS_EXPLORE },
+        { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE, owfork_why },
+        { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE, genfork_why },
+        { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE, gen2fork_why },
+        { "genofork", genofork_tt, "/api/genofork", SESS_EXPLORE, genofork_why },
+        { "afromfork", afromfork_tt, "/api/afromfork", SESS_EXPLORE, afromfork_why },
+        { "spreadfork", spreadfork_tt, "/api/spreadfork", SESS_EXPLORE, spreadfork_why },
+        { "setaddfork", setaddfork_tt, "/api/setaddfork", SESS_EXPLORE, setaddfork_why },
+        { "setfork", setfork_tt, "/api/setfork", SESS_EXPLORE, setfork_why },
         { "mapmutfork", mapmutfork_tt, "/api/mapmutfork", SESS_EXPLORE, mapmutfork_why },
-        { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE },
-        { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE },
-        { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE },
-        { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE },
-        { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE },
-        { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE },
+        { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE, afsfork_why },
+        { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE, paffork_why },
+        { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE, paf2fork_why },
+        { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE, redfork_why },
+        { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE, rerepfork_why },
+        { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE, toprimfork_why },
         /* EACH CARRIES ITS OWN `why`, and the first clause of every one is "there is a record at all" — a 0
            on any of these names whether the run ANSWERED the statement wrongly or never REACHED it, which is
            the distinction a bare `&&` folded away and a lane was dispatched on. */
@@ -7357,9 +7538,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "sortnan", sortnan_tt, "/api/sortnan", SESS_EXPLORE, sortnan_why },
         { "sortdefctl", sortdefctl_tt, "/api/sortdefctl", SESS_EXPLORE, sortdefctl_why },
         { "sortbranch", sortbranch_tt, "/api/sortbranch", SESS_EXPLORE, sortbranch_why },
-        { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE },
-        { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE },
-        { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE },
+        { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE, gcallfork_why },
+        { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE, gapplyfork_why },
+        { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE, grefapplyfork_why },
         { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE },
         { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE },
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE },
