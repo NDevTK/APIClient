@@ -127,9 +127,10 @@ extern const EnumeratedAttribute HTML_FORM_ENCTYPE_ATTRIBUTE;
 extern const EnumeratedAttribute HTML_FORM_FORMENCTYPE_ATTRIBUTE;
 
 /* §4.10.3's `autocomplete` ON A `form` ELEMENT — "on"/"off", both defaults the On state. It is NOT the
-   `autocomplete` of §4.10.19.7, which is a control's autofill detail tokens and whose IDL getter returns "the
-   element's IDL-exposed autofill value" rather than reflecting anything; one name, two attributes, and only
-   this one is an enumerated attribute. */
+   `autocomplete` of §4.10.19.7 Autofill, which is a control's autofill detail tokens and whose IDL getter
+   §4.10.19.7.2 Processing model defines as "The autocomplete IDL attribute, on getting, must return the
+   element's IDL-exposed autofill value" rather than as a reflection of anything; one name, two attributes, and
+   only this one is an enumerated attribute. */
 extern const EnumeratedAttribute HTML_FORM_AUTOCOMPLETE_ATTRIBUTE;
 
 /* §4.10.7's PLACEHOLDER LABEL OPTION: with `required` specified and a display size of 1, the FIRST option in
