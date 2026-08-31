@@ -302,7 +302,7 @@ static void cv_radio_group(JSContext *ctx, JSValueConst wrap, bool *pany_require
     *pany_required = cv_has(el, "required");
     *pany_checked = html_form_control_checked(ctx, wrap);
     if (!name || !namelen) { JS_FreeValue(ctx, owner); return; }   /* an unnamed radio's group is itself */
-    for (c = root; c; ) {
+    for (c = root; c; c = node_next_in(c, root)) {
         if (c != n && c->type == LXB_DOM_NODE_TYPE_ELEMENT && cv_tag_is(c, "input") &&
             html_form_input_state(c) == INPUT_STATE_RADIO) {
             lxb_dom_element_t *ce = lxb_dom_interface_element(c);
@@ -319,9 +319,6 @@ static void cv_radio_group(JSContext *ctx, JSValueConst wrap, bool *pany_require
                 JS_FreeValue(ctx, w);
             }
         }
-        if (c->first_child) { c = c->first_child; continue; }
-        while (c && !c->next) c = (c == root) ? NULL : c->parent;
-        c = c ? c->next : NULL;
     }
     JS_FreeValue(ctx, owner);
 }

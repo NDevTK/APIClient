@@ -1629,6 +1629,15 @@ void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */
     lxb_dom_node_insert_child(parent, child);
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
+    /* THE SUBTREE THE HOOK IS TOLD ABOUT IS THE ONE THIS CALL PLACED, ASSERTED AT THE PLACEMENT. DOM §4.2.3
+       "Mutation algorithms"' insert step 7.7 walks "each shadow-including inclusive descendant of node", so
+       every registrant's walk is bounded by the node named here and by nothing else — the bound is only as
+       good as this argument. Asked at the chokepoint because this is the one place that knows both what was
+       asked for and where Lexbor put it; a registrant can only re-read what it was handed. */
+    DCHECK(child->parent == parent && child->next == NULL,
+           "§4.2.3's append chokepoint is about to name a node that is not where it just put it — the tree "
+           "hooks run the insertion steps over this node's subtree, so a node reported before it is the "
+           "parent's last child would run them over a tree nobody built");
     if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);   /* AFTER: connectedness is the new tree's */
 }
 /* §4.2.3 "insert before": the same capture, at a POSITION. The insert entry remembers where it landed at
@@ -1639,6 +1648,15 @@ void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
     dom_insert_capture(child);
     lxb_dom_node_insert_before(ref, child);
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
+    /* THE SAME ASSERTION AS THE APPEND ABOVE, AND THIS IS THE SIDE THAT MATTERS. `child->next` is `ref` rather
+       than NULL here, which is exactly the shape a registrant's walk must not read as licence to keep going:
+       a subtree root WITH a next sibling is what an insert-before produces and an append never does, so a
+       walker whose bound is tested only on the climb out escapes on this path and on no other. Naming the node
+       and its landing place here is what lets that walk be judged against something. */
+    DCHECK(child->parent == ref->parent && child->next == ref,
+           "§4.2.3's insert-before chokepoint is about to name a node that is not where it just put it — the "
+           "tree hooks run the insertion steps over this node's subtree, so a node reported before it sits "
+           "immediately before the reference child would run them over a tree nobody built");
     if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);
 }
 

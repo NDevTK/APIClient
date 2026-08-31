@@ -1817,7 +1817,18 @@ bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b
 }
 
 /* The PRE-ORDER successor within `root`'s subtree, or NULL at the end. This is the one traversal primitive the
-   spec's tree-order algorithms need, and having it once is what keeps them from each growing a walker. */
+   spec's tree-order algorithms need, and having it once is what keeps them from each growing a walker.
+   THE ROOT TEST COMES BEFORE THE SIBLING TEST, AND THAT ORDER IS THE WHOLE OF THE BOUND. A hand-rolled advance
+   is naturally written the other way round — climb while there is no next sibling, and turn the root into NULL
+   ON THE WAY UP — which reads as bounded and is not: a root that HAS a next sibling never enters the climb at
+   all, so the walk steps straight out of the subtree and runs to the end of the DOCUMENT in tree order. The
+   escape is invisible wherever the root is a document or a detached tree's root, because such a node has no
+   next sibling to escape through; it appears the day a caller walks from a node the page just put in the
+   middle of a parent's child list. Measured: §4.2.3's insert walk written that way ran insert step 12's
+   post-connection steps over every element from the insertion point to the end of the document, so an
+   `insertBefore` with a non-null reference child re-prepared and re-executed every following `<script>` and
+   created every following `<iframe>`'s child navigable a second time — while the same walk after an
+   `appendChild` was correct, because an appended node is a last child. */
 lxb_dom_node_t *node_next_in(lxb_dom_node_t *n, lxb_dom_node_t *root)
 {
     if (n->first_child) return n->first_child;

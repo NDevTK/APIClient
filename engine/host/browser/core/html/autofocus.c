@@ -311,11 +311,11 @@ int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_
    walk is correct for every document whose parsed tree does not reach it. */
 void autofocus_document_parsed(JSContext *ctx)
 {
-    lxb_dom_node_t *root = document_root_node(ctx), *n = root;
+    lxb_dom_node_t *root = document_root_node(ctx), *n;
     uint8_t ua_phase = 0;
 
     DCHECK(g_ready, "a parsed document reached §6.6.7 before autofocus_init declared its state");
-    while (n) {
+    for (n = root; n; n = node_next_in(n, root)) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             int r = autofocus_element_inserted(lxb_dom_interface_element(n), NULL, &ua_phase);
 
@@ -323,9 +323,6 @@ void autofocus_document_parsed(JSContext *ctx)
                            "runs inside document install, which has no flow and no machine to park at");
             (void)r;
         }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
     }
 }
 

@@ -447,7 +447,7 @@ static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPr
     CHECK(!JS_IsException(arr), "forms: OOM building a form's control list");
     if (!form) return arr;
     root = node_root(form);
-    for (n = root; n; ) {
+    for (n = root; n; n = node_next_in(n, root)) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && html_form_maybe_associated(n)) {
             JSValue wrap = node_wrap(ctx, n);
             if (want(ctx, wrap)) {
@@ -458,9 +458,6 @@ static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPr
             }
             JS_FreeValue(ctx, wrap);
         }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
     }
     return arr;
 }
@@ -1659,17 +1656,14 @@ static lxb_dom_node_t *form_nearest_ancestor(lxb_dom_node_t *n)
    and step 4's "and is connected" is what keeps this to documents in practice. */
 static lxb_dom_node_t *form_first_by_id(lxb_dom_node_t *root, const char *id, size_t idlen)
 {
-    lxb_dom_node_t *n = root;
+    lxb_dom_node_t *n;
 
-    for (; n; ) {
+    for (n = root; n; n = node_next_in(n, root)) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             size_t len = 0;
             const char *v = attr_of(lxb_dom_interface_element(n), "id", &len);
             if (v && len == idlen && memcmp(v, id, idlen) == 0) return n;
         }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
     }
     return NULL;
 }
@@ -1825,12 +1819,9 @@ JSValue html_form_labels_of(JSContext *ctx, JSValueConst wrap)
     CHECK(!JS_IsException(arr), "forms: OOM building a labels NodeList");
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return collections_static(ctx, arr);
     root = node_root(n);
-    for (c = root; c; ) {
+    for (c = root; c; c = node_next_in(c, root)) {
         if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && tag_is(c, "label") && form_label_controls(ctx, c, n))
             JS_SetPropertyUint32(ctx, arr, k++, node_wrap(ctx, c));
-        if (c->first_child) { c = c->first_child; continue; }
-        while (c && !c->next) c = (c == root) ? NULL : c->parent;
-        c = c ? c->next : NULL;
     }
     return collections_static(ctx, arr);
 }

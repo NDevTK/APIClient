@@ -601,9 +601,9 @@ void iframe_run_load_event_steps(JSContext *ctx, JSValueConst wrap)
  * afterwards goes through the chokepoint and needs nothing from this. */
 void iframe_document_parsed(JSContext *ctx)
 {
-    lxb_dom_node_t *root = document_root_node(ctx), *n = root;
+    lxb_dom_node_t *root = document_root_node(ctx), *n;
 
-    while (n) {
+    for (n = root; n; n = node_next_in(n, root)) {
         if (iframe_element_is(n)) {
             JSValue w = node_wrap(ctx, n);
             iframe_create_navigable(ctx, w);
@@ -616,9 +616,6 @@ void iframe_document_parsed(JSContext *ctx)
             iframe_process_attributes(ctx, w, /*initialInsertion*/ true);
             JS_FreeValue(ctx, w);
         }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
     }
 }
 
@@ -637,11 +634,11 @@ void iframe_document_parsed(JSContext *ctx)
 static JSValue child_navigables(JSContext *ctx, int want, int *out_n)
 {
     lxb_dom_node_t *root = document_root_node(ctx);
-    lxb_dom_node_t *n = root;
+    lxb_dom_node_t *n;
     int seen = 0;
 
     if (out_n) *out_n = 0;
-    while (n) {
+    for (n = root; n; n = node_next_in(n, root)) {
         if (iframe_element_is(n)) {
             JSValue w = node_wrap(ctx, n);
             JSValue nav = iframe_navigable(ctx, w);
@@ -652,9 +649,6 @@ static JSValue child_navigables(JSContext *ctx, int want, int *out_n)
             }
             JS_FreeValue(ctx, nav);
         }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
     }
     if (out_n) *out_n = seen;
     return JS_UNDEFINED;
