@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>negated gate fork</title>
+<script>
+/* ONE PROBLEM: the same gate spelled with `!`, which is how a real bundle writes it.
+ *
+ * `__FLAGS` resolves nowhere and is not a Web IDL name, so solver/absent.c answers it as unknown INPUT — and
+ * a branch over an unknown forks. That was true of `if (p)` and NOT of `if (!p)`: §7.1.2 ToBoolean answers
+ * from the value's REPRESENTATION, which for this class is an ordinary object and therefore `true`, so the
+ * negation was the concrete `false` one opcode before any branch saw it. flag_fork.html's twin is this one
+ * and it could not be written.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT, which is the only thing this gate asks: every case below
+ * forks, every arm fetches, so every arm parks on a reply and which one resumes first is entirely the
+ * schedule's choice. A new fork SITE is exactly the shape that can break the razor — a resume that drops,
+ * starves, skips, reorders or forgets an arm is a cap — and the negation is a new fork site in the
+ * interpreter's most-travelled operator. The gate stores no expected output: it fails only when one build
+ * disagrees with ITSELF, so nothing here needs updating when the solver learns more.
+ *
+ * THE THIRD CASE IS THE ONE WITH A PREDICTION THIS GATE CANNOT MAKE, and it is here anyway because the gate
+ * it CAN make is the load-bearing one. `/never` must never be fetched: the flow proved the gate true and `!`
+ * of a decided predicate is decided, not forked — one predicate, one constraint entry, the polarity on the
+ * ARM. If the negation ever acquires a constraint key of its own, this document starts emitting a fourth
+ * endpoint that no value of `__FLAGS.c` can produce, and it will do so IDENTICALLY under every schedule —
+ * which is the honest limit of a differential and the reason the claim is written down here rather than
+ * left to the number. */
+
+if (!__FLAGS.a) { fetch("/api/a/anon"); } else { fetch("/api/a/admin"); }
+
+/* `!!` composes back to the predicate, so this is the `if (x)` spelling and must fork exactly once. */
+if (!!__FLAGS.b) { fetch("/api/b/admin"); } else { fetch("/api/b/anon"); }
+
+if (__FLAGS.c) {
+  if (!__FLAGS.c) { fetch("/api/never"); } else { fetch("/api/c/admin"); }
+}
+
+/* §20.3.1.1 Boolean ( value ) step 1 is the same coercion, and had the same collapse. */
+if (Boolean(__FLAGS.d)) { fetch("/api/d/admin"); } else { fetch("/api/d/anon"); }
+</script>
