@@ -173,9 +173,10 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
         /* The DOCUMENT is the delta's (or the realm's) from document_new, so it is owned either way; the
            WRAPPER is this function's own reference and has to go back. */
         if (!s) { JS_FreeValue(ctx, doc); return JS_EXCEPTION; }
-        title = lxb_dom_document_create_element(lxb_dom_interface_document(dom),
-                                                (const lxb_char_t *)"title", 5, NULL);
-        CHECK(title != NULL, "createHTMLDocument: OOM building step 6's title element");
+        /* THE HTML NAMESPACE, NAMED — createHTMLDocument builds an HTML document by construction, so the
+           `title` it appends into the skeleton's `head` has no namespace question to ask; see document.h's
+           document_create_element_html for why asking one would have been the wrong shape. */
+        title = document_create_element_html(lxb_dom_interface_document(dom), "title", 5);
         text = lxb_dom_document_create_text_node(lxb_dom_interface_document(dom), (const lxb_char_t *)s, len);
         CHECK(text != NULL, "createHTMLDocument: OOM building step 6's Text node");
         JS_FreeCString(ctx, s);
