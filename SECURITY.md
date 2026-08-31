@@ -320,8 +320,28 @@ guarantees, in one auditable place:
   it must never read as one who answered "data". Centralised so a new code-loader can't forget it.
 - **per-call principal** (`opts.pageUrl` = the requesting DOCUMENT's own `sender.url`, never the tab's) —
   **not a shared global**: the trusted zone drives many renderers concurrently and interleaves their rounds,
-  so a global principal would let one page's origin contaminate another's fetch. Unknown principal → treated
-  as public → private targets blocked.
+  so a global principal would let one page's origin contaminate another's fetch.
+  **AND "UNKNOWN PRINCIPAL → PUBLIC" WAS ONE SENTENCE OVER THREE DIFFERENT STATES, which is why the
+  classification is unchanged and the sentence is not.** A principal that is ABSENT, one that will not PARSE,
+  and one that parses and names NO HOST (`about:blank`, `data:`, `blob:` — reachable because
+  `manifest.json` sets `match_about_blank` and `match_origin_as_fallback`) all reached `_isPrivateHost` as
+  the same empty string and all classified public. Only the third is an input: a principal that names no
+  server is not a private-network principal, and `safe-fetch.js` now reads that as the positive statement it
+  is. The other two are **this zone's contract broken** — `opts.pageUrl` is never on the wire (§The principal
+  is MINTED in one place), so it is always `_browserFacts`' `url`, already DCHECKed non-empty at the mint,
+  and all four `safeFetch` call sites in `bridge.js` take it from there — so they are **DCHECKed** at the
+  chokepoint. DCHECK and not CHECK because release must still be able to PROCEED, and it can: with the
+  checks compiled out an unparseable principal still classifies as public and private targets are still
+  blocked, so **the release behaviour named by the old sentence is exactly what it was**. This is not the
+  hostile-input abort this file refuses elsewhere — that is `CONTENT_SEED`'s page-suggested address, which
+  is dropped closed and is a different value.
+- **one same-origin answer, read by both post-fetch gates.** "Is the landed resource same-origin with the
+  page principal" is computed once beside the response's own origin and read by CORB's same-origin exemption
+  and by the credentialed SOP. It used to be asked twice — CORB through a helper that re-parsed the landed
+  address under a `catch` of its own, the credentialed gate inline — which is a second derivation of one
+  security question and the same shape as the four private re-derivations of the landed URL that the
+  post-redirect fix removed. The helper is deleted rather than commented, so a body CORB exempts as
+  same-origin that the credentialed gate refuses as cross-origin is no longer a state anyone can write.
 
 A cross-origin script uses the **page's** origin, never the asset's own host (gstatic.com
 JS in google.com acts as google.com) — exactly what the principal encodes.

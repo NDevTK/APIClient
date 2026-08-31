@@ -34,8 +34,9 @@
 //   • HTTP(S) only     — scheme must be http:/https:; file:/data:/blob:/chrome-
 //                        extension:/etc. are rejected so a crafted URL can't read
 //                        local/extension resources.
-//   • origin-relative  — the analyzer acts with the analyzed PAGE's origin, passed
-//     SSRF guard         PER CALL as opts.pageUrl (the trusted sender.tab.url) —
+//   • origin-relative  — the analyzer acts with the analyzed DOCUMENT's own origin,
+//     SSRF guard         passed PER CALL as opts.pageUrl (the browser's MessageSender
+//                        .url for THAT document, never `sender.tab.url`) —
 //                        never a shared global (concurrent grinds). NORMAL web rules:
 //                        a page may load cross-origin PUBLIC JS (CDN/imports) AND
 //                        a localhost/intranet page may fetch its OWN private
@@ -211,19 +212,13 @@ function _computedType(declared, nosniff, sniff) {
   if (sniff.type && sniff.type !== mime) return sniff.type;
   return mime;
 }
-// THE PRINCIPAL COMPARISON, factored out of `_corbAllowsScript` and kept that way:
-// it is the one line of the CORB rule that is about SECURITY.md rather than about
-// bytes, and it is worth being able to read on its own. `scriptUrl` is a network
-// resource, so its origin IS its URL's origin; `pageOrigin` is the AUTHORITATIVE
-// browser origin of the loading document, passed in and NEVER url-parsed (a
-// sandboxed frame's url would fabricate a tuple origin it lacks). No real
-// pageOrigin -> not same-origin -> strict CORB, which is the fail-closed direction:
-// an opaque origin is same-origin with nothing.
-function _corbSameOrigin(scriptUrl, pageOrigin) {
-  var so;
-  try { so = new URL(scriptUrl).origin; } catch (e) { return false; }
-  return _isRealOrigin(so) && _isRealOrigin(pageOrigin) && so === pageOrigin;
-}
+// THE PRINCIPAL COMPARISON USED TO LIVE HERE, as `_corbSameOrigin(scriptUrl, pageOrigin)`,
+// and it is GONE rather than moved: it re-parsed the landed address under a `catch` of its
+// own to re-derive an origin the request path had already computed, which made it a THIRD
+// answer to "is the resource same-origin with the page principal" beside the credentialed
+// gate's. `_resourceSameOrigin`, computed once beside `_finalOrigin` and read by both
+// gates, is that one answer — see the paragraph that computes it for why one is the whole
+// point and for the reasoning this comment used to carry.
 // CORB FOR A SCRIPT LOAD, over the facts already computed above so nothing here
 // re-reads a header or re-decodes a body. Answers the RULE THAT REFUSED, or null for
 // allowed — because "blocked" alone sends whoever reads the status message hunting
@@ -350,7 +345,8 @@ function _isPrivateHost(host) {
 //   answers:    computedType — the ONE type decision made about this response, the
 //               same one CORB was decided from, stamped on the record for the
 //               renderer so no downstream zone repeats it.
-//   principal:  opts.pageUrl PER CALL (the page's trusted sender.tab.url) classifies
+//   principal:  opts.pageUrl PER CALL — the analysed DOCUMENT's OWN browser-stated
+//               address (`MessageSender.url`), NEVER `sender.tab.url` — classifies
 //               the SSRF host; opts.pageOrigin (the BROWSER-provided
 //               MessageSender.origin, opaque-unique) is the SAME-ORIGIN principal for
 //               the credentialed SOP — NOT re-parsed from a URL (a sandboxed frame
@@ -567,17 +563,67 @@ async function safeFetch(url, opts) {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {},
              body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
-  // Origin-relative SSRF (see header). The PRINCIPAL is the analyzed PAGE's origin,
-  // passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
+  // Origin-relative SSRF (see header). The PRINCIPAL is the analysed DOCUMENT's OWN
+  // address, passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
   // concurrently in one worker, so a worker-global principal would let one page's
-  // origin contaminate another's fetch. Every caller passes the trusted
-  // sender.tab.url. A cross-origin script/source-map uses the origin of the PAGE
-  // it is loaded into (gstatic.com JS in google.com acts as google.com), never the
-  // asset's own host. Block a PRIVATE target only when the page origin is NOT
-  // itself private. Unknown page origin -> treated as public -> blocked.
-  var _po = opts.pageUrl || "";
-  var _pageHost = ""; try { if (_po) _pageHost = new URL(_po).hostname; } catch (e) {}
-  var _pagePrivate = _isPrivateHost(_pageHost);
+  // origin contaminate another's fetch. It is the browser's `MessageSender.url` for
+  // that document and NEVER `sender.tab.url`, which this comment named until now: the
+  // tab's address is the address of the TOP of the tab, and using it here is the exact
+  // bug SECURITY.md records fixing — a sub-frame in a tab whose top is
+  // http://localhost/ inherits that PRIVATE classification and reaches the user's
+  // intranet on its embedder's behalf. `sender.tab.url` still travels, as
+  // `topLevelUrl`, for HTML §8.1.3.1's top-level creation URL; it is not a fetch
+  // principal. A cross-origin script uses the origin of the PAGE it is loaded into
+  // (gstatic.com JS in google.com acts as google.com), never the asset's own host.
+  // Block a PRIVATE target only when the page principal is NOT itself private.
+  /* THREE STATES USED TO ARRIVE HERE AS ONE, which is worth ending at a security
+     decision even though all three fail closed. `opts.pageUrl || ""` followed by
+     `try { new URL(_po).hostname } catch (e) {}` handed the EMPTY HOST to an ABSENT
+     principal, to an UNPARSEABLE one, and to a perfectly valid one that simply names
+     no host — and `_isPrivateHost("")` answers false for all three, so "our contract
+     is broken" and "this document has no server" were reported as one public
+     classification with nothing able to tell them apart.
+     TWO OF THEM ARE THIS ZONE'S CONTRACT BROKEN, and the discriminator is the one this
+     file already states seventy lines down: WHO DETERMINES THE VALUE. `opts.pageUrl` is
+     never on the wire — SECURITY.md deleted every principal-shaped field an untrusted
+     zone could send, so this one has no argument to travel in — which makes it always
+     `_browserFacts`' `url`, minted in the trusted zone out of `MessageSender` and
+     already DCHECKed there as a non-empty string. All four call sites are in
+     `bridge.js`, every one takes it from that mint, and `navigationLoad` asserts the
+     same fact again at its own door. So an absent or unparseable principal is OUR bug
+     and it asserts. This is NOT the hostile input SECURITY.md refuses to abort on:
+     that is `CONTENT_SEED`'s page-suggested address, which is dropped closed, and it is
+     a different value that never reaches this argument.
+     DCHECK AND NOT CHECK, because the release question is only whether we may PROCEED —
+     and with the guard below an unparsed principal still classifies as public and still
+     blocks every private target, so release has a safe answer and does not need to
+     abort. That guard is also what keeps this DCHECK from becoming load-bearing in the
+     build that compiles it out: a bare `.hostname` would trade a dev abort for a
+     release TypeError inside the chokepoint.
+     THE THIRD IS A REAL INPUT AND IS NOW A POSITIVE STATEMENT RATHER THAN A HOLE.
+     `manifest.json` sets `match_about_blank` and `match_origin_as_fallback` on the
+     content script, so a document whose own address is `about:blank` — or a `data:` /
+     `blob:` document — does reach the mint, passes its non-empty check, parses, and
+     states NO HOST. A principal that names no server is not a private-network
+     principal. That is an answer about what the address SAYS, so it classifies public
+     here deliberately, and the code now reads it as the statement it is. */
+  DCHECK(typeof opts.pageUrl === "string" && opts.pageUrl !== "",
+         "the network chokepoint was asked to classify an SSRF target with no page principal (`" +
+         opts.pageUrl + "`) — the principal is the analysed document's OWN browser-stated address, " +
+         "minted by _browserFacts and DCHECKed non-empty there, so its absence at this call is a " +
+         "caller that stopped passing one and never a document that has no address");
+  var _pageUrl = null;
+  try { _pageUrl = new URL(String(opts.pageUrl)); }
+  catch (e) { RETHROW_FATAL(e); _pageUrl = null; }
+  DCHECK(_pageUrl !== null,
+         "the page principal handed to the SSRF classifier is not a parseable URL (`" + opts.pageUrl +
+         "`) — the browser states this address and this zone only carries it, so a string a URL parser " +
+         "refuses is our copy of it corrupted rather than anything the analysed page did");
+  /* A principal that PARSES and names no host is the third state above, read as the positive statement
+     it is: no server, therefore not private. The `!!_pageUrl &&` is the release guard the paragraph
+     above names — with the DCHECKs compiled out, an unparseable principal lands here as "public",
+     which is the same fail-closed answer this line has always given it. */
+  var _pagePrivate = !!_pageUrl && _isPrivateHost(_pageUrl.hostname);
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
     return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {},
              body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
@@ -662,6 +708,30 @@ async function safeFetch(url, opts) {
      the identity — which is why this is a structural guarantee rather than a normalization. */
   var _finalHref = _finalUrl.href;
   var _finalOrigin = _finalUrl.origin;
+  /* IS THE LANDED RESOURCE SAME-ORIGIN WITH THE PAGE PRINCIPAL — ONE QUESTION, ONE ANSWER, COMPUTED
+     HERE BECAUSE BOTH POST-FETCH GATES ASK IT AND THEY MUST NOT BE ABLE TO DISAGREE. The block above
+     ended four private derivations of the landed URL; this ends the last derivation of the COMPARISON
+     over it. CORB asked it through a helper that took `_finalHref` and re-parsed it under a `catch` of
+     its own, and the credentialed SOP asked it again inline over `_finalOrigin` — the same question,
+     answered twice, from two parses, with two failure arms. The helper's catch was unreachable (its
+     argument was the `.href` of a URL object, which a URL parser cannot refuse) and its arm was
+     fail-closed, so this is dead code rather than a hole; it is deleted rather than commented because
+     the assumption it hid — that the two gates judge the SAME origin — is now structural instead of
+     something a reader has to verify. A body CORB exempts as same-origin and the credentialed gate
+     refuses as cross-origin is the disagreement that can no longer be written.
+     THE REASONING THE DELETED HELPER CARRIED, KEPT: `_finalOrigin` is a network resource's own origin,
+     which IS its URL's origin. `pageOrigin` is the AUTHORITATIVE browser origin of the loading document
+     (`MessageSender.origin`), passed in and NEVER url-parsed — a sandboxed frame reports an ordinary
+     address and an OPAQUE origin, so parsing its address would fabricate a tuple origin it does not
+     have and hand it same-origin access to its embedder's credentialed document. No real `pageOrigin`
+     -> not same-origin -> strict CORB and a credentialed read that needs CORS, which an opaque origin
+     can never be granted (ACAO cannot equal it). That is the fail-closed direction in both gates.
+     THE PAGE ORIGIN IS ALSO READ ONCE, for the same reason: the credentialed gate compares ACAO against
+     it, and a second spelling of the principal beside the one the same-origin test used is how those
+     two stop being about one origin. */
+  var _pageOrigin = opts.pageOrigin || "";
+  var _resourceSameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(_finalOrigin) &&
+                            _finalOrigin === _pageOrigin;
   // SSRF-via-redirect: the initial-URL check can't see a 30x to the intranet.
   // Re-validate the FINAL url (redirects were followed) BEFORE reading the body,
   // so a public page's request that landed on a private host never feeds internal
@@ -720,14 +790,19 @@ async function safeFetch(url, opts) {
   var _nosniff = _determineNosniff(headers["x-content-type-options"]);
   var _sn = _sniff(body);
   var _computed = _computedType(headers["content-type"], _nosniff, _sn);
-  /* THE TWO GATES BELOW READ `_finalHref` / `_finalOrigin`, WHICH THE BLOCK ABOVE THE
-     FIRST POST-FETCH GATE COMPUTED — and that placement is the fix, not a preference.
-     They used to be derived HERE, below the two post-fetch gates, while those gates each
-     re-derived the same fact for themselves; the two gates below then read `parsed`, the
+  /* THE TWO GATES BELOW READ `_finalHref` / `_finalOrigin` / `_resourceSameOrigin`, WHICH THE
+     BLOCK ABOVE THE FIRST POST-FETCH GATE COMPUTED — and that placement is the fix, not a
+     preference. They used to be derived HERE, below the two post-fetch gates, while those gates
+     each re-derived the same fact for themselves; the two gates below then read `parsed`, the
      requested address, so a SAME-ORIGIN request that 302'd to another host was CORB-exempt
      as "same-origin" and passed the credentialed SOP as same-origin, and the other host's
      cookie-bearing reply was handed back readable. One question, one answer, computed once
-     — and computed ABOVE the first reader, so no gate can be reached before it exists. */
+     — and computed ABOVE the first reader, so no gate can be reached before it exists.
+     THE COMPARISON MOVED UP WITH THE VALUES IT IS OVER, and that was the residue of the same
+     fix rather than a separate one: the addresses were computed once here while the SAME-ORIGIN
+     TEST over them was still asked twice — once by a CORB helper that re-parsed `_finalHref`,
+     once inline by the credentialed gate. Two derivations of one security question is the shape
+     the paragraph above is about, whatever it is a derivation OF. */
   // CORB policy BY THE REQUEST'S DESTINATION (opts.destination, Fetch §2.2.5). A
   // SCRIPT-LIKE destination is bytes that will RUN as code under QuickJS control, so
   // the body must be JS-typed or same-origin; every other destination ("" for a
@@ -751,8 +826,7 @@ async function safeFetch(url, opts) {
     // for a body whose label lied.
     var _declared = String(headers["content-type"] == null ? "" : headers["content-type"])
       .split(";")[0].trim().toLowerCase();
-    var _deny = _corbDeniesScript(_declared, _nosniff, _sn,
-                                  _corbSameOrigin(_finalHref, opts.pageOrigin));
+    var _deny = _corbDeniesScript(_declared, _nosniff, _sn, _resourceSameOrigin);
     // The rule that decided rides the status message with what this file computed the
     // resource to be, which is where every other refusal already puts its ground
     // (`blocked-scheme:https:`).
@@ -782,12 +856,12 @@ async function safeFetch(url, opts) {
     // mixed-origin buffer's minted token) is UNIQUE per the spec → never same-origin
     // with ANYTHING → a credentialed cross-origin read that needs CORS, which an
     // opaque origin can never be granted (ACAO can't equal it). No pageOrigin ->
-    // "" -> fail closed: the principal is NEVER re-derived by parsing a URL (that
-    // would fabricate an origin for a sandboxed/about:blank frame).
-    var _pageOrigin = opts.pageOrigin || "";
-    // OVER `_finalOrigin`, NOT `parsed.origin` — see the paragraph that computes it.
-    var _sameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(_finalOrigin) && _finalOrigin === _pageOrigin;
-    if (!_sameOrigin) {
+    // "" -> fail closed.
+    // BOTH `_pageOrigin` AND THE SAME-ORIGIN ANSWER ARE READ, NOT RECOMPUTED. They are
+    // the ones the block above `_finalHref` computed, over `_finalOrigin` and not
+    // `parsed.origin`; this gate asking the question a second time for itself is what
+    // let it and CORB disagree about one origin, and is what that block ended.
+    if (!_resourceSameOrigin) {
       var _acao = headers["access-control-allow-origin"] || "";
       var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
       // Fetch §4.10 "CORS check": ACAO must byte-match the request's own origin (`*` is
