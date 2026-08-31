@@ -38,29 +38,28 @@
  * spent; this host is a CLEAN CLIENT, which is a coherent thing to be and is precisely the surface CLAUDE.md
  * §What-the-tool-produces aims at ("learn the LOGGED-IN API surface WHILE LOGGED OUT"). So `credentialed` is
  * passed FALSE as a positive statement with its reason, never left off — and the destructive-path deny list,
- * which `safe-fetch.js` scopes to exactly the credentialed case, is correctly inert here for the same reason
- * it is armed there: the harm it prevents needs the session.
+ * which `safe-fetch.js` scopes to a request that is credentialed AND NOT `observed`, is correctly inert here
+ * for the same reason it is armed there: the harm it prevents needs the session, and this process has none.
  *
- * WHAT THIS ZONE WILL FIRE, AND WHAT IT REFUSES — the whole of the policy, and it is deliberately narrow.
+ * WHAT THIS ZONE WILL FIRE, AND WHAT IT REFUSES — AND IT IS NO LONGER THIS ZONE THAT DECIDES.
  * CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE: every outbound request states whether it is OBSERVED, DERIVED
  * or FORCED, and a reply to a FORCED request is evidence about what a server says to a request no client
- * makes. Two requests are OBSERVED and this zone performs them:
- *   · THE SEED. This zone originated it, from an address a person typed. Nothing derived it.
- *   · A PARSER-INSERTED `<script src>` OF THE SEEDED DOCUMENT — the pending line's `parser` initiator, which
- *     is HTML §4.12.1 "The script element"'s parser-inserted flag (solver/engine.h). It is named by the BYTES
- *     THIS ZONE ITSELF FETCHED, so a real load of that document makes exactly that request.
- * EVERYTHING ELSE IS REFUSED, WITH THE REASON, AND THE REASON IS NO LONGER THAT THE TWO LOOK ALIKE. A park
- * made by RUNNING CODE — a page `fetch()`, an injected `<script src>`, a dynamic `import()` — is DERIVED or
- * FORCED, and the pending line now SAYS which: the engine composes it at the park from the parser-inserted
- * flag and from whether the parking flow's path had taken an arm its own concrete example contradicts
- * (solver/flow.h's `path_forced`). What is missing is the AUTHORISATION for a DERIVED fetch — the per-origin
- * widening that lets a person say "at this host, fire what the bundle derives", which exists here for
- * NAVIGATIONS and not yet for fetches — and, for a FORCED one, nothing is missing at all: it is refused by
- * the rule. See PROVENANCE_DECLINE, which states the two separately. Neither refusal is a default: the reason
- * travels to the child, which prints it at the stall. That this zone is stricter than `bridge.js` — which fires every pending line
- * uncredentialed — is not a second policy: it is a hole SECURITY.md §Network already names as its own standing
- * open item ("that vocabulary … is the next subproblem"), and a zone written after the rule does not get to
- * inherit one that predates it.
+ * makes. Every request this process makes now STATES that word to the chokepoint, and `safe-fetch.js`'s
+ * `_firingRefusal` answers — one function, one per-origin widening table, read by this host and by the
+ * offscreen alike, because it is the same file loaded in both. What this zone contributes is the two facts
+ * only it can state:
+ *   · THE SEED IS `observed`. This zone originated it, from an address a person typed. Nothing derived it.
+ *   · `--explore <origin>` IS A PERSON'S SENTENCE and it writes into that shared table, so one widening
+ *     covers every act at that host — a navigation, a park, an XHR — instead of the navigations alone that a
+ *     Set held in this file could ever have covered.
+ * WHAT THAT MEANS IN PRACTICE: `observed` and `derived` are FIRED, `forced` waits on a widening. The previous
+ * state of this file declined every DERIVED park, and its own decline text named this diff as the fix ("firing
+ * it is the ACTIVE DISCOVERY CLAUDE.md §Attacker-sources calls REQUIRED. What is missing is the authorisation
+ * … Saying it about fetches is the next diff here"). A refusal still travels with its reason: `workFetch`
+ * declines in the CHOKEPOINT's words and the child prints them at the stall, because the party that refused is
+ * the party that knows why. And the divergence this paragraph used to record — that this zone was stricter
+ * than `bridge.js`, which fired every pending line — is gone by CONSTRUCTION rather than by agreement: there
+ * is one policy and neither host holds a copy of it.
  *
  * THE CHANNEL IS HALF-DUPLEX, WHICH IS WHAT KEEPS IT FROM DEADLOCKING. The child announces its bill whenever
  * the bill CHANGES and never reads back; it reads only after writing `stalled`, which is the one moment every
@@ -88,15 +87,17 @@
  * is navigated; a FORCED one waits on the PER-ORIGIN WIDENING (`--explore <origin>`), which is a person saying
  * "at this host, navigate what the bundle reaches past a forced gate" and is the zone's to own; and a record
  * that states nothing now THROWS rather than declining, which is the crash that bullet asks for.
- * WHAT REMAINS UNSAID IS A *FETCH*'S authorisation, not a navigation's — see PROVENANCE_DECLINE, which is
- * about `workFetch` and is a different decision over a different record. IT IS NOT THE CLASSIFICATION, and
- * that has to be said here because a constant named UNSTATED_PROVENANCE stood at that cross-reference after
- * the provenance began being stated: dead, unreferenced by any decline path, and describing a zone that could
- * not tell a page `fetch()` from a forced arm's. A refusal whose stated reason outlives the absence it
- * describes is the stale-`DFAIL` failure with a network policy on it — it reads as a decision somebody made
- * while naming a capability that is already there — so the reason a running-code park is refused travels with
- * the park's own class (PROVENANCE_DECLINE is keyed on it) and nothing here is left to describe it a second
- * time. */
+ * WHAT REMAINS OPEN IS THE CREDENTIAL HALF AND THE REPLY'S GRADE, NOT THE FIRING DECISION. This process has
+ * no cookie jar, so nothing here can act as a person; the offscreen can, and `bridge.js` still leaves
+ * `msg.credentialed` unwritten for a learned GET. And a FORCED reply, once a widening lets one be fetched,
+ * must be carried as FORCED by the engine and never merged into the observed pool (§@H) — that carrying is
+ * the subproblem AFTER this one and it is named at the widening rather than assumed away.
+ * A CONSTANT NAMED `UNSTATED_PROVENANCE` ONCE STOOD AT A CROSS-REFERENCE HERE, dead and unreferenced,
+ * describing a zone that could not tell a page `fetch()` from a forced arm's. `PROVENANCE_DECLINE`,
+ * `NAVIGATION_WIDENING` and `FORCED_NAVIGATION` have now followed it out for the mirror-image reason: not
+ * that they described an absence that had been filled, but that they described a DECISION this file no longer
+ * makes. A rule that outlives the place it belongs reads as authoritative from the wrong zone, which is the
+ * stale-`DFAIL` failure with a network policy on it. */
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -126,6 +127,18 @@ const ZONE = (() => {
     throw new Error('extension/lib/safe-fetch.js did not install `safeFetch` — this zone loads that file ' +
                     'verbatim rather than restating its rules, so a load that installs nothing leaves this ' +
                     'process with no chokepoint and therefore no permission to reach the network at all');
+  /* AND THE FIRING POLICY BESIDE IT, ASSERTED AT THE SAME DOOR AND FOR A SHARPER REASON. The chokepoint's
+     absence is a process with no network; the POLICY's absence is a process that reaches the network with the
+     one decision CLAUDE.md puts at that chokepoint silently missing — `--explore` would widen nothing while
+     reading as though it had, and `navigate`/`workFetch` would take an `undefined` refusal as permission.
+     That is the defaulted-read defect standing on a security decision, so it is a load-time abort rather than
+     a TypeError three calls into a request. */
+  for (const n of ['safeFetchWiden', 'safeFetchFiringRefusal', 'safeFetchWidenedOrigins'])
+    if (typeof sandbox[n] !== 'function')
+      throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
+                      'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
+                      'same table, and a zone that obtained the chokepoint without them would fire every ' +
+                      'grade while `--explore` authorized nothing');
   return sandbox;
 })();
 
@@ -188,67 +201,34 @@ const ABSENT = '-';
    decision is the stale-`DFAIL` failure with a process boundary in the middle. */
 function decline(reason) { return `decline\t${b64(reason)}`; }
 
-/* WHY A PARK THIS ZONE CAN CLASSIFY IS STILL NOT FIRED, IN ITS OWN WORDS AND PER CLASS. Three states behind
- * one answer is the defect CLAUDE.md names at §@S ("a rung whose ABSENCE and whose ZERO read alike"), and a
- * refusal that reads the same for a DERIVED park and a FORCED one is that defect performed on the one seam
- * whose whole subject is telling them apart. The two are refused for genuinely different reasons: a DERIVED
- * request is one a person may authorise per origin and has not; a FORCED one is refused by the rule itself,
- * and would be under any widening short of a sentence about forcing specifically. */
-const PROVENANCE_DECLINE = {
-  derived:
-    'a DERIVED park — the page\'s own code computed this address from real inputs, so it is a fact about the ' +
-    'app and firing it is the ACTIVE DISCOVERY CLAUDE.md §Attacker-sources calls REQUIRED. What is missing is ' +
-    'the authorisation: §Attacker-sources makes firing configurable and PER ORIGIN, "default conservative, ' +
-    'widened deliberately per origin, never inferred from a site looking like a test", and this zone\'s ' +
-    '`--explore <origin>` says that about NAVIGATIONS only. Saying it about fetches is the next diff here',
-  forced:
-    'a FORCED park — a value in this request exists only because a gate was forced, so a reply to it is ' +
-    'evidence about what a server says to a request no client makes. CLAUDE.md §@H forbids such a reply ever ' +
-    'being carried as OBSERVED, and the danger is that it is PLAUSIBLE: a 401 body parses as JSON and yields ' +
-    'fields that exist nowhere, and one invented field is the example that shapes the next endpoint. The ' +
-    'request is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap in the report but IS ' +
-    'the report — that surface is what forced execution finds and a sniffer cannot',
-};
-
-/* THE PER-ORIGIN WIDENING, WHICH IS A PERSON'S SENTENCE AND NOT AN INFERENCE — `--explore <origin>`, repeated.
- * CLAUDE.md §Attacker-sources: "It is CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG
- * AND A SINGLE SWITCH CANNOT SAY SO … Default conservative, widened deliberately per origin, never inferred
- * from a site looking like a test." Firing what a bundle NAMES at an app you own is the point of the tool;
- * doing it at a stranger's production account is not; and no property of the address distinguishes them, which
- * is exactly why the answer is a person's and is stated per origin rather than derived.
- *
- * IT COVERS NAVIGATIONS AND NOTHING ELSE, and that narrowness is the design rather than a first instalment.
- * §Attacker-sources' real-navigable bullet puts the WHOLE of a navigation's safety in the choice of ADDRESS:
- * a top-level navigation is a GET, which RFC 9110 §9.2.1 "Safe Methods" contains, so the METHOD half is
- * already answered and the entire remaining question is PROVENANCE — which is what this flag answers. A
- * running-code FETCH has a second question this flag cannot answer (which CORB class the body is), so it is
- * refused on its own ground and not swept in here.
- *
- * AND THE ONE COMBINATION THAT IS NEVER A SETTING IS UNREACHABLE HERE BY CONSTRUCTION, which is why this is a
- * whole answer and not a hole with a flag over it. That combination is credentialed AND state-mutating AND
- * forced. This process has NO COOKIE JAR (see this file's header: Node's `fetch` has no cookie store, so
- * `credentials:"include"` would attach nothing and name a person who is not present), and `safe-fetch.js` is
- * GET-only BY ABSENCE — it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`. So both
- * of the other two conjuncts are false at every setting of this flag, including its widest. */
-const NAVIGATION_WIDENING = new Set();
-
-/* WHY A NAVIGATION TO A *FORCED* ADDRESS IS REFUSED AT AN UNWIDENED ORIGIN — and it is now the ONLY reason a
-   navigation is refused here at all. There used to be a second, `UNWIDENED_NAVIGATION`, for a record that did
-   not say who named the address; it is deleted with the gap it described, because the three provisioning
-   records all state it (core/frame/navigable.c, core/frame/browsing_context_group.c) and `navigate` throws on
-   a record that does not rather than declining one. Its own text named the fix that landed — "carry that
-   initiator on the create notice so a navigable the PARSER of the seeded document created is OBSERVED" — and
-   a refusal that outlives the absence it describes is the stale-`DFAIL` failure with a network policy on it:
-   it would go on reporting a capability as missing while reading as a decision somebody made. */
-const FORCED_NAVIGATION =
-  'a DOCUMENT LOAD at an address that exists only because a GATE WAS FORCED. CLAUDE.md §Attacker-sources ' +
-  'makes exactly this the per-origin widening — "default conservative, widened deliberately per origin, never ' +
-  'inferred from a site looking like a test" — so the refusal is this policy\'s ANSWER for an origin nobody ' +
-  'has widened rather than a capability that is missing. Pass `--explore <origin>` to widen it, and note what ' +
-  'that then obliges: §@H makes the reply to a forced request evidence about what a server says to a request ' +
-  'no client makes, so its values are carried as FORCED and never merged into the observed pool. Until then ' +
-  'the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap in the report ' +
-  'but IS the report'
+/* THE FIRING DECISION IS NOT HERE ANY MORE, AND ITS ABSENCE IS THE DIFF RATHER THAN A DELETION.
+ * Three constants stood in this space: `PROVENANCE_DECLINE`, a per-class refusal for every DERIVED and FORCED
+ * park; `NAVIGATION_WIDENING`, a Set this file held; and `FORCED_NAVIGATION`, the sentence it refused a
+ * navigation with. Every one of them was the RIGHT POLICY IN THE WRONG PLACE, and the proof is what the other
+ * host was doing meanwhile: `bridge.js` fired every DERIVED and FORCED park uncredentialed while this file
+ * declined all of them, and each zone's text explained itself perfectly. One question, two answers, neither of
+ * them the policy — and the ONE thing that could not happen while it stayed that way is the thing this seam is
+ * for: an origin a person widens is widened for the whole tool, not for whichever host they widened it in.
+ * IT LIVES AT THE CHOKEPOINT NOW, WHICH IS WHERE CLAUDE.md PUTS IT: "the engine holds no network policy by
+ * construction, so `safeFetch` decides, from the provenance the request declares beside its method and
+ * credential state". This file loads `extension/lib/safe-fetch.js` VERBATIM into a realm of its own rather
+ * than restating its rules, so the policy arrives here the same way the SOP, the CORS gate, the PNA guard and
+ * the destructive-path deny list already do — `_firingRefusal` and its widening table, read by both hosts
+ * because it is one table. `--explore <origin>` still exists and is still a person's sentence; it now writes
+ * into that table (`ZONE.safeFetchWiden`) rather than into a Set this process alone could see.
+ * AND IT NO LONGER COVERS NAVIGATIONS ALONE. The old comment gave a reason for that narrowness — "a
+ * running-code FETCH has a second question this flag cannot answer (which CORB class the body is)" — and the
+ * reason had already stopped being true: Fetch §2.2.5 "Requests"' DESTINATION rides every pending line and
+ * `_destinationOf` answers the CORB question from it, for a park this zone has never seen. A rule kept alive
+ * by a reason that has stopped being true is the stale-comment failure with a network policy attached, so it
+ * goes out with the reason.
+ * WHAT A REFUSAL STILL OWES THIS CHANNEL IS ITS WORDS, and it still gets them — `workFetch` declines with the
+ * chokepoint's own `statusText`, which is the party that refused saying why, one zone further in than before.
+ * THE ONE COMBINATION THAT IS NEVER A SETTING REMAINS UNREACHABLE FROM THIS PROCESS BY CONSTRUCTION —
+ * credentialed AND state-mutating AND forced. This process has NO COOKIE JAR (see this file's header: Node's
+ * `fetch` has no cookie store, so `credentials:"include"` would attach nothing and name a person who is not
+ * present), and `safe-fetch.js` is GET-only BY ABSENCE. Both other conjuncts are false at every setting of
+ * the widening, including its widest. */
 
 
 async function main() {
@@ -264,12 +244,20 @@ async function main() {
     if (process.argv[i] !== '--explore') { positional.push(process.argv[i]); continue; }
     const v = process.argv[++i];
     if (v === undefined) {
-      console.error('[trusted] `--explore` was given no origin. The flag is a person authorizing navigation ' +
-                    'at a host; one that names none authorizes nothing, and accepting it would leave this ' +
-                    'zone reading as though a permission had been granted.');
+      console.error('[trusted] `--explore` was given no origin. The flag is a person authorizing this tool to ' +
+                    'fire what a bundle only reaches past a FORCED gate at a host; one that names none ' +
+                    'authorizes nothing, and accepting it would leave this zone reading as though a ' +
+                    'permission had been granted.');
       process.exit(2);
     }
-    NAVIGATION_WIDENING.add(new URL(v).origin);
+    /* AND IT IS WRITTEN INTO THE CHOKEPOINT'S OWN TABLE, WHICH IS THE WHOLE OF WHAT THE FLAG NOW DOES. It used
+       to add to a Set this file held, so a widening said something about NAVIGATIONS made by this process and
+       nothing about anything else — while the same word arriving on a pending line was refused by a second
+       rule beside it. `ZONE.safeFetchWiden` is `safe-fetch.js`'s `_EXPLORED`, the table `_firingRefusal`
+       reads, so one sentence from a person now covers every request this tool makes at that host: a
+       navigation, a park, an XHR. The chokepoint validates the value (a tuple origin, never a URL and never
+       an opaque `null`) and aborts on anything else, which is why nothing is checked here. */
+    ZONE.safeFetchWiden(new URL(v).origin);
   }
   const target = positional[0];
   const bin = positional[1] || join(ENGINE, 'host', 'out', 'qjs-native-none');
@@ -291,9 +279,13 @@ async function main() {
      loopback (normal web rules) while a public page may not, and it is `safe-fetch.js`'s rule rather than a
      decision taken here.
      UNCREDENTIALED, STATED — see this file's header: there is no cookie jar in this process, so the mode
-     would name a person who is not present. */
+     would name a person who is not present.
+     AND `observed` IS STATED RATHER THAN LEFT OFF, which is the same sentence the first line of this comment
+     already makes: a person typed this address. The chokepoint refuses a request whose grade it was not told
+     (`_provenanceOf` is a CHECK), so there is no arm here that could take a default — but the word is also
+     what the deny list is scoped by, and a seed is exactly the population that scoping is for. */
   const seed = await ZONE.safeFetch(target, { pageUrl: target, destination: 'document',
-                                              credentialed: false });
+                                              provenance: 'observed', credentialed: false });
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
     throw new Error(`the chokepoint refused the seed: ${seed.statusText} — the document a session is rooted ` +
@@ -517,22 +509,37 @@ async function main() {
        arm below refused every child navigable and every peer this zone was ever told about, at every origin
        nobody had widened, which is every origin by default — and the refusal read as a policy working rather
        than as a capability missing. All three records carry the word now (core/frame/navigable.c and
-       core/frame/browsing_context_group.c), so an absent or unknown one is a PRODUCER that stopped stating it
-       and it STOPS this function rather than falling to whichever arm is written as the else. That is the
-       crash §Attacker-sources asks for, and it is the same reader contract `workFetch` keeps over the same
-       vocabulary, applied to the decision that spends the network. */
-    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
-      throw new Error(`a document load was asked for with the provenance \`${provenance}\`, which is none of ` +
-                      'the three tokens solver/engine.h declares — every record that reaches this function ' +
-                      'states one, so this is a producer that stopped, and CLAUDE.md §Attacker-sources makes ' +
-                      'a navigation whose provenance is not established a crash at the decision rather than ' +
-                      'a load: there is no partition and no interception behind this line');
-    if (provenance === 'forced' && !NAVIGATION_WIDENING.has(new URL(abs).origin))
-      return { declined: `${what} ${abs} — ${FORCED_NAVIGATION}` };
+       core/frame/browsing_context_group.c).
+       BOTH THE ENUMERATION AND THE WIDENING ARE THE CHOKEPOINT'S NOW, AND THE CRASH IS STRICTLY STRONGER FOR
+       IT. This function held a `throw` over the vocabulary and an arm over the widening; both are gone into
+       `safe-fetch.js`, where `_provenanceOf` is a `CHECK` — fatal in dev AND release, because the arm an
+       unstated grade falls to is the one that spends the network — and `_firingRefusal` reads the one
+       widening table both hosts share. So the crash §Attacker-sources asks for still happens, at the line
+       that opens the socket, for BOTH hosts, and this file no longer has a copy of it to drift.
+       WHAT IS ASKED HERE IS NOT THE POLICY BUT THE SHAPE OF THIS CHANNEL'S ANSWER, and the two are different
+       questions. A refusal the NETWORK made — a blocked scheme, a private target, a refused read — leaves a
+       navigable that EXISTS and shows an error page: `replyRecord` answers null and the empty byte sequence
+       below is HTML's own Document for it. A refusal this ZONE made is not that; nothing is provisioned at
+       all, and the creating engine is told so with the reason, because `abi_report_declines` is the only
+       thing that will ever print why a peer does not exist. `safeFetchFiringRefusal` is `_firingRefusal`
+       itself, asked by a caller that needs the GRADE in order to say which — never a second copy of the rule,
+       and never a string match on the `statusText` the same refusal would arrive in one call later. */
+    const refusal = ZONE.safeFetchFiringRefusal(provenance, abs);
+    if (refusal)
+      return { declined: `${what} ${abs} — a DOCUMENT LOAD whose address stands on a ${refusal.toUpperCase()} ` +
+                         'arm at an origin nobody has widened for exploration. CLAUDE.md §Attacker-sources ' +
+                         'makes exactly this the per-origin widening ("default conservative, widened ' +
+                         'deliberately per origin, never inferred from a site looking like a test"), so this ' +
+                         'is the policy\'s ANSWER rather than a capability that is missing. Pass `--explore ' +
+                         '<origin>` to widen it, and note what that obliges: §@H makes the reply to a forced ' +
+                         'request evidence about what a server says to a request no client makes, so its ' +
+                         'values are carried as FORCED and never merged into the observed pool. Until then ' +
+                         'the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a ' +
+                         'gap in the report but IS the report' };
     /* Fetch §2.2.5's `document` DESTINATION — this is HTML's navigate algorithm's own fetch, which is that
        section's own `document` row. Not script-like, so no CORB: an HTML parser is what reads these bytes. */
     const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
-                                                        credentialed: false }),
+                                                        provenance, credentialed: false }),
                             `${what} ${abs}`);
     /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
        result of determining the origin given response's URL" — and Fetch §2.2.5 "Requests" makes that the LAST
@@ -554,23 +561,27 @@ async function main() {
       throw new Error(`the pending line states the initiator \`${initiator}\`, which is neither token ` +
                       'solver/engine.h declares — this zone reads that field, so an unknown value must stop ' +
                       'it rather than fall to a default');
-    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
-      throw new Error(`the pending line states the provenance \`${provenance}\`, which is none of the three ` +
-                      'tokens solver/engine.h declares — this zone\'s firing decision reads that field, so ' +
-                      'an unknown value must stop it rather than fall to a default');
-    /* THE DECISION IS READ OFF THE FIELD NOW, AND THE FIELD IS THE ENGINE'S FACT AND NOT THIS ZONE'S GUESS.
-       `observed` is "a real load of this document makes exactly this request", composed at the park from the
-       parser-inserted flag and the parking flow's path; it is what this zone performs. The other two are
-       declined for reasons that are no longer "this zone cannot tell them apart" — see PROVENANCE_DECLINE,
-       which states each of the two separately because they are refused by different things. */
-    if (provenance !== 'observed') {
-      e.ready.push(decline(`${method} ${abs} — ${PROVENANCE_DECLINE[provenance]}`));
-      return;
-    }
+    /* THE PROVENANCE'S OWN VOCABULARY IS NOT RE-CHECKED HERE, and its absence is the unification rather than a
+       check dropped. `_provenanceOf` is a `CHECK` in `safe-fetch.js` — fatal in dev AND release, one door, one
+       message, both hosts — and this file loads that file verbatim. A second enumeration in a host is the
+       thing that goes stale when a fourth token is added; the initiator's stays because the CHOKEPOINT reads
+       no such field and this zone does (the implication below).
+       THIS ZONE FIRES DERIVED PARKS NOW, WHICH IS THE CAPABILITY THIS DIFF ADDS AND NOT A RELAXATION. The arm
+       that stood here declined every park that was not `observed`, and its own text said what was wrong with
+       it: "a DERIVED park — the page's own code computed this address from real inputs, so it is a fact about
+       the app and firing it is the ACTIVE DISCOVERY CLAUDE.md §Attacker-sources calls REQUIRED. What is
+       missing is the authorisation … Saying it about fetches is the next diff here." This is that diff. The
+       authorisation is `_firingRefusal` and it answers for every act at once: `observed` and `derived` fire,
+       `forced` waits on the per-origin widening. The refusal arrives as the chokepoint's own reply record and
+       is relayed below, in its words rather than in a copy of them held here. */
     /* AND `observed` IMPLIES PARSER-INSERTED, because that flag is one of the two facts it is composed from.
        Asserted rather than assumed: the two are stated independently on the line, so a provenance that
-       reached `observed` by some other route is the composition having drifted from the flag it is made of. */
-    if (initiator !== 'parser')
+       reached `observed` by some other route is the composition having drifted from the flag it is made of.
+       IT IS GUARDED BY THE GRADE RATHER THAN REACHED ONLY THROUGH IT. The implication is `observed ⇒ parser`,
+       and it used to sit after an early return that made every other grade unreachable — so it read as an
+       unconditional statement about every park this zone fired, which stopped being true the moment a DERIVED
+       one did. A `script`-initiated DERIVED park is the ordinary case and asserts nothing. */
+    if (provenance === 'observed' && initiator !== 'parser')
       throw new Error(`${method} ${abs} is OBSERVED and was not parser-inserted — the two are composed from ` +
                       'one flag (solver/pending.h), so this zone is being told two things about one park ' +
                       'that cannot both be true');
@@ -589,11 +600,36 @@ async function main() {
        §2.2.5 "Requests" gives every request a destination and the engine states it at each park; the
        chokepoint asks §2.2.5's SCRIPT-LIKE predicate of it, so a body that becomes executable code must be
        JS-typed or same-origin and everything else is data. This line used to hardcode `as: 'script'` on the
-       strength of the INITIATOR — sound only because this zone fires nothing but parser-inserted parks, and
-       wrong the moment it fires anything else, which is exactly what the provenance work above is heading
-       toward. Reading it off the field costs nothing and cannot go stale. */
-    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, credentialed: false }),
-                            `the parser-inserted script ${abs}`);
+       strength of the INITIATOR — sound only while this zone fired nothing but parser-inserted parks, and wrong
+       the moment it fires anything else, which is what the arm above now does. Reading it off the field costs
+       nothing and cannot go stale. */
+    /* AND THE PROVENANCE BESIDE IT, WHICH IS THE FIRING DECISION'S ONE INPUT. This zone states it and does not
+       test it: `_firingRefusal` refuses a FORCED park at an unwidened origin before a socket is opened, and
+       the refusal comes back in the reply record's `statusText` like every other refusal that function makes. */
+    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, provenance, credentialed: false });
+    /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
+       the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
+       its failure path having been told the server could not be reached, which for a request nobody sent is a
+       LIE about the world and teaches the flow something false. A decline settles nothing — the flow stays
+       PARKED, exactly as §@S requires of a search not yet solved, and it fires the day the origin is widened.
+       IT IS DISCRIMINATED BY ASKING THE POLICY, NEVER BY MATCHING THE `statusText`. The reason string is for a
+       READER; a branch that parsed it would be a second copy of the rule written in a format nothing checks.
+       So the grade is asked once more here — of the same `_firingRefusal` — and the chokepoint's own words are
+       what the decline CARRIES. Every OTHER status-0 (a blocked scheme, a private target, CORB, a refused
+       credentialed read) stays a network error, which is what it is: this zone tried and the reply is
+       unusable. */
+    const refusal = ZONE.safeFetchFiringRefusal(provenance, abs);
+    if (refusal) {
+      e.ready.push(decline(`${method} ${abs} — ${raw.statusText}. A ${refusal.toUpperCase()} park at an ` +
+                           'origin nobody has widened for exploration: pass `--explore <origin>` to widen it, ' +
+                           'and note what that obliges — §@H makes the reply to a forced request evidence ' +
+                           'about what a server says to a request no client makes, so its values are carried ' +
+                           'as FORCED and never merged into the observed pool. Until then the request is ' +
+                           'DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap in the ' +
+                           'report but IS the report'));
+      return;
+    }
+    const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
     e.ready.push(['provide', method, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
                   rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };

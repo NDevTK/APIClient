@@ -299,6 +299,143 @@ function _destinationOf(opts) {
         "what the request is for");
   return opts.destination;
 }
+// ── WHAT A REPLY WOULD BE EVIDENCE OF, AND WHETHER THIS ZONE SPENDS A REQUEST ON IT ──
+// CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names, spelled here because this
+// is the file that DECIDES from them. The engine states the word (solver/engine.h's
+// PENDING_PROVENANCE_*, composed at the park from HTML §4.12.1's parser-inserted flag
+// and the parking flow's `path_forced`); a zone that originated an act states it for
+// itself. Neither may decide, and this file may not re-derive it — nothing in an
+// ADDRESS distinguishes a page a person's own session would have loaded from one that
+// exists because a gate was forced, which is the whole reason the field travels.
+var _PROVENANCE_TYPES = ["observed", "derived", "forced"];
+// AND EVERY CALLER MUST STATE ONE — a `CHECK`, by exactly the argument `_destinationOf`
+// carries one function up and for the same failure shape. The arm an unstated value
+// falls to is whichever the firing test below happens to be written as its else, and
+// with the test written the way it must be ("refuse unless the origin is widened") an
+// ABSENT provenance and an INVENTED one both read as `not forced` — the PERMISSIVE arm.
+// A fail-open on a decision about whether to spend someone else's server, under the
+// person's own session, is what CLAUDE.md's `CHECK` is for; and the value crosses from
+// the untrusted engine, whose own splitter asserts the vocabulary with DCHECKs that are
+// compiled out on the far side of a mojo boundary. Asserting it HERE closes it for both
+// hosts at once, which is why it is not in either host's splitter.
+// THERE IS NO `unknown` GRADE. CLAUDE.md §Attacker-sources makes a request whose
+// provenance is not established a CRASH AT THE DECISION rather than a load, because
+// there is no partition and no interception behind this line: a document load one call
+// below carries the person's cookies.
+function _provenanceOf(opts) {
+  CHECK(typeof opts.provenance === "string" && _PROVENANCE_TYPES.indexOf(opts.provenance) >= 0,
+        "safeFetch was called with a PROVENANCE that is none of the three CLAUDE.md " +
+        "§A-REQUEST-CARRIES-THE-PROVENANCE declares (solver/engine.h's PENDING_PROVENANCE_*): " +
+        JSON.stringify(opts.provenance) + " — this file decides whether to FIRE the request from it, and " +
+        "an absent or invented value takes the same arm `derived` does, which is the arm that spends the " +
+        "network. State `observed`, `derived` or `forced` and mean it");
+  return opts.provenance;
+}
+/* THE PER-ORIGIN EXPLORATION WIDENING — A PERSON'S SENTENCE, NEVER AN INFERENCE.
+   CLAUDE.md §Attacker-sources: firing what a bundle only reaches past a forced gate is
+   "CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG AND A SINGLE
+   SWITCH CANNOT SAY SO … Default conservative, widened deliberately per origin, never
+   inferred from a site looking like a test." Firing at an app you own is the point of the
+   tool; doing it at a stranger's production account is not; and NO PROPERTY OF THE ADDRESS
+   distinguishes them, which is precisely why the answer is a person's.
+   IT LIVES IN THIS FILE BECAUSE THE DECISION DOES. A registry in a host is a registry the
+   OTHER host does not read, and two zones answering one question is the shape this whole
+   parameter exists to end. `engine/trusted.mjs` loads this file verbatim into a realm of
+   its own and its `--explore <origin>` writes HERE; the offscreen loads it in
+   `ast-worker.html` and reads the same table. An EMPTY table is the positive statement
+   "nobody has widened anything", which is the conservative default rather than an absence.
+   WHAT WIDENING OBLIGES, STATED WHERE IT IS GRANTED. §@H makes the reply to a forced
+   request evidence about what a server says to a request NO CLIENT MAKES, so its values
+   must be carried as FORCED and never merged into the observed pool — a 401 body parses as
+   JSON and yields fields that exist nowhere, and one invented field is the example that
+   shapes the next endpoint. That carrying is the engine's and it is the subproblem AFTER
+   this one; until it exists, widening buys the request and the person takes on the reply. */
+var _EXPLORED = Object.create(null);
+/* THE VALUE MUST BE THE ORIGIN A URL PARSER WOULD PRODUCE, AND `_isRealOrigin` IS NOT THAT
+   TEST. It asks only whether the string contains "://", which the whole of
+   `https://a.test/some/path` does — so a person who typed an address rather than an origin
+   would have widened a key no request's `.origin` can ever equal: a permission that was
+   granted, is in the table, reads as granted, and matches nothing for ever. That is the
+   destructive deny list's own failure shape (an entry that looks protective and refuses
+   nothing) pointed the other way, and it is worse here because the silence looks like the
+   conservative default working. So the value is required to be its OWN serialized origin —
+   parsed, re-serialized, compared — which is exactly the comparison `_firingRefusal` makes.
+   AN OPAQUE ORIGIN IS REFUSED BY THE SAME LINE and needs no clause of its own: `null` does
+   not parse as a URL, and every opaque origin is same-origin with nothing (itself included),
+   so there is no address one could ever widen. */
+function safeFetchWiden(origin) {
+  var normalized = null;
+  try { normalized = new URL(String(origin)).origin; } catch (e) { RETHROW_FATAL(e); normalized = null; }
+  CHECK(_isRealOrigin(origin) && normalized === origin,
+        "an exploration widening was asked for " + JSON.stringify(origin) + ", which is not the serialized " +
+        "TUPLE ORIGIN a URL parser produces (" + JSON.stringify(normalized) + ") — the widening is compared " +
+        "against a request URL's own `origin`, so a full address, an opaque `null`, an explicit default port " +
+        "or an empty string would sit in this table matching nothing while reading as a permission somebody " +
+        "granted. Pass the origin, not the address");
+  _EXPLORED[origin] = true;
+}
+/* WHAT HAS BEEN WIDENED, FOR A CALLER THAT MUST ASSERT THE ABSENCE OF ANY. Not a report —
+   a PREMISE READER. A zone whose own reasoning rests on "no origin is widened HERE" holds
+   that premise where it is relied on rather than in a comment that outlives it. */
+function safeFetchWidenedOrigins() { return Object.keys(_EXPLORED); }
+/* THE FIRING DECISION, IN ONE FUNCTION, ANSWERING THE RULE THAT REFUSED OR `null` FOR FIRE.
+   THE METHOD HALF IS ALREADY ANSWERED AND IS NOT ASKED HERE: this file is GET-ONLY BY
+   ABSENCE (it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`), and
+   GET is in RFC 9110 §9.2.1 "Safe Methods"' safe set — "the client does not request, and
+   does not expect, any state change on the origin server". So the entire remaining question
+   is PROVENANCE, which is what this reads.
+   `observed` FIRES: a real load of this document makes exactly this request, so the request
+   is one the person's own client makes and firing it discovers nothing about a world that
+   would not have happened anyway.
+   `derived` FIRES: the page's own code computed the address from real inputs, so it is a
+   FACT ABOUT THE APP even where no session sent it — and CLAUDE.md §Attacker-sources calls
+   firing it REQUIRED ("Active discovery is REQUIRED … passive learning is too thin"), with
+   §the-symbolic/trust-boundary naming the headline case in as many words: "a fetch whose
+   body is JAVASCRIPT is ALWAYS fetched + EXECUTED (a lazy chunk reveals real endpoints —
+   the headline moat surface)". A default that refused it would turn the tool's central
+   capability off and call the silence caution.
+   `forced` IS THE WIDENING, AND ITS REFUSAL IS THIS POLICY'S ANSWER RATHER THAN A GAP IN
+   IT. A value in the request exists only because a gate was forced, so a reply to it is
+   evidence about what a server says to a request no client makes. The address is DERIVED IN
+   FULL and REPORTED, which §Attacker-sources says is not a gap in the report but IS the
+   report — "that surface is what forced execution finds and a sniffer cannot".
+   THE ONE COMBINATION THAT IS NEVER A SETTING IS UNREACHABLE HERE BY CONSTRUCTION, which is
+   what makes this a whole answer rather than a hole with a flag over it: credentialed AND
+   state-mutating AND forced. The middle conjunct is false at every setting of this table,
+   because this file cannot issue a non-GET at all. What is left of that sentence's concern
+   — that §9.2.1's contract is the RESOURCE OWNER's to honour and not ours to verify — is
+   the destructive-path deny list below, which is a FLOOR under this policy and never a
+   substitute for it. */
+function _firingRefusal(provenance, origin) {
+  if (provenance === "observed" || provenance === "derived") return null;
+  if (_EXPLORED[origin] === true) return null;
+  return provenance;
+}
+/* THE SAME ANSWER, ASKED BY A CALLER WHOSE ACT IS NOT A FETCH. One function read twice is
+   not two policies — it is the opposite, and it is why this is exported rather than
+   restated. Two callers need it and each needs a different SHAPE of outcome, which is
+   precisely what they may decide for themselves and the answer is not: `bridge.js`'s
+   route-declaration arm records a WORK ITEM whose load happens rounds later, and enqueuing
+   one this file will refuse would pay an admission slot every round to be told no;
+   `engine/trusted.mjs`'s `navigate` must answer its channel with a DECLINE (no instance is
+   provisioned) rather than with the empty Document a network refusal produces.
+   IT ANSWERS THE RULE THAT REFUSED AND NOT A BOOLEAN, for the reason `_corbDeniesScript`
+   answers one: a caller that must tell somebody WHY cannot re-derive the grade from a `false`,
+   and re-deriving it is how the second copy of a policy gets written. The refusal is the
+   GRADE; the SENTENCE a host wraps around it is that host's own, because how a person
+   expresses a widening is per-host (`--explore <origin>` is a command line, and the offscreen
+   has no command line) while what a widening MEANS is not.
+   IT TAKES AN ABSOLUTE URL because the caller holds one and the origin comparison is this
+   file's to make; an address that will not parse is not a refusal but a caller's serializer
+   disagreeing with a URL parser, so it THROWS rather than answering a permission question
+   about nothing. */
+function safeFetchFiringRefusal(provenance, url) {
+  CHECK(_PROVENANCE_TYPES.indexOf(provenance) >= 0,
+        "safeFetchFiringRefusal was asked about the provenance " + JSON.stringify(provenance) + ", which is " +
+        "none of the three — the caller is deciding whether to spend an act on this address and would read " +
+        "an unknown value as the permissive arm, exactly as the chokepoint would");
+  return _firingRefusal(provenance, new URL(String(url)).origin);
+}
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   // same-origin: the page's own data is its to read, and the only thing refused is
   // that data reaching a CODE loader — a load that could not have executed anyway.
@@ -372,8 +509,24 @@ function _isPrivateHost(host) {
 //               and ONLY where the address is same-origin with the browser-stated
 //               principal of the document being loaded (`navigationCarriesSession`).
 //               The learned-GET replay path (`fetched`) passes no pageOrigin and is
-//               still uncredentialed — a learned address may be FORCED, which is a
-//               per-origin decision that does not exist yet.
+//               still uncredentialed — turning that on is a separate deliberate
+//               decision about the CORB class of a same-origin chunk, not a side
+//               effect of the provenance below.
+//   opts.provenance:
+//               CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's OBSERVED / DERIVED /
+//               FORCED, verbatim from the engine (solver/engine.h's
+//               PENDING_PROVENANCE_*) or stated by the zone that originated the act.
+//               It is what a reply is EVIDENCE OF, and it is half of the firing
+//               decision — the other half being the METHOD, which RFC 9110 §9.2.1
+//               "Safe Methods" answers and this file enforces by ABSENCE. See
+//               `_firingRefusal`: the decision is HERE because CLAUDE.md puts it
+//               here ("the engine holds no network policy by construction, so
+//               `safeFetch` decides, from the provenance the request declares beside
+//               its method and credential state"), and because a policy in either
+//               host would be a second copy of it that drifts — which is exactly the
+//               state this parameter ends: `engine/trusted.mjs` declined every
+//               DERIVED and FORCED park while `bridge.js` fired every one of them,
+//               two answers to one question, neither of them the policy.
 //   opts.destination:
 //               Fetch §2.2.5 "Requests"' DESTINATION, verbatim from the request the
 //               engine parked (solver/engine.h puts it on the pending line). A
@@ -596,6 +749,11 @@ async function safeFetch(url, opts) {
          "(Fetch §2.2.5), stated by the engine on the pending line and passed as opts.destination. Ignoring " +
          "`as` would fetch a code load as data, which is the defect the destination exists to end");
   _destinationOf(opts);
+  /* AND WHAT THE REQUEST IS EVIDENCE OF, ASKED AT THE SAME DOOR AND FOR THE SAME REASON: it is a field this
+     zone DECIDES from, its absent and invented values take the permissive arm, and the decision it feeds
+     happens before any byte moves. Read ONCE here and passed down, never re-read at the two gates below — a
+     field consulted twice is a field two gates can disagree about. */
+  var provenance = _provenanceOf(opts);
   var parsed;
   try { parsed = new URL(String(url)); }
   // No URL at all, so there is no URL list either — « » is the honest report, and
@@ -669,6 +827,18 @@ async function safeFetch(url, opts) {
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
     return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {},
              body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+  /* THE FIRING DECISION, BEFORE THE REQUEST EXISTS — see `_firingRefusal`. It is placed after the
+     well-formedness gates and before the credential one because that is the order the questions are
+     answerable in: an address that will not parse, names a scheme this zone cannot speak, or points into the
+     person's intranet is refused on facts about ITSELF, while this one is about WHOSE ACT it is and is the
+     first gate that needed a field to be carried here to be askable at all.
+     THE REFUSAL NAMES THE GRADE, exactly as `blocked-scheme:` and `blocked-destructive:` name theirs. A
+     reader of a request that did not happen needs WHICH RULE refused it, and `forced` in this position is the
+     whole account: the origin is not widened for exploration and the address is reported instead. */
+  var _ptok = _firingRefusal(provenance, parsed.origin);
+  if (_ptok)
+    return { ok: false, status: 0, statusText: "blocked-provenance:" + _ptok, headers: {},
+             body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
   // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
   // authenticated reply (the logged-in API surface), instead of a useless 401. Still
   // GET-only (method is forced below) so a well-designed server performs no account
@@ -676,10 +846,29 @@ async function safeFetch(url, opts) {
   // the browser's does not apply to an extension fetch with host_permissions.
   var credentialed = !!opts.credentialed;
   // THE DENY LIST, BEFORE THE REQUEST EXISTS — see _destructiveToken. Scoped to the
-  // credentialed case because that is the whole of where the harm is: without the
-  // person's cookies a logout path ends no session. The refusal names the token so it
-  // is attributable, exactly as `blocked-scheme:` and `blocked-corb:` name their ground.
-  if (credentialed) {
+  // credentialed case because that is half of where the harm is: without the person's
+  // cookies a logout path ends no session. The refusal names the token so it is
+  // attributable, exactly as `blocked-scheme:` and `blocked-corb:` name their ground.
+  /* AND THE SECOND HALF IS THE PROVENANCE, WHICH THIS GATE HAS BEEN WAITING FOR. The
+     list's own paragraph states the harm exactly: "Forced execution builds requests NO
+     REAL CLIENT MAKES", and "a GET that ends the person's session mid-analysis is a CSRF
+     we committed against our own user". Both halves of that sentence are load-bearing and
+     only one of them was askable here, so the gate stood over the whole credentialed
+     population — including the one caller for which the first half is FALSE BY
+     CONSTRUCTION. `observed` is solver/engine.h's "a real load of this document makes
+     exactly this request", and the ambient seed is that in its strongest form: the address
+     is the one the browser ACTUALLY NAVIGATED TO, so the person's own browser performed
+     this exact credentialed GET seconds ago in this same profile. Refusing to repeat it
+     prevents no state change — the state change already happened, by the person's own act
+     — and costs the analysis the document they are looking at, reported unanalysed with a
+     token in place of a reason anybody would recognise.
+     THIS IS A LOOSENING AND IS NAMED AS ONE. The list's cheap direction is being over-broad
+     and its expensive one is being loosened by accident, so the condition is narrowed to
+     exactly the population the harm argument covers and to nothing wider: a credentialed
+     request THIS TOOL originated (`derived`, `forced`) is still refused on a destructive
+     path, on the initial URL and again after a redirect. What changes is only the request
+     the person had already made. */
+  if (credentialed && provenance !== "observed") {
     var _dtok = _destructiveToken(parsed);
     if (_dtok)
       return { ok: false, status: 0, statusText: "blocked-destructive:" + _dtok, headers: {},
@@ -794,13 +983,27 @@ async function safeFetch(url, opts) {
      been carried to the same place. The harm this file exists to prevent is INITIATING a
      request the person never would, and that decision is the pre-request check. What is
      left here is refusing to build analysis on the reply. */
-  if (credentialed) {
+  if (credentialed && provenance !== "observed") {
     var _rtok = _destructiveToken(_finalUrl);
     if (_rtok)
       return { ok: false, status: 0, statusText: "blocked-destructive-redirect:" + _rtok,
                headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected),
                computedType: "" };
   }
+  /* AND THE FIRING DECISION AGAIN ON THE FINAL URL, WITH THE SAME SHAPE AND THE SAME LIMIT
+     AS THE TWO GATES ABOVE IT. `redirect: "follow"` means a 30x off the widened origin was
+     ALREADY followed by the time this runs, so this cannot un-send anything — it refuses to
+     INGEST, and the argument the destructive re-check makes for that is this one's too:
+     following a redirect the SERVER chose is the server's own behaviour, and what is left
+     here is refusing to build analysis on the reply. What makes it worth refusing: a
+     widening is a sentence about ONE HOST — "at this host, fire what the bundle reaches past
+     a forced gate" — and a reply that came from somewhere else is a reply about a server
+     nobody said that about, carried under a grade the person granted to a different one. */
+  var _rptok = _firingRefusal(provenance, _finalUrl.origin);
+  if (_rptok)
+    return { ok: false, status: 0, statusText: "blocked-provenance-redirect:" + _rptok,
+             headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected),
+             computedType: "" };
   /* THE HEADERS, WITH NOTHING BETWEEN THEM AND THE TWO GATES THAT READ THEM. This walk stood
      inside `catch (e) {}`, whose arm was an EMPTY header map — and an empty map is not an
      absent input to the rules below, it is a wrong one: CORB then judges a body labelled with
@@ -936,4 +1139,17 @@ async function safeFetch(url, opts) {
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
            urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed };
 }
-if (typeof self !== "undefined") self.safeFetch = safeFetch;
+/* THE CHOKEPOINT AND THE POLICY THAT DECIDES WHETHER IT FIRES, INSTALLED TOGETHER — because they are one
+   thing and a host that could obtain one without the other would be a host holding half the contract. Both
+   hosts reach them the same way: `engine/trusted.mjs` runs this file in a vm context and reads them off it,
+   `ast-worker.html` loads it into the offscreen document before bridge.js.
+   `safeFetchWiden` IS THE POLICY'S ONE INPUT and it takes a person's sentence. `safeFetchFiringRefusal` is the
+   same answer for a caller whose act is not a fetch, and `safeFetchWidenedOrigins` is for a caller that must
+   ASSERT no widening exists in its zone. None of the three is a second policy: all four names resolve to
+   `_firingRefusal`, which is the only thing in this project that answers the firing question. */
+if (typeof self !== "undefined") {
+  self.safeFetch = safeFetch;
+  self.safeFetchWiden = safeFetchWiden;
+  self.safeFetchFiringRefusal = safeFetchFiringRefusal;
+  self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
+}

@@ -1342,8 +1342,30 @@ async function frontierRederive(e) {
        initiator/destination table whose feature is "HTML's navigate algorithm (top-level only)". Not
        script-like, so no CORB: this is a document being re-fetched to rebuild a shed frontier entry, and the
        parser that will read it is the engine's own. */
+    /* AND ITS PROVENANCE, WHICH THIS ENTRY DOES NOT YET PARK AND SO IS STATED HERE WITH ITS PREMISE ASSERTED
+       BESIDE IT. A re-derivation is the SAME LOAD as the one that put this entry in the store, so the right
+       long-term answer is §scheduler's — "an operation that becomes a work item takes its inputs with it" —
+       and the field belongs on the record beside `credentialed`, which is the identical class of fact. It is
+       not there yet, and rather than read a grade back off the address (which is exactly the inference
+       §Attacker-sources forbids) this states the strongest word the store's population can support.
+       `derived` AND NOT `observed`, because under-claiming is the direction a provenance is allowed to be
+       wrong in (solver/engine.h says so at `engine_provenance_of_running_path`): an entry seeded from a
+       person's own navigation is genuinely `observed`, and calling it `derived` costs only the destructive
+       deny list staying armed over a re-fetch — one refused re-derivation, reported as a stranded entry.
+       `derived` AND NOT `forced`, because a FORCED address cannot be in this store: a forced load is refused
+       at the chokepoint unless its origin is widened, and NOTHING WIDENS AN ORIGIN IN THIS ZONE — the
+       extension has no door onto `safeFetchWiden` yet. That premise is the whole of why this line may state
+       a word it did not park, so it is ASSERTED where it is relied on rather than written in a comment that
+       would outlive it: the day the offscreen gains a widening control, this fires and names the parking
+       that must be built before it. */
+    DCHECK(self.safeFetchWidenedOrigins().length === 0,
+           "an origin is widened for exploration in this zone, so the cold tier may now hold a document whose " +
+           "address existed only past a FORCED gate — and this re-derivation states `derived` for every entry " +
+           "because no such entry could exist. Park the load's PROVENANCE on the frontier entry beside " +
+           "`credentialed` (it travels the AST_ANALYZE record the same way) and read it here, before a " +
+           "widening makes a re-fetch claim a grade the person granted to one document about another");
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
-                                                  destination: "document",
+                                                  destination: "document", provenance: PROVENANCE_DERIVED,
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
@@ -1881,11 +1903,13 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    `bytes` is null and `unavailable` NAMES WHY in the closed vocabulary the popup renders. `bytes: null` is a
    load that did not load — the navigable still exists and shows an error page, which is what the engine's own
    child_document reads it as — and it is a real §7.4 outcome rather than a softening.
-   ONE OF THOSE REASONS IS THIS FUNCTION'S OWN AND NOT THE NETWORK'S — `{kind: "provenance"}`, a navigation
-   this zone declined to make because the address exists only past a forced gate. It is in the same vocabulary
-   as the network's refusals for the same reason they are all in one: what a reader of a navigable that shows
-   an error page needs is WHICH RULE refused it, and "the chokepoint would not" and "this caller would not"
-   are two answers to that one question rather than two questions.
+   EVERY ONE OF THOSE REASONS IS THE NETWORK'S NOW, AND THAT IS THE VOCABULARY BEING KEPT CLOSED RATHER THAN
+   A REASON BEING LOST. This function used to hold a fourth word of its own — `{kind: "provenance"}`, for a
+   navigation it declined because the address exists only past a forced gate — and the closed vocabulary the
+   popup renders has exactly three. The refusal is the CHOKEPOINT's now (`blocked-provenance:forced` in the
+   reply record's `statusText`), so it arrives through `kind: "network"` beside `blocked-scheme:` and
+   `blocked-private-from-public`, which is where a reader already looks for WHICH RULE refused a load. "The
+   chokepoint would not" and "this caller would not" were two answers to one question; there is one answerer.
    EMPTINESS IS NOT JUDGED HERE. An OK response with a zero-length body is a perfectly ordinary empty Document
    under §7.4.5, and refusing one is a SEED's rule (a document with no bytes cannot be the bundle), stated at
    the seed rather than imposed on every child navigable a page creates. */
@@ -1931,43 +1955,28 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      the deliberate per-origin widening, and one whose provenance is NOT ESTABLISHED crashes at the decision
      rather than proceeding." A top-level navigation is a GET, which RFC 9110 §9.2.1 "Safe Methods"' safe set
      contains, so the METHOD half is answered before this function is entered and there is nothing else left.
-     UNESTABLISHED IS THE CRASH AND IT IS THIS ASSERT. Every record that reaches a caller of this function now
-     states the word (core/frame/navigable.c's load job and create notice, browsing_context_group.c's swap,
-     route_seed.c's declaration, and the ambient seed, whose address the person's own browser navigated to),
-     so an absent or unknown one is a PRODUCER that stopped stating it rather than an act nobody can classify
-     — and there is nothing downstream to catch it: no partition, no interception, and a same-origin load one
-     line below that carries the person's cookies. A `||` here would be that crash spelled as a default. */
-  DCHECK(provenance === PROVENANCE_OBSERVED || provenance === PROVENANCE_DERIVED ||
-         provenance === PROVENANCE_FORCED,
-         "a §7.4 navigation was asked for with the provenance `" + provenance + "`, which is none of the " +
-         "three solver/engine.h declares — CLAUDE.md §Attacker-sources makes a navigation whose provenance " +
-         "is not established a crash at the decision rather than a load, because with no partition and no " +
-         "interception there is nothing behind this line to catch it and the load below carries the " +
-         "person's session wherever a browser's would");
-  /* A FORCED ADDRESS IS NOT LOADED, AND THE REFUSAL IS THIS POLICY'S ANSWER RATHER THAN A GAP IN IT.
-     §Attacker-sources makes firing what a bundle only reaches past a forced gate "CONFIGURABLE AND PER-ORIGIN
-     … Default conservative, widened deliberately per origin, never inferred from a site looking like a test",
-     so an origin nobody has widened answers NO at every future state of that setting — which is what this arm
-     is. It is the SAME answer this zone's `document.seed` arm already gives a declared route on a forced arm,
-     and the two must not differ: they are one question about one kind of act, and a zone that refused a
-     declared address while fetching a forced `<iframe src>` would be deciding by which record the address
-     arrived on. A widening is a PERSON'S SENTENCE and enters where every other risk decision does.
-     WHY IT IS THE LOAD AND NOT MERELY THE SESSION. Dropping to an uncredentialed fetch would answer only the
-     ACTING-AS-THE-PERSON half. The other half is §@H's: a reply to a request no client makes is PLAUSIBLE —
-     a 401 body parses as JSON and yields fields that exist nowhere — and one invented field is the example
-     that shapes the next endpoint, so the values are carried as FORCED for ever whether or not cookies went
-     with them. Not sending the request is the only thing that answers both.
-     AND IT IS STILL A DOCUMENT. §7.4.5 gives a navigable whose load did not load a Document all the same, so
-     this returns the same shape a blocked scheme does — `bytes: null` with the reason in `unavailable` — and
-     the navigable exists showing an error page rather than the page's model losing a frame it holds a
-     WindowProxy for. The address is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap
-     in the report but IS the report. */
-  if (provenance === PROVENANCE_FORCED) {
-    console.warn("[bridge] a navigation to `" + abs + "` stood on a FORCED arm and its origin is not widened " +
-                 "for exploration — the address is derived and reported, and it is not loaded");
-    return { url: abs, headers: {}, bytes: null,
-             unavailable: { kind: "provenance", provenance: provenance } };
-  }
+     AND THE DECISION IS NOT MADE HERE ANY MORE, WHICH IS THE POINT RATHER THAN A DELEGATION. This function
+     used to hold two things the chokepoint could not: a DCHECK enumerating the three tokens, and an arm that
+     refused a FORCED address outright. Both were the correct policy and both were a SECOND COPY of it — the
+     `document.seed` arm one screen down held a third, and `engine/trusted.mjs` held a fourth that disagreed
+     with all of them. CLAUDE.md puts the firing decision at the one chokepoint, beside the deny list and the
+     credential choice, and `safe-fetch.js` now reads the word this call passes it: `_provenanceOf` is a
+     `CHECK` (fatal in release too, because the arm an unstated grade falls to is the one that spends the
+     network), and `_firingRefusal` is the widening. So the crash §Attacker-sources asks for still happens,
+     once, for BOTH hosts, at the line that opens the socket — and a refused navigation comes back as the
+     chokepoint's own `blocked-provenance:` reply record, in the same refusal vocabulary as a blocked scheme,
+     rather than through a shape this file invented for one caller. */
+  /* THE FORCED ARM THAT STOOD HERE IS DELETED WITH THE `unavailable` KIND IT INVENTED, AND BOTH DELETIONS ARE
+     THE SAME CORRECTION. Its reasoning was right and is preserved at `_firingRefusal`, where it now serves
+     every caller of the chokepoint instead of this one; what was wrong was WHERE it stood. Its refusal
+     answered `{kind: "provenance"}`, a fourth word in a vocabulary `serialize.js` and `popup.js` each assert
+     to exactly three — so the one shape it produced could never reach a reader, and the row that renders a
+     page that was not analysed would have aborted on it had a seed ever taken this arm. The chokepoint's
+     refusal is a reply record whose `statusText` is `blocked-provenance:forced`, which the `status === 0`
+     arm below already turns into `{kind: "network", detail}` — the same field, and the same sentence in the
+     popup, that `blocked-scheme:` and `blocked-private-from-public` are read out of. A refusal this zone
+     makes and a refusal the network makes are two answers to the reader's ONE question ("why is there no
+     document here"), and they belong in one vocabulary. */
   try {
     // Never `as:"script"` — these bytes are PARSED as a document, not run as code.
     /* AND IT CARRIES THE SESSION EXACTLY WHERE A BROWSER'S NAVIGATION WOULD. The chokepoint re-decides this
@@ -1975,29 +1984,29 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        load that leaves this origin between the request and the response is refused there and never here:
        two-sided, a caller stating intent and the one policy point enforcing it, rather than one check
        trusted twice.
-       ASKING FOR COOKIES ALSO ARMS THE DESTRUCTIVE-PATH DENY LIST, which is scoped to exactly the
-       credentialed case — so a document whose OWN ADDRESS carries one of its tokens (`/settings/delete-
-       account`, `/logout`) is now refused as `blocked-destructive:<token>` and reported unanalysed instead
-       of loaded. That is over-scoped for THIS caller and the reason is stated rather than worked around: the
-       list exists because "forced execution builds requests no real client makes", and a seeded navigation
-       is a request a real client made SECONDS AGO in this same profile — the person's own browser performed
-       that exact credentialed GET, which is where the seed came from. The condition under which the harm
-       exists is credentialed AND NOT-OBSERVED.
-       THIS PARAGRAPH USED TO SAY safe-fetch.js "can only see the first half because no request in this system
-       yet DECLARES its provenance", AND THAT HAS STOPPED BEING TRUE. Every caller of this function now states
-       the word, this function asserts it above, and a FORCED one never reaches the fetch at all. What has NOT
-       changed is the deny list's scope: the token is not passed to `safeFetch`, so the list is still armed for
-       every credentialed load including the OBSERVED ones it is over-scoped for. That is deliberate ordering
-       rather than an oversight — this diff's subproblem is that a request STATES what it is evidence of, and
-       rescoping a security gate is the next one and LOOSENS one, which is not a thing to do as a side effect
-       of the diff that made the field available. Being over-broad remains its cheap direction (one unfired
-       navigation, reported with its token); loosening it by accident remains its expensive one. */
+       ASKING FOR COOKIES ALSO ARMS THE DESTRUCTIVE-PATH DENY LIST, AND IT IS NO LONGER ARMED FOR THE ONE
+       CALLER IT WAS OVER-SCOPED FOR. The paragraph that stood here named the condition exactly — "the list
+       exists because forced execution builds requests no real client makes, and a seeded navigation is a
+       request a real client made SECONDS AGO in this same profile … the condition under which the harm
+       exists is credentialed AND NOT-OBSERVED" — and then said the chokepoint could not see the second half
+       because the token was not passed to it. It is passed now, on the line below, and `safe-fetch.js`
+       scopes both of its destructive checks (the pre-request one and the post-redirect one) to
+       `credentialed && provenance !== "observed"`. So a document whose own address carries one of the
+       list's tokens (`/settings/delete-account`, `/logout`) is LOADED when the person's own browser
+       navigated to it, and still refused when this tool derived or forced the address.
+       THAT IS A LOOSENING AND IT IS THE ONE THIS FIELD EXISTED TO MAKE SAFE. Being over-broad was the deny
+       list's cheap direction and it stays cheap everywhere the harm argument still reaches; what is given up
+       is one refusal whose whole premise — that no real client makes this request — was false of this
+       caller by construction. */
     /* Fetch §2.2.5's `document` DESTINATION — HTML §7.4.5 "Populating a session history entry" is the
        navigate algorithm's own fetch, and §2.2.5's table gives that row the destination `document`. It is not
        script-like, so this load takes no CORB: what reads these bytes is the HTML parser, which is what they
        are. */
+    /* AND `provenance`, WHICH IS WHAT DECIDES WHETHER THE REQUEST HAPPENS AT ALL. It is the caller's
+       statement about who named this address, relayed verbatim; this function neither tests it nor completes
+       it, because the zone that owns the firing decision is the one that opens the socket. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
-                                          destination: "document",
+                                          destination: "document", provenance: provenance,
                                           credentialed: navigationCarriesSession(abs, principalOrigin) });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
@@ -2650,7 +2659,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      "Requests" gives every request one; `safe-fetch.js` decides the CORB class from §2.2.5's own script-like
      predicate over it. It is passed THROUGH rather than reduced to a boolean here, because a boolean is a
      second vocabulary for a spec field and the zone that decides is the one that should read the value. */
-  const fetched = async (method, u, destination) => {
+  const fetched = async (method, u, destination, provenance) => {
     DCHECK(typeof destination === "string",
            "a pending request reached the chokepoint with no DESTINATION — GetPending answers " +
            "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and Fetch §2.2.5 makes the " +
@@ -2670,13 +2679,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* @security-finding  NO `pageOrigin` REACHES THE CHOKEPOINT FROM *HERE*, AND ONE MUST BEFORE
          `credentialed` IS EVER TURNED ON FOR A LEARNED GET. The DOCUMENT-LOAD path now passes one
          (`navigationLoad`, from `msg.origin`) and carries the person's session; this path — the reply to a
-         request the analysed bundle made, and the chunk loads beside it — deliberately still does not, and
-         the difference is PROVENANCE rather than plumbing. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE:
-         a navigation is OBSERVED (the person went there), while an address this engine learned may be
-         DERIVED or FORCED — a value that exists only because a gate was forced — and a credentialed reply
-         to a FORCED request is evidence about what a server says to a request no client makes. Whether to
-         fire those is a per-origin CONFIGURATION in the trusted zone that does not exist yet, so
-         `msg.credentialed` stays unwritten and every read here stays uncredentialed.
+         request the analysed bundle made, and the chunk loads beside it — deliberately still does not.
+         THE HALF OF THIS FINDING THAT WAS ABOUT PROVENANCE IS DISCHARGED AND THE REST IS NOT. It read
+         "whether to fire those is a per-origin CONFIGURATION in the trusted zone that does not exist yet";
+         it exists, this call states the word, and `safe-fetch.js`'s `_firingRefusal` answers it — a FORCED
+         park at an origin nobody widened never reaches the wire. What is unchanged is the CREDENTIAL half:
+         `msg.credentialed` is still unwritten, so every read here is still uncredentialed, and turning that
+         on is a decision about the CORB class of a same-origin chunk rather than a consequence of the grade.
          WHEN IT IS BUILT, THE VALUE TO PASS IS `msg.origin` (the browser's MessageSender.origin, plumbed by
          _dispatchDocument) and NEVER `originOf(msg.sourceUrl)` — that is the exact URL-derivation the
          credentialed principal exists to forbid, and it would hand a page's own sandboxed iframe (opaque
@@ -2692,7 +2701,12 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          a POLICY, which CLAUDE.md puts at the one chokepoint with the firing decision and the deny list. Both
          facts are handed over and `safe-fetch.js` decides. Nothing changes today: `msg.credentialed` is still
          never written (see the finding above), so every read here is still uncredentialed. */
-      const opts = { pageUrl: msg.sourceUrl, destination,
+      /* AND THE THIRD FACT IS WHAT THE REQUEST IS EVIDENCE OF, RELAYED AND NEVER RE-DERIVED HERE. The engine
+         composed it at the park from HTML §4.12.1's parser-inserted flag and the parking flow's own
+         `path_forced` (solver/engine.h); nothing in an address could tell this zone the same thing, which is
+         the whole reason it rides the pending line. This zone neither tests it nor defaults it: the chokepoint
+         holds the firing decision, and a value it does not know is fatal there rather than permissive here. */
+      const opts = { pageUrl: msg.sourceUrl, destination, provenance,
                      credentialed: !!(msg && msg.credentialed) };
       const r = await self.safeFetch(abs, opts);
       /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
@@ -2863,7 +2877,25 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* XMLHttpRequest's destination is Fetch §2.2.5's EMPTY STRING — its row of that section's own table,
          the `connect-src` one it shares with `fetch()`. Stated rather than left off: "" is the answer, and a
          call that says nothing is a call whose CORB class was decided by silence. */
-      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "", headers: q.headers });
+      /* AND WHAT THE REQUEST IS EVIDENCE OF, WHICH THIS SEAM WAS THE LAST ONE NOT TO STATE. Every request an
+         XMLHttpRequest makes is made by RUNNING THE PAGE'S CODE, so it is exactly the population a forced arm
+         produces — and it reached the chokepoint with no grade at all while the pending line beside it carried
+         one. The engine composes it at the record (`xhr_request_op` → `engine_provenance_of_running_path`),
+         which answers `derived` or `forced` and never `observed`, because `observed`'s first conjunct is HTML
+         §4.12.1 "The script element"'s parser-inserted flag and there is no parser behind an XHR.
+         ASSERTED AND NEVER DEFAULTED, in the direction §@H makes asymmetric: taking `derived` for a record
+         that stopped stating one would fire a request whose values may exist only past a gate, and carry its
+         reply as evidence about a server nobody asked. The chokepoint CHECKs the vocabulary again — fatal in
+         release, where this DCHECK is not — so this assert's job is to name the PRODUCER while the C record
+         is the thing that changed. */
+      DCHECK(q.provenance === PROVENANCE_OBSERVED || q.provenance === PROVENANCE_DERIVED ||
+             q.provenance === PROVENANCE_FORCED,
+             "the engine's xhr.send record states the provenance `" + q.provenance + "`, which is none of " +
+             "the three solver/engine.h declares — xhr_request_op writes one on every record from " +
+             "engine_provenance_of_running_path, and the firing decision is made from it, so an absent or " +
+             "unknown one is a producer that stopped stating what its request is evidence of");
+      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
+                                            provenance: q.provenance, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
@@ -3333,9 +3365,15 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      engine_provide's answered-twice DFAIL, a live abort on every dynamic `import()`. A fact about a request
      belongs on the request. */
   const requests = owedList("GetPending", (await eng.r.renderer.getPending()).requests);
+  /* AND THE PROVENANCE TRAVELS WITH THE REQUEST IT BELONGS TO. It was DESTRUCTURED AWAY HERE — this loop read
+     three of the line's five fields and dropped the fourth on the floor, so the one zone CLAUDE.md makes the
+     sole owner of the firing decision ("`safeFetch` decides, from the provenance the request declares beside
+     its method and credential state") was the only zone in the path that could not see it. The engine composed
+     it, the splitter above CHECKed it, and then it stopped here: every park was fired, at every grade, and the
+     check that validated the word was validating a field with no reader. */
   for (const line of requests) {
-    const { method, destination, url } = pendingRequest(line);
-    await engineProvide(eng, method, url, await eng.fetched(method, url, destination));
+    const { method, destination, provenance, url } = pendingRequest(line);
+    await engineProvide(eng, method, url, await eng.fetched(method, url, destination, provenance));
   }
   await engineServiceHostRequests(eng);
 }
@@ -3790,28 +3828,6 @@ async function hostNotice(eng, line) {
            "a route declaration carries the provenance `" + f[2] + "`, which is neither `derived` nor " +
            "`forced` — those are the only two a declaration can have, so this is either the field split at " +
            "the wrong tab or an engine speaking a vocabulary this zone does not");
-    /* A FORCED ADDRESS IS REFUSED, AND THE REFUSAL IS THE POLICY'S OWN DEFAULT RATHER THAN A GAP IN IT.
-       CLAUDE.md §Attacker-sources: firing what a bundle merely NAMES is "CONFIGURABLE AND PER-ORIGIN … Default
-       conservative, widened deliberately per origin, never inferred from a site looking like a test." So an
-       origin nobody has widened answers NO at every future state of that setting, which is what this arm is —
-       not a placeholder for one. A widened origin is a PERSON'S SENTENCE and enters through the same door
-       every other risk decision does (`engine/trusted.mjs` is where the native host reads it, as `--explore
-       <origin>`); it is never inferred here from the address, which is exactly the inference that rule bans.
-       WHY IT MATTERS FOR A NAVIGATION SPECIFICALLY: the address IS the whole of the safety. There is no
-       partition, no interception and no second policy point behind it, and a navigation of one of the custom
-       browser's own tabs CARRIES THE PERSON'S SESSION — so a credentialed load of an address that exists only
-       because a gate was forced is a reply about a request no client makes, delivered under the person's own
-       name. It is not merely unhelpful: §@H makes such a reply's values FORCED for ever, because one invented
-       field is the example that shapes the next endpoint.
-       REPORTED RATHER THAN ASSERTED, because nothing is broken: the engine did exactly what it should — it
-       derived the address and STATED how it got there — and this zone did exactly what it should, which is to
-       decline. A derived-and-unfired address is not a gap in the report; §Attacker-sources says it IS the
-       report. */
-    if (f[2] === PROVENANCE_FORCED) {
-      console.warn("[bridge] a route declaration for `" + f[1] + "` stood on a FORCED arm and its origin is " +
-                   "not widened for exploration — the address is derived and reported, and it is not loaded");
-      return;
-    }
     /* AND IT IS A ROUTE OF *THIS* DOCUMENT, ESTABLISHED FROM THE TWO ADDRESSES. HTML §7.2.5 "The History
        interface"' can-have-its-URL-rewritten refuses a rewrite whose target differs "in their scheme,
        username, password, host, or port components", so the engine has already refused a cross-origin one —
@@ -3826,6 +3842,32 @@ async function hostNotice(eng, line) {
       console.warn("[bridge] a route declaration named an address outside the declaring document's origin (" +
                    f[1] + " vs " + eng.msg.sourceUrl + ") — HTML §7.2.5's can-have-its-URL-rewritten permits " +
                    "no such rewrite, so this is not a page of that application and it is not seeded");
+      return;
+    }
+    /* AN ADDRESS THE CHOKEPOINT WOULD NOT FIRE IS NOT ENQUEUED, AND THE QUESTION IS ASKED OF THE CHOKEPOINT
+       RATHER THAN ANSWERED HERE. This arm used to hold its own copy of the firing rule — `f[2] === forced` →
+       refuse — which was the right policy in the wrong place: `navigationLoad` held a second copy, the native
+       host held a third that disagreed, and this one could never learn that an origin had been widened.
+       `safeFetchFiringRefusal` is the SAME function the chokepoint refuses with (`_firingRefusal`), asked by
+       a caller whose act is to RECORD A WORK ITEM rather than to fetch — §scheduler makes that load an
+       external effect the Level-1 order pays for, so enqueuing one the chokepoint will refuse would spend an
+       admission slot every round to be told no. Asking one function twice is not two policies; it is the
+       opposite. It answers the GRADE that refused rather than a boolean, so this line can say which.
+       WHY IT MATTERS FOR A NAVIGATION SPECIFICALLY: the address IS the whole of the safety. There is no
+       partition, no interception and no second policy point behind it, and a navigation of one of the custom
+       browser's own tabs CARRIES THE PERSON'S SESSION — so a credentialed load of an address that exists only
+       because a gate was forced is a reply about a request no client makes, delivered under the person's own
+       name. It is not merely unhelpful: §@H makes such a reply's values FORCED for ever, because one invented
+       field is the example that shapes the next endpoint.
+       REPORTED RATHER THAN ASSERTED, because nothing is broken: the engine did exactly what it should — it
+       derived the address and STATED how it got there — and this zone did exactly what it should, which is to
+       decline. A derived-and-unfired address is not a gap in the report; §Attacker-sources says it IS the
+       report. */
+    const _seedRefusal = self.safeFetchFiringRefusal(f[2], f[1]);
+    if (_seedRefusal) {
+      console.warn("[bridge] a route declaration for `" + f[1] + "` stood on a " + _seedRefusal.toUpperCase() +
+                   " arm and its origin is not widened for exploration — the address is derived and " +
+                   "reported, and it is not seeded");
       return;
     }
     /* THE PRIVATE-NETWORK PRINCIPAL AND THE CREDENTIALED-READ PRINCIPAL ARE TAKEN NOW AND CARRIED WITH THE

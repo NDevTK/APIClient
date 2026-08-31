@@ -1605,13 +1605,25 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
     JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v); JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
 }
 
-/* The request the host is owed, as one self-describing JSON record: `{method, url, credentials, headers,
-   body}`. It is JSON because the ANSWER already crosses that way (main.c's qjs_host_answer parses one) and
-   because a host that must route this to safeFetch needs every field — SECURITY.md's chokepoint cannot decide
-   about a method it was never told, and a tab-separated line cannot carry a body. It is written with
+/* The request the host is owed, as one self-describing JSON record: `{method, url, credentials, provenance,
+   headers, body}`. It is JSON because the ANSWER already crosses that way (main.c's qjs_host_answer parses one)
+   and because a host that must route this to safeFetch needs every field — SECURITY.md's chokepoint cannot
+   decide about a method it was never told, and a tab-separated line cannot carry a body. It is written with
    core/json_buf.h rather than with a JS value: every string here is one this engine built, so there is no
    `toJSON` and no Proxy trap to run, which is exactly the distinction quickjs.h makes when it deletes
-   JS_JSONStringify. Caller frees with free(). */
+   JS_JSONStringify. Caller frees with free().
+   `provenance` IS WHAT THE REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE, and the one
+   field the FIRING DECISION is made from. Every OTHER request this engine builds already states it: a park
+   carries it on the pending line (solver/engine.h's PENDING_PROVENANCE_*), a navigation and a route
+   declaration take it from `engine_provenance_of_running_path`. This record did not, so the one seam whose
+   requests are made ENTIRELY by running the page's code — which is precisely where a forced arm's values end
+   up — reached `safe-fetch.js` with nothing to decide from, and the chokepoint would have to either default
+   it (the permissive arm, for the population most likely to be forced) or refuse every XHR.
+   IT IS `engine_provenance_of_running_path` AND NOT A LOCAL TERNARY over `flow_path_forced`, for the reason
+   that function's own header gives: one composition, in one place, for every request built by running code.
+   It answers `derived` or `forced` and never `observed`, which is a fact about this act rather than a
+   narrowing — `observed`'s first conjunct is HTML §4.12.1 "The script element"'s parser-inserted flag, and an
+   XMLHttpRequest has no parser behind it by construction. */
 static char *xhr_request_op(JSContext *ctx, XhrData *d)
 {
     JsonBuf b = { 0 };
@@ -1624,6 +1636,8 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     json_buf_str(&b, u ? u : "");
     json_buf_raw(&b, ","); json_buf_key(&b, "credentials");
     json_buf_str(&b, d->cross_origin_credentials ? "include" : "same-origin");
+    json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
+    json_buf_str(&b, engine_provenance_of_running_path());
     json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
