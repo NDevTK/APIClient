@@ -133,7 +133,13 @@ const ZONE = (() => {
      reading as though it had, and `navigate`/`workFetch` would take an `undefined` refusal as permission.
      That is the defaulted-read defect standing on a security decision, so it is a load-time abort rather than
      a TypeError three calls into a request. */
-  for (const n of ['safeFetchWiden', 'safeFetchFiringRefusal', 'safeFetchWidenedOrigins'])
+  /* `safeFetchMethodRefusal` IS ON THIS LIST FOR THE SAME REASON AND WITH THE SAME FAILURE SHAPE. It is the
+     METHOD half of whether an act may be spent (RFC 9110 §9.2.1 "Safe Methods"), which the chokepoint enforces
+     by ABSENCE — so nothing downstream can OBSERVE it, and both hosts wrote their own copy and answered
+     differently. A zone that obtained the chokepoint without it would take an `undefined` refusal as permission
+     and fire every method it was parked on. */
+  for (const n of ['safeFetchWiden', 'safeFetchFiringRefusal', 'safeFetchWidenedOrigins',
+                   'safeFetchMethodRefusal'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -169,6 +175,24 @@ function replyRecord(r, where) {
     throw new Error(`safeFetch answered ${where} with no statusText — it is written on every path (the ` +
                     'blocked arms carry their REFUSAL REASON in it) and the empty string is what any HTTP/2 ' +
                     'response says, so the two cannot be collapsed by a default');
+  /* AND THE GRADE OF THE REFUSAL, WHICH IS THE ONE THING ABOUT A STATUS-0 RECORD A HOST MAY NOT WORK OUT FOR
+     ITSELF. `status === 0` says a request produced no reply; it does not say whether a BROWSER would have
+     refused it too, and that is the whole of the decision. `safe-fetch.js` applied the rule, so it states the
+     answer on the record — `network` where Fetch §5.6 "Fetch methods"' network error is the FAITHFUL outcome
+     (a `file:` scheme is Fetch §4.3 "Scheme fetch"'s own "Return a network error"; a §4.10 "CORS check"
+     failure is §4.4 "HTTP fetch"'s), `decline` where only this tool refuses and there is no fact to relay. */
+  if (r.refusal !== null &&
+      (typeof r.refusal !== 'object' || (r.refusal.kind !== 'network' && r.refusal.kind !== 'decline') ||
+       r.refusal.reason !== r.statusText))
+    throw new Error(`safeFetch answered ${where} with a refusal it did not grade — the record carries ` +
+                    '`refusal: null` for a reply and `{kind, reason}` for a refusal, with `kind` one of ' +
+                    '`network` (a real browser refuses this same request, so §5.6\'s network error is the ' +
+                    'faithful answer) and `decline` (only this tool refuses, so the flow parks). A host that ' +
+                    'cannot read the grade re-derives it, which is how a second copy of a policy gets written');
+  if ((r.status === 0) !== (r.refusal !== null))
+    throw new Error(`safeFetch answered ${where} with a status and a refusal that disagree — ` +
+                    'status 0 is the one status no HTTP response has and every refusal answers with it, so a ' +
+                    'record carrying one without the other is a decline arriving as a reply');
   if (r.status === 0) return null;
   return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers),
                    urlList: r.urlList, computedType: r.computedType },
@@ -585,15 +609,20 @@ async function main() {
       throw new Error(`${method} ${abs} is OBSERVED and was not parser-inserted — the two are composed from ` +
                       'one flag (solver/pending.h), so this zone is being told two things about one park ' +
                       'that cannot both be true');
-    if (method !== 'GET') {
+    const methodRefusal = ZONE.safeFetchMethodRefusal(method);
+    if (methodRefusal) {
       /* §Attacker-sources: a state-mutating request is NEVER fired to learn. `safe-fetch.js` enforces this by
          ABSENCE (it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`), so issuing one
          here would fetch a POST's address as a GET and hand the bytes back under the POST's key — the reply
          would match the request it names and still be a response the server never gave for it. */
-      e.ready.push(decline(`${method} ${abs} — a non-GET park. The chokepoint is GET-only by ABSENCE ` +
-                           '(SECURITY.md §Network), so this address can only be DERIVED and reported, never ' +
-                           'issued; answering it with a GET\'s body would be a wrong answer rather than a ' +
-                           'missing one'));
+      /* THE GRADE IS THE CHOKEPOINT'S AND THE SENTENCE IS THIS HOST'S. `if (method !== 'GET')` stood here and
+         `bridge.js` held the same test — the same question in two hosts, answered differently: this one
+         declined and that one returned §5.6's network error for a request nobody sent. `safeFetchMethodRefusal`
+         is that answer given once, in the same refusal vocabulary the reply record carries. */
+      e.ready.push(decline(`${method} ${abs} — ${methodRefusal.reason}. The chokepoint is GET-only by ` +
+                           'ABSENCE (SECURITY.md §Network), so this address can only be DERIVED and reported, ' +
+                           'never issued; answering it with a GET\'s body would be a wrong answer rather than ' +
+                           'a missing one'));
       return;
     }
     /* THE CORB CLASS IS THE REQUEST'S OWN DESTINATION, PASSED THROUGH — never a keyword decided here. Fetch
@@ -614,13 +643,28 @@ async function main() {
        PARKED, exactly as §@S requires of a search not yet solved, and it fires the day the origin is widened.
        IT IS DISCRIMINATED BY ASKING THE POLICY, NEVER BY MATCHING THE `statusText`. The reason string is for a
        READER; a branch that parsed it would be a second copy of the rule written in a format nothing checks.
-       So the grade is asked once more here — of the same `_firingRefusal` — and the chokepoint's own words are
-       what the decline CARRIES. Every OTHER status-0 (a blocked scheme, a private target, CORB, a refused
-       credentialed read) stays a network error, which is what it is: this zone tried and the reply is
-       unusable. */
-    const refusal = ZONE.safeFetchFiringRefusal(provenance, abs);
-    if (refusal) {
-      e.ready.push(decline(`${method} ${abs} — ${raw.statusText}. A ${refusal.toUpperCase()} park at an ` +
+       IT IS READ OFF THE RECORD NOW RATHER THAN RE-ASKED, AND THAT CLOSED A HOLE THIS PARAGRAPH DID NOT KNOW
+       IT HAD. The grade came from asking `_firingRefusal` a second time, which answers about the PROVENANCE
+       and about nothing else — so a `blocked-destructive:` refusal, which is equally a decline (no browser
+       refuses a GET to a logout path; this tool refuses to send one with the person's session), came back
+       `null` from that question and was relayed as a NETWORK ERROR. Re-deriving a grade can only ever answer
+       for the rule the re-derivation happens to know about; the chokepoint applied the rule, so the chokepoint
+       states which one fired. Every `network` status-0 (a blocked scheme, a private target, CORB, a refused
+       credentialed read) stays a network error, which is what a real browser makes of the same request.
+       THE SENTENCE IS STILL THIS HOST'S, and picking WHICH sentence is a policy question rather than a
+       `statusText` match: `safeFetchFiringRefusal` says whether a widening is what this park is waiting on, so
+       the `--explore` paragraph is written only where `--explore` is the answer. */
+    if (raw.refusal && raw.refusal.kind === 'decline') {
+      const refusal = ZONE.safeFetchFiringRefusal(provenance, abs);
+      if (!refusal) {
+        e.ready.push(decline(`${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
+                             'request: no browser refuses it, so there is nothing to hand the flow back and a ' +
+                             'network error would tell it the server was unreachable. The flow stays PARKED, ' +
+                             'and the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says ' +
+                             'is not a gap in the report but IS the report'));
+        return;
+      }
+      e.ready.push(decline(`${method} ${abs} — ${raw.refusal.reason}. A ${refusal.toUpperCase()} park at an ` +
                            'origin nobody has widened for exploration: pass `--explore <origin>` to widen it, ' +
                            'and note what that obliges — §@H makes the reply to a forced request evidence ' +
                            'about what a server says to a request no client makes, so its values are carried ' +

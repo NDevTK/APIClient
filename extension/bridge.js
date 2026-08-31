@@ -2036,6 +2036,36 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        target, CORB, a URL that would not parse. The REASON is in `statusText` and it travels: a page that
        could not be seeded says WHICH rule refused it, which is the whole difference between a report and the
        silence it replaces. */
+    /* A DECLINE IS NOT AN ERROR PAGE, AND THIS ARM WAS TURNING EVERY REFUSAL INTO ONE. `bytes: null` is read by
+       the engine's `child_document` as a navigable that EXISTS and SHOWS AN ERROR PAGE — a real HTML §7.4
+       outcome, and the right one where the network genuinely refused. Where THIS ZONE declined, no load was
+       attempted at all, and §7.3.1.3 "Child navigables"' create-a-new-child-navigable has already said what
+       the navigable holds in that case: it is created holding the initial `about:blank` and NAVIGATED
+       afterwards, so a navigation that does not happen leaves it at `about:blank`. Those are different
+       documents with different origins — `about:blank` inherits the creator's, an error page is opaque — and
+       every flow the engine forks inside that frame runs under whichever one it was handed.
+       THERE IS NO THIRD ANSWER ON THIS SEAM TODAY, WHICH IS WHY THIS CRASHES RATHER THAN PICKING ONE. The
+       `document.fetch` seam can decline by NOT delivering (the pending register keeps the park), and
+       `engine/trusted.mjs` has the `decline` verb for it. This one cannot: the caller must answer the notice
+       with a load record, and the vocabulary has three words for a load that FAILED and none for a navigation
+       that was never made. Building it is the capability — the navigable stays at its pre-operation
+       `about:blank` and the flow that created it parks — and until it exists this must not silently pick the
+       nearest wrong word, which is what `{kind:"network"}` was. */
+    if (r.refusal) {
+      DCHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
+             "safeFetch graded a §7.4 navigation's refusal `" + r.refusal.kind + "`, which is neither word it " +
+             "states — and the arm an unknown grade falls to here reports the load as a page whose server " +
+             "could not be reached");
+      if (r.refusal.kind === "decline")
+        DFAIL("a §7.4 navigation was DECLINED by the chokepoint (" + r.refusal.reason + ") and this seam has " +
+              "no word for that. Its `unavailable` vocabulary is status/empty/network and every one of the " +
+              "three says a load was ATTEMPTED and failed, so answering with any of them hands the engine a " +
+              "navigable showing an error page for an address nothing ever fetched — an opaque-origin document " +
+              "where HTML §7.3.1.3 \"Child navigables\" leaves the creator-inherited `about:blank` it created " +
+              "the navigable holding. BUILD the decline: the navigable keeps its pre-operation document and " +
+              "the creating flow PARKS, exactly as a declined `document.fetch` park does, so it fires the day " +
+              "the origin is widened");
+    }
     if (r.status === 0)
       return { url: finalUrl, headers: {}, bytes: null, unavailable: { kind: "network", detail: r.statusText } };
     /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page. The URL still
@@ -2716,7 +2746,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "a pending request reached the chokepoint with no method — GetPending answers " +
            "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and the (method, url) pair is what " +
            "the flow parked on, so a request whose method is unknown can be neither refused nor issued");
-    if (method !== "GET") return null;
+    /* THE METHOD HALF OF THE FIRING QUESTION, ASKED OF THE CHOKEPOINT RATHER THAN RE-DERIVED HERE. This was
+       `if (method !== "GET") return null` — the SAME rule `engine/trusted.mjs` held in its own copy, and the
+       two answered it DIFFERENTLY: that host DECLINED (the flow stays parked) and this one returned Fetch
+       §5.6 "Fetch methods"' network error, which rejects the page's request with a TypeError and resumes it
+       down its failure path having been told the server was unreachable. For a request nobody sent, that is a
+       fact about the origin no observation supports, and every branch below that `catch` is then explored
+       under it. One question, two answers, neither of them the policy — so `safeFetchMethodRefusal` answers it
+       once, in the refusal vocabulary the chokepoint's own reply record carries. */
+    const _mRefusal = self.safeFetchMethodRefusal(method);
+    if (_mRefusal) return { refusal: _mRefusal };
     if (!canFetch || hasHole(u)) return null;
     try {
       const abs = new URL(u, msg.sourceUrl).href;
@@ -2803,6 +2842,34 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          private target, CORB). This comment's own rule — «`null` is a NETWORK ERROR, which is what a URL this
          zone must not or cannot fetch honestly is» — names that case, and the record was crossing anyway: the
          page saw a real reply whose status was a number no server returns, instead of §5.6's TypeError. */
+      /* AND WHICH KIND OF NOT-A-REPLY IT IS, WHICH THE CHOKEPOINT STATES AND THIS ZONE MAY NOT WORK OUT.
+         `status === 0` says a request did not produce a reply; it does not say WHY, and the two why's take
+         opposite actions. A refusal a real browser also makes (a `file:` scheme, a CORS failure, a CORB-blocked
+         script) IS Fetch §5.6's network error, and handing the flow one is the FIDELITY. A refusal only this
+         tool makes — the firing policy declining to spend an act, the destructive deny list refusing to send a
+         session-ending GET — has no browser behind it, so a network error FABRICATES a fact about the origin
+         and the flow explores its whole failure path under it. §@S names the honest state: search-not-yet-
+         solved, a PARKED flow, never a verdict.
+         THE GRADE IS READ OFF THE RECORD AND NEVER RE-DERIVED. `safe-fetch.js` applied the rule, so it is the
+         only zone that knows which one fired without asking the policy a second time — and a consumer that
+         MATCHED `statusText` would be a second copy of that policy written in a format nothing checks. This is
+         the same move `computedType` is: the zone that decided tells the renderer what it decided. */
+      DCHECK((r.status === 0) === (r.refusal !== null),
+             "safeFetch answered with a status and a refusal that disagree — `status: 0` is the one status no " +
+             "HTTP response has and is what every refusal answers, and `refusal` is the same fact graded, so " +
+             "a record carrying one without the other is a decline arriving as a reply or a reply arriving as " +
+             "a request that never happened");
+      if (r.refusal) {
+        DCHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
+               "safeFetch graded a refusal `" + r.refusal.kind + "`, which is neither word it states — a " +
+               "third grade would take whichever arm this branch happens to be written with as its else, and " +
+               "that arm fabricates a network error for a request nobody sent");
+        DCHECK(typeof r.refusal.reason === "string" && r.refusal.reason === r.statusText,
+               "safeFetch graded a refusal whose reason is not the one on the record — the reason is the only " +
+               "account a person ever gets of a request this zone did not make, and two spellings of it are " +
+               "two answers to which rule refused");
+        if (r.refusal.kind === "decline") return { refusal: r.refusal };
+      }
       if (r.status === 0) return null;
       /* TWO PIECES OF ONE REPLY, because they cross on two channels — `meta` is the JSON qjs_provide parses
          and `bytes` is what it copies into the engine's heap beside it. They are handed over together so a
@@ -2878,8 +2945,23 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     DCHECK(typeof q.method === "string" && q.method !== "",
            "the engine's xhr.send record names no method — xhr_request_op writes one on every record, and a " +
            "request whose method is unknown cannot be refused OR issued");
-    if (q.method !== "GET")
-      return { meta: { status: 0, statusText: "blocked-method:" + q.method, headers: [] }, bytes: null };
+    /* AND THE REFUSAL IS THE CHOKEPOINT'S GRADE, NOT A THIRD COPY OF THE RULE. `if (q.method !== "GET")` stood
+       here beside the identical test in `fetched` and a third in `engine/trusted.mjs` — one question, three
+       places, and the paragraph above is careful about the SUBSTITUTION (a POST answered with a GET's body)
+       while saying nothing about what the page is told INSTEAD, which is the network error §3.5.6's handle
+       errors makes of it. No browser refuses a POST, so that is a fabricated fact about the origin, and it is
+       the most frequent one this zone tells: every page that POSTs an XHR gets it. */
+    const _xhrMethodRefusal = self.safeFetchMethodRefusal(q.method);
+    if (_xhrMethodRefusal) {
+      DFAIL("an XMLHttpRequest was DECLINED by the chokepoint (" + _xhrMethodRefusal.reason + ") and this " +
+            "seam can only answer it with §3.5.6 \"The send() method\"'s network error — the page's `error` " +
+            "event, for a request this zone chose never to send. The address is DERIVED IN FULL and REPORTED " +
+            "(§Attacker-sources: that is not a gap in the report, it IS the report), and what is missing is " +
+            "the way to say so to the FLOW: an `xhr.send` is a HOST REQUEST, so a decline means HOLDING it " +
+            "open as a relayed `perform` is held, with the flow SUSPENDED at the `send()` line rather than " +
+            "resumed down its failure path");
+      return { meta: { status: 0, statusText: _xhrMethodRefusal.reason, headers: [] }, bytes: null };
+    }
     if (!canFetch) return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
@@ -2960,6 +3042,30 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          the received bytes with the FINAL encoding, and until those bytes crossed as bytes that algorithm was
          decoding a re-encoding of this zone's own UTF-8 guess. `responseType = "arraybuffer"` handed the page
          the same round trip in place of the server's bytes. */
+      /* AND THE GRADE, WHICH THIS SEAM CAN READ AND CANNOT YET ACT ON. XMLHttpRequest §3.5.6 "The send()
+         method"'s HANDLE ERRORS ("Handle errors for this. If this's response is a network error, then return")
+         turns a status-0 record with no bytes into the page's `error` event, which is right where a real
+         browser would also have failed — a `file:` scheme, a CORS failure, a CORB-blocked body. It is a LIE
+         where THIS ZONE declined: the page's `onerror` runs, `xhr.status` reads 0, and every branch under that
+         handler is explored on a fact about the origin no observation supports, for a request nobody sent.
+         THERE IS NO DECLINE CHANNEL HERE AND THAT IS THE CAPABILITY, NOT AN OVERSIGHT. `document.fetch` parks
+         by leaving the pending register entry unpaid; an `xhr.send` is a HOST REQUEST answered by
+         `engineAnswer(eng, id, …)`, and an unanswered host request is re-reported by `qjs_host_requests` on
+         every step — so declining by silence is a spin, not a park. Holding the request open needs the engine
+         side that `perform` already has for a cross-agent operation, and this seam does not have it. */
+      if (r.refusal) {
+        DCHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
+               "safeFetch graded an XHR's refusal `" + r.refusal.kind + "`, which is neither word it states");
+        if (r.refusal.kind === "decline")
+          DFAIL("an XMLHttpRequest was DECLINED by the chokepoint (" + r.refusal.reason + ") and this seam " +
+                "can only answer it with §3.5.6 \"The send() method\"'s network error — the page's `error` " +
+                "event, " +
+                "which tells the flow the server was unreachable for a request this zone chose never to send, " +
+                "and hands every branch under `onerror` a fact about the origin nothing observed. BUILD the " +
+                "decline: an `xhr.send` is a HOST REQUEST, so declining it means HOLDING it open the way a " +
+                "relayed `perform` is held, with the flow SUSPENDED at the line the page wrote `send()` on — " +
+                "not answered, and not re-reported into a spin by qjs_host_requests");
+      }
       return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers) },
                bytes: r.body };
     } catch (e) {
@@ -3321,6 +3427,18 @@ function engineWeight(eng) {
    on both halves: a delivery named by the address alone settled whichever request was parked on that address
    first, so a page issuing a GET and a POST to one address had them collect each other's bodies. */
 async function engineProvide(eng, method, url, rep) {
+  /* AND A DECLINE MAY NOT ARRIVE HERE AT ALL, which is what makes the wrong pairing impossible rather than
+     discouraged. A `provide` SETTLES the parked request, and `reply: "null"` settles it with Fetch §5.6's
+     network error; there is no spelling of `provide` that means "this zone declined and the flow should stay
+     parked", because the way to say that is NOT TO CALL THIS. So a declined answer reaching this function is a
+     caller that read the grade and delivered anyway, and it would settle the flow with the exact lie the grade
+     exists to prevent. */
+  DCHECK(!(rep && rep.refusal),
+         "a DECLINED request reached the delivery seam — `provide` settles the park, and settling it with a " +
+         "network error tells the flow the server was unreachable for a request this zone chose not to send. " +
+         "A decline is delivered by NOT calling this: the flow stays parked, which is what §@S requires of a " +
+         "search not yet solved, and it fires the day the origin is widened. Refusal: " +
+         String(rep && rep.refusal && rep.refusal.reason));
   DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
@@ -3420,7 +3538,30 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      check that validated the word was validating a field with no reader. */
   for (const line of requests) {
     const { method, destination, provenance, url } = pendingRequest(line);
-    await engineProvide(eng, method, url, await eng.fetched(method, url, destination, provenance));
+    const answer = await eng.fetched(method, url, destination, provenance);
+    /* A DECLINE IS DELIVERED BY DELIVERING NOTHING, and that is the whole mechanism rather than an omission
+       in it. The engine's pending register keys a park on (method, url) and clears it when `provide` answers;
+       leaving the entry there is the flow STAYING PARKED — the same thing `engine/trusted.mjs` does by pushing
+       `decline` instead of `provide`, and the same thing its C reader does with one (`abi_declined` records
+       the reason and never touches `qjs_provide`). This host had no such arm at all: every refusal came back
+       as `null` and settled the park with Fetch §5.6's network error.
+       THE REASON IS PRINTED BECAUSE THE PARTY THAT REFUSED IS THE PARTY THAT KNOWS WHY — the chokepoint's own
+       words, in the same shape the route-declaration decline above already reports one, so a person reading a
+       frontier that will not drain is told WHICH RULE holds it rather than left to guess at a policy this zone
+       deliberately does not own. `blocked-provenance:forced` and `blocked-destructive:logout` are different
+       sentences to that reader: the first names a per-origin widening that would make this fire, the second
+       names a refusal nothing reopens, and both are addresses DERIVED IN FULL AND REPORTED — which
+       §Attacker-sources says is not a gap in the report but IS the report. */
+    if (answer !== null && answer.refusal) {
+      DCHECK(typeof answer.refusal.reason === "string" && answer.refusal.reason !== "",
+             "a declined request carries no reason — the reason is the only account a person gets of a park " +
+             "this zone will not pay, and an unnamed one leaves a frontier stalled with nothing to read");
+      console.warn("[bridge] " + method + " " + url + " — " + answer.refusal.reason +
+                   ". This zone DECLINED to make the request, so the flow stays PARKED rather than being " +
+                   "told the server was unreachable; the address is derived and reported");
+      continue;
+    }
+    await engineProvide(eng, method, url, answer);
   }
   await engineServiceHostRequests(eng);
 }

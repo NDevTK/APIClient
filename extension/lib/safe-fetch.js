@@ -135,6 +135,95 @@ function _isRealOrigin(o) { return typeof o === "string" && o.indexOf("://") > 0
 // empty STRING: a caller that must tell "no bytes" from "bytes I cannot read" reads
 // `ok`/`status`, and a body is one type on every path this function has.
 function _NO_BYTES() { return new Uint8Array(0); }
+/* ── WHAT A REFUSAL IS, GRADED BY THE ARM THAT MADE IT ───────────────────────────────────────────────────
+   A HOST THAT TURNS A REFUSAL INTO Fetch §5.6 "Fetch methods"' NETWORK ERROR IS TELLING THE FLOW THE SERVER
+   ANSWERED, AND FOR HALF THE ARMS BELOW THAT IS FALSE. §5.6 is explicit about what a network error becomes on
+   the page: "If response is a network error, then reject p with a TypeError and abort these steps" — so the
+   page's request RESUMES down its failure path, and every branch after that `catch` is then explored under a
+   fact about the origin that no observation supports. That is the plausible-datum defect at the level of the
+   solver's world model: nothing crashes, the arm is real code, and the report cannot tell it from an arm a
+   real failure reached.
+   THE DISCRIMINATOR IS NOT "PERMANENT VS TEMPORARY" AND IT IS NOT "PRE- VS POST-REQUEST". It is: WOULD A REAL
+   BROWSER, PERFORMING THIS SAME REQUEST, ALSO PRODUCE A NETWORK ERROR? Where it would, §5.6's answer is the
+   FIDELITY and not a fabrication — the browser half is spec-locked and a `file:` URL, a CORS failure and a
+   CORB-blocked script load all fail exactly this way in Chrome. Where no browser makes the refusal at all,
+   there is no fact to relay and the only honest thing this zone can say is nothing.
+     "network"  — a real browser refuses this same request, and Fetch §5.6's network error IS the answer.
+                  Fetch §4.3 "Scheme fetch" ends its switch with "Return a network error" (and says of `file:`
+                  "When in doubt, return a network error"); §4.10 "CORS check" failing makes §4.4 "HTTP fetch"
+                  "return a network error"; a private-network target is refused by the browser's own PNA and
+                  by CORS besides. The flow resumes down its failure path CORRECTLY.
+     "decline"  — THIS TOOL declined, and no browser is refusing anything. Forced execution builds requests no
+                  real client makes, and whether to spend an act on one is a POLICY (CLAUDE.md
+                  §A-REQUEST-CARRIES-THE-PROVENANCE), so a refusal here is this zone declining to ASK. There is
+                  no observation to hand back, and §@S says what that state is: search-not-yet-solved, a PARKED
+                  flow, never a verdict. The flow stays parked and fires the day the origin is widened.
+   WHY THERE IS NO THIRD WORD, WHICH IS A CONCLUSION AND NOT AN OMISSION. Two of the declines below are
+   PERMANENT — the destructive-path deny list has no widening, and no setting reopens it — so it is fair to
+   ask whether parking a flow on one for ever is a leak that needs an answer of its own. It is not, and the
+   arithmetic is the scheduler's: a parked flow burns no CPU and emits nothing, so the WFQ's reward term stops
+   paying it, `frontierWeight` (emit-per-visit) sinks it below productive and unrun work, and the disk share
+   sheds it as a strict suffix of the one value order. Nothing is truncated and nothing accumulates. What a
+   permanent decline owes the READER is not a third channel but the SENTENCE, and it already has one: the
+   reason travels in `statusText`, and `blocked-destructive:logout` and `blocked-provenance:forced` say
+   different things to the person reading the stall. §Attacker-sources states the rest outright — a
+   derived-and-unfired request "is not a gap in the report, it IS the report".
+   WHAT A DECLINE DOES COST, NAMED HERE BECAUSE THIS IS WHERE IT IS DECIDED: the page's own `.catch(...)` arm
+   goes unexplored. That is a real loss and it is NOT an argument for the lie — an arm reached by fabricating
+   a network error is an arm explored under a false premise, which is worse than an unexplored one. The right
+   answer to it is a FORK (whether this request succeeds is unknown, so both arms are feasible), which is a
+   solver capability and not a thing a chokepoint may buy by mis-grading a refusal.
+   THE GRADE IS STAMPED BY THE ARM, WHICH IS WHAT MAKES THE WRONG PAIRING IMPOSSIBLE RATHER THAN DISCOURAGED.
+   `computedType` is on the record for the same reason — the zone that read the bytes is the one that may
+   answer what they are — and this is the zone that applied the rule, so it is the only one that knows which
+   rule fired without re-deriving it. A consumer that re-asked the policy would be writing a second copy of it,
+   and a consumer that MATCHED `statusText` would be writing that copy in a format nothing checks. */
+/* AND THE HEADER MAP IS STATED BY THE ARM RATHER THAN DEFAULTED HERE, because one arm legitimately has one:
+   a CORB refusal happens after the reply arrived and the headers ARE part of what was learned, while a
+   pre-request refusal has none because no response exists. `{}` at the pre-request arms is therefore the
+   positive statement "no response, therefore no headers" and not a hole this builder filled in. */
+var _REFUSAL_KINDS = ["network", "decline"];
+function _refused(kind, reason, urlList, headers) {
+  DCHECK(_REFUSAL_KINDS.indexOf(kind) >= 0,
+         "a refusal was graded `" + kind + "`, which is neither of the two this file states: `network` (a real " +
+         "browser refuses this same request, so Fetch §5.6's network error is the faithful answer) and " +
+         "`decline` (only this tool refuses, so there is nothing to hand back and the flow parks). A third " +
+         "word would be a grade no host has an arm for, and the arm an unknown grade falls to is whichever a " +
+         "consumer wrote as its else");
+  DCHECK(typeof reason === "string" && reason !== "",
+         "a refusal carries no reason — `statusText` is the only account a page or a person ever gets of a " +
+         "request this zone did not make, and the empty string is a legitimate reason phrase from any HTTP/2 " +
+         "response, so an unwritten one is indistinguishable from a reply");
+  DCHECK(Array.isArray(urlList),
+         "a refusal carries no Fetch §2.2.6 \"Responses\" URL LIST — the request URL is a fact even when the " +
+         "reply is not, and the engine reads `response.url` off this list's last item");
+  DCHECK(headers !== null && typeof headers === "object" && !Array.isArray(headers),
+         "a refusal carries no header map — every record this file returns has one, and a caller that read " +
+         "`undefined` here would be reading it off a refusal instead of off the reply it thought it had");
+  return { ok: false, status: 0, statusText: reason, headers: headers, body: _NO_BYTES(),
+           urlList: urlList, computedType: "", refusal: { kind: kind, reason: reason } };
+}
+/* THE SAME REFUSAL VALUE FOR A CALLER WHOSE REQUEST NEVER REACHES THE FETCH, WHICH IS THE OTHER HALF OF THE
+   FIRING QUESTION AND THE ONE THIS FILE ANSWERS BY ABSENCE. RFC 9110 §9.2.1 "Safe Methods" is half of whether
+   an act is spent and `_firingRefusal` is the other; this file enforces the method half STRUCTURALLY — it
+   hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`, which is why a non-GET cannot be
+   issued here by any route — and that structure is exactly why nothing downstream can OBSERVE the answer.
+   SO IT WAS BEING RE-DERIVED IN BOTH HOSTS, which is the shape `_firingRefusal` was hoisted here to end. Each
+   held its own `if (method !== 'GET')` and each answered it differently: `engine/trusted.mjs` DECLINED (the
+   flow stays parked) and `bridge.js` returned Fetch §5.6's network error (the flow resumes down its failure
+   path having been told the server was unreachable, for a request nobody sent). One question, two answers,
+   neither of them the policy — and the grade is the policy's to give, so it is given here.
+   IT IS A DECLINE AND NOT A NETWORK ERROR: no browser refuses a POST. The address is DERIVED IN FULL AND
+   REPORTED, which §Attacker-sources says is not a gap in the report but IS the report, and the flow parks.
+   IT ANSWERS THE REFUSAL VALUE AND NOT A BOOLEAN, so a host that must tell somebody WHY cannot re-derive the
+   grade from a `false` — the same reason `_corbDeniesScript` and `_firingRefusal` answer grades. */
+function safeFetchMethodRefusal(method) {
+  CHECK(typeof method === "string" && method !== "",
+        "safeFetchMethodRefusal was asked about " + JSON.stringify(method) + ", which is not a Fetch §2.2.1 " +
+        "\"Methods\" method — the caller is deciding whether this zone can perform a request at all, and an " +
+        "absent method would take the arm `GET` takes, which is the arm that spends the network");
+  return method === "GET" ? null : { kind: "decline", reason: "blocked-method:" + method };
+}
 // HTML's JavaScript MIME TYPE list, and Chromium's CORB-PROTECTED set — the two
 // tables the CORB rule is stated over.
 function _jsMime(m) {
@@ -758,11 +847,15 @@ async function safeFetch(url, opts) {
   try { parsed = new URL(String(url)); }
   // No URL at all, so there is no URL list either — « » is the honest report, and
   // the engine's `response.url` is then the empty string the spec names for it.
-  catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: _NO_BYTES(), urlList: [],
-                       computedType: "" }; }
+  /* NETWORK, because a browser agrees: the URL constructor throwing is URL Standard §6.1 "URL class"' own
+     failure, and a request whose URL cannot be parsed never becomes a request at all. */
+  catch (e) { return _refused("network", "bad-url", [], {}); }
+  /* NETWORK, and this is the arm Fetch §4.3 "Scheme fetch" names in as many words — its switch ends "Return a
+     network error", and `file:` is "left as an exercise for the reader. When in doubt, return a network
+     error." A page fetching `file:///etc/passwd` gets §5.6's TypeError in Chrome, so the flow's failure path
+     is where a real browser puts it too. */
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
-    return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {},
-             body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+    return _refused("network", "blocked-scheme:" + parsed.protocol, [parsed.href], {});
   // Origin-relative SSRF (see header). The PRINCIPAL is the analysed DOCUMENT's OWN
   // address, passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
   // concurrently in one worker, so a worker-global principal would let one page's
@@ -824,9 +917,11 @@ async function safeFetch(url, opts) {
      above names — with the DCHECKs compiled out, an unparseable principal lands here as "public",
      which is the same fail-closed answer this line has always given it. */
   var _pagePrivate = !!_pageUrl && _isPrivateHost(_pageUrl.hostname);
+  /* NETWORK. This gate exists because the extension's host permissions BYPASS the browser's own answer, so
+     what it does is REINSTATE it: a public page reaching the person's intranet is refused by Private Network
+     Access, and by Fetch §4.10 "CORS check" besides, both of which reach the page as a network error. */
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
-    return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {},
-             body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+    return _refused("network", "blocked-private-from-public", [parsed.href], {});
   /* THE FIRING DECISION, BEFORE THE REQUEST EXISTS — see `_firingRefusal`. It is placed after the
      well-formedness gates and before the credential one because that is the order the questions are
      answerable in: an address that will not parse, names a scheme this zone cannot speak, or points into the
@@ -835,10 +930,15 @@ async function safeFetch(url, opts) {
      THE REFUSAL NAMES THE GRADE, exactly as `blocked-scheme:` and `blocked-destructive:` name theirs. A
      reader of a request that did not happen needs WHICH RULE refused it, and `forced` in this position is the
      whole account: the origin is not widened for exploration and the address is reported instead. */
+  /* DECLINE, AND THIS IS THE ARM THE WHOLE GRADE EXISTS FOR. No browser refuses this — there is no server
+     behaviour here at all, only this zone declining to ASK, because the address stands on an arm a gate was
+     forced onto. So there is nothing to hand a flow back, and §@S says exactly what that state is: a search
+     not yet solved, a PARKED flow, never a verdict. Parking is also what makes the widening MEAN anything —
+     the flow fires the day `safeFetchWiden` is told about this origin, which a flow that has already run its
+     failure path cannot do. */
   var _ptok = _firingRefusal(provenance, parsed.origin);
   if (_ptok)
-    return { ok: false, status: 0, statusText: "blocked-provenance:" + _ptok, headers: {},
-             body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+    return _refused("decline", "blocked-provenance:" + _ptok, [parsed.href], {});
   // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
   // authenticated reply (the logged-in API surface), instead of a useless 401. Still
   // GET-only (method is forced below) so a well-designed server performs no account
@@ -869,10 +969,13 @@ async function safeFetch(url, opts) {
      path, on the initial URL and again after a redirect. What changes is only the request
      the person had already made. */
   if (credentialed && provenance !== "observed") {
+    /* DECLINE, AND IT IS THE PERMANENT ONE — no widening reopens this list, which is the case the grade above
+       argues does not need a third word. A browser would send this request; this tool will not send it with
+       the person's session. So there is no observation to relay, and a network error here would be the same
+       lie the provenance arm makes, told about a request the server would have answered. */
     var _dtok = _destructiveToken(parsed);
     if (_dtok)
-      return { ok: false, status: 0, statusText: "blocked-destructive:" + _dtok, headers: {},
-               body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+      return _refused("decline", "blocked-destructive:" + _dtok, [parsed.href], {});
   }
   var init = { method: "GET", credentials: credentialed ? "include" : "omit", redirect: "follow" };
   // Analyzer probe headers only (e.g. discovery's X-Goog-Api-Key / X-Http-Method-
@@ -924,9 +1027,11 @@ async function safeFetch(url, opts) {
        on, which is the one thing a catch in this zone must never absorb. */
     try { _fu = new URL(resp.url); }
     catch (e) { RETHROW_FATAL(e); _fu = null; }
+    /* NETWORK. The request went out and the browser answered with an address this zone's own URL parser
+       refuses, so what is unusable is the RESPONSE — "this zone tried and the reply cannot be read" is what a
+       network error says, and no policy of ours declined anything. */
     if (!_fu)
-      return { ok: false, status: 0, statusText: "blocked-final-url-unparseable", headers: {},
-               body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+      return _refused("network", "blocked-final-url-unparseable", [parsed.href], {});
     _finalUrl = _fu;
   }
   /* AND THE HREF IS TAKEN OFF THAT SAME RECORD RATHER THAN OFF `resp.url` AGAIN, which is
@@ -970,9 +1075,10 @@ async function safeFetch(url, opts) {
   // request itself for extension fetches; this stops the data from being ingested.)
   // Where nothing redirected `_finalUrl` IS `parsed`, so this re-asks a question already
   // answered above rather than skipping one — the same answer, never an unasked gate.
+  /* NETWORK, by the same argument the pre-request private-host check carries: PNA and CORS both refuse a
+     public page a private host's bytes, and both reach the page as a network error. */
   if (_isPrivateHost(_finalUrl.hostname) && !_pagePrivate)
-    return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {},
-             body: _NO_BYTES(), urlList: [parsed.href], computedType: "" };
+    return _refused("network", "blocked-private-redirect", [parsed.href], {});
   /* THE DENY LIST AGAIN ON THE FINAL URL, AND WHAT IT CAN AND CANNOT DO. `redirect:
      "follow"` means a 30x into a destructive path was ALREADY followed by the time this
      runs, so unlike the pre-request check this one cannot un-send anything — it refuses
@@ -984,11 +1090,14 @@ async function safeFetch(url, opts) {
      request the person never would, and that decision is the pre-request check. What is
      left here is refusing to build analysis on the reply. */
   if (credentialed && provenance !== "observed") {
+    /* DECLINE, AND THE FACT THAT THE REQUEST ALREADY WENT OUT DOES NOT MOVE IT. The server was reachable and
+       answered; a network error would state the opposite, which is a lie about the world with a reply sitting
+       right there to contradict it. What this zone is doing is refusing to build analysis on that reply, and
+       a refusal to INGEST is a decline whatever side of the wire it is made on. */
     var _rtok = _destructiveToken(_finalUrl);
     if (_rtok)
-      return { ok: false, status: 0, statusText: "blocked-destructive-redirect:" + _rtok,
-               headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected),
-               computedType: "" };
+      return _refused("decline", "blocked-destructive-redirect:" + _rtok,
+                      _urlList(parsed.href, _finalHref, resp.redirected), {});
   }
   /* AND THE FIRING DECISION AGAIN ON THE FINAL URL, WITH THE SAME SHAPE AND THE SAME LIMIT
      AS THE TWO GATES ABOVE IT. `redirect: "follow"` means a 30x off the widened origin was
@@ -999,11 +1108,13 @@ async function safeFetch(url, opts) {
      widening is a sentence about ONE HOST — "at this host, fire what the bundle reaches past
      a forced gate" — and a reply that came from somewhere else is a reply about a server
      nobody said that about, carried under a grade the person granted to a different one. */
+  /* DECLINE, for the reason the destructive re-check states one line up, and with the widening still live: a
+     person who widens the LANDED origin makes this same load fire, and a flow that has run its failure path
+     is not there to fire. */
   var _rptok = _firingRefusal(provenance, _finalUrl.origin);
   if (_rptok)
-    return { ok: false, status: 0, statusText: "blocked-provenance-redirect:" + _rptok,
-             headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected),
-             computedType: "" };
+    return _refused("decline", "blocked-provenance-redirect:" + _rptok,
+                    _urlList(parsed.href, _finalHref, resp.redirected), {});
   /* THE HEADERS, WITH NOTHING BETWEEN THEM AND THE TWO GATES THAT READ THEM. This walk stood
      inside `catch (e) {}`, whose arm was an EMPTY header map — and an empty map is not an
      absent input to the rules below, it is a wrong one: CORB then judges a body labelled with
@@ -1077,10 +1188,18 @@ async function safeFetch(url, opts) {
     // The rule that decided rides the status message with what this file computed the
     // resource to be, which is where every other refusal already puts its ground
     // (`blocked-scheme:https:`).
+    /* NETWORK, because the browser refuses this load too — Chromium's CORB, and ORB after it, exist precisely
+       to stop a cross-origin data body reaching a code loader, and an ORB-blocked script load reaches the page
+       as Fetch §5.6's network error. This zone applies the rule only because a host-permission fetch bypasses
+       the browser's copy of it, so the grade is the browser's answer relayed rather than a policy of ours.
+       ONE ARM OF `_corbDeniesScript` DIVERGES AND IT IS NAMED RATHER THAN GLOSSED: `same-origin-protected`
+       refuses a page its OWN HTML as script text, which a browser would hand over — the load would then die
+       at COMPILE with a SyntaxError instead of on the wire with `onerror`. That is a browser-half fidelity
+       residual (the wrong failure event, not a fabricated one), and it is not a decline: no policy of ours
+       declined the act, and parking a flow on a load a browser completes would be the opposite error. */
     if (_deny)
-      return { ok: false, status: 0, statusText: "blocked-corb:" + _deny + ":" + _computed,
-               headers: headers, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected),
-               computedType: "" };
+      return _refused("network", "blocked-corb:" + _deny + ":" + _computed,
+                      _urlList(parsed.href, _finalHref, resp.redirected), headers);
   }
   // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
   // policy to an extension fetch with host_permissions (it can read any origin), so
@@ -1126,8 +1245,15 @@ async function safeFetch(url, opts) {
            (`blocked-final-url-unparseable`) and never reaches this line, so the default's arm
            is unreachable and keeping it would be a second name for a state that no longer
            exists — the one thing a reader of a refusal message must not be handed. */
-        return { ok: false, status: 0, statusText: "blocked-cors-credentialed:" + _finalOrigin,
-                 headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: "" };
+        /* NETWORK, and this one is the browser's own rule almost verbatim: Fetch §4.10 "CORS check" failing
+           makes §4.4 "HTTP fetch" "return a network error", which §5.6 turns into the page's TypeError. This
+           zone runs the check only because a host-permission fetch bypasses the browser's, so the flow's
+           failure path is exactly where a real browser would put it.
+           THE HEADERS ARE `{}` HERE AND `headers` AT CORB, WHICH IS DELIBERATE. CORB refuses a body whose own
+           label is the evidence; this refuses a CROSS-ORIGIN credentialed read the server never granted, and
+           handing its response headers back is handing over part of the very thing the check refused. */
+        return _refused("network", "blocked-cors-credentialed:" + _finalOrigin,
+                        _urlList(parsed.href, _finalHref, resp.redirected), {});
     }
   }
   /* AND THE TYPE THIS ZONE COMPUTED TRAVELS WITH THE BYTES. `computedType` is the
@@ -1136,8 +1262,24 @@ async function safeFetch(url, opts) {
      handed a browser-stated origin on a delivered message rather than a URL to parse.
      engine/host/solver/reply_decode.c reads this field and DCHECKs its presence — an
      absent stamp is a producer that failed, never a type called "unknown". */
+  /* AND `refusal: null` IS A POSITIVE STATEMENT, WHICH IS WHY IT IS WRITTEN AND NOT LEFT OFF. It says THIS
+     REQUEST REACHED THE WIRE AND THE REPLY BELOW IS WHAT CAME BACK — including an HTTP error status, which is
+     a server's answer and never a refusal of ours. A record that simply omitted the field would make "the
+     chokepoint permitted this" and "the chokepoint stopped grading" the same absence, and the second of those
+     is a decline arriving at a host as a reply.
+     THE TWO SIGNALS ARE BOUND SO THEY CANNOT DRIFT. `status: 0` is the one status no HTTP response has and it
+     is what every refusal answers; a graded refusal is the same fact stated in a vocabulary. Asserting the
+     equivalence here is what stops a future arm from carrying one without the other — a refusal with a real
+     status would be ingested as a reply, and a status-0 reply would be a network error nothing declined.
+     `mode` is unset on the request below, so Fetch's default `cors` applies and there is no opaque filtered
+     response to answer 0 legitimately. */
+  DCHECK(resp.status !== 0,
+         "the wire answered with status 0, which is the one status no HTTP response has and which every " +
+         "refusal in this file answers with — `mode` is unset so Fetch's default `cors` applies and an " +
+         "opaque filtered response cannot arise, so a 0 here is a reply and a refusal wearing one number");
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
-           urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed };
+           urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed,
+           refusal: null };
 }
 /* THE CHOKEPOINT AND THE POLICY THAT DECIDES WHETHER IT FIRES, INSTALLED TOGETHER — because they are one
    thing and a host that could obtain one without the other would be a host holding half the contract. Both
@@ -1146,9 +1288,15 @@ async function safeFetch(url, opts) {
    `safeFetchWiden` IS THE POLICY'S ONE INPUT and it takes a person's sentence. `safeFetchFiringRefusal` is the
    same answer for a caller whose act is not a fetch, and `safeFetchWidenedOrigins` is for a caller that must
    ASSERT no widening exists in its zone. None of the three is a second policy: all four names resolve to
-   `_firingRefusal`, which is the only thing in this project that answers the firing question. */
+   `_firingRefusal`, which is the only thing in this project that answers the firing question.
+   `safeFetchMethodRefusal` IS THE OTHER HALF OF THE SAME QUESTION and is installed beside them for the same
+   reason: the method decides whether an act may be spent (RFC 9110 §9.2.1 "Safe Methods") and this file
+   answers it by ABSENCE, so a host that cannot see the answer writes its own — which both of them did, with
+   two different grades. It answers in the SAME refusal vocabulary the reply record's `refusal` field carries,
+   so a host has ONE shape to read whether the refusal came before the fetch or out of it. */
 if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
+  self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchWiden = safeFetchWiden;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
