@@ -227,13 +227,19 @@ again:
     contains->insensitive = false;
     str = &contains->str;
 
-    str->data = lexbor_mraw_alloc(parser->memory->mraw,
-                                  sizeof(lexbor_str_t));
+    /* THE BUFFER IS SIZED BY THE ARGUMENT, NOT BY lexbor_str_t. This asked for sizeof(lexbor_str_t) -- the size
+       of the DESCRIPTOR, 16 bytes on LP64 -- and then copied the argument into it, so every `:lexbor-contains()`
+       whose argument reaches 16 bytes wrote past its mraw chunk and over the next chunk's header. It is
+       page-reachable: a selector string is the page's, this pseudo-class is in the parser's function table and
+       is not on the not-supported list beside `:dir()` and `:lang()`, so `querySelector` carries the argument
+       here unfiltered. `length` and not `length + 1`, because the terminator is written below from a byte this
+       function owns rather than copied from a token this function does not own the end of. */
+    str->data = lexbor_mraw_alloc(parser->memory->mraw, length + 1);
     if (str->data == NULL) {
         return lxb_css_parser_memory_fail(parser);
     }
 
-    memcpy(str->data, data, length + 1);
+    memcpy(str->data, data, length);
 
     str->length = length;
     str->data[length] = '\0';
