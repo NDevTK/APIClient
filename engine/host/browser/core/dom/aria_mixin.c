@@ -532,7 +532,7 @@ void aria_mixin_init(JSContext *ctx)
     CHECK(g_atom_state != JS_ATOM_NULL, "the ARIAMixin state key could not be interned");
 
     aria_mixin_declare_target(ARIA_TARGET_ELEMENT, &ARIA_ELEMENT_OPS);
-    g_refl_base = element_declare_reflections(ctx, ARIA_STRINGS, ARIA_STRING_N);
+    g_refl_base = element_declare_reflections(ctx, "Element", ARIA_STRINGS, ARIA_STRING_N);
     /* ONE DECLARATION PER (target kind, member). Both kinds are declared HERE, in the agent's one sealed pool,
        rather than each interface declaring its own: the members are one algorithm, and an interface that
        declared its own copy is how the two would come to differ. What an interface still states for itself is

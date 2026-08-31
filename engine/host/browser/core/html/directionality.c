@@ -9,10 +9,17 @@
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 
-/* §3.2.6.4's ENUMERATED `dir` STATES. Undefined is the missing-value AND the invalid-value default, so an
-   element with `dir=sideways` is in it — which is why an unrecognised keyword falls through to Undefined
-   rather than being a case of its own. */
-enum { DIR_UNDEFINED = 0, DIR_LTR, DIR_RTL, DIR_AUTO };
+/* §3.2.6.4's table, in the section's own order. The states are in directionality.h because §2.6.1's reflection
+   of this attribute shares them; §3.2.6.4 declares no empty value default, which §2.3.3 reduces to running
+   step 4, so the empty position carries the invalid one. */
+static const EnumeratedKeyword DIR_KEYWORDS[] = {
+    { "ltr",  DIR_LTR },
+    { "rtl",  DIR_RTL },
+    { "auto", DIR_AUTO },
+    { NULL,   0 }
+};
+
+const EnumeratedAttribute DIR_ATTRIBUTE = { DIR_KEYWORDS, DIR_UNDEFINED, DIR_UNDEFINED, DIR_UNDEFINED };
 
 static bool tag_is(const lxb_dom_node_t *n, const char *name)
 {
@@ -21,24 +28,13 @@ static bool tag_is(const lxb_dom_node_t *n, const char *name)
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     /* §3.2.6's element names are HTML's, so the NAMESPACE is part of the test — the standard says so in as
-       many words ("the dir attribute is only defined for HTML elements, it cannot be present on elements from
-       other namespaces"), and an SVG `<style>` skipped as if it were HTML's would hide the text under it. */
+       many words ("Since the dir attribute is only defined for HTML elements, it cannot be present on elements
+       from other namespaces"), and an SVG `<style>` skipped as if it were HTML's would hide the text under
+       it. The quotation used to begin at "the" and drop the "Since", which is a sentence the spec does not
+       contain; a quotation is the half of a citation no auditor here can check. */
     if (n->ns != LXB_NS_HTML) return false;
     t = lxb_dom_element_local_name(lxb_dom_interface_element((lxb_dom_node_t *)n), &len);
     return t && len == strlen(name) && memcmp(t, name, len) == 0;
-}
-
-static bool ascii_ci_is(const char *a, size_t alen, const char *lower)
-{
-    size_t i, n = strlen(lower);
-
-    if (!a || alen != n) return false;
-    for (i = 0; i < n; i++) {
-        char c = a[i];
-        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-        if (c != lower[i]) return false;
-    }
-    return true;
 }
 
 /* THE NODE'S ROOT — DOM §4.2's "root", which for a node inside a shadow tree is the ShadowRoot. §3.2.6 asks
@@ -65,19 +61,16 @@ static lxb_dom_element_t *slot_shadow_host(const lxb_dom_node_t *n)
     return shadow_root_is(r) ? shadow_root_host(r) : NULL;
 }
 
+/* §3.2.6.4's state for THIS file's walks — the namespace condition §3.2.6 states in as many words ("Since the
+   dir attribute is only defined for HTML elements, it cannot be present on elements from other namespaces"),
+   and then §2.3.3's determine-the-state. The comparison was four hand-written `ascii_ci_is` calls, which is the
+   shape core/html/enumerated_attribute.c exists to end; it folded correctly and had no defaults of its own, so
+   what it cost was not a wrong answer here but a table nothing else could reach. */
 static int dir_state(const lxb_dom_element_t *el)
 {
-    size_t len = 0;
-    const char *v;
-
     if (!el || lxb_dom_interface_node((lxb_dom_element_t *)el)->ns != LXB_NS_HTML) return DIR_UNDEFINED;
-    v = (const char *)lxb_dom_element_get_attribute((lxb_dom_element_t *)el, (const lxb_char_t *)"dir", 3,
-                                                    &len);
-    if (!v) return DIR_UNDEFINED;
-    if (ascii_ci_is(v, len, "ltr"))  return DIR_LTR;
-    if (ascii_ci_is(v, len, "rtl"))  return DIR_RTL;
-    if (ascii_ci_is(v, len, "auto")) return DIR_AUTO;
-    return DIR_UNDEFINED;
+    return enumerated_attribute_state(el, "dir", DIR_ATTRIBUTE.keywords,
+                                      DIR_ATTRIBUTE.missing, DIR_ATTRIBUTE.empty, DIR_ATTRIBUTE.invalid);
 }
 
 /* WHICH OF THE THREE STRONG CLASSES A CODE POINT IS, by binary search over the generated runs. A code point

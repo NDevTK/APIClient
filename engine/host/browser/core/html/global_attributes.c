@@ -1,10 +1,13 @@
-/* HTML's ENUMERATED GLOBAL ATTRIBUTES — the seven HTMLElement members that COMPUTE a value from the tree.
+/* HTML's ENUMERATED GLOBAL ATTRIBUTES — the HTMLElement members that COMPUTE a value from the tree.
  *
  * WHY THEY ARE NOT REFLECTIONS AND CANNOT BE. core/dom/element.c's ElReflect registry mirrors ONE attribute in
  * both directions: the IDL property IS the attribute. Every member here answers a question the attribute alone
  * does not: `translate` is true unless the nearest ancestor that states a translation mode states `no`,
  * `spellcheck` and `writingSuggestions` inherit the same way, `autocorrect` inherits from a form OWNER rather
- * than from a parent, and `isContentEditable` is a property of the element's position in an editing host. A
+ * than from a parent, `autocapitalize` inherits from a form owner AND cannot name its own answer (§6.8.7 maps
+ * two keywords to None and two to Sentences, so §2.3.3's canonical keyword is undefined for both states and the
+ * section states the getter's answer for each), and `isContentEditable` is a property of the element's position
+ * in an editing host. A
  * REFLECT_BOOL for any of them would answer the attribute's PRESENCE — `<div translate=no>` would read `true`
  * because the attribute is there — which is the failure html_style_element.c records for `<style disabled>`:
  * wrong in both directions, silently. §6.11.7's `draggable` is the same trap in its sharpest form: the state
@@ -38,6 +41,7 @@
 static int g_id_set_translate = -1;
 static int g_id_set_spellcheck = -1;
 static int g_id_set_writing_suggestions = -1;
+static int g_id_set_autocapitalize = -1;
 static int g_id_set_autocorrect = -1;
 static int g_id_set_content_editable = -1;
 static int g_id_set_draggable = -1;
@@ -224,21 +228,115 @@ static JSValue js_writing_suggestions_set(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* §4.10.2 Categories — the AUTOCAPITALIZE-AND-AUTOCORRECT INHERITING ELEMENTS, "elements that inherit the
+   autocapitalize and autocorrect attributes from their form owner". BOTH sections below ask this one question
+   and the standard names the category after both attributes, which is why it is not spelled `autocorrect_`
+   anything: §6.8.7 step 2 and §6.8.8 step 3 are the same list, and a second copy under the other name is how
+   the two would come to differ. */
+static bool autocapitalize_and_autocorrect_inheriting(lxb_dom_element_t *el)
+{
+    return element_is_html(el) &&
+           (local_name_is(el, "button") || local_name_is(el, "fieldset") || local_name_is(el, "input") ||
+            local_name_is(el, "output") || local_name_is(el, "select") || local_name_is(el, "textarea"));
+}
+
+/* ---- HTML §6.8.7 Autocapitalization ------------------------------------------------------------------------ */
+
+/* §6.8.7's FIVE AUTOCAPITALIZATION HINTS, and the mapping that is the whole reason this member is here rather
+   than a REFLECT_ENUM row in core/dom/element.c: TWO keywords map to None and TWO to Sentences. §2.3.3's
+   canonical keyword is defined only where "there is only one keyword mapping to the given state", so those two
+   states have no canonical keyword this engine may pick — and §6.8.7 does not leave that to be guessed, it
+   names the answer for each of them in the getter steps below. */
+enum { AC_DEFAULT = 0, AC_NONE, AC_SENTENCES, AC_WORDS, AC_CHARACTERS };
+static const EnumeratedKeyword AUTOCAPITALIZE_KW[] = {
+    { "off", AC_NONE },       { "none", AC_NONE },
+    { "on", AC_SENTENCES },   { "sentences", AC_SENTENCES },
+    { "words", AC_WORDS },    { "characters", AC_CHARACTERS },
+    { NULL, 0 }
+};
+
+/* §6.8.7's OWN AUTOCAPITALIZATION HINT, in the section's three steps.
+   STEP 1 IS NOT §2.3.3'S STEP 1. It reads "if the autocapitalize content attribute is present on element, AND
+   ITS VALUE IS NOT THE EMPTY STRING, return the state of the attribute" — so `<input autocapitalize="">` does
+   NOT take the attribute's empty value default, it falls through to the form owner, which is a condition no
+   keyword table can express and the reason presence and emptiness are tested here rather than passed as
+   defaults. Once step 1 has decided the attribute is there and non-empty, §2.3.3 decides which state, and only
+   its INVALID value default (Sentences) can still be reached.
+   THE RECURSION IS ONE HOP AND THAT IS PROVABLE, not a bound: step 2 recurses into the FORM OWNER, a form owner
+   is a `form` element, and `form` is not one of §4.10.2's autocapitalize-and-autocorrect inheriting elements —
+   so the owner's own step 2 cannot fire. Asserted, because the day that list gains `form` this reads wrong. */
+static int own_autocapitalization_hint(JSContext *ctx, JSValueConst wrap, lxb_dom_element_t *el)
+{
+    JSValue owner;
+    lxb_dom_element_t *form;
+    int hint = AC_DEFAULT;
+    size_t len = 0;
+
+    if (lxb_dom_element_has_attribute(el, (const lxb_char_t *)"autocapitalize", 14) &&        /* step 1 */
+        lxb_dom_element_get_attribute(el, (const lxb_char_t *)"autocapitalize", 14, &len) && len != 0)
+        return enumerated_attribute_state(el, "autocapitalize", AUTOCAPITALIZE_KW,
+                                          AC_DEFAULT, AC_SENTENCES, AC_SENTENCES);
+    if (!autocapitalize_and_autocorrect_inheriting(el)) return AC_DEFAULT;              /* step 3 */
+    owner = html_form_owner_of(ctx, wrap);                                                    /* step 2 */
+    form = element_of_value(owner);
+    if (form) {
+        DCHECK(!autocapitalize_and_autocorrect_inheriting(form),
+               "§6.8.7 step 2 recursed into a form owner that is itself an autocapitalize-and-autocorrect "
+               "inheriting element — §4.10.2's list is button/fieldset/input/output/select/textarea and a form "
+               "owner is a `form`, so this walk is one hop by construction and would need a loop if it were not");
+        len = 0;
+        if (lxb_dom_element_has_attribute(form, (const lxb_char_t *)"autocapitalize", 14) &&
+            lxb_dom_element_get_attribute(form, (const lxb_char_t *)"autocapitalize", 14, &len) && len != 0)
+            hint = enumerated_attribute_state(form, "autocapitalize", AUTOCAPITALIZE_KW,
+                                              AC_DEFAULT, AC_SENTENCES, AC_SENTENCES);
+    }
+    JS_FreeValue(ctx, owner);
+    return hint;
+}
+
+/* §6.8.7: "The autocapitalize getter steps are to: Let state be the own autocapitalization hint of this. If
+   state is Default, then return the empty string. If state is None, then return "none". If state is Sentences,
+   then return "sentences". Return the keyword value corresponding to state."
+   THIS MEMBER WAS A `REFLECT_STRING` ROW ON HTMLElement, which mirrored the attribute's raw bytes — so
+   `<div autocapitalize="OFF">.autocapitalize` answered "OFF" where these steps answer "none", an element
+   inheriting from its form owner answered "" where they answer the owner's keyword, and every unrecognised
+   value answered itself where they answer "sentences". */
+static JSValue js_autocapitalize_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el = receiver(ctx, this_val, "autocapitalize");
+    int state;
+
+    (void)magic;
+    if (!el) return JS_EXCEPTION;
+    state = own_autocapitalization_hint(ctx, this_val, el);
+    if (state == AC_DEFAULT) return JS_NewStringLen(ctx, "", 0);
+    if (state == AC_NONE) return JS_NewString(ctx, "none");
+    if (state == AC_SENTENCES) return JS_NewString(ctx, "sentences");
+    return JS_NewString(ctx, enumerated_attribute_canonical_keyword(AUTOCAPITALIZE_KW, state));
+}
+
+/* The IDL is `[CEReactions, ReflectSetter] attribute DOMString autocapitalize`, so the SETTER is §2.6.1's plain
+   "set the content attribute with the given value" while the getter above is the section's own algorithm — the
+   same asymmetry `writingSuggestions` has, and the same reason neither can be a registry row. */
+static JSValue js_autocapitalize_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    const char *s;
+
+    (void)magic;
+    if (!receiver(ctx, this_val, "autocapitalize")) return JS_EXCEPTION;
+    s = JS_ToCString(ctx, val);
+    if (!s) return JS_EXCEPTION;
+    element_attr_set(ctx, this_val, "autocapitalize", s);
+    JS_FreeCString(ctx, s);
+    return JS_UNDEFINED;
+}
+
 /* ---- HTML §6.8.8 Autocorrection --------------------------------------------------------------------------- */
 
 enum { AUTOCORRECT_ON, AUTOCORRECT_OFF };
 static const EnumeratedKeyword AUTOCORRECT_KW[] = {
     { "on", AUTOCORRECT_ON }, { "off", AUTOCORRECT_OFF }, { NULL, 0 }
 };
-
-/* §4.10.2 Categories — the AUTOCAPITALIZE-AND-AUTOCORRECT INHERITING ELEMENTS, "elements that inherit the
-   autocapitalize and autocorrect attributes from their form owner". */
-static bool autocorrect_inheriting(lxb_dom_element_t *el)
-{
-    return element_is_html(el) &&
-           (local_name_is(el, "button") || local_name_is(el, "fieldset") || local_name_is(el, "input") ||
-            local_name_is(el, "output") || local_name_is(el, "select") || local_name_is(el, "textarea"));
-}
 
 /* §4.10.5.1's URL, Email and Password states of an `input` element's `type` attribute — the three §6.8.8 step 1
    names, and the only three of that enumeration this file has any question about. */
@@ -264,7 +362,7 @@ static bool autocorrect_on(JSContext *ctx, JSValueConst wrap, lxb_dom_element_t 
     if (lxb_dom_element_has_attribute(el, (const lxb_char_t *)"autocorrect", 11))   /* step 2 */
         return enumerated_attribute_state(el, "autocorrect", AUTOCORRECT_KW,
                                           AUTOCORRECT_ON, AUTOCORRECT_ON, AUTOCORRECT_ON) == AUTOCORRECT_ON;
-    if (!autocorrect_inheriting(el)) return true;                                   /* step 4 */
+    if (!autocapitalize_and_autocorrect_inheriting(el)) return true;                                   /* step 4 */
     owner = html_form_owner_of(ctx, wrap);                                          /* step 3 */
     form = element_of_value(owner);
     on = form ? enumerated_attribute_state(form, "autocorrect", AUTOCORRECT_KW,
@@ -477,6 +575,7 @@ void global_attributes_declare(JSContext *ctx)
     g_id_set_translate = idl_setter_id(ctx, IDL_BOOLEAN, false, js_translate_set, 0);
     g_id_set_spellcheck = idl_setter_id(ctx, IDL_BOOLEAN, false, js_spellcheck_set, 0);
     g_id_set_writing_suggestions = idl_setter_id(ctx, IDL_DOMSTRING, false, js_writing_suggestions_set, 0);
+    g_id_set_autocapitalize = idl_setter_id(ctx, IDL_DOMSTRING, false, js_autocapitalize_set, 0);
     g_id_set_autocorrect = idl_setter_id(ctx, IDL_BOOLEAN, false, js_autocorrect_set, 0);
     g_id_set_content_editable = idl_setter_id(ctx, IDL_DOMSTRING, false, js_content_editable_set, 0);
     g_id_set_draggable = idl_setter_id(ctx, IDL_BOOLEAN, false, js_draggable_set, 0);
@@ -490,6 +589,7 @@ void global_attributes_install(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "spellcheck", js_spellcheck_get, 0, g_id_set_spellcheck);
     idl_install_accessor(ctx, proto, "writingSuggestions", js_writing_suggestions_get, 0,
                          g_id_set_writing_suggestions);
+    idl_install_accessor(ctx, proto, "autocapitalize", js_autocapitalize_get, 0, g_id_set_autocapitalize);
     idl_install_accessor(ctx, proto, "autocorrect", js_autocorrect_get, 0, g_id_set_autocorrect);
     idl_install_accessor(ctx, proto, "contentEditable", js_content_editable_get, 0, g_id_set_content_editable);
     idl_install_accessor(ctx, proto, "isContentEditable", js_is_content_editable, 0, -1);
@@ -499,6 +599,7 @@ void global_attributes_install(JSContext *ctx, JSValueConst proto)
 void global_attributes_free(void)
 {
     g_id_set_translate = g_id_set_spellcheck = g_id_set_writing_suggestions = -1;
-    g_id_set_autocorrect = g_id_set_content_editable = g_id_set_draggable = -1;
+    g_id_set_autocapitalize = g_id_set_autocorrect = -1;
+    g_id_set_content_editable = g_id_set_draggable = -1;
     g_ready = false;
 }

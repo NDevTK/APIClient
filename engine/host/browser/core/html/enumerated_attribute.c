@@ -62,12 +62,18 @@ static void dcheck_table_is_canonical(const EnumeratedKeyword *kw)
     size_t j;
 
     DCHECK(kw != NULL, "an enumerated attribute's state was asked for with no keyword table");
-    for (i = 0; kw[i].keyword; i++)
+    for (i = 0; kw[i].keyword; i++) {
+        DCHECK(kw[i].state != ENUMERATED_NO_STATE,
+               "an enumerated attribute's keyword table names ENUMERATED_NO_STATE as one of its states — that "
+               "value IS §2.3.3's \"return no state\" answer, so a keyword mapping to it makes a real state "
+               "indistinguishable from the absence of one, and §2.6.1's getter would hand a page a keyword for "
+               "an attribute value that corresponds to no state at all");
         for (j = 0; kw[i].keyword[j]; j++)
             DCHECK(!(kw[i].keyword[j] >= 'A' && kw[i].keyword[j] <= 'Z'),
                    "an enumerated attribute's keyword table holds a row that is not ASCII lowercase — §2.3.3's "
                    "match would still accept it, and §2.6.1's reflected getter returns these exact bytes, so a "
                    "page would read back a keyword the attribute's own specification does not define");
+    }
 #else
     (void)kw;
 #endif
@@ -99,6 +105,16 @@ int enumerated_attribute_state(const lxb_dom_element_t *el, const char *attr,
         if (enumerated_attribute_keyword_match(kw[i].keyword, (const char *)v, len)) return kw[i].state;
     if (len == 0) return empty;                                 /* STEP 3 */
     return invalid;                                             /* STEPS 4-5 */
+}
+
+bool enumerated_attribute_state_has_keyword(const EnumeratedKeyword *kw, int state)
+{
+    int i;
+
+    dcheck_table_is_canonical(kw);
+    for (i = 0; kw[i].keyword; i++)
+        if (kw[i].state == state) return true;
+    return false;
 }
 
 const char *enumerated_attribute_canonical_keyword(const EnumeratedKeyword *kw, int state)

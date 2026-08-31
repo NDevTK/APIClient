@@ -878,8 +878,15 @@ function columnStrings(R, table, field) {
 
 const TABLE_FORMS = [
   /* a reflection IS §3.7.6's attribute — [Reflect] changes where the value comes from, not what kind of
-     property the member is — and a byte reader is one of §4's five operations. */
-  { declare: "element_declare_reflections", install: "element_install_reflections", arg: 1, field: "idl",
+     property the member is — and a byte reader is one of §4's five operations.
+     `arg` IS A POSITION AND A POSITION IS A CLAIM ABOUT A SIGNATURE, so it goes stale the day the C gains a
+     parameter — and it goes stale QUIETLY, because a resolver handed the wrong argument reports the site as
+     UNRESOLVED and this file's own header says an unresolved construct is a member it can neither count nor
+     miss. Measured: `element_declare_reflections` gained an interface-name argument in front of its table, and
+     with `arg` still 1 every reflection on every interface went ABSENT at once while the run stayed green. The
+     tell is a whole family of members disappearing together, which is what a signature change looks like from
+     here and what a real regression never does. */
+  { declare: "element_declare_reflections", install: "element_install_reflections", arg: 2, field: "idl",
     target: 1, handle: 2, kind: "accessor" },
   { declare: "byte_reader_declare", install: "byte_reader_install", arg: 1, via: "readers", field: "name",
     target: 1, handle: 2, kind: "data" },

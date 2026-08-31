@@ -4,6 +4,17 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/html/enumerated_attribute.h"
+
+/* §2.5.5's attribute, AS §2.3.3 DEFINES IT — the nine keywords and the two defaults, for the consumer that
+   needs the DEFINITION rather than this element's answer: §2.6.1's limited-to-only-known-values getter looks up
+   "the attribute definition of element's content attribute" and then decides the state itself, which is not
+   what the reader below does (it also asks §2.3.3 for the canonical keyword). Six interfaces reflect this
+   attribute — `<a>`, `<area>`, `<iframe>`, `<img>`, `<link>` and `<script>` — and the definition is exported so
+   that none of them restates the keyword list; the file's own header says why a seventh copy is the failure
+   mode this component exists to prevent. */
+extern const EnumeratedAttribute REFERRER_POLICY_ATTRIBUTE;
+
 /* The state of this element's `referrerpolicy` content attribute, AS ITS CANONICAL KEYWORD — which is what
    every consumer of a referrer policy attribute is defined to take: HTML §7.1.6's determine-the-iframe-element-
    referrer-policy returns "the state's corresponding keyword", and §2.6.1's reflected `referrerPolicy` getter

@@ -1314,6 +1314,42 @@ static JSValue el_reflect_ulong(JSContext *ctx, const ElReflect *r, JSValue raw)
     }
 }
 
+/* §2.6.1's `DOMString` getter steps 3 and 4 — the two the plain string reflection does not have, run for a
+   member that §2.6.1 says is "limited to only known values": "If attributeDefinition indicates it is an
+   enumerated attribute and the reflected IDL attribute is defined to be limited to only known values: if
+   contentAttributeValue does not correspond to any state of attributeDefinition (e.g., it is null and there is
+   no missing value default), or if it is in a state of attributeDefinition with no associated keyword value,
+   then return the empty string. Return the canonical keyword for the state of attributeDefinition that
+   contentAttributeValue corresponds to."
+ *
+ * THE TWO ARMS OF THE FIRST BRANCH COLLAPSE INTO ONE QUESTION HERE, and that is a property of §2.3.3's answer
+ * rather than a shortcut. "Corresponds to no state" IS core/html/enumerated_attribute.h's ENUMERATED_NO_STATE,
+ * which no keyword table may name; "a state with no associated keyword value" is a state no row maps to. So
+ * both are "this state has no keyword", asked once — and the assert that keeps them one question is the one in
+ * enumerated_attribute.c forbidding a keyword to name the sentinel.
+ *
+ * IT READS THE ATTRIBUTE THROUGH LEXBOR AND NOT THROUGH THE §@S SHADOW, deliberately, and for the reason
+ * core/html/enumerated_attribute.c states in full: what is asked for here is not the attribute's VALUE but its
+ * STATE, which a fixed keyword table decides. An attacker string a flow stashed in `dir` matches no keyword, so
+ * the state is the invalid value default and the answer is one of a handful of bytes the page's own attacker
+ * cannot influence — carrying provenance onto it would claim a taint the value does not have. That is the same
+ * line REFLECT_ULONG draws in the other direction: its answer is a NUMBER derived from the stored bytes, so it
+ * keeps the provenance; this one's is a constant chosen by a comparison. */
+static JSValue el_reflect_enum(JSContext *ctx, lxb_dom_element_t *el, const ElReflect *r)
+{
+    int state;
+
+    DCHECK(r->en != NULL,
+           "§2.6.1's limited-to-only-known-values getter ran for a row with no §2.3.3 attribute definition — "
+           "element_declare_reflections asserts that pairing at the declaration, so reaching it here is a "
+           "registry entry that was written past rather than a table that was mis-declared");
+    state = enumerated_attribute_state(el, r->attr, r->en->keywords,
+                                       r->en->missing, r->en->empty, r->en->invalid);
+    if (!enumerated_attribute_state_has_keyword(r->en->keywords, state))
+        return JS_NewStringLen(ctx, "", 0);
+    return JS_NewString(ctx, enumerated_attribute_canonical_keyword(r->en->keywords, state));
+}
+
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_element_t *el = element_of_value(this_val);
@@ -1338,6 +1374,10 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     if (g_reflect[magic].kind == REFLECT_BOOL)
         return JS_NewBool(ctx, lxb_dom_element_has_attribute(el, (const lxb_char_t *)g_reflect[magic].attr,
                                                              strlen(g_reflect[magic].attr)));
+    /* BEFORE the attribute is fetched, because §2.6.1's enumerated branch does not read contentAttributeValue
+       at all — it reads the STATE, and §2.3.3 decides that from the attribute's presence as well as its bytes
+       (`<img crossorigin>` is Anonymous and `<img>` is No CORS, which the value "" cannot tell apart). */
+    if (g_reflect[magic].kind == REFLECT_ENUM) return el_reflect_enum(ctx, el, &g_reflect[magic]);
     nv = JS_NewString(ctx, g_reflect[magic].attr);
     r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv, 0);   /* a real string already: the reflected NAME is the engine's */
     JS_FreeValue(ctx, nv);
@@ -1585,9 +1625,13 @@ void element_reflect_double_set(JSContext *ctx, JSValueConst el, const char *att
    setter's pool id are the AGENT's, the accessor on a prototype is the REALM's. The caller keeps the BASE index
    the declaration returned, which is what lets the install name the same registry entries again without
    appending a second copy of the table. */
-int element_declare_reflections(JSContext *ctx, const ElReflect *r, int n)
+int element_declare_reflections(JSContext *ctx, const char *iface, const ElReflect *r, int n)
 {
     int base = g_reflect_n, i;
+
+    DCHECK(iface != NULL,
+           "a table of reflections was declared without naming its interface — the name is what every "
+           "should-never-happen below reports, since this one function declares every interface's table");
 
     for (i = 0; i < n; i++) {
         IdlArgType t;
@@ -1616,11 +1660,26 @@ int element_declare_reflections(JSContext *ctx, const ElReflect *r, int n)
         case REFLECT_STRING_NULLABLE: t = IDL_DOMSTRING_NULLABLE; break;
         case REFLECT_URL:             t = IDL_USVSTRING; break;
         case REFLECT_ULONG:           t = IDL_UNSIGNED_LONG; break;
+        /* §2.6.1 gives "limited to only known values" no type of its own — it is a `DOMString` whose GETTER has
+           two extra branches — so the declared IDL type is the plain string's and only the getter differs. */
+        case REFLECT_ENUM:            t = IDL_DOMSTRING; break;
         default:
             t = IDL_ANY;
             DFAIL("a reflection was declared with a kind §2.6.1 has no processing model for — give the kind "
                   "its IDL type here and its getter steps in js_el_reflect_get");
         }
+        /* THE DEFINITION AND THE KIND ARE ONE STATEMENT, ASSERTED IN BOTH DIRECTIONS. A REFLECT_ENUM row with
+           no definition has nothing to answer with and would fall through to the raw attribute; a row carrying
+           a definition on any other kind is the WORSE half — somebody wrote §2.3.3's table for that attribute
+           and the getter reflects its bytes anyway, which is exactly the class REFLECT_ENUM was built to end,
+           arriving through a table that exists. Neither is reachable from a page, so both are DCHECKs. */
+        DCHECKF((r[i].kind == REFLECT_ENUM) == (r[i].en != NULL),
+                "%s.%s declares §2.6.1's limited-to-only-known-values kind and §2.3.3's attribute definition "
+                "%s — a REFLECT_ENUM row answers out of its definition's keyword table and has nothing else to "
+                "answer with, and a row that carries a definition on another kind reflects the attribute's raw "
+                "bytes while the table that would have been consulted sits beside it",
+                iface, r[i].idl,
+                r[i].kind == REFLECT_ENUM ? "without one" : "on a kind whose getter never reads it");
         /* §2.6.2 restricts BOTH augmenting attributes by TYPE — `[ReflectRange]` "must only be used on
            attributes with a type of unsigned long", `[ReflectDefault]` on double, long or unsigned long — so a
            row carrying either on a kind that has no step reading it is a declaration that silently does
@@ -2771,7 +2830,7 @@ void element_init(JSContext *ctx)
             { "elementTiming", "elementtiming", REFLECT_STRING },
         };
         g_refl_n = (int)(sizeof(R) / sizeof(R[0]));
-        g_refl_base = element_declare_reflections(ctx, R, g_refl_n);
+        g_refl_base = element_declare_reflections(ctx, "Element", R, g_refl_n);
     }
     /* WAI-ARIA's `Element includes ARIAMixin` — 52 members, declared beside §4.9's own three because they are
        the same kind of thing on the same interface: 44 reflections into the one registry above, and 8 members

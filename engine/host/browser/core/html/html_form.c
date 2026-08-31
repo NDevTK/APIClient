@@ -113,29 +113,51 @@ static bool ascii_ci_is(const char *a, size_t alen, const char *lower)
    per. The keywords are ASCII case-insensitive like every enumerated attribute's (§2.3.3 Keywords and
    enumerated attributes), and a missing or unrecognised one is the TEXT state — both defaults
    §4.10.5.1.2 declares. */
+static const EnumeratedKeyword INPUT_TYPE_KEYWORDS[] = {
+    { "hidden", INPUT_STATE_HIDDEN },   { "text", INPUT_STATE_TEXT },
+    { "search", INPUT_STATE_SEARCH },   { "tel", INPUT_STATE_TEL },
+    { "url", INPUT_STATE_URL },         { "email", INPUT_STATE_EMAIL },
+    { "password", INPUT_STATE_PASSWORD }, { "date", INPUT_STATE_DATE },
+    { "month", INPUT_STATE_MONTH },     { "week", INPUT_STATE_WEEK },
+    { "time", INPUT_STATE_TIME },       { "datetime-local", INPUT_STATE_DATETIME_LOCAL },
+    { "number", INPUT_STATE_NUMBER },   { "range", INPUT_STATE_RANGE },
+    { "color", INPUT_STATE_COLOR },     { "checkbox", INPUT_STATE_CHECKBOX },
+    { "radio", INPUT_STATE_RADIO },     { "file", INPUT_STATE_FILE },
+    { "submit", INPUT_STATE_SUBMIT },   { "image", INPUT_STATE_IMAGE },
+    { "reset", INPUT_STATE_RESET },     { "button", INPUT_STATE_BUTTON },
+    { NULL, 0 }
+};
+
+/* §4.10.5 The input element states the defaults, not §4.10.5.1 States of the type attribute, which is the
+   keyword table: "The attribute's missing value default and invalid value default are both the Text state."
+   INPUT_STATE_NONE is not one of those states and no keyword names it — it is this engine's answer to a
+   question the section never asks, whether the element is an `input` at all, which is why it is the reader's
+   return below and not a member of this definition. */
+const EnumeratedAttribute HTML_INPUT_TYPE_ATTRIBUTE = {
+    INPUT_TYPE_KEYWORDS, INPUT_STATE_TEXT, INPUT_STATE_TEXT, INPUT_STATE_TEXT
+};
+
+/* §4.10.3's `autocomplete` on a `form`: "The attribute's missing value default and invalid value default are
+   both the On state." Its states are ITS OWN and not §4.10.5.1's, so they are declared here rather than added
+   to the enum above, which is a list of `type` states. */
+enum { FORM_AUTOCOMPLETE_ON = 0, FORM_AUTOCOMPLETE_OFF };
+static const EnumeratedKeyword FORM_AUTOCOMPLETE_KEYWORDS[] = {
+    { "on",  FORM_AUTOCOMPLETE_ON },
+    { "off", FORM_AUTOCOMPLETE_OFF },
+    { NULL,  0 }
+};
+const EnumeratedAttribute HTML_FORM_AUTOCOMPLETE_ATTRIBUTE = {
+    FORM_AUTOCOMPLETE_KEYWORDS, FORM_AUTOCOMPLETE_ON, FORM_AUTOCOMPLETE_ON, FORM_AUTOCOMPLETE_ON
+};
+
 HtmlInputState html_form_input_state(const lxb_dom_node_t *n)
 {
-    static const struct { const char *keyword; HtmlInputState state; } TYPES[] = {
-        { "hidden", INPUT_STATE_HIDDEN },   { "text", INPUT_STATE_TEXT },
-        { "search", INPUT_STATE_SEARCH },   { "tel", INPUT_STATE_TEL },
-        { "url", INPUT_STATE_URL },         { "email", INPUT_STATE_EMAIL },
-        { "password", INPUT_STATE_PASSWORD }, { "date", INPUT_STATE_DATE },
-        { "month", INPUT_STATE_MONTH },     { "week", INPUT_STATE_WEEK },
-        { "time", INPUT_STATE_TIME },       { "datetime-local", INPUT_STATE_DATETIME_LOCAL },
-        { "number", INPUT_STATE_NUMBER },   { "range", INPUT_STATE_RANGE },
-        { "color", INPUT_STATE_COLOR },     { "checkbox", INPUT_STATE_CHECKBOX },
-        { "radio", INPUT_STATE_RADIO },     { "file", INPUT_STATE_FILE },
-        { "submit", INPUT_STATE_SUBMIT },   { "image", INPUT_STATE_IMAGE },
-        { "reset", INPUT_STATE_RESET },     { "button", INPUT_STATE_BUTTON },
-    };
-    size_t tlen = 0, i;
-    const char *t;
-
     if (!tag_is((lxb_dom_node_t *)n, "input")) return INPUT_STATE_NONE;
-    t = attr_of(lxb_dom_interface_element((lxb_dom_node_t *)n), "type", &tlen);
-    for (i = 0; i < sizeof TYPES / sizeof TYPES[0]; i++)
-        if (ascii_ci_is(t, tlen, TYPES[i].keyword)) return TYPES[i].state;
-    return INPUT_STATE_TEXT;
+    return (HtmlInputState)enumerated_attribute_state(lxb_dom_interface_element((lxb_dom_node_t *)n), "type",
+                                                      HTML_INPUT_TYPE_ATTRIBUTE.keywords,
+                                                      HTML_INPUT_TYPE_ATTRIBUTE.missing,
+                                                      HTML_INPUT_TYPE_ATTRIBUTE.empty,
+                                                      HTML_INPUT_TYPE_ATTRIBUTE.invalid);
 }
 
 bool html_form_is_submittable(JSContext *ctx, JSValueConst wrap)
@@ -618,14 +640,57 @@ static const char *submitter_attr(JSContext *ctx, JSValueConst submitter, lxb_do
    above is that fall-through. */
 enum { FORM_METHOD_GET = 0, FORM_METHOD_POST, FORM_METHOD_DIALOG };
 
+/* §4.10.19.6's table, in the section's own order — ONE table for both spellings, which is what the section
+   states ("The method and formmethod content attributes are enumerated attributes with the following keywords
+   and states"). It is exported through html_form.h because §2.6.1's `form.method`, `input.formMethod` and
+   `button.formMethod` are limited-to-only-known-values reflections and must answer with a CANONICAL KEYWORD;
+   before there was a kind for that they mirrored the attribute's raw bytes, so `<form method="POST">.method`
+   read "POST" where §2.6.1 answers "post" and `method="bogus"` read the word instead of "get". */
+static const EnumeratedKeyword FORM_METHOD_KEYWORDS[] = {
+    { "get",    FORM_METHOD_GET },
+    { "post",   FORM_METHOD_POST },
+    { "dialog", FORM_METHOD_DIALOG },
+    { NULL,     0 }
+};
+
+const EnumeratedAttribute HTML_FORM_METHOD_ATTRIBUTE = {
+    FORM_METHOD_KEYWORDS, FORM_METHOD_GET, FORM_METHOD_GET, FORM_METHOD_GET
+};
+/* "The formmethod attribute has no missing value default, and its invalid value default is the GET state." */
+const EnumeratedAttribute HTML_FORM_FORMMETHOD_ATTRIBUTE = {
+    FORM_METHOD_KEYWORDS, ENUMERATED_NO_STATE, FORM_METHOD_GET, FORM_METHOD_GET
+};
+
+/* §2.3.3's steps 2 to 5 over a value the caller has ALREADY resolved. The submitter lookup above is
+   §4.10.19.6's own fall-through ("if the element is a submit button and has a formmethod attribute, then the
+   element's method is that attribute's state; otherwise, it is the form owner's method attribute's state"), so
+   by the time a value reaches here the choice between the two attributes has been made and only the keyword
+   match is left — which is why this is the value-shaped half of §2.3.3 and not enumerated_attribute_state.
+   AN ABSENT ATTRIBUTE AND A PRESENT EMPTY ONE ARRIVE THE SAME WAY here (lexbor stores both as a NULL value with
+   a zero length), and for these two definitions that is not a distinction to preserve: `method` and `enctype`
+   declare no empty value default, and their missing and invalid value defaults are the same state, so all
+   three positions hold one answer. A definition whose three positions differ must not be resolved through this
+   function, which is what the assert says. */
+static int form_value_state(const EnumeratedAttribute *def, const char *v, size_t len)
+{
+    int i;
+
+    DCHECK(def->missing == def->empty && def->empty == def->invalid,
+           "§4.10.19.6's submitter fall-through resolved a value for an enumerated attribute whose three "
+           "special states are not one state — this path cannot tell an absent attribute from a present empty "
+           "one, so such a definition has to be decided from the ELEMENT (enumerated_attribute_state) rather "
+           "than from the value the fall-through returned");
+    for (i = 0; def->keywords[i].keyword; i++)
+        if (enumerated_attribute_keyword_match(def->keywords[i].keyword, v, len)) return def->keywords[i].state;
+    return def->invalid;
+}
+
 static int form_method_state(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form)
 {
     size_t len = 0;
     const char *v = submitter_attr(ctx, submitter, form, "formmethod", "method", &len);
 
-    if (ascii_ci_is(v, len, "post")) return FORM_METHOD_POST;
-    if (ascii_ci_is(v, len, "dialog")) return FORM_METHOD_DIALOG;
-    return FORM_METHOD_GET;
+    return form_value_state(&HTML_FORM_METHOD_ATTRIBUTE, v, len);
 }
 
 /* §4.10.19.6's `enctype`/`formenctype`, the same shape: three keywords, with the urlencoded state as both
@@ -633,14 +698,31 @@ static int form_method_state(JSContext *ctx, JSValueConst submitter, lxb_dom_ele
    record can carry without a body: its CONTENT TYPE. */
 enum { FORM_ENCTYPE_URLENCODED = 0, FORM_ENCTYPE_MULTIPART, FORM_ENCTYPE_TEXT };
 
+/* §4.10.19.6's second table. The keywords ARE the MIME types, which is why the reflected `form.enctype` of a
+   `<form enctype="MULTIPART/FORM-DATA">` is the lowercase spelling and not the author's — §2.3.3's match is
+   ASCII case-insensitive and §2.6.1's getter hands back the canonical keyword. */
+static const EnumeratedKeyword FORM_ENCTYPE_KEYWORDS[] = {
+    { "application/x-www-form-urlencoded", FORM_ENCTYPE_URLENCODED },
+    { "multipart/form-data",               FORM_ENCTYPE_MULTIPART },
+    { "text/plain",                        FORM_ENCTYPE_TEXT },
+    { NULL,                                0 }
+};
+
+const EnumeratedAttribute HTML_FORM_ENCTYPE_ATTRIBUTE = {
+    FORM_ENCTYPE_KEYWORDS, FORM_ENCTYPE_URLENCODED, FORM_ENCTYPE_URLENCODED, FORM_ENCTYPE_URLENCODED
+};
+/* "The formenctype attribute has no missing value default, and its invalid value default is the
+   application/x-www-form-urlencoded state." */
+const EnumeratedAttribute HTML_FORM_FORMENCTYPE_ATTRIBUTE = {
+    FORM_ENCTYPE_KEYWORDS, ENUMERATED_NO_STATE, FORM_ENCTYPE_URLENCODED, FORM_ENCTYPE_URLENCODED
+};
+
 static int form_enctype_state(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form)
 {
     size_t len = 0;
     const char *v = submitter_attr(ctx, submitter, form, "formenctype", "enctype", &len);
 
-    if (ascii_ci_is(v, len, "multipart/form-data")) return FORM_ENCTYPE_MULTIPART;
-    if (ascii_ci_is(v, len, "text/plain")) return FORM_ENCTYPE_TEXT;
-    return FORM_ENCTYPE_URLENCODED;
+    return form_value_state(&HTML_FORM_ENCTYPE_ATTRIBUTE, v, len);
 }
 
 static const char *form_enctype_mime(int state)

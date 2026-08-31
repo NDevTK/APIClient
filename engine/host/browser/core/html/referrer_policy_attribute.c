@@ -56,6 +56,12 @@ static const EnumeratedKeyword RP_KEYWORDS[] = {
     { NULL,                              0 }
 };
 
+/* §2.5.5's two sentences about defaults, as the one definition §2.6.1's getter looks up. All three positions
+   are the empty string state, for the two different reasons the reader below spells out. */
+const EnumeratedAttribute REFERRER_POLICY_ATTRIBUTE = {
+    RP_KEYWORDS, RP_EMPTY_STRING, RP_EMPTY_STRING, RP_EMPTY_STRING
+};
+
 const char *referrer_policy_attribute_keyword(const lxb_dom_element_t *el)
 {
     int state;
@@ -69,7 +75,8 @@ const char *referrer_policy_attribute_keyword(const lxb_dom_element_t *el)
        it, and it declares NO empty value default at all — which §2.3.3 reduces to "step 3 is skipped and step 4
        runs", i.e. passing the invalid one in the empty position. Step 3 is unreachable here regardless, because
        the empty string is a KEYWORD and step 2 has already matched it. */
-    state = enumerated_attribute_state(el, "referrerpolicy", RP_KEYWORDS,
-                                       RP_EMPTY_STRING, RP_EMPTY_STRING, RP_EMPTY_STRING);
-    return enumerated_attribute_canonical_keyword(RP_KEYWORDS, state);
+    state = enumerated_attribute_state(el, "referrerpolicy", REFERRER_POLICY_ATTRIBUTE.keywords,
+                                       REFERRER_POLICY_ATTRIBUTE.missing, REFERRER_POLICY_ATTRIBUTE.empty,
+                                       REFERRER_POLICY_ATTRIBUTE.invalid);
+    return enumerated_attribute_canonical_keyword(REFERRER_POLICY_ATTRIBUTE.keywords, state);
 }

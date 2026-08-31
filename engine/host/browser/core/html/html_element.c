@@ -72,6 +72,10 @@
 #include "core/html/html_form.h"
 #include "core/html/dom_string_map.h"
 #include "core/html/global_attributes.h"
+#include "core/html/cors_settings_attribute.h"     /* §2.5.4, reflected by <link>, <script>, <img> */
+#include "core/html/lazy_loading_attribute.h"      /* §2.5.7, reflected by <img> and <iframe> */
+#include "core/html/referrer_policy_attribute.h"   /* §2.5.5, reflected by five of the tables below */
+#include "core/html/directionality.h"              /* §3.2.6.4's `dir` states, shared with its own walks */
 #include "core/html/html_element_view.h"
 #include "core/html/declarative_shadow.h"
 
@@ -80,13 +84,105 @@ static JSClassID g_unknown_class;   /* HTMLUnknownElement — HTML's answer for 
 static int g_html_ready;
 static JSAtom  g_dataset_key = JS_ATOM_NULL;   /* the [SameObject] dataset cache slot on an element's wrapper */
 
-/* HTMLElement's OWN reflections — §3.2.6's global attributes. */
+/* §6.8.9's `inputmode`. The section's table has a Keyword column and NO State column and states NO defaults at
+   all, so each keyword maps to a state of its own name and §2.3.3's two "return no state" arms are what an
+   absent or unrecognised value reaches — which is why `<div>.inputMode` and `<div inputmode=banana>.inputMode`
+   are both the empty string under §2.6.1's getter and not the word the page wrote. */
+enum { IM_NONE = 0, IM_TEXT, IM_TEL, IM_URL, IM_EMAIL, IM_NUMERIC, IM_DECIMAL, IM_SEARCH };
+static const EnumeratedKeyword INPUTMODE_KW[] = {
+    { "none", IM_NONE }, { "text", IM_TEXT }, { "tel", IM_TEL }, { "url", IM_URL },
+    { "email", IM_EMAIL }, { "numeric", IM_NUMERIC }, { "decimal", IM_DECIMAL }, { "search", IM_SEARCH },
+    { NULL, 0 }
+};
+static const EnumeratedAttribute INPUTMODE_ATTR = {
+    INPUTMODE_KW, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE
+};
+
+/* §6.8.10's `enterkeyhint` — the same shape as `inputmode` above, keywords with no declared defaults. */
+enum { EKH_ENTER = 0, EKH_DONE, EKH_GO, EKH_NEXT, EKH_PREVIOUS, EKH_SEARCH, EKH_SEND };
+static const EnumeratedKeyword ENTERKEYHINT_KW[] = {
+    { "enter", EKH_ENTER }, { "done", EKH_DONE }, { "go", EKH_GO }, { "next", EKH_NEXT },
+    { "previous", EKH_PREVIOUS }, { "search", EKH_SEARCH }, { "send", EKH_SEND },
+    { NULL, 0 }
+};
+static const EnumeratedAttribute ENTERKEYHINT_ATTR = {
+    ENTERKEYHINT_KW, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE
+};
+
+/* §6.12's `popover`, whose THREE special states are three DIFFERENT states — "the attribute's missing value
+   default is the No Popover state, its invalid value default is the Manual state, and its empty value default
+   is the Auto state" — which is the case core/html/enumerated_attribute.c's header records as having defeated
+   an earlier implementation that collapsed missing and invalid into one field. All three are observable through
+   §2.6.1's getter: `<div>` reflects "" (No Popover has no keyword), `<div popover>` reflects "auto", and
+   `<div popover=bogus>` reflects "manual". */
+enum { POPOVER_NONE = 0, POPOVER_AUTO, POPOVER_MANUAL, POPOVER_HINT };
+static const EnumeratedKeyword POPOVER_KW[] = {
+    { "auto", POPOVER_AUTO }, { "manual", POPOVER_MANUAL }, { "hint", POPOVER_HINT }, { NULL, 0 }
+};
+static const EnumeratedAttribute POPOVER_ATTR = { POPOVER_KW, POPOVER_NONE, POPOVER_AUTO, POPOVER_MANUAL };
+
+/* §4.6.8.20's PRELOAD DESTINATION and §4.6.8.12's MODULE PRELOAD DESTINATION, whose UNION §4.2.4 makes the
+   keyword set of `<link as>`: "Each of the union of preload destinations and module preload destinations is a
+   keyword for this attribute, mapping to a state of the same name." A preload destination is "fetch", "font",
+   "image", "script", "style" or "track"; a module preload destination is "json", "style", "text", or a
+   SCRIPT-LIKE destination, which Fetch §2.2.5 Requests defines as "audioworklet", "paintworklet", "script",
+   "serviceworker", "sharedworker" or "worker". §4.2.4 declares no defaults, so an absent or unrecognised value
+   is §2.3.3's no state and `link.as` reflects the empty string.
+   THE LIST IS NOT FETCH'S DESTINATIONS. "document", "embed", "frame", "iframe", "manifest", "object",
+   "report", "webidentity" and "xslt" are destinations and are NOT in either union, so a row for one of them
+   would make `<link as=iframe>.as` answer "iframe" where the spec answers "". */
+enum { LINK_AS_FETCH = 0, LINK_AS_FONT, LINK_AS_IMAGE, LINK_AS_SCRIPT, LINK_AS_STYLE, LINK_AS_TRACK,
+       LINK_AS_JSON, LINK_AS_TEXT, LINK_AS_AUDIOWORKLET, LINK_AS_PAINTWORKLET, LINK_AS_SERVICEWORKER,
+       LINK_AS_SHAREDWORKER, LINK_AS_WORKER };
+static const EnumeratedKeyword LINK_AS_KW[] = {
+    { "fetch", LINK_AS_FETCH }, { "font", LINK_AS_FONT }, { "image", LINK_AS_IMAGE },
+    { "script", LINK_AS_SCRIPT }, { "style", LINK_AS_STYLE }, { "track", LINK_AS_TRACK },
+    { "json", LINK_AS_JSON }, { "text", LINK_AS_TEXT }, { "audioworklet", LINK_AS_AUDIOWORKLET },
+    { "paintworklet", LINK_AS_PAINTWORKLET }, { "serviceworker", LINK_AS_SERVICEWORKER },
+    { "sharedworker", LINK_AS_SHAREDWORKER }, { "worker", LINK_AS_WORKER },
+    { NULL, 0 }
+};
+static const EnumeratedAttribute LINK_AS_ATTR = {
+    LINK_AS_KW, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE, ENUMERATED_NO_STATE
+};
+
+/* §4.8.4.3.4 Decoding images' IMAGE DECODING HINT keywords, which §4.8.3 makes `<img decoding>`'s: "This
+   attribute's missing value default and invalid value default are both the Auto state." */
+enum { DECODING_AUTO = 0, DECODING_SYNC, DECODING_ASYNC };
+static const EnumeratedKeyword DECODING_KW[] = {
+    { "sync", DECODING_SYNC }, { "async", DECODING_ASYNC }, { "auto", DECODING_AUTO }, { NULL, 0 }
+};
+static const EnumeratedAttribute DECODING_ATTR = {
+    DECODING_KW, DECODING_AUTO, DECODING_AUTO, DECODING_AUTO
+};
+
+/* §4.8.10's `<track kind>`: "The attribute's missing value default is the subtitles state, and its invalid
+   value default is the metadata state" — two different states, so `<track>` reflects "subtitles" and
+   `<track kind=bogus>` reflects "metadata". */
+enum { TRACK_SUBTITLES = 0, TRACK_CAPTIONS, TRACK_DESCRIPTIONS, TRACK_CHAPTERS, TRACK_METADATA };
+static const EnumeratedKeyword TRACK_KIND_KW[] = {
+    { "subtitles", TRACK_SUBTITLES }, { "captions", TRACK_CAPTIONS },
+    { "descriptions", TRACK_DESCRIPTIONS }, { "chapters", TRACK_CHAPTERS },
+    { "metadata", TRACK_METADATA }, { NULL, 0 }
+};
+static const EnumeratedAttribute TRACK_KIND_ATTR = {
+    TRACK_KIND_KW, TRACK_SUBTITLES, TRACK_METADATA, TRACK_METADATA
+};
+
+/* HTMLElement's OWN reflections — §3.2.6's global attributes.
+   NO `autocapitalize` HERE. §6.8.7 gives it GETTER STEPS rather than a reflection: they read the element's OWN
+   AUTOCAPITALIZATION HINT, which falls through an empty attribute value to the element's FORM OWNER, and they
+   name the answer for two of the five states explicitly because two keywords map to each of them ("off"/"none"
+   and "on"/"sentences"), which is precisely the case §2.3.3's first canonical-keyword arm does not decide. It
+   is a member of core/html/global_attributes.c beside the other globals whose getters walk the tree. */
 static const ElReflect R_HTML[] = {
     { "title", "title", REFLECT_STRING }, { "lang", "lang", REFLECT_STRING },
-    { "dir", "dir", REFLECT_STRING }, { "accessKey", "accesskey", REFLECT_STRING },
-    { "autocapitalize", "autocapitalize", REFLECT_STRING },
-    { "enterKeyHint", "enterkeyhint", REFLECT_STRING }, { "inputMode", "inputmode", REFLECT_STRING },
-    { "nonce", "nonce", REFLECT_STRING }, { "popover", "popover", REFLECT_STRING },
+    { "dir", "dir", REFLECT_ENUM, .en = &DIR_ATTRIBUTE },
+    { "accessKey", "accesskey", REFLECT_STRING },
+    { "enterKeyHint", "enterkeyhint", REFLECT_ENUM, .en = &ENTERKEYHINT_ATTR },
+    { "inputMode", "inputmode", REFLECT_ENUM, .en = &INPUTMODE_ATTR },
+    { "nonce", "nonce", REFLECT_STRING },
+    { "popover", "popover", REFLECT_ENUM, .en = &POPOVER_ATTR },
     { "hidden", "hidden", REFLECT_BOOL }, { "inert", "inert", REFLECT_BOOL },
     { "autofocus", "autofocus", REFLECT_BOOL },
     /* §2.6.2 `[Reflect, ReflectRange=(0,8)] unsigned long` — no [ReflectDefault], so an unparseable or absent
@@ -113,7 +209,7 @@ static const ElReflect R_ANCHOR[] = {
     { "target", "target", REFLECT_STRING },
     { "rel", "rel", REFLECT_STRING }, { "download", "download", REFLECT_STRING },
     { "hreflang", "hreflang", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
-    { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
+    { "referrerPolicy", "referrerpolicy", REFLECT_ENUM, .en = &REFERRER_POLICY_ATTRIBUTE },
 };
 static const ElReflect R_AREA[] = {   /* `href` is §4.6.3's, as on <a> */
     { "target", "target", REFLECT_STRING },
@@ -122,8 +218,10 @@ static const ElReflect R_AREA[] = {   /* `href` is §4.6.3's, as on <a> */
 static const ElReflect R_LINK[] = {
     { "href", "href", REFLECT_URL }, { "rel", "rel", REFLECT_STRING },
     { "type", "type", REFLECT_STRING }, { "media", "media", REFLECT_STRING },
-    { "as", "as", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
-    { "integrity", "integrity", REFLECT_STRING }, { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
+    { "as", "as", REFLECT_ENUM, .en = &LINK_AS_ATTR },
+    { "crossOrigin", "crossorigin", REFLECT_ENUM, .en = &CORS_SETTINGS_ATTRIBUTE },
+    { "integrity", "integrity", REFLECT_STRING },
+    { "referrerPolicy", "referrerpolicy", REFLECT_ENUM, .en = &REFERRER_POLICY_ATTRIBUTE },
     { "disabled", "disabled", REFLECT_BOOL },
 };
 /* NO `async` HERE. §4.12.1 defines its getter and setter steps over the element's `force async` boolean and not
@@ -132,39 +230,49 @@ static const ElReflect R_LINK[] = {
    question in both directions. core/html/html_script.c owns it, beside the flag. */
 static const ElReflect R_SCRIPT[] = {
     { "src", "src", REFLECT_URL }, { "type", "type", REFLECT_STRING },
-    { "integrity", "integrity", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
-    { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
+    { "integrity", "integrity", REFLECT_STRING },
+    { "crossOrigin", "crossorigin", REFLECT_ENUM, .en = &CORS_SETTINGS_ATTRIBUTE },
+    { "referrerPolicy", "referrerpolicy", REFLECT_ENUM, .en = &REFERRER_POLICY_ATTRIBUTE },
     { "defer", "defer", REFLECT_BOOL },
     { "noModule", "nomodule", REFLECT_BOOL },
 };
 static const ElReflect R_IMG[] = {
     { "src", "src", REFLECT_URL }, { "srcset", "srcset", REFLECT_STRING },
     { "sizes", "sizes", REFLECT_STRING }, { "alt", "alt", REFLECT_STRING },
-    { "useMap", "usemap", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
-    { "referrerPolicy", "referrerpolicy", REFLECT_STRING }, { "loading", "loading", REFLECT_STRING },
-    { "decoding", "decoding", REFLECT_STRING }, { "isMap", "ismap", REFLECT_BOOL },
+    { "useMap", "usemap", REFLECT_STRING },
+    { "crossOrigin", "crossorigin", REFLECT_ENUM, .en = &CORS_SETTINGS_ATTRIBUTE },
+    { "referrerPolicy", "referrerpolicy", REFLECT_ENUM, .en = &REFERRER_POLICY_ATTRIBUTE },
+    { "loading", "loading", REFLECT_ENUM, .en = &LAZY_LOADING_ATTRIBUTE },
+    { "decoding", "decoding", REFLECT_ENUM, .en = &DECODING_ATTR }, { "isMap", "ismap", REFLECT_BOOL },
 };
 static const ElReflect R_IFRAME[] = {
     { "src", "src", REFLECT_URL }, { "srcdoc", "srcdoc", REFLECT_STRING },
     { "name", "name", REFLECT_STRING }, { "allow", "allow", REFLECT_STRING },
-    { "referrerPolicy", "referrerpolicy", REFLECT_STRING }, { "loading", "loading", REFLECT_STRING },
+    { "referrerPolicy", "referrerpolicy", REFLECT_ENUM, .en = &REFERRER_POLICY_ATTRIBUTE },
+    { "loading", "loading", REFLECT_ENUM, .en = &LAZY_LOADING_ATTRIBUTE },
     { "allowFullscreen", "allowfullscreen", REFLECT_BOOL },
 };
 static const ElReflect R_FORM[] = {
-    { "action", "action", REFLECT_STRING }, { "method", "method", REFLECT_STRING },
+    { "action", "action", REFLECT_STRING },
+    { "method", "method", REFLECT_ENUM, .en = &HTML_FORM_METHOD_ATTRIBUTE },
     { "name", "name", REFLECT_STRING }, { "target", "target", REFLECT_STRING },
-    { "enctype", "enctype", REFLECT_STRING }, { "acceptCharset", "accept-charset", REFLECT_STRING },
-    { "autocomplete", "autocomplete", REFLECT_STRING }, { "rel", "rel", REFLECT_STRING },
+    { "enctype", "enctype", REFLECT_ENUM, .en = &HTML_FORM_ENCTYPE_ATTRIBUTE },
+    { "acceptCharset", "accept-charset", REFLECT_STRING },
+    { "autocomplete", "autocomplete", REFLECT_ENUM, .en = &HTML_FORM_AUTOCOMPLETE_ATTRIBUTE },
+    { "rel", "rel", REFLECT_STRING },
     { "noValidate", "novalidate", REFLECT_BOOL },
 };
 static const ElReflect R_INPUT[] = {
-    { "name", "name", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
+    { "name", "name", REFLECT_STRING },
+    { "type", "type", REFLECT_ENUM, .en = &HTML_INPUT_TYPE_ATTRIBUTE },
     { "defaultValue", "value", REFLECT_STRING }, { "placeholder", "placeholder", REFLECT_STRING },
     { "pattern", "pattern", REFLECT_STRING }, { "accept", "accept", REFLECT_STRING },
     { "autocomplete", "autocomplete", REFLECT_STRING }, { "min", "min", REFLECT_STRING },
     { "max", "max", REFLECT_STRING }, { "step", "step", REFLECT_STRING },
-    { "formAction", "formaction", REFLECT_STRING }, { "formMethod", "formmethod", REFLECT_STRING },
-    { "formEnctype", "formenctype", REFLECT_STRING }, { "formTarget", "formtarget", REFLECT_STRING },
+    { "formAction", "formaction", REFLECT_STRING },
+    { "formMethod", "formmethod", REFLECT_ENUM, .en = &HTML_FORM_FORMMETHOD_ATTRIBUTE },
+    { "formEnctype", "formenctype", REFLECT_ENUM, .en = &HTML_FORM_FORMENCTYPE_ATTRIBUTE },
+    { "formTarget", "formtarget", REFLECT_STRING },
     { "src", "src", REFLECT_URL }, { "alt", "alt", REFLECT_STRING },
     { "disabled", "disabled", REFLECT_BOOL }, { "required", "required", REFLECT_BOOL },
     { "readOnly", "readonly", REFLECT_BOOL }, { "multiple", "multiple", REFLECT_BOOL },
@@ -173,7 +281,8 @@ static const ElReflect R_INPUT[] = {
 static const ElReflect R_BUTTON[] = {
     { "name", "name", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
     { "value", "value", REFLECT_STRING }, { "formAction", "formaction", REFLECT_STRING },
-    { "formMethod", "formmethod", REFLECT_STRING }, { "disabled", "disabled", REFLECT_BOOL },
+    { "formMethod", "formmethod", REFLECT_ENUM, .en = &HTML_FORM_FORMMETHOD_ATTRIBUTE },
+    { "disabled", "disabled", REFLECT_BOOL },
 };
 static const ElReflect R_TEXTAREA[] = {
     { "name", "name", REFLECT_STRING }, { "placeholder", "placeholder", REFLECT_STRING },
@@ -208,7 +317,8 @@ static const ElReflect R_SOURCE[] = {
 };
 static const ElReflect R_TRACK[]  = {
     { "src", "src", REFLECT_URL }, { "srclang", "srclang", REFLECT_STRING },
-    { "label", "label", REFLECT_STRING }, { "kind", "kind", REFLECT_STRING },
+    { "label", "label", REFLECT_STRING },
+    { "kind", "kind", REFLECT_ENUM, .en = &TRACK_KIND_ATTR },
     { "default", "default", REFLECT_BOOL },
 };
 /* §4.8.9's HTMLVideoElement declares TWO reflections of its own; the six `<audio>` and `<video>` share are
@@ -645,13 +755,15 @@ void html_element_init(JSContext *ctx)
             }
     }
     /* EVERY REFLECTION DECLARED ONCE, here, with the base index each row's install names them by. */
-    g_html_refl_base = element_declare_reflections(ctx, R_HTML, (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
+    g_html_refl_base = element_declare_reflections(ctx, "HTMLElement", R_HTML,
+                                                  (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
     for (i = 0; i < HTML_IFACE_N; i++) {
         for (j = 0; j < i; j++)
             if (g_iface_class[j] == g_iface_class[i]) break;
         g_iface_refl_base[i] = (j < i) ? g_iface_refl_base[j]
                              : (g_iface_nrefl[i]
-                                    ? element_declare_reflections(ctx, g_iface_refl[i], g_iface_nrefl[i])
+                                    ? element_declare_reflections(ctx, HTML_IFACE[i].iface,
+                                                                  g_iface_refl[i], g_iface_nrefl[i])
                                     : -1);
     }
     /* THE MIXINS' AND SUB-INTERFACES' DECLARATIONS, once per agent — their installs run per realm below. */

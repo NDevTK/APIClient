@@ -80,6 +80,8 @@
 #include "core/events/event.h"
 #include "core/frame/sandboxing.h"
 #include "core/events/event_target.h"
+#include "core/html/cors_settings_attribute.h"   /* §2.5.4's `crossorigin` table */
+#include "core/html/lazy_loading_attribute.h"    /* §2.5.7's `loading` table, shared with <img>/<iframe> */
 #include "core/html/media_element.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -111,7 +113,7 @@ static int g_refl_base = -1;
 static int g_id_load = -1, g_id_can_play = -1, g_id_play = -1, g_id_pause = -1, g_id_fast_seek = -1,
            g_id_start_date = -1, g_id_range_start = -1, g_id_range_end = -1;
 static int g_set_src_object = -1, g_set_current_time = -1, g_set_volume = -1, g_set_muted = -1,
-           g_set_rate = -1, g_set_default_rate = -1, g_set_pitch = -1, g_set_loading = -1;
+           g_set_rate = -1, g_set_default_rate = -1, g_set_pitch = -1;
 static int g_task_stepid = -1, g_select_stepid = -1;
 static int g_ready;
 
@@ -1746,54 +1748,6 @@ static JSValue js_media_set_pitch(JSContext *ctx, JSValueConst this_val, JSValue
     return JS_UNDEFINED;
 }
 
-/* An ASCII CASE-INSENSITIVE match — HTML's own comparison for a keyword of an enumerated attribute, which is
-   what `<video loading="LAZY">` needs and what the C library's locale-dependent strcasecmp is not. */
-static bool media_ascii_eq(const char *a, const char *b)
-{
-    size_t i;
-
-    for (i = 0; a[i] && b[i]; i++) {
-        char x = a[i], y = b[i];
-
-        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return a[i] == b[i];
-}
-
-/* §4.8.11.5's `loading` — an enumerated attribute limited to only known values, whose invalid and missing
-   value defaults are both the Eager state. The getter therefore returns the canonical keyword of the state the
-   content value corresponds to, which is what "limited to only known values" means (§2.6.1's reflect rules)
-   and is why this is not a plain string reflection. */
-static JSValue js_media_get_loading(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    char *v;
-    bool lazy;
-
-    (void)magic;
-    if (!media_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "loading read on something that is not a media element");
-    v = element_attr_get(ctx, this_val, "loading");
-    lazy = v && media_ascii_eq(v, "lazy");
-    free(v);
-    return JS_NewString(ctx, lazy ? "lazy" : "eager");
-}
-
-static JSValue js_media_set_loading(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
-{
-    const char *s;
-
-    (void)magic;
-    if (!media_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "loading set on something that is not a media element");
-    s = JS_ToCString(ctx, val);
-    if (!s) return JS_EXCEPTION;
-    element_attr_set(ctx, this_val, "loading", s);
-    JS_FreeCString(ctx, s);
-    return JS_UNDEFINED;
-}
-
 /* §4.8.11.3's `canPlayType(type)`. */
 static JSValue js_media_can_play_type(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic)
@@ -1945,10 +1899,30 @@ static JSValue js_media_pause(JSContext *ctx, JSValueConst this_val, int argc, J
    `[CEReactions, ReflectURL] attribute USVString src` and the registry had no URL kind, so the hand-written
    getter answered the RAW attribute — `<video src="/a.mp4">` read back `/a.mp4` where every browser answers
    the absolute URL. Both bodies are deleted; the kind carries it. */
+/* §4.8.11.5's `preload`. Its EMPTY value default is the Automatic state, and its missing and invalid value
+   defaults are the one place in this file where the standard hands the decision over: "The attribute's missing
+   value default and invalid value default are both implementation-defined, though the Metadata state is
+   suggested as a compromise between reducing server load and providing an optimal user experience." So Metadata
+   is the section's OWN suggestion taken, not a guess — and it is observable, since §2.6.1's getter answers
+   `<video>.preload` with that state's keyword. */
+enum { PRELOAD_NONE = 0, PRELOAD_METADATA, PRELOAD_AUTOMATIC };
+static const EnumeratedKeyword PRELOAD_KW[] = {
+    { "none", PRELOAD_NONE }, { "metadata", PRELOAD_METADATA }, { "auto", PRELOAD_AUTOMATIC }, { NULL, 0 }
+};
+static const EnumeratedAttribute PRELOAD_ATTR = {
+    PRELOAD_KW, PRELOAD_METADATA, PRELOAD_AUTOMATIC, PRELOAD_METADATA
+};
+
 static const ElReflect R_MEDIA[] = {
     { "src",         "src",         REFLECT_URL },
-    { "crossOrigin", "crossorigin", REFLECT_STRING },
-    { "preload",     "preload",     REFLECT_STRING },
+    { "crossOrigin", "crossorigin", REFLECT_ENUM, .en = &CORS_SETTINGS_ATTRIBUTE },
+    { "preload",     "preload",     REFLECT_ENUM, .en = &PRELOAD_ATTR },
+    /* §4.8.11's `loading`, WHICH WAS A HAND-WRITTEN ACCESSOR PAIR IN THIS FILE. Its getter already knew it had
+       to answer a canonical keyword — it said so, citing §2.6.1 — and implemented that by comparing the raw
+       attribute against "lazy" with a private ASCII fold, which is a third copy of §2.3.3 and could not be
+       reached by the `<img>` and `<iframe>` reflections of the same attribute. Both bodies are deleted; the
+       kind carries it, and core/html/lazy_loading_attribute.c carries §2.5.7's table for all three. */
+    { "loading",     "loading",     REFLECT_ENUM, .en = &LAZY_LOADING_ATTRIBUTE },
     { "autoplay",    "autoplay",    REFLECT_BOOL },
     { "loop",        "loop",        REFLECT_BOOL },
     { "controls",    "controls",    REFLECT_BOOL },
@@ -2001,7 +1975,8 @@ void media_element_declare(JSContext *ctx)
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
     CHECK(g_atom_state != JS_ATOM_NULL, "§4.8.11: the media element state slot key could not be interned");
 
-    g_refl_base = element_declare_reflections(ctx, R_MEDIA, (int)(sizeof(R_MEDIA) / sizeof(R_MEDIA[0])));
+    g_refl_base = element_declare_reflections(ctx, "HTMLMediaElement", R_MEDIA,
+                                              (int)(sizeof(R_MEDIA) / sizeof(R_MEDIA[0])));
     g_id_load = idl_method_id(ctx, NULL, 0, js_media_load, 0);
     g_id_play = idl_method_id(ctx, NULL, 0, js_media_play, 0);
     g_id_pause = idl_method_id(ctx, NULL, 0, js_media_pause, 0);
@@ -2018,7 +1993,6 @@ void media_element_declare(JSContext *ctx)
     g_set_rate = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_rate, MS_RATE);
     g_set_default_rate = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_rate, MS_DEFAULT_RATE);
     g_set_pitch = idl_setter_id(ctx, IDL_BOOLEAN, false, js_media_set_pitch, 0);
-    g_set_loading = idl_setter_id(ctx, IDL_DOMSTRING, false, js_media_set_loading, 0);
 
     g_task_stepid = JS_RegisterStepDef(rt, &media_task_def);
     g_select_stepid = JS_RegisterStepDef(rt, &media_select_def);
@@ -2088,7 +2062,6 @@ void media_element_install_proto(JSContext *ctx, JSValueConst html_proto)
     idl_install_accessor(ctx, proto, "ended", js_media_get, MG_ENDED, -1);
     idl_install_accessor(ctx, proto, "volume", js_media_get, MG_VOLUME, g_set_volume);
     idl_install_accessor(ctx, proto, "muted", js_media_get, MG_MUTED, g_set_muted);
-    idl_install_accessor(ctx, proto, "loading", js_media_get_loading, 0, g_set_loading);
     idl_install_method(ctx, proto, "load", g_id_load);
     idl_install_method(ctx, proto, "canPlayType", g_id_can_play);
     idl_install_method(ctx, proto, "fastSeek", g_id_fast_seek);
@@ -2150,5 +2123,5 @@ void media_element_free(JSRuntime *rt)
     g_refl_base = g_id_load = g_id_can_play = g_id_play = g_id_pause = g_id_fast_seek = -1;
     g_id_start_date = g_id_range_start = g_id_range_end = -1;
     g_set_src_object = g_set_current_time = g_set_volume = g_set_muted = -1;
-    g_set_rate = g_set_default_rate = g_set_pitch = g_set_loading = -1;
+    g_set_rate = g_set_default_rate = g_set_pitch = -1;
 }

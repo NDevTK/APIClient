@@ -6,6 +6,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "core/html/enumerated_attribute.h"   /* §2.3.3's definitions for the enumerated attributes below */
 
 /* Install §4.10's members on the interfaces that DECLARE them. The html layer owns the per-tag prototypes and
    hands them over; this file owns the algorithms. */
@@ -103,6 +104,33 @@ typedef enum {
     INPUT_STATE_RESET, INPUT_STATE_BUTTON,
 } HtmlInputState;
 HtmlInputState html_form_input_state(const lxb_dom_node_t *n);
+
+/* §4.10.5.1's `type` AS §2.3.3 DEFINES IT, exported for the consumer that needs the DEFINITION rather than this
+   element's state: §2.6.1's `input.type` is a limited-to-only-known-values reflection, so it must hand back the
+   CANONICAL KEYWORD of the state, which the enum above cannot spell. Sharing the definition is what stops the
+   reflection becoming a twenty-third spelling of the keyword list. */
+extern const EnumeratedAttribute HTML_INPUT_TYPE_ATTRIBUTE;
+
+/* §4.10.19.6's FOUR FORM SUBMISSION ATTRIBUTES, as TWO keyword tables and FOUR definitions — which is the shape
+   the section itself states: "The method and formmethod content attributes are enumerated attributes with the
+   following keywords and states ... The method attribute's missing value default and invalid value default are
+   both the GET state. The formmethod attribute has no missing value default, and its invalid value default is
+   the GET state", and the same sentence again for `enctype`/`formenctype`. So the pairs differ ONLY in the
+   missing value default, and the one without it is why core/html/enumerated_attribute.h has a no-state value at
+   all: `document.createElement('input').formMethod` is the empty string, not "get".
+   `method` and `enctype` ARE THE ELEMENT'S OWN STATES and are what §4.10.22.3's submission reads; the
+   `form`-prefixed two are the submitter's override, which is why the section defines "the method of an element"
+   over both. */
+extern const EnumeratedAttribute HTML_FORM_METHOD_ATTRIBUTE;
+extern const EnumeratedAttribute HTML_FORM_FORMMETHOD_ATTRIBUTE;
+extern const EnumeratedAttribute HTML_FORM_ENCTYPE_ATTRIBUTE;
+extern const EnumeratedAttribute HTML_FORM_FORMENCTYPE_ATTRIBUTE;
+
+/* §4.10.3's `autocomplete` ON A `form` ELEMENT — "on"/"off", both defaults the On state. It is NOT the
+   `autocomplete` of §4.10.19.7, which is a control's autofill detail tokens and whose IDL getter returns "the
+   element's IDL-exposed autofill value" rather than reflecting anything; one name, two attributes, and only
+   this one is an enumerated attribute. */
+extern const EnumeratedAttribute HTML_FORM_AUTOCOMPLETE_ATTRIBUTE;
 
 /* §4.10.7's PLACEHOLDER LABEL OPTION: with `required` specified and a display size of 1, the FIRST option in
    the select's list of options, when its value is the empty string and its parent is the select itself. It is

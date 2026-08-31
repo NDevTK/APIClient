@@ -29,6 +29,20 @@
 
 #include "quickjs.h"
 
+#include "core/html/enumerated_attribute.h"
+
+/* §3.2.6.4's ENUMERATED `dir` STATES. Undefined is BOTH the missing value default and the invalid value
+   default, so `<div>` and `<div dir=sideways>` are in the same state — and it is the state with NO KEYWORD,
+   which is what makes `<div dir=sideways>.dir` answer the empty string under §2.6.1's limited-to-only-known-
+   values getter rather than the word the page wrote. */
+enum { DIR_UNDEFINED = 0, DIR_LTR, DIR_RTL, DIR_AUTO };
+
+/* §3.2.6.4's attribute as §2.3.3 defines it, EXPORTED because §2.6.1's reflection of it is not this file's
+   algorithm: `HTMLElement.dir` is a limited-to-only-known-values mirror of one attribute on one element, so it
+   is a registry row (core/dom/element.h) and not one of §3.2.6's tree walks. The row and the walk share this
+   definition rather than each spelling out three keywords, which is the copy this engine keeps paying for. */
+extern const EnumeratedAttribute DIR_ATTRIBUTE;
+
 /* §3.2.6's two answers. There is no third: "the directionality of an element is either 'ltr' or 'rtl'". The
    NULL that `auto directionality` can answer is not one of these — it means "this element's own text decided
    nothing", and every caller of it turns that into 'ltr' at its own step. */

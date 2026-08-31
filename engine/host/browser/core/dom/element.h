@@ -5,6 +5,10 @@
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 #include "core/idl_args.h"
+/* §2.3.3's keyword/state machinery, for the REFLECT_ENUM row below. The reflection registry is HTML's §2.6.1
+   already — its URL and unsigned long models are §2.6.2's `[ReflectURL]` and `[ReflectRange]` — so this is the
+   same layer the file has always spoken and not a new dependency for the DOM. */
+#include "core/html/enumerated_attribute.h"
 
 void    element_init(JSContext *ctx);
 void    element_free(JSRuntime *rt);
@@ -76,8 +80,14 @@ JSValue element_proto(JSContext *ctx);
    unmodelled and they look like a pattern. They are twenty-eight component getters.
 
    A KIND MUST ANSWER BOTH DIRECTIONS FROM THE ATTRIBUTE ALONE. That is the test for whether something belongs
-   in this enum, and it is also why core/html/global_attributes.c's six enumerated globals are not rows: their
-   getters walk ANCESTORS.
+   in this enum, and it is also why core/html/global_attributes.c's enumerated globals are not rows: their
+   getters walk the TREE — an ancestor chain for `translate`, `spellcheck`, `writingSuggestions` and
+   `contentEditable`, the element's FORM OWNER for `autocorrect` and for §6.8.7's own autocapitalization hint.
+   THE TEST CUTS BOTH WAYS AND THE OTHER SIDE IS WHERE ROWS WENT MISSING: being an ENUMERATED attribute is not
+   what puts a member in global_attributes.c. `dir`, `inputMode`, `enterKeyHint` and `popover` are enumerated
+   and their getters walk nothing — each is §2.6.1's limited-to-only-known-values reflection of one attribute on
+   one element — so they are REFLECT_ENUM rows, and they were REFLECT_STRING rows answering raw bytes for as
+   long as the enum had no kind for them.
 
    AN UNSIGNED LONG is §2.6.1's `unsigned long` model, and it is the first kind whose answer is not the
    attribute's bytes: §2.3.4.2's rules parse them and the reflection then applies its OWN range. The range and
@@ -85,12 +95,33 @@ JSValue element_proto(JSContext *ctx);
    the same mechanism — a value outside a RANGE is pulled to the nearest end, a value that fails to PARSE falls
    to the default. `<td colspan="0">` is 1 (the range starts at 1) and `<td colspan="x">` is also 1 (the
    default), by two different steps that happen to agree here and do not for `rowspan`, whose range starts at
-   0 and whose default is 1. */
-enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL, REFLECT_ULONG };
+   0 and whose default is 1.
+
+   AN ENUM is §2.6.1's "LIMITED TO ONLY KNOWN VALUES", and it is a KIND rather than a component for exactly the
+   reason stated three paragraphs up: it answers both directions from the attribute alone. Its setter is
+   §2.6.1's plain "set the content attribute with the given value" — the same one `DOMString` runs, which is why
+   there is no separate setter body below — and its getter is the section's own two branches over §2.3.3's
+   determine-the-state: "if contentAttributeValue does not correspond to any state of attributeDefinition ..., or
+   if it is in a state of attributeDefinition with no associated keyword value, then return the empty string.
+   Return the canonical keyword for the state ... that contentAttributeValue corresponds to."
+   A REFLECT_STRING ROW FOR ONE OF THESE IS A DIFFERENT VALUE AND NOT A LENIENT READING, the same way a
+   REFLECT_URL row was: the mirror answers the attribute's RAW BYTES, so `<div dir="RTL">.dir` read "RTL" where
+   §3.2.6.4 answers "rtl" and `<div dir="banana">.dir` read "banana" where it answers "". The IDL cannot state
+   this — "limited to only known values" is prose, so §2.6.2 gives it no extended attribute — which is why the
+   spec-versus-tree audit that catches a missing member cannot see it, and why the whole class had to be found
+   by reading §2.6.1 against every row rather than by any gate.
+   THE DEFINITION IS §2.3.3'S, NOT THIS TABLE'S: a row points at an `EnumeratedAttribute` that the section
+   defining the attribute owns, so `method` and `formmethod` share one keyword table and differ only in their
+   defaults, and the six interfaces that reflect `referrerpolicy` share one definition rather than six copies. */
+enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL, REFLECT_ULONG, REFLECT_ENUM };
 /* The numeric fields are TRAILING so that every row declaring none of them is unchanged — an omitted brace
    initialiser zeroes them, and each is read only through the `has_` flag beside it. That flag is a POSITIVE
    statement that the IDL declares no default/range, never a hole a `?:` fills: §2.6.1's steps ask "if the
-   reflected IDL attribute HAS a default value", so absence is one of the algorithm's own branches. */
+   reflected IDL attribute HAS a default value", so absence is one of the algorithm's own branches.
+   `en` IS THE SAME KIND OF POSITIVE STATEMENT and its `has_` flag is the KIND: it is non-NULL exactly when the
+   row is REFLECT_ENUM, asserted at the declaration in both directions — a row that carries a definition on
+   another kind would silently reflect raw bytes for an attribute somebody had already written the table for,
+   which is the defect this kind exists to end arriving through the fix for it. */
 typedef struct {
     const char *idl;
     const char *attr;
@@ -99,12 +130,19 @@ typedef struct {
     bool        has_dflt;
     long long   rmin, rmax; /* §2.6.2 [ReflectRange] — read only when has_range */
     bool        has_range;
+    const EnumeratedAttribute *en;   /* §2.3.3's attribute definition — REFLECT_ENUM rows only */
 } ElReflect;
 
 /* Install an interface's OWN reflections on its prototype. Each is assigned a magic out of one shared registry,
    so the two bodies that implement every reflection still take exactly one index. */
-/* DECLARE a table of reflections once per AGENT; returns the BASE registry index the install names them by. */
-int  element_declare_reflections(JSContext *ctx, const ElReflect *r, int n);
+/* DECLARE a table of reflections once per AGENT; returns the BASE registry index the install names them by.
+   `iface` NAMES THE INTERFACE THE TABLE BELONGS TO, and it is an argument rather than something this function
+   could derive because the declaration's should-never-happens are checked HERE while the tables are written
+   forty files-worth away — one call site walks every per-interface table in a loop, so a crash stamped with
+   this function's own file and line names one line for the whole platform and its remedy ("fix the row") then
+   has no object. The row's IDL name alone does not close that: `type` is a row on nine interfaces and `name` on
+   more. So the interface travels with the operation and the abort says `HTMLLinkElement.type`. */
+int  element_declare_reflections(JSContext *ctx, const char *iface, const ElReflect *r, int n);
 /* INSTALL the `n` reflections declared at `base` onto THIS realm's prototype. */
 void element_install_reflections(JSContext *ctx, JSValueConst proto, int base, int n);
 
