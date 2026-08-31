@@ -1350,6 +1350,28 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
             filled = 1;
         } else {
             filled = engine_provide(ctx, r->method, r->url, reply);
+            /* THE CALLER'S HALF OF THE PROVIDE EDGE'S CONTRACT, WHICH THIS HOST DID NOT HAVE. engine_provide
+               tells "answered twice" apart from "answered for nobody" and asserts only the first, delegating
+               the second to the caller BY NAME — because only the caller holds the credit that can excuse it
+               (engine.h: "0 with nothing matched is the host's pairing being off (or a sale —
+               engine_take_paged_owed), and it is the CALLER that tells those apart"). main.c has that assert
+               and this runner did not, so an assert contract with a writer and no reader stood at the one
+               seam a conformance gate drives hardest.
+               WHAT IT WAS HIDING IS NOT SILENCE, WHICH IS WHY IT MATTERS MORE HERE THAN IT READS. A record
+               that no reply fills stays OUTSTANDING, so the join keeps listing it and wpt_issue_pending asks
+               for it again at the very next slice — wpt_request_asked dedups against requests IN FLIGHT and
+               this one has just been released. So an unmatched reply is a REQUEST LOOP at the corpus server,
+               and the loop's own `did = 1` keeps the frontier from ever reaching the stall whose DCHECK would
+               have named it. Two states, one symptom, and the flow that IS parked never resumes either way.
+               A SALE IS THE OTHER WAY `filled == 0` HAPPENS AND IT IS NOT A BUG: the engine sold the flow that
+               was waiting on this reply to the cold tier, and its recipe re-issues the request. The take
+               CONSUMES one such credit, so it is a side effect and cannot live in a DCHECK's condition — the
+               `if` runs in every build and only the message is dev-only, exactly as main.c's does. */
+            if (filled == 0 && !engine_take_paged_owed())
+                DFAILF("a corpus reply was provided for a request no flow is parked on and none was paged "
+                       "out — the pair this runner fetched under is not the pair the frontier parked on, so "
+                       "the flow that IS parked waits for the rest of the run and this address is re-issued "
+                       "at every slice. request=%s %s", r->method, r->url);
             /* THE REQUEST RECORD THIS ANSWERED, released only now: it holds the body and headers that made
                the question, and a second flow parking the same pair before the answer landed is the case its
                own DCHECK is there to catch. */
