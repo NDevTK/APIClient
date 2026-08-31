@@ -224,4 +224,48 @@ typedef struct {
 size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                  LineBoxFragment **out);
 
+/* WHERE A NON-REPLACED INLINE BOX'S OWN MARGIN EDGES REACH on ONE PHYSICAL AXIS — `*lo` and `*hi` receive the
+ * extreme over ALL of its fragments, in the same frame `line_box_content_span` and `LineBoxFragment` report in
+ * (offsets from `*establishing`'s content box origin on that axis), with `*establishing` receiving the block
+ * container that frame belongs to.
+ *
+ * IT EXISTS BECAUSE AN INLINE BOX HAS NO `width` AND NO `height`, so the ONE-ORIGIN-PLUS-ONE-EXTENT shape every
+ * other box's margin edge is composed from cannot describe it. CSS 2.2 §10.3.1 "Inline, non-replaced elements"
+ * is one sentence long — "The 'width' property does not apply" — and §10.6.1 "Inline, non-replaced elements"
+ * opens with "The 'height' property does not apply", so core/layout/used_value.h's border-edge EXTENT asserts
+ * against exactly this box and a caller that composed one would abort in that file, naming CSSOM §9's
+ * applicability contract, for a question that was asked here. §9.4.2 says what is there instead: "when an
+ * inline box exceeds the width of a line box, it is SPLIT into several boxes and these boxes are distributed
+ * across several line boxes", so the box is a SET of border areas and its margin edge is an extreme over them.
+ *
+ * ITS CALLER IS CSSOM VIEW §2 "Terminology"'s SCROLLING AREA — "the right margin edge of all of the element's
+ * descendants' boxes" — and an inline box is one of those descendants whenever a page asks `scrollWidth` of a
+ * container holding a `<span>`. CSSOM VIEW §6's own `scrollWidth` steps have no inline exclusion (its step 1
+ * terminates only for "no associated box", where `clientWidth`'s terminates for "the box is inline"), so this
+ * is not a corner: it is the shape of every paragraph.
+ *
+ * THE TWO MARGINS GO ON THE TWO FRAGMENTS THAT CARRY THE BOX'S OWN BOUNDARIES, WHICH ARE THE FIRST AND THE
+ * LAST, and that is `line_box_inline_fragments`' own loop rather than a rule restated here. §9.4.2: "when an
+ * inline box is split, margins, borders, and padding have NO VISUAL EFFECT where the split occurs (or at any
+ * split, when there are several)" — so a middle fragment runs edge to edge with no margin on either side. That
+ * entry emits one fragment per line its `[open, close]` item range intersects, in line order, and its lines
+ * PARTITION the item collection: the first intersecting line is therefore the one holding `open` and the last
+ * the one holding `close`, which is precisely where it took the two margins OFF to report §6's border area.
+ * They go back on here and nowhere else.
+ *
+ * THE BLOCK AXIS TAKES NO MARGIN AT ALL, and that is CSS 2.2 §8.3 "Margin properties" in so many words: "These
+ * properties apply to all elements, but VERTICAL MARGINS WILL NOT HAVE ANY EFFECT ON NON-REPLACED INLINE
+ * ELEMENTS", restated in the `margin-top`/`margin-bottom` definition as "These properties have no effect on
+ * non-replaced inline elements." So on that axis the margin edge IS the border area §10.6.1 nests around the
+ * content area, and adding a vertical margin here would report an overflow no user agent draws.
+ *
+ * THE EXTREME IS OVER EVERY FRAGMENT AND NOT OVER THE TWO ENDS, and §8.3's NEGATIVE margin is what makes those
+ * two different answers: "negative values for margin properties are allowed", so a `margin-left: -20px` puts
+ * the FIRST fragment's margin edge 20px INSIDE its own border edge, and a middle fragment — whose split edge
+ * carries no margin at all — is then the outermost thing the box has. Each fragment contributes the coordinate
+ * the split sentence gives IT, and the extreme is over those; a fragment's bare border edge where a margin
+ * belongs is not a coordinate any margin edge of this box occupies and is never an operand. */
+void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                 bool vertical, CssPx *lo, CssPx *hi);
+
 #endif

@@ -14,6 +14,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/line_box.h"
+#include "core/layout/replaced_element.h"
 #include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 
@@ -104,10 +105,25 @@ static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
     return false;
 }
 
+/* CSS 2.2 §10.3.1 "Inline, non-replaced elements" and §10.6.1 "Inline, non-replaced elements"' OWN BOX — the
+   one shape of descendant whose margin edge is not an origin plus an extent, so it is asked about BEFORE the
+   composition below is attempted rather than inside it.
+   BOTH HALVES OF THE NAME ARE THE TEST AND THE SECOND IS NOT DECORATION. §10.3.2 "Inline, replaced elements"
+   gives an inline `img` a real used `width`, and §8.3's `Applies to:` exception is written over "non-replaced
+   inline elements" alone — so a replaced inline HAS the extent `sa_descendant_edge` composes and takes that
+   path, while a non-replaced one has none and would abort inside core/layout/used_value.c's applicability
+   assert, naming CSSOM §9 and core/css/css_property_applies.c for a question this file asked. */
+static bool sa_is_non_replaced_inline(lxb_dom_element_t *el)
+{
+    return sa_computed_is(el, "display", "inline") && !replaced_element_of(el).replaced;
+}
+
 /* ONE DESCENDANT'S CONTRIBUTION — the margin edge §2's table names on the ENDING side of this axis. A margin
    edge is CSS 2 §8.1's outermost edge, so it is the placed BORDER box's origin moved outward by the margin on
    that side. Where the ENDING edge is at the higher coordinate that is the far border edge plus the
-   trailing margin, and where it is at the lower one it is the origin less the leading margin. */
+   trailing margin, and where it is at the lower one it is the origin less the leading margin.
+   IT IS ONE ORIGIN AND ONE EXTENT, SO IT IS ASKED ONLY OF A BOX THAT HAS BOTH — see `sa_is_non_replaced_inline`
+   above and `sa_inline_box_edge` below for the box that has neither. */
 static CssPx sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi)
 {
     FlowPoint o = flow_border_box_origin(d);
@@ -128,6 +144,31 @@ static CssPx sa_content_origin(lxb_dom_element_t *b, bool vertical)
     FlowPoint o = flow_padding_box_origin(b);
 
     return css_px_add(vertical ? o.y : o.x, used_value_px(b, vertical ? "padding-top" : "padding-left"));
+}
+
+/* ONE NON-REPLACED INLINE DESCENDANT'S CONTRIBUTION, which is `sa_descendant_edge`'s question over a box that
+   answers neither of its two operands. CSS 2.2 §9.4.2 "Inline formatting contexts" is why: "when an inline box
+   exceeds the width of a line box, it is SPLIT into several boxes and these boxes are distributed across
+   several line boxes", so this descendant is a SET of border areas rather than one placed rectangle, and
+   §10.3.1 and §10.6.1 remove the extent that would have sized a single one ("the 'width' property does not
+   apply", "the 'height' property does not apply"). core/layout/line_box.h owns the extreme over that set,
+   because which fragment carries which of the box's two margins is §9.4.2's own split sentence and that is the
+   file whose fill establishes it.
+   THE FRAME IS THE ESTABLISHING BOX'S CONTENT BOX, which is the frame `sa_fold_span` already composes for the
+   two shapes of §9.4.2's context above — the same `sa_content_origin`, over whichever block container
+   core/layout/line_box.h reports this box's lines belong to, which for a `<span>` nested in inline ancestors is
+   not its parent. */
+static CssPx sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi)
+{
+    lxb_dom_element_t *establishing = NULL;
+    CssPx lo, hi;
+
+    line_box_inline_margin_span(d, &establishing, vertical, &lo, &hi);
+    DCHECK(establishing != NULL,
+           "CSS 2.2 §9.4.2's formatting context was reported as NO BOX for an inline box whose fragments were "
+           "measured in it. core/layout/line_box.c walks past every inline ancestor to a block container and "
+           "crashes there when it runs out, so a NULL here is that walk having returned without either");
+    return css_px_add(sa_content_origin(establishing, vertical), ending_at_hi ? hi : lo);
 }
 
 /* ONE BLOCK CONTAINER'S INLINE FORMATTING CONTEXT folded into the running extreme — the boxes CSS 2.2 §9.2.2.1
@@ -266,7 +307,11 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                    out of it, and the inline formatting context an excluded box establishes is folded for the
                    same reason: the anonymous inline boxes on its lines have IT as their containing block. */
                 if (exclude_under == NULL || !sa_excluded(exclude_under, d)) {
-                    CssPx e = sa_descendant_edge(d, vertical, ending_at_hi);
+                    /* WHICH DERIVATION ANSWERS THIS BOX'S MARGIN EDGE is CSS 2.2 §9.2.2's own split between an
+                       inline box and everything else, asked here because §9.4.2 gives the first a SET of
+                       border areas and no `width` or `height` to size one with. */
+                    CssPx e = sa_is_non_replaced_inline(d) ? sa_inline_box_edge(d, vertical, ending_at_hi)
+                                                           : sa_descendant_edge(d, vertical, ending_at_hi);
 
                     best = ending_at_hi ? css_px_max(best, e) : css_px_min(best, e);
                 }
@@ -288,31 +333,40 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                run of inline-level children in a box of its own. So the parent being a block container IS the
                guarantee — the run is either on the element's own context or inside one of its anonymous block
                boxes, and both were folded when the walk reached it. */
-            if (block_flow_text_child_generates_box(parent, n) && !sa_is_block_container(parent))
+            if (block_flow_text_child_generates_box(parent, n) && !sa_is_block_container(parent) &&
+                !sa_is_non_replaced_inline(parent))
                 DFAIL("CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "
                       "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1 "
                       "\"Anonymous inline boxes\") holding this text run — but the element this run is a child "
-                      "of is NOT A BLOCK CONTAINER BOX, so neither of the two shapes CSS 2.2 §9.2.1 "
-                      "\"Block-level elements and block boxes\" gives an inline formatting context is here to "
-                      "be asked, and the run has not been folded in. THREE THINGS REACH THIS LINE AND EACH "
-                      "NAMES A DIFFERENT MISSING BOX. (1) An INLINE box parent (`<div>a<span>b</span></div>`): "
-                      "§9.2.2.1's own sentence is that \"any text that is DIRECTLY contained inside a block "
-                      "container element (not inside an inline element) must be treated as an anonymous inline "
-                      "element\", so this run's boxes are on the lines of the nearest block container ANCESTOR "
-                      "and are already covered there — what is missing is the `span`'s own contribution, which "
-                      "core/layout/line_box.h answers as `line_box_inline_fragments` and this walk does not "
-                      "ask for; BUILD the fragment fold beside the element's margin edge above, and this arm "
-                      "goes. (2) A `display: contents` parent, whose children css-display-3 §2.5 \"Box "
+                      "of is NEITHER A BLOCK CONTAINER BOX NOR A NON-REPLACED INLINE BOX, so neither of the "
+                      "two shapes CSS 2.2 §9.2.1 \"Block-level elements and block boxes\" gives an inline "
+                      "formatting context is here to be asked, and the run has not been folded in. "
+                      "A NON-REPLACED INLINE PARENT IS NOT ONE OF THESE AND USED TO BE, and what it was "
+                      "waiting on is built: §9.2.2.1's own sentence is that \"any text that is DIRECTLY "
+                      "contained inside a block container element (not inside an inline element) must be "
+                      "treated as an anonymous inline element\", so a `<div>a<span>b</span></div>`'s run is on "
+                      "the lines of the nearest block container ANCESTOR and was always folded there — what "
+                      "was missing was the `span`'s OWN margin edge, which `sa_inline_box_edge` above now "
+                      "takes over §9.4.2's fragments. THREE THINGS REACH THIS LINE AND EACH NAMES A DIFFERENT "
+                      "MISSING BOX. (1) A `display: contents` parent, whose children css-display-3 §2.5 \"Box "
                       "Generation: the none and contents keywords\" splices into the grandparent's box list — "
                       "\"the element must be treated as if it had been replaced in the element tree by its "
                       "contents\" — so this run's context is the grandparent's and the splice is what is "
-                      "missing; core/layout/block_flow.c's own child walk names the same absence. (3) A FLEX "
+                      "missing; core/layout/block_flow.c's own child walk names the same absence. (2) A FLEX "
                       "or GRID container parent, whose text is not §9.2.1.1's box at all: css-flexbox-1 §4 "
                       "\"Flex Items\" says \"each child text sequence is wrapped in an ANONYMOUS BLOCK "
                       "CONTAINER FLEX ITEM\", css-grid-2 §6 \"Grid Items\" says the same with `grid item` for "
                       "`flex item`, and both add that a sequence of only white space \"is instead not "
                       "rendered\" — a different box, generated by a different rule, laid out by a different "
-                      "algorithm. Which of the three this is, is the parent's computed `display`");
+                      "algorithm. (3) A REPLACED INLINE parent (`<object>x</object>`): CSS 2.2 §3.1 "
+                      "\"Definitions\" says of a replaced element that \"the content of replaced elements is "
+                      "not considered in the CSS rendering model\", so this run generates NO BOX and the "
+                      "missing thing is not a box at all but the SUPPRESSION — the walk should not have "
+                      "descended into it. core/layout/replaced_element.h answers which elements are replaced "
+                      "and in what state; BUILD the child-box suppression over it, in the ONE predicate that "
+                      "decides box existence (core/dom/element_view.h's), so this walk and "
+                      "core/layout/line_box.c's fill stop descending together rather than one at a time. "
+                      "Which of the three this is, is the parent's computed `display` and `replaced_element_of`");
         }
         if (descend && n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;
@@ -329,6 +383,33 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
     FlowPoint origin;
 
     DCHECK(el != NULL, "a scrolling area was asked for with no element");
+    /* §2's ELEMENT ROW IS WRITTEN OVER ONE PADDING EDGE, AND A NON-REPLACED INLINE BOX HAS ONE PER FRAGMENT —
+       so the row has no answer for it and this crashes HERE rather than three files down. §2's beginning edges
+       are "the element's top padding edge" and "the element's left padding edge", each a single coordinate,
+       while CSS 2.2 §9.4.2 "Inline formatting contexts" splits this box across lines ("when an inline box
+       exceeds the width of a line box, it is SPLIT into several boxes and these boxes are distributed across
+       several line boxes") and §10.3.1 and §10.6.1 leave it no `width` and no `height` to make one rectangle
+       out of. It is REACHABLE and not a corner: CSSOM VIEW §6's `scrollWidth` terminates early only for an
+       element with no associated box — its `clientWidth` neighbour is the member whose step 1 also terminates
+       when "the box is inline" — so `document.querySelector("span").scrollWidth` arrives here.
+       WHAT IT USED TO DO IS THE REASON THIS IS A CRASH AND NOT A COMMENT: the padding-edge read below asks
+       core/layout/used_value.h for an extent, which asserts §10.3.1's and §10.6.1's applicability and aborts
+       naming CSSOM §9 and core/css/css_property_applies.c — a correct assert, in a shared helper, reporting a
+       contract that had not come apart, for a question asked in this file. */
+    if (sa_is_non_replaced_inline(el))
+        DFAIL("CSSOM VIEW §2 \"Terminology\"'s SCROLLING AREA was asked for a NON-REPLACED INLINE box. §2's "
+              "element row seeds both of its beginning edges with \"the element's top padding edge\" and "
+              "\"the element's left padding edge\" and folds the same padding edge into each ending extreme, "
+              "and CSS 2.2 §9.4.2 gives this box one padding edge PER FRAGMENT rather than one — §10.3.1 "
+              "\"Inline, non-replaced elements\" (\"the 'width' property does not apply\") and §10.6.1 "
+              "\"Inline, non-replaced elements\" (\"the 'height' property does not apply\") are what leave it "
+              "no single rectangle. So §2 does not define this element's scrolling area and no user agent "
+              "reads it off one box. WHAT TO BUILD IS THE SEED, not the walk: `line_box_inline_margin_span` "
+              "(core/layout/line_box.h) already answers the extreme over this box's fragments on one axis, and "
+              "the same entry over its PADDING edges is what §2's row wants in place of the one padding box "
+              "below — everything after the seed is unchanged, because the descendant walk is over `el`'s "
+              "subtree and does not read `el`'s own extent again. Take that to the CSSOM View editors as well: "
+              "§2's row states a single padding edge for a box the CSS 2.2 sections above give several");
     /* THE ELEMENT'S OWN PADDING BOX FIRST, because its two edges are §2's table's own BEGINNING edges and
        because the placement inside it is where a box type this engine cannot lay out crashes by its own name.
        core/layout/flow_position.h owns the border-to-padding step, so the read of `border-top-width` that used

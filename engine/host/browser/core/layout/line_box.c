@@ -1125,3 +1125,48 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     *out = frags;
     return nf;
 }
+
+void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                 bool vertical, CssPx *lo, CssPx *hi)
+{
+    LineBoxFragment *frags = NULL;
+    size_t n, i;
+
+    DCHECK(el != NULL && establishing != NULL && lo != NULL && hi != NULL,
+           "CSS 2.2 §9.4.2's margin span of an inline box was asked for with no element, nowhere to report the "
+           "formatting context it is in, or nowhere to report one of the two edges");
+    n = line_box_inline_fragments(el, establishing, &frags);
+    DCHECK(n >= 1 && frags != NULL,
+           "CSS 2.2 §9.4.2's fragments were reported as NONE for an inline box that generates one. That entry's "
+           "own closing assert makes a zero count impossible — the box's two edge items are content the fill "
+           "partitions and every item is on exactly one line — so this is that contract having been broken "
+           "between two functions of one file");
+    if (vertical) {
+        /* CSS 2.2 §8.3: "vertical margins will not have any effect on non-replaced inline elements", so the
+           margin edge on this axis IS §10.6.1's border area and EVERY fragment carries its own. */
+        *lo = frags[0].block_start;
+        *hi = frags[0].block_end;
+        for (i = 1; i < n; i++) {
+            *lo = css_px_min(*lo, frags[i].block_start);
+            *hi = css_px_max(*hi, frags[i].block_end);
+        }
+    } else {
+        /* §9.4.2's split sentence decides WHICH coordinate each fragment contributes, and the two ends are the
+           only ones a margin reaches: the FIRST fragment's beginning and the LAST fragment's end are the box's
+           own boundaries, every other fragment edge is a split where "margins, borders, and padding have no
+           visual effect". A NEGATIVE margin is why the two ends are the SEED and not two more operands of a
+           loop over all of them: with `margin-left: -20px` the first fragment's MARGIN edge is 20px INSIDE its
+           border edge, and that border edge is then a coordinate no margin edge of this box occupies. */
+        *lo = css_px_sub(frags[0].inline_start, used_value_px(el, "margin-left"));
+        *hi = css_px_add(frags[n - 1].inline_end, used_value_px(el, "margin-right"));
+        for (i = 1; i < n; i++) *lo = css_px_min(*lo, frags[i].inline_start);
+        for (i = 0; i + 1 < n; i++) *hi = css_px_max(*hi, frags[i].inline_end);
+    }
+    free(frags);
+    DCHECK(css_px_sub(*hi, *lo).px >= 0.0,
+           "an inline box's margin span reported an ENDING edge before its BEGINNING edge. Both are extremes "
+           "over the SAME fragment array, each of whose rectangles `line_box_inline_fragments` asserts is "
+           "non-inverted on the inline axis and derives on the block axis from one baseline plus a "
+           "non-negative ascent and descent — so an inverted pair is the two edges having been taken over "
+           "different fragment sets");
+}
