@@ -484,11 +484,21 @@ static int js_idb_iterate_operation(JSContext *ctx, void *st, JSValue cb_result,
                "§6.7 was entered on an index cursor holding a position but no object store position — that is "
                "the state step 9.2 leaves an EXHAUSTED cursor in, and §4.9's got-value refusal is what makes "
                "it unreachable");
-        /* STEP 8: "If count is not given, let count be 1." */
+        /* STEP 8: "If count is not given, let count be 1."
+           THE COUNT IS ALWAYS A NUMBER HERE, AND THAT IS A FACT ABOUT ITS ONE PRODUCER rather than a hope:
+           §4.9's advance is the only member that mints this operation with a count, and it resolves the
+           page's operand through idl_number_of before doing so — `continue` and `continuePrimaryKey` both
+           pass undefined. Asserting it is what keeps the coercion below off the page's own value: a producer
+           that ever hands this a raw argument would run ToPrimitive from an activation with no flow base,
+           and the abort would land in the coercion instead of at the member that passed it. */
         s->count = 1;
         if (!JS_IsUndefined(count)) {
             double d;
 
+            DCHECK(JS_IsNumber(count),
+                   "§6.7 was minted with a count that is not a Number — §4.9's advance is its only source and "
+                   "resolves it through idl_number_of, so a value here means a second producer appeared that "
+                   "hands this algorithm the page's own operand");
             CHECK(JS_ToFloat64(ctx, &d, count) == 0, "IndexedDB: §6.7's count could not be read");
             DCHECK(d >= 1 && d == floor(d),
                    "§6.7 was given a count that is not a positive integer. §4.9's advance step 1 throws a "
@@ -783,22 +793,78 @@ static void cu_place(JSContext *ctx, JSValueConst c, JSValueConst tx, JSValueCon
  *
  * It runs NONE of the page's code — its one argument is an `[EnforceRange] unsigned long` the IDL has already
  * converted (and a page `valueOf` runs inside THAT conversion, which is the args machine's own request) — so
- * the body is an ordinary C function and not a machine, unlike `continue`, whose key reaches §7.4's array arm. */
+ * the body is an ordinary C function and not a machine, unlike `continue`, whose key reaches §7.4's array arm.
+ *
+ * WHAT IT MAY NOT DO IS READ THAT ARGUMENT BACK WITH A COERCION, and this body did. `JS_ToUint32(ctx, &count,
+ * argv[0])` is the read core/idl_args.h bans by name: idl_concolic_rule answers IDL_CONCOLIC_CROSSES for
+ * IDL_UNSIGNED_LONG_ENFORCE, so unknown external input reaches here UNCONVERTED — that crossing is what makes
+ * opacity survive §3.2's conversion and is the whole reason a later branch on the value still forks. A concolic
+ * is an Object, so ToNumber on it reaches ECMAScript §7.1.1 ToPrimitive and runs the page's own valueOf from a
+ * plain C activation with no flow base under it, which this engine aborts on INSIDE THE COERCION rather than
+ * here at the member. `cursor.advance(new URLSearchParams(location.search).get("page") * 10)` is an ordinary
+ * page's pagination and it ended the document.
+ * AND THE ASSERT AROUND IT WAS SPEC-WRONG IN THE WORST DIRECTION — it was a release-fatal CHECK saying the
+ * count "its [EnforceRange] unsigned long did not convert", which instructs the next reader to make the
+ * declaration convert an unknown. Following that instruction deletes the crossing, and with it every fork the
+ * value would have driven.
+ * `idl_number_of` is the one answer: the converted Number for a real value, and for an unknown the SAME
+ * §3.2.4.9 Abstract operations conversion run on that value's own EXAMPLE — so a count a fetched config
+ * computed keeps this flow running on the number the app actually produced, while the value itself stays
+ * unknown at its source. It is what §4.5's three sibling counts already read (core/indexeddb/idb_get_all.c,
+ * idb_object_store.c, idb_index_handle.c), and this was the one member of that family still coercing. */
 static JSValue js_cu_advance(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    JSValue tx;
-    uint32_t count;
+    JSValue tx, count_v;
+    double count = 0;
 
     (void)argc; (void)magic;
     if (!cu_brand(ctx, this_val)) return JS_EXCEPTION;
+    /* NO EXAMPLE MEANS NO NUMBER, and §4.9's `count` has no "not given" arm for one to fall back to — §4.5's
+       counts do (§6.2 step 1's absent count is infinity, the superset a later example can only narrow), and
+       that is exactly why the same absence is answered differently here. Advancing by any invented number is
+       the fabrication §RUN-DON'T-MATCH forbids and returning early is the dropped flow §Time-travel's razor
+       calls a cap, so there is nothing correct left to do and this crashes at the member that has to fork. */
+    if (!idl_number_of(ctx, IDL_UNSIGNED_LONG_ENFORCE, argv[0], &count))
+        DFAIL("§4.9's advance was given an UNKNOWN count carrying no example. Its step 1 (\"If count is 0 "
+              "(zero), throw a TypeError\") has both completions feasible over an unconstrained "
+              "[EnforceRange] unsigned long, and §6.7's step 9 then has one distinct outcome per skip — so "
+              "this member must become a step machine (idl_method_id_step) and ask step_fork_run over step 1, "
+              "exactly as core/timing/timer.c asks it over HTML §8.7 Timers' step 4, then fork §6.7 step 9 "
+              "over the FINITE arm set {1 … n, at-or-past-n} that the cursor's own record count bounds");
+    /* IN RELEASE THAT DFAIL IS GONE AND `count` IS STILL THE 0 IT WAS INITIALISED TO, which falls into step 1's
+       TypeError two lines down. That is a DECISION and not a fall-through: release cannot build the fork, so
+       the member refuses a count it cannot read, through the standard's own refusal for this argument, rather
+       than advancing by a number nobody computed. idl_number_of leaves `*out` untouched when it answers 0, so
+       there is nothing here that a compiled-out assert made undefined. */
+    /* §3.3.6 [EnforceRange]'s arm of §3.2.4.9 Abstract operations' ConvertToInt REFUSES a non-finite value and
+       one outside the type's range, at the declaration, before this body is entered — so a value here it would
+       have refused means this position lost its declared type. */
+    DCHECK(count >= 0 && count <= 4294967295.0 && count == (double)(uint32_t)count,
+           "§4.9's advance reached its body with a count outside an unsigned long's range — ADVANCE_ARGS "
+           "declares IDL_UNSIGNED_LONG_ENFORCE, whose §3.3.6 [EnforceRange] conversion refuses such a value "
+           "before any body runs");
     /* "If count is 0 (zero), throw a TypeError." Step 1, ahead of every other refusal — so `advance(0)` on a
-       cursor whose transaction has finished is a TypeError and not a TransactionInactiveError. */
-    CHECK(JS_ToUint32(ctx, &count, argv[0]) == 0,
-          "IndexedDB: §4.9's advance received a count its [EnforceRange] unsigned long did not convert");
+       cursor whose transaction has finished is a TypeError and not a TransactionInactiveError.
+       RESIDUAL — this step is DECIDED and not FORKED for an unknown that carries an example, which is correct
+       for the world that example names and narrower than the standard.
+         NOT COVERED: an unknown count whose example is 5 explores only the advance-by-5 world; step 1's
+           TypeError arm, and §6.7 step 9's other skip distances, are never entered for that value.
+         THE NEXT DIFF: the machine the DFAIL above names — this member declared idl_method_id_step, step 1
+           asked through step_fork_run with the example marking the primary arm (core/timing/timer.c's shape),
+           and §6.7 step 9 forked over the record count's finite arm set.
+         HOW ITS ABSENCE SHOWS: one `advance(x)` on an unknown produces exactly ONE request completion, so a
+           store whose later records are reachable only past a different skip is never read and its cursor's
+           `success` handler runs once per call rather than once per feasible count. */
     if (count == 0)
         return JS_ThrowTypeError(ctx, "the cursor cannot be advanced by 0 records");
     if (cu_check(ctx, this_val, /*writes*/ false, &tx) < 0) return JS_EXCEPTION;               /* STEPS 2-5 */
-    cu_place(ctx, this_val, tx, JS_UNDEFINED, JS_UNDEFINED, argv[0]);       /* STEPS 6-11 */
+    /* THE NUMBER AND NOT THE VALUE crosses into §6.7, which is what makes that algorithm's own step 8 read a
+       Number rather than repeating this coercion on the page's operand. This member is §6.7's ONLY source of a
+       count — `continue` and `continuePrimaryKey` both mint the operation with an undefined one — so resolving
+       it here is what makes step 8's read total. */
+    count_v = JS_NewFloat64(ctx, count);
+    cu_place(ctx, this_val, tx, JS_UNDEFINED, JS_UNDEFINED, count_v);       /* STEPS 6-11 */
+    JS_FreeValue(ctx, count_v);
     JS_FreeValue(ctx, tx);
     return JS_UNDEFINED;
 }
