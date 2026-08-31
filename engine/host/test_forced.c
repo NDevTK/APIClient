@@ -5899,9 +5899,34 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        name at location "path" with NO value, because a symbolic server-injected field determined none. */
     int path_param = strstr(js, "\"/v1/users/{state.id}/posts\"") && strstr(js, "\"name\":\"state.id\"") &&
                      strstr(js, "\"location\":\"path\"");
-    /* THE BODY'S FIELDS, from the bytes the page composed, with the literals the code computed. */
-    int body_param = strstr(js, "\"name\":\"title\"") && strstr(js, "\"firstPost\"") &&
-                     strstr(js, "\"name\":\"count\"") && strstr(js, "\"location\":\"body\"");
+    /* THE BODY'S FIELDS, from the bytes the page composed, with the literals the code computed.
+       FOLDED, WITH THE SAME FIRST-CLAUSE RULE THE SORT ROWS CARRY, applied to the one row in this document
+       whose statement runs JSON.stringify. That is what makes it worth folding rather than a sweep: this
+       fixture contains EXACTLY ONE `JSON.stringify` call, it is this statement's `body:`, so this is the only
+       row a reader can plausibly mistake for a statement about that builtin — and it was read as one. A
+       cross-revision report quoted body-param 1/0/1 across three runs while a JSON.stringify change was under
+       suspicion. The flip was the SCHEDULE: the argument here is a wholly concrete object literal, so the walk
+       meets no unknown, and a change confined to how the walk takes an UNKNOWN cannot reach it.
+       THE CLAUSES ARE THE ORIGINAL CONJUNCTION REORDERED, NOT STRENGTHENED — a fold is a conjunction, so the
+       truth value is byte-identical and nothing here is softened. Ordered structural-first, they separate: no
+       body param at all (the POST never ran, OR the serialization yielded nothing readable — the one clause
+       whose second reading should ever send anyone at that machine) from a schema that is present and missing
+       a field (the walk ran and dropped a member). Two different next steps that used to be one 0.
+       THE FIRST CLAUSE DELIBERATELY DOES NOT ASSERT THE RECORD'S ADDRESS. `"/v1/users/{state.id}/posts"` would
+       have made a cleaner three-way split and it belongs to `path-param`, which is a statement about the PATH:
+       folding it in here would have coupled two rows, so a re-spelled path would redden a row about the BODY
+       and the localisation would point at the wrong machine. A row states its own statement; where that leaves
+       two readings in one clause, the clause NAMES the row that separates them instead of borrowing it. */
+    const char *body_param_why = NULL;
+    int body_param = 1;
+    fold_row(&body_param, &body_param_why, !!strstr(js, "\"location\":\"body\""),
+             "no body param on the surface AT ALL — either the POST statement never ran or its "
+             "`body:` JSON.stringify produced nothing a schema could be read out of; `path-param` is the row "
+             "that separates those, since it asserts the same statement's record and nothing about the body");
+    fold_row(&body_param, &body_param_why, strstr(js, "\"name\":\"title\"") && strstr(js, "\"firstPost\""),
+             "the body schema is there and `title` is missing or lost its computed literal `firstPost`");
+    fold_row(&body_param, &body_param_why, !!strstr(js, "\"name\":\"count\""),
+             "the body schema is there and `count` is missing — one member was dropped from the walk");
     /* THE ALIGNED EXAMPLE: the shape's hole and the concolic's concrete URL line up segment for segment, so the
        path param carries `visible` — the value the document actually has. The query param on the same record is
        what proves all three locations coexist rather than one overwriting the others. */
@@ -7157,7 +7182,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE },
         { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
         { "path-param", path_param, "/v1/users/", SESS_EXPLORE },
-        { "body-param", body_param, "firstPost", SESS_EXPLORE },
+        { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
         { "path-example", path_example, "/v1/vis/", SESS_EXPLORE },
         { "role-public", role_public, "/api/data?role=", SESS_EXPLORE },
         { "merged", merged, "/api/data?role=", SESS_EXPLORE },
