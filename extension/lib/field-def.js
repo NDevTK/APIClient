@@ -138,7 +138,13 @@ const FIELD_DEF_ABSENT = Object.freeze({
                             // equality determines a value, an ordering an interval, a call neither), and the
                             // one §@H names in its headline example. null = nothing proved, `[]` = a claim a
                             // later path disproved — the same two facts `_excludedValues` keeps apart.
-  _astValidValues: null,    // values the bundle was observed setting this field to; null = none observed.
+  _astValidValues: null,    // values the bundle was observed setting this field to ON A PATH THAT STOOD ON NO
+                            // FORCED ARM — the pool a consumer may OFFER from; null = none observed.
+  _astForcedValues: null,   // values EVERY sighting of which stood on a forced arm — a real observation this
+                            // run made, and one no real client's request carries, so it is a pool of its own
+                            // rather than an entry in the one above (lib/endpoint-record.js's
+                            // `provenanceOffersExample` states why the line is a FIELD NAME and not a grade
+                            // each reader must remember to consult). null = none; `[]` never reaches here.
   _detectedEnum: false,     // the `enum` above was inferred from observations, not declared.
   _defaultValue: null,      // an observed default; null = none.
   _defaultConfidence: null, // how often that default held; null = not measured.
@@ -217,10 +223,22 @@ function makeFieldDef(parts, where) {
          "so anything else here is that refusal bypassed");
   DCHECK(_fdNullOrList(fd.children) && _fdNullOrList(fd.enum) && _fdNullOrList(fd.enumDescriptions) &&
          _fdNullOrList(fd._excludedValues) && _fdNullOrList(fd._astValidValues) &&
-         _fdNullOrList(fd._predicates),
+         _fdNullOrList(fd._astForcedValues) && _fdNullOrList(fd._predicates),
          "a FieldDef carries a list-or-nothing in a third form (" + where + ") — `children: null` means NOT " +
          "a message and `children: []` means a message with no fields, and a consumer that cannot tell them " +
          "apart renders one as the other");
+  /* THE TWO VALUE POOLS ARE DISJOINT, AND THAT DISJOINTNESS *IS* THE FOLD. A value one sighting computed on
+     a forced arm and another computed without one is `derived` by lib/endpoint-record.js's
+     `mostObservedProvenance` — the same rule the method's own grade folds by, one level down — and this
+     record spells that fold as WHICH POOL the value sits in. So a value in both pools is not a duplicate to
+     tidy: it is the fold having failed to happen, and it renders the same bytes twice under two
+     contradictory claims, one of which the panel labels as a request no client makes. */
+  DCHECK(fd._astValidValues === null || fd._astForcedValues === null ||
+         !fd._astForcedValues.some((v) => fd._astValidValues.indexOf(v) >= 0),
+         "a FieldDef carries the same learned value in both the offerable and the forced pool (" + where +
+         ") — membership of one pool or the other IS this record's spelling of the per-value grade fold, so " +
+         "a value in both is a producer that appended where it had to promote, and the panel would offer the " +
+         "value as one the app computes and label it as one no client sends");
   DCHECK(_fdNullOr(fd._defaultConfidence, "number") && _fdNullOr(fd._requiredConfidence, "number"),
          "a FieldDef's confidence is neither a number nor null (" + where + ") — the panel renders it as a " +
          "percentage, and a non-number renders as NaN%");

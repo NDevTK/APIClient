@@ -172,6 +172,14 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
             _exampleValueSource: fdDocString(pd._exampleValueSource),
             // AST-discovered valid values
             _astValidValues: fdDocList(pd._astValidValues),
+            /* …AND THE POOL BESIDE IT, WHICH IS THE SAME OBSERVATION AT THE ONE GRADE THAT MUST NOT BE
+               OFFERED. lib/learn.js keeps a value every sighting of which stood on a FORCED arm out of the
+               list above, because the panel prefills from that list and a forced example is a request no
+               client makes — but the value is still a fact this run computed and the panel says so on its
+               own row. A projection that carried only the offerable pool would make a forced-only parameter
+               and one nothing ever learned render with identical bytes, which is §@H's wrong report rather
+               than a thin one. */
+            _astForcedValues: fdDocList(pd._astForcedValues),
             /* AND THE OTHER HALF OF THE SHAPE. A param's two facts are PROVENANCE-and-example (above) and
                DOMAIN — what the forced execution's own equality gates proved this value is NOT. A projection
                that carried only the first would put the popup back where the engine was before it emitted
@@ -327,6 +335,15 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                                _defaultValue: null, _defaultConfidence: null, _range: null,
                                _exampleValue: null, _exampleValueSource: null,
                                _excludedValues: null, _bounds: null, _predicates: null,
+                               /* `_astForcedValues` IS PRE-DECLARED AND `_astValidValues` IS NOT, and the
+                                  asymmetry is the loop below: it assigns the offerable pool unconditionally
+                                  out of `pp.values` (pre-declaring it would only give that assignment
+                                  something to overwrite), while nothing here fills the forced pool — the
+                                  flat endpoint record does not carry one yet, which lib/merge.js's
+                                  `pathParams` names as its residual. `null` is the true statement for this
+                                  producer meanwhile, and it is STATED rather than left absent so both
+                                  literals speak one vocabulary. */
+                               _astForcedValues: null,
                                _astValidValues: null };
       DCHECK(cur && typeof cur === "object",
              "the resolved schema declares `" + pp.name + "` as something that is not a parameter record — " +

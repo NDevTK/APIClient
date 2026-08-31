@@ -1315,6 +1315,13 @@ async function cmdNetDiff(args) {
               if (!m || !m.httpMethod) continue;
               const pk = _paramKey(m.httpMethod, m.path || mid);
               let pm = _fcsParams.get(pk); if (!pm) { pm = new Map(); _fcsParams.set(pk, pm); }
+              /* THE OFFERABLE POOL ONLY, AND DELIBERATELY. `_astForcedValues` holds values every sighting of
+                 which stood on a forced arm; counting them here would put requests no client makes into the
+                 census that measures the learned surface, which is the merge CLAUDE.md §PASSIVE-AND-FORCED-
+                 COMBINE-AS-A-COMPARISON forbids — an instrument reading its own input, whose number goes up
+                 while what it measures gets worse. This reader needs no grade check to get that right because
+                 lib/learn.js keeps the two in separate fields; a grade appearing here later is the symptom of
+                 that split having failed. */
               const addVals = (pe, o) => { const vv = o && (o._astValidValues || (o._exampleValue != null ? [o._exampleValue] : null)); if (Array.isArray(vv)) for (const v of vv) if (v != null && v !== "") pe.vals.add(v); };
               const params = m.parameters || {};
               /* THE SAME FIELD ONE PRODUCER LATER, AND THE SAME GUARANTEE. A VDD parameter under

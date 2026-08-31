@@ -100,7 +100,7 @@ function _renderServiceGrouping() {
            this says whether a real client's code composes it at all. A forced-only method inflating the UNUSED
            headline is the fabrication at the level of the COUNT: "N things the bundle can do but didn't", of
            which some are requests no client makes. */
-        if (_methodProvenance(m) === "forced") forced++;
+        if (methodProvenance(m, "lib/popup-send.js service summary") === "forced") forced++;
       }
     }
     if (total > 0) {
@@ -130,22 +130,12 @@ function _renderServiceGrouping() {
 // built (the offscreen store, from the engine's @H surface plus the request log), not re-derived by the view
 // every render. The view then paints a field instead of classifying.
 // WHAT THE ENGINE'S PATH TO THIS METHOD WAS WORTH — the second fact `_methodOrigin` deliberately does not
-// carry, asked in ONE place for the same reason that one is. `null` is a POSITIVE STATEMENT and not a hole:
-// a method with no bundle sighting (a probed discovery document's) was never graded by the engine, so there
-// is no grade to state, which is exactly what `_astInferred` being false means.
-// THE DCHECK IS THE HALF THAT MATTERS. `m._astProvenance` is written by lib/learn.js on the same line as
-// `_astInferred` — the two are one write — so a record carrying the first and not the second is that pairing
-// broken, or a store an older build wrote being read by this one. Both must crash rather than render, because
-// what a missing grade renders as is nothing, and nothing reads as "not forced".
-function _methodProvenance(m) {
-  if (!m._astInferred) return null;
-  DCHECK(isCallSiteProvenance(m._astProvenance),
-         "a bundle-inferred method carries the provenance " + JSON.stringify(m._astProvenance) + ", which is " +
-         "none of " + CALLSITE_PROVENANCE.join("/") + " — lib/learn.js writes it beside `_astInferred` on " +
-         "every call site it registers, so this record has one half of that write and not the other and the " +
-         "row would render with no grade, which a reviewer reads as `not forced`");
-  return m._astProvenance;
-}
+// carry — IS `methodProvenance` IN lib/endpoint-record.js, AND THE PRIVATE COPY THAT STOOD HERE IS GONE.
+// It became one fact asked in TWO zones the moment lib/learn.js needed it: the templated-path reconcile
+// grades a concrete record's path segments by the fold over that record's sightings, which is the same
+// question this view asks, and `if (!m._astInferred) return null` written twice is two rules free to
+// disagree about what an ungraded record means. endpoint-record.js already declares the vocabulary and the
+// fold and is already loaded by both zones for exactly that reason, so the reader lives beside them.
 
 function _methodOrigin(m) {
   if (m._responseKind === "asset") return "asset";
@@ -213,7 +203,7 @@ function renderMethodDropdown() {
                IT IS STATED RATHER THAN SHOWN-ONLY-WHEN-FORCED: with `derived` and `observed` silent, a
                reviewer reads the absence of a grade as "fine", which is a consumer defaulting a producer's
                field with a rendering instead of a `||`. */
-            const prov = _methodProvenance(m);
+            const prov = methodProvenance(m, "lib/popup-send.js method dropdown");
             if (prov !== null) tag += " [" + prov + "]";
             /* THE METHOD ID AS THE STORE HOLDS IT. A rewrite stood here that substituted a declared name
                recovered from the page's source map into each `{hole}` of the displayed id (`{e}` → `{owner}`)

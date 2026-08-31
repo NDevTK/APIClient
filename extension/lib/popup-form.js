@@ -121,6 +121,12 @@ function buildFormFields(schema, initialData = null) {
             location: param.location,
             parentSchema: "params",
             _astValidValues: param._astValidValues,
+            /* …AND THE POOL THE PANEL MUST NOT PREFILL FROM. A value every sighting of which stood on a
+               FORCED arm is a real observation and a request no client makes, so it is carried to the panel
+               and rendered on its own row — never into `resolvePrefill` or the datalist, which are the two
+               surfaces where a value is used without being read. `undefined` and `null` are one statement
+               here for the reason they are one on the domain lines below. */
+            _astForcedValues: param._astForcedValues === undefined ? null : param._astForcedValues,
             /* NO `_astValueSource`. lib/send.js stopped projecting it (its only writer wrote it onto its own
                path-param entries, and nothing ever rendered it), so this line carried undefined into the
                field def and no reader looked. */
@@ -513,6 +519,35 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
       if (input) { input.value = e.target.textContent; input.dispatchEvent(new Event("input")); }
     });
     wrapper.appendChild(valHint);
+  }
+
+  /* THE VALUES THIS RUN COULD ONLY REACH BY FORCING A GATE — ON THEIR OWN ROW, SAYING SO, AND NOWHERE ELSE
+     IN THIS PANEL. `_astForcedValues: null` MEANS every value learned for this field was computed on a path
+     that forced nothing, which is a third silence beside the two above and is read as itself.
+     WHY A ROW AND NOT A CHIP AMONG THE OTHERS. The list above is what the panel will PREFILL and autocomplete
+     from, and a forced value offered there is an example a server will reject under a method the tool says
+     the app's own code computes — CLAUDE.md §@H's fabrication with a server behind it, whose distinguishing
+     property is that it is PLAUSIBLE rather than that it is useless. lib/learn.js keeps the two apart in two
+     pools so that no consumer has to remember which is which, and this is where the second pool becomes a
+     sentence a person reads: the value is still offered to a deliberate CLICK, because it is a real thing
+     this run learned and the reviewer may want exactly it — what it is not is a suggestion that arrives in
+     the box on its own.
+     IT RENDERS EVEN WHERE A MEMBERSHIP IS DECLARED, unlike the row above, and that is not an oversight. The
+     select states what the API's own description says the field accepts; this states what this run had to
+     force to reach, which no document can contradict and which a `<select>` cannot express — so hiding it
+     behind a declaration would delete the observation rather than avoid doubling it. */
+  if (fieldDef._astForcedValues !== null && fieldDef._astForcedValues.length > 0) {
+    const forcedHint = el("div", "field-ast-values field-ast-forced");
+    forcedHint.innerHTML = '<span class="ast-values-label ast-forced-label">Reached only by FORCING a gate '
+      + '(a request no client makes):</span> '
+      + fieldDef._astForcedValues.map(v => '<span class="ast-value-chip ast-value-chip-forced">'
+                                          + esc(String(v)) + '</span>').join(' ');
+    forcedHint.addEventListener("click", function(e) {
+      if (!e.target.classList.contains("ast-value-chip-forced")) return;
+      var input = wrapper.querySelector(".form-input");
+      if (input) { input.value = e.target.textContent; input.dispatchEvent(new Event("input")); }
+    });
+    wrapper.appendChild(forcedHint);
   }
 
   if (fieldDef.label === "repeated" && (fieldDef.type === "message" || fieldDef.type === "object")) {

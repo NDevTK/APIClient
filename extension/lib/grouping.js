@@ -116,6 +116,10 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
 // attaches AST facts DIRECTLY:
 //   - method.parameters[name]._astValidValues    query params
 //   - doc.schemas[…].properties[name]._astValidValues  body fields
+//   - …._astForcedValues                          the same, for a value EVERY sighting of which stood on a
+//                                                 forced arm: a real observation and a request no client
+//                                                 makes, so a pool of its own rather than an entry in the
+//                                                 list the panel prefills from
 //   - method._astSourceScript                     where in the JS bundle
 // All AST-origin data is tagged `_astInferred: true` so pickExampleValue
 // reports it under `ast-constraint` provenance — never as "observed-top"

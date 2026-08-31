@@ -1451,6 +1451,23 @@ details summary:hover {
   border-color: #58a6ff;
 }
 
+/* THE FORCED POOL READS AS A WARNING BECAUSE IT IS ONE. The row above is what the panel prefills and
+   autocompletes from; this one is a value that exists only because a gate was forced, offered to a
+   deliberate click and to nothing else. Same geometry, different colour, so the two rows cannot be skimmed
+   as one list. */
+.ast-forced-label {
+  color: #d29922;
+}
+.ast-value-chip-forced {
+  background: #2b2415;
+  color: #e3b341;
+  border-color: #6c5418;
+}
+.ast-value-chip-forced:hover {
+  background: #3a301b;
+  border-color: #d29922;
+}
+
 .form-input {
   width: 100%;
   background: #0d1117;

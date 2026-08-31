@@ -213,6 +213,19 @@ function mergeASTResultsIntoVDD(tab, results) {
               for (var _pn in _learned.method.parameters) {
                 var _pd = _learned.method.parameters[_pn];
                 if (!_pd || _pd.location !== "path") continue;
+                /* THE OFFERABLE POOL ALONE, WHICH IS WHAT THIS FIELD IS FOR. `pathParams` is read by
+                   lib/send.js, which unions these into the Send form's value list AND takes `values[0]` as
+                   the prefilled `_exampleValue` — so a hole filled only on a forced arm would arrive as the
+                   address the reviewer sends, which is the exact failure the pool split exists to stop.
+                   NAMED RESIDUAL — a forced-only path example does not reach the FLAT record. WHAT IS NOT
+                   COVERED: this record survives the eviction of the per-document method schema (the comment
+                   above says why it exists at all), so after that eviction a `{hole}` whose every sighting
+                   was forced has no example anywhere, where before this it had one that was reported as
+                   derived. WHAT THE NEXT DIFF BUILDS: a second stated field beside `pathParams` on
+                   lib/endpoint-record.js's own record — its declaration, its absent value, and lib/send.js
+                   reading it into `_astForcedValues` rather than into the prefill. HOW ITS ABSENCE SHOWS: a
+                   templated address whose forced-arm segment is visible in the Send panel while the method
+                   schema is alive and gone from the moat afterwards — a finding that expires. */
                 var _vals = Array.isArray(_pd._astValidValues) ? _pd._astValidValues : [];
                 if (!_vals.length) continue;   // a templated hole nothing has filled yet is not an example
                 out.push({ name: _pn, values: _vals.slice(0, 20) });
@@ -307,10 +320,30 @@ function mergeASTResultsIntoVDD(tab, results) {
    is copied whole; a param both records have keeps the existing DECLARATION (type/location/description are a
    function of the same URL and verb) and unions the OBSERVATIONS, because those are what differ per page. */
 function _mergeParamInto(ep, np) {
+  /* THE UNION IS PER POOL, AND ACROSS DOCUMENTS THE POOLS STILL FOLD. lib/learn.js splits a parameter's
+     learned values by whether the sighting that computed each one stood on a forced arm, and this is the
+     OTHER merge — one document's parameter into the cumulative moat's — so the same law applies to it or the
+     split holds within a page and dissolves between two. The law is most-observed (lib/endpoint-record.js),
+     spelled here exactly as it is spelled there: a value the other document computed WITHOUT forcing anything
+     is promoted out of our forced pool, and one it could only force is added to ours only where no document
+     has computed it otherwise. Unioning the two pools independently would have re-created the defect the
+     split exists to remove, in the one place it is invisible from either page — the moat, which is what
+     `netdiff --unused` counts and what a reviewer reads after the per-document schema has been evicted. */
   const ev = Array.isArray(ep._astValidValues) ? ep._astValidValues : [];
+  const ef = Array.isArray(ep._astForcedValues) ? ep._astForcedValues : [];
   const nv = Array.isArray(np._astValidValues) ? np._astValidValues : [];
-  for (const x of nv) if (ev.indexOf(x) < 0) ev.push(x);
+  const nf = Array.isArray(np._astForcedValues) ? np._astForcedValues : [];
+  for (const x of nv) {
+    const at = ef.indexOf(x);
+    if (at >= 0) ef.splice(at, 1);          // THE FOLD: a value some path computed unforced is not forced.
+    if (ev.indexOf(x) < 0) ev.push(x);
+  }
+  for (const x of nf) if (ev.indexOf(x) < 0 && ef.indexOf(x) < 0) ef.push(x);
   if (ev.length) ep._astValidValues = ev;
+  /* AN EMPTIED FORCED POOL IS DELETED RATHER THAN LEFT AS `[]` — the last promotion out of it is exactly
+     where the key would otherwise survive as an empty list, which is a third statement no reader has. */
+  if (ef.length) ep._astForcedValues = ef;
+  else if (Array.isArray(ep._astForcedValues)) delete ep._astForcedValues;
   /* THE EXAMPLE IS A COMPUTED VALUE AND ITS ABSENCE IS A STATEMENT (§RUN, DON'T MATCH: a param known only to
      satisfy a range gate has a SHAPE and no example). So an existing example is never overwritten and an
      absent one is filled from the other page — and the SOURCE label travels with it, because a value whose

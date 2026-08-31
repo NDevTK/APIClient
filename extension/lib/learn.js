@@ -340,14 +340,12 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
      path, so the engine's two @H rows for one address (which it deliberately does NOT merge, because the
      grade is part of the record's identity there) meet here, and the record's ONE claim about the address is
      the strongest that any path to it supports.
-     NAMED RESIDUAL — THE FOLD IS THE RECORD'S CLAIM AND NOT EACH VALUE'S. WHAT IS NOT COVERED: `m.parameters`
-     below merges `validValues` from every sighting into one set, so a value the engine computed on a FORCED
-     arm sits beside one from a derived arm under a record this line may have folded to `derived`. The engine
-     keeps them apart (the grade is part of the @H record's identity), and this merge is where they meet
-     again. WHAT IS STILL OWED: a grade PER VALUE — `_mergeAstValues` taking the sighting's word and the Send
-     panel rendering a forced example as one, which is §@H's "a shape states TWO facts" applied one level
-     below the record. HOW ITS ABSENCE SHOWS: a Send-panel example that a server will reject, offered under a
-     method the tool says the app's own code computes.
+     THIS FOLD IS THE RECORD'S CLAIM AND NOT EACH VALUE'S, AND THE VALUES HAVE THEIR OWN — `_mergeAstValues`
+     below folds the grade of every sighting that computed a VALUE by this same most-observed rule and spells
+     the result as which of the parameter's two pools the value sits in, so a value the engine computed on a
+     FORCED arm can no longer sit beside a derived one under a record this line folded to `derived`. The two
+     folds are separate because their subjects are: one address can be reached at two grades, and so can one
+     value, and neither answer follows from the other.
      THE FIRST SIGHTING FOLDS AGAINST ITSELF rather than being assigned past the fold, so the vocabulary is
      asserted on EVERY path through this line and not only on the second call site to reach a method. A record
      restored from a store an older build wrote carries no `_astProvenance` at all, and taking the new word
@@ -402,27 +400,74 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     return p.bounds ? "number" : "string";
   };
 
-  // Merge AST-observed valid values onto a target (param or schema prop).
+  /* MERGE THE VALUES ONE SIGHTING COMPUTED ONTO A TARGET (param or schema prop), AT THE GRADE THAT SIGHTING
+     WAS REACHED AT — the third argument is REQUIRED and every caller states it, because a value's grade is a
+     fact about the value and there is no default for it that is not a fabrication.
+
+     THIS IS THE FOLD THE RECORD-LEVEL ONE NAMED AS ITS RESIDUAL. `m._astProvenance` above folds the METHOD's
+     one claim about the address; this folds each VALUE, and it has to be a separate fold because the method
+     record is keyed by verb and path, so the engine's two @H rows for one address — which it deliberately
+     does NOT merge, the grade being part of the record's identity there — meet here with their values in one
+     bag. Before this, a value the engine computed on a FORCED arm sat in `_astValidValues` beside one from a
+     derived arm, under a record folded to `derived`, and the Send panel prefilled it: an example a server
+     will reject, offered under a method the tool says the app's own code computes. That is CLAUDE.md §@H's
+     fabrication with a server behind it, and its distinguishing property is not that it is useless but that
+     it is PLAUSIBLE.
+
+     THE FOLD IS THE SAME RULE AS THE RECORD'S — MOST OBSERVED — AND IT IS PERFORMED AS A MOVE BETWEEN POOLS.
+     A value one path computed without forcing anything is a value the app computes, whatever some other path
+     had to force to reach it, so a promotion is one-way: out of `_astForcedValues` and into
+     `_astValidValues`, never back. lib/endpoint-record.js's `provenanceOffersExample` is the one place the
+     line between the pools is drawn and states why it is a FIELD NAME rather than a grade every reader must
+     remember to consult.
+
+     A VALUE ENTERS ONE POOL ONLY, so the pools stay disjoint and lib/field-def.js asserts that they are.
+     Membership IS the folded grade; a value in both would render the same bytes twice under two
+     contradictory claims. */
   // Promotes to `enum` when distinct count >= 2 (matches prior behavior).
   // Re-picks the example value when new AST values land — without this,
   // a form-scan-created param whose initial pickExampleValue ran BEFORE
   // any AST values were added would stay frozen at "type-default" even
   // though tier-3 (ast-constraint) is now satisfied.
-  const _mergeAstValues = (target, validValues) => {
+  const _mergeAstValues = (target, validValues, prov) => {
+    /* `provenanceOffersExample` ASSERTS THE VOCABULARY, so there is no second check of it here: a grade
+       outside the three words crashes inside it, at the one place the words are declared. */
+    const _offerable = provenanceOffersExample(prov);
     let merged = false;
     if (Array.isArray(validValues) && validValues.length) {
-      const prev = Array.isArray(target._astValidValues) ? target._astValidValues.slice() : [];
-      const before = prev.length;
+      /* `undefined`-or-array IS THIS RECORD'S VOCABULARY AND NOT A DEFAULT. A method parameter is a raw
+         object rather than a FieldDef (lib/field-def.js's `null` spelling is that record's), and this
+         producer writes each pool's key only where the pool is NON-EMPTY — which is the vocabulary
+         `_astValidValues` already speaks here and which lib/send.js's two literals normalise to `null` on the
+         way out. A second spelling would be two rules. */
+      const valid = Array.isArray(target._astValidValues) ? target._astValidValues.slice() : [];
+      const forced = Array.isArray(target._astForcedValues) ? target._astForcedValues.slice() : [];
+      const before = valid.length;
       for (const vv of validValues) {
         const s = String(vv);
-        if (prev.indexOf(s) < 0) prev.push(s);
+        if (_offerable) {
+          const _at = forced.indexOf(s);
+          if (_at >= 0) forced.splice(_at, 1);   // THE FOLD: most-observed wins, and it wins by MOVING.
+          if (valid.indexOf(s) < 0) valid.push(s);
+        } else if (valid.indexOf(s) < 0 && forced.indexOf(s) < 0) {
+          forced.push(s);
+        }
       }
-      if (prev.length > before) merged = true;
-      target._astValidValues = prev;
+      if (valid.length > before) merged = true;
+      if (valid.length) target._astValidValues = valid;
+      /* AN EMPTIED FORCED POOL IS DELETED RATHER THAN LEFT AS `[]`, because the last promotion out of it is
+         exactly the case where the key would otherwise survive as an empty list — and an empty list here is
+         a THIRD statement beside "no forced value was observed" and "these were", which no reader has. */
+      if (forced.length) target._astForcedValues = forced;
+      else if (Array.isArray(target._astForcedValues)) delete target._astForcedValues;
       // (No `customEnum` test: nothing writes that flag — see _applyStatsToField. An existing `enum` still
       //  wins, which is the real condition, since a declared one is a fact about the API description.)
-      if (prev.length >= 2 && !target.enum) {
-        target.enum = prev.slice();
+      /* AND THE MEMBERSHIP IS PROMOTED OUT OF THE OFFERABLE POOL ALONE. An `enum` is a CLAIM about what this
+         API accepts, rendered as a `<select>` the reviewer picks from and exported into the OpenAPI document
+         as a validation keyword — so a member that exists only because a gate was forced is the same
+         fabrication one container further out, where it also escapes the two-pool split entirely. */
+      if (valid.length >= 2 && !target.enum) {
+        target.enum = valid.slice();
         target._detectedEnum = true;
       }
     }
@@ -576,7 +621,12 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       };
       if (p.location === "path") m.parameters[p.name].required = true;
     }
-    _mergeAstValues(m.parameters[p.name], p.validValues);
+    /* THE GRADE IS THE SIGHTING'S, NOT THE RECORD'S. `m._astProvenance` above is already the FOLD of every
+       sighting that reached this method, so reading it here would grade this call site's values by a claim
+       some OTHER call site supports — which is the merge this pool split exists to stop, performed one line
+       after it. `callSite.provenance` is what THIS row was reached at, asserted at lib/merge.js's boundary
+       before it arrives. */
+    _mergeAstValues(m.parameters[p.name], p.validValues, callSite.provenance);
     _mergeExcludes(m.parameters[p.name], p);
     _mergeBounds(m.parameters[p.name], p);
     _mergePredicates(m.parameters[p.name], p);
@@ -617,15 +667,35 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
             if (_tSegs[_i] !== _cSegs[_i]) { _ok = false; break; }
           }
           if (!_ok || !_concreteAtHole) continue;
-          for (let _i = 0; _i < _tSegs.length; _i++) {
-            if (!(_tSegs[_i].charAt(0) === "{" && _tSegs[_i].slice(-1) === "}")) continue;
-            const _val = _cSegs[_i];
-            if (_val.charAt(0) === "{") continue;
-            const _hole = _tSegs[_i].slice(1, -1);
-            if (!_hole) continue;   // generic {} hole -> the ENGINE's shape/concrete collapse owns its path-param
-                                    // example (arg{i}); creating m.parameters[""] here made a duplicate empty-name @path param.
-            if (!m.parameters[_hole]) m.parameters[_hole] = { type: "string", location: "path", required: true, description: "Learned (concrete value from live traffic)" };
-            _mergeAstValues(m.parameters[_hole], [_val]);
+          /* WHAT THE CONCRETE RECORD'S PATH SEGMENTS ARE WORTH — asked ONCE, of the record being dissolved,
+             before any of its segments becomes a path-param example on the template.
+             THE RECORD'S OWN GRADE IS EXACTLY THE SEGMENT'S. A learned method is keyed by (verb, path), so
+             its path IS its identity and every sighting folded into it carried these very segments — which
+             makes `methodProvenance`'s fold over those sightings the fold over this segment, and not an
+             approximation of it. That identity is why this is the one place a record-level grade may be read
+             for a value.
+             A RECORD THE ENGINE NEVER GRADED IS NOT THEREFORE OBSERVED, and splitting that absence is the
+             half this line did not used to have at all. `null` from `methodProvenance` says only "no bundle
+             sighting"; the wire is what makes a concrete address an observation, so a record with request
+             stats states `observed` — a real client sent exactly this — and one WITHOUT them is a probed
+             DISCOVERY DOCUMENT's declaration, whose concrete segment is a third party's example and not a
+             value this run computed at any grade. §@H forbids rendering that as either, so its holes are not
+             filled from here; the rest of the reconcile (parameters, response, request, stats) is unchanged,
+             because none of those claims that the RUN determined a value. */
+          const _cmProv = methodProvenance(_cm, "lib/learn.js templated-path reconcile");
+          const _cmFired = !!(_cm._stats && _cm._stats.requestCount);
+          if (_cmProv !== null || _cmFired) {
+            const _segProv = _cmProv === null ? "observed" : _cmProv;
+            for (let _i = 0; _i < _tSegs.length; _i++) {
+              if (!(_tSegs[_i].charAt(0) === "{" && _tSegs[_i].slice(-1) === "}")) continue;
+              const _val = _cSegs[_i];
+              if (_val.charAt(0) === "{") continue;
+              const _hole = _tSegs[_i].slice(1, -1);
+              if (!_hole) continue;   // generic {} hole -> the ENGINE's shape/concrete collapse owns its path-param
+                                      // example (arg{i}); creating m.parameters[""] here made a duplicate empty-name @path param.
+              if (!m.parameters[_hole]) m.parameters[_hole] = { type: "string", location: "path", required: true, description: "Learned (concrete value from live traffic)" };
+              _mergeAstValues(m.parameters[_hole], [_val], _segProv);
+            }
           }
           if (_cm.parameters) for (const _pn in _cm.parameters) { if (!m.parameters[_pn]) m.parameters[_pn] = _cm.parameters[_pn]; }
           if (_cm.response && !m.response) m.response = _cm.response;
@@ -678,7 +748,9 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       if (!schema.properties[bp.name]) {
         schema.properties[bp.name] = { type: _paramType(bp), _astInferred: true };
       }
-      _mergeAstValues(schema.properties[bp.name], bp.validValues);
+      /* AT THIS SIGHTING'S GRADE, for the reason the query params carry it: a body field the page POSTs is
+         learned on the same path the address was, so it is worth exactly what that path is worth. */
+      _mergeAstValues(schema.properties[bp.name], bp.validValues, callSite.provenance);
       /* A BODY FIELD'S DOMAIN IS THE SAME FACT AS A QUERY PARAM'S. endpoint.c reads the request body in the
          body's own format and mints a param per field, so a gate over a value the page then POSTs is observed
          exactly as one over a value it appends to the query is. Leaving it out here would make the report's

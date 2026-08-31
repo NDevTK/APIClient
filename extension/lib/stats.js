@@ -265,6 +265,14 @@ function pickExampleValue(field, stats) {
     }
   }
   // 3. ast-constraint — switch cases, includes() arguments, literal chains
+  /* THIS TIER ASKS NO QUESTION ABOUT PROVENANCE AND THAT IS THE POINT, NOT AN OMISSION. It is the site the
+     per-value grade was built for: this line picks the value the Send panel PREFILLS, so a value the engine
+     reached only by forcing a gate arriving here is an example a server will reject, offered under a method
+     the tool says the app's own code computes. It cannot arrive. lib/learn.js keeps such a value in
+     `_astForcedValues` and lib/endpoint-record.js's `provenanceOffersExample` states why the line is a FIELD
+     NAME rather than a grade each reader must remember to consult — this reader is the reason: nothing here
+     could have asserted that it remembered, so the pool it reads is what makes the wrong answer impossible.
+     If a later change gives this tier a grade to consult, the split has failed and the grade is the symptom. */
   if (field && Array.isArray(field._astValidValues) && field._astValidValues.length) {
     return { value: field._astValidValues[0], source: "ast-constraint" };
   }

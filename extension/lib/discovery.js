@@ -297,6 +297,12 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
     _exampleValue: prop._exampleValue === undefined ? null : prop._exampleValue,
     _exampleValueSource: fdDocString(prop._exampleValueSource),
     _astValidValues: fdDocList(prop._astValidValues),
+    /* …AND THE POOL BESIDE IT. lib/learn.js merges a request-body field's learned values by the same
+       two-pool split a query parameter's take, so a body field whose every sighting stood on a FORCED arm
+       has its values here and nowhere else. Dropping it would make the panel's silence mean two different
+       things in two halves of one record — the same argument the three domain fields below carry, and the
+       same one lib/send.js makes for the query side. */
+    _astForcedValues: fdDocList(prop._astForcedValues),
     /* THE BODY FIELD'S DOMAIN. endpoint.c mints a param per request-body field and learn.js merges its
        `excludes` onto the schema property, so a gate over a value the page POSTS is observed exactly as one
        over a value it appends to the query is — and a projection that dropped it here would make the popup's

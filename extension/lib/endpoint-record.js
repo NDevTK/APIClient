@@ -98,8 +98,8 @@ function isCallSiteProvenance(p) { return CALLSITE_PROVENANCE.indexOf(p) >= 0; }
    THE ENGINE DOES *NOT* FOLD, AND THAT IS NOT A DISAGREEMENT — engine/host/solver/endpoint.h explains it: the
    grade is part of the @H record's IDENTITY there, so a forced sighting's VALUES can never merge into a
    derived record's. Two @H rows arrive here, and what folds is this record's one-line CLAIM ABOUT THE
-   ADDRESS. The values behind it are still merged by the method record below, which is the residual named at
-   lib/learn.js's fold. */
+   ADDRESS. The VALUES behind it fold too, one level down and by this same rule — see
+   `provenanceOffersExample` below for where the two facts part company. */
 function mostObservedProvenance(a, b) {
   DCHECK(isCallSiteProvenance(a) && isCallSiteProvenance(b),
          "a call-site provenance fold was handed `" + a + "` and `" + b + "` — the engine emits one of " +
@@ -107,6 +107,70 @@ function mostObservedProvenance(a, b) {
          "serializer and this vocabulary having parted, and the fold would answer with whichever argument " +
          "happened to be first");
   return CALLSITE_PROVENANCE.indexOf(a) <= CALLSITE_PROVENANCE.indexOf(b) ? a : b;
+}
+
+/* WHETHER A VALUE LEARNED AT THIS GRADE MAY BE OFFERED AS AN EXAMPLE OF WHAT THIS APP COMPUTES — the ONE
+   place that line is drawn, and the reason lib/learn.js keeps a parameter's learned values in TWO POOLS
+   rather than in one list carrying a grade beside each entry.
+
+   THE CHOICE IS SETTLED BY WHICH DESIGN MAKES THE WRONG ANSWER IMPOSSIBLE RATHER THAN DISCOURAGED, which is
+   the argument engine/host/solver/endpoint.h already made one layer up when it put the grade in the @H
+   record's IDENTITY: a folded grade does not, because "a FORCED sighting merging into a record whose grade
+   folds to `observed` publishes, under the strongest claim this surface can make, a value that exists only
+   because a gate was forced". A list of `{value, grade}` entries has exactly that failure one level down —
+   every reader of `_astValidValues` (the example picker's ast-constraint tier, the Send form's prefill and
+   its datalist, the value chips, the cross-document parameter merge, the two record projections, the
+   harness's netdiff value census) would have to REMEMBER to consult the grade, nothing can assert that it
+   did, and the one that forgot renders a fabricated example with nothing to say so. Two pools delete the
+   remembering: `_astValidValues` holds what this predicate admits, so a consumer that reads it CANNOT be
+   handed a forced value, and `_astForcedValues` has exactly the readers that asked for it by name.
+
+   THREE WORDS AND TWO POOLS IS NOT A COLLAPSE OF THE VOCABULARY. A pool is named by the QUESTION a consumer
+   asks, and every consumer of a learned value asks ONE question: may this be offered as an example of what
+   this app computes? `observed` and `derived` answer it identically — CLAUDE.md §A-REQUEST-CARRIES-THE-
+   PROVENANCE says of the second that "the real code computed it from real inputs …, so it is a fact about
+   the app even where no session sent it", which is the surface forced execution exists to find — and
+   `forced` answers it no. A third pool would be a distinction no consumer can act on and would put every one
+   of them back to unioning two of three, which is the remembered rule this shape exists to delete. The
+   three-word grade is not lost by that: it stays on the METHOD, where `_astProvenance` carries it and
+   lib/popup-send.js renders it as its own tag, because THERE the difference between "a real load makes this
+   request" and "the app's own code composes it" is a fact about the ADDRESS and has a reader. */
+function provenanceOffersExample(p) {
+  DCHECK(isCallSiteProvenance(p),
+         "a learned value was graded `" + p + "`, which is none of " + CALLSITE_PROVENANCE.join("/") +
+         " — every producer of a value states the grade of the sighting that computed it, so a word outside " +
+         "that set is that producer and this vocabulary having parted, and this predicate would answer " +
+         "`offerable` for a value nothing graded");
+  return p !== "forced";
+}
+
+/* WHAT THE ENGINE'S PATH TO A LEARNED METHOD WAS WORTH — one fact, asked in ONE place, because TWO zones ask
+   it. lib/popup-send.js asks it to tag the row and to count the methods a bucket reached only by forcing;
+   lib/learn.js asks it of the CONCRETE record it is about to dissolve into a templated one, because that
+   record's path IS its identity, so the fold over its sightings is exactly the fold over the sightings of
+   the path segment it is handing over. Two spellings of `if (!m._astInferred) return null` are two rules
+   free to disagree about what an ungraded record means, and this one is loaded by both zones already.
+
+   `null` IS A POSITIVE STATEMENT AND NOT A HOLE: a method with no bundle sighting (a probed discovery
+   document's, or one only the wire produced) was never graded by the engine, so there is no grade to state,
+   which is exactly what `_astInferred` being false means. The caller reads that absence as itself.
+
+   THE DCHECK IS THE HALF THAT MATTERS. `_astProvenance` is written by lib/learn.js on the same line as
+   `_astInferred` — the two are one write — so a record carrying the first and not the second is that pairing
+   broken, or a store an older build wrote being read by this one. Both must crash rather than render,
+   because what a missing grade renders as is nothing, and nothing reads as "not forced". */
+function methodProvenance(m, where) {
+  DCHECK(!!m && typeof m === "object" && !Array.isArray(m),
+         "a method provenance was asked of something that is not a method record (" + where + ") — the " +
+         "learned-method map holds one per (verb, path) and every reader walks that map, so anything else " +
+         "is that walk having left it");
+  if (!m._astInferred) return null;
+  DCHECK(isCallSiteProvenance(m._astProvenance),
+         "a bundle-inferred method carries the provenance " + JSON.stringify(m._astProvenance) + ", which is " +
+         "none of " + CALLSITE_PROVENANCE.join("/") + " (" + where + ") — lib/learn.js writes it beside " +
+         "`_astInferred` on every call site it registers, so this record has one half of that write and not " +
+         "the other and the row would render with no grade, which a reviewer reads as `not forced`");
+  return m._astProvenance;
 }
 
 /* THE KEY — THE NAME THIS RECORD IS FILED UNDER — MINTED HERE AND SPELLED NOWHERE ELSE.
