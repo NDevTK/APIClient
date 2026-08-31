@@ -253,12 +253,15 @@ static char *errs_json_array(void) {
    AND `neverPicked`/`neverPickedGap` ARE THE SAME PAIR ASKED OF THE ONE WORD IN §scheduler'S RAZOR THAT NO
    OTHER ROW HERE CAN ANSWER. The razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY
    flow"; every row above that looks like it names the starved population is a TERM OF THE WEIGHT, and
-   flow_credit_emit resets all of them — `unrun` is zero own silence and an emission by ANY arm of the
-   member's family writes that zero for the whole family at once, `visZero` is
-   `visits == 0` and an emission writes that too, and flow_pick's own `unrun` needs all three at zero, which
-   its own comment says is non-empty only within one quantum of an emission. So each of them counts a member
-   that has just PRODUCED something as one that has never run, and on a frontier that has gone quiet none of
-   them can name anybody. `neverPicked` counts members the scheduler has never handed the thread — the one
+   flow_credit_emit resets the SILENCE ones — `unrun` is zero own silence and an emission by ANY arm of the
+   member's family writes that zero for the whole family at once, and flow_pick's own `unrun` needs all three
+   at zero, which its own comment says is non-empty only within one quantum of an emission. So each of those
+   counts a member that has just PRODUCED something — and every arm standing beside it — as one that has never
+   run, and on a frontier that has gone quiet neither can name anybody. `visZero` is the exception and is not
+   the answer either: an emission used to write `visits = 0` on the emitter and no longer does, so the row now
+   means exactly "completed no unit of work" — which a member can read for a whole run BECAUSE it was
+   dispatched into a program that never ends, a resume-seam defect wearing an ordering row's shape.
+   `neverPicked` counts members the scheduler has never handed the thread — the one
    quantity nothing resets, because the member did nothing to reset it — and `neverPickedGap` is how far the
    best of them stands behind the weight the pick actually returned, in the order's own points. Read them the
    way `jobsReady`/`jobWGap` are read: a large gap is the ordering WORKING (those members are outranked, and

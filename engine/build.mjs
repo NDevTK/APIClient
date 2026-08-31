@@ -589,9 +589,12 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                     /* AND THE ONE WORD OF §scheduler'S RAZOR THIS READER COULD NOT SPEAK. It forbids a resume
                        that "drops, starves, skips, reorders, or forgets ANY flow", and STARVES had no row: the
                        three fields that look like the starved population are all TERMS OF THE WEIGHT and
-                       flow_credit_emit resets every one of them, which is why this file already has to warn,
-                       twice, that `unrun` counts a member that has run and emitted. `visZero` carries the same
-                       flaw one field over. So a reader asking "is some member never being chosen" had only
+                       flow_credit_emit resets the SILENCE ones, which is why this file already has to warn,
+                       twice, that `unrun` counts a member that has run and emitted. `visZero` used to carry the
+                       same flaw one field over — an emission wrote `visits = 0` on the emitter — and no longer
+                       does; it is still not the row, because a member completes no unit for a whole run when it
+                       is dispatched into a program that never ends, which is a resume-seam defect and not an
+                       ordering one. So a reader asking "is some member never being chosen" had only
                        rows that answer "…or chose to emit recently", and the two states take opposite work.
                        `neverPicked` is the dispatch count's zero — nothing resets it, because a member that
                        was never handed the thread did nothing that could — and `neverPickedGap` is how far the

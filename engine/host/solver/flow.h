@@ -188,34 +188,55 @@ typedef struct Flow {
        flow keeps the thread until it finishes the program, its arms then tie with it and take their turns, and
        the reactions run. It is not a job priority and there is no job in it: the term counts units of work, and
        a program is one.
-       INHERITED AT A FORK for the same reason `val` and `cpu` are — an arm has, by construction, completed every
-       unit its parent completed before the branch — and RESET BY AN EMISSION on the reasoning that a flow that
-       just produced something is not one the frontier needs protecting from. flow_fork_inherit's
-       rank-neutrality DCHECK is what forces the inheritance, and it fires the moment it is forgotten.
-       THE RESET IS PER MEMBER AND IT IS THE ONE TERM OF THE WEIGHT THAT IS STILL SCOPED THAT WAY, which is
-       worth stating beside `cpu` rather than left to be re-derived, because the two used to be reset together
-       and no longer are. `cpu` above is now forgiven for the whole ACCOUNT at an emission (FlowAcct's
-       `emit_gen`) because it is weighed against a reward the account earns; this one is written to zero on the
-       EMITTER alone, so within a family an arm frozen at a count of V stands `1 - 1/(1+V)` behind the flow that
-       forked it, repayable at FLOW_AGE_RATE by that flow's own silence — a priced deficit, and not the
-       unrepayable one the own-silence half used to be. Whether an emission should move this term at all is a
-       question about what a UCB count MEANS and is not settled by this sentence; what is settled is that the
-       two scopes are different on purpose and that a reader may not infer one from the other. */
+       INHERITED AT A FORK for the same reason `cpu` is — an arm has, by construction, completed every unit its
+       parent completed before the branch. flow_fork_inherit's rank-neutrality DCHECK is what forces the
+       inheritance, and it fires the moment it is forgotten.
+       AND NOT RESET BY AN EMISSION, WHICH IS THE ONE THING ABOUT THIS FIELD THAT USED TO BE A QUESTION AND IS
+       NOW SETTLED. It used to be written to zero on the EMITTER, on the reasoning that a flow which has just
+       produced something is not one the frontier needs protecting from and "then leads by its REWARD". That
+       reasoning was written when `val` was a per-flow field: the reward is the fork FAMILY's, so within a
+       family it leads nobody, and the zero was residue of the era when this term read `cpu` and forgiving the
+       silence and forgetting the trials were one statement in one field.
+       WHAT SETTLED IT IS THE TEST THIS ACCOUNTING ALREADY APPLIES TO EVERY TERM: two arms of one parent, forked
+       at two instants, must be worth the same, because neither did anything between the two branches. A zero
+       written on the emitter is COPIED by every fork it takes afterwards, so two arms straddling one emission
+       stood a whole optimism range apart for an event NEITHER performed and BOTH were already credited for
+       through the account they share — one credit minted once and presented twice, which is exactly what
+       FlowAcct's `val` was moved onto the family to stop. And the field that WOULD hold a per-member emission
+       preference already exists and is deliberately unranked: `Flow.val` is what one member emitted and is
+       never read by flow_weight, so the zero was that refusal being overturned through this term instead.
+       SO THIS COUNT IS ONE QUANTITY WITH ONE MEANING — units of work completed on this flow's own prefix,
+       raised only by flow_credit_visit, carried by a fork, and monotone for the life of the flow. It is the
+       ONE term of the weight with no reset of any kind, which is worth stating beside `cpu` rather than left to
+       be re-derived: `cpu` above is forgiven for the whole ACCOUNT at an emission (FlowAcct's `emit_gen`)
+       because it is weighed against a reward the account earns, and this one is weighed against nothing — it
+       is a trial count, and a trial that happened cannot un-happen.
+       A PARK DOES NOT CARRY IT, AND THAT IS CONSISTENT RATHER THAN AN OMISSION. The cold tier writes the
+       account's reward and not this (cold.c), so a resumed member re-enters at zero; it then REPLAYS its
+       document and re-completes the units its recipe describes, which is the same reason §@S's distance is
+       "re-earned rather than resumed across a park". A count that is re-earned by the work that earned it is
+       not a reset. */
     int64_t visits;
     /* HOW MANY TIMES THE SCHEDULER HAS HANDED THIS MEMBER THE THREAD — a CENSUS quantity and never a rank, in
        the same class as `val` beside it: it is not read by flow_weight, it is not inherited at a fork, and it
        is not reset by anything. It exists because §scheduler's word for the state the razor forbids is
        STARVES, and no other field in this struct can name the population that sentence is about.
-       EVERY CANDIDATE FOR THAT ROLE IS A TERM OF THE WEIGHT, AND flow_credit_emit RESETS ALL OF THEM. The
-       own-silence half goes to 0 for every member of the emitting family, so the census row built on it counts
-       a flow that has just produced something AND every arm standing beside it (build.mjs's reader says so in
-       as many words); `visits` goes to 0 on the emitter, so "completed no unit of work" counts it too; the
-       family notch goes to 0 on any arm's emission, so flow_pick's own `unrun`
-       population — every non-reward term at zero — is documented at its site as non-empty only within one
-       quantum of an emission, which is why all three of its §ONE-WFQ guards short-circuit to vacuity on
+       EVERY CANDIDATE FOR THAT ROLE IS A TERM OF THE WEIGHT, AND flow_credit_emit RESETS THE SILENCE HALVES OF
+       ALL OF THEM. The own-silence half goes to 0 for every member of the emitting family, so the census row
+       built on it counts a flow that has just produced something AND every arm standing beside it (build.mjs's
+       reader says so in as many words); the family notch goes to 0 on any arm's emission, so flow_pick's own
+       `unrun` population — every non-reward term at zero — is documented at its site as non-empty only within
+       one quantum of an emission, which is why its §ONE-WFQ guards short-circuit to vacuity on
        exactly the frontier where a member is being starved. A count of DISPATCHES is the one statement none of
        that can move: a member that was never switched in was never given the chance to emit, so nothing it
        could have done can erase the fact.
+       `visits` USED TO BE ON THAT LIST AND IS NOT ANY MORE, WHICH SHORTENS THE ARGUMENT WITHOUT WEAKENING IT.
+       An emission zeroed the emitter's count, so "completed no unit of work" counted it too; that write is gone
+       (flow_credit_emit says why it was one credit presented twice), and `vis_zero` below now means what it
+       reads. This field is still the answer, because the two rows ask different questions: `vis_zero` counts
+       members that finished nothing, and a member can finish nothing for a whole run BECAUSE it was dispatched
+       into a program that never ends — which is a resume-seam defect and not an ordering one. Only a dispatch
+       count separates those, and it is the separation the row exists for.
        IT IS WHAT SEPARATES TWO DIAGNOSES THAT TAKE OPPOSITE WORK, and until it existed a run could not tell
        them apart at all: a world missing from the emitted surface because its flow was never picked is an
        ORDERING defect, and one missing because its flow was picked and made no forward progress is a defect in
@@ -1064,8 +1085,12 @@ typedef struct {
     /* MEMBERS THE SCHEDULER HAS NEVER HANDED THE THREAD, AND HOW FAR THE BEST OF THEM STANDS BEHIND THE FRONT.
        §scheduler's razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY flow", and
        STARVES is the only one of the five with no row anywhere in this struct — every other candidate (`unrun`,
-       `vis_zero`, `svc_min`, flow_pick's own `unrun`) is a term of the weight that flow_credit_emit resets, so
-       each of them counts a member that has just PRODUCED something as one that has never run. `picks == 0` is
+       `vis_zero`, `svc_min`, flow_pick's own `unrun`) is a term of the weight, and flow_credit_emit resets the
+       SILENCE ones for the whole emitting family, so each of those counts a member that has just PRODUCED
+       something — and every arm standing beside it — as one that has never run. `vis_zero` is the exception
+       since the emitter's per-member visit zero went, and it still cannot answer this: a member that finished
+       nothing may have been dispatched into a program that never ends, which is a resume-seam defect wearing
+       the same row. `picks == 0` is
        the population, and it cannot be moved by anything the member did, because it did nothing.
        THE PAIR IS THE READING AND NEITHER HALF IS ONE ALONE, which is the same shape `jobs_ready`/`job_w_gap`
        already takes one row down. The COUNT says such members exist; only the GAP — in the order's own points,

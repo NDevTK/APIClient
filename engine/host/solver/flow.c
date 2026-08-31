@@ -94,7 +94,12 @@ typedef struct FlowAcct {
        nothing a fork can carry differently.
        WHAT THE ORDER IS THEN MADE OF, AT TWO SCOPES, WHICH IS THE POINT AND NOT A SIDE EFFECT. WITHIN a family
        this term is a common offset and cancels, so members are ordered by the optimism bonus and their OWN
-       silence — both bounded, both reset by their own emission — which is fair queueing over the arms and is
+       silence — both bounded, and NEITHER of them reset by the emitting MEMBER, which is the correction this
+       sentence carries. It used to read "both reset by their own emission", and by the time it did neither
+       half was: the own silence is forgiven for the whole ACCOUNT at any arm's emission (`emit_gen` below),
+       and the optimism bonus is not moved by an emission at all (flow_credit_emit says why the per-member zero
+       that used to move it was one credit presented twice). So what orders a family's members is fewest
+       completed units first and least own burn first — fair queueing over the arms and
        §scheduler's BFS. BETWEEN families it is the whole bandit ordering, charged once against a silence
        charged once, so a family that emitted V holds the thread for V seconds of ITS OWN silence and is then
        passed. Neither scope can do the other's job, which is the same sentence flow_silence_notch already
@@ -328,14 +333,40 @@ void flow_credit_emit(double v) {
        ancestor's findings. It is never copied, never inherited and never read by flow_weight, which is what
        keeps it a measurement rather than a rank. */
     g_running->val += v;
-    /* …AND THE OPTIMISM TERM'S OWN QUANTITY, which is what a per-flow `cpu = 0` here used to be doing under a comment that
-       said so ("a fresh visit count") while `cpu` was a clock. A flow that has just produced something is not
-       one the frontier needs protecting from, so it is restored to the full bonus exactly as a never-run flow
-       carries it — and it then leads by its REWARD, which is the term that is supposed to decide between two
-       flows the optimism term has nothing left to say about. Without this reset a productive flow's bonus
-       decays monotonically for the whole session and the only thing keeping it in front is `val`, so the moment
-       it stops emitting it falls behind every arm it forked while it was working. */
-    g_running->visits = 0;
+    /* …AND **NOT** THE OPTIMISM TERM'S QUANTITY, WHICH THIS USED TO ZERO ON THE EMITTER. `g_running->visits = 0`
+       stood here, and the line above it is what retires the argument that justified it: that argument said a
+       flow which has just produced something "then leads by its REWARD", and the reward is the FAMILY's, so
+       within a family it is a common offset that leads NOBODY — the emitter and every arm of it read the same
+       `val` through the same pointer. Its second clause ("the only thing keeping it in front is `val`") is the
+       same sentence and is stale for the same reason, and its third described the ordinary rotation as a
+       failure: an arm inherits the emitter's count at the branch, so the emitter falls behind it by exactly ONE
+       completed unit, which is fair queueing rather than a flow being buried.
+       IT WAS RESIDUE OF THE TERM THE COUNT REPLACED. While the optimism term read `cpu / FLOW_SERVICE_US`,
+       forgiving the silence and forgetting the trials were ONE statement in ONE field, and zeroing on an
+       emission was coherent. When the quantity became a COUNT OF COMPLETED UNITS those stopped being one
+       statement; only the silence half was re-derived (FlowAcct's `emit_gen`, below), and the count's zero was
+       carried across the re-keying verbatim.
+       WHY IT WAS WRONG AND NOT MERELY STALE — in this file's own words at FlowAcct's `val`, about this exact
+       pair: two arms of one parent, forked at two instants, "differ by exactly what the parent emitted in
+       between — which neither of them did". A zero written here is COPIED by every fork the emitter takes
+       afterwards, so an arm born after an emission carried a full 1.0 while its sibling born before it carried
+       `1/(1+V)` — the optimism term's whole range apart, on an event BOTH of them are already credited for
+       once through the account they share. One credit minted once was presented twice: to the family through
+       `val`, and again to whichever member happened to be holding the thread.
+       AND THE FIELD THAT WOULD HOLD SUCH A PREFERENCE ALREADY EXISTS AND IS DELIBERATELY UNRANKED. `Flow.val`
+       one line up is what THIS member emitted, and it is never read by flow_weight — which is what keeps it a
+       measurement rather than a rank. A within-family preference for the productive member is therefore a
+       thing this accounting has already refused, in the field built to hold it, and the zero was that refusal
+       being overturned through the optimism term instead.
+       WHAT ORDERS A FAMILY'S MEMBERS INSTEAD is what §scheduler asks of it: fewest completed units first and
+       least own silence first — fair queueing over the arms, with the value-of-information ordering carried
+       BETWEEN families by the reward. A flow that emits keeps the thread until it finishes the unit it is
+       inside (flow_pick's comparison is STRICT and its arms tie with it), its count then advances, and it
+       hands over on its own visit.
+       SO AN EMISSION DOES NOT MOVE THIS TERM AT ALL, and `visits` is now one quantity with one meaning: the
+       units of work completed on this flow's own prefix, raised only by flow_credit_visit and carried by a
+       fork. The rank still changes on an emission — through the reward, both silence halves and the generation
+       bump below — so nothing that watches for one loses its signal. */
     /* …AND THE AGING, BOTH HALVES OF IT, IN ONE STATEMENT ABOUT THE ACCOUNT. This used to be two: `fam_us = 0`
        here and `g_running->cpu = 0` above it, and the pair was described as "deliberately no ordering between
        the resets — a sibling's emission forgives the family while this flow's own `cpu` stands, and that is the
@@ -689,22 +720,29 @@ void flow_credit_pick(Flow *f) {
  * forked it goes on burning, so an unrun arm ranks at or above the flow that made it, and the queue drains
  * oldest-arm-first. AN EMISSION NO LONGER BREAKS THAT on the aging axis: it forgives the whole account's
  * window at once (FlowAcct's `emit_gen`), so the emitter and every arm of it stand level and the emitter sinks
- * again from the first quantum it burns. What an emission still moves within a family is the OPTIMISM term —
- * the emitter's `visits` goes to zero and an arm's frozen count does not — so the clause the sentence above
- * needs is "for as long as that flow neither emits nor advances its search", read as a statement about that
- * ONE term rather than about the silence. Between families the reward orders exactly what it is for, charged
- * once against a silence charged once.
- * THAT CLAUSE IS A CORRECTION AND IT IS RECORDED RATHER THAN QUIETLY TIGHTENED, because the sentence it
- * replaces said "always" and was carried forward into a hand-off as an IDENTITY to derive a new ordering
- * guard from — which would have made the guard fire on healthy runs. The premise is true and the conclusion
- * does not follow from it: a fork does freeze the arm's `visits` and rungs at the parent's readings, but TWO
- * writers move the parent's the other way afterwards. flow_credit_emit sets the emitter's `visits` to zero, so
- * an arm holding a frozen visit count of V is left worth `1/(1+V)` against a parent worth a full `1.0` on the
- * same reward — strictly less whenever V > 0. And flow_observe_survival/flow_observe_rung raise the parent's
- * fitness monotonically while the arm's stays where it was born. Neither is a defect: a flow that has just
- * produced something, or just carried its payload one rung further, is exactly the flow the frontier should be
- * running. What is wrong is only the word "always", and it is worth keeping the refutation here because a
- * reader who re-derives the freezing argument will re-derive the missing quantifier with it.
+ * again from the first quantum it burns. NOR ON THE OPTIMISM AXIS ANY MORE, which is the correction this
+ * paragraph now carries: an emission does not touch `visits` at all (flow_credit_emit says why the per-member
+ * zero that used to was one credit presented twice), so the emitter's count stands where its arms' frozen
+ * counts stand and only COMPLETING a unit moves it. Between families the reward orders exactly what it is
+ * for, charged once against a silence charged once.
+ * SO THE CLAUSE THE SENTENCE ABOVE NEEDS IS "for as long as that flow does not advance its search", AND THE
+ * LONGER LIST IT USED TO NEED IS RECORDED RATHER THAN QUIETLY TIGHTENED, because the sentence before that one
+ * said "always" and was carried forward into a hand-off as an IDENTITY to derive a new ordering guard from —
+ * which would have made the guard fire on healthy runs. The premise is true and the conclusion does not follow
+ * from it: a fork does freeze the arm's `visits` and rungs at the parent's readings, and ONE writer moves the
+ * parent's the other way afterwards — flow_observe_survival/flow_observe_rung raise the parent's fitness
+ * monotonically while the arm's stays where it was born. That is not a defect: a flow that has just carried
+ * its payload one rung further is exactly the flow the frontier should be running.
+ * THERE USED TO BE A SECOND SUCH WRITER AND IT WAS THE ONE THAT MATTERED, WHICH IS WHY ITS ABSENCE IS STATED
+ * HERE RATHER THAN LEFT AS A SHORTER LIST. flow_credit_emit set the emitter's `visits` to zero, so an arm
+ * holding a frozen count of V was left worth `1/(1+V)` against a parent worth a full `1.0` on the same reward.
+ * That reads as the fitness case — the parent did something and the arm did not — and it is a different shape,
+ * because the zero was COPIED by every fork taken afterwards: two arms of one parent, forked either side of
+ * one emission, were then a whole optimism range apart for an event NEITHER of them performed and BOTH of them
+ * were already credited for through the account they share. That is the pair this function's own equality
+ * cannot see, and it is the pair FlowAcct's `val` is held on the family to answer. The refutation is worth
+ * keeping because a reader who re-derives the freezing argument will re-derive the missing quantifier with it,
+ * and one who re-derives "a productive flow should not be overtaken" will re-derive the zero.
  * `cpu` IS NO LONGER ONE OF THOSE TWO, AND THAT IS THE CORRECTION THIS BLOCK CARRIES RATHER THAN A SHORTER
  * LIST. It used to be, and being one was not a bounded demotion like the visit count's — it was UNREPAYABLE.
  * The freeze is written by nothing but a dispatch, so a member the scheduler has never chosen kept its
@@ -2588,12 +2626,20 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        (flow_fork_inherit), an arrival takes `flow_own_silence(g_running)` and its family's `fam_us` as values
        (flow_arrive_at_virtual_time) — so a
        newborn's notch and visit count are EXACTLY the incumbent's, and on a quiet frontier the incumbent is
-       not in this population either. The only writer that puts anything back is flow_credit_emit, which zeroes
-       the emitter's `visits` and, through the account's generation, the own AND family silence of every member
-       of that family at once. So this population is non-empty only
+       not in this population either. The only writer that puts the SILENCE half back is flow_credit_emit,
+       which through the account's generation zeroes the own AND family silence of every member of that family
+       at once. So this population is non-empty only
        within one quantum of an emission, and the two guards below — each of which short-circuits on it —
        assert NOTHING on a frontier that has gone quiet, which is precisely the frontier §scheduler's sentence
-       is about. That is the §Testing empty-denominator defect standing in the guard written to catch it. */
+       is about. That is the §Testing empty-denominator defect standing in the guard written to catch it.
+       AND THE VISIT-COUNT CLAUSE IS NOW A NARROWER TEST THAN IT WAS, WHICH IS A HONEST POPULATION AND NOT A
+       WIDER HOLE. flow_credit_emit used to zero the EMITTER's `visits` as well, so within a quantum of any
+       emission the emitter itself answered this test however many programs it had finished — a member that had
+       just PRODUCED counted as one that had never run, which is the same flaw `never_picked` (flow.h) exists
+       because of. With that write gone the clause means what it reads: a member whose own prefix has completed
+       no unit of work. What that does NOT do is fix the vacuity above — the silence clause is what empties this
+       set on a quiet frontier and it is untouched — so the residual below covers strictly more picks than it
+       did, and it is stated there rather than left to be re-derived here. */
     const Flow *unrun = NULL;   /* the best-weighted member with EVERY non-reward term of flow_weight at zero */
     double unrun_w = 0.0;
     DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
@@ -2676,7 +2722,12 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
 
        NAMED RESIDUAL — THE TWO GUARDS ABOVE ARE STILL GATED ON `unrun` AND STILL ASSERT NOTHING ON A QUIET
        FRONTIER. Not covered: §scheduler's monopolizer-sinks sentence and its never-run floor, on any frontier
-       more than one cooperative quantum past its last emission — which is most of a long run. Both are RIGHT
+       more than one cooperative quantum past its last emission — which is most of a long run — AND, since the
+       emitter's per-member visit zero went (flow_credit_emit), on the picks INSIDE that quantum at which the
+       only member the silence clause admits is one that has completed a unit. That second set is a widening of
+       this residual and not a new one: the reason both are uncovered is the same reference member, and the
+       reason to record the widening rather than absorb it is that a guard which fires less often than it did
+       must say so or its silence reads as a stronger result. Both are RIGHT
        where they fire and NARROWER than the sentence they cite, which is why they crash on nothing today: the
        range claim they leaned on has moved to a guard that cannot be gated, and what is left in them is a
        claim about a PAIR, which structurally needs a reference member whose weight is known — and the only
