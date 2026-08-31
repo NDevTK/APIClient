@@ -2244,6 +2244,11 @@ static unsigned g_wfq_census_gen;
 void flow_wfq_census(WfqCensus *out) {
     Flow *top;
     int i;
+    /* THE BEST WEIGHT ANY READY JOB HOLDER OFFERS — held as a separate maximum because `job_w_gap` is a
+       DIFFERENCE against a top the scan does not know until flow_best runs below, and because "no ready
+       holder" must not be spelled the same way as "a ready holder at weight zero". */
+    double job_w_max = 0.0;
+    int have_job_holder = 0;
 
     DCHECK(out != NULL, "the WFQ was asked to report its ordering into nothing");
     out->members = g_flows_n;
@@ -2260,6 +2265,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->dec_max = 0;
     out->dist_max = 0.0;
     out->w_top = out->w_min = out->cand_w_max = 0.0;
+    out->jobs_ready = out->jobs_framed = out->jobs_owed = out->vis_zero = 0;
+    out->job_w_gap = 0.0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
@@ -2290,6 +2297,31 @@ void flow_wfq_census(WfqCensus *out) {
            fork counts say. It is the number that separates "being served fairly" from "finishing nothing". */
         if (i == 0 || f->visits < out->vis_min) out->vis_min = f->visits;
         if (f->visits > out->vis_max) out->vis_max = f->visits;
+        /* …AND HOW MANY MEMBERS STAND AT ZERO OF IT, which `vis_min` cannot say — see flow.h. */
+        if (f->visits == 0) out->vis_zero++;
+        /* THE JOB BACKLOG SPLIT BY WHAT IT IS WAITING ON — the three states flow.h names, decided by the two
+           predicates the engine already asks and in the order it asks them. flow_pick refuses a host-owed
+           member outright, so that question comes first; among the members the pick will consider, HTML
+           §8.1.4.4 "Calling scripts"'s clean up after running script step 3 ("If the JavaScript execution
+           context stack is now empty, perform a microtask checkpoint") is what every job arm of flow_step is
+           under, and `frame` is that stack. Whatever is left waits on RANK, and it is the only one of the
+           three the ordering can move. Written as if/else-if/else rather than three tests so the classes are
+           disjoint and exhaustive BY CONSTRUCTION: a member holding jobs has exactly one reason, and a fourth
+           reason has nowhere to be folded into. */
+        {
+            int jn = flow_job_pending(f);
+            if (jn > 0) {
+                if (flow_host_owed(f))   out->jobs_owed   += jn;
+                else if (f->frame)       out->jobs_framed += jn;
+                else {
+                    out->jobs_ready += jn;
+                    /* THE BEST OF THEM, against which `job_w_gap` is taken below. A maximum and not a first
+                       hit: the question is how far the backlog's BEST claim stands from the front of the
+                       queue, and any other holder is further still. */
+                    if (!have_job_holder || w > job_w_max) { job_w_max = w; have_job_holder = 1; }
+                }
+            }
+        }
         if (s > out->svc_max) out->svc_max = s;
         /* …AND THE FAMILY THIS MEMBER BELONGS TO, in the SAME notch — which is now the notch the AGING term
            actually reads, so `svc_fam_max` against `svc_max` is no longer a diagnostic beside the order, it is
@@ -2349,6 +2381,26 @@ void flow_wfq_census(WfqCensus *out) {
     }
     top = flow_best();
     if (top) { out->val_top = top->val; out->w_top = flow_weight(top); }
+
+    /* HOW FAR THE JOB BACKLOG STANDS BEHIND THE FRONT OF THE QUEUE — see flow.h. Taken here and not in the
+       scan because it is a difference against a top the scan cannot know, and left at 0 when nothing is
+       waiting on rank because there is then no gap to state; `jobs_ready` beside it is what tells the two
+       apart, which is exactly why neither row is worth emitting without the other. */
+    if (have_job_holder && top) out->job_w_gap = out->w_top - job_w_max;
+
+    /* AND IT IS NON-NEGATIVE BY CONSTRUCTION, WHICH IS WHY THIS IS AN ASSERTION AND NOT A CLAMP. `w_top` is
+       flow_best's maximum over EVERY member (flow_pick with no seed, no exclusion and `runnable_only` off) and
+       a ready job holder is one of those members, read through the same flow_weight in the same scan — so the
+       difference cannot be negative while the pick and this census are ordering by one comparator. It fires on
+       an EDIT and not on a state: a filter added to flow_best that hides a member from the maximum while
+       leaving it in the frontier, or a second reading of the weight that disagrees with the pick's. Either
+       would make `job_w_gap` a number about an instrument, and the row exists to answer whether a job backlog
+       is an ORDERING problem — the one reading a wrong sign would invert. */
+    DCHECK(out->job_w_gap >= 0.0,
+           "the WFQ census reports a job backlog standing ABOVE the front of its own queue — flow_best's "
+           "maximum is taken over the same members this scan walks, so a negative deficit means the pick and "
+           "the census are no longer reading one comparator, and every conclusion drawn from this row about "
+           "whether queued jobs are outranked or unreachable is a statement about the instrument");
 
     /* THE FAMILY COUNT IS BRACKETED BY THE POPULATION IT PARTITIONS, asserted because both ends name a real
        break rather than a rounding. Zero families with members standing is the mark not being taken at all —

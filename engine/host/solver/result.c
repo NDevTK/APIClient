@@ -239,16 +239,28 @@ static char *errs_json_array(void) {
    identity of the structure and the family half can never order anything; more than 1 is a term that orders
    and is momentarily level). solver/flow.h states each row in full.
 
+   AND HOW TO READ THE JOB ROWS, which are the ones that say what the ORDER is costing. `jobsOwed`,
+   `jobsFramed` and `jobsReady` are the cold line's `jobs` total split by what each job waits on — the host,
+   the member finishing its own program (HTML §8.1.4.4 "Calling scripts", clean up after running script step
+   3), or RANK. Only the last is the WFQ's to move, and `jobWGap` says how far behind the front of the queue it
+   stands, in the order's own points: 0 with `jobsReady > 0` is the top of the queue holding a runnable job and
+   no ordering problem at all; a gap on the scale of `valMax - valMin` is the reward spread burying the backlog
+   where the aging term — FLOW_AGE_QUANTUM per quantum of silence — cannot reach it inside a session. `jobsReady`
+   at 0 makes `jobWGap` 0 too, which is why the pair is read together and neither alone. `visZero` is the count
+   `visMin` cannot give: how many members have completed NO unit of work, which is both the population
+   `jobsFramed` belongs to and the population whose optimism bonus can never decay.
+
    THE ARITHMETIC, DONE RATHER THAN ESTIMATED, and it is the reason the buffer is this size: the format's fixed
-   bytes are 251 without its conversion specifiers, and the twenty-three numbers' widest forms are 2512 (nine
-   longs and seven int64s at 20, three `%.1f` doubles at 312 and four `%.3f` at 314 — a double's widest decimal
-   form is 309 integer digits plus sign, point and fraction, which is what makes this buffer two orders larger
-   than the counter documents in this file). 251 + 2512 + 1 = 2764 against this 2816. RE-DO IT WHEN YOU ADD A
-   ROW; the DCHECK below catches the arithmetic being re-done wrong, and is not a substitute for doing it. */
+   bytes are 312 without its conversion specifiers, and the twenty-eight numbers' widest forms are 2906
+   (thirteen longs and seven int64s at 20, three `%.1f` doubles at 312 and five `%.3f` at 314 — a double's
+   widest decimal form is 309 integer digits plus sign, point and fraction, which is what makes this buffer two
+   orders larger than the counter documents in this file). 312 + 2906 + 1 = 3219 against this 3328. RE-DO IT
+   WHEN YOU ADD A ROW; the DCHECK below catches the arithmetic being re-done wrong, and is not a substitute for
+   doing it. */
 char *result_wfq_json(void) {
     WfqCensus w;
     char *out;
-    size_t n = 2816;
+    size_t n = 3328;
     int m;
 
     flow_wfq_census(&w);
@@ -264,16 +276,18 @@ char *result_wfq_json(void) {
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
                      "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
                      "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
-                     "\"visMin\":%lld,\"visMax\":%lld,"
+                     "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
-                     "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f}",
+                     "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
+                     "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f}",
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
-                     (long long)w.vis_min, (long long)w.vis_max,
+                     (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,
                      w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
-                     w.dist_max, w.w_top, w.w_min, w.cand_w_max);
+                     w.dist_max, w.w_top, w.w_min, w.cand_w_max,
+                     w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap);
     DCHECK(m > 0 && (size_t)m < n,
            "the WFQ census did not fit its buffer — a truncation here does not lose a digit, it loses the "
            "closing brace, so the document that embeds it will not parse and every finding for this page is "

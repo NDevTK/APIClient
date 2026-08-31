@@ -1117,6 +1117,57 @@ typedef struct {
     double w_top;         /* flow_best's weight — what holds the front of the queue */
     double w_min;         /* the lowest weight in the frontier — the other end of the same order */
     double cand_w_max;    /* the best weight any @S candidate can offer against `w_top` */
+
+    /* THE JOB BACKLOG, SPLIT BY WHAT EACH JOB IS WAITING ON — three states that the cold census's `jobs` total
+     * reports as one number, and the three take OPPOSITE actions.
+     *
+     * §scheduler says "every enqueued job is a first-class flow in the one WFQ" and "there is NO
+     * `while(JS_ExecutePendingJob)` loop — the scheduler IS the job pump", so a queued job that never runs is
+     * either a ROUTE that cannot reach it (§scheduler's razor: a resume that "drops, starves, skips, reorders,
+     * or forgets ANY flow" is a cap) or an ORDER that has not got to it yet (the WFQ working as specified, its
+     * terms mis-scaled). Those have opposite fixes and `jobs: 5814` on the cold line is the same digit for
+     * both — which is how a whole class of continuation came to be read as unreachable when it was outranked.
+     * The split is over exactly the two predicates flow_step and flow_pick already ask, so it is a reading of
+     * the engine's own decisions and not a fourth opinion beside them:
+     *
+     *   `jobs_owed`   — the member carries the host-owed mark, so flow_pick REFUSES it (`runnable_only`).
+     *                   These jobs wait on the HOST, and nothing about the order can move them.
+     *   `jobs_framed` — the member is inside a program (`frame != NULL`). HTML §8.1.4.4 "Calling scripts",
+     *                   clean up after running script step 3 — "If the JavaScript execution context stack is
+     *                   now empty, perform a microtask checkpoint" — is what every job arm of flow_step is
+     *                   under, and `Flow::frame` IS that stack here. So these jobs wait on the member
+     *                   COMPLETING its unit of work, which is also what advances the optimism term's `visits`.
+     *                   This row is NOT a defect on its own: it is the spec's precondition, measured.
+     *   `jobs_ready`  — neither: an empty stack and no mark, so the member reaches its jobs at the very next
+     *                   pick it wins. These jobs wait on RANK ALONE, and they are the population §scheduler's
+     *                   WFQ sentence is about.
+     *
+     * Disjoint and exhaustive by construction (two booleans over every member), which is the point: a fourth
+     * reason cannot be folded silently into one of the three, because there is nowhere for it to go.
+     *
+     * `job_w_gap` IS THE READING THE THREE COUNTS CANNOT MAKE, and it is denominated in the order's own unit.
+     * It is `w_top` minus the best weight any READY holder offers, so it says how many reward points the job
+     * backlog is standing behind the front of the queue — 0 means the top of the order itself holds a runnable
+     * job and the backlog is not an ordering problem at all; a figure on the scale of the reward spread
+     * (`val_max - val_min`) is the ordering saying that the aging term, which moves at FLOW_AGE_QUANTUM per
+     * quantum of silence, cannot reach it inside a session. READ IT BESIDE `jobs_ready` AND NEVER ALONE: with
+     * no ready holder there is no gap to state, and this is 0 for that too. The pair is what separates
+     * "nothing is waiting on rank" from "the front of the queue is a job holder", which are the two states a
+     * bare 0 reads as. `>= 0` by construction — `w_top` is flow_best's maximum over the same members this scan
+     * walks — so a negative value is the pick and the census disagreeing about the one comparator, which is
+     * the edit the DCHECK beside it catches.
+     *
+     * `vis_zero` IS THE OTHER HALF OF `jobs_framed`, counted over MEMBERS rather than over jobs: how many of
+     * them have completed no unit of work at all. `vis_min: 0` says at least one and a frontier of thousands
+     * makes that unremarkable; the COUNT is what says whether the framed backlog belongs to a handful of deep
+     * programs or to most of the frontier. It is also the population whose optimism bonus can never decay
+     * (flow_queue_weight keys it on completed units), so a large `vis_zero` beside a large `jobs_framed` is a
+     * frontier ranking itself on a term none of its members can spend. */
+    long jobs_ready;
+    long jobs_framed;
+    long jobs_owed;
+    double job_w_gap;
+    long vis_zero;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
