@@ -87,7 +87,8 @@ typedef enum {
     IDL_CALLBACK,
     /* AN ENUMERATION — §3.2.18. ToString, and then the result must be one of the values the IDL lists or it is
        a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised value is never silently the
-       default. The values are declared beside the member, because they are part of the type. */
+       default. The values are declared beside the POSITION (idl_arg_enum) or beside the dictionary MEMBER
+       (IdlDictMember::values), because they are part of the type and a member's IDL may write two. */
     IDL_ENUM,
     /* A NULLABLE ENUMERATION — `NavigationType? navigationType = null`, and the difference from IDL_ENUM is
        the whole reason it exists. §3.2.18's conversion is ToString-then-membership, and null ToStrings to the
@@ -138,6 +139,23 @@ typedef enum {
        argument-position sequence does, rather than being walked from a body after every later member was
        already read. */
     IDL_SEQUENCE_DOMSTRING,
+    /* `sequence<E>` where E is an ENUMERATION — §3.2.21 Sequences' iterator-protocol conversion with §3.2.18
+       Enumeration types as the element conversion. Web Cryptography §14.3.9 The importKey method's
+       `sequence<KeyUsage> keyUsages` is the first.
+       THE ELEMENT CONVERSION IS TWO STEPS AND THE FIRST OF THEM IS THE PAGE'S CODE. §3.2.18 is "Let S be the
+       result of calling ? ToString(V)", then "If S is not one of E's enumeration values, then throw a
+       TypeError" — so an element rests on its ToString exactly as IDL_SEQUENCE_DOMSTRING's does, and the
+       membership test that follows runs none of the page's code and is decided before the cursor's next pull.
+       AND THE PLACE THAT TEST RUNS IS OBSERVABLE, which is the whole reason this is a declared type rather
+       than a walk in a body. §3.2.21.1 Creating a sequence from an iterable puts the element conversion INSIDE
+       the repeat loop — step 3.1 is "Let next be ? IteratorStepValue(iteratorRecord)" and step 3.3 is
+       "Initialize S i to the result of converting next to an IDL value of type T" — so a bogus element at
+       index 0 throws BEFORE index 1 is pulled, and a page whose iterator has side effects per element can tell
+       that apart from a walk that collects the whole list and checks it afterwards. A body cannot get that
+       order back: it runs after §3.6 has converted every position.
+       The value list is declared beside the POSITION (idl_arg_enum), exactly as an interface type's is
+       (idl_arg_iface) and a typed array's T is (idl_typed_array). */
+    IDL_SEQUENCE_ENUM,
     /* `sequence<double>` — §3.2.21 Sequences' iterator-protocol conversion with §3.2.7 `double` as the
        element type.
        Intersection Observer §2.4's `threshold` is the first, reached as the arm of the union below.
@@ -417,7 +435,7 @@ typedef enum {
        SO `T` IS A PARAMETER OF THE CONVERSION AND NOT A ROW OF THIS LIST: twelve rows would state one rule
        twelve times and differ only in a constant, which is the per-member line this file exists to remove.
        The type is declared beside the POSITION instead (idl_typed_array), exactly as
-       an interface type's class is (idl_iface_brand) and an enumeration's value list is (idl_enum_values): one
+       an interface type's class is (idl_iface_brand) and an enumeration's value list is (idl_arg_enum): one
        row stating the RULE, one declaration stating what this position's rule is about.
        AND THE TWO §3.3 EXTENDED ATTRIBUTES ARE DECLARED WITH IT, because §3.2.26 reads them as CONDITIONS on
        steps 3 and 4 rather than as a different algorithm. §3.3.1 [AllowResizable] and §3.3.2 [AllowShared] are
@@ -573,6 +591,34 @@ static inline bool idl_type_brands_interface(IdlArgType t)
     /* The union's ARM is the brand test itself — `(Node or DOMString)` picks the object arm exactly when the
        value implements the interface — so a declaration with no brand cannot even choose an arm. */
     case IDL_STRING_UNLESS_IFACE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* WHICH DECLARED TYPES ASK FOR Web IDL §3.2.18 Enumeration types' VALUE LIST — "If S is not one of E's
+ * enumeration values, then throw a TypeError", whose `E` a declaration has to state or there is nothing to
+ * test against. It is the same sentence idl_type_brands_interface directly above answers for §3.2.15's `I`,
+ * one axis over, and it is ONE statement here for the same reason that one is: the set lived as each
+ * conversion arm's `t ==` chain plus the DCHECK standing over it, and a set written once per reader is the
+ * second copy CLAUDE.md names.
+ *
+ * Every reader asks THIS: the positional conversion's bare-enumeration arm, the element conversion inside
+ * §3.2.21's sequence walk, idl_arg_enum's position check, and the seal's sweep over the whole platform — so a
+ * type added to the enum that needs a value list is a type all four learn about at once.
+ *
+ * IDL_ENUM_NULLABLE is here even though §3.2.20's null rule collapses it to IDL_ENUM before any membership
+ * test is reached, for idl_type_brands_interface's own reason: the DECLARATION is what the seal and
+ * idl_arg_enum see, and a `E?` position whose values were never stated is a position whose non-null values
+ * reach §3.2.18 step 2 with nothing to be one of. The `?` decides whether null is admitted, never whether an
+ * enumeration was named. */
+static inline bool idl_type_admits_enumeration(IdlArgType t)
+{
+    switch (t) {
+    case IDL_ENUM:
+    case IDL_ENUM_NULLABLE:
+    case IDL_SEQUENCE_ENUM:
         return true;
     default:
         return false;
@@ -1160,21 +1206,41 @@ void idl_arg_iface(int index, bool (*is)(JSContext *ctx, JSValueConst v), const 
  * LAST one made, exactly as idl_iface_brand and idl_optional_from do and for the same reason. */
 void idl_this_iface(bool (*is)(JSValueConst v), const char *iface);
 
-/* DECLARE THE VALUES AN IDL_ENUM POSITION ADMITS — §3.2.18's enumeration, whose value list IS the type. A
-   NULL-terminated array of the identifiers the IDL lists, which the conversion checks the string ToString
-   produced against and throws a TypeError for anything else.
-   IT WAS EXPRESSIBLE ONLY ON A DICTIONARY MEMBER, and the conversion stood at a DCHECK saying so: "an
-   ENUMERATION was declared as a positional argument — the value list lives on a dictionary member … give the
-   declaration somewhere to carry the list". HTML §7.2.5's `attribute ScrollRestoration scrollRestoration` is
-   that position — a setter, one value, no dictionary — and `history.scrollRestoration = "bogus"` is a
-   TypeError from the TYPE rather than from the algorithm, which is why the check belongs here and not in the
-   setter's body. Set after the declaration, naming the member the LAST one made, as idl_iface_brand and
-   idl_optional_from do; `values` must outlive the declaration, so every caller passes a static. */
-void idl_enum_values(const char *const *values);
+/* DECLARE §3.2.18's `E` AT ONE POSITION — the enumeration whose value list IS the type, as the
+ * NULL-terminated array of the identifiers the IDL lists. §3.2.18 step 2 is "If S is not one of E's
+ * enumeration values, then throw a TypeError", so the conversion checks the string ToString produced against
+ * this and refuses anything else: `history.scrollRestoration = "bogus"` is a TypeError from the TYPE, before
+ * the setter's algorithm runs at all, and a body performing it would be one body's private copy of a rule
+ * every enumeration member has.
+ *
+ * IT IS PER POSITION, and that is the whole of what this states beyond the values. It was one list per
+ * DECLARATION, which is everything a member whose enumeration positions are all one enumeration needs — and
+ * Web Cryptography §14.3.9 The importKey method is the member that walks past it:
+ *
+ *     Promise<CryptoKey> importKey(KeyFormat format, BufferSource keyData, AlgorithmIdentifier algorithm,
+ *                                  boolean extractable, sequence<KeyUsage> keyUsages);
+ *
+ * TWO enumerations on one line — §14.1 Data Types' KeyFormat at position 0 and KeyUsage as the ELEMENT type
+ * at position 4 — so one list per declaration could name at most one of them, and the second was checked by
+ * hand in the member's body. That is the brand test written out in a body which a declared type exists to
+ * replace, and it is the identical shape idl_arg_iface answers for §3.2.15's `I`.
+ *
+ * SO THERE IS NO DECLARATION-WIDE FORM TO FALL BACK TO. A per-position list subsumes it exactly — the
+ * declaration-wide one was this call at whichever position asked — where idl_iface_brand survives beside
+ * idl_arg_iface because a CLASS and a PREDICATE are two different tests. Keeping both here would be one fact
+ * stated two ways with a fallback between them, which is the dual system CLAUDE.md forbids, so the old form is
+ * gone and every caller names its index.
+ *
+ * Set after the declaration, naming the member the LAST one made, exactly as idl_arg_iface and
+ * idl_optional_from do. The position must be one the declaration listed and its type must be one
+ * idl_type_admits_enumeration answers true for, both asserted here; idl_args_seal asserts the other direction
+ * over the whole platform — every position whose type admits an enumeration has one. `values` must outlive the
+ * declaration, so every caller passes a static, and IDL_ENUM_VALUES below is how one is written. */
+void idl_arg_enum(int index, const char *const *values);
 
 /* DEFINE A §3.2.18 VALUE LIST — AND SUPPLY ITS TERMINATOR, so it cannot be left off.
  *
- * Both readers of a value list scan it for a NULL: the positional conversion behind idl_enum_values and the
+ * Both readers of a value list scan it for a NULL: the positional conversion behind idl_arg_enum and the
  * dictionary member that names the list in an IdlDictMember row. Neither can bound the scan, because both
  * receive a POINTER and a pointer has already lost the extent — so the list's length lives entirely in its own
  * last element, and until now nothing about writing one made that element mandatory. A list missing it is not
@@ -1211,7 +1277,7 @@ void idl_enum_values(const char *const *values);
    are two independent attributes — §3.3.2's own example writes all four combinations — so collapsing them into
    one "kind of buffer position" loses two of the four.
    Set after the declaration, naming the member the LAST one made, exactly as idl_arg_default, idl_iface_brand
-   and idl_enum_values do. idl_args_seal asserts BOTH directions: a position declared IDL_TYPED_ARRAY that
+   and idl_arg_enum do. idl_args_seal asserts BOTH directions: a position declared IDL_TYPED_ARRAY that
    states no T is a conversion that cannot start, and a T stated at a position of any other type is a
    declaration describing a member that is not this one. */
 void idl_typed_array(int index, JSTypedArrayEnum kind, bool allow_shared, bool allow_resizable);
@@ -1219,7 +1285,7 @@ void idl_typed_array(int index, JSTypedArrayEnum kind, bool allow_shared, bool a
 /* DECLARE THAT THIS MEMBER'S TAIL IS VARIADIC — `T... name`, so the LAST declared type applies to every
    argument from that position on and the member takes as many as the page passed.
    IT IS SET AFTER THE DECLARATION, naming the member the LAST one made, exactly as idl_optional_from,
-   idl_arg_default, idl_iface_brand and idl_enum_values do. It existed only as a parameter of
+   idl_arg_default, idl_iface_brand and idl_arg_enum do. It existed only as a parameter of
    `idl_method_id_ext`, which builds a PLAIN-BODY member — so a member that is BOTH a step machine and variadic
    could not be declared at all, and the Console Standard's namespace is nine of them (`log(any... data)` and
    its eight siblings reach §2.2's Formatter, which calls the page's `toString`). A flag that composes with
@@ -1240,7 +1306,7 @@ void idl_variadic(void);
  * above exists to have one of.
  *
  * Set AFTER the declaration, naming the member the LAST one made, exactly as idl_optional_from, idl_arg_default,
- * idl_iface_brand, idl_enum_values and idl_variadic do, and for the same reason: the id a declaration returns
+ * idl_iface_brand, idl_arg_enum and idl_variadic do, and for the same reason: the id a declaration returns
  * is the RUNTIME's step id and not this pool's index. It composes with every declaration form. */
 void idl_returns_promise(void);
 

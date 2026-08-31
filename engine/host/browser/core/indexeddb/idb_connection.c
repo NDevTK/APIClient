@@ -260,13 +260,14 @@ void idb_connection_transaction_finished(JSContext *ctx, JSValueConst connection
 
 /* ---- §4.4's ENUMERATIONS ----------------------------------------------------------------------------------
  *
- * The value lists ARE the types (Web IDL §3.2.19), so they are declared beside the member and the conversion
+ * The value lists ARE the types (Web IDL §3.2.18 Enumeration types), so each is declared beside the POSITION
+ * that takes it and the conversion
  * refuses anything else before a body runs. The ORDER is not free: the index into each list is the enumerator
  * idb_transaction.h declares, which is what lets one lookup serve both the declaration and the body. */
 IDL_ENUM_VALUES(TX_MODES, "readonly", "readwrite", "versionchange");
 IDL_ENUM_VALUES(TX_DURABILITY, "default", "strict", "relaxed");
 
-/* WHICH VALUE OF THE ENUMERATION THIS IS. It runs none of the page's code — §3.2.19's membership check is part
+/* WHICH VALUE OF THE ENUMERATION THIS IS. It runs none of the page's code — §3.2.18's membership check is part
    of the TYPE and has already run, so what arrives is one of the strings this file wrote. */
 static int conn_enum_index(JSContext *ctx, JSValueConst v, const char *const *values)
 {
@@ -276,7 +277,7 @@ static int conn_enum_index(JSContext *ctx, JSValueConst v, const char *const *va
     CHECK(str != NULL, "IndexedDB: an enumeration value could not be read back as a string");
     while (values[i] != NULL && strcmp(str, values[i]) != 0)
         i++;
-    /* ALWAYS FATAL, because what this decides is whether the database may be WRITTEN. §3.2.19's check runs in
+    /* ALWAYS FATAL, because what this decides is whether the database may be WRITTEN. §3.2.18's check runs in
        the conversion against the list declared beside the member, so a value arriving here that this list does
        not name means the declaration and this list have drifted apart — and the index would then be read past
        the end of the list and handed to §2.7 as a mode. */
@@ -552,7 +553,7 @@ static JSValue js_conn_delete_object_store(JSContext *ctx, JSValueConst this_val
  * "if it is a sequence" is then the one JS_IsString below and nothing else.
  *
  * STEP 6 REFUSES A VALUE THE TYPE ADMITS, which is why it is a step and not part of the declaration.
- * IDBTransactionMode lists "versionchange", so §3.2.19 accepts it and this algorithm then throws a TypeError
+ * IDBTransactionMode lists "versionchange", so §3.2.18 accepts it and this algorithm then throws a TypeError
  * for it — an upgrade transaction is created by §5.7 and never by a page. */
 
 /* §4.4 step 3's "the set of UNIQUE strings", resolved to the §2.2 object store RECORDS step 7 names, with step
@@ -741,7 +742,7 @@ void idb_connection_init(JSContext *ctx)
     /* `[NewObject] IDBTransaction transaction((DOMString or sequence<DOMString>) storeNames,
         optional IDBTransactionMode mode = "readonly", optional IDBTransactionOptions options = {});` — the
        union is what kept this member out, and it is a declared type because its arm is decided by a read of
-       the page's value. `mode` carries §3.2.19's value list AND §3.6 steps 15.4.1 and 16.1's default, both
+       the page's value. `mode` carries §3.2.18's value list AND §3.6 steps 15.4.1 and 16.1's default, both
        stated below. */
     static const IdlArgType TX_ARGS[3] = { IDL_DOMSTRING_OR_SEQUENCE, IDL_ENUM, IDL_DICT };
     /* `dictionary IDBTransactionOptions { IDBTransactionDurability durability = "default"; };` — one member,
@@ -775,7 +776,7 @@ void idb_connection_init(JSContext *ctx)
                                           (int)(sizeof TX_OPTIONS / sizeof TX_OPTIONS[0]),
                                           js_conn_transaction, 0);
     idl_optional_from(1);                                 /* `mode` and `options` are both optional */
-    idl_enum_values(TX_MODES);                            /* §3.2.19's value list for the `mode` position */
+    idl_arg_enum(1, TX_MODES);                            /* §3.2.18's value list for the `mode` position */
     idl_arg_default(1, IDL_DEFAULT_STRING, "readonly");   /* §3.6 steps 15.4.1 and 16.1's `= "readonly"` */
     g_id_create_store = idl_method_id_dict(ctx, CREATE_ARGS, 2, CREATE_INIT,
                                            (int)(sizeof CREATE_INIT / sizeof CREATE_INIT[0]),

@@ -1845,12 +1845,12 @@ void idb_object_store_init(JSContext *ctx)
        IS the magic, so a declaration cannot be shared between them. */
     g_id_open_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &OPEN_CURSOR_STEP, OS_WITH_VALUE);
     idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
-    idl_enum_values(IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
+    idl_arg_enum(1, IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");   /* §3.6 steps 15.4.1 and 16.1's `= "next"` */
     idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_open_key_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &OPEN_CURSOR_STEP, OS_KEY_ONLY);
     idl_optional_from(0);
-    idl_enum_values(IDB_CURSOR_DIRECTIONS);
+    idl_arg_enum(1, IDB_CURSOR_DIRECTIONS);
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");
     idl_this_iface(idb_object_store_is, "IDBObjectStore");
     /* `IDBIndex index(DOMString name)`, `IDBIndex createIndex(DOMString name, (DOMString or

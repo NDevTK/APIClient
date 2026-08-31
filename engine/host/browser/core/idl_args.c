@@ -361,12 +361,13 @@ typedef struct {
     /* THE NARROWING half of that brand — see idl_iface_narrow. NULL for a member whose interface a class id
        already names exactly, which is most of them. */
     bool     (*iface_narrow)(JSValueConst v);
-    /* §3.2.18's VALUE LIST for this member's IDL_ENUM position — the list IS the type, so a declaration
-       carrying one is a declaration stating what it takes. It lived only on IdlDictMember, which is why a
-       positional enumeration stood at a DCHECK naming this field as the thing to build; the enumeration
-       attribute that needed it is HTML §7.2.5's `scrollRestoration`, whose setter a router calls. NULL for
-       every member with no such position, which is nearly all of them. */
-    const char *const *enum_values;
+    /* §3.2.18's VALUE LIST AT EACH POSITION WHOSE TYPE ADMITS AN ENUMERATION — see idl_arg_enum. One entry per
+       position the IDL lists; NULL for a member that declares no such position, which is nearly all of them,
+       allocated by the first idl_arg_enum and freed with the pool exactly as `arg_ifaces` is. It was ONE list
+       per member, which could not say what Web Cryptography §14.3.9 The importKey method's IDL says — a
+       KeyFormat at position 0 and a sequence<KeyUsage> at position 4 — so the second was checked in the
+       member's body, which is the per-body copy of a rule this machine exists to have one of. */
+    const char *const **arg_enums;
     const char *name;       /* what to call this member in a diagnostic; set when it is installed */
     /* WEB IDL §3.5 Security's THIRD INPUT for this member — "method", "getter" or "setter" — plus the one
        value §3.5 has no name for, because the member is not one of the three: a CONSTRUCTOR. It is stated at
@@ -546,6 +547,8 @@ static void idl_seal_check_typed_arrays(void);
 /* And for idl_iface_brand's / idl_arg_iface's — every §3.2.15 position of every member has an interface named,
    asked once where the whole platform is in hand rather than on whichever call first reaches the position. */
 static void idl_seal_check_ifaces(void);
+/* And for idl_arg_enum's — every §3.2.18 position of every member has a value list to be a member of. */
+static void idl_seal_check_enums(void);
 static void idl_seal_check_dictionaries(void);
 
 void idl_args_seal(void)
@@ -553,6 +556,7 @@ void idl_args_seal(void)
     idl_seal_check_splits();
     idl_seal_check_typed_arrays();
     idl_seal_check_ifaces();
+    idl_seal_check_enums();
     idl_seal_check_dictionaries();
     g_sealed = true;
     g_sealed_at = g_n;
@@ -1165,6 +1169,54 @@ static void idl_seal_check_ifaces(void)
     }
 }
 
+/* ---- Web IDL §3.2.18 Enumeration types' `E`, RESOLVED AT ONE DECLARED POSITION ----------------------------
+ *
+ * The same shape as §3.2.15's `I` directly above, one axis over, and `ti` means the same thing: the DECLARED
+ * position the argument takes its statements from, derived once by the conversion (a variadic tail repeats the
+ * last declared position), never the argument's own index.
+ */
+static const char *const *idl_arg_enum_values(const IdlMember *m, int ti)
+{
+    DCHECK(ti >= 0 && ti < m->nargs,
+           "§3.2.18's value list was asked about a position outside the member's own declared type list");
+    DCHECK(m->arg_enums != NULL && m->arg_enums[ti] != NULL,
+           "§3.2.18 step 2 is a membership test and this position declared nothing to be a member OF — "
+           "idl_args_seal asserts every position whose type admits an enumeration states its values, so this "
+           "member was declared after the platform was sealed");
+    return m->arg_enums[ti];
+}
+
+/* EVERY POSITION WHOSE TYPE ADMITS AN ENUMERATION HAS ONE, over the whole platform at once —
+   idl_seal_check_ifaces' sweep asked of the other half of a declared type, and it is the SEAL rather than the
+   conversion for that function's own reason: a member whose value list was never stated is broken from the
+   moment it is declared, and the conversion only finds out on the first call that reaches the position, so a
+   member nothing on this page happens to call would carry the defect to whichever page does. The set of types
+   that ask is idl_type_admits_enumeration's and no copy of it. */
+static void idl_seal_check_enums(void)
+{
+    int i, k;
+
+    for (i = 0; i < g_n; i++) {
+        const IdlMember *m = idl_member(i);
+
+        for (k = 0; k < m->nargs; k++) {
+            bool stated = m->arg_enums != NULL && m->arg_enums[k] != NULL;
+
+            DCHECKF(!idl_type_admits_enumeration(m->types[k]) || stated,
+                    "member `%s` declares a Web IDL §3.2.18 enumeration at position %d and names no values for "
+                    "it — §3.2.18 step 2 is \"If S is not one of E's enumeration values, then throw a "
+                    "TypeError\", and with no E there is nothing to be one of, so every string would reach the "
+                    "body. State them with idl_arg_enum",
+                    m->name ? m->name : "(not installed)", k);
+            DCHECKF(idl_type_admits_enumeration(m->types[k]) || !stated,
+                    "member `%s` stated §3.2.18's values at position %d, whose declared type asks for no "
+                    "enumeration — no conversion reads them, so the declaration describes a position that "
+                    "never tests against them",
+                    m->name ? m->name : "(not installed)", k);
+        }
+    }
+}
+
 static int idl_declared_positions(const IdlMember *m)
 {
     DCHECK(!m->variadic || m->nargs >= 1,
@@ -1634,6 +1686,17 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
                "a dictionary member was declared as a §3.6 overload split — that type resolves between "
                "two overload ENTRIES at an argument position, and a member is inside one entry already; "
                "the member's own IDL names either the sequence or the dictionary, never both");
+        /* §3.2.21 OVER A DICTIONARY MEMBER IS THIS FUNCTION'S OWN COPY OF THE ARGUMENT-POSITION WALK, and it
+           has no §3.2.18 element arm — so a member declared this way would run step 3.3's element conversion
+           as a plain ToString and place every string the page wrote, which is the same silent shape the two
+           asserts above name. Twenty dictionary members of the platform's IDL are `sequence<E>`
+           (GPUDeviceDescriptor's requiredFeatures and XRHitTestOptionsInit's entityTypes among them), so this
+           is a row to BUILD beside the IDL_SEQUENCE_DOMSTRING arm below — the element conversion is
+           step_tostring_run then idl_enum_check against `dm->values`, exactly as the argument path does — and
+           not a shape to keep out. */
+        DCHECK(mt != IDL_SEQUENCE_ENUM,
+               "a dictionary member was declared `sequence<E>` and the dictionary walk has no §3.2.18 element "
+               "conversion — build it beside this function's IDL_SEQUENCE_DOMSTRING arm, over dm->values");
         /* §3.2.17 (ES-to-IDL list) step 4.1.5's DEFAULT comes first, because it is the difference between a
            member that does not exist and one that exists holding what the IDL wrote. It is already an IDL
            value, so nothing converts it.
@@ -3123,7 +3186,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            clause, whose step 14 says to create the sequence "from V and method" — the method that clause
            already obtained, never a second read. */
         if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT ||
-            t == IDL_SEQUENCE_DOMSTRING || t == IDL_SEQUENCE_DOUBLE) {
+            t == IDL_SEQUENCE_DOMSTRING || t == IDL_SEQUENCE_DOUBLE || t == IDL_SEQUENCE_ENUM) {
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
@@ -3225,10 +3288,28 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (r < 0) return JS_STEP_ABRUPT;
                     /* THE SCALAR VALUE CONVERSION BELONGS TO THE ELEMENT TYPE. `BlobPart`'s string arm is a
                        USVString, so §3.2.12 replaces its lone surrogates; a `sequence<DOMString>`'s element is
-                       a DOMString and keeps them, which is the whole difference between the two. */
-                    if (t != IDL_SEQUENCE_DOMSTRING) {
+                       a DOMString and an enumeration's is §3.2.18's own ToString, and both keep them.
+                       IT IS ASKED POSITIVELY AND IT USED TO BE ASKED AS `t != IDL_SEQUENCE_DOMSTRING`, which
+                       is a NEGATIVE test over a set that grows: every sequence row added afterwards silently
+                       inherited a §3.2.12 conversion its element type never asked for, and the row that would
+                       have inherited it is the one directly below. A test naming the type that DOES want it
+                       cannot go wrong that way. */
+                    if (t == IDL_SEQUENCE_BLOBPART) {
                         str = JS_ToScalarValueString(ctx, str);   /* §3.2.12: lone surrogates become U+FFFD */
                         if (JS_IsException(str)) return JS_STEP_ABRUPT;
+                    }
+                    /* §3.2.18's ELEMENT CONVERSION, STEP 2 — "If S is not one of E's enumeration values, then
+                       throw a TypeError", over the string step 1's ToString just produced. It runs none of the
+                       page's code, so it is decided here rather than being a rest point of its own; and it is
+                       decided BEFORE the cursor's next pull, which is §3.2.21.1's own order (the element
+                       conversion is step 3.3 of the repeat loop, after step 3.1's IteratorStepValue and before
+                       the next iteration's) and is observable to a page whose iterator has side effects. */
+                    if (t == IDL_SEQUENCE_ENUM &&
+                        idl_enum_check(ctx, str, idl_arg_enum_values(m, ti), "argument") < 0) {
+                        /* The string is this block's, not yet handed to the list — the abrupt return below
+                           discharges everything the STATE owns and knows nothing about a local. */
+                        JS_FreeValue(ctx, str);
+                        return JS_STEP_ABRUPT;
                     }
                     JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, str);
                     s->dw.seq_phase = 1;
@@ -3526,9 +3607,6 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             *slot = JS_DupValue(ctx, a);
             goto placed;
         }
-        DCHECK(t != IDL_ENUM || m->enum_values != NULL,
-               "an ENUMERATION was declared at a positional argument with no value list — the list IS the "
-               "type (§3.2.18), so idl_enum_values must name it beside the declaration");
         DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING || t == IDL_USVSTRING || t == IDL_ENUM,
                "an IDL argument was declared with a type this machine does not convert");
         r = step_tostring_run(ctx, &s->hdr, a, cb_result, slot, out_cb, out_argc);
@@ -3541,7 +3619,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            because it is part of the TYPE: `history.scrollRestoration = "bogus"` is a TypeError from the
            conversion, before the setter's algorithm runs at all, and a body performing it would be one body's
            private copy of a rule every enumeration member has. */
-        if (t == IDL_ENUM && idl_enum_check(ctx, *slot, m->enum_values, "argument") < 0)
+        if (t == IDL_ENUM && idl_enum_check(ctx, *slot, idl_arg_enum_values(m, ti), "argument") < 0)
             return JS_STEP_ABRUPT;
         if (t == IDL_USVSTRING) {
             *slot = JS_ToScalarValueString(ctx, *slot);
@@ -3940,7 +4018,10 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
        pool slot reused across a runtime cannot inherit the previous member's brand. */
     idl_member(idx)->this_is = NULL;
     idl_member(idx)->this_iface = NULL;
-    idl_member(idx)->enum_values = NULL;
+    /* NO PER-POSITION VALUE LIST STATED, on the same terms as the two arrays above: allocated by the first
+       idl_arg_enum this member makes, so a member with no enumeration position costs nothing, and
+       idl_args_seal is what turns "the type asks for one and none was stated" into a crash. */
+    idl_member(idx)->arg_enums = NULL;
     /* THE STATE CARRIES THE MEMBER'S OWN ARGUMENT VECTOR AND NESTED-CONVERSION FRAMES, which is why its size is
        per-member and not a constant: a getter pays for neither, a fifteen-argument legacy initializer gets
        fifteen slots, and a member declaring a sequence-of-union type gets exactly the depth its declared type
@@ -4228,17 +4309,40 @@ void idl_iface_brand(JSClassID iface)
     idl_member(g_n - 1)->iface_narrow = NULL;   /* a fresh brand narrows to nothing until the member says so */
 }
 
-/* §3.2.18's ENUMERATION VALUES for the member's IDL_ENUM position — see idl_args.h. Named after the
-   declaration, on the member the LAST one made, exactly as idl_iface_brand and idl_optional_from are and for
-   the same reason: the id a declaration returns is the RUNTIME's step id, not this pool's index. */
-void idl_enum_values(const char *const *values)
+/* §3.2.18's `E` AT ONE POSITION — see idl_args.h for why there is no declaration-wide form left beside it.
+   Same "names the last declaration" rule as idl_optional_from, and it is PER POSITION for the reason
+   idl_arg_iface is: a member's IDL may write several, and Web Cryptography §14.3.9 The importKey method's two
+   are two DIFFERENT enumerations. */
+void idl_arg_enum(int index, const char *const *values)
 {
+    IdlMember *m;
+
     DCHECK(g_n > 0, "an enumeration's value list was declared before any member was");
     DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(index >= 0 && index < m->nargs,
+           "an enumeration's value list named a position the member's IDL does not list — the index is into "
+           "that member's own type list, which is what its declaration passed");
+    /* THE POSITION'S TYPE IS WHAT ASKS FOR AN ENUMERATION, so stating one anywhere else is a declaration about
+       a different position — and, if the member was declared elsewhere, about a different member entirely. The
+       seal asserts the same pair from the other side, over every declaration at once. */
+    DCHECK(idl_type_admits_enumeration(m->types[index]),
+           "§3.2.18's values were stated at a position whose declared type is not an enumeration — no "
+           "conversion reads them, so the declaration describes a position that never tests against them");
     DCHECK(values != NULL && values[0] != NULL,
            "an enumeration declared an empty value list — every §3.2.18 enumeration has at least one value, and "
            "a member whose type admits nothing is a member no assignment can satisfy");
-    idl_member(g_n - 1)->enum_values = values;
+    if (m->arg_enums == NULL) {
+        m->arg_enums = calloc((size_t)m->nargs, sizeof *m->arg_enums);
+        CHECK(m->arg_enums != NULL,
+              "idl: OOM recording a member's per-position enumeration values — a member that cannot be "
+              "declared is an API the page cannot call");
+    }
+    /* Twice is two answers to one question, and only one of them decides every call — the same refusal
+       idl_arg_iface and idl_typed_array make, and for the same reason: it is restating the POSITION that is
+       wrong, not what was said about it. */
+    DCHECK(m->arg_enums[index] == NULL, "a position stated §3.2.18's value list twice");
+    m->arg_enums[index] = values;
 }
 
 void idl_iface_narrow(bool (*is)(JSValueConst v))
@@ -5863,6 +5967,10 @@ void idl_args_pool_free(void)
            the array naming them is this pool's, allocated by the first position a member stated one at. */
         free(idl_member(i)->arg_ifaces);
         idl_member(i)->arg_ifaces = NULL;
+        /* §3.2.18's per-position value lists — the lists themselves are the declaring component's statics, and
+           the array naming them is this pool's, allocated by the first position a member stated one at. */
+        free(idl_member(i)->arg_enums);
+        idl_member(i)->arg_enums = NULL;
         /* The joined stage labels — the strings themselves are statics belonging to the member and to this
            file; the array that names them is this pool's, and it is part of the BORROWED definition. */
         free((void *)idl_member(i)->steps);

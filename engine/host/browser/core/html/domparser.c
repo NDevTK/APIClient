@@ -425,7 +425,7 @@ void domparser_init(JSContext *ctx)
        engine — so the union IS its DOMString arm, which is the same collapse core/dom/element.c's innerHTML
        setter declares, and step 1 is still run because that is where the throw comes from. */
     g_id_parse = idl_method_id(ctx, PARSE_ARGS, 2, js_domparser_parse_from_string, 0);
-    idl_enum_values(DOM_PARSER_SUPPORTED_TYPE);
+    idl_arg_enum(1, DOM_PARSER_SUPPORTED_TYPE);   /* §3.2.18's values for the `type` position */
     g_ready = 1;
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. This row was on
        core/platform.c's list with an EMPTY release column and no release function existed at all, so all four

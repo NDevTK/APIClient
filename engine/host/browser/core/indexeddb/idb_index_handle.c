@@ -843,12 +843,12 @@ void idb_index_handle_init(JSContext *ctx)
     idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_open_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &IX_OPEN_CURSOR_STEP, IX_WITH_VALUE);
     idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
-    idl_enum_values(IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
+    idl_arg_enum(1, IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");   /* §3.6 steps 15.4.1 and 16.1's `= "next"` */
     idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_open_key_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &IX_OPEN_CURSOR_STEP, IX_KEY_ONLY);
     idl_optional_from(0);
-    idl_enum_values(IDB_CURSOR_DIRECTIONS);
+    idl_arg_enum(1, IDB_CURSOR_DIRECTIONS);
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");
     idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_setter_name = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ false, js_ix_set_name, 0);

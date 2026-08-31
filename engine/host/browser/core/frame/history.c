@@ -701,7 +701,7 @@ void history_init(JSContext *ctx)
     /* §7.2.5's `attribute ScrollRestoration scrollRestoration`. The enumeration's value list IS the type, so it
        is declared here beside the member and the setter's body never sees an invalid value. */
     g_id_scroll_setter = idl_setter_id(ctx, IDL_ENUM, false, js_hist_set_scroll_restoration, 0);
-    idl_enum_values(SCROLL_RESTORATION);
+    idl_arg_enum(0, SCROLL_RESTORATION);   /* a setter declares one position, and this is it */
 
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Six member declarations and the
        realm-value slot this init's own latch consults; a release that kept any of them would hand a second

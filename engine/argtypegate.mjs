@@ -40,6 +40,12 @@
  *     helper's parameter is UNJOINED — named with its file and line, never dropped and never guessed.
  *   - A MEMBER INSTALLED FROM ONE FILE AND DECLARED IN ANOTHER is joined only when the declaration's
  *     assignment target is unique corpus-wide; where two files declare the same identifier it is UNJOINED.
+ *   - IT COMPARES A POSITION'S ENUMERATION VALUES AND NEVER JUDGES THEM. `idl_arg_enum` states §3.2.18's value
+ *     list at a position and the IDL states it again, so the join exists — but the corpus carries whichever
+ *     edition of an enumeration it was built from, and for `KeyFormat` that is a WICG draft's widened eight
+ *     rather than Web Cryptography API Level 2's four. A judged comparison would report a correct declaration
+ *     as a defect, so ENUMVALUES prints both lists and is counted. What IS judged is whether the position is
+ *     an enumeration at all, which no edition disagrees about.
  *   - IT COMPARES A POSITION'S NAMED INTERFACE ONLY WHERE THE DECLARATION NAMES ONE. `idl_iface_brand` states
  *     a CLASS ID and no identifier, so a member branded that way has nothing for the spec's interface name to
  *     be compared against and the IFACE axis is silent about it — which is most of the platform. That silence
@@ -86,9 +92,11 @@ const idl = await loadIdl();
  * is exactly the difference between `addEventListener(t, function(){})` working and throwing. An audit that
  * folded the two reported the engine's correct IDL_CALLBACK_INTERFACE_NULLABLE as a defect at every
  * EventListener and NodeFilter position it saw, which is the kind of finding that gets an auditor muted. */
-const enums = new Set(), callbacks = new Set(), callbackIfaces = new Set(), typedefs = new Map();
+/* `enums` carries the VALUES and not only the names, because §3.2.18 says the value list IS the type — the
+   ENUMVALUES axis below compares the engine's declared list against it, and a name-only set could not. */
+const enums = new Map(), callbacks = new Set(), callbackIfaces = new Set(), typedefs = new Map();
 for (const n of idl.declarations) {
-  if (n.type === "enum" && n.name) enums.add(n.name);
+  if (n.type === "enum" && n.name) enums.set(n.name, (n.values || []).map((v) => v.value));
   else if (n.type === "callback" && n.name) callbacks.add(n.name);
   else if (n.type === "callback interface" && n.name) callbackIfaces.add(n.name);
   else if (n.type === "typedef" && n.name) typedefs.set(n.name, n.idlType);
@@ -163,12 +171,24 @@ const cFiles = [...env.sources.keys()].filter((p) => p.endsWith(".c"));
 
 const declByLhs = new Map();        /* "file\0lhs" -> decl */
 const declByLhsGlobal = new Map();  /* lhs -> [ {file, decl} … ] */
+/* §3.2.18's value lists, corpus-wide: identifier -> [ {file, values} … ]. It is GLOBAL because an enumeration
+   two members share is written once and declared `extern` (IDBCursorDirection is written in idb_cursor.c and
+   declared at four positions in two other files), so resolving it from the declaring file alone would report
+   every shared list as unreadable. A name two files define is carried as two entries and reported as
+   ambiguous, exactly as a step id assigned twice is — the audit says which question it could not answer rather
+   than picking an answer. */
+const enumListsGlobal = new Map();
 const stripped = new Map();
 for (const path of cFiles) {
   const raw = env.sources.get(path).orig;
   const src = strip(raw);
   stripped.set(path, src);
-  const { decls } = declarations(src, raw).read(C);
+  const reader = declarations(src, raw);
+  for (const [name, values] of reader.enumLists) {
+    if (!enumListsGlobal.has(name)) enumListsGlobal.set(name, []);
+    enumListsGlobal.get(name).push({ file: path, values });
+  }
+  const { decls } = reader.read(C);
   for (const d of decls) {
     if (!d.lhs) continue;
     d.file = path;
@@ -350,6 +370,69 @@ for (const rec of world.records) {
       + "the identifier is the subject of the TypeError §3.2.15 throws, so a page is told it failed an "
       + "interface the IDL does not declare there" });
   }
+
+  /* (6) AND WHICH ENUMERATION A POSITION THAT NAMES ONE SAYS IT IS — §3.2.18's `E`, the same shape as the
+     interface axis directly above and blind in the same place: silent about a position that declares none.
+     TWO QUESTIONS, AND THEY ARE SPLIT BECAUSE ONLY ONE OF THEM IS EDITION-STABLE.
+       - THE POSITION is judged. Whether the IDL's type there is an enumeration at all (its own, or the element
+         type of a `sequence<E>`) is a fact every edition of a spec agrees on, and a value list stated at a
+         position the IDL does not make an enumeration is a declaration about a member that is not this one.
+       - THE VALUES are counted and never judged, for the OVERLOADED bucket's reason one axis over: which
+         EDITION of an enumeration a declaration is meant to be is a question the corpus cannot answer, and it
+         is not hypothetical here. `enum KeyFormat` is not written in webref's `webcrypto.idl` at all — the
+         corpus's only definition of it comes from the WICG "Modern Algorithms in the Web Cryptography API"
+         draft, which widens it from the published Web Cryptography API Level 2's four values to eight. A
+         judged comparison would report the engine's correct §14.1 declaration as a defect. So both lists are
+         printed and a human decides. */
+  for (const ae of decl.argEnums) {
+    if (ae.index == null || ae.index >= spec.n) {
+      push("UNJOINED", { at, who, why: `idl_arg_enum at ${dat} names position \`${ae.index}\`, which is not a `
+        + `position the IDL's ${spec.n} argument(s) list` });
+      continue;
+    }
+    const arg = op.arguments[ae.index];
+    const name = enumAt(arg);
+    if (!name) {
+      push("ENUM", { at, who, why: `position ${ae.index} (\`${arg.name}\`) is ${typeText(arg)}, which names no `
+        + `enumeration, and idl_arg_enum at ${dat} states §3.2.18's values there — no conversion reads them, so `
+        + "the declaration describes a position that never tests against them" });
+      continue;
+    }
+    const defs = enumListsGlobal.get(ae.list) || [];
+    if (defs.length !== 1) {
+      push("UNPLACEABLE", { at, who, why: `idl_arg_enum at ${dat} names the value list \`${ae.list}\` for `
+        + `position ${ae.index} (the IDL's \`${name}\`), and ${defs.length
+          ? `${defs.length} files define that identifier, so which list this names cannot be read from text`
+          : "no file this audit scanned defines that identifier"}` });
+      continue;
+    }
+    const got = defs[0].values, want = enums.get(name) || [];
+    if (got.length === want.length && got.every((v, i) => v === want[i])) {
+      push("CONFIRMED", { at, who, why: `position ${ae.index} (\`${arg.name}\`) declares \`${name}\` as `
+        + `\`${ae.list}\` = [${got.join(", ")}]` });
+      continue;
+    }
+    push("ENUMVALUES", { at, who, why: `position ${ae.index} (\`${arg.name}\`) is ${typeText(arg)}; the corpus's `
+      + `\`${name}\` is [${want.join(", ")}] and \`${ae.list}\` (${relative(ROOT, defs[0].file)}) is `
+      + `[${got.join(", ")}] — counted and not judged, since which EDITION of the enumeration the declaration `
+      + "is meant to be is a question about the member's own algorithm" });
+  }
+}
+
+/* THE ENUMERATION AN ARGUMENT'S IDL TYPE NAMES, or null. §3.2.18's `E` is stated at a position two ways and
+   both are one question here: the position's own type is an enumeration, or it is a `sequence<E>` /
+   `FrozenArray<E>` whose ELEMENT type is one — which is what IDL_SEQUENCE_ENUM declares, and the reason this
+   sees through the generic rather than asking about the position's outermost type. */
+function enumAt(arg) {
+  const t = resolveTypedef(arg.idlType);
+  if (!t || t.union) return null;
+  if (t.generic) {
+    if (!["sequence", "FrozenArray"].includes(t.generic)) return null;
+    const el = resolveTypedef(Array.isArray(t.idlType) ? t.idlType[0] : t.idlType);
+    if (!el || el.union || el.generic || typeof el.idlType !== "string") return null;
+    return enums.has(el.idlType) ? el.idlType : null;
+  }
+  return typeof t.idlType === "string" && enums.has(t.idlType) ? t.idlType : null;
 }
 
 function typeText(arg) {
@@ -369,9 +452,9 @@ console.log(`declaration-against-spec argument audit — ${cFiles.length} .c fil
   + `${world.records.length} install record(s)`);
 console.log(`${considered} installed operation(s) the corpus declares; ${joined} joined to a C declaration\n`);
 
-const ORDER = ["TYPE", "IFACE", "ARITY", "VARIADIC", "LENGTH", "UNJOINED", "UNPLACEABLE", "OVERLOADED",
-               "MODIFIER", "CONFIRMED"];
-const JUDGED = new Set(["TYPE", "IFACE", "ARITY", "VARIADIC", "LENGTH"]);
+const ORDER = ["TYPE", "IFACE", "ENUM", "ARITY", "VARIADIC", "LENGTH", "UNJOINED", "UNPLACEABLE", "OVERLOADED",
+               "ENUMVALUES", "MODIFIER", "CONFIRMED"];
+const JUDGED = new Set(["TYPE", "IFACE", "ENUM", "ARITY", "VARIADIC", "LENGTH"]);
 for (const kind of ORDER) {
   const rows = findings.filter((f) => f.kind === kind);
   if (!rows.length) continue;

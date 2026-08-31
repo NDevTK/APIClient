@@ -1055,35 +1055,42 @@ static void ik_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->len_v);
 }
 
+/* §14.1 Data Types' `enum KeyUsage`, IN THE ORDER crypto_key.h's CryptoKeyUsage BITS ARE DECLARED — the index
+ * into this list IS the bit, which is what lets ONE list be both the §3.2.18 Enumeration types value list the
+ * `sequence<KeyUsage>` position declares and the §9 Terminology mapping the walk below performs. It was two
+ * lists, in two files, that had to stay in the same order with nothing saying so.
+ * §14.1's own text writes the values in this order, so the list is the IDL's and the bit assignment reads off
+ * it rather than the other way round. */
+IDL_ENUM_VALUES(IK_KEY_USAGES, "encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits", "wrapKey",
+                "unwrapKey");
+
 /* §9 Terminology's "normalized value of a usages list", which is "the usage intersection of usages and the
  * list of recognized key usage values" — a sequence containing each recognized value that appears in both, in
  * the order that list gives them. As a mask, that is exactly a set of bits, which is why §13.3's [[usages]] is
  * one (crypto_key.h states the argument in full).
  *
- * A STRING NO RECOGNIZED USAGE MATCHES IS A TypeError, AND IT BELONGS TO THE TYPE RATHER THAN TO THIS WALK —
- * a NAMED RESIDUAL, because the answer is right and the LAYER is not. WHAT IS NOT COVERED: §14.3.9's
- * `sequence<KeyUsage> keyUsages` is a sequence whose ELEMENT TYPE is §3.2.19's enumeration, and this engine's
- * declared types have no such row, so the position is declared IDL_SEQUENCE_DOMSTRING and the enumeration
- * check is performed here instead. WHAT THE NEXT DIFF BUILDS: an `IDL_SEQUENCE_ENUM` row in core/idl_args
- * (IDL_SEQUENCE_DOMSTRING's walk with idl_enum_check on each element) together with a PER-POSITION value list
- * — `idl_enum_values` names the member's ONE enum position and §14.3.9 declares TWO (`format` and each element
- * of `keyUsages`), which is the same per-position rule `idl_arg_iface` already states for interfaces. HOW ITS
- * ABSENCE WOULD SHOW: it does not show in the ANSWER — a bogus usage is a TypeError either way, and it is
- * raised here BEFORE any member of the algorithm object is read, which is the order §3.6's left-to-right
- * argument conversion gives. It shows in the LAYER: every later member that takes a `sequence<KeyUsage>`
- * (§14.3.6 generateKey, §14.3.7 deriveKey, §14.3.12 unwrapKey) has to repeat this walk, and the second copy is
- * the one that drifts. */
-static int ik_usages_normalize(JSContext *ctx, JSValueConst list, uint32_t *out)
+ * THE INTERSECTION IS AN IDENTITY HERE AND THAT IS A FACT ABOUT THE TYPE, NOT A SHORTCUT. §14.3.9's
+ * `sequence<KeyUsage> keyUsages` is declared IDL_SEQUENCE_ENUM over this very list, so Web IDL §3.2.18 step 2
+ * has already refused every string that is not a recognized usage — with a TypeError, at the position, before
+ * this member's body exists. Every element that arrives is therefore in both operands, and §9's intersection
+ * has nothing to drop. THIS WALK USED TO PERFORM THAT REFUSAL, which was the right answer at the wrong layer:
+ * the declared types had no row for a sequence whose element type is an enumeration, so the position was
+ * IDL_SEQUENCE_DOMSTRING and the check was a body's private copy of a rule every enumeration has. The
+ * observable difference the row bought is ORDER — §3.2.21.1 Creating a sequence from an iterable converts each
+ * element inside the repeat loop, so a bogus usage at index 0 now throws before index 1 is pulled from the
+ * page's iterator, where this walk pulled the whole list first and judged it afterwards.
+ *
+ * SO THE ONLY THING THAT CAN FAIL HERE IS THIS ENGINE'S OWN INVARIANT, and it is asserted rather than
+ * reported: a name this list does not hold means the declaration and this list have drifted apart, which is
+ * impossible while they ARE one list. */
+static void ik_usages_normalize(JSContext *ctx, JSValueConst list, uint32_t *out)
 {
-    static const char *const NAMES[] = {
-        "encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits", "wrapKey", "unwrapKey", NULL
-    };
     uint32_t n = 0, i;
     JSValue len_v;
 
     *out = 0;
     DCHECK(JS_IsArray(list), "§3.2.21's sequence conversion did not hand this member an Array — the position "
-                             "is declared IDL_SEQUENCE_DOMSTRING and that conversion builds one");
+                             "is declared IDL_SEQUENCE_ENUM and that conversion builds one");
     len_v = JS_GetPropertyStr(ctx, list, "length");
     JS_ToUint32(ctx, &n, len_v);
     JS_FreeValue(ctx, len_v);
@@ -1095,17 +1102,20 @@ static int ik_usages_normalize(JSContext *ctx, JSValueConst list, uint32_t *out)
         JS_FreeValue(ctx, e);
         CHECK(nm != NULL, "an element of a keyUsages sequence could not be read back as UTF-8 — §3.2.21's "
                           "conversion already produced a DOMString for every element");
-        for (k = 0; NAMES[k]; k++)
-            if (strcmp(nm, NAMES[k]) == 0) break;
-        if (!NAMES[k]) {
-            JS_ThrowTypeError(ctx, "'%s' is not a valid value for the enumeration KeyUsage", nm);
-            JS_FreeCString(ctx, nm);
-            return -1;
-        }
+        for (k = 0; IK_KEY_USAGES[k]; k++)
+            if (strcmp(nm, IK_KEY_USAGES[k]) == 0) break;
+        /* ALWAYS FATAL, and it is a CHECK rather than a DCHECK because `k` is LOAD-BEARING IN RELEASE: the
+           shift below builds §13.3's [[usages]], which is the authorization every later operation asks (§14.3.3
+           step 10's "does not contain an entry that is \"sign\""). A `k` that walked off this list would set a
+           bit outside CRYPTO_KEY_USAGES_ALL in the one build where nothing checked, and a key would carry a
+           permission no page asked for. */
+        CHECK(IK_KEY_USAGES[k] != NULL,
+              "a keyUsages element is not one of §14.1's KeyUsage values — the position is declared "
+              "IDL_SEQUENCE_ENUM over THIS list, so Web IDL §3.2.18 step 2 refused every other string before "
+              "this body ran");
         JS_FreeCString(ctx, nm);
         *out |= 1u << k;
     }
-    return 0;
 }
 
 static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1136,14 +1146,11 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             return sc_reject(ctx, &s->p, presult);
         }
         s->extractable = (uint8_t)(JS_ToBool(ctx, argc > 3 ? argv[3] : JS_UNDEFINED) != 0);
-        /* THE USAGES ARE NORMALIZED BEFORE ANY MEMBER OF `algorithm` IS READ, which is §3.6's own order: the
-           argument conversions run LEFT TO RIGHT and finish before the body's step 1, so a bogus usage string
-           is a TypeError with none of the algorithm object's getters having run. See ik_usages_normalize for
-           why the check is in this body at all. */
-        if (ik_usages_normalize(ctx, argc > 4 ? argv[4] : JS_UNDEFINED, &s->usages) < 0) {
-            JS_FreeValue(ctx, cb_result);
-            return sc_reject(ctx, &s->p, presult);
-        }
+        /* §9's NORMALIZED VALUE, AS A MASK. It cannot fail: the position is declared IDL_SEQUENCE_ENUM, so Web
+           IDL §3.2.18 refused every string that is not a KeyUsage during the argument conversion — which §3.6
+           runs LEFT TO RIGHT and finishes before this body's step 1, so a bogus usage is a TypeError with none
+           of the algorithm object's getters having run. */
+        ik_usages_normalize(ctx, argc > 4 ? argv[4] : JS_UNDEFINED, &s->usages);
     }
     DCHECK(!JS_IsException(cb_result) || hdr->stage == IK_NAME || hdr->stage == IK_NAME_STR ||
                hdr->stage == IK_HASH || hdr->stage == IK_HASH_NAME || hdr->stage == IK_LENGTH ||
@@ -1498,16 +1505,18 @@ void subtle_crypto_init(JSContext *ctx)
                                                  IDL_BUFFERSOURCE };
     /* §14's `Promise<CryptoKey> importKey(KeyFormat format, (BufferSource or JsonWebKey) keyData,
        AlgorithmIdentifier algorithm, boolean extractable, sequence<KeyUsage> keyUsages)`.
-       TWO OF THESE FIVE ROWS ARE NARROWER THAN THE IDL AND BOTH ARE NAMED WHERE THEY BITE. The keyData union
-       is declared IDL_BUFFERSOURCE — see hmac.h's residual on §31.6.4 step 5's jwk arm, which is where the
-       missing `IDL_BUFFERSOURCE_OR_DICT` row is named. The usages sequence is declared IDL_SEQUENCE_DOMSTRING
-       because no row expresses a sequence whose element type is an ENUMERATION — see ik_usages_normalize,
-       which performs §3.2.19's check itself and names `IDL_SEQUENCE_ENUM` as the row that retires it. */
+       ONE OF THESE FIVE ROWS IS NARROWER THAN THE IDL AND IT IS NAMED WHERE IT BITES: the keyData union is
+       declared IDL_BUFFERSOURCE — see hmac.h's residual on §31.6.4 step 5's jwk arm, which is where the
+       missing `IDL_BUFFERSOURCE_OR_DICT` row is named. THE TWO ENUMERATIONS ON THIS LINE ARE BOTH DECLARED,
+       which is what one value list per declaration could not do: §3.2.18's `E` is a fact about a POSITION, so
+       `format` states KeyFormat and `keyUsages` states KeyUsage as its element type. */
     static const IdlArgType IK_ARGS[] = { IDL_ENUM, IDL_BUFFERSOURCE, IDL_STRING_UNLESS_OBJECT, IDL_BOOLEAN,
-                                          IDL_SEQUENCE_DOMSTRING };
+                                          IDL_SEQUENCE_ENUM };
     /* §14.1 Data Types: "enum KeyFormat { \"raw\", \"spki\", \"pkcs8\", \"jwk\" };" — the value list IS the
-       type, so `importKey("RAW", …)` is a TypeError from §3.2.19 before any step of §14.3.9 runs. */
-    static const char *const IK_FORMATS[] = { "raw", "spki", "pkcs8", "jwk", NULL };
+       type, so `importKey("RAW", …)` is a TypeError from §3.2.18 before any step of §14.3.9 runs. Written with
+       IDL_ENUM_VALUES because that macro SUPPLIES the terminator both readers of a value list scan for; a
+       hand-written list is a list whose last element can be left off. */
+    IDL_ENUM_VALUES(IK_FORMATS, "raw", "spki", "pkcs8", "jwk");
 
     DCHECK(g_obj_slot < 0, "subtle_crypto_init ran twice — the class, the slot and the member's pool id are "
                            "the AGENT's");
@@ -1542,7 +1551,10 @@ void subtle_crypto_init(JSContext *ctx)
     idl_iface_brand(crypto_key_class());
     g_id_import_key = idl_method_id_step(ctx, IK_ARGS, 5, NULL, 0, &IK_DECL, 0);
     idl_returns_promise();
-    idl_enum_values(IK_FORMATS);
+    /* §3.2.18's `E` AT EACH OF THE TWO POSITIONS §14.3.9's IDL declares one at — position 0's own type, and
+       position 4's ELEMENT type. */
+    idl_arg_enum(0, IK_FORMATS);
+    idl_arg_enum(4, IK_KEY_USAGES);
     /* DECLARED UNDER THE ROW THAT RELEASES IT, which is `crypto` — §10's component declares this one and its
        release reaches this one's, so core/platform.c's two-sided check ("a row with a release that declared no
        agent state cannot be asserted to have undone anything") is asking about the pair. Naming a component

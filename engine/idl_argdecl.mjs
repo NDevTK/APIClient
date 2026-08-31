@@ -169,7 +169,7 @@ const DECL_RE = /\bidl_(method_id|method_id_ext|method_id_dict|method_id_step|se
    drift, and exported so a consumer can say which of a declaration's modifiers it took no account of — the
    difference between "there was nothing there" and "there was something this did not read". */
 export const INTERPRETED_MODS = new Set(["optional_from", "overload_split_optional_from", "variadic",
-                                         "iface_brand", "arg_default", "arg_iface"]);
+                                         "iface_brand", "arg_default", "arg_iface", "arg_enum"]);
 
 /* THE RAW SOURCE IS A SECOND, REQUIRED PARAMETER AND NOT AN OPTIONAL ONE. `strip` blanks a string literal to
    spaces of the SAME LENGTH, so a declaration's own string arguments — the identifier `idl_arg_iface` names its
@@ -188,6 +188,27 @@ export function declarations(strippedSrc, rawSrc) {
   const arrays = new Map();
   for (const m of src.matchAll(/\b(?:static\s+)?const\s+IdlArgType\s+([A-Za-z_][A-Za-z_0-9]*)\s*\[[^\]]*\]\s*=\s*\{([\s\S]*?)\}\s*;/g))
     arrays.set(m[1], args(m[2]).map((t) => t.split(/\s+/)[0]));
+
+  /* WEB IDL §3.2.18 Enumeration types' VALUE LISTS this file DEFINES, as name → the identifiers the IDL lists.
+     They are read from the RAW source because the values ARE string literals and `strip` blanks those; the
+     macro is where nearly all of them are written (it is what supplies the terminator, so the list's own last
+     element cannot be left off), and the plain array form is read too because a file may still spell one by
+     hand. The terminating NULL is this engine's bookkeeping and never part of the enumeration, so it is
+     dropped here — what comes back is what the IDL says, which is the only thing a consumer can compare. */
+  const enumLists = new Map();
+  for (const m of rawSrc.matchAll(/\bIDL_ENUM_VALUES(?:_EXTERN)?\s*\(/g)) {
+    const { text } = callText(rawSrc, m.index + m[0].length - 1);
+    const a = args(text);
+    const name = (a[0] || "").trim();
+    const vals = a.slice(1).map((x) => (x.match(/^\s*"((?:[^"\\]|\\.)*)"\s*$/) || [])[1] ?? null);
+    if (name && vals.length && vals.every((v) => v !== null)) enumLists.set(name, vals);
+  }
+  for (const m of rawSrc.matchAll(/\b(?:static\s+)?const\s+char\s*\*\s*const\s+([A-Za-z_][A-Za-z_0-9]*)\s*\[[^\]]*\]\s*=\s*\{([\s\S]*?)\}\s*;/g)) {
+    if (enumLists.has(m[1])) continue;                 /* the macro form already read it */
+    const vals = args(m[2]).map((x) => x.trim()).filter((x) => x !== "NULL")
+      .map((x) => (x.match(/^"((?:[^"\\]|\\.)*)"$/) || [])[1] ?? null);
+    if (vals.length && vals.every((v) => v !== null)) enumLists.set(m[1], vals);
+  }
 
   const stepFn = new Map();
   for (const m of src.matchAll(/\b(?:static\s+)?const\s+IdlStepDecl\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*\{([\s\S]*?)\}\s*;/g)) {
@@ -208,7 +229,7 @@ export function declarations(strippedSrc, rawSrc) {
     return arrays.get(name) || (enumMembers.has(name) ? [name] : null);
   };
 
-  return { arrays, stepFn, listOf,
+  return { arrays, stepFn, listOf, enumLists,
     /* `C` is the contract() this consumer already read — passed in rather than re-read, so one file reads the
        header and both audits see the same enum and the same modifier set. */
     read(C) {
@@ -246,7 +267,7 @@ export function declarations(strippedSrc, rawSrc) {
           lhs: asg ? asg[1].replace(/\s+/g, "") : null,
           at: m.index, end, mods: new Map(),
           optionalFrom: null, optionalFromExpr: null, splitOptionalFrom: null, brand: null, defaults: [],
-          argIfaces: [],
+          argIfaces: [], argEnums: [],
         });
       }
 
@@ -281,6 +302,11 @@ export function declarations(strippedSrc, rawSrc) {
                                                                    : (rawArgs[2].match(/"([^"]*)"/) || [])[1] ?? null });
         else if (k[1] === "arg_default") owner.defaults.push({ index: num(a[0]), kind: (a[1] || "").trim(),
                                                               str: (a[2] || "").trim() });
+        /* §3.2.18's `E` at ONE position, as the POSITION and the IDENTIFIER of the value list it names. The
+           list itself is a C array that may be defined in ANOTHER file (an enumeration two members share is
+           written once and declared `extern`), so only its name is carried here and resolving it is the
+           consumer's — which is what lets a consumer say `two files define this name` instead of picking one. */
+        else if (k[1] === "arg_enum") owner.argEnums.push({ index: num(a[0]), list: (a[1] || "").trim() });
       }
       return { decls: out, orphans };
     } };
