@@ -89,6 +89,18 @@ enum { NODE_TREE_REMOVED = -1, NODE_TREE_REMOVING = 0, NODE_TREE_INSERTED = 1 };
 typedef void (*NodeTreeHook)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
 void node_add_tree_hook(NodeTreeHook fn);
 
+/* THE LIST IS NOT ONLY THE INSERTION AND REMOVING STEPS — it is everything §4.2.3 numbers at a tree change, in
+   that order, which is why §4.3's mutation record (insert step 8) is on it too. This entry is `insert` step
+   7.7.3 and `remove` steps 13/14.2: the CUSTOM ELEMENT REACTION ENQUEUE, which is a SIBLING of step 7.7.1's
+   insertion steps rather than one of them, and on the removal side is two top-level steps away from them.
+   IT IS ON THIS LIST AND NOT IN THE DEFERRED DRAIN because it can neither park nor fork — it allocates a
+   reaction and pushes it — and because §4.5 adopt step 3.3.3's `adoptedCallback` cannot be deferred at all
+   (`adoptNode` on a parentless node performs no tree change, so no drain would ever see it). Deferring one of
+   that pair and not the other is what ordered a cross-document move « adopted, disconnected, connected ».
+   REGISTER IT BETWEEN the recorder that feeds the drain and §4.3's mutation record; see core/dom/node.c. */
+void node_custom_element_reactions_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent,
+                                             int phase);
+
 /* §4.2.3's CHILDREN CHANGED STEPS — "specifications may define children changed steps for all or some nodes.
  * The algorithm is passed no argument and is called from insert, remove, and replace data."
  *

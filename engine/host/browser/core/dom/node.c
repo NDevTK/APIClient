@@ -450,8 +450,11 @@ static const EventTargetTree NODE_EVENT_TREE = {
    need it would have had to be called from inside the first. That is the hand-copied list CLAUDE.md warns
    about, one layer down: a component added without editing whoever happens to hold the slot is a component
    whose steps silently never run.
-   The ORDER is the registration order, which is the standard's order because the components register in it. */
-#define NODE_TREE_HOOKS_MAX 6
+   The ORDER is the registration order, which is the standard's order because the components register in it —
+   which is why `insert`'s and `remove`'s OWN steps join it too and are not called around it: step 7.7.3's
+   enqueue is numbered between step 7.7.1's insertion steps and step 8's mutation record, and a call placed
+   before or after the whole loop cannot be between two of its members. */
+#define NODE_TREE_HOOKS_MAX 8
 static NodeTreeHook g_tree_hooks[NODE_TREE_HOOKS_MAX];
 static int g_tree_hook_n;
 
@@ -480,6 +483,100 @@ void node_add_children_changed_hook(NodeChildrenChangedHook fn)
           "more §4.2.3 children-changed-steps hooks were registered than the list holds — a dropped one is a "
           "component that never learns its own contents were rewritten");
     g_cc_hooks[g_cc_hook_n++] = fn;
+}
+
+/* DOM §4.2.3 "Mutation algorithms" — `insert`'s AND `remove`'s OWN CUSTOM-ELEMENT STEPS, WHICH ARE NOT
+ * INSERTION OR REMOVING STEPS AND THEREFORE MUST NOT TRAVEL WITH THEM.
+ *
+ * The distinction is the standard's own numbering and it decides the order every lifecycle callback arrives in.
+ * Step 7.7 is a loop with four sub-steps and only the FIRST is a hook another standard defines. Step 7.7.1 is
+ * "Run the insertion steps with inclusiveDescendant"; 7.7.2 is "If inclusiveDescendant is not connected, then
+ * continue"; 7.7.3 opens "If inclusiveDescendant is an element and inclusiveDescendant's custom element
+ * registry is non-null"; and under it 7.7.3.2 is "If inclusiveDescendant is custom, then enqueue a custom
+ * element callback reaction with inclusiveDescendant, callback name "connectedCallback", and « »" with 7.7.3.3
+ * "Otherwise, try to upgrade inclusiveDescendant".
+ * `remove` separates the two further still — there the enqueue is a TOP-LEVEL step of its own. Step 11 is "Run
+ * the removing steps with node, true, and parent"; step 12 is "Let isParentConnected be parent's connected";
+ * step 13 is "If node is custom and isParentConnected is true, then enqueue a custom element callback reaction
+ * with node, callback name "disconnectedCallback", and « »"; and step 14 is "For each shadow-including
+ * descendant descendant of node, in shadow-including tree order", whose 14.1 is "Run the removing steps with
+ * descendant, false, and parent" and whose 14.2 is "If descendant is custom and isParentConnected is true, then
+ * enqueue a custom element callback reaction with descendant, callback name "disconnectedCallback", and « »".
+ * (Counted with LIST DEPTH TRACKED against the fetched text: `insert` has 12 top-level steps and `remove` 17;
+ * step 7.7's four sub-steps and step 14's two are nested lists, not peers of the steps that hold them.)
+ *
+ * WHY THAT MATTERS HERE AND NOT MERELY ON PAPER: the insertion and removing steps are DEFERRED by this engine,
+ * because they can park (a `<script>`'s preparation) and fork (§6.6.7's autofocus asks about activation), and a
+ * chokepoint is a C body with no flow base under it. The custom-element enqueue can do neither — it allocates a
+ * reaction array and pushes it — so deferring it too bought nothing and COST THE ORDER. §4.5 `adopt` step 3.3.3
+ * enqueues `adoptedCallback` from inside the walk, synchronously, because adopt has no deferred half to hide in
+ * and needs none: `document.adoptNode(el)` on a parentless node performs NO TREE CHANGE AT ALL, so there is no
+ * record for any drain to find. So the two enqueues could not both be deferred even in principle, and while one
+ * was and the other was not, every cross-document move produced « adopted, …, disconnected, connected » where
+ * the two standards' own numbering gives « disconnected, adopted, connected »: §4.2.3 `insert` puts step 7.1,
+ * "Adopt node into parent's node document", ahead of step 7.7, and §4.5 "Interface Document"'s `adopt` puts its
+ * step 2, "If node's parent is non-null, then remove node", ahead of its step 3 — so `remove`'s enqueue runs
+ * inside adopt step 2, adopt's own runs at its step 3.3.3, and `insert`'s runs last at step 7.7.3.
+ *
+ * THE PHASES ARE THE STEP NUMBERS, AND SO IS THE REGISTRATION POSITION. On the insert side the enqueue is step
+ * 7.7.3: AFTER the recorder that feeds step 7.7.1's drain and BEFORE §4.3's step 8 mutation record, which is a
+ * place only a member of the hook list can occupy — a call placed around the loop would sit before every
+ * member or after every member, and step 8's record is one of them. On the removal side steps 12-14 come AFTER
+ * step 7's detach, which is why this answers at NODE_TREE_REMOVED and not NODE_TREE_REMOVING: step 12 reads
+ * `parent`'s connected precisely because the node no longer has one to be asked for, and `parent` is passed to
+ * this list for that reason. One walk answers both sides — step 7.7's set is the shadow-including INCLUSIVE
+ * descendants, and step 13 (the node) followed by step 14 (its shadow-including DESCENDANTS) is that same set
+ * in that same order, written from the other end.
+ *
+ * THE REALM IS THE NODE'S DOCUMENT'S, never this hook's `ctx`: dom_cow holds ONE context set at init, so using
+ * it would answer every document's insertion out of whichever realm happened to run first — CLAUDE.md
+ * §A-PER-REALM-FACT. document.h states the same rule for §4.2.3's steps in its own words. A node document with
+ * no realm is a parse in progress and has no reaction queue to join. */
+static lxb_dom_document_t *node_document_of(lxb_dom_node_t *n);
+
+void node_custom_element_reactions_tree_steps(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent,
+                                             int phase)
+{
+    JSContext *rctx;
+    lxb_dom_node_t *n;
+    lxb_dom_document_t *doc;
+
+    /* NODE_TREE_REMOVING is `remove` BEFORE step 7's detach. Steps 12-14 are numbered after it, and step 12's
+       isParentConnected would have no parent to be read off — so this phase is not one of the two, and the
+       other phase of a removal is where the answer is. */
+    (void)ctx;
+    if (phase == NODE_TREE_REMOVING) return;
+    DCHECK(phase == NODE_TREE_INSERTED || phase == NODE_TREE_REMOVED,
+           "§4.2.3's custom-element enqueue ran at a phase the tree-steps list does not have");
+    if (!root) return;
+    /* Insert step 7.7.2 ("If inclusiveDescendant is not connected, then continue") and remove step 12 ("Let
+       isParentConnected be parent's connected") are ONE question asked of two different nodes, because by
+       NODE_TREE_REMOVED the node is detached and the parent is the only end of the edge still in the tree.
+       Every node this walk reaches shares the answer: it is bounded by `root`, and a shadow-including inclusive
+       descendant of a connected node is connected. */
+    if (phase == NODE_TREE_INSERTED) {
+        if (!node_is_connected(root)) return;
+    } else {
+        if (!parent || !node_is_connected(parent)) return;
+        DCHECK(root->parent == NULL,
+               "§4.2.3 `remove` step 13 was reached with the node still attached — steps 12-14 are numbered "
+               "after step 7's \"remove node from its parent's children\", and running them before it would "
+               "read isParentConnected off an edge the algorithm has already cut");
+    }
+    rctx = document_realm_of(root);
+    if (!rctx) return;
+    doc = node_document_of(root);
+    for (n = root; n; n = shadow_root_next_in_shadow_including(rctx, n, root)) {
+        DCHECK(node_document_of(n) == doc,
+               "§4.2.3's shadow-including walk left the node document it started in — a shadow root's node "
+               "document is its host's, so one realm answers the whole subtree, and a descendant in another "
+               "document means this batch needs one realm per node rather than one per walk");
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (phase == NODE_TREE_INSERTED)
+            custom_elements_element_connected(rctx, lxb_dom_interface_element(n));   /* STEP 7.7.3 */
+        else
+            custom_elements_disconnected(rctx, lxb_dom_interface_element(n));        /* STEPS 13 and 14.2 */
+    }
 }
 
 static void node_tree_hooks_run(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)

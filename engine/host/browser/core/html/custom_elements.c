@@ -827,8 +827,19 @@ static JSValue ce_reaction_queue(JSContext *ctx, JSValueConst wrap, int create)
 /* §4.13.6 "enqueue an element on the appropriate element queue". The BRANCH is the whole algorithm: with a
    `[CEReactions]` member running the element joins THAT member's queue and its reactions run before the member
    returns; with none running it joins the backup queue and a microtask drains it. */
+/* EVERY REACTION THIS AGENT HAS EVER ENQUEUED, so a caller can ask whether a span of its own steps enqueued
+   ANYTHING without naming which callback it was looking for. It is the instrument for one ordering invariant
+   and it is deliberately not a queue length: a length falls when the queue drains, so a span that enqueued one
+   reaction and drained another would read as having done nothing. Monotone, agent-wide, and NOT per flow — a
+   reader may only bracket a span no other flow can run inside, which the two spans that use it state at their
+   own sites. */
+static uint64_t g_ce_enqueued;
+
+uint64_t custom_elements_reactions_enqueued(void) { return g_ce_enqueued; }
+
 static void ce_enqueue_element(JSContext *ctx, JSValueConst wrap)
 {
+    g_ce_enqueued++;
     if (g_current) {                                        /* step 3: the current element queue */
         if (JS_IsUndefined(g_current->queue)) {
             /* CREATED BY THE FIRST ENQUEUE, so a member that touches no custom element allocates nothing — and

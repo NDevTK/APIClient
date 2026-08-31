@@ -3,6 +3,7 @@
 #define ENGINE_HOST_BROWSER_CORE_HTML_CUSTOM_ELEMENTS_H
 #include <lexbor/dom/dom.h>
 #include <stdbool.h>
+#include <stdint.h>   /* custom_elements_reactions_enqueued's monotone count */
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/events/report_exception.h"
@@ -256,15 +257,30 @@ enum { CE_FORM_CB_ASSOCIATED = 0, CE_FORM_CB_RESET, CE_FORM_CB_DISABLED, CE_FORM
 void custom_elements_enqueue_form_callback(JSContext *ctx, JSValueConst wrap, int which,
                                            int argc, JSValueConst *args);
 
-/* DOM §4.2.3's INSERTION STEPS for an element, as HTML's custom-element half states them: an element that is
-   already "custom" gets a connectedCallback reaction, and any other element is TRIED FOR UPGRADE (§4.13.5's
-   "try to upgrade", which ENQUEUES an upgrade reaction — it never constructs here, because the insertion is
-   inside a C walk that cannot park). The two are one branch and not two calls because the spec writes them as
-   one, and because doing both for an element that is already custom would run its constructor twice. */
+/* DOM §4.2.3 `insert` STEP 7.7.3, which is NOT an insertion step — it is the sibling of one. Step 7.7.1 is
+   "Run the insertion steps with inclusiveDescendant"; this is 7.7.3, guarded by 7.7.2's "If inclusiveDescendant
+   is not connected, then continue": an element that is already "custom" gets a connectedCallback reaction, and
+   any other element is TRIED FOR UPGRADE (§4.13.5's "try to upgrade", which ENQUEUES an upgrade reaction — it
+   never constructs here). The two are one branch and not two calls because the spec writes them as one, and
+   because doing both for an element that is already custom would run its constructor twice.
+   THE DISTINCTION IS LOAD-BEARING AND NOT PEDANTRY: this engine DEFERS the insertion and removing steps,
+   because they park and fork, and it must NOT defer this — §4.5 adopt step 3.3.3's `adoptedCallback` is
+   enqueued synchronously (adopt on a parentless node performs no tree change at all, so it has no deferred half
+   to live in), and deferring only one of the pair reordered every cross-document move. Called from the DOM
+   mutation chokepoint; see core/dom/node.c's node_custom_element_reactions_tree_steps. */
 void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el);
-/* §4.13.3's disconnected reaction — the twin of the upgrade, for an element LEAVING a document. A no-op unless
-   the element was upgraded, because only an upgraded element has a lifecycle to react with. */
+/* DOM §4.2.3 `remove` STEPS 13 and 14.2 — §4.13.3's disconnected reaction, the twin of the above, for an
+   element LEAVING a document. `remove` separates it from the removing steps by NUMBER rather than by loop
+   position: step 11 runs the removing steps, step 12 reads isParentConnected, step 13 enqueues. A no-op unless
+   the element was upgraded, because only an upgraded element has a lifecycle to react with. Step 12's
+   condition belongs to the CALLER — it is one fact for the whole removed subtree, read off the parent because
+   the node itself is detached by then. */
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);
+/* HOW MANY REACTIONS §4.13.6's "enqueue an element on the appropriate element queue" has run for, ever.
+   Monotone and agent-wide. It exists so a span of steps can assert it enqueued NOTHING — the ordering
+   invariant that lets the insertion/removing steps be deferred while the enqueues above are not. A caller may
+   only bracket a span NO OTHER FLOW CAN RUN INSIDE: one counter cannot tell two forked arms apart. */
+uint64_t custom_elements_reactions_enqueued(void);
 /* DOM §4.2.3 MOVE STEP 24.3 — "if inclusiveDescendant is custom and newParent is connected, then enqueue a
    custom element callback reaction with inclusiveDescendant, callback name "connectedMoveCallback", and « »".
    THE THIRD SIDE OF A TREE CHANGE, and it is neither of the other two: a move runs no insertion steps and no

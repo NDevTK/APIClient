@@ -1805,11 +1805,15 @@ enum {
  * WHICH SIDE A CALLBACK BELONGS TO IS READ OFF ITS OWN STANDARD, never off where it used to sit. HTML §4.8.5
  * "The iframe element" and §4.12.1.1 "Processing model" each say "HTML element post-connection steps" in the
  * text that defines them; HTML §4.8.2 "The source element" and §4.8.3 "The img element" say "HTML element
- * insertion steps"; §4.2.6 "The style element" and §4.6.8.23 "Link type \"stylesheet\"" trigger on the element
- * BECOMING connected, which is the insertion side; and DOM §4.2.3's own insert step 7.7.3.2 enqueues
- * connectedCallback inside step 7.7's loop, so a custom element's connection is an insertion-phase fact even
- * though HTML §4.13.6 "Custom element reactions" runs the reaction later, in the [CEReactions]
- * epilogue every member ends through.
+ * insertion steps"; and §4.2.6 "The style element" and §4.6.8.23 "Link type \"stylesheet\"" trigger on the
+ * element BECOMING connected, which is the insertion side.
+ * A CUSTOM ELEMENT'S CONNECTION IS ON NEITHER SIDE OF THAT SPLIT, and reading it onto the insertion side is
+ * what put the lifecycle callbacks in the wrong order. Insert step 7.7.3 sits INSIDE step 7.7's loop beside
+ * step 7.7.1's insertion steps without being one of them, and `remove` states the same fact by NUMBERING
+ * instead: its step 11 runs the removing steps and its step 13 enqueues disconnectedCallback. What decides
+ * where a step runs here is not which phase it resembles but whether it can PARK — an enqueue cannot, so it
+ * belongs at the chokepoint (core/dom/node.c's node_custom_element_reactions_tree_steps), where §4.5 adopt step 3.3.3's
+ * `adoptedCallback` already was and had to be.
  *
  * THE LIST IS MATERIALIZED, NOT RE-WALKED, and step 10's own note is the reason: "We collect all nodes before
  * calling the post-connection steps on any one of them, instead of calling the post-connection steps while
@@ -2361,6 +2365,16 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
             if (b->nphase == TS_NODE_EFFECTS) {
+                /* THE ENQUEUE ORDER THIS BLOCK MUST NOT DISTURB — see the note where insert step 7.7.3 used to
+                   sit, below. The chokepoint has ALREADY enqueued this batch's connectedCallback, upgrade and
+                   disconnectedCallback reactions, so an insertion or removing step that enqueues one HERE lands
+                   behind them, and §4.13.6's queue is FIFO. Nothing in this block does today; the count says so
+                   rather than a paragraph claiming it. It is a plain global read and not a per-flow one because
+                   this block CANNOT PARK — its own enum says "None can ask anything, so they all run in one
+                   step and the phase is past them before the step that can is reached" — so no sibling flow can
+                   enqueue between the two reads. §6.6.7's autofocus, the one step that CAN fork, is therefore
+                   outside the bracket: a fork's two arms share one global counter and it could not see them. */
+                uint64_t ce_mark = custom_elements_reactions_enqueued();
                 /* HTML §4.2.5.3 "Pragma directives"' CONTENT SECURITY POLICY STATE. Its five steps are written
                    over a `<meta>` that is IN a Document, and HTML says which moment that is in its own words
                    beside them: "At the time of inserting the meta element to the document, it is possible that
@@ -2415,14 +2429,23 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
                    observes the style rules that were applied in the above step." The script is FIRST in that
                    fragment, so the phase split is the only thing that gives the example its answer. */
                 html_style_element_update(el);
-                /* DOM §4.2.3 insert step 7.7.3.2/7.7.3.3: an element that ENTERS a document gets its
-                   connectedCallback ENQUEUED if it is already custom, and is otherwise tried for upgrade —
-                   the other half of "learned by execution". It is an INSERTION-phase fact even though the
-                   reaction RUNS later: the enqueue is written inside step 7.7's loop, and HTML §4.13.6
-                   "Custom element reactions"' invoke-custom-element-reactions pops the queue in the
-                   [CEReactions] epilogue every declared member ends through, which is after step 12. Nothing
-                   here constructs the page's class, so nothing here parks. */
-                custom_elements_element_connected(ctx, el);
+                /* THE CUSTOM-ELEMENT ENQUEUE IS NOT HERE, AND ITS ABSENCE IS THE MECHANISM. Insert step 7.7.3
+                   is a SIBLING of step 7.7.1's insertion steps inside one loop, not a part of them, and
+                   `remove` separates the two further still — its step 11 runs the removing steps and its step
+                   13 enqueues disconnectedCallback, two top-level steps apart. Only the insertion and removing
+                   steps are deferred to this drain, because only they park; the enqueue allocates a reaction
+                   and pushes it, so it runs where the standard puts it, at the DOM mutation chokepoint
+                   (core/dom/node.c's node_custom_element_reactions_tree_steps). While it was deferred here and §4.5 adopt step
+                   3.3.3's `adoptedCallback` was not, every cross-document move enqueued « adopted,
+                   disconnected, connected » for an order the standard writes « disconnected, adopted,
+                   connected ». */
+                DCHECK(custom_elements_reactions_enqueued() == ce_mark,
+                       "an INSERTION STEP enqueued a custom element callback reaction, and this drain runs "
+                       "after core/dom/node.c's node_custom_element_reactions_tree_steps has already enqueued insert step "
+                       "7.7.3's — so §4.13.6's FIFO queue now delivers this node's connectedCallback BEFORE "
+                       "the reaction its own insertion steps produced, which §4.2.3 step 7.7 orders the other "
+                       "way round. Move that step's enqueue to the chokepoint beside 7.7.3, or build the "
+                       "per-node interleaving of 7.7.1 and 7.7.3 that having both in one place would give");
                 /* THE PHASE MOVES BEFORE THE STEP THAT CAN ASK, and that placement is the whole mechanism:
                    everything above is DONE for this node, and a re-entry that ran it again would start one
                    `<video>`'s resource selection twice, request one `<link>`'s resource twice and enqueue one
@@ -2461,6 +2484,8 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
                        "asked the first half of");
             }
         } else {
+            uint64_t ce_mark = custom_elements_reactions_enqueued();   /* see the insert side's bracket */
+
             DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
                    "§4.2.3's REMOVING steps resumed mid-node — nothing in them asks anything, so there is no "
                    "point inside one for a walk to park at");
@@ -2478,7 +2503,17 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
                no longer connected, so a `<style>` taken out of the document stops having a style sheet and the
                one it had is orphaned rather than left claiming an owner node it no longer has. */
             html_style_element_update(el);
-            custom_elements_disconnected(ctx, el);
+            /* `remove` steps 13 and 14.2 ARE NOT HERE either, and on this side the standard makes the point
+               with its numbering rather than with a loop: step 11 runs the removing steps, step 12 reads
+               isParentConnected, and step 13 enqueues disconnectedCallback — three top-level steps, of which
+               only the first is a hook another standard defines. The enqueue is at the chokepoint; see
+               core/dom/node.c's node_custom_element_reactions_tree_steps. */
+            DCHECK(custom_elements_reactions_enqueued() == ce_mark,
+                   "a REMOVING STEP enqueued a custom element callback reaction, and this drain runs after "
+                   "core/dom/node.c's node_custom_element_reactions_tree_steps has already enqueued `remove` steps 13/14.2's — "
+                   "so §4.13.6's FIFO queue delivers this node's disconnectedCallback BEFORE the reaction its "
+                   "own removing steps produced, where §4.2.3 numbers step 11 ahead of step 13. Move that "
+                   "step's enqueue to the chokepoint beside 13/14.2");
         }
     } else {
         DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
@@ -2495,14 +2530,18 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
     if (e->inserted) tree_steps_list_append(ctx, b, n);
     /* THE WALK IS SHADOW-INCLUDING, and that is the whole of what §4.2.3 asks for on BOTH sides of a tree
        change. `insert` step 7.7 is "For each shadow-including inclusive descendant inclusiveDescendant of node,
-       in shadow-including tree order: Run the insertion steps with inclusiveDescendant. … If inclusiveDescendant
-       is custom, then enqueue a custom element callback reaction with inclusiveDescendant, callback name
-       "connectedCallback", and « ». Otherwise, try to upgrade inclusiveDescendant."; `remove` states the same
-       set from the other end — "Run the removing steps with node, true, and parent. … For each shadow-including
-       descendant descendant of node, in shadow-including tree order: Run the removing steps with descendant,
-       false, and parent. If descendant is custom and isParentConnected is true, then enqueue a custom element
-       callback reaction with descendant, callback name "disconnectedCallback", and « »." — node itself first,
-       then its shadow-including descendants, which is one walk over the shadow-including INCLUSIVE descendants.
+       in shadow-including tree order", whose step 7.7.1 is "Run the insertion steps with inclusiveDescendant";
+       `remove` states the same set from the other end — step 11 is "Run the removing steps with node, true, and
+       parent", step 14 is "For each shadow-including descendant descendant of node, in shadow-including tree
+       order" and its step 14.1 is "Run the removing steps with descendant, false, and parent" — node itself
+       first, then its shadow-including descendants, which is one walk over the shadow-including INCLUSIVE
+       descendants.
+       THE SAME SET IS WALKED A SECOND TIME, EARLIER AND ELSEWHERE, and that is not duplication: step 7.7.3 and
+       steps 13/14.2 are stated over these same nodes in this same order and belong at the chokepoint, because
+       they cannot rest and must not be reordered against §4.5 adopt's enqueue. See
+       core/dom/node.c's node_custom_element_reactions_tree_steps, which is the same successor and the same
+       bound as this one — the two walks agree because they call one primitive, never because two loops were
+       written to match.
        A PLAIN `first_child`/`next`/`parent` WALK IS A DIFFERENT NODE SET, not a cheaper spelling of this one:
        it stops at every shadow host, so a custom element the page built inside a shadow tree got neither
        callback when its HOST was inserted or removed — the element was live, its constructor had run, and the
@@ -2514,7 +2553,9 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
        above rides this cursor rather than re-traversing — and why the two could not be made to agree while
        this advance and that sentence described different walks. */
     n = shadow_root_next_in_shadow_including(ctx, n, e->root);
-    /* §4.2's shadow-including tree order NEVER LEAVES THE SUBTREE THE RECORD NAMED, and the successor is what
+    /* §4.8 "Interface ShadowRoot"'s shadow-including tree order — which is where the term is DEFINED, §4.2
+       "Node tree" being where plain tree order is — NEVER LEAVES THE SUBTREE THE RECORD NAMED, and the
+       successor is what
        the whole batch's connectedness rests on: element_tree_changed recorded this root because it was
        connected, and every node this walk reaches is connected exactly because it is a shadow-including
        inclusive descendant of that root. A successor outside it would be a node whose insertion steps this
@@ -2919,6 +2960,11 @@ void element_init(JSContext *ctx)
        after the base is the one script that does not see it. */
     node_add_tree_hook(html_base_element_tree_steps);
     node_add_tree_hook(element_tree_changed);
+    /* §4.2.3 insert step 7.7.3 and remove steps 13/14.2 — the CUSTOM ELEMENT REACTION ENQUEUE, AFTER the
+       recorder above (which stands for step 7.7.1's insertion steps) and BEFORE §4.3's record below. It is the
+       one thing at a tree change that is neither an insertion/removing step nor a mutation record, and this
+       line is the only place its position between the two can be stated. */
+    node_add_tree_hook(node_custom_element_reactions_tree_steps);
     /* §4.3's RECORD IS QUEUED LAST, which is where §4.2.3 numbers it: insert step 8 follows step 7's insertion
        steps and custom-element reactions, and remove steps 15-16 follow the removing steps and the
        disconnectedCallback. The hook list runs in registration order, so this line IS that ordering. */
