@@ -44,8 +44,9 @@
 /* §4.2's three states — declared in the header, because pipeTo branches on them and two spellings of
    one enum is one more than a component may have. */
 
-/* §4.2's stream and §4.3's reader are declared in readable_stream_impl.h, because §4.7's controller performs
-   §4.9.1's operations on the one and §4.5's reader IS the other. */
+/* §4.2's stream and §4.4/§4.5's reader are declared in readable_stream_impl.h, because §4.7's controller
+   performs §4.9.1's operations on the one and §4.5's reader IS the other. ONE record for both reader classes,
+   because §4.3's mixin is most of both — see the record's own comment there. */
 
 /* §4.6's controller. The three flags are the spec's own [[started]], [[pulling]] and [[pullAgain]], and they
    exist because `pull` is ASYNCHRONOUS: nothing may pull before start's promise fulfils, only one pull may be in
@@ -471,9 +472,11 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
         if (rd->closed_settled) {
             JSValue p;
             if (!replace_if_settled) { JS_FreeValue(ctx, in); return 0; }
-            /* §4.3's release, second arm: a reader whose stream had ALREADY finished gets a NEW `closed`
-               promise, already rejected. The identity change is observable — `assert_not_equals` on the two
-               promise objects is what the corpus checks — so it cannot be a no-op. */
+            /* §4.9.3 Readers' ReadableStreamReaderGenericRelease step 5 — the OTHERWISE arm: a reader whose
+               stream had ALREADY finished gets a NEW `closed` promise, already rejected (step 4 is the arm
+               that rejects the one it has, for a stream still `readable`). The identity change is
+               observable — `assert_not_equals` on the two promise objects is what the corpus checks — so it
+               cannot be a no-op. */
             p = JS_NewPromiseCapability(ctx, funcs);
             if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
             rd_set(ctx, rd, &rd->closed, p);
@@ -515,9 +518,9 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
     return 0;
 }
 
-/* §4.9.2's ReadableStreamClose and ReadableStreamError and §4.3's release, which are ONE sequence with three
- * entry points: move the stream's state (or, for a release, none), settle the reader's `closed` promise, then
- * answer EVERY parked read request. All three say "for each readRequest", and answering one is a CALL of the
+/* §4.9.2's ReadableStreamClose and ReadableStreamError and §4.9.3's ReadableStream*ReaderRelease, which are
+ * ONE sequence with three entry points: move the stream's state (or, for a release, none), settle the
+ * reader's `closed` promise, then answer EVERY parked read request. All three say "for each readRequest", and answering one is a CALL of the
  * page's code — so the tail is a LOOP OF CALL REQUESTS, one suspension per request. Answering only the first,
  * which is what this component did before the controller could pull, silently abandons the rest.
  * The caller sets `w->settle` (and `w->err` for the arms that carry a reason) and calls until it returns 0. */
