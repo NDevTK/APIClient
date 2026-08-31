@@ -958,6 +958,40 @@ static const char *HTML =
     " getComputedStyle(rd).width === '300px' && getComputedStyle(rd).height === '150px' ? 'is300' : 'wrong'));"
     "var rs = document.createElement('span'); document.body.appendChild(rs);"
     "fetch('/api/replacedspan?v=' + (getComputedStyle(rs).width === 'auto' ? 'isauto' : 'wrong'));"
+    /* ---- CSSOM VIEW §2 "Terminology"'s SCROLLING AREA over CSS 2.2 §9.4.2 "Inline formatting contexts" ----
+       THE PROBE ABOVE ENDS WHERE THIS ONE BEGINS. It asserts that a non-replaced inline box resolves `width`
+       to the computed `auto` — CSS 2.2 §10.3.1 "Inline, non-replaced elements" is one sentence, "the 'width'
+       property does not apply" — and §2's scrolling area is the one member that then has to report a MARGIN
+       EDGE for that box anyway: "the right-most edge of the element's right padding edge and the right margin
+       edge of all of the element's descendants' boxes". There is no extent to compose one from, so the edge
+       comes out of §9.4.2's fragments instead ("when an inline box exceeds the width of a line box, it is
+       split into several boxes and these boxes are distributed across several line boxes").
+       THE ASSERTION IS A DIFFERENCE, WHICH IS WHAT MAKES IT A PLAIN INTEGER IN A PROBE THAT MEASURES TEXT.
+       Where the fragment's own end lands is a font advance — this engine's modelled face, through
+       core/css/font_metrics.h — so neither `scrollWidth` alone is a number this file may write down. The two
+       containers below are identical in every way except 300 CSS pixels of `margin-right` on the span, and
+       CSS 2.2 §8.3 "Margin properties" gives that margin a used value straight off its declaration for an
+       inline box ("a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of
+       '0'" is §10.3.1's rule for the OTHER case), so the advance appears in both and cancels. §6's `long`
+       rounding cancels with it, because the two values differ by a whole number.
+       IT IS ONE-SIDED ON PURPOSE AND THE OTHER SIDE IS THE BLOCK AXIS: §8.3 says "vertical margins will not
+       have any effect on non-replaced inline elements", so the same 300px written as `margin-bottom` must
+       move `scrollHeight` by ZERO, and a fold that reached for a margin box on both axes passes the first
+       claim and fails the second. */
+    "var saInline = function(p, v){"
+    "  var d = document.createElement('div'); d.style.setProperty('width', '50px');"
+    "  var s = document.createElement('span'); s.style.setProperty(p, v);"
+    "  s.appendChild(document.createTextNode('x'));"
+    "  d.appendChild(s); document.body.appendChild(d); return d;"
+    "};"
+    "var saNarrow = saInline('margin-right', '400px'), saWide = saInline('margin-right', '700px');"
+    "var saTall = saInline('margin-bottom', '400px'), saTaller = saInline('margin-bottom', '700px');"
+    "fetch('/api/sainlineinline?v=' + (saWide.scrollWidth - saNarrow.scrollWidth === 300 ? 'is300' : 'wrong'));"
+    "fetch('/api/sainlineblock?v=' + (saTaller.scrollHeight - saTall.scrollHeight === 0 ? 'iszero' : 'wrong'));"
+    /* THE TWO DELTAS THEMSELVES, because a `wrong` above names no number and the whole point of the pair is
+       WHICH of 300 and 0 the fold produced. */
+    "fetch('/api/sainlinedelta?i=' + (saWide.scrollWidth - saNarrow.scrollWidth) +"
+    " '&b=' + (saTaller.scrollHeight - saTall.scrollHeight));"
     /* §4.8.3's `[CEReactions, ReflectSetter] attribute unsigned long width` — the SETTER is HTML §2.6.1's
        reflection and the GETTER is determine-the-dimensions, so the two do NOT round-trip and that asymmetry
        is what this asserts. Writing 64 sets the content attribute; reading back still reports the RENDERED

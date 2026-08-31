@@ -157,7 +157,10 @@ static CssPx sa_content_origin(lxb_dom_element_t *b, bool vertical)
    THE FRAME IS THE ESTABLISHING BOX'S CONTENT BOX, which is the frame `sa_fold_span` already composes for the
    two shapes of §9.4.2's context above — the same `sa_content_origin`, over whichever block container
    core/layout/line_box.h reports this box's lines belong to, which for a `<span>` nested in inline ancestors is
-   not its parent. */
+   not its parent, and which for a MIXED container is §9.2.1.1's ANONYMOUS BLOCK BOX. That last one is a box no
+   element names, so there is nothing here to hand back an origin for; core/layout/line_box.c crashes for it by
+   name at the walk that would have returned it, rather than measuring the container's whole child list as if
+   the run were the list. */
 static CssPx sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi)
 {
     lxb_dom_element_t *establishing = NULL;
