@@ -74,8 +74,13 @@
      THE PARAMETER TYPES ARE FACTS, NOT CHOICES. Every one is read off `engine/host/main.c`'s own `QJS_EXPORT`
      body — `qjs_top_weight` returns a C `double`, `qjs_bundle_id` an `unsigned` the wasm hands back as an i32,
      `qjs_provide` a `(const char *body, unsigned body_len)` PAIR — and `engine/build.mjs`'s QJS_ABI is the
-     authoritative list of which entries exist. The ORDINALS are that list's order.
-     ONE INTERFACE FOR ALL TWENTY, WHICH IS AN ORDERING DECISION AND NOT A FILING ONE. Mojo orders messages
+     authoritative list of which entries exist. AN ORDINAL IS A METHOD'S IDENTITY ON THE WIRE AND NOTHING ELSE:
+     it is APPENDED and never reused (the ordinal-8 hole below says the same thing from the deletion side), so
+     it is not a position in that list and must not be read as one. This said "the ORDINALS are that list's
+     order" while `Unload` — third in QJS_ABI — had already been appended at 21, which is the shape of sentence
+     that is true when written and wrong at the next addition; what is CHECKED is the SET, in `build.mjs`'s
+     `abiCheck` and in `fieldgate.mjs`'s entry/export/binding/method diff, and neither asks about order.
+     ONE INTERFACE FOR ALL OF THEM, WHICH IS AN ORDERING DECISION AND NOT A FILING ONE. Mojo orders messages
      within a pipe and across none; `Begin` may not overtake `Init` and `Step` may not overtake `Begin` — the C
      entries assert exactly that, on `g_ctx` and `g_begun` — so the sequence stays ordered by being one
      interface rather than by a rule somebody remembers.
@@ -641,6 +646,34 @@
          in the zone that performs them and over the table only that zone holds (bridge.js's engineUnload). */
       { ordinal: 21, name: "Unload",
         params: [DOCUMENT_ID],
+        reply: [WORKING_SET] },
+
+      /* THE CROSS-INSTANCE SEAM'S LIFETIME HALF, and it belongs with `Route`/`Perform`/`HostAnswerRemote`
+         rather than at the end of a list — the ordinal is 22 because an ordinal is an IDENTITY that is
+         appended and never reused, and nothing about where a method is DECLARED follows from it.
+         WHAT IT IS FOR. `Route`, `Perform` and `WorldGone` all carry a record INTO a document that is still
+         there to receive one; this is what makes that true. A document another agent holds a WindowProxy for
+         may not run its timelines out (solver/engine.h's `engine_set_referenced`): its last flow reports
+         itself host-owed instead of finishing, so a `windowproxy.get`, a delivery or a `w.length` still has a
+         timeline to be answered in. Without it a peer this zone provisions runs its scripts, drains, closes
+         its session — and the creator's first cross-origin read arrives at a document with nothing left to
+         run the getter in, which the engine reports from the FAR side (engine_route's drained-instance
+         assert) one boundary away from the zone that made the decision.
+         IT IS DECLARED BY THE PROVISIONING ZONE BECAUSE IT IS A FACT ABOUT PROVISIONING. An instance exists
+         because some other agent created its navigable, which the engine cannot see for itself and which the
+         routing table SECURITY.md gives this zone has by construction. */
+      { ordinal: 22, name: "SetReferenced",
+        params: [
+          { name: "referenced", type: "int32", retained: false,
+            why: "1 if some other instance holds a WindowProxy for this instance's document and 0 if none " +
+                 "does — the two answers a provisioning zone can give, and `qjs_set_referenced` refuses a " +
+                 "third because a value that is neither would be read by whichever arm the scheduler's test " +
+                 "happens to be written as. It crosses BEFORE `Begin`: the flag decides whether the LAST " +
+                 "timeline may finish, so a session that has already been seeded may already have taken that " +
+                 "decision, and the C entry asserts `!g_begun` rather than accepting a statement about a " +
+                 "frontier that has drained. It is NOT a session fact — it survives `Teardown`, because " +
+                 "whether a peer holds a proxy is a property of the instance's PROVISIONING and not of any " +
+                 "one run of its frontier" }],
         reply: [WORKING_SET] },
     ],
   });

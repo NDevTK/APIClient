@@ -2101,7 +2101,7 @@ function embedderPolicyWhole(e) {
    so the name it passes in IS the answer (SECURITY.md's `(browsing-context group, origin)`), which is also
    what makes a frame in the offscreen's DOM identifiable as the instance the pool is talking about. */
 function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inherited, parentNavigable,
-                      containerPolicy, ancestorOrigins, creationSandboxFlags) {
+                      containerPolicy, ancestorOrigins, creationSandboxFlags, referenced) {
   /* THE ONE WAY TO OBTAIN AN INSTANCE, ASSERTED RATHER THAN DISCOVERED AS A TypeError. Without this the failure
      of a load-order change (renderer-host.js is a <script> before this one in ast-worker.html) arrives as
      "self.rendererLaunch is not a function" inside admit's catch, which reports it as a BOOT ABORT of the
@@ -2202,6 +2202,32 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
          "`none` are the two things a caller can say, and every call site knows which applies (a create " +
          "notice carries the set the creating engine computed; a document nothing embeds says `none`). An " +
          "absent one is a caller that skipped the question and a sandboxed frame with its sandbox deleted");
+  /* AND THE ONE FACT OF THIS PROVISIONING THAT IS NOT ABOUT THE DOCUMENT AT ALL — whether some OTHER instance
+     holds a WindowProxy for the document this one is rooted at. It decides whether this instance's timelines
+     may RUN OUT: a referenced document's last flow reports itself host-owed instead of finishing, so a
+     `windowproxy.get`, a delivery or a `w.length` arriving afterwards still has a timeline to be answered in
+     (solver/engine.h's `engine_set_referenced`, reached through `SetReferenced`). Without it a peer this zone
+     provisions runs its scripts, drains, closes its session — and the creator's first cross-origin read
+     arrives at a document with nothing left to run the getter in. The engine names that from the FAR side
+     (engine_route's drained-instance assert, and this file's own `windowproxy.post` branch, which already
+     says "that instance was finalized while a peer still held a WindowProxy for it"), which is the right
+     place for the crash and the wrong place for the fix: an instance exists because SOME OTHER AGENT created
+     its navigable, and the only party that knows that is the one holding the routing table.
+     IT IS ASKED PER CALL SITE BECAUSE THE ANSWER IS NOT THE SAME FOR ALL FIVE, AND "AN ENGINE MINTED THE
+     NAME" IS THE WRONG RULE. HTML §7.1.3.2 "Browsing context group switches due to opener policy" mints a
+     name too, and its own note says the old browsing context "will not be used by the new Document that we
+     are about to initialise" — so the handle the navigating page still holds answers about the document it
+     HAD, and nothing anywhere holds a proxy for the swapped-TO one.
+     BOTH ERRORS ARE SILENT AND THEY ARE NOT SYMMETRIC. Understating it drains a peer that was about to be
+     read, and the crash lands in the ASKING instance, one boundary from the zone that decided it. Overstating
+     it holds a frontier open until the pool releases the instance, which costs a slot and truncates nothing.
+     That is not a licence to guess high — it is why the answer is stated per arm with its reason, so the next
+     arm has to answer the question rather than inherit an answer. */
+  DCHECK(referenced === 0 || referenced === 1,
+         "an instance was started without stating whether a peer holds a reference into its document — the " +
+         "flag decides whether this instance's timelines may finish, so an unstated one is either a peer that " +
+         "drains before it is asked anything or a document held open for a question nobody can ask, and " +
+         "neither is visible from here");
   const cluster = clusterKeyOf(msg);
   /* THE POOL IS THE REGISTER OF WHO HOLDS WHAT, AND ASKING IT IS THE CALLER'S JOB — this asserts they did.
      Every site that builds an instance has already answered "does this agent cluster have one?" (admit's
@@ -2222,7 +2248,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
      engine CREATED arrives already named (`docName`, minted in that engine's navigable.create notice); a
      rehydrated cold recipe has no browser document to name it and takes the counter. */
   const docId = docName || (msg && msg.documentId ? String(msg.documentId) : String(++nextDocumentId));
-  const eng = engineReserve(cluster, docId, msg, cold);
+  const eng = engineReserve(cluster, docId, msg, cold, referenced);
   /* THE PROVISIONING ITSELF, WHICH IS THE ONLY PART THAT SUSPENDS, AND THE PROMISE IS WHAT SAYS *WHEN*. It
      never carries the instance — the caller already holds the record, which is the point — and it settles on
      BOTH outcomes, because the thing waiting on it is hostSchedule's wait arm and a document that merely
@@ -2263,7 +2289,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
    against memory already spoken for, and the second is the engine's own word for a frontier with no runnable
    flow (355a03d2) — a drained instance, which is a different thing from one that has not started. Both facts
    are ABSENT until engineRecordFacts states them, and every reader of either reads the STATE first. */
-function engineReserve(cluster, docId, msg, cold) {
+function engineReserve(cluster, docId, msg, cold, referenced) {
   /* `_readyP` IS DECLARED NULL AND FILLED BY engineCreate ON THE VERY NEXT LINE, which is a stated hole rather
      than a placeholder promise: a stand-in built here would be a second promise that resolves at a different
      moment than the provisioning does, and the wait arm would then be released by whichever of the two the
@@ -2304,8 +2330,14 @@ function engineReserve(cluster, docId, msg, cold) {
      found — reported `0 resumed` for every still-running session there has ever been, however many thousands
      of flows had come back. A count re-read downstream of the event it counts is a count of the reader's
      input, and here the reader's input never contained it. */
+  /* `referenced` IS ON THE RESERVATION AND NOT A PARAMETER OF `engineRoot`, because it is a fact about this
+     agent cluster that OUTLIVES the rooting and is asked again afterwards: the create-notice JOIN arm reads it
+     to refuse a peer-referenced document being added to an instance that is entitled to drain, and it is
+     answerable from the instant the record exists rather than from the instant the frame answers. It is
+     STATED here rather than defaulted for engineCreate's reason, and `engineRoot` is the one reader that
+     turns it into the ABI call. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
-                groupId: msg && msg.groupId, _resumed: null,
+                groupId: msg && msg.groupId, _resumed: null, referenced,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
                 _epoch: self.frontierEpoch(), r: null, _readyP: null };
   _pool.push(eng);
@@ -2546,6 +2578,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     parentNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags });
   DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                          "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
+  /* WHETHER A PEER HOLDS A WINDOWPROXY FOR THIS DOCUMENT, STATED AFTER `Init` AND BEFORE `Begin`, AND BOTH
+     BOUNDS ARE THE C ENTRY'S OWN. It is about THIS instance's document, so there must BE one (the entry
+     asserts `g_ctx`); and it decides whether the LAST timeline may finish, so a frontier that has already
+     been seeded may already have taken that decision and closed over the flows the flag was meant to keep
+     (the entry asserts `!g_begun`). engineCreate holds the reasoning for the answer itself and the
+     reservation carries it, because it is a fact about this instance's PROVISIONING rather than about this
+     rooting — which is also why nothing re-states it after a `Teardown`: `qjs_set_referenced` deliberately
+     survives one, since a peer that held a proxy for this document holds one still.
+     UNCONDITIONAL, INCLUDING FOR THE `0`. A zero is the positive statement that this instance's frontier is
+     entitled to drain, and an instance that is never told is one whose C-side flag is whatever the entry's
+     static initialiser left — the same fact arriving by silence, which is the one shape this seam has already
+     been wrong in once. */
+  await rend.renderer.setReferenced({ referenced: eng.referenced });
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
      here would key every unidentifiable document to the SAME frontier entry, so one page's parked residue
      would resume in another's engine. */
@@ -3716,6 +3761,28 @@ async function hostNotice(eng, line) {
              "a document was announced for a cluster whose instance never became one — the reservation holding " +
              "it failed to boot, so this child has an agent that does not exist rather than one it can join, " +
              "and every read through its proxy would park forever");
+      /* AND THE JOINED DOCUMENT IS A REFERENCED ONE BY THE SAME SENTENCE THE PROVISIONED ARM BELOW IS — the
+         create notice EXISTS because the creating engine minted a name its page already holds a WindowProxy
+         under. So the instance that takes it may not be one whose timelines are entitled to run out, and the
+         instance's flag is the only place that is recorded: `qjs_set_referenced` is stated BEFORE `qjs_begin`
+         and this instance was seeded long ago, so there is nothing to say here and the honest thing is to
+         refuse rather than to invent a second moment the flag may be set at.
+         REACHABLE, AND NOT BY THE ROUTE IT LOOKS LIKE. A content script reports every frame, but a
+         cross-origin sub-frame with a real origin never ROOTS a cluster (`admit`'s walk leaves it waiting for
+         its embedder to name it), so an unreferenced holder cannot come from that race. What reaches it is
+         frame nesting that comes BACK to an origin a top-level document already runs in this browsing-context
+         group — A embeds cross-origin B and B embeds A — where the holder was rooted by that top document
+         with nothing holding a proxy for it. WHAT TO BUILD when it fires: the flag has to be statable for an
+         instance whose frontier is live, which is a different entry from the one the ABI has (its `!g_begun`
+         assert is exactly the statement that this is not it) and a different question for the scheduler,
+         since a frontier that has ALREADY drained cannot be un-drained by being told late. */
+      DCHECK(holder.referenced === 1,
+             "a cross-origin child was joined to an instance that never declared a peer reference — the create " +
+             "notice is itself the proof that one exists (the creating engine minted this name because its " +
+             "page holds a WindowProxy under it), so this agent may not let its timelines run out, and the " +
+             "flag that says so can only be stated before the frontier is seeded; this instance's was seeded " +
+             "for a document nothing held a proxy for, and the first read through the new child's proxy will " +
+             "arrive at a heap entitled to have finished");
       await engineJoin(holder, msg, f[1], f[5], inherited, parentNavigable, containerPolicy, ancestorOrigins,
                        creationSandboxFlags);
       return;
@@ -3725,9 +3792,13 @@ async function hostNotice(eng, line) {
        rehydrated cold engine's do rather than being returned to a requester that never asked for it — which
        is `cold`, stated at the reservation because it is a fact about this call site and not about how the
        boot turns out. AWAITED, because the notices of one round are acted on IN ORDER: a page opens a window
-       and posts to it in the same turn, so the instance must exist before the post that names it is routed. */
+       and posts to it in the same turn, so the instance must exist before the post that names it is routed.
+       REFERENCED, AND THE NOTICE IS ITSELF THE PROOF: the creating engine minted `f[1]` because its page
+       already holds a WindowProxy for this navigable, which is the only reason a delivery has to be routed
+       here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document, so this
+       document's timelines may not run out before they do. */
     await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true, inherited, parentNavigable,
-                       containerPolicy, ancestorOrigins, creationSandboxFlags)._readyP;
+                       containerPolicy, ancestorOrigins, creationSandboxFlags, 1)._readyP;
     return;
   }
   /* `navigable.swap <new document> <url> <origin>` — HTML §7.1.3.2 "Browsing context group switches due to
@@ -3805,8 +3876,15 @@ async function hostNotice(eng, line) {
        principal above: the swapped-to navigable IS a top-level traversable, so its environments' top-level
        creation URL is its own Document's address (§7.5.1's `creationURL`), which after a redirect is where
        the response came from and not where the swap pointed. */
+    /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE MINTED THE NAME" IS THE WRONG READING. §7.1.3.2's
+       step 10 note says the old browsing context "will not be used by the new Document that we are about to
+       initialise", and the emitting engine discards it right after writing this notice — so the page that
+       navigated still holds its handle, and that handle answers about the document it HAD (which is exactly
+       why its `closed` reads true) rather than about this one. Nothing anywhere holds a proxy for the
+       swapped-TO document, so keeping its timelines open would park its last flow on a question no instance
+       can ask, for as long as the pool holds it. */
     await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, true, null, "u", "null",
-                       "none", "none")._readyP;
+                       "none", "none", 0)._readyP;
     return;
   }
   /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, reached
@@ -5276,9 +5354,13 @@ const _hostOps = {
            §7.3.1.3 gives it no parent and no container element, and §3.1.3's steps 2-3 return the empty list
            for a Document with no container document — three statements of one fact about a top-level page.
            `cold: true` — it has no caller. Nothing awaited this document, so its findings MERGE to the moat
-           rather than being returned to a requester, which is the same arm a rehydrated recipe takes. */
+           rather than being returned to a requester, which is the same arm a rehydrated recipe takes.
+           AND NOT REFERENCED, WHICH IS THE SAME SENTENCE THE CLUSTER-OF-ONE PARAGRAPH ABOVE ALREADY MAKES:
+           nothing holds a WindowProxy for a route the bundle merely DECLARED — no element presents it and no
+           page opened it, which is precisely why this zone had to mint its group and its name. Its frontier
+           is entitled to drain, and draining is what produces the findings this arm exists to collect. */
         await engineCreate("", loaded.bytes, msg, true, null, loaded.url, true, null, "u", "null",
-                           "none", "none")._readyP;
+                           "none", "none", 0)._readyP;
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -5304,8 +5386,16 @@ const _hostOps = {
            navigable no create notice named, and the reason this zone can state its §7.3.1.3 parent at all.
            `none`: a top-level traversable's Document has no container document, so §3.1.3's steps 2-3 return
            the empty list — the same fact its `u` parent states one link along. */
+        /* NOT REFERENCED. What is admitted here is a TOP-LEVEL document of a browsing-context group — the
+           walk above leaves a cross-origin sub-frame WAITING for its embedder to name it, precisely so that a
+           document a peer created is provisioned through the create notice and never through this arm — so no
+           instance in this pool holds a WindowProxy for it. It is a person's own tab, and its frontier is
+           entitled to drain and answer its caller.
+           A CROSS-ORIGIN CHILD MAY STILL BE CREATED *INTO* THIS INSTANCE LATER, and that is not this line
+           being wrong — it is the join arm's question, asked and refused there, because the flag can only be
+           stated before the frontier is seeded and this one is about to be. */
         const eng = engineCreate("", job.html, job.msg, job.persist, null, null, false, null, "u",
-                                 "null", "none", "none");
+                                 "null", "none", "none", 0);
         DCHECK(hostClusterOf(key) === eng,
                "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
                "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +
@@ -5373,8 +5463,17 @@ const _hostOps = {
          replay re-emits rather than through this path.
          `none`: and §3.1.3's list arrives on that same re-emitted notice for the same reason, so what is
          replayed HERE is a document with no embedder and therefore no ancestors. */
+      /* AND NOT REFERENCED, ON THAT SAME SENTENCE. A resumed recipe is a CLUSTER OF ONE in a group this zone
+         mints from the frontier key: the browsing-context group it parked in is gone, so there is no live
+         instance anywhere holding a WindowProxy for the document being rebuilt. If this document creates a
+         child navigable again, that child arrives as a create notice and is provisioned referenced by the arm
+         above — which is the same route the parked child took the first time.
+         THIS IS THE ONE ARM WITH NO NATIVE COUNTERPART, and it is worth saying why it does not contradict
+         `qjs_set_referenced` surviving a teardown: what survives a teardown is one INSTANCE's statement about
+         itself across a park, and what happens here is a NEW instance for a document whose peers no longer
+         exist. Carrying the old session's `1` forward would hold a frontier open for a proxy nothing holds. */
       await engineCreate(doc.code, doc.html, msg, true, null, null, true, null, "u", "null",
-                         "none", "none")._readyP;
+                         "none", "none", 0)._readyP;
     }
     return pick ? pick.census : null;
   },
