@@ -133,8 +133,20 @@ static void event_write_flag(JSContext *ctx, JSValueConst ev, const char *name, 
 }
 
 bool event_canceled(JSContext *ctx, JSValueConst ev)       { return event_read_flag(ctx, ev, "canceled"); }
-/* The flag itself, written — see event.h for why this is not §2.2's set-the-canceled-flag algorithm. */
-void event_set_canceled(JSContext *ctx, JSValueConst ev, bool on) { event_write_flag(ctx, ev, "canceled", on); }
+/* The flag itself, written — see event.h for why this is not §2.2's set-the-canceled-flag algorithm, and for
+   the two steps that link DOM's `#canceled-flag` rather than its `#set-the-canceled-flag`.
+   event_write_flag NO-OPS on a non-Event, so an unbranded receiver here is a cancel that never happened and
+   that nothing downstream can tell from one the gate legitimately declined. Every caller of this and of the
+   algorithm below either brands its receiver (§2.2's four legacy accessors, above) or holds an event the
+   dispatch it is inside of created, so a miss is a lost write and never a reachable state. */
+void event_set_canceled(JSContext *ctx, JSValueConst ev, bool on)
+{
+    DCHECK(event_is(ctx, ev),
+           "a canceled flag was written on something that is not an Event — HTML §7.2.6.8 step 6 and "
+           "§8.1.8.1 step 6 are the direct writers and each holds the event its own dispatch is carrying, so "
+           "this is a write that silently went nowhere rather than a cancel that was declined");
+    event_write_flag(ctx, ev, "canceled", on);
+}
 /* §2.9 reads these while it walks: whether the event travels up the path at all, and whether a listener
    stopped it between targets. */
 bool event_bubbles(JSContext *ctx, JSValueConst ev)        { return event_read_flag(ctx, ev, "bubbles"); }
@@ -274,6 +286,14 @@ void event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target)
    `{passive:true}` gives the user agent. */
 void event_set_the_canceled_flag(JSContext *ctx, JSValueConst ev)
 {
+    /* THE TWO REFUSALS ARE NOT THE SAME AS A MISSING EVENT, which is the whole reason this is asserted rather
+       than tested: declining because the event is not cancelable, and declining because a passive listener is
+       running, are both the algorithm WORKING, and a no-op on a non-Event is indistinguishable from either at
+       every site downstream. Both callers (preventDefault, the returnValue setter) brand their receiver. */
+    DCHECK(event_is(ctx, ev),
+           "§2.2's set-the-canceled-flag was performed on something that is not an Event — its two callers are "
+           "preventDefault() and the returnValue setter, and Web IDL §3.7.6 makes both throw on a foreign "
+           "receiver before reaching here, so this would be a cancel lost where the gate reports declining one");
     if (event_read_flag(ctx, ev, "cancelable") && !event_read_flag(ctx, ev, "inPassive"))
         event_write_flag(ctx, ev, "canceled", true);
 }
@@ -517,10 +537,29 @@ static JSValue js_event_get(JSContext *ctx, JSValueConst this_val, int magic)
     return v;
 }
 
+/* WEB IDL §3.7.6 Attributes' BRAND CHECK, which the four legacy §2.2 accessors below share with every other
+   member of every other interface: "If jsValue does not implement target, then: If attribute was specified with
+   the [LegacyLenientThis] extended attribute, then return undefined. Otherwise, throw a TypeError." NONE of
+   these four carries [LegacyLenientThis] — DOM declares them `attribute boolean cancelBubble` and
+   `attribute boolean returnValue`, bare — so the TypeError is the whole of the answer for a foreign receiver.
+   IT IS ALSO WHAT MAKES THE WRITE PATH ASSERTABLE. These bodies reach event_write_flag, whose silent no-op on a
+   non-Event is a lost write dressed as success; refusing the receiver HERE is what lets the canceled-flag
+   writers DCHECK that they were handed an Event at all, rather than each of them re-testing for one. */
+static bool event_brand(JSContext *ctx, JSValueConst v)
+{
+    if (event_is(ctx, v))
+        return true;
+    JS_ThrowTypeError(ctx, "an Event attribute was reached with a receiver that does not implement Event");
+    return false;
+}
+
 /* §2.2 defaultPrevented is the CANCELED flag, and srcElement is target under its legacy name. */
 static JSValue js_event_derived(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    if (magic == 0) return JS_NewBool(ctx, event_canceled(ctx, this_val));
+    if (magic == 0) {
+        if (!event_brand(ctx, this_val)) return JS_EXCEPTION;
+        return JS_NewBool(ctx, event_canceled(ctx, this_val));
+    }
     DCHECK(magic == 1, "an Event derived attribute was declared with a magic this file does not name");
     return js_event_get(ctx, this_val, 1);   /* srcElement */
 }
@@ -530,12 +569,14 @@ static JSValue js_event_derived(JSContext *ctx, JSValueConst this_val, int magic
 static JSValue js_event_get_cancel_bubble(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
+    if (!event_brand(ctx, this_val)) return JS_EXCEPTION;
     return JS_NewBool(ctx, event_read_flag(ctx, this_val, "stopPropagation"));
 }
 
 static JSValue js_event_set_cancel_bubble(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     (void)magic;
+    if (!event_brand(ctx, this_val)) return JS_EXCEPTION;
     if (JS_ToBool(ctx, val))
         event_write_flag(ctx, this_val, "stopPropagation", true);
     return JS_UNDEFINED;
@@ -546,12 +587,14 @@ static JSValue js_event_set_cancel_bubble(JSContext *ctx, JSValueConst this_val,
 static JSValue js_event_get_return_value(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
+    if (!event_brand(ctx, this_val)) return JS_EXCEPTION;
     return JS_NewBool(ctx, !event_canceled(ctx, this_val));
 }
 
 static JSValue js_event_set_return_value(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     (void)magic;
+    if (!event_brand(ctx, this_val)) return JS_EXCEPTION;
     /* "The returnValue setter steps are to SET THE CANCELED FLAG with this if the given value is false" — the
        named algorithm, not a second copy of its condition. This body spelled the condition itself and had only
        half of it: `cancelable` without the in-passive-listener flag, so a `{passive:true}` listener cancelled

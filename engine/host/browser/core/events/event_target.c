@@ -984,7 +984,16 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
             JS_FreeValue(ctx, v);
             if (rc) return rc;
             if (arm == 2) {
-                JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal");
+                /* THE TWO THROWS IN THIS STAGE MUST NOT READ ALIKE, and they did — byte-identical messages for
+                   two states that are not even the same KIND of event. This one is the engine EXPLORING: the
+                   operand is unknown external input, and §3.2.15 Interface types' refusal is one of the three
+                   feasible worlds this member has, so the throw is the forced arm doing its job and §Offensive
+                   programming names it explicitly as not a `@WHY`. The one below is a REAL page type error on a
+                   value the run actually knows. A reader who cannot tell them apart reads a designed world as
+                   an unbuilt capability — which is what happened, from a smoke run, to an expert reader. */
+                JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal (on the forced arm where "
+                                       "this flow's unknown `options.signal` is not one — two sibling arms take "
+                                       "it as a live signal and as an already-aborted one)");
                 return -1;
             }
             if (arm == 1)
@@ -1000,6 +1009,9 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                   "the AbortSignal standing for an unknown `options.signal` could not be allocated — a dropped "
                   "one is a listener registered outside the lifetime the page gave it");
         } else {
+            /* A KNOWN value that is not a signal — the ordinary Web IDL §3.2.15 Interface types TypeError, and
+               the only one of this stage's two throws that is a fact about the PAGE. `{signal: null}` arrives
+               here too, which is §2.7's non-nullable member refusing an explicit null. */
             JS_FreeValue(ctx, v);
             JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal");
             return -1;

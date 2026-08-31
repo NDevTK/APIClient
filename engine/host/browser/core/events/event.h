@@ -58,23 +58,36 @@ bool    event_is(JSContext *ctx, JSValueConst v);
 JSValue event_type(JSContext *ctx, JSValueConst ev);            /* a new owned string, or JS_UNDEFINED */
 bool    event_canceled(JSContext *ctx, JSValueConst ev);        /* the canceled flag */
 /* THE SAME FLAG, WRITTEN — and it is NOT §2.2's "set the canceled flag", which is an algorithm with two
-   conditions on it (cancelable is true, and the in-passive-listener flag is unset) and whose one caller is
-   preventDefault(). HTML §7.2.6.8's abort the ongoing navigation step 6 writes the FLAG: "if event's dispatch
-   flag is set, then set event's canceled flag to true", with no condition, because a navigation aborted while
-   its `navigate` event is still dispatching must report itself as canceled to the rest of §7.2.6.10.4 whatever
-   the listener currently running is allowed to do. Routing that through preventDefault's algorithm would make a
-   non-cancelable navigate event silently stay uncanceled. */
+   conditions on it (cancelable is true, and the in-passive-listener flag is unset).
+   TWO SPECS WRITE THIS FLAG DIRECTLY, and each says so in the only way that settles it — by LINKING the flag
+   rather than the algorithm. DOM gives the two dfns separate anchors (`#canceled-flag` for the flag,
+   `#set-the-canceled-flag` for the gated algorithm), so which one a step means is not a matter of reading its
+   prose sympathetically; it is in the href.
+     HTML §7.2.6.8 Ongoing navigation tracking's abort the ongoing navigation step 6 — "If event's dispatch flag
+     is set, then set event's canceled flag to true" — links `#canceled-flag`. A navigation aborted while its
+     `navigate` event is still dispatching must report itself as canceled to the rest of §7.2.6.10.4 whatever
+     the listener currently running is allowed to do.
+     HTML §8.1.8.1 Event handlers' event handler processing algorithm step 6 ("Process return value as
+     follows") links `#canceled-flag` in ALL THREE of its arms — the BeforeUnloadEvent arm's "Set event's
+     canceled flag", the special-error arm's "If return value is true, then set event's canceled flag", and the
+     otherwise arm's "If return value is false, then set event's canceled flag". That whole page references
+     `#set-the-canceled-flag` ZERO times.
+   Routing either through preventDefault's algorithm silently narrows it: a non-cancelable event, or one being
+   handled by a passive listener, would stay uncanceled where the standard cancels it. */
 void    event_set_canceled(JSContext *ctx, JSValueConst ev, bool on);
 /* DOM §2.2 Interface Event's SET THE CANCELED FLAG — the ALGORITHM the line above is deliberately not: "To set
    the canceled flag, given an event event, if event's cancelable attribute value is true and event's in passive
    listener flag is unset, then set event's canceled flag, and do nothing otherwise."
-   THREE ALGORITHMS PERFORM IT AND NONE OF THEM MAY SPELL IT AGAIN. §2.2's preventDefault() ("The
-   preventDefault() method steps are to set the canceled flag with this"), §2.2's legacy returnValue setter
-   ("set the canceled flag with this if the given value is false"), and HTML §8.1.8.1's event handler processing
-   algorithm step 6, which is where `return false` cancels. Two of those three were written out by hand and the
-   second of them had dropped the in-passive-listener half — so `e.returnValue = false` inside a `{passive:true}`
+   EXACTLY TWO ALGORITHMS PERFORM IT AND NEITHER MAY SPELL IT AGAIN — both in §2.2, and both linking
+   `#set-the-canceled-flag`: preventDefault() ("The preventDefault() method steps are to set the canceled flag
+   with this") and the legacy returnValue setter ("The returnValue setter steps are to set the canceled flag
+   with this if the given value is false; otherwise do nothing"). Both were once written out by hand and the
+   setter had dropped the in-passive-listener half — so `e.returnValue = false` inside a `{passive:true}`
    listener cancelled an event `preventDefault()` in the same listener could not, which is the one guarantee the
-   passive flag exists to give the user agent, given away through the spelling nobody looks at. */
+   passive flag exists to give the user agent, given away through the spelling nobody looks at.
+   HTML §8.1.8.1 step 6 IS NOT A THIRD PERFORMER, and listing it here as one is what put a gated call into the
+   event-handler path: `<body onload="return false">` and `document.body.onwheel = () => false` are precisely
+   the two cases the gate swallows and the standard does not. */
 void    event_set_the_canceled_flag(JSContext *ctx, JSValueConst ev);
 /* §2.2's currentTarget — "the object whose event listener's callback is currently being invoked", which §2.9's
    `invoke` writes at every path item. A new owned reference, or JS_NULL outside a dispatch. HTML §8.1.8.1 step

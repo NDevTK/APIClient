@@ -251,7 +251,10 @@ int event_handler_run(JSContext *ctx, EventHandlerWork *w, JSStepHdr *hdr, uint8
                "nor a DOMString — the attribute's Web IDL type is `OnBeforeUnloadEventHandler`, whose "
                "`DOMString?` return type coerces it, so this invocation took the wrong callback type");
         if (!JS_IsNull(w->rv)) {
-            event_set_the_canceled_flag(ctx, event);
+            /* "Set event's canceled flag" — THE FLAG, and it is `event_set_canceled` and not §2.2's gated
+               algorithm because this step links DOM's `#canceled-flag` and not its `#set-the-canceled-flag`.
+               A `beforeunload` the page dispatched itself with `cancelable: false` is cancelled here. */
+            event_set_canceled(ctx, event, true);
             /* "If event's returnValue attribute's value is the empty string, then set event's returnValue
                attribute's value to return value." A handler that BOTH assigned `returnValue` and returned a
                string keeps the one it assigned — the standard only fills a hole. */
@@ -282,8 +285,14 @@ int event_handler_run(JSContext *ctx, EventHandlerWork *w, JSStepHdr *hdr, uint8
                    "that is neither of the two an identity test has");
             cancels = arm;   /* outcome 0 = it is not that boolean, so nothing is cancelled */
         }
+        /* BOTH ARMS SET THE FLAG DIRECTLY — see the BeforeUnloadEvent arm above and event.h: step 6 links
+           `#canceled-flag` in all three of its arms and never `#set-the-canceled-flag`, so §2.2's cancelable /
+           in-passive-listener gate is not this step's to apply. The two cases that separates are ordinary web:
+           `window.onload = () => false` cancels a NON-CANCELABLE event, and `document.body.onwheel = () =>
+           false` cancels one being handled by a listener the default passive value made PASSIVE. Routing this
+           through the gate left both silently uncancelled, which `defaultPrevented` then answers false for. */
         if (cancels)
-            event_set_the_canceled_flag(ctx, event);
+            event_set_canceled(ctx, event, true);
     }
 
 done:
