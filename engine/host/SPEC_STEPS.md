@@ -7,8 +7,28 @@ the page's own code can run — that would be a suspension the engine cannot exp
 is the answer to "where are those points" for the seven algorithm groups the conversion takes next,
 **in conversion order**.
 
-**What this file is NOT.** It does not describe what this codebase does today. It describes what the
-standards say. Someone else is diffing the two.
+**What this file is NOT — and the half of that sentence that stopped being true.** This used to say
+"it does not describe what this codebase does today; someone else is diffing the two." That is still
+right about the algorithm listings, and it is FALSE about the rest of the file, which now names C
+files, calls capabilities BUILT, and carries sections titled *What is honestly ABSENT, by name* that
+components cite BY NAME as the standing statement of what is missing. Leaving the old sentence in
+place was worse than saying nothing: it is a disclaimer that tells a reader there are no tree-claims
+here to check, so the one audit this file most needs is the one it talked people out of.
+
+So, stated properly: **any sentence here that names a `.c`/`.h` file, says "is BUILT", or lists
+something as absent is a claim about THIS TREE, under exactly CLAUDE.md's rule for a `DFAIL` — true
+when written, falsifiable by one grep afterwards, and read as authoritative long after it rots.** A
+diff that closes an absence is NOT FINISHED while the entry here that named it still stands, and a
+reader who follows a component's pointer into one of these sections greps the claim before building
+what it asks for. The algorithm listings are a different kind of sentence: they are claims about the
+STANDARDS, and they are checked against the standards' text.
+
+**How a `§` is read here.** A bare `§N` is a section of the **standard named in the enclosing `##`
+banner**. A reference to a section of **this file** is written `SPEC_STEPS §N` — which is also how
+the C files spell it, so the two cannot be confused in either direction. A number this file is
+REFUTING is written **without the `§` sigil** ("DOM 1.5", "the brief's 14.3"), because the sigil is
+what asserts the section exists — quotation marks around it are not enough, since neither a reader
+skimming nor `citegen.mjs` reads a quoted `§N` as anything but a citation.
 
 **Network was available.** Everything below was read from the live standards on 2026-08-09:
 
@@ -138,7 +158,7 @@ the algorithm says.
 
 ---
 
-## 1. DOM §4.5 "Interface Document" — `createElement`, `createElementNS`, `getElementById`, and DOM §4.2.6's tree-order lookups
+## 1. DOM §4.5 "Interface Document" — `createElement`, `createElementNS`, `getElementById`, and DOM §4.2.6 "Mixin ParentNode"'s tree-order lookups
 
 ### 1.0 Two corrections to the brief, stated rather than picked silently
 
@@ -148,7 +168,7 @@ the algorithm says.
   (pre-2018, when mixins were still written as `interface ParentNode`) titled it "Interface
   ParentNode"; the section number is unchanged.
 
-### 1.1 `createElement(localName, options)` — DOM §4.5, `[CEReactions, NewObject]`
+### 1.1 DOM §4.5 "Interface Document" — `createElement(localName, options)`, `[CEReactions, NewObject]`
 
 IDL: `[CEReactions, NewObject] Element createElement(DOMString localName, optional (DOMString or ElementCreationOptions) options = {});`
 
@@ -181,7 +201,7 @@ Epilogue:
 
 - E1. **`[S]`** `[CEReactions]` step 4: invoke custom element reactions in the popped queue.
 
-### 1.2 `createElementNS(namespace, qualifiedName, options)` — DOM §4.5, `[CEReactions, NewObject]`
+### 1.2 DOM §4.5 "Interface Document" — `createElementNS(namespace, qualifiedName, options)`, `[CEReactions, NewObject]`
 
 Prologue: **`[S]`** ToString(`namespace`) when not null (`DOMString?`); **`[S]`** ToString(
 `qualifiedName`); **`[S]`×3** the same `options` union/dictionary trio as §1.1.
@@ -458,9 +478,9 @@ steps. Epilogue: **`[S]`** `[CEReactions]` invoke.
    there:
    - DOM's own: update the element's **ID** (`localName is id`, `namespace is null`); update a
      `DOMTokenList`'s token set (`class`, `rel`, …); a `slot`'s name. **No user code.**
-   - HTML's: `<script>`'s (HTML §4.12.1) — "If namespace is not null, return. If localName is
-     `src`, value is not null, and element is connected, then run the script HTML element
-     post-connection steps" → **prepare the script element**. Because the branch requires `src`,
+   - HTML's: `<script>`'s (HTML §4.12.1.1 "Processing model") — "If namespace is not null, then
+     return. If localName is `src`, value is not null, and element is connected, then run the script
+     HTML element post-connection steps, given element." → **prepare the script element**. Because the branch requires `src`,
      that path takes the **fetch** arm, which is asynchronous; **no author code runs
      synchronously here**. (The synchronous execution lives in the *children changed steps* and the
      *post-connection steps* — see Algorithm 3.)
@@ -596,8 +616,9 @@ applies on top.
 9. **`[S]`** Run the **children changed steps** for parent. — **This step CAN run author code.**
    DOM does **not** apply the insertion-steps prohibition to children changed steps, and HTML uses
    that: `<script>`'s children changed steps **prepare the script element**, and for an inline
-   classic script "prepare the script element" ends at "**Otherwise, immediately execute the script
-   element el, even if other scripts are already executing**". HTML's own worked example spells
+   classic script "prepare the script element" (HTML §4.12.1.1 "Processing model") ends at
+   "**Otherwise, immediately execute the script element el, even if other scripts are already
+   executing.**". HTML's own worked example spells
    this out: appending three children to a `<script>` in one call runs the insertion steps (no
    consequences), then the children changed steps **execute the script body**, then the
    post-connection steps run for a nested script.
@@ -694,8 +715,8 @@ steps** (**must not execute JavaScript**, same prohibition as the insertion step
 | Thing queued | Queued at | Drained at |
 | --- | --- | --- |
 | `connectedCallback` / `disconnectedCallback` / `adoptedCallback` / `connectedMoveCallback` / `attributeChangedCallback` / upgrade | insert 7.7.3, remove 13/14.2, adopt 3.3.3, move 24.3, handle attribute changes 2 | **`[S]`** the `[CEReactions]` wrapper's step 4 on the API that started it — or, if there was no `[CEReactions]` API on the stack, the **backup element queue microtask** |
-| `MutationRecord` | insert 4.2/8, remove 16, replace 10, replace all 7, handle attribute changes 1 | **`[S]`** `notify mutation observers`, run from the **mutation observer microtask** (DOM §4.3.1 step 6.4: "invoke mo's callback with « records, mo » and `report`") |
-| `slotchange` | signal a slot change (insert 7.5, remove 9) | **`[S]`** the same mutation observer microtask (DOM §4.3.1 steps 4–5, 7) |
+| `MutationRecord` | insert 4.2/8, remove 16, replace 10, replace all 7, handle attribute changes 1 | **`[S]`** `notify mutation observers`, run from the **mutation observer microtask** (DOM §4.3 "Mutation observers" step 6.4: "invoke mo's callback with « records, mo » and \"report\", and with callback this value mo") |
+| `slotchange` | signal a slot change (insert 7.5, remove 9) | **`[S]`** the same mutation observer microtask (DOM §4.3 "Mutation observers" steps 4–5, 7) |
 
 ### 3.8 Headless note
 
@@ -952,7 +973,7 @@ An event loop runs these steps continually:
 
 **And, in parallel, a window event loop also runs the rendering loop** — that is Algorithm 6.
 
-### 5.4 `perform a microtask checkpoint` — HTML §8.1.7.3
+### 5.4 HTML §8.1.7.3 "Processing model" — `perform a microtask checkpoint`
 
 1. If the event loop's **performing a microtask checkpoint** is true, **return**. — *the reentrancy
    guard; this is why a checkpoint inside a checkpoint is a no-op*
@@ -1016,18 +1037,19 @@ promises. `clean up after running script` step 3. `spin the event loop` step 5.)
 
 ---
 
-## 6. "Update the rendering" — HTML §8.1.7.3, **not** §14.3
+## 6. "Update the rendering" — HTML §8.1.7.3 "Processing model", **not** the brief's "§14.3"
 
 ### 6.0 A correction to the brief, stated rather than picked silently
 
-**There is no HTML §14.3 "update the rendering".** In the HTML Living Standard as read:
+**There is no HTML section numbered 14.3 named "update the rendering".** In the HTML Living Standard
+as read:
 
 - **§14 is "The XML syntax"**; **§15 is "Rendering"** (§15.1 Introduction, §15.2 The CSS user agent
   style sheet and presentational hints, **§15.3 Non-replaced elements**, …). §15 is a **CSS
   requirements** section — it defines the UA stylesheet and presentational hints. It contains no
   algorithm named "update the rendering". Older editions numbered Rendering as §14; the brief's
-  "§14.3" most likely comes from that older numbering, where §14.3 was likewise "Non-replaced
-  elements".
+  "§14.3" most likely comes from that older numbering, where the third subsection was likewise
+  "Non-replaced elements".
 - **"Update the rendering" is defined in §8.1.7.3 "Processing model"**, in the *in-parallel* half of
   the window event loop, as the steps of a task queued on the **rendering task source**. Its
   definition id is `#update-the-rendering`.
@@ -1080,10 +1102,11 @@ unknowable one.
    2. For each `(target, type)` in doc's pending scroll events, **in the order they were added**:
       **fire** `scroll`/`scrollend` (bubbling at a Document) or
       `scrollsnapchange`/`scrollsnapchanging`. **Author code.**
-10. **`[S]`** For each doc: **evaluate media queries and report changes** [CSSOM VIEW §4.2]. —
-    "For each `MediaQueryList` object target that has doc as its document, **in the order they were
-    created, oldest first**: if target's matches state has changed since the last time these steps
-    were run, **fire `change`**" with `MediaQueryListEvent`. **Author code.** *(This is the step
+10. **`[S]`** For each doc: **evaluate media queries and report changes** [CSSOM VIEW §4.2 "The
+    MediaQueryList Interface"]. — "For each `MediaQueryList` object target that has doc as its
+    document, **in the order they were created, oldest first**, run these substeps: If target's
+    matches state has changed since the last time these steps were run, **fire an event named
+    `change` at target using `MediaQueryListEvent`**". **Author code.** *(This is the step
     `matchMedia().onchange` runs from; the `.matches` value it reports is a real computed value from
     the modeled viewport, which is why a `matchMedia` that returns opaque breaks this step rather
     than merely under-reporting.)*
@@ -1350,7 +1373,7 @@ as the four distinct shapes they delegate to, already listed.)
 
 | # | Algorithm group | Spec section(s) | Suspension points | The ones that will surprise an implementer |
 | --- | --- | --- | --- | --- |
-| 1 | Document: `createElement`, `createElementNS`, `getElementById`, ParentNode lookups | DOM §4.5, §4.2.4, §4.2.6, §4.9 (`create an element`), HTML §4.13.5/§4.13.6 | **18** | `createElement` passes `synchronousCustomElements = true`, so the author's constructor runs **inside** it; `getElementById` is §4.2.4, not §4.5; "report an exception" fires an `error` event |
+| 1 | Document: `createElement`, `createElementNS`, `getElementById`, ParentNode lookups | DOM §4.5, §4.2.4, §4.2.6, §4.9 (`create an element`), HTML §4.13.5/§4.13.6 | **18** | `createElement` passes `synchronousCustomElements = true`, so the author's constructor runs **inside** it; `getElementById` is §4.2.4, not §4.5; HTML §8.1.4.6 "Runtime script errors"' "report an exception" fires an `error` event |
 | 2 | Element attributes: `setAttribute`, `setAttributeNS`, `getAttribute`, `removeAttribute`, attribute change steps | DOM §4.9, HTML §4.13.6, Trusted Types §3.4/§3.5 | **13** | `setAttribute` **step 3** runs the page's Trusted Types default policy; `handle attribute changes` runs **zero** author code — `attributeChangedCallback` is enqueued there and invoked by the `[CEReactions]` wrapper; `setAttribute` and `setAttributeNS` put the Trusted Types call at **different step positions** |
 | 3 | Mutation algorithms: pre-insert, insert, append, replace, remove, move | DOM §4.2.3, §4.3.2, §4.5 (adopt), HTML §4.12.1 | **8** | `insert` **step 9** (children changed steps) and **step 12** (post-connection steps) both execute scripts; the **insertion steps, moving steps and removing steps may not**; every custom-element callback in this algorithm is enqueued, never called |
 | 4 | Reflection + `innerHTML`/`outerHTML` + fragment parsing | HTML §2.6.1, §8.5.4, §8.5.5, §13.4 | **11** | reflection is §2.6.1 not §3.2.2; `innerHTML` is HTML §8.5.4 (DOM Parsing was merged into HTML); the setter's **step 1** is Trusted Types; the fragment parse defaults to **`Inert`**, so no `<script>` runs — but custom element constructors still can; `outerHTML` parses with **`parent`** as context, not `this` |
@@ -1415,9 +1438,12 @@ further down.
    above."* Concretely: **`el.setAttribute("1abc", "x")` does not throw**, and neither does
    `el.setAttribute("<", "x")` or `el.setAttribute("a:b", "x")`. The only rejected code points in an
    attribute local name are ASCII whitespace, U+0000, `/`, `=`, `>`. See §9.2.
-2. **DOM §1.5 "Namespaces" no longer exists.** The six namespace constants live in **Infra §8**.
-   DOM §1 is now: 1.1 Trees, 1.2 Ordered sets, 1.3 Selectors, 1.4 Name validation — and stops.
-   Any citation of "DOM §1.5" for the XML/XMLNS/XLink namespace strings is stale.
+2. **There is no DOM section numbered 1.5, and "Namespaces" is not a DOM section title any more.**
+   The six namespace constants live in **Infra §8 "Namespaces"**. DOM §1 "Infrastructure" is now:
+   §1.1 "Trees", §1.2 "Ordered sets", §1.3 "Selectors", §1.4 "Name validation" — and stops; §1.4 is
+   the section that carries the old `#namespaces` id, which is how the retired number survives in
+   other people's citations. Any citation of DOM 1.5 for the XML/XMLNS/XLink namespace strings is
+   stale.
 3. **`set an existing attribute value` checks the same field twice, deliberately, around a
    suspension point** (steps 1 and 4 both test "attribute's element is null", with the Trusted Types
    call at step 3 between them). This is the spec instructing you that author code runs in the
@@ -2508,7 +2534,7 @@ not "where are the suspension points" but "is there a step anywhere that is *not
 | --- | --- | --- |
 | Observable | `https://wicg.github.io/observable/` | Editor's Draft, read 2026-08-10 |
 | WHATWG DOM (`AbortSignal`, "signal abort") | `https://dom.spec.whatwg.org/` | Living Standard, §3.2 |
-| Web IDL (callback invocation, dictionaries) | `https://webidl.spec.whatwg.org/` | Living Standard, §3.2.18, §3.12 |
+| Web IDL (callback invocation, dictionaries) | `https://webidl.spec.whatwg.org/` | Living Standard, §3.2.16 "Callback interface types", §3.12 "Invoking callback functions" — this standard's callbacks are callback FUNCTIONS, so §3.12 and not §3.11 |
 
 The standard is **not** in WHATWG DOM yet. `https://dom.spec.whatwg.org/` contains no `Observable`,
 no `Subscriber` and no `subscribe` — a `curl` of it and a `grep` for those three words answers zero,
@@ -2605,12 +2631,12 @@ single easiest way to get this component wrong and have most tests still pass.
 1. If `active` is false, **return** — the re-entrancy guard, and the standard's own example is a
    teardown that aborts a controller whose abort algorithm re-enters this algorithm. —
 2. Set `active` to false. —
-3. **`[S]`** Signal abort the subscription controller with the reason, if one was given. — DOM §3.2:
-   this runs the signal's **abort algorithms** and then fires `abort` at it, so it is two kinds of
-   author code, and it is where the whole upstream chain unsubscribes.
+3. **`[S]`** Signal abort the subscription controller with the reason, if one was given. — DOM §3.2
+   "Interface AbortSignal": this runs the signal's **abort algorithms** and then fires `abort` at it,
+   so it is two kinds of author code, and it is where the whole upstream chain unsubscribes.
 4. For each teardown **sorted in reverse insertion order**:
-   1. Re-check fully-active — *the standard says this step "runs repeatedly because each teardown
-      could result in the above Document becoming inactive"*. —
+   1. Re-check fully-active — *Observable §2.1's own note on this step: "This step runs repeatedly
+      because each teardown could result in the above Document becoming inactive."* —
    2. **`[S]`** Invoke teardown with «» and `"report"`.
 
 **Suspension points: 2 (one of them per teardown).** Step 3 must be its own stage from step 4:
@@ -2752,9 +2778,11 @@ All eight open with the same prologue, and the ONE thing that differs is whether
 | `toArray`, `last` | no | they never end the subscription early, so the internal options signal IS the caller's |
 | `forEach`, `every`, `first`, `find`, `some`, `reduce` | yes | their observer DECIDES to stop — a false predicate, the first value, a callback that threw |
 
-For the six, the internal options signal is **§3.2's "create a dependent abort signal" over «controller's
-signal, options's signal if non-null»**, and that primitive is not optional and not replaceable by "add an
-algorithm to each that aborts the result". §3.2 states the propagation as STATE: step 4 of *signal abort* sets
+For the six, the internal options signal is **DOM §3.2 "Interface AbortSignal"'s "create a dependent abort
+signal" over «controller's signal, options's signal if non-null»**, and that primitive is not optional and not
+replaceable by adding, to each source signal, an algorithm that aborts the result — that spelling is this
+file's paraphrase and not the standard's, and it is wrong for the reason the next sentence gives. DOM §3.2
+states the propagation as STATE: step 4 of *signal abort* sets
 every non-aborted dependent's abort reason **before** any of the abort steps run, so by the time the source's
 own algorithms and `abort` listeners execute, every dependent already reads `aborted === true`. An
 algorithm-based imitation aborts the dependent DURING the source's algorithm walk — one turn late, and
@@ -2789,10 +2817,11 @@ hard-coded the other four. `when()` names FOUR of them explicitly, so the entry 
 listener. `passive` must stay the TRISTATE: §3 says "options's `passive` if this member EXISTS; null
 otherwise", and collapsing an absent member to `false` would deny the type its default passive value.
 
-### 10.10 HTML §7.3.1 "fully active" — the guard this whole standard opens with
+### 10.10 HTML §7.3.3 "Fully active documents" — the guard this whole standard opens with
 
-§2.1's `next`/`error`/`complete`/`addTeardown`, §2.2.1's subscribe and §3's `when()` each begin with *"If the
-relevant global object is a `Window` object, and its associated `Document` is not fully active, then return"*,
+§2.1's `next`/`error`/`complete`/`addTeardown`, §2.2.1's subscribe and §3's `when()` each begin with *"If
+this's relevant global object is a `Window` object, and its associated `Document` is not fully active, then
+return."*,
 and §2.1's close-a-subscription re-asks it **per teardown**, because the standard says each teardown could
 result in that Document becoming inactive.
 
@@ -2805,7 +2834,7 @@ fork removed the frame and its sibling did not.
 The guard sits AFTER the brand test and after Web IDL's argument conversion, because those precede step 1:
 `subscriber.next()` with no arguments is still a TypeError in a detached document.
 
-## 11. DOM §2.7 / §2.8 / §2.9 — the event listener list, the event path, and dispatch
+## 11. DOM §2.7 "Interface EventTarget", §2.8 "Observing event listeners", §2.9 "Dispatching events" — the event listener list, the event path, and dispatch
 
 **Why this section exists.** `dispatchEvent` is the only DOM member whose RETURN VALUE depends on
 what the page's own code did, and its algorithm runs page code at up to three different depths in
@@ -2818,8 +2847,9 @@ example an implementer invents and disagree on the one the corpus asks for direc
 
 **THE SECOND HALF OF THIS SECTION IS THE PATH ITEM.** The walk above was rebuilt as two passes and
 left one thing behind, named at the time: the path was a list of TARGETS, so every item's `target`
-was `path[0]` and `composedPath()` answered every entry it held. Shadow DOM (§17) landed after it and
-made both wrong — §4.8's get-the-parent now hands the walk a shadow root's HOST and a slottable's
+was `path[0]` and `composedPath()` answered every entry it held. Shadow DOM (SPEC_STEPS §17) landed after
+it and made both wrong — DOM §4.8 "Interface ShadowRoot"'s get-the-parent now hands the walk a shadow
+root's HOST and a slottable's
 SLOT, which is precisely where the standard retargets and hides. So the path is a list of ITEMS,
 each carrying its own shadow-adjusted target and two closed-tree booleans, and §11.8-§11.11 below are
 those algorithms.
@@ -2830,7 +2860,7 @@ those algorithms.
 | Standard | Source | Version read |
 | --- | --- | --- |
 | WHATWG DOM | `https://dom.spec.whatwg.org/` | Living Standard, §2.7, §2.8, §2.9, §4.2, §4.4 |
-| Web IDL (call a user object's operation) | `https://webidl.spec.whatwg.org/` | Living Standard, §3.12 |
+| Web IDL (call a user object's operation) | `https://webidl.spec.whatwg.org/` | Living Standard, §3.11 "Callback interfaces" |
 
 Step numbers are the standard's own list numbering as of that date.
 
@@ -2998,7 +3028,7 @@ event was dispatched at and an item from the host outward reports the host, from
    13. Restore the global's current event. —
 3. Return found. —
 
-**Step 11 is TWO suspension points, not one** — Web IDL §3.12 "call a user object's operation":
+**Step 11 is TWO suspension points, not one** — Web IDL §3.11 "Callback interfaces", whose "call a user object's operation" it is (§3.12 "Invoking callback functions" is the sibling algorithm for a callback FUNCTION and has no `opName` to look up):
 
 - 9. Let X be O.
 - 10. **If IsCallable(O) is false:**
@@ -3013,7 +3043,7 @@ So `el.addEventListener("x", {handleEvent(e){…}})` is an ordinary registration
 **per invocation**, and the receiver of that call is the OBJECT, not `currentTarget`. A component
 that requires a callable listener at registration time drops the registration silently; one that
 requires it at invocation time drops the call silently. Both are wrong in the same place: the
-callback type is a callback INTERFACE (§2.8 `callback interface EventListener`), not a function.
+callback type is a callback INTERFACE — Web IDL §2.4 "Callback interfaces" is the construct, and DOM §2.7 "Interface EventTarget" is where `callback interface EventListener` is declared — not a function.
 
 **And step 2.11's "report" is a THIRD suspension point.** HTML §8.1.4.6 "report an exception":
 
@@ -3129,8 +3159,11 @@ that is not — the shadow HOST — becomes the new target and carries its own. 
 **shadow-including**, so it climbs from a node to its root's host, which is why a plain ancestor walk
 gets step 5 backwards for every node in a shadow tree.
 
-**Step 1's assert is why §4.4's get the parent has to be right.** "A node's get the parent algorithm,
-given an event, returns the node's **assigned slot**, if node is assigned; otherwise node's parent."
+**Step 1's assert is why §4.4 "Interface Node"'s get the parent has to be right.** The abstract
+algorithm is declared in §2.7 "Interface EventTarget" ("Nodes, shadow roots, and documents override
+the get the parent algorithm"); the NODE override is §4.4's, and it reads: "A node's get the parent
+algorithm, given an event, returns the node's **assigned slot**, if node is assigned; otherwise
+node's parent."
 So a slotted node's event travels through the shadow tree that RENDERS it, and steps 6.6/6.9.2 exist
 only to tell that one hop apart from an ordinary parent — which is what makes `slot-in-closed-tree`
 recordable at all. A get-the-parent that returned the light-tree parent would never take the hop, the
@@ -3651,13 +3684,15 @@ exceptions* list — is written `10.n` here and in the code; the other two are c
 3. **The custom element state has FIVE values and three of them coexist with a non-null definition.**
    "undefined", "uncustomized", "failed", "precustomized", "custom". §4.13.5 step 1 returns early for
    the first two and for nothing else, so an element whose upgrade THREW must never be upgraded
-   again — and a boolean "does this wrapper carry a definition" cannot express that, because step 2
+   again — and a boolean asking only whether this wrapper carries a definition cannot express that, because step 2
    sets the definition BEFORE step 10 can fail. DOM's "create an element" gives a fresh element
    "undefined" exactly when its local name is one §4.13.3 "Core concepts" would accept, and "uncustomized"
    otherwise, which is why an absent state is DERIVED from the name rather than written at every
    creation site (one of which is the HTML parser).
-4. **DOM's insertion steps are a BRANCH, not two calls.** "If inclusiveDescendant is custom, then
-   enqueue a `connectedCallback` reaction. **Otherwise**, try to upgrade it." Doing both would fire
+4. **DOM's insertion steps are a BRANCH, not two calls.** DOM §4.2.3 "Mutation algorithms"' insert
+   steps **7.7.3.2** and **7.7.3.3**, verbatim: "If inclusiveDescendant is custom, then enqueue a
+   custom element callback reaction with inclusiveDescendant, callback name \"connectedCallback\", and
+   « »." / "**Otherwise**, try to upgrade inclusiveDescendant." Doing both would fire
    `connectedCallback` twice for a freshly upgraded element, because §4.13.5's own step 5 enqueues
    that same reaction.
 
@@ -3794,7 +3829,7 @@ regardless-list step 3 pops the entry either way.
 
 ### 14.6 What running the constructors EXPOSED, by name
 
-Making §4.13.5 construct turns a class of "every subtest fails" files into "the page's own code throws",
+Making §4.13.5 construct turns a class of every-subtest-fails files into files where the PAGE'S OWN CODE throws,
 because a WPT file's constructor calls the API the test is about. `testharness.js` installs
 `window.onerror`, so HTML §8.1.4.6's report — working correctly — is what marks the file ERROR. Each of
 these is an ABSENT capability naming itself, not a defect in §4.13:
@@ -3852,9 +3887,10 @@ Step numbers are the standard's own list numbering as of that date.
    ToBoolean(undefined) is false and step 7 never runs. The argument COUNT decides, never the value,
    and a declaration that gives `async` a default of true gets this exactly backwards.
 2. **`readystatechange` fires more often than the state changes**, and the standard says so at the
-   site: processBodyChunk sets the state to loading only "if this's state is headers received" and
-   then fires `readystatechange` **unconditionally**, with the note "Web compatibility is the reason
-   readystatechange fires more often than this's state changes."
+   site (§3.5.6 "The send() method", inside `processBodyChunk`): it sets the state to loading only
+   "If this's state is headers received", then fires `readystatechange` **unconditionally**, with the
+   note "Web compatibility is the reason readystatechange fires more often than this's state
+   changes."
 3. **`abort()` on a DONE object sets the state back to UNSENT and fires NOTHING** (§3.5.7 step 3,
    with its own note "No readystatechange event is dispatched"). It is the one transition in the
    standard that moves the state without an event.
@@ -3897,7 +3933,7 @@ The throwing arms, which are the whole reason the record is one and not eleven f
 
 A forbidden request-header in `setRequestHeader()` is **not** in that table: §3.5.2 step 5 RETURNS.
 A page that sets `Host` defensively must keep working, which is the same three-way distinction Fetch
-§5.1's guard makes and the reason this component asks `header_forbidden_request` rather than reusing
+Fetch §5.1 "Headers class"'s guard makes and the reason this component asks `header_forbidden_request` rather than reusing
 the throwing `header_check`.
 
 ### 15.2 §3.5.1 `open(method, url, async, username, password)` — 12 steps
@@ -3925,7 +3961,7 @@ replacement that makes a USVString one.
 ### 15.3 §3.5.6 `send(body)` — where the two arms split
 
 Steps 1-11 are common and none of them fires anything: the state and send()-invoked checks, dropping
-the body for a GET or a HEAD, §5.1's "safely extract" of the BodyInit union (whose USVString arm is
+the body for a GET or a HEAD, Fetch §5.2 "BodyInit unions"'s "safely extract" (whose USVString arm is
 **[S]** — ToString on the page's value), the author `Content-Type`, the upload-listener flag, and
 the request. Step 12 is the ASYNCHRONOUS arm and step 13 the SYNCHRONOUS one.
 
@@ -4277,9 +4313,10 @@ the page owns, so the whole algorithm is ordinary C.
 `<my-control form="nothing">` inside a `<form>` therefore keeps a NULL owner — which is also why the
 owner is STORED rather than derived at read time.
 
-**§4.13.3's trigger is separate from §4.13.5 step 11's:** "when the user agent resets the form owner
-of a form-associated custom element and doing so **changes** the form owner, its
-`formAssociatedCallback` is called, given the new form owner **(or null if no owner)**". The null
+**§4.13.6 "Custom element reactions"'s trigger is separate from §4.13.5 step 11's:** "When the user
+agent resets the form owner of a form-associated custom element and doing so **changes** the form
+owner, its `formAssociatedCallback` is called, given the new form owner **(or null if no owner)** as
+an argument." The null
 argument is real, which is why this cannot be folded into step 11.1's non-null-only enqueue.
 
 **AND THE `form` ATTRIBUTE'S NEW VALUE IS AN ARGUMENT, NOT A READ.** DOM §4.9's "change an
@@ -4327,12 +4364,13 @@ control the parser MOVED (`<form><table><input>`) with the form it was written i
 | `willValidate` | is the target a **candidate for constraint validation** | — |
 | `validity` | a LIVE `ValidityState` over the element's flags | — |
 | `validationMessage` | the stored validation message | — |
-| `checkValidity()` | §4.10.21.1's **check validity steps** | **`[S]`** at step 1.1 |
-| `reportValidity()` | §4.10.21.1's **report validity steps** | **`[S]`** at step 1.1 |
+| `checkValidity()` | §4.10.21.3's **check validity steps** | **`[S]`** at step 1.1 |
+| `reportValidity()` | §4.10.21.3's **report validity steps** | **`[S]`** at step 1.1 |
 | `labels` | §4.10.19's label association, as a static `NodeList` | — |
 | `states` | §4.13.7.5's `CustomStateSet` | — |
 
-**Both validity methods are ONE machine.** §4.10.21.1's two step lists differ in exactly one place:
+**Both validity methods are ONE machine.** §4.10.21.3 "The constraint validation API"'s two step lists
+differ in exactly one place:
 
   1. If *element* is a candidate for constraint validation and does not satisfy its constraints:
      1. Fire an event named `invalid` at *element*, cancelable. — **`[S]`**
@@ -4376,28 +4414,43 @@ platform has the same gap and the same one-line answer.
   still missing is steps 4-5: the root's **available to element internals** field, which §4.8's
   record carries as a WRITE (`shadow_root_mark_declarative`) with no reader. A getter that skipped
   that check would hand a page the one shadow root §4.13.7.2 hides from it — a WRONG answer rather
-  than a partial one — so the member stays absent until the field is readable. §4.13.4's **disable
-  shadow** boolean is collected anyway, because it comes off the same sequence **disable internals**
-  does.
+  than a partial one — so the member stays absent until the field is readable. §4.13.3 "Core
+  concepts"' **disable shadow** boolean (collected by §4.13.4 step 15, off the same sequence **disable
+  internals** comes off) is NOT on this list: it has two readers — §4.13.5 "Upgrades" step 10.1 and
+  DOM §4.9 "Interface Element"'s "attach a shadow root" step 3 — and both refuse.
 - **ARIAMixin's eight ELEMENT-reflecting members** — `ariaActiveDescendantElement` and the seven
-  `FrozenArray<Element>?` ones. They are not content-attribute reflections at all; they are the
-  "explicitly set attr-element" machinery, with its own lifetime rules. The **46 `DOMString?`
-  members are real** and reflect into §4.13.7.4's internal content attribute map.
+  `FrozenArray<Element>?` ones — **WERE on this list**, on the grounds that they are not
+  content-attribute reflections at all but the "explicitly set attr-element" machinery, with its own
+  lifetime rules. They are that, and that machinery now EXISTS, so all eight are BUILT: HTML §2.6.1
+  makes the reflected target a PARAMETER of one algorithm, `core/dom/aria_mixin.h` states the eight in
+  one list beside the string members, and `aria_mixin.c` owns the explicitly-set list, the walk, the
+  shadow-including-ancestor filter and the cached `FrozenArray` that keeps
+  `el.ariaOwnsElements === el.ariaOwnsElements` true. The **`DOMString?` members are real** too and
+  reflect into §4.13.7.4's internal content attribute map — a count of them belongs beside the list
+  that states them (`ARIA_STRING_MEMBERS`) and not in a sentence here, because a number written here
+  goes stale the first time a member is added and nothing says so.
 - **`formStateRestoreCallback` and `formResetCallback` have no CALLER.** Both are collected by step
   14.13 and both are enqueueable through one entry point; the first needs a session-history state
   restore and the second needs `form.reset()`, neither of which exists.
-- **§4.13.4 steps 8-9's "element definition is running" flag.** It guards against a `define()`
-  re-entered from a getter the same `define()` invoked; the flag is state on the registry, which is
-  per-realm, so it lands with the scoped-registry work that also makes step 7.1's "is scoped" real.
+- **§4.13.4 steps 8-9's "element definition is running" flag is BUILT** — this entry used to say it
+  would land with the scoped-registry work that also makes step 7.1's `is scoped` real. Both landed:
+  `custom_elements.c` raises the flag on the registry before step 10 reads the page's object, throws
+  `NotSupportedError` on a `define()` re-entered from a getter that same `define()` invoked, and
+  clears it in the teardown that runs on BOTH exits — which is what step 14's "regardless of whether
+  the above steps threw an exception or not" asks for. The entry is kept rather than deleted for the
+  same reason SPEC_STEPS §17.6's first bullet is: components read these lists as the standing
+  statement of what is missing, and a reader following one must not find the old claim still standing.
 
 **The SUBMISSION side of `setFormValue` came off this list**, and §16.7 is where it went.
 
 ### 16.7 HTML §4.10.22.4 "constructing the entry list" — the algorithm three gaps were one gap of
 
 **Why it is in §16 at all.** §4.13.7.3's **entry construction algorithm** is not a thing beside form
-submission; it is *step 5.3 of* form submission's entry list. So "`ElementInternals.setFormValue`
-stores a value nothing consumes", "`new FormData(form)` `DFAIL`s", and "`form.elements` does not
-include form-associated custom elements" were three views of ONE missing algorithm, and they close
+submission; it is *step 5.3 of* form submission's entry list. So three entries this file had written
+in three places — an `ElementInternals.setFormValue` storing a value nothing consumes, a
+`new FormData(form)` that `DFAIL`s, and a `form.elements` that does not include form-associated custom
+elements (all three THIS FILE'S own wording, not the standard's) — were three views of ONE missing
+algorithm, and they close
 together or not at all. Read from the live standard on **2026-08-12** (`https://html.spec.whatwg.org/`
 §4.10.2, §4.10.7, §4.10.10, §4.10.18.3, §4.10.18.4, §4.10.21, §4.10.22; `https://xhr.spec.whatwg.org/`
 §5). Step numbers are the standard's own list numbering as of that date.
@@ -4495,20 +4548,21 @@ surface (§16.5a's gap, one level further in). The submitter's check is therefor
 first act, stated as such.
 
 **The encoding is a PARAMETER, not a read.** §4.10.22.4's own default is UTF-8 and that is what
-`new FormData(form)` passes; §4.10.21.3 step 15 passes the result of §4.10.22.5's **pick an
-encoding** (`accept-charset` split on ASCII whitespace, first label that resolves to an encoding,
+`new FormData(form)` passes; HTML §4.10.22.3 "Form submission algorithm" **step 6** passes the result
+of §4.10.22.5 "Selecting a form submission encoding"'s **pick an encoding** (`accept-charset` split on ASCII whitespace, first label that resolves to an encoding,
 UTF-8 otherwise). Reading `accept-charset` from inside the algorithm would put a `_charset_` entry
 in a list XHR §5 builds without one — the same defect as any operation reading its inputs off the
 object it acts on rather than taking them with it.
 
 ### 16.8 What §16.7 leaves ABSENT, by name
 
-- **Step 5.12's `dirname` entry**, which needs §3.2.6's **directionality**: the `dir` attribute chain
+- **Step 5.11's `dirname` entry** (§4.10.22.4 "Constructing the entry list"), which needs §3.2.6's
+  **directionality**: the `dir` attribute chain
   plus the first-strong-character scan `dir=auto` resolves by. A submitted control carrying a
   non-empty `dirname` reaches a `DFAIL` naming it, rather than submitting one entry where a browser
   submits two.
-- **`SubmitEvent`.** §4.10.21.3 step 11 fires `submit` **using `SubmitEvent`**, with a `submitter`
-  attribute; this engine fires a plain `Event`, so `e.submitter` is undefined. The interface is one
+- **`SubmitEvent`.** HTML §4.10.22.3 "Form submission algorithm" **step 5.6** fires `submit` **using
+  `SubmitEvent`**, with a `submitter` attribute; this engine fires a plain `Event`, so `e.submitter` is undefined. The interface is one
   slot on one event — it lands with the click-activation path that makes a submitter reachable
   without `requestSubmit`.
 - **A file control's SELECTED FILES are always empty, and that is not absent — it is the answer.**
@@ -4711,12 +4765,14 @@ the empty list for a slot whose root is not a shadow root, and a tree being INSE
 that has assigned nodes already, because an insertion is how a node gets into a tree at all. The
 walk's whole effect is therefore empty, and the common case costs one node-type check.
 
-**The same test inside the algorithm was a BUG, and §4.2.3 remove step 7 is the caller it was wrong
-for.** "If node has an inclusive descendant that is a slot: run assign slottables for a tree with
-parent's root, AND WITH NODE" — the second call is over the subtree that has just LEFT the shadow
+**The same test inside the algorithm was a BUG, and §4.2.3 "Mutation algorithms"' remove **step 10**
+is the caller it was wrong for.** Verbatim: "If node has an inclusive descendant that is a slot:" /
+"Run assign slottables for a tree with parent's root." / "Run assign slottables for a tree with
+node." — steps 10.1 and 10.2, and the SECOND of them is over the subtree that has just LEFT the shadow
 tree, whose slots still hold their assigned nodes, and emptying them is the entire point of it. A
 guard inside the algorithm skipped exactly that call, so a removed slot kept its nodes and each of
-those nodes kept naming it as its `assigned slot` — which §4.4's get the parent answers with, so the
+those nodes kept naming it as its `assigned slot` — which §4.4 "Interface Node"'s NODE OVERRIDE of get
+the parent answers with, so the
 event path of a node whose slot had been removed walked into a DETACHED subtree. The condition now
 stands at the insertion call site, where it is true.
 
@@ -4735,7 +4791,8 @@ Document's *allow declarative shadow roots*) and §4.8 (`declarative`).
 
 **Why it is the whole of `declarative`.** §4.8 gives a shadow root a `declarative` boolean, initially
 false, and NOTHING in DOM ever sets it true — the writer is this HTML step and only this one. So
-before it, §4.8 "attach a shadow root" step 4's re-attach branch was unreachable code that 17.1 wrote
+before it, DOM §4.9 "Interface Element"'s "attach a shadow root" step 4's re-attach branch was
+unreachable code that SPEC_STEPS §17.1 wrote
 out anyway, and a page shipping server-rendered Web Components (which is what declarative shadow DOM
 is FOR) had no shadow trees at all: the markup the author wrote for the shadow tree sat inside a
 `<template>`'s contents, every slot in it held nothing, and the page's own
@@ -4920,26 +4977,31 @@ which is what the standard says happens and is not a should-never-happen.
   `custom_elements.c` builds a CONSTRUCTIBLE `CustomElementRegistry` with a class-id brand and §4.13.4's
   `is scoped`, `shadow_root.c` resolves 17.2 steps 1-3 against it, and a registry is a NODE's state
   rather than the document's — so step 3's comparison is a real one that can fail, and the note calling
-  it unreachable "because this engine has exactly one registry" went with it. **This bullet is kept
-  rather than deleted because four components cite §17.6 BY NAME as the authority on what is missing,
-  and a reader who follows one of those pointers must not find the old claim still standing.**
-- **The FRAGMENT parses that opt in** — `Element.setHTMLUnsafe`, `ShadowRoot.setHTMLUnsafe` and
-  `Document.parseHTMLUnsafe` (HTML §8.5.2, over §8.6.4's "set and filter HTML"). 17.5a's step runs at
-  the parse boundary and takes the parser's *allow declarative shadow roots* as a parameter; the only
-  caller passing true today is `document_install`, so a declarative shadow root in markup handed to a
-  fragment parse is correctly NOT attached — because every fragment parse this engine has is one whose
-  flag is false (`innerHTML`, `outerHTML`, `insertAdjacentHTML`). The three members above are the ones
-  that pass true, and each also needs §8.6.4's `options` — whose `sanitizer` and `runScripts` members
-  are the Sanitizer API, absent entirely, so they land together rather than as a member that silently
+  it unreachable *on the ground that this engine had exactly one registry* (this file's own retired
+  wording, never the standard's) went with it. **This bullet is kept
+  rather than deleted because components cite SPEC_STEPS §17.6 BY NAME as the authority on what is
+  missing, and a reader who follows one of those pointers must not find the old claim still standing.
+  A COUNT of those components is not written here: it is one grep away and it is wrong the moment a
+  component is added or a pointer removed.**
+- **The FRAGMENT parse that opts in — only `Document.parseHTMLUnsafe` is left.** This entry used to
+  name three members (HTML §8.5.2, over §8.6.4's "set and filter HTML"); `Element.setHTMLUnsafe` and
+  `ShadowRoot.setHTMLUnsafe` are BOTH INSTALLED — `element.c` and `shadow_root.c` install them on
+  their own prototypes, beside `setHTML` — so `Document.parseHTMLUnsafe` is the one that remains.
+  17.5a's step runs at the parse boundary and takes the parser's *allow declarative shadow roots* as
+  a parameter, and a fragment parse whose flag is false (`innerHTML`, `outerHTML`,
+  `insertAdjacentHTML`) correctly does NOT attach a declarative shadow root in its markup. What the
+  remaining member still needs is §8.6.4's `options` — whose `sanitizer` and `runScripts` members are
+  the Sanitizer API, absent entirely, so they land together rather than as a member that silently
   ignores a sanitizer it was handed.
 - **`shadowrootcustomelementregistry` is BUILT** — 17.5a step 5.5's `registry` argument that reads the
   content attribute is `declarative_shadow.c`'s, and the IDL attribute reflecting it
   (`shadowRootCustomElementRegistry`) is a row in `html_element.c`'s `R_TEMPLATE`. It is a PLAIN
   `DOMString` mirror and never was an enumerated one: HTML §4.12.3 declares it `[CEReactions, Reflect]
   attribute DOMString` with no *limited to only known values* line, and states the reason itself — the
-  member "intentionally does not have a boolean type so it can be extended". The old entry called it "a
-  boolean content attribute reflected by a DOMString IDL attribute" that "lands with
-  `CustomElementRegistry`"; the registry landed, and the reflection did not go with it.
+  member "intentionally does not have a boolean type so it can be extended" (HTML §4.12.3 "The template
+  element", verbatim). The old entry — this file's wording, not the standard's — called it a boolean
+  content attribute reflected by a `DOMString` IDL attribute that would land with
+  `CustomElementRegistry`; the registry landed, and the reflection did not go with it.
 - **`clonable`'s effect is BUILT** — 17.5b, which is where the account of it lives. This entry used to
   say the machine could not host step 6 and that the restructure was a ~60-line rewrite behind
   `dom/nodes`' 25k subtests. The restructure is `CLONE_LEAVE` and it landed on its own first, with
@@ -4954,17 +5016,34 @@ which is what the standard says happens and is not a should-never-happen.
   gives it one (step 5 of "clone a single node": "If node is a document, then set document to copy").
   `dom_implementation.c`'s `createDocument` is the other half — it is what "create a document that
   implements the same interfaces" already does for `DOMImplementation`.
-- **`Range.cloneContents()` clones no shadow root, and that is a SECOND `clone a node`.** §5.5 step 18
-  says "clone a node with subtree set to true" and `range.c` runs its own copier for it — a walk with
+- **`Range.cloneContents()` clones no shadow root, and that is a SECOND `clone a node`.** DOM §5.5
+  "Interface Range"'s "clone the contents" is **17 steps**, and the site is **step 14.1**: "Let clone be
+  a clone of contained child **with subtree set to true**." (This entry used to cite "step 18", which
+  is the number a FLAT `<li>` count produces — steps 4, 12, 13, 14, 15 and 16 each hold a nested list,
+  and counting their sub-items as peers walks the number past the end of an algorithm that has no step
+  18 at all.) `range.c` runs its own copier for it — a walk with
   no step 3 and no step 6, so a `<template>` in a range already lost its content fragment and a
   clonable host now loses its shadow tree as well. It is not a missing feature but a missing ROUTE:
   the one clone machine is `NODE_CLONE_STEP`, and §5.5's frame should seed it rather than re-walk the
   subtree beside it. That conversion needs the machine reachable as a sub-machine of another member's
   frame, which is what makes it its own diff and not a paragraph of this one.
-- **`serializable`'s effect** — `getHTML(options)`, which is HTML §8.5's, not §4.8's.
-- **`delegatesFocus`'s effect**, which is HTML's focusing steps; this engine has no focus model.
-- **HTML's additions to `ShadowRoot`** — `innerHTML`, `activeElement`, `styleSheets`,
-  `adoptedStyleSheets` and the rest of `DocumentOrShadowRoot`.
+- **`serializable`'s effect is BUILT** — `getHTML(options)` is HTML §8.5's, not §4.8's, and
+  `fragment_serializer.c` installs it on this prototype; its `serializableShadowRoots` argument is
+  what READS the flag, and HTML §13.3 step 4.2 is where. This entry used to list it as absent.
+- **`delegatesFocus`'s effect is BUILT, and this engine HAS a focus model** — both halves of the old
+  entry, which called the effect HTML's focusing steps and said this engine had no focus model, are
+  now false. `focus.c` is
+  HTML §6.6's focused-area machinery, and `delegatesFocus` is what makes a host NOT a focusable area
+  (§6.6.2's row 1) and sends "get the focusable area" to the focus delegate (§6.6.4), read through
+  `shadow_root_flag`.
+- **HTML's additions to `ShadowRoot` — only `adoptedStyleSheets` is left.** This entry used to name
+  `innerHTML`, `activeElement`, `styleSheets` and `adoptedStyleSheets` together. The first three are
+  installed on this prototype: `innerHTML` (with `setHTML` and `setHTMLUnsafe`) by `shadow_root.c`,
+  `activeElement` by `focus.c` — its getter RETARGETS the focused area against the receiver, which is
+  why a `ShadowRoot` answers with its own tree's node — and `styleSheets` by `style_sheet_list.c`,
+  over CSSOM §6.2's collection for "the document OR shadow root". `adoptedStyleSheets` is an
+  `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is absent with CSSOM §6.1.2's
+  constructor, which is what it lands with.
 - **`ElementInternals`' `shadowRoot` getter** (§4.13.7.2), which §16 named as absent for want of a
   shadow root to answer with. It answers "this's target element's shadow root, if its **available to
   element internals** is true" — the field step 9 above now sets — and lands with the next diff on
@@ -4975,11 +5054,15 @@ which is what the standard says happens and is not a should-never-happen.
   `innerHTML`'s serialiser did.
 - **Retargeting (§2.9's shadow-adjusted target) and `composedPath`'s closed-tree hiding are BUILT** —
   see §11.8-§11.11, which is where they belong, beside the rest of §2.9. The path is a list of items;
-  §4.4's get the parent answers with a slottable's assigned slot; the walk retargets at each shadow
-  boundary and records both closed-tree flags; `composedPath()` runs the three walks. What is absent
-  is §4.2's `retarget` itself and the two path-item fields it feeds (`relatedTarget`, touch target
-  list), because the interfaces that carry them — `MouseEvent`, `FocusEvent`, `TouchEvent` — do not
-  exist here; §11.11 names each piece and what lands with it.
+  §4.4 "Interface Node"'s node override of get the parent answers with a slottable's assigned slot;
+  the walk retargets at each shadow
+  boundary and records both closed-tree flags; `composedPath()` runs the three walks. **§4.2's
+  `retarget` and the `relatedTarget` path-item field are BUILT TOO** — this entry used to call them
+  absent "because the interfaces that carry them — `MouseEvent`, `FocusEvent`, `TouchEvent` — do not
+  exist here", and two of those three now do: `event_target.c` has `event_target_retarget` and
+  retargets the relatedTarget against the target at each ancestor, and `mouse_event.c` and
+  `focus_event.c` are the interfaces. What is left is the TOUCH TARGET LIST, whose `TouchEvent` is
+  the one of the three still absent; SPEC_STEPS §11.11 names each piece and what lands with it.
 - **A `<script>` inside a declarative shadow root does not run.** `document_scripts.c` collects a
   document's executable scripts by walking its CHILD links, and a shadow root is not a child of its
   host — so a script the parser put in a shadow tree is parsed and never executed. The same walk is
@@ -5168,8 +5251,9 @@ taint shadow keys on the pair.
 
 ### 18.6 What is honestly ABSENT, by name
 
-Nothing of §4.3's own algorithm is absent. §4.3's **signal slots** (notify steps 4, 5 and 7) arrived
-with §17's shadow DOM in the same hour as the record queue, as a SECOND machine with a SECOND
+Nothing of §4.3's own algorithm is absent. The **signal slots** set is defined in DOM §4.2.2.5
+"Signaling slot change" and CONSUMED by §4.3 "Mutation observers"' notify steps 4, 5 and 7; it arrived
+with SPEC_STEPS §17's shadow DOM in the same hour as the record queue, as a SECOND machine with a SECOND
 `mutation observer microtask queued` flag and a SECOND microtask — two halves of one algorithm, each
 correct alone and wrong together, because §4.3 clones BOTH sets, delivers every record at step 6 and
 only THEN fires every `slotchange` at step 7. Split, that order is whichever half was queued first,
@@ -5183,13 +5267,12 @@ now one machine, one flag and one microtask: `signal a slot change` calls §4.3'
   strong reference to every wrapper for the life of the document, so a weak list here would not
   change what is retained by one object. It becomes real with the wrapper map's own weakening, and
   both are the same mechanism.
-- **The BATCH: an `insert` of a DocumentFragment queues N records where §4.2.3 step 8 queues ONE**
-  with all of `nodes` in `addedNodes`, and so does `replace all` (which is what `innerHTML`,
-  `textContent` and `replaceChildren` are). Every SINGLE-node insertion and **every** removal is
-  byte-exact, because `remove` removes one node and `nodes` then has one member — but a page that
-  appends a fragment of three children and counts records reads 3 where a browser reads 1. The
-  mechanism this needs is §4.2.3's own `suppressObservers` parameter on the three tree chokepoint
-  entries, so the operation that owns the loop (`node_insert_at`'s fragment branch, `replace all`'s
-  remove-all) queues the one record itself with the list it already has. That is the next diff in
-  this section, and it is named here rather than left as a comment because a comment is not a
-  follow-up.
+- **The BATCH is BUILT.** This entry used to say an `insert` of a DocumentFragment queued N records
+  where §4.2.3 step 8 queues ONE with all of `nodes` in `addedNodes`, and that the same was true of
+  `replace all` (which is what `innerHTML`, `textContent` and `replaceChildren` are) — so a page that
+  appended a fragment of three children and counted records read 3 where a browser reads 1. The
+  mechanism it named as the next diff is the one that landed: §4.2.3's own `suppressObservers`
+  parameter is carried as a SCOPE (`mutation_observer.h`), the operation that owns the loop removes
+  with it set and queues the ONE record itself over the list it already has, and step 4.2's record for
+  the FRAGMENT is queued the way the standard's own note asks — "This step intentionally does not pay
+  attention to suppressObservers."

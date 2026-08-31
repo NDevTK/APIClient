@@ -31,14 +31,16 @@
  * `attachInternals` impossible and what would keep the state right if an element ever outlived its internals.
  *
  * WHAT IS HONESTLY ABSENT, BY NAME:
- *   - `shadowRoot`. The reason this line USED to give — "there is no Shadow DOM in this engine at all" — is no
- *     longer true and is deleted: §17 built `attachShadow`, ShadowRoot and the slot algorithms, so steps 2-3's
+ *   - `shadowRoot`. The reason this line USED to give — that there was no Shadow DOM in this engine at all,
+ *     which is this file's own wording and never the standard's — is no longer true and is deleted: §17
+ *     built `attachShadow`, ShadowRoot and the slot algorithms, so steps 2-3's
  *     "is a shadow host" and "target's shadow root" both have real answers now. What is still missing is steps
  *     4-5's: the root's AVAILABLE TO ELEMENT INTERNALS field, which §4.8's record carries as a WRITE
  *     (shadow_root_mark_declarative) with no reader. A getter that skipped that check would hand a page the
  *     one shadow root §4.13.7.2 hides from it, which is a WRONG answer rather than a partial one, so the
- *     member stays ABSENT until the field is readable. §4.13.4's `disable shadow` boolean is a different
- *     question and is both collected and READ — by §4.13.5 "Upgrades" step 10.1, which refuses to upgrade an
+ *     member stays ABSENT until the field is readable. §4.13.3 "Core concepts"' `disable shadow` boolean
+ *     (collected by §4.13.4 step 15) is a different question and is both collected and READ — by §4.13.5
+ *     "Upgrades" step 10.1, which refuses to upgrade an
  *     element that already carries a shadow root.
  *   - ARIAMixin's EIGHT element-reflecting members WERE on this list, on the grounds that the "explicitly set
  *     attr-element" machinery is its own mechanism. It is — and it now EXISTS, so they are built: §2.6.1 makes
@@ -184,9 +186,10 @@ static uint32_t ei_flags_of(JSContext *ctx, JSValueConst el)
  * wrote, in the SAME CV_* bits constraint_validation.h declares, so "statically validate the constraints" can
  * ask a FACE the question it asks every other control.
  *
- * ONE FUNCTION, NOT TWO. The caller asked for a second — "does it have a custom error" — and that answer is
- * already the CV_CUSTOM_ERROR bit of this one; what is NOT derivable from the bits is §4.10.21.1's validation
- * MESSAGE, which is the string setValidity was given. Nothing reads that message yet (`validationMessage` is
+ * ONE FUNCTION, NOT TWO. The caller asked for a second, one answering whether the element has a custom error,
+ * and that answer is already the CV_CUSTOM_ERROR bit of this one; what is NOT derivable from the bits is
+ * §4.13.7.3 "Form-associated custom elements"' validation MESSAGE, which is the string setValidity was
+ * given. Nothing reads that message yet (`validationMessage` is
  * absent for built-in controls too), so the reader for it is not written here: an exported accessor with no
  * caller is a shape nothing exercises, and it would arrive with a guess about what its answer should be for an
  * element setValidity never touched.
@@ -699,12 +702,12 @@ static int js_ei_validity_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
 
 static const JSTrampStepDef js_ei_check_validity_def = {
     sizeof(JSEiValidityState), js_ei_validity_step, js_ei_validity_fini, 0, .visit = js_ei_validity_visit,
-    .algorithm = "HTML §4.10.21.1 check validity steps (from ElementInternals.checkValidity)",
+    .algorithm = "HTML §4.10.21.3 check validity steps (from ElementInternals.checkValidity)",
     .steps = EI_VALIDITY_STEPS
 };
 static const JSTrampStepDef js_ei_report_validity_def = {
     sizeof(JSEiValidityState), js_ei_validity_step, js_ei_validity_fini, 0, .visit = js_ei_validity_visit,
-    .algorithm = "HTML §4.10.21.1 report validity steps (from ElementInternals.reportValidity)",
+    .algorithm = "HTML §4.10.21.3 report validity steps (from ElementInternals.reportValidity)",
     .steps = EI_VALIDITY_STEPS
 };
 
@@ -779,8 +782,9 @@ static JSValue js_internals_aria_set(JSContext *ctx, JSValueConst this_val, JSVa
 /* ---- §2.6.1's FOUR ALGORITHMS FOR AN ElementInternals TARGET ------------------------------------------------
  *
  * The eight ELEMENT-REFLECTING members used to be on this file's honestly-absent list, on the grounds that they
- * are "their own mechanism with their own lifetime rules". That was true and is no longer a reason: the
- * mechanism EXISTS, in core/dom/aria_mixin.c, and §2.6.1 already states the only thing that differs between the
+ * are their own mechanism with their own lifetime rules (this file's wording, not the standard's). That was
+ * true and is no longer a reason: the mechanism EXISTS, in core/dom/aria_mixin.c, and §2.6.1 already states
+ * the only thing that differs between the
  * two interfaces that include the mixin — the reflected target's four algorithms. So this component states its
  * four and the members are the SAME machine, rather than a second copy of a walk, a shadow-including-ancestor
  * filter and a FrozenArray cache.
