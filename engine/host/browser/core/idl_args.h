@@ -1451,6 +1451,32 @@ typedef enum {
     IDL_SECURE_CONTEXT,     /* [SecureContext] — ABSENT, not throwing, in a non-secure realm */
 } IdlExposure;
 
+/* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — "Let name be the string \"get \"
+ * prepended to attribute's identifier" for create an attribute getter, and "Let name be the string \"set \"
+ * prepended to id" for create an attribute setter. The installers below perform it themselves and no caller of
+ * one ever needs this; it is declared because a handful of members are defined at a RAW JS_DefinePropertyGetSet
+ * instead, and every one of them was spelling the prefix by hand — half of them correctly. A prefix written at
+ * N sites is a prefix that is wrong at some of them, which is the defect this composer was extracted to end, so
+ * there is ONE place in the engine that writes it and the raw sites reach it here.
+ *
+ * `buf` is the caller's, at least IDL_ACCESSOR_NAME_MAX bytes, and the composed string is for the MINT ALONE —
+ * never for a property key, a pool entry, or data a getter carries to name its member in a TypeError. See
+ * idl_args.c for why those four readers must keep the bare identifier.
+ *
+ * NAMED RESIDUAL — THE RAW SITES THEMSELVES. WHAT IS NOT COVERED: an event-handler IDL attribute and
+ * HTMLTemplateElement's `content` are defined by JS_DefinePropertyGetSet rather than by an installer, so they
+ * get §3.7.6's descriptor and its name from their own call site and nothing checks that they agree with the
+ * installers. They are there because no installer form accepts a PLAIN C SETTER — `idl_install_accessor` takes
+ * a setter STEP id, and `js_handler_set` is an ordinary C function. WHAT THE NEXT DIFF BUILDS: an installer
+ * form taking a plain-C setter beside the IdlGetter, after which those call sites become ordinary installs and
+ * this declaration has no callers left and goes. HOW ITS ABSENCE SHOWS: a member added at a raw site keeps
+ * §3.7.6's [[Enumerable]]/[[Configurable]] pair and its name under whoever wrote that line, so it can differ
+ * from every installed member without any gate saying so — which is how `content` came to answer
+ * `Object.getOwnPropertyDescriptor(HTMLTemplateElement.prototype,"content").get.name` with "content". */
+#define IDL_ACCESSOR_NAME_MAX 96
+typedef enum { IDL_ACCESSOR_GET, IDL_ACCESSOR_SET } IdlAccessorKind;
+const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessorKind kind);
+
 /* AN ATTRIBUTE THAT STATES ITS IDL'S EXPOSURE. This is the general form; the plain `idl_install_accessor`
    below is the same install for a member whose IDL carries no exposure condition, which is most of them. */
 void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const char *name,

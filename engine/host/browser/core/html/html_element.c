@@ -869,9 +869,14 @@ void html_element_install_protos(JSContext *ctx)
            survives the runtime and the gc_obj_list walk counts it. */
         JSAtom a = JS_NewAtom(ctx, "content");
         JSValue tpl = html_iface_proto(ctx, "HTMLTemplateElement");
+        char nb[IDL_ACCESSOR_NAME_MAX];
         CHECK(a != JS_ATOM_NULL, "the `content` attribute name could not be interned");
+        /* Web IDL §3.7.6 Attributes names the GETTER "get content" — the atom above is the property key and is
+           a different string. Written out here, it was the key twice; it comes from the one composer now. */
         JS_DefinePropertyGetSet(ctx, tpl, a,
-                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_template_content, "content", 0,
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_template_content,
+                                                     idl_accessor_name(nb, sizeof nb, "content",
+                                                                       IDL_ACCESSOR_GET), 0,
                                                      JS_CFUNC_getter_magic, 0),
                                 JS_UNDEFINED, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, a);

@@ -1542,6 +1542,15 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
 
     DCHECK(JS_IsObject(target), "event handlers were installed on something that is not an object");
     for (i = 0; i < EH_COUNT; i++) {
+        /* WEB IDL §3.7.6 Attributes NAMES THE FUNCTIONS, NOT THE PROPERTY. An event handler is an ordinary IDL
+           attribute — HTML §8.1.7.1 Event handlers declares each as `attribute EventHandler onfoo` — so its
+           accessors are named by §3.7.6 like every other attribute's: "get onclick" and "set onclick", never
+           the bare handler name. Both mints took EH_NAME[i], which is the PROPERTY key and is right for the
+           atom below and wrong for the two functions. This is the largest attribute family in the engine and
+           it is defined here rather than through idl_install_accessor only because js_handler_set is a plain C
+           setter and no installer form takes one — see idl_args.h's residual. Until that exists, the prefix
+           comes from the same composer every installed accessor uses, so the two cannot drift. */
+        char gb[IDL_ACCESSOR_NAME_MAX], sb[IDL_ACCESSOR_NAME_MAX];
         JSAtom a;
         if (!(EH_MASK[i] & mask))
             continue;
@@ -1550,9 +1559,13 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
         /* The getter/setter cprotos take their own signatures, which the magic-function constructor reaches
            through one pointer type — the same cast every JS_CGETSET_MAGIC_DEF performs at compile time. */
         JS_DefinePropertyGetSet(ctx, (JSValue)target, a,
-                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_get, EH_NAME[i], 0,
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_get,
+                                                     idl_accessor_name(gb, sizeof gb, EH_NAME[i],
+                                                                       IDL_ACCESSOR_GET), 0,
                                                      JS_CFUNC_getter_magic, i),
-                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_set, EH_NAME[i], 1,
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_handler_set,
+                                                     idl_accessor_name(sb, sizeof sb, EH_NAME[i],
+                                                                       IDL_ACCESSOR_SET), 1,
                                                      JS_CFUNC_setter_magic, i),
                                 JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, a);

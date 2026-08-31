@@ -4642,12 +4642,14 @@ static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, i
  *
  * `buf` is the CALLER'S, because JS_NewCFunction2 and JS_NewCFunctionData2 both intern the name into an atom
  * (js_new_c_function_data / JS_NewCFunction3 do `JS_NewAtom(ctx, name)`) and retain no pointer — so a stack
- * buffer that outlives the call is all this needs, and the composed string must NEVER be what a caller stores. */
-#define IDL_ACCESSOR_NAME_MAX 96
-
-typedef enum { IDL_ACCESSOR_GET, IDL_ACCESSOR_SET } IdlAccessorKind;
-
-static const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessorKind kind)
+ * buffer that outlives the call is all this needs, and the composed string must NEVER be what a caller stores.
+ *
+ * IT IS NOT `static`, AND THAT IS NOT AN INVITATION. Everything above is performed FOR the installs in this
+ * file; what reaches it from outside are the few members defined at a raw JS_DefinePropertyGetSet because no
+ * installer form takes a plain C setter yet — see idl_args.h, which states that residual and what retires it.
+ * Exporting a composer cannot be misused the way exporting a PREDICATE can: there is no call site at which
+ * using this is the wrong thing to do, because using it IS the rule. */
+const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessorKind kind)
 {
     int n;
 
