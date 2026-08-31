@@ -6,8 +6,9 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/route_seed.h"
-#include "solver/engine.h"   /* the one-way notice, and the provenance vocabulary both ends of it read */
-#include "solver/flow.h"     /* whose path this declaration was made on — the other half of the provenance */
+#include "solver/engine.h"   /* the one-way notice, the provenance vocabulary both ends of it read, and the
+                                ONE composition of that vocabulary from the running path */
+#include "solver/flow.h"     /* …and that there IS a path here at all, which is this file's own invariant */
 
 void route_seed_declare(JSContext *ctx, const char *previous, const char *address)
 {
@@ -36,17 +37,24 @@ void route_seed_declare(JSContext *ctx, const char *previous, const char *addres
        claiming a provenance belonging to nobody, and the zone's firing decision is made on exactly that field.
        The same assert core/html/html_link.c makes for the same reason, on the other side of the boundary. */
     f = flow_running();
+    (void)f;   /* the assert below is this value's only reader, and a DCHECK is compiled out in release */
     DCHECK(f != NULL,
            "an application declared a page of itself with no flow running — HTML §7.2.5 \"The History "
            "interface\" and every other caller of §7.4.4's URL and history update steps are the page's own "
            "code, so a declaration made outside a flow has no path to say whether a gate was forced to reach "
            "it, and the trusted zone decides whether to LOAD this address on precisely that answer");
-    /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE, with its first conjunct answered by the algorithm rather
-       than by this call: a real load of this document makes no pushState, so `observed` is unreachable here and
-       is not one of the two answers below. What is left is the PATH's own fact — an address computed past an
-       arm the concrete example contradicted exists only because a gate was forced, and a reply to a navigation
-       to it is evidence about what a server says to a request no client makes. */
-    prov = flow_path_forced(f) ? PENDING_PROVENANCE_FORCED : PENDING_PROVENANCE_DERIVED;
+    /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE, with its first conjunct answered by the ALGORITHM rather
+       than by this call: a real load of this document makes no pushState, so `observed` is unreachable here.
+       What is left is the PATH's own fact — an address computed past an arm the concrete example contradicted
+       exists only because a gate was forced, and a reply to a navigation to it is evidence about what a server
+       says to a request no client makes.
+       THE COMPOSITION IS SOLVER/ENGINE.H'S AND NOT THIS FILE'S, and it used to be a ternary here. That was the
+       whole rule, written down a second time, one file away from the vocabulary it spells — and it was about
+       to become a THIRD copy in core/frame/navigable.c, where a NAVIGATION asks the identical question about
+       the identical fact. One composition, one place; this site keeps only what is ITS own, which is the
+       assert directly above (a declaration with no path is a broken invariant HERE and is an ordinary
+       document-install navigation there). */
+    prov = engine_provenance_of_running_path();
 
     /* THE RECORD SPLITS ON TAB, so a tab in either field shifts the other one — and the field that would be
        read in the wrong place is the PROVENANCE, which is the zone's whole firing decision. URL §3.2 "Host

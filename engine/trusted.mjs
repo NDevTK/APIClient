@@ -77,14 +77,19 @@
  * engine knows what a world vector or an object name means. `engine/route.mjs` is the same protocol against
  * wasm instances and is where its reasoning is written at length.
  *
- * WHAT IT STILL DOES NOT DO, AND WHY THE ROUTING ABOVE IS NOT THEREFORE EXERCISED BY DEFAULT. Provisioning a
- * peer means LOADING a document at an address the PAGE'S OWN CODE chose, and this zone cannot yet establish
- * that address's provenance (see UNSTATED_PROVENANCE). CLAUDE.md's §Attacker-sources is explicit that a
- * navigation whose provenance is not established CRASHES at the decision rather than proceeding, so by default
- * it does — and the refusal travels to the child, which prints it at the stall. What lifts it is the second of
- * the two things that bullet names, and it is built here because it is the zone's to own: the PER-ORIGIN
- * WIDENING (`--explore <origin>`), which is a person saying "at this host, navigate what the bundle names".
- * See NAVIGATION_WIDENING for why that is a whole answer here and not half of one. */
+ * AND THE ROUTING ABOVE IS EXERCISED BY DEFAULT NOW, WHICH IT WAS NOT. Provisioning a peer means LOADING a
+ * document at an address the PAGE'S OWN CODE chose, and this paragraph used to say this zone could not
+ * establish that address's provenance — so, CLAUDE.md §Attacker-sources being explicit that a navigation whose
+ * provenance is not established CRASHES at the decision, it refused every one of them and the whole
+ * cross-instance surface below was a design that had never run. The three provisioning records now STATE what
+ * the navigation is evidence of (`navigable.create` field 15, `navigable.swap` field 4, and the load job's own
+ * `document.fetch`), composed in the engine from the one fact only the engine can see: whether the flow that
+ * built the address had stood on an arm its own concrete example contradicts. An OBSERVED or DERIVED address
+ * is navigated; a FORCED one waits on the PER-ORIGIN WIDENING (`--explore <origin>`), which is a person saying
+ * "at this host, navigate what the bundle reaches past a forced gate" and is the zone's to own; and a record
+ * that states nothing now THROWS rather than declining, which is the crash that bullet asks for.
+ * WHAT REMAINS UNSAID IS A *FETCH*'S authorisation, not a navigation's — see UNSTATED_PROVENANCE, which is
+ * about `workFetch` and is a different decision over a different record. */
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -239,9 +244,14 @@ const PROVENANCE_DECLINE = {
  * of the other two conjuncts are false at every setting of this flag, including its widest. */
 const NAVIGATION_WIDENING = new Set();
 
-/* WHY A NAVIGATION TO A *FORCED* ADDRESS IS REFUSED AT AN UNWIDENED ORIGIN — a different sentence from
-   UNWIDENED_NAVIGATION because it is a different fact: there the provenance could not be established at all,
-   here it is established and it is the one the widening exists to gate. */
+/* WHY A NAVIGATION TO A *FORCED* ADDRESS IS REFUSED AT AN UNWIDENED ORIGIN — and it is now the ONLY reason a
+   navigation is refused here at all. There used to be a second, `UNWIDENED_NAVIGATION`, for a record that did
+   not say who named the address; it is deleted with the gap it described, because the three provisioning
+   records all state it (core/frame/navigable.c, core/frame/browsing_context_group.c) and `navigate` throws on
+   a record that does not rather than declining one. Its own text named the fix that landed — "carry that
+   initiator on the create notice so a navigable the PARSER of the seeded document created is OBSERVED" — and
+   a refusal that outlives the absence it describes is the stale-`DFAIL` failure with a network policy on it:
+   it would go on reporting a capability as missing while reading as a decision somebody made. */
 const FORCED_NAVIGATION =
   'a DOCUMENT LOAD at an address that exists only because a GATE WAS FORCED. CLAUDE.md §Attacker-sources ' +
   'makes exactly this the per-origin widening — "default conservative, widened deliberately per origin, never ' +
@@ -252,19 +262,6 @@ const FORCED_NAVIGATION =
   'the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap in the report ' +
   'but IS the report'
 
-/* WHY A NAVIGATION AT AN UNWIDENED ORIGIN IS REFUSED, in the zone's own words — the same shape as
-   UNSTATED_PROVENANCE and a different sentence, because it is a different decision over a different record. */
-const UNWIDENED_NAVIGATION =
-  'a DOCUMENT LOAD at an address the page\'s own code chose. CLAUDE.md §Attacker-sources makes a navigation\'s ' +
-  'whole safety the choice of address and its whole remaining question PROVENANCE: an OBSERVED or DERIVED ' +
-  'address is navigated freely, a FORCED one is the deliberate per-origin widening, and one whose provenance ' +
-  'is NOT ESTABLISHED crashes at the decision rather than proceeding. This zone cannot establish it — the ' +
-  'create notice carries the child\'s name, address, origin, §8.1.3.1 top-level creation URL, §7.1.7 policy ' +
-  'container, §7.3.1.3 links and §3.1.3 ancestors, and says nothing about WHO NAMED THE ADDRESS, which is the ' +
-  'one fact the pending register already carries for a fetch (solver/engine.h\'s INITIATOR). Two things lift ' +
-  'it and either is enough: carry that initiator on the create notice so a navigable the PARSER of the ' +
-  'seeded document created is OBSERVED by the same argument its parser-inserted <script src> is; or say ' +
-  '`--explore <origin>` for this host, which is a person authorizing exactly this';
 
 async function main() {
   /* THE FLAGS ARE TAKEN OUT BEFORE THE POSITIONALS ARE COUNTED, so `--explore` may appear anywhere and the
@@ -406,11 +403,14 @@ async function main() {
      feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
      engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
      rather than by SPACE, because that section's flag names CONTAIN spaces.
-     THE POLICY IS THE REMAINDER FROM FIELD 15 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
+     THE POLICY IS THE REMAINDER FROM FIELD 16 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
      not fail, it silently joins the field before the policy onto the FRONT of it, which is a creator's CSP
-     arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. */
+     arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. It
+     moved when the navigation's PROVENANCE was inserted at field 15, and the provenance is deliberately NOT
+     in this list: these are the facts the CHILD instance is built from, and what a navigation is evidence of
+     is a fact about the LOAD this zone performs rather than about the Document it produces. */
   const createFacts = (f) =>
-    [f[5], b64(f.slice(15).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
+    [f[5], b64(f.slice(16).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -481,9 +481,11 @@ async function main() {
      §7.4.5's load for a navigable this instance holds, and the load that roots a PEER. Both are HTML §7.4.5
      "Populating a session history entry"'s create-navigation-params-by-fetching, both are GETs, and the whole
      of what separates them is which instance the bytes end up in.
-     THE REFUSAL IS THE DEFAULT AND IT NAMES ITSELF. See UNWIDENED_NAVIGATION: the create notice says nothing
-     about who named the address, so provenance is UNESTABLISHED and §Attacker-sources makes that a crash at
-     the decision rather than a load.
+     THE DECISION IS READ OFF THE RECORD AND IS NO LONGER A BLANKET REFUSAL. Every record that reaches this
+     function states what the navigation is evidence of — the create notice, §7.1.3.2's swap, the load job's
+     own `document.fetch` and a route declaration — so an OBSERVED or DERIVED address is navigated freely
+     (§Attacker-sources: that IS the capability, reaching what a bundle NAMES and no link exposes) and only a
+     FORCED one waits on the per-origin widening.
      A LOAD THAT DID NOT LOAD IS A DOCUMENT TOO. `replyRecord` answers null for the chokepoint's status 0 — a
      blocked scheme, a private target, a refused read — and HTML still gives that navigable a Document: the
      empty byte sequence is the `about:blank`-shaped one the engine's own child_document builds. The ADDRESS
@@ -495,20 +497,24 @@ async function main() {
     /* THE PROVENANCE IS THE WHOLE DECISION AND IT IS STATED BY THE CALLER, never derived here. §Attacker-
        sources: "an OBSERVED or DERIVED address is navigated freely, a FORCED one is the deliberate per-origin
        widening", and one whose provenance is NOT ESTABLISHED crashes at the decision rather than proceeding.
-       `null` IS "THE RECORD DOES NOT STATE IT" AND IS A POSITIVE ANSWER, not a caller that forgot: a
-       `navigable.create` carries the child's name, address, origin, top-level creation URL, policy container,
-       §7.3.1.3 links and §3.1.3 ancestors and says nothing about WHO NAMED THE ADDRESS, while a
-       `document.seed` states it as its second field. Two records, two answers, and the difference decides
-       whether the widening is what stands between this zone and a fetch.
-       AN UNKNOWN WORD STOPS IT rather than falling to whichever arm is written as the else — the same reader
-       contract `workFetch` keeps over the same vocabulary, applied to the decision that spends the network. */
-    if (provenance !== null && provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
-      throw new Error(`a document load was asked for with the provenance \`${provenance}\`, which is neither ` +
-                      'null (the record does not state it) nor one of the three tokens solver/engine.h ' +
-                      'declares — this zone decides whether to spend the network on that field');
-    const established = provenance === 'observed' || provenance === 'derived';
-    if (!established && !NAVIGATION_WIDENING.has(new URL(abs).origin))
-      return { declined: `${what} ${abs} — ${provenance === 'forced' ? FORCED_NAVIGATION : UNWIDENED_NAVIGATION}` };
+       `null` WAS A FOURTH ANSWER HERE — "the record does not state it" — AND IT IS GONE WITH THE RECORDS THAT
+       COULD NOT STATE IT. It was an honest description of a gap and it had exactly the failure mode a
+       tolerated absence has: `navigable.create`, `navigable.swap` and `document.fetch` all passed it, so the
+       arm below refused every child navigable and every peer this zone was ever told about, at every origin
+       nobody had widened, which is every origin by default — and the refusal read as a policy working rather
+       than as a capability missing. All three records carry the word now (core/frame/navigable.c and
+       core/frame/browsing_context_group.c), so an absent or unknown one is a PRODUCER that stopped stating it
+       and it STOPS this function rather than falling to whichever arm is written as the else. That is the
+       crash §Attacker-sources asks for, and it is the same reader contract `workFetch` keeps over the same
+       vocabulary, applied to the decision that spends the network. */
+    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
+      throw new Error(`a document load was asked for with the provenance \`${provenance}\`, which is none of ` +
+                      'the three tokens solver/engine.h declares — every record that reaches this function ' +
+                      'states one, so this is a producer that stopped, and CLAUDE.md §Attacker-sources makes ' +
+                      'a navigation whose provenance is not established a crash at the decision rather than ' +
+                      'a load: there is no partition and no interception behind this line');
+    if (provenance === 'forced' && !NAVIGATION_WIDENING.has(new URL(abs).origin))
+      return { declined: `${what} ${abs} — ${FORCED_NAVIGATION}` };
     /* Fetch §2.2.5's `document` DESTINATION — this is HTML's navigate algorithm's own fetch, which is that
        section's own `document` row. Not script-like, so no CORB: an HTML parser is what reads these bytes. */
     const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
@@ -656,21 +662,29 @@ async function main() {
     const f = record.split('\t');
 
     if (f[0] === 'navigable.create') {
-      /* SIXTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one an
-         unmoved count would let arrive as `undefined`, and every one of them below is read. */
-      if (f.length < 16)
+      /* SEVENTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one
+         an unmoved count would let arrive as `undefined`, and every one of them below is read. */
+      if (f.length < 17)
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
                         'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
                         '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s parent ' +
                         'navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ' +
-                        'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, and the policy');
+                        'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION ' +
+                        'is evidence of, and the policy');
       /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
          against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
          re-announcing it under the same name. A second instance would give one document two heaps and two
          object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent and
          which nothing downstream could tell from the routing. */
       if (holderOf(f[1])) return;
-      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, null);
+      /* FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF, AND IT IS WHY THIS ARM STOPPED BEING A BLANK REFUSAL.
+         `null` here meant "the record does not state it", and §Attacker-sources makes an unestablished
+         provenance a crash at the decision — so every cross-origin child navigable any page ever created was
+         declined at every unwidened origin, which is every origin by default. The create notice now carries
+         the word, so a child a page's own code named on a path that stood on no contradicted arm is `derived`
+         and is navigated freely, which is the capability §What-the-tool-produces exists for; a FORCED one is
+         still the per-origin widening this zone reads as `--explore <origin>`. */
+      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, f[15]);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
@@ -680,7 +694,7 @@ async function main() {
                         headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f) });
       return;
     }
-    /* `navigable.swap <new document> <url> <origin>` — HTML §7.1.3.2 "Browsing context group switches due to
+    /* `navigable.swap <new document> <url> <origin> <provenance>` — HTML §7.1.3.2 "Browsing context group switches due to
        opener policy": a navigation whose response's opener policy does not match its navigable's active
        document's builds that Document in a NEW top-level browsing context in a NEW browsing context group. It
        is the same provisioning act and a different record because §7.3.2.3 creates that context "with null,
@@ -689,10 +703,14 @@ async function main() {
        URL. A new GROUP is a new instance for the same reason a cross-origin child is: SECURITY.md keys one on
        `(browsing context group, origin)` and a swap changes the first half. */
     if (f[0] === 'navigable.swap') {
-      if (f.length < 4 || !f[1] || !f[2])
-        throw new Error(`a navigable.swap notice was short of its fields: ${record}`);
+      if (f.length < 5 || !f[1] || !f[2] || !f[4])
+        throw new Error(`a navigable.swap notice was short of its fields: ${record} — the fourth is what the ` +
+                        'navigation that caused the swap is EVIDENCE OF, taken off that navigation\'s own ' +
+                        'load job (core/frame/browsing_context_group.c), and the load below is decided from it');
       if (holderOf(f[1])) return;
-      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`, null);
+      /* AND IT IS THE SAME NAVIGATION'S WORD, which is what keeps a swap from being a door an address this
+         zone declined at `document.fetch` could be fetched through one notice later. */
+      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`, f[4]);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url) });
@@ -853,19 +871,27 @@ async function main() {
       if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
         askOperation(e, id, op);
       } else if (op.startsWith('document.fetch\t')) {
-        /* §7.4.5's load for a document THIS instance holds — answered here rather than routed, because
-           routing a same-origin load to a peer would be answering it out of another agent.
-           THE PROVENANCE IS `null` AND IT IS STATED, which is `navigate`'s own word for "the record does not
-           state it": a `document.fetch` names an ADDRESS and nothing else, exactly as a `navigable.create`
-           does, so the two callers of that function reach the same decision from the same standing — this
-           one is the SAME-AGENT half of the act whose cross-agent half is provisioned above it, and it would
-           be incoherent for the agent boundary to change what a person had authorized. It was OMITTED here,
-           which is not the same mistake as passing the wrong word and is a worse one: `undefined` is neither
-           `null` nor one of the three tokens, so the check written to stop an unknown provenance THREW on the
-           first same-origin child navigable of any session — the one shape it was never meant to be about. */
+        /* `document.fetch<TAB><provenance><TAB><url>` — §7.4.5's load for a document THIS instance holds,
+           answered here rather than routed, because routing a same-origin load to a peer would be answering
+           it out of another agent.
+           THE RECORD STATES ITS PROVENANCE NOW AND THIS ARM USED TO PASS `null` FOR IT — `navigate`'s own word
+           for "the record does not state it", which §Attacker-sources makes a crash at the decision, so every
+           same-origin child navigable of every session was declined at every unwidened origin. The record
+           names the same word its cross-agent twin above carries, taken off the same load job, so the two
+           callers reach one decision from one fact: the agent boundary decides WHERE a document is built and
+           never WHETHER this zone may spend the network on it.
+           SPLIT AT THE FIRST TAB AFTER THE VERB, ADDRESS LAST — a URL cannot contain a tab (URL Standard §4.4
+           "URL parsing" strips every ASCII tab from its input) and the vocabulary in front of it is three
+           words of ASCII lowercase letters, so this grammar has exactly one place it comes apart. */
         track(e, key, (async () => {
-          const loaded = await navigate(op.slice('document.fetch\t'.length), e.docUrl, 'document.fetch',
-                                        null);
+          const args = op.slice('document.fetch\t'.length);
+          const t = args.indexOf('\t');
+          if (t <= 0 || t >= args.length - 1)
+            throw new Error(`a document.fetch request is not \`document.fetch<TAB><provenance><TAB><url>\`: ` +
+                            `${op} — core/frame/navigable.c writes both fields non-empty on every path, so a ` +
+                            'record with one tab is this zone and that job no longer sharing a grammar and ' +
+                            'the address read out of it would be a provenance token');
+          const loaded = await navigate(args.slice(t + 1), e.docUrl, 'document.fetch', args.slice(0, t));
           if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
              byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would

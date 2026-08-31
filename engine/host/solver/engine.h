@@ -821,6 +821,32 @@ void engine_unload_document(uint32_t doc);
 #define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
 #define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
 
+/* THE SAME THREE WORDS FOR AN ACT THAT IS NOT A PARK — one composition, in one place, for every request this
+ * engine builds by RUNNING THE PAGE'S CODE rather than by parking on a reply. A NAVIGATION is the caller this
+ * was written for (core/frame/navigable.c's §7.4.5 "Populating a session history entry" load and its
+ * `navigable.create`) and a ROUTE DECLARATION is the other (solver/route_seed.c); both used to be — or would
+ * have been — a hand-written ternary over `flow_path_forced`, which is the second copy of a rule this file
+ * already owns.
+ *
+ * IT ANSWERS `derived` OR `forced` AND NEVER `observed`, AND THAT IS A FACT ABOUT THE ACT RATHER THAN A
+ * NARROWING OF THE VOCABULARY. `observed` is "a REAL LOAD of this document makes exactly this request", and
+ * its first conjunct is HTML §4.12.1 "The script element"'s PARSER-INSERTED flag — a fact the PARK register
+ * holds because a parser-inserted script's address came out of bytes the trusted zone itself fetched
+ * (solver/pending.h's FLOW_PENDING_DOCSCRIPT). Nothing this door serves has that conjunct available: it is
+ * asked where code RAN.
+ *
+ * NO RUNNING FLOW IS A POSITIVE ANSWER AND NOT A DEFAULT. A path that does not exist has stood on no
+ * contradicted arm, so the answer is `derived` — which is also the direction a provenance is allowed to be
+ * wrong in: under-claiming costs one request a person may authorise per origin, while over-claiming carries a
+ * reply to a request no client makes into the observed pool, which CLAUDE.md §@H forbids outright. A caller
+ * for which a flow-less act would itself be a broken invariant asserts that at its own site (route_seed.c
+ * does; §7.4.4's URL and history update steps are reached only by running the page's code).
+ *
+ * THE ENGINE STATES AND THE ZONE DECIDES. This names what a request IS and refuses nothing — the firing
+ * decision, the credential decision and the per-origin widening are all `extension/lib/safe-fetch.js`'s and
+ * its callers', by construction. */
+const char *engine_provenance_of_running_path(void);
+
 /* WHAT THE BYTES ARE FOR, WHICH IS A DIFFERENT QUESTION FROM WHO ASKED — Fetch §2.2.5 "Requests"' DESTINATION,
  * stated verbatim off the request record the park carried (core/fetch/fetch.h) and never derived here.
  * THE TWO FIELDS ARE NOT TWO SPELLINGS OF ONE FACT, and reading them as one is what left a live hole. The
@@ -860,8 +886,13 @@ void engine_unload_document(uint32_t doc);
    which is not a duplicated table: neither party can take the other's answer, since the engine has no bytes
    and the zone has no register. */
 
-/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>URL`
- * line per outstanding request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
+/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one
+ * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` line per outstanding request,
+ * newline-terminated, "" for none, DEDUPED BY THE PAIR.
+ * THIS SENTENCE NAMED FOUR FIELDS AFTER THE PROVENANCE BECAME THE FIFTH, which is the ordinary way a grammar
+ * stated in prose beside the function that joins it goes wrong: every reader of the LINE was updated and the
+ * one-line description of it was not. engine_pending_split below is the authority on the shape — it is what
+ * every host takes the line apart with — and this is its restatement rather than a second grammar.
  *
  * THE METHOD IS PART OF THE REQUEST'S IDENTITY, and this seam used to answer an ADDRESS ALONE. The register
  * has carried the method since the day it carried the whole request (PEND_METHOD), and it was dropped at

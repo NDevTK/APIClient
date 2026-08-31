@@ -50,7 +50,7 @@ void browsing_context_group_release(void)
 }
 
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
-                                 SandboxFlags final_sandbox_flags)
+                                 SandboxFlags final_sandbox_flags, const char *provenance)
 {
     uint32_t swapped;
     size_t n;
@@ -60,6 +60,14 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
            "§7.1.3.2's browsing context group swap was asked to create a top-level browsing context with no "
            "destination — the address and the principal are the navigation's, and the new instance is created "
            "from exactly the two of them");
+    /* AND THE THIRD FACT THE NAVIGATION CARRIES, asserted here because the zone's decision to LOAD this
+       address at all is made from it alone — see the header. An empty one is not "no opinion": it is a caller
+       that stopped stating a field whose absence §Attacker-sources makes a crash at the decision. */
+    DCHECK(provenance != NULL && *provenance,
+           "§7.1.3.2's group swap was asked to announce an instance with NO PROVENANCE for the navigation that "
+           "caused it — the load job carries the word (core/frame/navigable.c) and the trusted zone re-fetches "
+           "this address to build the Document, so without it that zone is deciding whether to spend the "
+           "network, and whose session, on a navigation nothing has told it who named");
     /* §7.1.3.2 STEP 2 — "if browsingContext is not a top-level browsing context, then return browsingContext".
        Reaching the swap for a child navigable means the predicate was asked where the standard never asks it;
        §7.4.5 obtains an opener policy only for a top-level traversable, which is the same fact from the other
@@ -90,7 +98,8 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
        the navigable's CURRENT document, which is the one the swap supersedes, so the name is unique by the same
        induction every other document name here rests on. */
     swapped = world_mint_doc(window_proxy_doc(proxy));
-    n = strlen(world_doc_name(swapped)) + strlen(url) + strlen(origin_serialized(origin)) + 32;
+    n = strlen(world_doc_name(swapped)) + strlen(url) + strlen(origin_serialized(origin)) +
+        strlen(provenance) + 32;
     op = malloc(n);
     CHECK(op != NULL, "browsing context group: OOM building §7.1.3.2's swap record — a dropped record is a "
                       "Document the host never provisions, and the navigable it belongs to has already been "
@@ -100,8 +109,14 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
        from. A field that is always empty is a field no reader can validate, so the record does not carry one.
        NO TOP-LEVEL CREATION URL EITHER: the swapped-to navigable IS a top-level traversable, so HTML §8.1.3.1's
        top-level creation URL for its environments is its own address — one fact, stated once, derived by the
-       zone from the address it is already given rather than sent twice and able to disagree. */
-    snprintf(op, n, "navigable.swap\t%s\t%s\t%s", world_doc_name(swapped), url, origin_serialized(origin));
+       zone from the address it is already given rather than sent twice and able to disagree.
+       A FOURTH FIELD THAT IS THE NAVIGATION'S AND NOT THE RECORD'S: what this load is evidence of. It is the
+       one field that is NOT derivable by the zone — every other fact here it can compute from the address or
+       from §7.3.2.3's own "null, null, and group", and this one is a statement about the PATH the engine ran,
+       which nothing outside the engine can see. TAB-SAFE by its vocabulary: solver/engine.h's three tokens are
+       ASCII lowercase letters. */
+    snprintf(op, n, "navigable.swap\t%s\t%s\t%s\t%s", world_doc_name(swapped), url, origin_serialized(origin),
+             provenance);
     engine_host_notify(ctx, op);
     free(op);
     /* AND THE OLD BROWSING CONTEXT IS DISCARDED — step 10's note, "browsingContext will not be used by the new

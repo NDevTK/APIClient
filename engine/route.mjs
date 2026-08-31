@@ -513,8 +513,19 @@ async function service(e) {
        origin given RESPONSE'S URL". This driver serves one literal document to every address and follows no
        redirect, so the response's URL is the ADDRESS THAT WAS ASKED FOR; stating it is a fact about this
        driver's own network rather than a field copied to satisfy a reader, and a host that DOES follow a
-       redirect reports a different string in the same slot. */
-    e.answer(id, { url: op.slice('document.fetch\t'.length), headers: "" }, HTML_B);
+       redirect reports a different string in the same slot.
+       `document.fetch<TAB><provenance><TAB><url>` — SPLIT AT THE FIRST TAB AFTER THE VERB, ADDRESS LAST. This
+       driver reads the provenance nowhere and makes no firing decision from it: it serves one literal document
+       out of memory, spends no network and has no session to spend, so it has nothing that field decides. What
+       it must not do is take the line's tail for a URL, which would answer every navigation with a Document
+       whose §7.4.5 origin is determined over a string beginning `derived<TAB>`. */
+    const fetchArgs = op.slice('document.fetch\t'.length);
+    const fetchTab = fetchArgs.indexOf('\t');
+    if (fetchTab <= 0 || fetchTab >= fetchArgs.length - 1)
+      fail(`a document.fetch request is not \`document.fetch<TAB><provenance><TAB><url>\`: ${op} — ` +
+           'core/frame/navigable.c writes both fields non-empty on every path, so a record with one tab is ' +
+           'this driver and that job no longer sharing a grammar');
+    e.answer(id, { url: fetchArgs.slice(fetchTab + 1), headers: "" }, HTML_B);
     paid++;
   }
   return { step: r, paid };
@@ -594,7 +605,11 @@ async function drainNotices(e) {
          an item of the §7.1.7 container beside it — that container is five policies and a flag set is none of
          them; §7.1.5 reads the embedder ELEMENT's iframe sandboxing flag set and that element's node
          document's active set, neither of which crosses an instance, so the creating engine runs it and the
-         result travels), and FIELD 15 IS
+         result travels), FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF (CLAUDE.md
+         §A-REQUEST-CARRIES-THE-PROVENANCE's `observed`/`derived`/`forced`, which this driver reads nowhere for
+         the `document.fetch` branch's reason exactly — it serves a literal and spends no network — but which
+         it must COUNT, because the policy behind it is the remainder and an uncounted field moves it), and
+         FIELD 16 IS
          THE LIST. The policy is the record's REMAINDER (a
          raw CSP header may contain HTAB), which is why everything that is not the policy sits before it: an
          origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
@@ -606,10 +621,10 @@ async function drainNotices(e) {
          parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
          either of them into the container beside them could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(15).join('\t'),
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(16).join('\t'),
                                          f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]));
     }
-    /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
+    /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin> <provenance>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a
        NULL CREATOR, so there is no policy container to clone and no top-level creation URL only the creator
        could state (a top-level traversable's is its own address). The instance is NEW rather than joined
@@ -621,7 +636,10 @@ async function drainNotices(e) {
        branch above with a `cross-origin-opener-policy: same-origin` field line, which `a`'s own `unsafe-none`
        does not match. That is one line in HTML_A and one URL-keyed header in the reply this driver serves. */
     else if (f[0] === 'navigable.swap') {
-      if (f.length < 4 || !f[1] || !f[2]) fail(`a navigable.swap notice was short of its fields: ${n}`);
+      /* FIVE FIELDS, the fourth being the provenance of the navigation that caused the swap — counted here
+         and read nowhere, for the create arm's reason. */
+      if (f.length < 5 || !f[1] || !f[2] || !f[4])
+        fail(`a navigable.swap notice was short of its fields: ${n}`);
       if (holderOf(f[1])) fail(`§7.1.3.2's swap named a document an instance already holds: ${f[1]}`);
       /* NO CREATOR (§7.3.2.3 makes the new browsing context "with null, null, and group"), so no container to
          clone and no self-origin to state. */

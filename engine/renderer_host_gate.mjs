@@ -702,7 +702,7 @@ try {
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
      origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
      coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>ancestorOrigins<TAB>
-     creationSandboxFlags<TAB>policy`, built by
+     creationSandboxFlags<TAB>provenance<TAB>policy`, built by
      core/frame/navigable.c. The policy is LAST
      because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
      field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
@@ -715,8 +715,8 @@ try {
      those names contain spaces ("sandboxed navigation browsing context flag").
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 16)
-    fail(`the create notice carries ${create.length} field(s) where the record has sixteen — ` +
+  if (create.length < 17)
+    fail(`the create notice carries ${create.length} field(s) where the record has seventeen — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -829,8 +829,25 @@ try {
          'fill only when the opener\'s own set carries the sandbox-propagates-to-auxiliary flag, and this ' +
          'opener\'s set is empty. `none` is that grammar\'s word for the empty set; flags here would put the ' +
          'peer\'s document under a sandbox nothing in this fixture asks for');
-  if (create.slice(15).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(15).join('\t')}\`) and this ` +
+  /* AND WHAT THE NAVIGATION IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three words, and
+     this fixture proves the MIDDLE one, which is the arm the host's whole cross-instance surface hangs on.
+     The opener RUNS `window.open(CHILD_ADDR, "child")`: code ran, so `observed` is unreachable (that word is
+     "a real load of this document makes exactly this request", whose first conjunct is HTML §4.12.1 "The
+     script element"'s parser-inserted flag and belongs to the park register); and no branch in this fixture
+     stands on an arm its own concrete example contradicts, so the flow's `path_forced` is clear and the
+     answer is `derived` rather than `forced`.
+     ASSERTING THE EXACT WORD RATHER THAN MEMBERSHIP IS THE POINT. A membership test would pass for an engine
+     that answered `forced` for everything, and `forced` is the arm both hosts REFUSE TO LOAD at an unwidened
+     origin — so an engine that composed this field the wrong way round would provision no peer at all and
+     this gate would report the refusal as a design decision. */
+  if (create[15] !== 'derived')
+    fail(`the create notice states the provenance \`${create[15]}\` and this document created the child by ` +
+         'RUNNING `window.open` on a path that stood on no contradicted arm — solver/engine.h composes that ' +
+         'as `derived`. `observed` would be an engine claiming a real load of this document makes this ' +
+         'request, and `forced` is the arm both hosts decline to load at an unwidened origin, so a wrong ' +
+         'word here is a peer that is never provisioned or a reply carried into the observed pool');
+  if (create.slice(16).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(16).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

@@ -1703,10 +1703,15 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    `bytes` is null and `unavailable` NAMES WHY in the closed vocabulary the popup renders. `bytes: null` is a
    load that did not load — the navigable still exists and shows an error page, which is what the engine's own
    child_document reads it as — and it is a real §7.4 outcome rather than a softening.
+   ONE OF THOSE REASONS IS THIS FUNCTION'S OWN AND NOT THE NETWORK'S — `{kind: "provenance"}`, a navigation
+   this zone declined to make because the address exists only past a forced gate. It is in the same vocabulary
+   as the network's refusals for the same reason they are all in one: what a reader of a navigable that shows
+   an error page needs is WHICH RULE refused it, and "the chokepoint would not" and "this caller would not"
+   are two answers to that one question rather than two questions.
    EMPTINESS IS NOT JUDGED HERE. An OK response with a zero-length body is a perfectly ordinary empty Document
    under §7.4.5, and refusing one is a SEED's rule (a document with no bytes cannot be the bundle), stated at
    the seed rather than imposed on every child navigable a page creates. */
-async function navigationLoad(u, base, principalUrl, principalOrigin) {
+async function navigationLoad(u, base, principalUrl, principalOrigin, provenance) {
   /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. §7.4.5
      determines the loaded Document's ORIGIN over the RESPONSE's URL, and a navigable whose load did not load
      still gets a Document — so "there was no response" is not a reason to answer without one, and the honest
@@ -1742,6 +1747,49 @@ async function navigationLoad(u, base, principalUrl, principalOrigin) {
          "MessageSender.origin for the document this load belongs to, and it is what decides whether the " +
          "person's session travels; `undefined` is a caller that stopped stating it, which would silently " +
          "return every tab to loading the LOGGED-OUT document");
+  /* ── WHO NAMED THIS ADDRESS, WHICH IS THE WHOLE OF WHAT DECIDES WHETHER THE LOAD HAPPENS ────────────────
+     CLAUDE.md §Attacker-sources puts a navigation's entire safety in the choice of address and its entire
+     remaining question in PROVENANCE: "an OBSERVED or DERIVED address is navigated freely, a FORCED one is
+     the deliberate per-origin widening, and one whose provenance is NOT ESTABLISHED crashes at the decision
+     rather than proceeding." A top-level navigation is a GET, which RFC 9110 §9.2.1 "Safe Methods"' safe set
+     contains, so the METHOD half is answered before this function is entered and there is nothing else left.
+     UNESTABLISHED IS THE CRASH AND IT IS THIS ASSERT. Every record that reaches a caller of this function now
+     states the word (core/frame/navigable.c's load job and create notice, browsing_context_group.c's swap,
+     route_seed.c's declaration, and the ambient seed, whose address the person's own browser navigated to),
+     so an absent or unknown one is a PRODUCER that stopped stating it rather than an act nobody can classify
+     — and there is nothing downstream to catch it: no partition, no interception, and a same-origin load one
+     line below that carries the person's cookies. A `||` here would be that crash spelled as a default. */
+  DCHECK(provenance === PROVENANCE_OBSERVED || provenance === PROVENANCE_DERIVED ||
+         provenance === PROVENANCE_FORCED,
+         "a §7.4 navigation was asked for with the provenance `" + provenance + "`, which is none of the " +
+         "three solver/engine.h declares — CLAUDE.md §Attacker-sources makes a navigation whose provenance " +
+         "is not established a crash at the decision rather than a load, because with no partition and no " +
+         "interception there is nothing behind this line to catch it and the load below carries the " +
+         "person's session wherever a browser's would");
+  /* A FORCED ADDRESS IS NOT LOADED, AND THE REFUSAL IS THIS POLICY'S ANSWER RATHER THAN A GAP IN IT.
+     §Attacker-sources makes firing what a bundle only reaches past a forced gate "CONFIGURABLE AND PER-ORIGIN
+     … Default conservative, widened deliberately per origin, never inferred from a site looking like a test",
+     so an origin nobody has widened answers NO at every future state of that setting — which is what this arm
+     is. It is the SAME answer this zone's `document.seed` arm already gives a declared route on a forced arm,
+     and the two must not differ: they are one question about one kind of act, and a zone that refused a
+     declared address while fetching a forced `<iframe src>` would be deciding by which record the address
+     arrived on. A widening is a PERSON'S SENTENCE and enters where every other risk decision does.
+     WHY IT IS THE LOAD AND NOT MERELY THE SESSION. Dropping to an uncredentialed fetch would answer only the
+     ACTING-AS-THE-PERSON half. The other half is §@H's: a reply to a request no client makes is PLAUSIBLE —
+     a 401 body parses as JSON and yields fields that exist nowhere — and one invented field is the example
+     that shapes the next endpoint, so the values are carried as FORCED for ever whether or not cookies went
+     with them. Not sending the request is the only thing that answers both.
+     AND IT IS STILL A DOCUMENT. §7.4.5 gives a navigable whose load did not load a Document all the same, so
+     this returns the same shape a blocked scheme does — `bytes: null` with the reason in `unavailable` — and
+     the navigable exists showing an error page rather than the page's model losing a frame it holds a
+     WindowProxy for. The address is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a gap
+     in the report but IS the report. */
+  if (provenance === PROVENANCE_FORCED) {
+    console.warn("[bridge] a navigation to `" + abs + "` stood on a FORCED arm and its origin is not widened " +
+                 "for exploration — the address is derived and reported, and it is not loaded");
+    return { url: abs, headers: {}, bytes: null,
+             unavailable: { kind: "provenance", provenance: provenance } };
+  }
   try {
     // Never `as:"script"` — these bytes are PARSED as a document, not run as code.
     /* AND IT CARRIES THE SESSION EXACTLY WHERE A BROWSER'S NAVIGATION WOULD. The chokepoint re-decides this
@@ -1756,14 +1804,16 @@ async function navigationLoad(u, base, principalUrl, principalOrigin) {
        list exists because "forced execution builds requests no real client makes", and a seeded navigation
        is a request a real client made SECONDS AGO in this same profile — the person's own browser performed
        that exact credentialed GET, which is where the seed came from. The condition under which the harm
-       exists is credentialed AND NOT-OBSERVED, and safe-fetch.js can only see the first half because no
-       request in this system yet DECLARES its provenance. That is the next subproblem in order and it is
-       CLAUDE.md §A REQUEST CARRIES THE PROVENANCE OF ITS VALUES' own shape — OBSERVED / DERIVED / FORCED
-       stated beside the method and the credential state, with the chokepoint deciding from it — and it is
-       not invented here as a one-valued flag with no other producer, which would be the vocabulary-with-one-
-       member defect this project has already paid for once. Until it exists the deny list stays armed:
-       being over-broad is its cheap direction (one unfired request, reported with its token) and loosening
-       a security gate as a side effect of turning cookies on is its expensive one. */
+       exists is credentialed AND NOT-OBSERVED.
+       THIS PARAGRAPH USED TO SAY safe-fetch.js "can only see the first half because no request in this system
+       yet DECLARES its provenance", AND THAT HAS STOPPED BEING TRUE. Every caller of this function now states
+       the word, this function asserts it above, and a FORCED one never reaches the fetch at all. What has NOT
+       changed is the deny list's scope: the token is not passed to `safeFetch`, so the list is still armed for
+       every credentialed load including the OBSERVED ones it is over-scoped for. That is deliberate ordering
+       rather than an oversight — this diff's subproblem is that a request STATES what it is evidence of, and
+       rescoping a security gate is the next one and LOOSENS one, which is not a thing to do as a side effect
+       of the diff that made the field available. Being over-broad remains its cheap direction (one unfired
+       navigation, reported with its token); loosening it by accident remains its expensive one. */
     /* Fetch §2.2.5's `document` DESTINATION — HTML §7.4.5 "Populating a session history entry" is the
        navigate algorithm's own fetch, and §2.2.5's table gives that row the destination `document`. It is not
        script-like, so this load takes no CORB: what reads these bytes is the HTML parser, which is what they
@@ -2543,8 +2593,15 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   // a live document and the origin of the URL THIS zone fetched for one it provisioned. A same-origin child
   // navigable therefore carries the session exactly as this document's own load did; a cross-origin one does
   // not, which is the residual `navigationCarriesSession` names.
-  const fetchedDocument = async (u) => {
-    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin);
+  /* AND `provenance` IS THE ENGINE'S STATEMENT ABOUT WHO NAMED THE ADDRESS, RELAYED AND NEVER RE-DERIVED HERE.
+     It rides every record that reaches this function — the `document.fetch` request, the `navigable.create`
+     notice and §7.1.3.2's `navigable.swap` — because it is a fact about the PATH the engine ran and there is
+     nothing in an address that could tell this zone the same thing. That is the whole reason this parameter
+     exists rather than being defaulted: an address alone cannot distinguish a frame a person's own session
+     would have loaded from one that exists because a gate was forced, and this zone was fetching both, with
+     cookies, for as long as the record said nothing. */
+  const fetchedDocument = async (u, provenance) => {
+    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance);
     return { url: r.url, headers: r.headers, bytes: r.bytes };
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
@@ -3167,13 +3224,17 @@ let _nextSwapGroup = 1;
    against a browser tab id, and two namespaces that can collide are one namespace. */
 let _nextSeedGroup = 1;
 
-/* THE ROUTE DECLARATION'S WIRE VOCABULARY, spelled here because both halves of it are read below and a string
-   literal at a branch is a vocabulary with no name. The verb is solver/route_seed.h's `ROUTE_SEED_NOTICE`; the
-   two provenance words are solver/engine.h's `PENDING_PROVENANCE_*`, which is the SAME vocabulary that header
-   declares for every outbound request rather than a second one for this record — a request is a request
-   whether it becomes a fetch or a NAVIGATION, and the zone's firing policy has to read one set of words. `observed` is deliberately absent: no load of anything produces a declaration, so
-   the token is unreachable on this record and a value carrying it is a field read at the wrong offset. */
+/* THE OUTBOUND REQUEST VOCABULARY, spelled here because every branch below reads it and a string literal at a
+   branch is a vocabulary with no name. The verb is solver/route_seed.h's `ROUTE_SEED_NOTICE`; the three
+   provenance words are solver/engine.h's `PENDING_PROVENANCE_*`, which is the SAME vocabulary that header
+   declares for every outbound request rather than a second one per record — a request is a request whether it
+   becomes a fetch or a NAVIGATION, and the zone's firing policy has to read one set of words.
+   ALL THREE ARE NAMED HERE NOW, because the third has readers: `navigationLoad` asserts the whole vocabulary
+   and the ambient seed states `observed` (the person's own browser performed that navigation, which is what
+   `observed` means). It is still unreachable on a `document.seed` RECORD — no load of anything produces a
+   declaration — and that arm's own check is what says so, which is where a fact about one record belongs. */
 const ROUTE_SEED_NOTICE = "document.seed";
+const PROVENANCE_OBSERVED = "observed";
 const PROVENANCE_DERIVED = "derived";
 const PROVENANCE_FORCED = "forced";
 
@@ -3191,8 +3252,9 @@ const PROVENANCE_FORCED = "forced";
 async function hostNotice(eng, line) {
   const f = line.split("\t");
   if (f[0] === "navigable.create") {
-    /* FOURTEEN FIELDS, because CSP §2.2's SELF-ORIGIN, §7.1.4's four EMBEDDER POLICY items, HTML §7.3.1.3's
-       TWO LINKS, HTML §3.1.3's ANCESTOR ORIGINS, the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are all
+    /* SIXTEEN FIELDS AFTER THE VERB, because CSP §2.2's SELF-ORIGIN, §7.1.4's four EMBEDDER POLICY items,
+       HTML §7.3.1.3's TWO LINKS, HTML §3.1.3's ANCESTOR ORIGINS, HTML §7.1.5's CREATION SANDBOXING FLAG SET,
+       the NAVIGATION'S PROVENANCE, the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are all
        read below. The count said five
        once, so a record that stopped at the origin passed the assert and then took `undefined` for the
        creator's policy clone — a child document judged under NO policy, which is §7.1.7's inheritance silently
@@ -3201,9 +3263,16 @@ async function hostNotice(eng, line) {
        the value is missing, so it counts every field the reader below indexes — and it MOVES when the record
        grows, because the field added last is exactly the one an unmoved count would let arrive as
        `undefined`. */
-    DCHECK(f.length >= 16, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, and the policy");
+    DCHECK(f.length >= 17, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
-    const loaded = await eng.fetchedDocument(f[3]);
+    /* FIELD 15 IS WHAT THIS NAVIGATION IS EVIDENCE OF, AND IT IS THE FIELD THE LOAD BELOW IS DECIDED FROM.
+       Until it existed this arm fetched every child navigable a page's own code named, CREDENTIALED wherever
+       it was same-origin, with nothing anywhere in the path saying who had named the address — which is
+       exactly the state CLAUDE.md §Attacker-sources calls a navigation whose provenance is not established and
+       makes a crash at the decision rather than a load. The engine states it; `navigationLoad` decides on it;
+       this arm neither re-derives it nor acts on it, which is why it is passed through rather than tested
+       here — one decision, at the one document-load path, for every caller of it. */
+    const loaded = await eng.fetchedDocument(f[3], f[15]);
     /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
        notice, even though the notice carries one at f[4]. SECURITY.md draws that line at this exact record:
        "identity may be minted by the untrusted side because it is only a name, but ROUTING and the ORIGIN
@@ -3288,7 +3357,8 @@ async function hostNotice(eng, line) {
        RELAYED VERBATIM. This zone does not read the tokens — the engine that receives them is the only party
        that turns one into a value, and it crashes on one it does not know rather than reading it as the
        default. See NEW_EMBEDDER_POLICY. */
-    /* THE POLICY IS THE REMAINDER FROM FIELD 15, AND THE INDEX HERE WAS ONE SHORT. It read `f.slice(13)`,
+    /* THE POLICY IS THE REMAINDER FROM FIELD 16, AND THE INDEX HERE WAS ONE SHORT ONCE ALREADY. It read
+       `f.slice(13)`,
        which is the position the policy held before §3.1.3's ancestor origins was inserted before it, so this
        zone had been relaying the ancestor list JOINED TO THE FRONT OF THE CREATOR'S CSP — a policy whose first
        directive is a list of origin serializations. CSP §2.2.2's parse discards a directive it cannot read, so
@@ -3296,8 +3366,10 @@ async function hostNotice(eng, line) {
        neighbour, and every `@S` verdict decided against it. That is precisely the failure navigable.c's own
        assert named as the silent one — a reader that tests a MINIMUM accepts a longer record and reads the
        policy off the wrong field — and it had already happened here once. The count above tests every field
-       this function indexes and MOVES with the record for that reason. */
-    const inherited = { csp: f.slice(15).join("\t"), selfOrigin: f[6],
+       this function indexes and MOVES with the record for that reason. It moved again when the PROVENANCE was
+       inserted at field 15, which is the same edit as the ancestor list's and is why the same paragraph is
+       still worth reading: the policy is the remainder, so every field added is added in front of it. */
+    const inherited = { csp: f.slice(16).join("\t"), selfOrigin: f[6],
                         embedder: { value: f[7], endpoint: f[8],
                                     reportOnlyValue: f[9], reportOnlyEndpoint: f[10] } };
     /* HTML §7.3.1.3's PARENT NAVIGABLE, AT FIELD 11 AND NOT INSIDE THE CONTAINER BESIDE IT. A §7.1.7 container
@@ -3456,15 +3528,21 @@ async function hostNotice(eng, line) {
      instance a document the first response's policy did not describe. Closing it is this zone remembering its
      OWN reply to the `document.fetch` that navigation already made, keyed by (instance, address). */
   if (f[0] === "navigable.swap") {
-    DCHECK(f.length >= 4 && !!f[1] && !!f[2],
+    DCHECK(f.length >= 5 && !!f[1] && !!f[2] && !!f[4],
            "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
-           "address it is loading and the origin it computed, and a record missing either of the first two " +
-           "names a Document this zone cannot provision while the navigable it replaces is already closed");
+           "address it is loading, the origin it computed and what the navigation that caused the swap is " +
+           "EVIDENCE OF; a record missing either of the first two names a Document this zone cannot provision " +
+           "while the navigable it replaces is already closed, and one missing the last leaves the load below " +
+           "with nothing to be decided from");
     DCHECK(!hostHolderOf(f[1]),
            "§7.1.3.2's swap named a document this pool already holds — the name is minted fresh for each swap " +
            "(solver/world.h), so a collision is one instance provisioned for two Documents, which is one heap " +
            "answering for two");
-    const swapped = await eng.fetchedDocument(f[2]);
+    /* AND THE SECOND FETCH THE PARAGRAPH ABOVE CALLS ONE TOO MANY IS MADE UNDER THE SAME DECISION THE FIRST
+       ONE WAS, because it is the SAME NAVIGATION: the provenance on this record is the load job's own
+       (core/frame/browsing_context_group.c takes it from there), so a swap cannot become a way for an address
+       this zone declined at `document.fetch` to be fetched anyway one notice later. */
+    const swapped = await eng.fetchedDocument(f[2], f[4]);
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -3571,9 +3649,16 @@ async function hostNotice(eng, line) {
        to `principalUrl`, so an address that supplied itself would self-authorize into the person's intranet,
        and the credentialed-read principal is the browser's `MessageSender.origin` for the document whose
        router declared this route. Reading either off the pool at admission time would read whatever that
-       engine had become by then — including gone. */
+       engine had become by then — including gone.
+       AND THE PROVENANCE IS ONE OF THOSE INPUTS, taken from the record rather than reconstructed at
+       admission. This arm has already declined a `forced` declaration two branches above, so a stored entry
+       is `derived` by construction — and storing that word rather than assuming it is the whole difference
+       between a work item that STATES what it is and one whose reader has to remember which arm it came
+       through. `navigationLoad` asserts the vocabulary on the way out, so an entry that lost the field would
+       stop the admission at the load rather than fetching under a provenance nobody wrote. */
     if (!_seeds.has(f[1]))
-      _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin });
+      _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
+                         provenance: f[2] });
     /* AND NOTHING IS KICKED. A `_hostKick()` here would be a call that cannot do anything: this router runs
        inside `serviceFetch`, which runs inside the ONE scheduling loop, so `_hostDriving` is true and the kick
        returns on its first line — a computed call with no effect, which is the read-with-no-writer defect
@@ -3840,7 +3925,23 @@ async function engineServiceHostRequests(eng) {
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
-    const r = await eng.fetchedDocument(op.slice("document.fetch\t".length));
+    /* `document.fetch<TAB><provenance><TAB><url>` — SPLIT ONCE, AT THE FIRST TAB AFTER THE VERB, so the
+       ADDRESS IS THE REMAINDER. A URL cannot contain a tab (URL Standard §4.4 "URL parsing" removes every
+       ASCII tab from its input before anything else and the C0 control percent-encode set escapes one
+       everywhere it could reappear), and the vocabulary in front of it is three words of ASCII lowercase
+       letters, so this grammar has exactly one place it can be taken apart and this is it.
+       IT IS INDEXED RATHER THAN `split("\t")`-ed for that same reason in reverse: splitting on every tab and
+       taking the last field would answer correctly for an address that has none and silently pick the tail of
+       one that does, which is the shape a reader that can never be told it is wrong has. */
+    const fetchArgs = op.slice("document.fetch\t".length);
+    const fetchTab = fetchArgs.indexOf("\t");
+    DCHECK(fetchTab > 0 && fetchTab < fetchArgs.length - 1,
+           "a document.fetch request is not `document.fetch<TAB><provenance><TAB><url>`: `" + op + "` — " +
+           "core/frame/navigable.c writes both fields non-empty on every path (the provenance from " +
+           "solver/engine.h's three tokens, the address as an absolute serialization), so a record with one " +
+           "tab is this zone and that job no longer sharing a grammar, and the address read out of it would " +
+           "be a provenance token");
+    const r = await eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab));
     // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
     // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
     // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
@@ -4397,7 +4498,7 @@ const _waiting = [];      // documents awaiting a slot: { code, html, msg, persi
    RECIPE outlives its bytes, and here the recipe is the DECLARING DOCUMENT'S OWN RESIDUE — a resumed session
    replays that document, its router runs again, and the address is declared again. Persisting the set would be
    storing what a replay reproduces, which is the tier's own definition of what to shed first. */
-const _seeds = new Map();   // absolute address -> { url, principalUrl, principalOrigin }
+const _seeds = new Map();   // absolute address -> { url, principalUrl, principalOrigin, provenance }
 let _hostDriving = false;
 /* THE RESERVATION LEDGER, WHICH IS CUMULATIVE BECAUSE THE STATE IT DESCRIBES IS TRANSIENT. A probe that reads
    the pool after an analysis settles sees an empty array whether the reservation mechanism ran or was never
@@ -4849,7 +4950,10 @@ const _hostOps = {
            are the DECLARING document's, taken when the route was declared and carried on the work item, because
            §scheduler's "an operation that becomes a work item takes its inputs with it" is exactly the rule a
            read of the pool here would break: the engine that declared this route may be gone by now. */
-        const loaded = await navigationLoad(seed.url, seed.principalUrl, seed.principalUrl, seed.principalOrigin);
+        /* AND SO IS THE PROVENANCE, for the identical sentence: the engine that declared this route stated
+           what its path made the address, and the load is decided from that word and not from the address. */
+        const loaded = await navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
+                                            seed.principalOrigin, seed.provenance);
         /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, in the same order and for the
            same reasons stated at the live seed: the chokepoint's own `unavailable`; a response that landed on
            ANOTHER ORIGIN (which is a Document of origin B about to be seated in a cluster keyed on origin A,
@@ -5548,8 +5652,17 @@ self.astDispatch = async function astDispatch(msg) {
        port components" the rewrite is refused). Two zones reaching the same answer from two facts is not a
        redundancy to collapse — the brain compares two ADDRESSES to decide this is a route of this document,
        and this compares an address against a BROWSER-STATED ORIGIN to decide whose bytes may be read, which
-       is what makes an opaque-origin (sandboxed) document's load uncredentialed while its seed is admitted. */
-    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin);
+       is what makes an opaque-origin (sandboxed) document's load uncredentialed while its seed is admitted.
+       AND ITS PROVENANCE IS `observed`, WHICH IS THE ONE PLACE IN THIS FILE THAT WORD IS TRUE OF A NAVIGATION
+       AND IS A FACT RATHER THAN AN ASSUMPTION. solver/engine.h defines `observed` as "a real load of this
+       document makes exactly this request", and an ambient seed is that in the strongest possible form: the
+       address is the one the browser ACTUALLY NAVIGATED TO (`PerformanceNavigationTiming.name`, which a
+       `pushState` cannot forge — CLAUDE.md §PASSIVE-AND-FORCED-DISCOVERY names exactly that as the one fact
+       an ambient observer contributes), so the person's own browser performed this exact credentialed GET
+       seconds ago in this same profile. It is stated HERE, by the zone that knows where the seed came from,
+       and never derived inside the loader from the shape of the address. */
+    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
+                                        PROVENANCE_OBSERVED);
     /* THE SEED'S OWN RULE, ON TOP OF THE LOADER'S, AND IT IS THE SEED'S BECAUSE IT IS ABOUT A BUNDLE. §7.4.5
        gives an OK response with a zero-length body a perfectly ordinary empty Document, and a child navigable
        gets exactly that — but a SEEDED document with no bytes cannot be the program this run exists to

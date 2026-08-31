@@ -2493,6 +2493,20 @@ static const char *prov_token(int prov) {
                 "zone's firing decision reads this field", prov);
 }
 
+/* See engine.h. THE SAME THREE WORDS FOR AN ACT THAT IS NOT A PARK, composed through the SAME mapping above
+   so a navigation and a route declaration cannot spell a provenance a pending line could not.
+   IT READS THE FLOW ITSELF rather than taking one, because the fact it wants is about the path standing HERE
+   and a caller that passed a flow could pass a different one. `flow_path_forced` is monotone and idempotent
+   (solver/flow.h), so this answers about the path as it is at the moment the act is performed — which is
+   §scheduler's "an operation that becomes a work item takes its inputs with it" read from the producing end:
+   the ANSWER travels with the operation, never the lookup. */
+const char *engine_provenance_of_running_path(void)
+{
+    const Flow *f = flow_running();
+
+    return prov_token(f != NULL && flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED);
+}
+
 /* …AND THE SAME TRIP BACK, for a token already written into the join. Length-delimited because the caller
    holds a field of a line and not a NUL-terminated string. */
 static int prov_of_token(const char *tok, size_t n) {
@@ -6534,8 +6548,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                       "Document that REPLACES the target navigable's active document, built from a synthesized "
                       "`text/html;charset=utf-8` response whose body is the string. §7.4's navigate can only "
                       "load an address the host FETCHES (navigable.c's js_nav_load_step asks "
-                      "`document.fetch\\t<url>`), so build the navigate that takes a RESPONSE THE ENGINE ALREADY "
-                      "HAS and route this through it");
+                      "`document.fetch\\t<prov>\\t<url>`), so build the navigate that takes a RESPONSE THE "
+                      "ENGINE ALREADY HAS and route this through it");
             JS_FreeValue(ctx, cv);
             /* §8.1.4.4 step 8 IS ABOUT AN evaluationStatus, and a frame that suspended or detached has none.
                Both returns below advance past this row without ever reaching the install, so a report built on

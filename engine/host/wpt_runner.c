@@ -1828,7 +1828,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[16]; int nf = 0; char *q;
+    char *f[17]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -1837,9 +1837,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 16; q++)
+    for (q = line, f[nf++] = q; *q && nf < 17; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 16 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 17 && !strcmp(f[0], "navigable.create")) {
         /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
            7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
            report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
@@ -1865,22 +1865,33 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            holds the element and its RESULT crosses. It sits before the policy at FIELD 15 for the reason
            everything else does, and its members are separated by COMMA rather than by the SPACE that joins
            §3.1.3's list and §9.5's answer: §7.1.5's flag names CONTAIN SPACES ("sandboxed navigation browsing
-           context flag"), so a space-joined set could not be taken apart at all. */
-        wpt_spawn_child(f[1], f[3], f[4], f[15], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
+           context flag"), so a space-joined set could not be taken apart at all.
+           FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF (CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's
+           `observed`/`derived`/`forced`) AND THIS RUNNER READS IT NOWHERE, WHICH IS NOT A DEFAULTED FIELD.
+           The field exists so a host can decide whether to spend the network — and whose SESSION — on an
+           address the page's own code chose; this host fetches only from the corpus's own wptserve, with no
+           cookie jar and no person to act as, so it has no such decision to make and states none. What it
+           MUST do is stop reading the policy off the index the provenance now occupies, which is why the
+           number below moved: the record grew and the count moved with it, so a build that missed one of the
+           two would take a provenance token for a CSP header rather than reading past the end. */
+        wpt_spawn_child(f[1], f[3], f[4], f[16], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
                         f[14]);
         free(whole);
         return;
     }
-    /* `navigable.swap <new doc> <url> <origin>` — HTML §7.1.3.2's browsing context group SWAP, which is the
-       SAME provisioning act and a different record because the two operations differ in every field the create
-       carries beyond these three. There is no CREATOR (§7.3.2.3 creates the new browsing context "with null,
-       null, and group"), so there is no policy container to clone and no opener policy to inherit; and the
-       swapped-to navigable IS a top-level traversable, so HTML §8.1.3.1's top-level creation URL for its
-       environments is its own address rather than something only the creator could state. Hence the empty
+    /* `navigable.swap <new doc> <url> <origin> <provenance>` — HTML §7.1.3.2's browsing context group SWAP,
+       which is the SAME provisioning act and a different record because the two operations differ in every
+       field the create carries beyond these. There is no CREATOR (§7.3.2.3 creates the new browsing context
+       "with null, null, and group"), so there is no policy container to clone and no opener policy to inherit;
+       and the swapped-to navigable IS a top-level traversable, so HTML §8.1.3.1's top-level creation URL for
+       its environments is its own address rather than something only the creator could state. Hence the empty
        policy and the address passed twice below — derived here, not sent twice and able to disagree.
+       THE FOURTH FIELD IS THE NAVIGATION'S PROVENANCE and this host reads it nowhere, for the create arm's
+       reason exactly: a corpus fetch spends no session. It is COUNTED and not read, which is what keeps a
+       record that grew from arriving here as a record that is merely long.
        A NEW GROUP IS A NEW PROCESS HERE FOR THE SAME REASON A CROSS-ORIGIN CHILD IS: SECURITY.md keys an
        instance on `(browsing context group, origin)`, and a swap changes the first half. */
-    if (nf == 4 && !strcmp(f[0], "navigable.swap")) {
+    if (nf == 5 && !strcmp(f[0], "navigable.swap")) {
         /* NO CREATOR MEANS NO CONTAINER TO CLONE, so both halves of the CSP list are empty rather than one of
            them being guessed at — an empty policy resolves no `'self'`, so there is no self-origin to state.
            §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" FOR THE SAME REASON AND IS SPELLED OUT RATHER THAN LEFT
@@ -2133,8 +2144,24 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                flow that would. The answer is built at the completion (wpt_request_finish's DOCUMENT arm),
                which is where the response's header list and its bytes arrive together. */
             if (!wpt_request_asked_id(id)) {
+                /* `document.fetch<TAB><provenance><TAB><url>` — TWO tabs, and the ADDRESS IS THE REMAINDER.
+                   The provenance is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for this navigation
+                   and this host reads it nowhere, for the notice router's reason above: a corpus fetch at
+                   wptserve spends no session and has no person to act as, so it makes no firing decision and
+                   states none. What it must do is SKIP the field rather than take the line's tail for a URL,
+                   which is why the address is found past the SECOND tab: one `strchr` here would have GET the
+                   nine characters `derived<TAB>` glued to every navigated address in the corpus.
+                   ASSERTED, because a record whose second tab is missing is the two grammars having parted and
+                   the arithmetic below would then run off this buffer. */
+                char *url_at = strchr(strchr(op, '\t') + 1, '\t');
+
+                DCHECK(url_at != NULL && url_at[1],
+                       "a document.fetch request carried no ADDRESS after its provenance — the load job writes "
+                       "`document.fetch<TAB><provenance><TAB><url>` (core/frame/navigable.c) and both fields "
+                       "are non-empty on every path, so one tab means this host and that job no longer share a "
+                       "grammar and the URL read here would be a provenance token");
                 req.method = "GET";
-                req.url = strchr(op, '\t') + 1;
+                req.url = url_at + 1;
                 /* §7.4.5's navigation request, whose destination is Fetch §2.2.5's `document` — HTML's
                    navigate algorithm is the `document` row of §2.2.5's own initiator/destination table. It is
                    not script-like, which is the whole of what a consumer reads it for. */

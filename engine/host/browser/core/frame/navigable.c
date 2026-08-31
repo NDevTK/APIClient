@@ -843,7 +843,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
  *
  * SO THE LOAD IS A JOB, which in this engine is a call-root FLOW: preemptible, forkable, parkable. That last
  * one is the point, and it is what the fetch needs. §7.4 step 14 FETCHES the destination, the network belongs
- * to the host, and a host-owed answer SUSPENDS the asking flow — so the load asks `document.fetch<TAB><url>`
+ * to the host, and a host-owed answer SUSPENDS the asking flow — so the load asks `document.fetch<TAB><provenance><TAB><url>`
  * and returns JS_STEP_YIELD, siblings run while the response is in flight, and the job resumes with `{body,
  * csp}` in hand. That is why none of the three callers could have done this themselves: each of them is a
  * place where nothing can suspend, and the job is a place where everything can.
@@ -1129,6 +1129,16 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     STEP_ARM(NAV_LOAD_FETCH);
     addr = JS_ToCString(ctx, step_arg(&s->hdr, 1));
     if (!addr) return JS_STEP_ABRUPT;
+    /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for this navigation, RIDING THE JOB — asserted once
+       here for both readers of it below (the request the host is asked to perform, and §7.1.3.2's swap record
+       when the response's opener policy forces a new browsing context group). It is stated by the OPERATION
+       that enqueued this load and never asked of the flow running now: this is a task, and the flow that runs
+       it need not be the flow that queued it. */
+    DCHECK(JS_IsString(step_arg(&s->hdr, 10)),
+           "a document load carried no PROVENANCE — navigable_load_enqueue asserts one on every path and puts "
+           "it on the job because §scheduler's \"an operation that becomes a work item takes its inputs with "
+           "it\" applies to what a request is evidence of exactly as it applies to its address; the trusted "
+           "zone decides whether to spend the network, and whose session, on this one word");
     /* IS THERE ANYTHING TO FETCH — one spec fact about the SCHEME, asked where the fetch is. `about:blank` has
        no response and no content, so navigating to it produces a Document from nothing: asking the host for it
        would be a GET of the literal text `about:blank`, and every host would answer 404 or nothing at all.
@@ -1159,11 +1169,23 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "script source as the request target. The branch is in navigable_navigate, which every navigation "
            "converges on, so whatever enqueued this load bypassed it");
     if (fetches && !s->req) {
-        char *op = malloc(strlen(addr) + 20);
+        /* `document.fetch<TAB><provenance><TAB><url>` — THE ADDRESS LAST, WHICH IS THE PENDING LINE'S OWN
+           SHAPE (solver/engine.h joins `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL`) and is
+           the only ordering a host can split without knowing how many fields there will be next time: every
+           fixed-vocabulary token comes first and the URL is the remainder. This record carried the address
+           ALONE, and a host handed an address and nothing else has no way to tell a navigation a real client
+           makes from one that exists only because a gate was forced — so one host declined all of them and the
+           other fetched all of them with the person's cookies. */
+        const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, 10));
+        char *op;
+
+        CHECK(prov != NULL, "navigable: OOM taking §7.4.5's provenance off the load job");
+        op = malloc(strlen(addr) + strlen(prov) + 20);
         CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
-        sprintf(op, "document.fetch\t%s", addr);
+        sprintf(op, "document.fetch\t%s\t%s", prov, addr);
         s->req = engine_host_request(ctx, op);
         free(op);
+        JS_FreeCString(ctx, prov);
         JS_FreeCString(ctx, addr);
         return JS_STEP_YIELD;   /* park on the response; siblings run meanwhile */
     }
@@ -1557,7 +1579,19 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                minted either: §7.5.1's own note says the Window, Document and agent on the swapped-past side
                "will not end up being used". */
             swapped = true;
-            browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags);
+            /* AND IT CARRIES THIS NAVIGATION'S OWN PROVENANCE, because §7.1.3.2's swap is not a second act:
+               it is THIS load, arriving at a host that must build its Document in another instance. The host
+               re-fetches the address to do that (it may not take bytes from an untrusted engine), so it makes
+               the identical firing decision the create arm makes and needs the identical field. Reading it off
+               the job rather than off the flow running now is §scheduler's rule again — by here the response
+               has come back, and the flow standing at this line need not be the one that navigated. */
+            {
+                const char *swap_prov = JS_ToCString(ctx, step_arg(&s->hdr, 10));
+
+                CHECK(swap_prov != NULL, "navigable: OOM taking §7.1.3.2's provenance off the load job");
+                browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags, swap_prov);
+                JS_FreeCString(ctx, swap_prov);
+            }
         }
     }
     header_list_free(&response_headers);
@@ -1791,16 +1825,28 @@ static int g_nav_load_stepid = -1;
    a destination that matches `about:blank` has no response to take a base from, and by the time the JOB runs
    the only document it could ask is the one being replaced. §CLAUDE.md's "an operation that becomes a work
    item takes its inputs with it" is exactly this field. NULL for a destination that fetches. */
+/* AND THE PROVENANCE RIDES FOR THE SAME SENTENCE, WHICH IS THE WHOLE REASON IT IS TAKEN HERE AND NOT AT THE
+   FETCH. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE makes an outbound request's provenance one of the inputs
+   the OPERATION has, and solver/flow.h's `path_forced` is monotone — so a flow that enqueues a load and takes
+   a contradicted arm afterwards built that navigation on the path it had THEN, while a job that asked at its
+   own fetch would file it under a path reached later, in a flow that need not even be the one that enqueued
+   it (this is a TASK, and a task queued with no owner is adopted by whichever flow runs first).
+   IT IS STATED BY THE CALLER rather than composed here, because the three callers are three OPERATIONS: a
+   §7.4.2.2 navigate, a §7.4.3 reload and §7.3.1.3 "Child navigables"' create. They all reach the same
+   composition today (solver/engine.h's engine_provenance_of_running_path), and taking it as a parameter is
+   what keeps that from being an assumption this function makes on their behalf the day one of them differs —
+   a document-install create, whose navigation no flow produced, is already the one that differs in kind. */
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
-                                   SerializedPolicyContainer inherit_policy, const char *about_base)
+                                   SerializedPolicyContainer inherit_policy, const char *about_base,
+                                   const char *provenance)
 {
-    JSValueConst argv[10];
-    JSValue fn, url, org, csp, self, about;
+    JSValueConst argv[11];
+    JSValue fn, url, org, csp, self, about, prov;
     JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
-    fn = JS_NewCFunction2(ctx, NULL, "load", 10, JS_CFUNC_step, g_nav_load_stepid);
+    fn = JS_NewCFunction2(ctx, NULL, "load", 11, JS_CFUNC_step, g_nav_load_stepid);
     CHECK(!JS_IsException(fn), "the document-load job's callee could not be allocated");
     url = JS_NewString(ctx, addr);
     CHECK(!JS_IsException(url), "the document-load job's address could not be allocated");
@@ -1866,6 +1912,18 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
            "value, which is what a destination that fetches has, and an empty string is neither");
     about = about_base ? JS_NewString(ctx, about_base) : JS_NULL;
     CHECK(!JS_IsException(about), "the document-load job's about base URL could not be allocated");
+    /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for this navigation, asserted rather than defaulted:
+       the trusted zone's whole decision about whether to spend the network — and whose session — on this
+       address is read off this one field, so a job that carried none would reach a host that has nothing to
+       decide from and no way to say that is what happened. */
+    DCHECK(provenance != NULL && *provenance,
+           "a document load was enqueued with NO PROVENANCE — every operation that enqueues one either has a "
+           "running flow whose path says whether a gate was forced, or has none and is therefore an act no "
+           "code produced, and solver/engine.h's engine_provenance_of_running_path answers both; an absent "
+           "field is a caller that stopped stating it, and the trusted zone decides whether to LOAD this "
+           "address and whether to send the person's cookies with it on exactly this word");
+    prov = JS_NewString(ctx, provenance);
+    CHECK(!JS_IsException(prov), "the document-load job's provenance could not be allocated");
     argv[0] = proxy;
     argv[1] = url;
     argv[2] = org;
@@ -1876,7 +1934,9 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[7] = coep_endpoint;
     argv[8] = coep_ro;
     argv[9] = coep_ro_endpoint;
-    JS_EnqueueCallTask(ctx, fn, 10, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    argv[10] = prov;
+    JS_EnqueueCallTask(ctx, fn, 11, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);
     JS_FreeValue(ctx, coep_ro);
     JS_FreeValue(ctx, coep_endpoint);
@@ -2100,9 +2160,14 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
        INITIATOR is the document whose script ran, which is this realm, and its base URL is what a relative URL
        inside the loaded `about:blank` Document must resolve against. It is decided HERE for the reason the
        address above is decided here rather than in the job. */
+    /* AND SO IS THE PROVENANCE, WHICH IS THIS OPERATION'S AND NOT THE NAVIGABLE'S. §7.4.2.2's navigate is
+       reached by RUNNING the page's code — a `location` assignment, a form submission, a link activation, an
+       `open()` at a named navigable — so the only question left is whether the path that ran stood on an arm
+       its own concrete example contradicts. */
     navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
                            serialized_policy_container_of(document_policy(ctx)),
-                           strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL);
+                           strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
+                           engine_provenance_of_running_path());
     free(addr);
     return JS_DupValue(ctx, proxy);
 }
@@ -2252,10 +2317,15 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
        navigable's ACTIVE DOCUMENT" — so the operation's initiator IS the target here, and reading the target
        is reading the operation's own input. They are still read at the ENQUEUE and never inside the job, for
        the reason navigable_load_enqueue states: by the time the job runs the only document it could ask is the
-       one being replaced. */
+       one being replaced.
+       THE PROVENANCE IS THIS RELOAD'S OWN PATH. §7.4.3's reload is `location.reload()` and the traversal
+       members beside it — the page's own code, every time — so the fact that decides it is the same one every
+       other running-code act asks. A reload of a document that only exists because a gate was forced is still
+       a request no client makes, which is why this is the running path's answer and not the address's. */
     navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
                            serialized_policy_container_of(document_policy(ctx)),
-                           strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL);
+                           strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
+                           engine_provenance_of_running_path());
 }
 
 int navigable_reload_run(JSContext *ctx, NavigableReloadWork *w, JSValue in, JSValue **out_cb, int *out_argc)
@@ -2684,6 +2754,19 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        self-origin: a document that INHERITED its policy resolves `'self'` against the origin the policy came
        FROM, and the initial about:blank is exactly such a document. */
     SerializedPolicyContainer creator_policy;
+    /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation this create FOLDS IN — §7.3.1.3
+       "Child navigables"' step 14, whose load reaches the network exactly as §7.4.2.2's navigate does.
+       COMPUTED ONCE, HERE, AND READ BY BOTH ARMS BELOW. The two arms are one operation seen from two sides: a
+       SAME-ORIGIN child's load is enqueued as a job in this heap and a CROSS-ORIGIN child's is announced to a
+       host that provisions a peer, and it would be incoherent for the agent boundary to change what this
+       navigation is evidence of. Asking twice is what would let them disagree, and the field is a firing
+       decision at both ends.
+       A DOCUMENT-INSTALL CREATE HAS NO RUNNING FLOW, and that is answered rather than asserted against:
+       §4.8.5's insertion steps run for every `<iframe>` in the initial markup before this agent's frontier is
+       seeded (see navigable_load_enqueue's own note about the task that has no owner), so the path that would
+       say whether a gate was forced does not exist and no gate was forced — which is what
+       engine_provenance_of_running_path answers `derived` for, in the under-claiming direction. */
+    const char *provenance = engine_provenance_of_running_path();
     char *addr = NULL;
     const Origin *origin = NULL;
     /* §7.4.2.2's scheme dispatch, as child_address answered it — see the assertion below for why a create is
@@ -2946,7 +3029,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             /* §7.1.7: the CREATOR's container, for §7.4's create — every item of it, as one value. */
             /* NO ABOUT BASE URL: the `if` above admits only a destination that is not an `about:` URL, so
                §7.4.5's aboutBaseURL stays null — §2.4.3's answer for a Document that comes from a response. */
-            navigable_load_enqueue(ctx, proxy, addr, origin, creator_policy, NULL);
+            /* AND THE PROVENANCE THE CROSS-ORIGIN ARM PUTS ON ITS NOTICE, taken from the same local rather
+               than recomputed: one operation, one answer. */
+            navigable_load_enqueue(ctx, proxy, addr, origin, creator_policy, NULL, provenance);
     } else {
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
@@ -3161,10 +3246,21 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             strlen(embedder_policy_value_token(creator_policy.embedder.report_only_value)) +
             strlen(creator_policy.embedder.report_only_endpoint) +
             strlen(parent_id) + strlen(container_policy) + strlen(ancestor_origins) +
-            strlen(sandbox_flags) + 32;
+            strlen(sandbox_flags) + strlen(provenance) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+        /* AND THE FIFTEENTH FIELD IS WHAT THIS NAVIGATION IS EVIDENCE OF — CLAUDE.md
+           §A-REQUEST-CARRIES-THE-PROVENANCE's `observed`/`derived`/`forced`, the same word the SAME-ORIGIN arm
+           puts on its load job, taken from the same local.
+           IT IS THE ONE FIELD THE HOST'S DECISION TO SPEND THE NETWORK IS MADE FROM, and until it existed the
+           host had nothing: §Attacker-sources puts the WHOLE of a navigation's safety in the choice of address
+           ("a navigation whose provenance is not established CRASHES at the decision rather than proceeding"),
+           and a record that named the address and said nothing about who named it left one host declining
+           every child navigable it was ever told about and the other firing every one of them CREDENTIALED.
+           IT SITS BEFORE THE POLICY FOR THE REASON EVERYTHING ELSE DOES: the policy is the record's remainder
+           because a raw CSP header may contain HTAB, and this vocabulary is three words of ASCII lowercase
+           letters (solver/engine.h), so it can never be the field that cannot be split. */
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
                  world_doc_name(child),
                  world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu,
                  creator_policy.self_origin,
@@ -3176,6 +3272,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                  container_policy,
                  ancestor_origins,
                  sandbox_flags,
+                 provenance,
                  creator_policy.csp ? creator_policy.csp : "");
         engine_host_notify(ctx, op);
         free(op);

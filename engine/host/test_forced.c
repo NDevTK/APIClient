@@ -4549,7 +4549,15 @@ static int hostreq_answer_all(JSContext *ctx)
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
-                const char *asked = tab + 1 + 15;   /* past `document.fetch<TAB>` */
+                /* `document.fetch<TAB><provenance><TAB><url>` — the ADDRESS IS THE REMAINDER, past the SECOND
+                   tab. The provenance is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for this
+                   navigation and this fixture reads it nowhere: it stands in for a trusted zone's network and
+                   has no session to spend, so it makes no firing decision and states none. Skipping the field
+                   is not optional, though — taking the tail for a URL would serve every navigated document
+                   under an address with a provenance token glued to its front, which the response-URL write
+                   below would then make that Document's ORIGIN. */
+                const char *prov_end = memchr(tab + 1 + 15, '\t', (size_t)(end - (tab + 1 + 15)));
+                const char *asked = prov_end ? prov_end + 1 : end;
 
                 v = JS_NewObject(ctx);
                 /* FETCH §2.2.6 "Responses"' RESPONSE URL, WHICH THIS FIXTURE SERVES OUT OF A LITERAL AND
@@ -4558,10 +4566,12 @@ static int hostreq_answer_all(JSContext *ctx)
                    satisfy a reader. HTML §7.4.5 determines the loaded Document's ORIGIN over this string, so a
                    host that DID redirect would put a different one here and the Document would belong to
                    another agent cluster. */
-                DCHECK(asked < end,
-                       "a document.fetch request carried no address after its tab — the load job writes "
-                       "`document.fetch<TAB><url>` with an absolute serialization, so an empty tail is that "
-                       "record's two ends disagreeing rather than a page navigating to nothing");
+                DCHECK(prov_end != NULL && asked < end,
+                       "a document.fetch request carried no address after its provenance — the load job writes "
+                       "`document.fetch<TAB><provenance><TAB><url>` with an absolute serialization and a "
+                       "non-empty token from solver/engine.h's three (core/frame/navigable.c), so a missing "
+                       "second tab or an empty tail is that record's two ends disagreeing rather than a page "
+                       "navigating to nothing");
                 JS_DefinePropertyValueStr(ctx, v, "url",
                                           JS_NewStringLen(ctx, asked, (size_t)(end - asked)), JS_PROP_C_W_E);
                 /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one.

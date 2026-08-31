@@ -1216,7 +1216,7 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
         DFAIL("a form submits to a `data:` action — §4.10.22.3 step 26 plans to navigate to it (the GET cell "
               "having mutated its query first), and navigating to a data: URL builds a Document out of the "
               "URL's OWN bytes with no network involved. §7.4's navigate can only load an address the HOST "
-              "fetches (navigable.c's js_nav_load_step asks `document.fetch\\t<url>`, which for a data: URL is "
+              "fetches (navigable.c's js_nav_load_step asks `document.fetch\\t<prov>\\t<url>`, which for a data: URL is "
               "a GET of the literal text); build the data: URL processor and the navigate that takes a "
               "RESPONSE THE ENGINE ALREADY HAS, then route this row through it");
     /* The unlisted-scheme row took `Get action URL` above, which is a decision about the TABLE; what the

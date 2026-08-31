@@ -161,8 +161,17 @@ void browsing_context_group_release(void);
  * ONE EMISSION PER FLOW, and the ceiling that implies is named rather than capped. Forced execution runs a
  * `window.open()` once per flow, so a page whose popup swaps groups announces one instance per flow — the same
  * shape core/frame/navigable.c's cross-origin child already has, one level more expensive. The answer is
- * reclamation at the host's Level-1 admission, never a seen-set here. */
+ * reclamation at the host's Level-1 admission, never a seen-set here.
+ *
+ * `provenance` IS THE NAVIGATION'S, NOT THIS RECORD'S — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's
+ * `observed`/`derived`/`forced` (solver/engine.h), taken from the load job that reached this arm. The zone
+ * fetches the address a SECOND time, as the paragraph above says, so it makes the same firing decision the
+ * create arm makes and needs the same field to make it from; a record that named an address and said nothing
+ * about who named it left the zone with §Attacker-sources' unestablished provenance, which that section makes
+ * a crash at the decision rather than a load. It is a PARAMETER and never a read of the running flow, for the
+ * reason the address beside it is one: this is reached from inside a queued task, by whichever flow adopted
+ * it, long after the operation that decided what this navigation is evidence of. */
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
-                                 SandboxFlags final_sandbox_flags);
+                                 SandboxFlags final_sandbox_flags, const char *provenance);
 
 #endif
