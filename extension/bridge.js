@@ -1238,8 +1238,19 @@ function frontierWeight(row) {
   DCHECK(row.visits > 0 || row.emit === 0,
          "a work item that has never been served carries emissions — nothing can have emitted before it ran, " +
          "so the rate below would be a total masquerading as a per-visit expectation");
-  const rate = row.visits ? row.emit / row.visits : 0;   // expected emit per admission — future productivity
-  return rate + 1 / (row.visits + 1);                    // reward + optimism; no aging (nothing is burning CPU)
+  return frontierReward(row) + 1 / (row.visits + 1);     // reward + optimism; no aging (nothing is burning CPU)
+}
+/* THE REWARD TERM ALONE, NAMED, BECAUSE A CENSUS OF A SUM CANNOT SAY WHICH HALF ORDERED IT. Both Level-1
+   defects fixed this session were this term standing still — a waiting document answering the constant 1.0
+   however many fetches had been spent at its address, and a total divided by its own visit count so no
+   document could ever sink — and in BOTH the weight was a perfectly ordinary number. A spread over the SUM
+   cannot tell those from the one state that legitimately ties: a profile whose store is empty, where every
+   candidate is unserved and 0 + 1/(0+1) is exactly 1.0 for all of them, correctly. That is the same reading
+   the popup was rendering as "a rank frozen at a constant looks like this from outside", on healthy code.
+   It is one expression with one definition, read by the weight and by the census, so the terms the census
+   reports are terms OF the weight the pick used and never a second computation beside it. */
+function frontierReward(row) {
+  return row.visits ? row.emit / row.visits : 0;         // expected emit per admission — future productivity
 }
 /* THE COLD TIER'S RANKING VIEW, WHICH IS NOT THE COLD TIER. The Level-1 order asks two numbers of a parked
    frontier and the store answers with a whole parked DOCUMENT — its bytes, its script inventory, its header
@@ -1472,38 +1483,79 @@ const CAND_KINDS = [
   { kind: "seed", pop: "candSeeds", wMax: "candSeedWMax" },   // an address an application declared is a page of itself
   { kind: "cold", pop: "candCold",  wMax: "candColdWMax" },   // a parked frontier in the cold tier
 ];
+/* THE SPREAD ROWS — the readings taken over the RANKED SET as a whole, declared once because they are attached
+   at the member that earns them and asserted at the record, and because the answer to "can this census show a
+   constant" is exactly this list. A spread over the WEIGHT can say that every candidate ties; it cannot say
+   WHY, and the two answers take opposite actions. On a profile whose store is empty every candidate is
+   unserved and every weight is 0 + 1/(0+1) = 1.0 — a tie that is the order sitting correctly at its entry
+   value. When an address that has been admitted n times ranks at that same 1.0, the tie is a rank frozen at a
+   constant, which is the defect this instrument exists for. `candVisMax` and `candUnserved` are what separate
+   them, and `candRewardMax`/`candRewardMin` say whether the term those defects froze is ordering anything at
+   all. Each row exists only over a NON-EMPTY ranked population, because an extremum over nothing is not a
+   number; `candUnserved` is a COUNT and lives with the populations below.
+   EACH ENTRY CARRIES ITS OWN WRITE, SPELLED WITH A LITERAL KEY, AND THAT IS NOT STYLE. A table-driven
+   `cen[s.row] = v` folds every one of these rows through a COMPUTED key, and a computed key is a write no
+   grep and no gate can see — `_level1Record` and popup.js then read `candWMax` and `candVisMax` by name off a
+   record whose producer has become invisible, which is READ-NO-WRITER with the writer standing right there.
+   `engine/fieldgate.mjs` reported exactly that when this table was first written the short way. So the table
+   is the one DECLARATION and each row's write is a literal at one site inside it; the DCHECK after the fold
+   is what stops an entry from naming one row and writing another. */
+const CAND_SPREAD = [
+  { row: "candWMax",
+    fold: (c, t) => { if (!("candWMax" in c) || t.w > c.candWMax) c.candWMax = t.w; } },
+  { row: "candWMin",
+    fold: (c, t) => { if (!("candWMin" in c) || t.w < c.candWMin) c.candWMin = t.w; } },
+  { row: "candRewardMax",
+    fold: (c, t) => { if (!("candRewardMax" in c) || t.reward > c.candRewardMax) c.candRewardMax = t.reward; } },
+  { row: "candRewardMin",
+    fold: (c, t) => { if (!("candRewardMin" in c) || t.reward < c.candRewardMin) c.candRewardMin = t.reward; } },
+  { row: "candVisMax",
+    fold: (c, t) => { if (!("candVisMax" in c) || t.visits > c.candVisMax) c.candVisMax = t.visits; } },
+];
 /* THE ZEROED READING — the ONE statement of which rows a candidate walk produces, so that "the walk ran" is a
-   fact a consumer can check without keeping its own copy of the row names. Populations and exclusions start at
-   0 because a count of zero is a READING; the extrema are absent because an extremum over nothing is not a
-   number, and `_candRanked` attaches each on its population's first member. */
+   fact a consumer can check without keeping its own copy of the row names. Populations, exclusions and the
+   unserved count start at 0 because a count of zero is a READING; the spread rows are absent because an
+   extremum over nothing is not a number, and `_candRanked` attaches each on the first member it has. */
 function _candCensus() {
-  const cen = { cands: 0, exclSub: 0, exclSeedLive: 0, exclSeedParked: 0,
+  const cen = { cands: 0, candUnserved: 0, exclSub: 0, exclSeedLive: 0, exclSeedParked: 0,
                 exclLive: 0, exclHeld: 0, exclStranded: 0 };
   for (const k of CAND_KINDS) cen[k.pop] = 0;
   return cen;
 }
-/* THE ONE SITE THAT COUNTS A RANKED CANDIDATE, so a kind's total, its population and its extrema cannot part.
-   Each arm of the walk used to do this itself in five lines, which is three copies of one rule and is exactly
-   how the total came to count a kind that the accounting had never heard of. PRESENCE IS THE FIRST-MEMBER
-   TEST rather than a zero sentinel: `candWMax` and each `wMax` exist from the moment their population has a
-   member and not before, which is the record's presence rule enforced where the number is produced instead of
-   restored by an attach pass afterwards. */
-function _candRanked(cen, kind, w) {
+/* THE ONE SITE THAT RANKS A CANDIDATE, so a kind's total, its population, its extrema and THE WEIGHT THE PICK
+   COMPARES cannot part. Each arm of the walk used to compute the weight and then count it itself in five
+   lines, which is three copies of one rule and is exactly how the total came to count a kind that the
+   accounting had never heard of. It now takes the ROW and returns the weight, so the terms this census reports
+   are terms of the number the pick actually used — a census that recomputed them beside the pick could
+   describe an order the walk did not take, which is the defect one layer in from the two this record exists
+   to expose. PRESENCE IS THE FIRST-MEMBER TEST rather than a zero sentinel: every spread row exists from the
+   moment the ranked set has a member and not before, which is the record's presence rule enforced where the
+   number is produced instead of restored by an attach pass afterwards. */
+function _candRanked(cen, kind, row) {
   const d = CAND_KINDS.find((k) => k.kind === kind);
   DCHECK(d !== undefined,
          "the Level-1 candidate walk ranked a work item of a kind that is not declared (`" + kind + "`) — " +
          "CAND_KINDS is what the record's accounting, the popup's columns and the admission's dispatch are " +
          "all read from, so a kind ranked outside it is a work item that would be counted into the total, " +
          "accounted for by no population, and built by whichever admission arm happened to be the fallback");
-  DCHECK(typeof w === "number" && Number.isFinite(w),
-         "the Level-1 candidate walk ranked a work item at a non-finite weight — every candidate's weight is " +
-         "`frontierWeight` over a reward and a visit count, so a non-finite one is that weight's own " +
-         "invariants having been bypassed, and it would win this order against every real number in it");
+  const t = { w: frontierWeight(row), reward: frontierReward(row), visits: row.visits };
+  DCHECK(Number.isFinite(t.w) && Number.isFinite(t.reward),
+         "the Level-1 candidate walk ranked a work item at a non-finite weight or reward — both are " +
+         "`frontierWeight`'s own terms over an emission count and a visit count, so a non-finite one is that " +
+         "weight's invariants having been bypassed, and it would win this order against every real number");
   cen[d.pop]++;
   cen.cands++;
-  if (!(d.wMax in cen) || w > cen[d.wMax]) cen[d.wMax] = w;
-  if (!("candWMax" in cen) || w > cen.candWMax) cen.candWMax = w;
-  if (!("candWMin" in cen) || w < cen.candWMin) cen.candWMin = w;
+  if (t.visits === 0) cen.candUnserved++;
+  if (!(d.wMax in cen) || t.w > cen[d.wMax]) cen[d.wMax] = t.w;
+  for (const s of CAND_SPREAD) {
+    s.fold(cen, t);
+    DCHECK(s.row in cen,
+           "a Level-1 spread row (`" + s.row + "`) was declared and its own fold did not write it — the " +
+           "declaration is what `_level1Record` asserts the record's presence rule against and what says a " +
+           "reading was taken over the ranked set, so an entry naming one row and writing another leaves the " +
+           "named row absent over a non-empty population, which this census reads as `nothing was ranked`");
+  }
+  return t.w;
 }
 /* THE PICK IS SYNCHRONOUS, AND THE INDEX IS WHY IT CAN BE. Its caller must not suspend between choosing a
    candidate and building its instance: a cluster can be rooted by a concurrent service round (hostNotice's
@@ -1592,8 +1644,7 @@ function _bestCandidate(idx) {
        profile has never served it, which is what `FRONTIER_UNSERVED` says and the one legitimate zero-visit
        input this weight takes. The two arms are different facts about the address and say so separately. */
     const known = byAddress.get(job.msg.sourceUrl);
-    const w = frontierWeight(known !== undefined ? known : FRONTIER_UNSERVED);
-    _candRanked(cen, "doc", w);
+    const w = _candRanked(cen, "doc", known !== undefined ? known : FRONTIER_UNSERVED);
     if (!best || w > best.w) best = { kind: "doc", job, w };
   }
   /* AND THE ADDRESSES AN APPLICATION DECLARED ARE PAGES OF ITSELF — the third kind of work item, ranked by the
@@ -1623,8 +1674,7 @@ function _bestCandidate(idx) {
        row in the store — so `FRONTIER_UNSERVED` is the POSITIVE statement about it rather than a hole a `||`
        fills, and it is the one legitimate zero-visit input this weight takes. That is the same reading the
        waiting arm above gives an address with no rows, reached here by exclusion instead of by lookup. */
-    const w = frontierWeight(FRONTIER_UNSERVED);
-    _candRanked(cen, "seed", w);
+    const w = _candRanked(cen, "seed", FRONTIER_UNSERVED);
     if (!best || w > best.w) best = { kind: "seed", addr, w };
   }
   for (const row of idx.values()) {
@@ -1654,8 +1704,7 @@ function _bestCandidate(idx) {
        are intact and the next VISIT to this address resumes them through engineRoot's own frontierGet, which
        reads recipes and never bytes. */
     if (row.stranded) { cen.exclStranded++; continue; }
-    const w = frontierWeight(row);
-    _candRanked(cen, "cold", w);
+    const w = _candRanked(cen, "cold", row);
     if (!best || w > best.w) best = { kind: "cold", row, w };
   }
   /* THE EXTREMA ARE ATTACHED BY `_candRanked` AT THE MEMBER THAT EARNS THEM, not restored by a pass here.
@@ -4314,17 +4363,29 @@ function _level1Record(pool, rd) {
          CAND_KINDS.map((k) => k.pop).join(" + ") + " of them — every work item with no instance is one of " +
          "the declared kinds, so a total that outruns them is an item counted into the order and accounted " +
          "for by no population, which the admission would then build through whichever arm is the fallback");
-  DCHECK(("candWMax" in r) === ("cands" in r && r.cands > 0) &&
-         ("candWMin" in r) === ("cands" in r && r.cands > 0) &&
+  DCHECK(CAND_SPREAD.every((s) => (s.row in r) === ("cands" in r && r.cands > 0)) &&
          CAND_KINDS.every((k) => (k.wMax in r) === ("cands" in r && r[k.pop] > 0)),
-         "the Level-1 census reports an extremum over an empty candidate population, or omits one over a " +
-         "population that has members — the ABSENCE of a weight is how this record says there was nothing to " +
+         "the Level-1 census reports a spread over an empty candidate population, or omits one over a " +
+         "population that has members — the ABSENCE of a reading is how this record says there was nothing to " +
          "rank, so a `candWMax: 0` beside `cands: 0` is a rank fabricated for an order with no members and a " +
          "missing one beside `cands: 3` is three items ranked by nothing");
-  DCHECK(!("candWMax" in r) || r.candWMin <= r.candWMax,
+  DCHECK(!("candWMax" in r) || (r.candWMin <= r.candWMax && r.candRewardMin <= r.candRewardMax),
          "the Level-1 census reports a candidate order whose lowest-ranked item outranks its highest — one " +
          "walk produces both, so an inversion is the spread being taken over a different set from the pick, " +
-         "and the spread is the ONE row that can show a rank frozen at a constant");
+         "and the spread is what can show a rank frozen at a constant");
+  /* THE SPREAD ROWS ARE READINGS OF THE SAME SET, AND THE THING THAT MAKES THEM ONE READING IS ASSERTED. A
+     candidate that has never been served contributes reward 0 and the full optimism bonus, so `candUnserved`
+     is a subset of the ranked population and it is exactly the population `candVisMax === 0` describes when it
+     is ALL of it. Without this the two rows could be taken over different walks and the popup's discriminator
+     — a tie at the entry value is the order's floor, a tie above an item with history is a frozen rank —
+     would be composed of two facts about two sets. */
+  DCHECK(!("cands" in r) || (r.candUnserved <= r.cands &&
+                             (r.cands === 0 || (r.candVisMax === 0) === (r.candUnserved === r.cands))),
+         "the Level-1 census reports " + r.candUnserved + " never-served candidate(s) of " + r.cands +
+         " with a maximum visit count of " + r.candVisMax + " — those two rows are one walk's reading of one " +
+         "set, and they are what separates an order sitting at its entry value (every item unserved, so a tie " +
+         "at 1.0 is correct) from a rank frozen at a constant (an address with history ranking at that same " +
+         "1.0), so a disagreement makes the census unable to tell the healthy case from the defect");
   self._level1 = r;
 }
 

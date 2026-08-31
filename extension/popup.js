@@ -1508,9 +1508,33 @@ function renderHostOrder() {
           + `, ${n("candCold")} parked frontier(s)`
           + ("candColdWMax" in hostOrder ? ` (best ${n("candColdWMax")})` : "")
           + `: best ${n("candWMax")}, lowest ${n("candWMin")}`
+          /* AND WHICH TERM PRODUCED THAT SPREAD, WHICH IS THE DIFFERENCE BETWEEN NAMING A DEFECT AND CRYING
+             WOLF. This row used to read a tie as "a rank frozen at a constant looks like this from outside",
+             and on a profile whose store is empty that sentence is WRONG about every run: every candidate is
+             then unserved, `0 + 1/(0+1)` is exactly 1.0 for all of them, and the tie is the order sitting
+             correctly at its entry value. The same tie is the real defect only when an address that HAS been
+             admitted ranks at that same entry value — which is precisely what both Level-1 defects fixed this
+             session did. `candVisMax` and `candUnserved` are what tell those apart, and the reward extrema
+             say whether the term those defects froze is ordering anything at all. A discriminator that cannot
+             rule its own alternative in is the shape §@S names about a search's own instrument. */
+          + `. Terms over that set: reward ${n("candRewardMin")}..${n("candRewardMax")}, `
+          + `${n("candUnserved")} of ${n("cands")} never served, most admissions at one address `
+          + `${n("candVisMax")}`
+          + (hostOrder.candRewardMax === 0 && hostOrder.candUnserved < hostOrder.cands
+              ? " — the reward term is ordering NOTHING here: every candidate that has been served demonstrates "
+                + "no findings, so what remains of the order is the optimism bonus alone"
+              : "")
           + (hostOrder.cands > 1 && hostOrder.candWMax === hostOrder.candWMin
-              ? " — every one of them ranks IDENTICALLY, which is what a rank frozen at a constant looks like "
-                + "from outside; the order between them is then whatever the walk happened to visit first"
+              ? (hostOrder.candVisMax === 0
+                  ? " — every one of them ranks IDENTICALLY, and every one is an address this profile has never "
+                    + "served: that tie is the order sitting at its ENTRY VALUE, which is correct, and not a "
+                    + "frozen rank"
+                  : ` — every one of them ranks IDENTICALLY even though ${n("candVisMax")} admission(s) have `
+                    + `been spent at one of these addresses, so the order between them is whatever the walk `
+                    + `visited first. That is the shape a rank FROZEN at a constant has, and it is the one `
+                    + `reading this row cannot settle on its own: two different histories can also sum to one `
+                    + `weight. What settles it is whether the tie SURVIVES more admissions — a live term `
+                    + `moves as \`candVisMax\` grows, a frozen one does not`)
               : "");
   const excl = "cands" in hostOrder
     ? `left the order: ${n("exclLive")} parked residue(s) whose address a live or waiting document holds `
