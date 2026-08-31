@@ -56,6 +56,7 @@
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/media_element.h"
+#include "core/html/event_handler_attribute.h"
 #include "core/html/html_image.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
@@ -239,6 +240,13 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
        given. The walk is still made rather than skipped, because whether a document is fully active is the
        ALGORITHM's question about the element's node document and not this call site's about its own. */
     html_image_parsed(ctx, root);
+    /* HTML §8.1.8.1 Event handlers for the same tree and for the media walk's reason: a lexbor parse reaches
+       none of DOM §4.9's mutation chokepoint, so a `<div onclick="x">` in the markup `parseFromString` was
+       handed is a handler no chokepoint ever saw. The walk is MADE rather than skipped for a document with no
+       browsing context, for the reason the image walk above is made: whether the handler can act upon anything
+       is §8.1.8.1's determine the target of an event handler's question about the element's node document —
+       which is what answers null for a `<body onload>` here — and not this call site's about its own. */
+    event_handler_attribute_parsed(ctx, root);
     return doc;
 }
 

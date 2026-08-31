@@ -49,6 +49,7 @@
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
 #include "core/html/html_base_element.h"
+#include "core/html/event_handler_attribute.h"   /* HTML §8.1.8.1's own attribute change steps */
 #include "core/html/html_form.h"    /* §2.1.4's moving steps step 2 — the form owner a move may have to reset */
 #include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
@@ -2558,6 +2559,17 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        element's own reflection setter, because a content attribute has more than one spelling and the setter
        answers for one of them — see core/html/media_element.c. The NEW value goes with it: "(Removing the src
        attribute does not do this)" is a question about the change and not about the element. */
+    /* HTML §8.1.8.1 Event handlers' own attribute change steps — the ones that turn `<button onclick="…">`
+       into a handler. Here for the reason every one of its neighbours is, and for one more: the OTHER half of
+       §8.1.8.1 is an IDL setter (`el.onclick = f`), which is a DIFFERENT ALGORITHM over the same handler map
+       rather than a second spelling of this one, so there is no setter these steps could have been hiding
+       inside — the content attribute simply did nothing at all.
+       FIRST OF THE STANDARDS' ENTRIES, and the standard defines no order among them (DOM §4.9's step 3 is one
+       extension point that several standards hook), so this is not a correctness ordering it is claiming to
+       satisfy — it is the one that cannot be wrong. Every entry below can START WORK whose completion is
+       dispatched at this element, and this is the only entry that REGISTERS A LISTENER, so installing it
+       before them means no such dispatch can arrive at a handler this write has not made yet. */
+    event_handler_attribute_changed(rctx, el, ns, local, val, val_len);
     media_element_attr_changed(rctx, el, ns, local, val);
     /* HTML §4.8.4.3.2's relevant mutations for an `img`: "The element's src, srcset, width, or sizes
        attributes are set, changed, or removed", and the `crossorigin`/`referrerpolicy` state changes beside

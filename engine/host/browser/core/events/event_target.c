@@ -58,6 +58,15 @@ static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
 static JSValue g_handler_marker;
+/* HTML §8.1.8.1's INTERNAL RAW UNCOMPILED HANDLER — the third thing an event handler's `value` can be, beside
+   null and a callback object, and the one a CONTENT attribute writes. It is a private-Symbol-keyed own slot on
+   an engine-minted record, for the reason the handler map itself is one: the page cannot forge the key, so a
+   record and a page-assigned object are told apart by a fact the page has no way to state. The alternative —
+   storing the body as a bare string and reading "a string here means uncompiled" — would rest on Web IDL
+   §3.2.20's non-object-to-null conversion happening in another function, and the day an entry point stored a
+   string without it a page's `onclick` would be COMPILED AS SOURCE. The key holds the BODY, so the brand and
+   the datum are one slot and a record with the brand and no body cannot exist. */
+static JSValue g_uncompiled_key;
 /* §9.4.2's handler-set hook — see event_target_set_handler_hook, far below, for what it is FOR. It is DEFINED
    here, beside the other three slots another component claims, because event_target_init declares all four to
    core/agent_state.h and a declaration needs the address. */
@@ -113,8 +122,10 @@ void event_target_init(JSContext *ctx)
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
     g_handler_key = JS_NewSymbol(ctx, "eventHandlers", false);
     g_handler_marker = JS_NewObject(ctx);
-    CHECK(!JS_IsException(g_handler_key) && !JS_IsException(g_handler_marker),
-          "the event-handler key or marker allocation failed");
+    g_uncompiled_key = JS_NewSymbol(ctx, "internalRawUncompiledHandler", false);
+    CHECK(!JS_IsException(g_handler_key) && !JS_IsException(g_handler_marker) &&
+          !JS_IsException(g_uncompiled_key),
+          "the event-handler key, marker or uncompiled-handler brand allocation failed");
     g_ready = 1;
     {
         /* (DOMString type, EventListener? callback, optional (AddEventListenerOptions or boolean) options) —
@@ -173,6 +184,7 @@ void event_target_init(JSContext *ctx)
     agent_state_value("event_target", &g_key, "§2.7's listener-map key");
     agent_state_value("event_target", &g_handler_key, "HTML §8.1.8.1's handler-map key");
     agent_state_value("event_target", &g_handler_marker, "HTML §8.1.8.1's handler placeholder in a listener list");
+    agent_state_value("event_target", &g_uncompiled_key, "HTML §8.1.8.1's internal raw uncompiled handler brand");
     agent_state_class("event_target", &g_et_class, "§2.7's interface prototype slot and brand");
     agent_state_id("event_target", &g_add_stepid, "§2.7's addEventListener machine");
     agent_state_id("event_target", &g_remove_stepid, "§2.7's removeEventListener machine");
@@ -362,6 +374,8 @@ void event_target_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_key);
     JS_FreeValueRT(rt, g_handler_key);
     JS_FreeValueRT(rt, g_handler_marker);
+    JS_FreeValueRT(rt, g_uncompiled_key);
+    g_uncompiled_key = JS_UNDEFINED;
     /* THE PROTOTYPE IS NOT RELEASED HERE: each realm's is held by that realm's class-proto slot and goes with
        the realm. Neither is the dispatcher — there is no lasting one to hold. */
     g_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
@@ -1412,6 +1426,61 @@ static JSValue handler_map(JSContext *ctx, JSValueConst target, int create)
     return map;
 }
 
+/* §8.1.8.1's INTERNAL RAW UNCOMPILED HANDLER, MINTED. Its `value` half; its `location` half — "a location where
+   the script body originated, in case an error needs to be reported" — is the one thing this record does not
+   carry, and it is ABSENT rather than defaulted: the location §8.1.8.1's attribute change steps step 5.4 asks
+   for is "the script location that TRIGGERED the execution of these steps", which is the chunk and line of
+   whatever ran `el.setAttribute("onclick", …)` and is the document's own address only for the parser's writes.
+   Deriving it from the element's document would be right for one of those two and a plausible datum for the
+   other, and its ONLY consumer is a syntax error the compile below does not exist to report yet. The crash in
+   handler_current names it beside the compile, so the diff that reads it is the diff that writes it.
+   Returns JS_EXCEPTION on allocation failure, like every other constructor here. */
+static JSValue uncompiled_new(JSContext *ctx, const char *body, size_t body_n)
+{
+    JSValue rec, b;
+    JSAtom k;
+
+    DCHECK(g_ready, "an internal raw uncompiled handler was minted before its brand existed");
+    DCHECK(body != NULL, "an internal raw uncompiled handler was minted with no uncompiled script body — "
+                         "§8.1.8.1's tuple has one, and a removed attribute is step 4's DEACTIVATE rather "
+                         "than a handler whose body is nothing");
+    rec = idl_slots_new(ctx);
+    if (JS_IsException(rec))
+        return rec;
+    b = JS_NewStringLen(ctx, body, body_n);
+    if (JS_IsException(b)) { JS_FreeValue(ctx, rec); return JS_EXCEPTION; }
+    k = JS_ValueToAtom(ctx, g_uncompiled_key);
+    if (k == JS_ATOM_NULL) { JS_FreeValue(ctx, rec); JS_FreeValue(ctx, b); return JS_EXCEPTION; }
+    JS_SetProperty(ctx, rec, k, b);
+    JS_FreeAtom(ctx, k);
+    return rec;
+}
+
+/* …AND RECOGNISED: the uncompiled script body of `h`, or JS_UNDEFINED when `h` is not one of these records.
+   AN OWN SLOT AND NEVER A LOOKUP, for handler_map's reason — the brand is a private Symbol the page cannot
+   name, so nothing it can build carries one, and asking about STORAGE rather than about a get keeps that true
+   for an object with a Proxy in its prototype chain. Owned. */
+static JSValue uncompiled_body(JSContext *ctx, JSValueConst h)
+{
+    JSValue b;
+    JSAtom k;
+
+    if (!JS_IsObject(h))
+        return JS_UNDEFINED;
+    DCHECK(g_ready, "an event handler's value was tested for §8.1.8.1's uncompiled brand before it existed");
+    k = JS_ValueToAtom(ctx, g_uncompiled_key);
+    if (k == JS_ATOM_NULL)
+        return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &b, h, k) <= 0)
+        b = JS_UNDEFINED;
+    JS_FreeAtom(ctx, k);
+    DCHECK(JS_IsUndefined(b) || JS_IsString(b),
+           "§8.1.8.1's internal raw uncompiled handler brand held something that is not the uncompiled script "
+           "body — the brand and the body are ONE slot precisely so a record carrying the first without the "
+           "second cannot exist, so this is a second writer of a key only uncompiled_new may write");
+    return b;
+}
+
 /* §8.1.8.1's GETTING THE CURRENT VALUE of the event handler for `type` on `target`, or JS_NULL. A map read, so
    no page code and no request — which is what lets the dispatch walk resolve the marker in place.
    AN OBJECT, NOT A FUNCTION. `EventHandler` is `EventHandlerNonNull?` and Web IDL §3.2.19 Callback function
@@ -1421,12 +1490,75 @@ static JSValue handler_map(JSContext *ctx, JSValueConst target, int create)
    value the page had assigned and could read back in every browser. */
 static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *type)
 {
-    JSValue map = handler_map(ctx, target, 0), h;
+    JSValue map = handler_map(ctx, target, 0), h, body;
 
+    /* STEPS 1-2 — "let handlerMap be eventTarget's event handler map", "let eventHandler be handlerMap[name]".
+       A target with no map has never had a handler set, which is every entry's initial null value. */
     if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_NULL; }
     h = JS_GetPropertyStr(ctx, map, type);
     JS_FreeValue(ctx, map);
+    /* STEP 3 — "if eventHandler's value is an INTERNAL RAW UNCOMPILED HANDLER". Its twelve substeps are the
+       COMPILE, and they are the whole of what turns `<button onclick="doThing()">` into something that runs. */
+    body = uncompiled_body(ctx, h);
+    if (!JS_IsUndefined(body)) {
+        int i = eh_index_of_type(type);
+
+        JS_FreeValue(ctx, body);
+        JS_FreeValue(ctx, h);
+        /* THE HANDLER EXISTS AND CANNOT BE READ, so this is the second half of §8.1.8.1 arriving before its
+           first — not a case to answer null for. Null here would be the SILENCE this whole path replaced: an
+           inline handler that is registered, positioned in the listener list, and never invoked, which is
+           indistinguishable from a page that set no handler at all.
+           WHAT THE NEXT DIFF BUILDS, and it is three things rather than one:
+             (a) step 3.9's OrdinaryFunctionCreate — sourceText "function <name>(event) {\n<body>\n}" (and the
+                 five-parameter form for `onerror` on a Window), thisMode non-lexical-this, and a SCOPE that is
+                 realm.[[GlobalEnv]] with NewObjectEnvironment layered on it for the node document, then the
+                 form owner, then the element. quickjs compiles a program or a `Function` body in the GLOBAL
+                 environment and has no entry point that takes a scope chain, so the object-environment layers
+                 are a quickjs-side primitive and not something this file can assemble; compiling without them
+                 is not a narrower answer, it is a wrong one — `<input onchange="value = 1">` resolves `value`
+                 on the element in every browser and would resolve it on the global here;
+             (b) step 5.4's LOCATION, which uncompiled_new does not carry and which step 3.7.2's SyntaxError is
+                 "based on";
+             (c) a place for step 3 to REST. The compile itself runs none of the page's code, but step 3.7.3
+                 REPORTS AN EXCEPTION, which fires an `error` event and therefore runs the page's listeners —
+                 and this function is reached both from §2.9's dispatch machine (which can park) and from the
+                 plain C accessor js_handler_get (which cannot). The accessor is the one that has to become a
+                 step machine; until it is, `el.onclick` on a markup handler has nowhere to suspend. */
+        DFAILF("the event handler content attribute `%s` was READ and HTML §8.1.8.1 \"Event handlers\"'s "
+               "\"get the current value of the event handler\" step 3 — the compile that turns an internal raw "
+               "uncompiled handler into a function — is not built, so the handler this page wrote in markup is "
+               "registered and cannot be invoked",
+               i >= 0 ? EH_NAME[i] : type);
+        return JS_NULL;
+    }
     return JS_IsObject(h) ? h : (JS_FreeValue(ctx, h), JS_NULL);
+}
+
+/* §8.1.8.1's ACTIVATE AN EVENT HANDLER. Its steps 3-5 are "if eventHandler's listener is not null, then
+   return", the one callback, and one add-an-event-listener — so the registration happens ONCE, the first time
+   a handler for this type is set, and every later assignment changes what the marker RESOLVES TO rather than
+   appending a second listener. That "once" is DOM §2.7's own dedup on (type, callback, capture), which is why
+   this is one unconditional call and not a flag: the marker is a single runtime-wide object, so a second add
+   for the same type finds the same triple already there.
+   THE CALLBACK IS THE MARKER AND NOT THE HANDLER, which is §8.1.8.1's own note — "the callback is emphatically
+   not the event handler itself. Every event handler ends up registering the same callback" — and is what keeps
+   `el.onclick = a; el.addEventListener('click', b); el.onclick = c` running c before b. */
+static void handler_activate(JSContext *ctx, JSValueConst target, const char *type)
+{
+    add_listener_with_type(ctx, target, g_handler_marker, type, /*capture*/ false, /*once*/ false,
+                           /*passive*/ -1, /*signal*/ JS_UNDEFINED);
+}
+
+/* §8.1.8.1's DEACTIVATE AN EVENT HANDLER — "set eventHandler's value to null", then "if listener is not null,
+   then remove an event listener". BOTH HALVES, which is the whole reason it is one algorithm: clearing the
+   value alone leaves a marker in the list that resolves to null on every dispatch (a listener that costs a
+   walk and does nothing), and removing the listener alone leaves a value the IDL getter would hand back for a
+   handler that can no longer fire. `map` is the caller's handler map, BORROWED. */
+static void handler_deactivate(JSContext *ctx, JSValueConst target, JSValueConst map, const char *type)
+{
+    JS_SetPropertyStr(ctx, (JSValue)map, type, JS_NULL);
+    remove_listener_with_type(ctx, target, g_handler_marker, type, /*capture*/ false);
 }
 
 /* HTML §8.1.8.1's DETERMINE THE TARGET OF AN EVENT HANDLER, given `target` and the name at index `magic`.
@@ -1542,12 +1674,9 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
        attribute and never for this one: §3.2.20 has already made it null before this setter's steps begin. */
     if (JS_IsObject(val)) {
         JS_SetPropertyStr(ctx, map, type, JS_DupValue(ctx, val));
-        /* §8.1.8.1 "activate an event handler": the listener is registered ONCE, the first time a handler is set for this type. */
-        add_listener_with_type(ctx, target, g_handler_marker, type, /*capture*/ false, /*once*/ false,
-                               /*passive*/ -1, /*signal*/ JS_UNDEFINED);
+        handler_activate(ctx, target, type);
     } else {
-        JS_SetPropertyStr(ctx, map, type, JS_NULL);
-        remove_listener_with_type(ctx, target, g_handler_marker, type, /*capture*/ false);   /* §8.1.8.1 "deactivate an event handler" */
+        handler_deactivate(ctx, target, map, type);
     }
     /* AFTER the handler is registered, for the reason event_target.h gives: §9.4.2's start() delivers what is
        already queued, and running it first would fire those events at a target with no listener yet.
@@ -1581,26 +1710,100 @@ const char *event_target_handler_attribute_at(int i)
     return EH_NAME[i];
 }
 
-bool event_target_is_handler_attribute(const char *name)
+int event_target_handler_attribute_index(const char *name, size_t name_len)
 {
     int i;
 
-    DCHECK(name != NULL, "the event handler content attribute test was asked about no name");
+    DCHECK(name != NULL || name_len == 0,
+           "the event handler content attribute test was asked about a name that is a null pointer with a "
+           "length — the two are one operand and a length over nothing is a read of whatever follows");
     /* ASCII case-insensitively: an attribute name reaching here has already been lowercased by DOM §4.9 step 2
        for an HTML element, but setAttributeNS performs no such lowercasing and `onClick` in an XML document is
        not an event handler content attribute — the compare is stated once here rather than at each caller. */
     for (i = 0; i < EH_COUNT; i++) {
         const char *n = EH_NAME[i];
         size_t k = 0;
-        while (n[k] && name[k]) {
+        while (k < name_len && n[k]) {
             char a = name[k];
             if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
             if (a != n[k]) break;
             k++;
         }
-        if (!n[k] && !name[k]) return true;
+        if (k == name_len && !n[k]) return i;
     }
-    return false;
+    return -1;
+}
+
+/* THE PREDICATE IS THE LOOKUP, not a second walk of the same list. Trusted Types §3.8 and HTML §8.6.2 ask only
+   whether the name is one of these; §8.1.8.1's attribute change steps need the ROW, because everything after
+   step 1 is keyed on it. */
+bool event_target_is_handler_attribute(const char *name)
+{
+    DCHECK(name != NULL, "the event handler content attribute test was asked about no name");
+    return event_target_handler_attribute_index(name, strlen(name)) >= 0;
+}
+
+bool event_target_handler_attribute_on_element(int index, bool body_or_frameset)
+{
+    DCHECK(index >= 0 && index < EH_COUNT,
+           "§8.1.8.2's content-attribute membership was asked of a row the handler list does not have");
+    /* §8.1.8.2's FIRST table is the GlobalEventHandlers set — "must be supported by all HTML elements, as both
+       event handler content attributes and event handler IDL attributes" — and its THIRD is the eighteen
+       WindowEventHandlers names, whose content attributes are "exposed on all body and frameset elements".
+       EH_WINDOW_REFLECTING adds nothing here on purpose: §8.1.8.2's SECOND table is a table of
+       GlobalEventHandlers members, so EH_GLOBAL already carries all six and that bit decides only their
+       TARGET. A row with neither bit — `onmessage` on a MessagePort, `onupgradeneeded` on an IDBRequest — is
+       an IDL attribute of an interface that is not an element and is a content attribute nowhere. */
+    return (EH_MASK[index] & EH_GLOBAL) != 0 || (body_or_frameset && (EH_MASK[index] & EH_WINDOW) != 0);
+}
+
+JSValue event_target_determine_handler_target(JSContext *ctx, JSValueConst exposed, int index)
+{
+    DCHECK(index >= 0 && index < EH_COUNT,
+           "§8.1.8.1's determine the target of an event handler was asked for a row the handler list does not "
+           "have");
+    return handler_determine_target(ctx, exposed, index);
+}
+
+void event_target_deactivate_handler(JSContext *ctx, JSValueConst target, int index)
+{
+    JSValue map;
+
+    DCHECK(index >= 0 && index < EH_COUNT,
+           "§8.1.8.1's deactivate an event handler was asked for a row the handler list does not have");
+    /* NO MAP MEANS NOTHING TO DEACTIVATE, and creating one here would be the opposite of the algorithm: an
+       entry's initial value IS null, so a target that has never had a handler set is already in the state
+       deactivate leaves it in, and minting a map would put a slot record on every element a `removeAttribute`
+       ever touched. */
+    map = handler_map(ctx, target, 0);
+    if (JS_IsObject(map))
+        handler_deactivate(ctx, target, map, EH_TYPE[index]);
+    JS_FreeValue(ctx, map);
+}
+
+void event_target_set_uncompiled_handler(JSContext *ctx, JSValueConst target, int index,
+                                         const char *body, size_t body_n)
+{
+    JSValue map, rec;
+
+    DCHECK(index >= 0 && index < EH_COUNT,
+           "an internal raw uncompiled handler was set for a row the handler list does not have");
+    DCHECK(body != NULL,
+           "§8.1.8.1's attribute change steps reached step 5 with a null value — step 4 is what a REMOVED "
+           "attribute takes and it deactivates, so a null arriving here is a caller that ran step 5 for a "
+           "removal and would store a handler whose body does not exist");
+    map = handler_map(ctx, target, 1);
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return; }
+    rec = uncompiled_new(ctx, body, body_n);
+    if (JS_IsException(rec)) { JS_FreeValue(ctx, map); return; }
+    /* STEP 5.5 — "set eventHandler's value to the internal raw uncompiled handler value/location". It REPLACES
+       whatever the entry held, callback object included: `div.onclick = f` followed by
+       `div.setAttribute("onclick", "g()")` leaves ONE handler, which is g, exactly as the two spellings of one
+       IDL attribute leave one. */
+    JS_SetPropertyStr(ctx, map, EH_TYPE[index], rec);
+    /* STEP 5.6 — "activate an event handler given eventTarget and localName". */
+    handler_activate(ctx, target, EH_TYPE[index]);
+    JS_FreeValue(ctx, map);
 }
 
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask)

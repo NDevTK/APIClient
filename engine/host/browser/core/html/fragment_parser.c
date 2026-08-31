@@ -32,6 +32,7 @@
 #include "core/html/html_parse.h"    /* the ONE place an HTML parser is made — that header owns the token bytes */
 #include "core/html/html_script.h"
 #include "core/html/media_element.h"
+#include "core/html/event_handler_attribute.h"
 #include "core/html/sanitizer.h"
 #include "core/idl_args.h"
 #include "solver/dom_cow.h"
@@ -426,6 +427,18 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
            nothing about media, and a media element is created with its attributes whether or not a script
            would have run. */
         media_element_parsed(ctx, s->frag);
+        /* HTML §8.1.8.1 Event handlers OVER THE FRAGMENT, and unlike §4.8.4.3.2 below this one belongs HERE
+           rather than in the insertion drain. §13.2.6.1 "Create an element for a token" appends the token's
+           attributes to the element it just created, so the attribute change steps run at CREATION — before
+           the element is inserted anywhere, and before anything can be dispatched at it. That order is the
+           whole of why this matters for `el.innerHTML = '<img src=x onerror=…>'`: the insertion drain is where
+           §4.8.4.3.2's image update runs and therefore where the `error` event comes from, so a handler
+           installed by that same drain would be racing the dispatch it exists to catch. Installing at creation
+           also matches what a browser does for a fragment nobody inserts — `createContextualFragment`'s
+           `<svg onload>` has its handler, it simply never fires.
+           AFTER the declarative-shadow conversion, and the walk is shadow-including, for the media walk's
+           reason: a handler attribute inside a `<template shadowrootmode>` moved with the contents. */
+        event_handler_attribute_parsed(ctx, s->frag);
         /* NO §4.8.4.3.2 WALK OVER THIS FRAGMENT, and that is a statement rather than an omission. An `img`'s
            mutation list already contains "the img HTML element insertion steps", and every node of this
            fragment that reaches a document goes through §4.2.3 insert step 7's shadow-including inclusive

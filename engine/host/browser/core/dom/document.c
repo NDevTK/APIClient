@@ -36,6 +36,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/media_element.h"
+#include "core/html/event_handler_attribute.h"
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_style_element.h"
@@ -4516,6 +4517,18 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        for the reason the media walk is: a `<style>` inside a `<template shadowrootmode>` is by now a style
        element in a shadow tree, and its sheet is the shadow root's. */
     html_style_element_parsed(ctx, lxb_dom_interface_node(dom));
+    /* HTML §8.1.8.1 Event handlers FOR THE TREE THE PARSER BUILT — its attribute change steps are what turn a
+       markup `<body onload="init()">` or `<img onerror=…>` into a handler, and a lexbor parse writes its
+       attributes through `lxb_dom_attr_set_value_wo_copy`, which reaches none of DOM §4.9's mutation
+       chokepoint.
+       Without this the two halves of §8.1.8.1 disagreed on exactly the documents that matter: `el.onclick = f`
+       worked and the markup the page shipped did nothing.
+       AFTER the declarative-shadow conversion, for the media and style walks' reason — the walk is
+       shadow-including and an `<svg onload=…>` that was inside a `<template shadowrootmode>` is by now in a
+       shadow tree. BEFORE the iframe walk, because a child navigable's creation is the first thing in this
+       function that can lead to a `load` being fired at something in THIS tree, and a handler installed after
+       that dispatch would have missed it. */
+    event_handler_attribute_parsed(ctx, lxb_dom_interface_node(dom));
     iframe_document_parsed(ctx);
     /* HTML §6.6.7 FOR THE TREE THE PARSER BUILT, for the reason the line above it exists: a browser runs the
        insertion steps during tree construction, so `<input autofocus>` in the page's own markup is a candidate

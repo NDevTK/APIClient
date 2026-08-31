@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_TARGET_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_EVENT_TARGET_H
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "quickjs.h"
 
@@ -201,6 +202,59 @@ bool event_target_is_handler_attribute(const char *name);
    X-list, so a handler added to §8.1.8.1's set is added to both at once. The names are static. */
 int         event_target_handler_attribute_count(void);
 const char *event_target_handler_attribute_at(int i);
+
+/* ---- THE CONTENT-ATTRIBUTE HALF OF §8.1.8.1, whose ALGORITHM lives in core/html/event_handler_attribute.c ---
+ *
+ * "Event handlers are exposed in TWO WAYS. The first way, common to all event handlers, is as an event handler
+ * IDL attribute. The second way is as an event handler CONTENT attribute." The two ways write ONE handler — the
+ * same entry of the same event handler map, whose §8.1.8.1 `value` is "either null, a callback object, or an
+ * INTERNAL RAW UNCOMPILED HANDLER" — so a page that sets `<div onclick="a()">` and then `div.onclick = f` has
+ * replaced one handler and not shadowed it, and the marker listener keeps the position the first write gave it.
+ *
+ * THE ALGORITHM IS NOT HERE AND THE PRIMITIVES ARE, and that split is the one this file already makes for
+ * §2.9's propagation path. §8.1.8.1's attribute change steps need an ELEMENT (step 1's name test is per
+ * element), a POLICY CONTAINER (step 5.1's "Should element's inline behavior be blocked by Content Security
+ * Policy?") and a document — none of which this component may name: a `#include` of the DOM here made every
+ * host that installs events link lexbor with it. So the steps live beside the element, in the HTML layer, where
+ * their numbers are all visible in one function, and what crosses is the three algorithms §8.1.8.1 names in
+ * their own right — determine the target, deactivate, and the map write that "activate an event handler"
+ * follows. A hook answering "is this element a body" would have put HTML's algorithm here with nothing naming
+ * its steps, which is the shape event_target_set_handler_target_terms below was written to avoid. */
+/* WHICH ROW OF §8.1.8.2's TABLES `name` IS, or -1. ASCII case-insensitive, because `setAttributeNS` performs
+   none of DOM §4.9 step 2's lowercasing and `onClick` in an XML document is not one of these names.
+   (name, name_len) AND NEVER A NUL-TERMINATED NAME ALONE, because an attribute's local name is a (pointer,
+   length) out of lexbor's own storage — a caller with one would otherwise have to copy it into a buffer whose
+   size is a second, silent statement of how long the longest handler name is. */
+int event_target_handler_attribute_index(const char *name, size_t name_len);
+/* …AND WHETHER THAT NAME IS A CONTENT ATTRIBUTE ON AN ELEMENT, which is step 1's "localName is not the name of
+   an event handler content attribute ON ELEMENT" and is NOT the same question as being one of the names.
+   §8.1.8.2's FIRST table is "the event handlers … that must be supported by all HTML elements, as both event
+   handler content attributes and event handler IDL attributes"; its THIRD is the eighteen WindowEventHandlers
+   names, exposed as content attributes on body and frameset elements ALONE. So `<div onunload="x">` is an
+   ordinary attribute in every browser and `<body onunload="x">` is a handler, and a test that asked only
+   whether the name is in the list would have made the first one a handler on an object nothing dispatches
+   `unload` at. §8.1.8.2's SECOND table needs no term of its own: all six of its names are GlobalEventHandlers
+   members, so the first table already contains them and what that table decides is only their TARGET. */
+bool event_target_handler_attribute_on_element(int index, bool body_or_frameset);
+/* §8.1.8.1's DETERMINE THE TARGET OF AN EVENT HANDLER, by row rather than by name — the same four steps the IDL
+   accessors run, so `<body onload=…>` and `document.body.onload = …` cannot land on different objects. OWNED,
+   and JS_NULL is step 3's own third outcome rather than an error. */
+JSValue event_target_determine_handler_target(JSContext *ctx, JSValueConst exposed, int index);
+/* §8.1.8.1's DEACTIVATE AN EVENT HANDLER — set the handler's value to null and remove its listener. It is the
+   attribute change steps' step 4 (a REMOVED attribute) and the IDL setter's step 3 (`el.onclick = null`), one
+   algorithm reached two ways. `target` is the DETERMINED target, never the object the handler is exposed on. */
+void event_target_deactivate_handler(JSContext *ctx, JSValueConst target, int index);
+/* §8.1.8.1's attribute change steps 5.2, 5.3, 5.5 and 5.6 — "let handlerMap be eventTarget's event handler
+   map", "let eventHandler be handlerMap[localName]", "set eventHandler's value to the INTERNAL RAW UNCOMPILED
+   HANDLER value/location", "activate an event handler". Steps 5.1 (CSP) and 5.4 (the location) are the
+   caller's, because both are facts about the element and the script that wrote the attribute rather than about
+   the handler map. `target` is the DETERMINED target. `body` is BORROWED and is not NUL-terminated — an
+   attribute value is a (pointer, length) out of the DOM, and a handler body may legitimately contain U+0000.
+   NOTHING COMPILES IT YET: §8.1.8.1's "get the current value of the event handler" step 3 is what turns this
+   value into a function, and reading one before that exists CRASHES by name rather than answering. */
+void event_target_set_uncompiled_handler(JSContext *ctx, JSValueConst target, int index,
+                                         const char *body, size_t body_n);
+
 /* A handler attribute whose SETTER has a side effect. HTML has one: §9.4.2's `onmessage` on a MessagePort also
    starts the port, which is why assigning it is enough and addEventListener alone is not. The hook runs AFTER
    the handler is registered — start() delivers what is already queued, and delivering it first would fire at a
