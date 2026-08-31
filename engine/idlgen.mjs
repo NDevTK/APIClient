@@ -501,7 +501,16 @@ const INTERFACES = {
      BUILT OUT OF, and ElementInternals is not part of it. */
   HTMLFormElement:     [...HTML_BASE, "core/html/html_form.c"],
   HTMLInputElement:    [...HTML_BASE, "core/html/html_form.c", "core/html/input_value.c",
-                        "core/html/input_picker.c", "core/html/constraint_validation.c"],
+                        "core/html/input_picker.c", "core/html/constraint_validation.c",
+                        "core/html/text_control_selection.c"],
+  /* §4.10.20's six members are the SAME component reached from two prototypes — the section says so itself
+     ("Their shared algorithms are defined here") — so the file is named by both rows, and HTMLTextAreaElement
+     gets a row of its own for the first time. It had none, so the audit found it only from its §3.7.3 tag and
+     credited everything it is built out of to core/html/html_element.c: §4.10.11's `value` is html_form.c's,
+     §4.10.21.3's `willValidate` and `setCustomValidity` are constraint_validation.c's, and §4.10.20's
+     selection members are text_control_selection.c's. */
+  HTMLTextAreaElement: [...HTML_BASE, "core/html/html_form.c", "core/html/constraint_validation.c",
+                        "core/html/text_control_selection.c"],
   HTMLButtonElement:   [...HTML_BASE],
   HTMLLinkElement:     [...HTML_BASE],
   HTMLMetaElement:     [...HTML_BASE],

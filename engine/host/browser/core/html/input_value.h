@@ -41,6 +41,16 @@ HtmlInputValueMode input_value_mode(HtmlInputState st);
 JSValue input_value_get(JSContext *ctx, JSValueConst wrap);
 JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val);
 
+/* SET THE ELEMENT'S VALUE, AND WITH IT THE DIRTY VALUE FLAG, AND NOTHING ELSE — §4.10.20's `setRangeText()`,
+   whose own steps are "Set this element's dirty value flag to true" and then a splice of the relevant value.
+   IT IS NOT THE `value` IDL SETTER and the difference is two of that setter's five steps: setRangeText does
+   not invoke the VALUE SANITIZATION ALGORITHM (its steps never name it, and sanitizing a spliced value would
+   move the offsets its own last step is about to set), and it does not run step 5's cursor move, which its
+   last step contradicts by setting the selection range explicitly.
+   The element must be in a state whose value mode is `value` — §4.10.20's offset members apply only to the
+   five text states, so a caller that reaches here has already asked. */
+void input_value_set_relevant(JSContext *ctx, JSValueConst wrap, JSValueConst val);
+
 /* §4.10.5.4's `files`, declared once per AGENT and installed on HTMLInputElement.prototype — the same three
    calls §4.10.21's constraint validation makes, from the same places, because the member goes on a prototype
    §4.10 owns and the algorithm behind it is this file's. */

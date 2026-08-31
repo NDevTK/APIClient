@@ -26,6 +26,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/infra_strings.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/document.h"
@@ -48,6 +49,7 @@
 #include "core/html/input_picker.h"
 #include "core/html/input_value.h"
 #include "core/html/submit_event.h"
+#include "core/html/text_control_selection.h"
 #include "core/html/user_activation.h"
 #include "core/url/url.h"
 #include "solver/attr_shadow.h"
@@ -441,6 +443,87 @@ static JSValue js_option_set_label(JSContext *ctx, JSValueConst this_val, JSValu
 /* magic names whose DEFAULT applies when the page has assigned no state. */
 enum { CTRL_ATTRIBUTE = 0, CTRL_TEXTAREA, CTRL_OPTION };
 
+bool html_form_is_textarea(const lxb_dom_node_t *n)
+{
+    return tag_is((lxb_dom_node_t *)n, "textarea");
+}
+
+/* §4.10.11 The textarea element's RAW VALUE. "The raw value of a textarea control must be initially the empty
+   string", the children changed steps "must, if the element's dirty value flag is false, set the element's raw
+   value to its child text content", and the reset algorithm says the same — so a false dirty value flag makes
+   the raw value the child text content and nothing stores it.
+   IT WAS THE DESCENDANT TEXT while the comment said CHILD, and the two differ exactly where an element child of
+   a `<textarea>` is representable — which HTML §13.2.5.2 "RCDATA state" forbids in the HTML syntax and an XML
+   document permits. DOM §4.12 "Interface CDATASection" is the other half: a `<textarea>` whose default value is
+   written as a CDATA section read back as the empty string. */
+static JSValue textarea_raw_value(JSContext *ctx, lxb_dom_element_t *el)
+{
+    int i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, "value");
+    size_t len = 0;
+    char *txt;
+    JSValue r;
+
+    if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));   /* the dirty raw value the page assigned */
+    txt = dom_child_text_content(lxb_dom_interface_node(el), &len);
+    r = JS_NewStringLen(ctx, txt, len);
+    free(txt);
+    return r;
+}
+
+JSValue html_form_textarea_api_value(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_element_t *el = form_elem_of(wrap);
+    const char *s;
+    size_t len = 0, nn = 0;
+    JSValue raw, api;
+    char *norm;
+
+    DCHECK(html_form_is_textarea(node_of(wrap)),
+           "§4.10.11's API value was asked of an element that is not a `textarea` — the algorithm is that "
+           "section's and the raw value it reads belongs to no other control");
+    if (!el) return JS_NewStringLen(ctx, "", 0);
+    raw = textarea_raw_value(ctx, el);
+    /* AN UNKNOWN RAW VALUE IS ITS OWN API VALUE, for the reason input_value.c's `iv_sanitize` states about the
+       value sanitization algorithm: the transform is a rewrite OF BYTES and an attacker source has none to
+       rewrite, so its domain admits a string this algorithm leaves alone and that is the arm the engine keeps.
+       Deriving a fresh value here instead would cost the two things that matter — `t.value === t.value` would
+       answer false, because a concolic is an object and a derivation mints a new one per read; and the source
+       identity `textarea.value = location.hash` carries to §4.10.22.4's entry list would be re-composed on
+       every getter rather than being the one the write recorded. */
+    if (concolic_is(raw)) return raw;
+    s = JS_ToCStringLen(ctx, &len, raw);
+    CHECK(s != NULL, "textarea: the raw value could not be read for §4.10.11's API value");
+    /* "The algorithm for obtaining the element's API value is to return the element's raw value, with NEWLINES
+       NORMALIZED" — Infra §4.7 Strings, which is why this is not a private pass. §4.10.20's own worked example
+       is what the difference buys: `demo.value = "A\r\nB"; demo.setRangeText("replaced", 0, 2)` gives
+       "replacedB", and over the RAW value it would have given "replaced\nB". */
+    norm = infra_normalize_newlines(s, len, &nn);
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, raw);
+    api = JS_NewStringLen(ctx, norm, nn);
+    free(norm);
+    return api;
+}
+
+/* §4.10.11's `value` setter is NOT the wrapping transformation: "The element's value is defined to be the
+   element's API value with the textarea wrapping transformation applied", and that transformation is
+   §4.10.11's own `wrap=hard` rendering step, which needs the control's rendered WIDTH — the one thing in this
+   section a headless agent has no answer for. It is honestly absent rather than approximated, and no member
+   here reaches for it: the `value` IDL attribute returns the API value by the standard's own sentence, and
+   §4.10.20's relevant value is the API value too. */
+
+/* Web IDL §3.7.5's BRAND CHECK for the two members HTMLTextAreaElement declares here, and it is this file's for
+   the same reason `js_input_brand` below is: `HTMLTextAreaElement.prototype.value` reached on anything else is
+   a TypeError, not the child text content a shared accessor would hand back for any element that has one. It
+   is also what keeps §4.10.11's own algorithms — which assert their receiver, because the raw value belongs to
+   no other control — unreachable from a receiver they were not written for. */
+static JSValue js_textarea_brand(JSContext *ctx, JSValueConst this_val)
+{
+    if (html_form_is_textarea(node_of(this_val))) return JS_UNDEFINED;
+    return JS_ThrowTypeError(ctx, "HTMLTextAreaElement's `value` was accessed on something that is not an "
+                                  "HTMLTextAreaElement");
+}
+
 static JSValue js_ctrl_get_value(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_element_t *el = form_elem_of(this_val);
@@ -449,24 +532,18 @@ static JSValue js_ctrl_get_value(JSContext *ctx, JSValueConst this_val, int magi
     int i;
 
     if (!el) return JS_NewStringLen(ctx, "", 0);
+    /* §4.10.11's `value` IDL attribute "must, on getting, return the element's API value" — which is NOT the
+       raw value the page assigned, so the textarea arm goes through the algorithm that states the difference
+       rather than reading the slot the way the two default-valued controls below do. */
+    if (magic == CTRL_TEXTAREA) {
+        JSValue bad = js_textarea_brand(ctx, this_val);
+
+        if (JS_IsException(bad)) return bad;
+        return html_form_textarea_api_value(ctx, this_val);
+    }
     i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, "value");
     if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));   /* the state the page assigned */
 
-    /* §4.10.11 The textarea element: the element's raw value with a false dirty value flag is "its child text
-       content" — the section states it twice in those words, at the children-changed steps and at the reset
-       algorithm, and the `defaultValue` getter "must return the element's child text content".
-       IT WAS THE DESCENDANT TEXT while the comment said CHILD, and the two differ exactly where an element
-       child of a `<textarea>` is representable — which HTML §13.2.5.2 "RCDATA state" forbids in the HTML syntax
-       and an XML document permits. DOM §4.12 "Interface CDATASection" is the other half: a `<textarea>` whose
-       default value is written as a CDATA section read back as the empty string. */
-    if (magic == CTRL_TEXTAREA) {
-        lxb_dom_node_t *n = lxb_dom_interface_node(el);
-        char *txt = dom_child_text_content(n, &len);
-        JSValue r = JS_NewStringLen(ctx, txt, len);
-
-        free(txt);
-        return r;
-    }
     /* §4.10.10: "The value of an option element is the value of the `value` content attribute, if there is one,
        or, if there is not, the result of COLLECT OPTION TEXT given this and false." */
     if (magic == CTRL_OPTION && !has_attr(el, "value"))
@@ -475,14 +552,79 @@ static JSValue js_ctrl_get_value(JSContext *ctx, JSValueConst this_val, int magi
     return a ? JS_NewStringLen(ctx, a, len) : JS_NewStringLen(ctx, "", 0);
 }
 
+void html_form_textarea_set_raw_value(JSContext *ctx, JSValueConst wrap, JSValueConst val)
+{
+    lxb_dom_element_t *el = form_elem_of(wrap);
+
+    DCHECK(html_form_is_textarea(node_of(wrap)),
+           "§4.10.11's raw value was assigned on an element that is not a `textarea`");
+    if (!el) return;
+    /* The per-flow chokepoint, so the assignment reverts with every other DOM write this flow made — and the
+       slot keeps the VALUE, so a concolic stays a concolic all the way to the submission.
+       STORING THE RAW VALUE IS SETTING §4.10.18.1's DIRTY VALUE FLAG, because they are one fact and not two:
+       the flag is true exactly when the element holds a raw value of its own instead of reading its child text
+       content, and stored twice they would be two facts that stop agreeing (input_value.c's `iv_dirty` states
+       the same identity for §4.10.5.1's value). */
+    dom_cow_set_prop_taint(ctx, el, "value", val);
+}
+
+/* §4.10.11 step 4's "IF THE NEW API VALUE IS DIFFERENT FROM oldAPIValue" — a comparison of two strings this
+   engine produced, decided here rather than through the interpreter's equality because neither operand is the
+   page's. AN UNKNOWN ON EITHER SIDE IS UNDECIDABLE AND COUNTS AS DIFFERENT: uncertainty keeps the arm, and the
+   arm here is the cursor move the standard makes whenever the value really changed. */
+static bool textarea_api_value_changed(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    const char *x, *y;
+    size_t xn = 0, yn = 0;
+    bool differ;
+
+    if (concolic_is(a) || concolic_is(b)) return true;
+    x = JS_ToCStringLen(ctx, &xn, a);
+    y = JS_ToCStringLen(ctx, &yn, b);
+    CHECK(x != NULL && y != NULL, "textarea: an API value could not be read for §4.10.11's step 4");
+    differ = xn != yn || memcmp(x, y, xn) != 0;
+    JS_FreeCString(ctx, x);
+    JS_FreeCString(ctx, y);
+    return differ;
+}
+
 static JSValue js_ctrl_set_value(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     lxb_dom_element_t *el = form_elem_of(this_val);
 
-    (void)magic;
-    /* The per-flow chokepoint, so the assignment reverts with every other DOM write this flow made — and the
-       slot keeps the VALUE, so a concolic stays a concolic all the way to the submission. */
-    if (el) dom_cow_set_prop_taint(ctx, el, "value", val);
+    if (!el) return JS_UNDEFINED;
+    if (magic == CTRL_TEXTAREA) {
+        JSValue bad = js_textarea_brand(ctx, this_val);
+
+        if (JS_IsException(bad)) return bad;
+        /* §4.10.11's `value` setter is FOUR steps and not the bare slot write §4.10.10's option takes:
+           1. Let oldAPIValue be this element's API value.
+           2. Set this element's raw value to the new value.
+           3. Set this element's dirty value flag to true.
+           4. If the new API value is different from oldAPIValue, then move the text entry cursor position to
+              the end of the text control, unselecting any selected text and resetting the selection direction
+              to "none". */
+        JSValue old_api = html_form_textarea_api_value(ctx, this_val);
+        JSValue new_api;
+
+        html_form_textarea_set_raw_value(ctx, this_val, val);          /* steps 2 and 3 */
+        new_api = html_form_textarea_api_value(ctx, this_val);
+        /* §4.10.20's OWN clamp runs on every change of the relevant value and preserves a selection that still
+           fits; step 4's stronger move runs only when the API value actually changed. Two operations, both
+           owed, and the order is the standard's — the clamp is "whenever the relevant value changes" and step
+           4 is what this setter does afterwards. */
+        text_control_selection_value_changed(ctx, this_val);
+        if (textarea_api_value_changed(ctx, old_api, new_api))
+            text_control_selection_move_to_end(ctx, this_val);         /* step 4 */
+        JS_FreeValue(ctx, old_api);
+        JS_FreeValue(ctx, new_api);
+        return JS_UNDEFINED;
+    }
+    /* §4.10.10's option, whose `value` IDL attribute is the state the page assigned over the `value` content
+       attribute — no cursor, because an option is not a text control. */
+    DCHECK(magic == CTRL_OPTION || magic == CTRL_ATTRIBUTE,
+           "§4.10's shared value setter was installed for a control it names no algorithm for");
+    dom_cow_set_prop_taint(ctx, el, "value", val);
     return JS_UNDEFINED;
 }
 
@@ -2332,6 +2474,11 @@ void html_form_declare(JSContext *ctx)
        HTMLInputElement.prototype and §4.10 owns that prototype — and it must come AFTER the line above,
        because the algorithm it ends in is input_value.c's update the file selection. */
     input_picker_declare(ctx);
+    /* §4.10.20's text control selection APIs, declared here for the same reason `files` and `showPicker()`
+       are: their members go on HTMLInputElement.prototype and HTMLTextAreaElement.prototype, which §4.10 owns,
+       and the relevant value they operate on is this file's and input_value.c's. It comes AFTER input_value's
+       line because the algorithms behind it read that component's value. */
+    text_control_selection_declare(ctx);
     /* §6.4's USER ACTIVATION STATE — declared here because §6.4.1's per-Window record has to exist BEFORE the
        first realm is built (a realm that missed it answers §7.4.2.4's sticky-activation conjunct out of a
        record that is not there), and this is the declaration point core/html reaches the agent through. It is
@@ -2383,6 +2530,9 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     constraint_validation_install(ctx, input_proto, textarea_proto);
     input_value_install(ctx, input_proto);   /* §4.10.5.4's `files`, on the prototype §4.10 owns */
     input_picker_install(ctx, input_proto);  /* §4.10.5.4's `showPicker()`, on the same prototype */
+    /* §4.10.20's six members, on BOTH text-control prototypes — the section shares its algorithms across the
+       two interfaces and each of them declares the members separately, which is why the install names both. */
+    text_control_selection_install(ctx, input_proto, textarea_proto);
 }
 
 void html_form_free(JSRuntime *rt)
@@ -2393,6 +2543,7 @@ void html_form_free(JSRuntime *rt)
     constraint_validation_free(rt);
     input_value_free();
     input_picker_free();
+    text_control_selection_free(rt);
     user_activation_free();
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */

@@ -18,6 +18,28 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
 void html_form_free(JSRuntime *rt);
 /* `document.forms` — a Document member, so document.c installs it on its prototype. */
 
+/* ---- §4.10.11 The textarea element's VALUE, for the one other component that operates on it ----------------
+ *
+ * §4.10.20's text control selection APIs "must operate on the element's API VALUE" for a textarea, so that
+ * algorithm has a second caller and stops being this file's private business. It is exported rather than
+ * re-spelled there for the reason §4.10.5.4's `input_value_get` is exported: two answers to "what is this
+ * control's value" is the defect that lets one algorithm read a value another one wrote differently. */
+
+/* Whether this node is a `textarea` element. Exported so a component that installs on both text-control
+   prototypes can perform Web IDL §3.7.5's brand check without a fourth private copy of the local-name test. */
+bool html_form_is_textarea(const lxb_dom_node_t *n);
+
+/* §4.10.11's API VALUE: "the element's raw value, with newlines normalized" (Infra §4.7 Strings), which is what
+   the `value` IDL attribute returns on getting and what §4.10.20 measures its offsets into. OWNED. An unknown
+   raw value is its own API value — see the algorithm for why the alternative costs identity and provenance. */
+JSValue html_form_textarea_api_value(JSContext *ctx, JSValueConst wrap);
+
+/* SET THE ELEMENT'S RAW VALUE, and with it §4.10.18.1's dirty value flag — the write half §4.10.20's
+   `setRangeText()` performs, whose steps splice the relevant value and set the flag and which never run the
+   `value` IDL setter (that one additionally moves the text entry cursor, which setRangeText's own last step is
+   about to contradict). */
+void html_form_textarea_set_raw_value(JSContext *ctx, JSValueConst wrap, JSValueConst val);
+
 /* ---- §4.10.18.3 THE FORM OWNER -----------------------------------------------------------------------------
  *
  * A form-associated element's relationship with a form element. It is STORED state and not a lookup: the spec

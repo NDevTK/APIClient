@@ -12,6 +12,7 @@
 #include "core/frame/sandboxing.h"
 #include "core/html/simple_dialogs.h"
 #include "core/idl_args.h"
+#include "core/infra_strings.h"
 #include "core/json_buf.h"
 #include "solver/concolic.h"
 
@@ -49,32 +50,6 @@ static int g_id_alert = -1, g_id_confirm = -1, g_id_prompt = -1;
 static bool sd_cannot_show(JSContext *ctx)
 {
     return (document_active_sandbox_flags(ctx) & SANDBOX_MODALS) != 0;
-}
-
-/* INFRA §4.7 Strings' NORMALIZE NEWLINES: "replace every U+000D CR U+000A LF code point pair with a single
-   U+000A LF code point, and then replace every remaining U+000D CR code point with a U+000A LF code point."
-   The two replacements are written as one pass rather than two because the second is defined over what the
-   first left — a lone CR — and a pass that ran them in the order the sentence lists them would turn a CRLF
-   into two LFs on the second sweep. It is NOT core/html/form_data.c's fd_normalize_newlines: that one is HTML
-   §4.10.22.8's multipart/form-data encoding algorithm step 1 and normalizes toward CRLF, the opposite
-   direction, which is why one shared helper would be two algorithms wearing one name.
-   The result is at most as long as the input. Caller frees. */
-static char *sd_normalize_newlines(const char *s, size_t n)
-{
-    char *out = malloc(n + 1);
-    size_t i, w = 0;
-
-    CHECK(out != NULL, "simple dialogs: OOM normalizing a dialog message's newlines");
-    for (i = 0; i < n; i++) {
-        if (s[i] == '\r') {
-            out[w++] = '\n';
-            if (i + 1 < n && s[i + 1] == '\n') i++;   /* the CR LF PAIR is one code point after the first rule */
-        } else {
-            out[w++] = s[i];
-        }
-    }
-    out[w] = 0;
-    return out;
 }
 
 /* §8.9.1's "Show message to the user, treating U+000A LF as a line break", performed by a user agent with no
@@ -137,7 +112,7 @@ static char *sd_dialog_string(JSContext *ctx, JSValueConst v)
     char *out;
 
     if (!s) return NULL;
-    out = sd_normalize_newlines(s, strlen(s));   /* step 3 */
+    out = infra_normalize_newlines(s, strlen(s), NULL);   /* step 3, Infra §4.7 Strings */
     JS_FreeCString(ctx, s);
     return out;                                  /* step 4, with `s itself` as the truncation */
 }
@@ -164,7 +139,7 @@ static JSValue js_sd_alert(JSContext *ctx, JSValueConst this_val, int argc, JSVa
            "external input — the position is declared DOMString and the argument machine runs Web IDL §3.2.10 "
            "DOMString's conversion before the body, so a third kind is a declaration that has come apart from "
            "this body");
-    message = argc == 0 ? sd_normalize_newlines("", 0) : sd_dialog_string(ctx, argv[0]);   /* steps 2-4 */
+    message = argc == 0 ? infra_normalize_newlines("", 0, NULL) : sd_dialog_string(ctx, argv[0]);  /* steps 2-4 */
     if (!message) return JS_EXCEPTION;
     sd_show("alert", message);   /* steps 5-7, with `userPromptHandler` "none" — see simple_dialogs.h */
     free(message);

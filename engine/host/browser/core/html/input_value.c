@@ -68,6 +68,7 @@
 #include "core/html/input_number.h"
 #include "core/html/input_value.h"
 #include "core/html/number_microsyntax.h"
+#include "core/html/text_control_selection.h"
 #include "core/idl_args.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
@@ -554,6 +555,43 @@ JSValue input_value_get(JSContext *ctx, JSValueConst wrap)
     return JS_NewStringLen(ctx, "", 0);
 }
 
+/* §4.10.5.4 step 5's "IS DIFFERENT FROM oldValue" — a comparison of two values this engine produced. AN
+   UNKNOWN ON EITHER SIDE IS UNDECIDABLE AND COUNTS AS DIFFERENT, which is the sound direction: uncertainty
+   keeps the arm, and the arm is the cursor move the standard makes on a real change. */
+static bool iv_value_differs(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    const char *x, *y;
+    size_t xn = 0, yn = 0;
+    bool differ;
+
+    if (concolic_is(a) || concolic_is(b)) return true;
+    x = JS_ToCStringLen(ctx, &xn, a);
+    y = JS_ToCStringLen(ctx, &yn, b);
+    CHECK(x != NULL && y != NULL, "input: a value could not be read for §4.10.5.4's step 5");
+    differ = xn != yn || memcmp(x, y, xn) != 0;
+    JS_FreeCString(ctx, x);
+    JS_FreeCString(ctx, y);
+    return differ;
+}
+
+void input_value_set_relevant(JSContext *ctx, JSValueConst wrap, JSValueConst val)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st = iv_state_of(wrap, &el);
+
+    DCHECK(input_value_mode(st) == INPUT_VALUE_MODE_VALUE,
+           "§4.10.20's relevant value was written on an `input` whose value is not its own — the offset members "
+           "apply to the five text states and every one of them is in value mode, so a caller that reached "
+           "here asked its applicability question wrongly");
+    if (!el) return;
+    /* Storing the element's own value IS setting the dirty value flag — see iv_dirty — which is §4.10.20's
+       step 2. The sanitization the `value` setter runs at its step 4 is deliberately NOT run here; see the
+       header. The state is still recorded, because the value now stored belongs to THIS state and a later type
+       change composes its algorithm with this one exactly as it does for an assignment. */
+    dom_cow_set_prop_taint(ctx, el, IV_VALUE, val);
+    iv_record_state(ctx, el, st);
+}
+
 JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
 {
     lxb_dom_element_t *el;
@@ -566,19 +604,37 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
     case INPUT_VALUE_MODE_VALUE: {
         JSValue now;
 
-        /* Steps 2-4: set the element's value to the new value, set the DIRTY VALUE FLAG, and invoke the value
-           sanitization algorithm. Step 1's `oldValue` and step 5's text entry cursor belong to a control with a
-           cursor, which nothing here has; the three steps that decide the value are all of it. Storing the
-           element's own value IS setting the flag — see iv_dirty.
+        JSValue old = JS_UNINITIALIZED;
+        bool has_cursor = text_control_selection_applies(lxb_dom_interface_node(el));
+
+        /* Steps 1-4: let oldValue be the element's value, set the element's value to the new value, set the
+           DIRTY VALUE FLAG, and invoke the value sanitization algorithm. Storing the element's own value IS
+           setting the flag — see iv_dirty.
            THE SLOT KEEPS THE VALUE and not its bytes, so a concolic stays a concolic all the way to §4.10.22.4's
            entry list: `input.value = location.hash` then `submit()` is an endpoint carrying an attacker
            source. */
+        if (has_cursor) old = input_value_get(ctx, wrap);              /* step 1 */
         now = iv_sanitize(ctx, el, st, JS_DupValue(ctx, val), NULL);
         dom_cow_set_prop_taint(ctx, el, IV_VALUE, now);
         /* Recorded unconditionally on this path — the value now stored was sanitized in THIS state, and it is
            the composition with a LATER state's algorithm that has no site to run at. */
         iv_record_state(ctx, el, st);
         JS_FreeValue(ctx, now);
+        if (has_cursor) {
+            /* §4.10.20's clamp, which runs "whenever the relevant value changes" and preserves a selection
+               that still fits — then step 5: "If the element's value (after applying the value sanitization
+               algorithm) is different from oldValue, AND THE ELEMENT HAS A TEXT ENTRY CURSOR POSITION, move the
+               text entry cursor position to the end of the text control, unselecting any selected text and
+               resetting the selection direction to \"none\"." The second conjunct is what `has_cursor` is: the
+               offset members apply only to the five text states, and a `type=number` assignment therefore runs
+               neither of these. */
+            JSValue after = input_value_get(ctx, wrap);
+
+            text_control_selection_value_changed(ctx, wrap);
+            if (iv_value_differs(ctx, old, after)) text_control_selection_move_to_end(ctx, wrap);
+            JS_FreeValue(ctx, after);
+            JS_FreeValue(ctx, old);
+        }
         return JS_UNDEFINED;
     }
     case INPUT_VALUE_MODE_DEFAULT:
