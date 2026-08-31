@@ -6548,16 +6548,64 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "miss", "null"),
              "§5 an ABSENT header is null and not \"\": /api/hdrs' `miss` is not exactly `null`");
     /* The record arm through a PROXY: its ownKeys and its get ran as the page's code (seen == 'trapped') and
-       the header still arrived. */
-    int hdrproxy = (strstr(js, "\"/api/hdrproxy\"") && strstr(js, "\"tv\"") && strstr(js, "trapped"));
+       the header still arrived.
+       THE TWO FACTS ARE TWO PARAMS OF ONE RECORD AND WERE TWO WHOLE-DOCUMENT EXISTENCES. The statement builds
+       `?v=&t=` on ONE record, and asked unscoped neither clause was about this endpoint: a run that put `tv`
+       on some other endpoint and `trapped` on a third satisfied the row exactly as the real one does, and so
+       did a seam that SWAPPED them onto each other's param. `trapped` is the worse of the two — a single
+       generic English word, satisfiable by any statement of any document that ever spells it, and one this
+       fixture is free to add tomorrow with nothing to say the row stopped meaning anything.
+       `_only` AND NOT `_is`: both values are DETERMINED here — the trap returns `t[k]` and `seen` is assigned
+       exactly once — so a second entry on either means the flow forked where this statement cannot, which is a
+       finding and not a match. AND THE EXISTENCE CLAUSE LEADS, so "the proxy statement never ran" and "it ran
+       and the trap or the header is wrong" are two messages rather than one 0 that named neither. */
+    const char *hdrproxy_why = NULL; int hdrproxy = 1;
+    fold_row(&hdrproxy, &hdrproxy_why, strstr(js, "\"/api/hdrproxy\"") != NULL,
+             "NOT REACHED: there is no /api/hdrproxy record at all, so the §5 record-arm-through-a-Proxy "
+             "statement never ran and neither fact below is being reported on. That is the SCHEDULE");
+    fold_row(&hdrproxy, &hdrproxy_why, param_value_only(js, "/api/hdrproxy", "v", "tv"),
+             "§5.1 the record arm converts a PROXY like any other object: /api/hdrproxy' `v` is not exactly "
+             "`tv` — the header did not survive a trap-bearing init, so ownKeys or get did not deliver it");
+    fold_row(&hdrproxy, &hdrproxy_why, param_value_only(js, "/api/hdrproxy", "t", "trapped"),
+             "§5.1 the trap RAN as the page's code: /api/hdrproxy' `t` is not exactly `trapped` — the "
+             "conversion read the target behind the proxy instead of driving its get");
     /* §5.2's iterable<>: sorted names, values combined per name, set-cookie NOT combined, and forEach handing
-       (value, key, headers) in that order. `for...of` over the Headers is entries, so e and f agree. */
-    int hdriter = (strstr(js, "\"/api/hdriter\"") &&
-                   strstr(js, "set-cookie|set-cookie|x-a|x-b") &&
-                   strstr(js, "c1|c2|1, 9|2") &&
-                   strstr(js, "set-cookie=c1;set-cookie=c2;x-a=1, 9;x-b=2;") &&
-                   strstr(js, "set-cookie:c1;set-cookie:c2;x-a:1, 9;x-b:2;") &&
-                   !strstr(js, "BADTHIS"));
+       (value, key, headers) in that order. `for...of` over the Headers is entries, so e and f agree.
+       FOUR BEHAVIOURS, FOUR PARAMS OF ONE RECORD, ASKED AS FIVE WHOLE-DOCUMENT EXISTENCES. The statement
+       builds `?k=&v=&e=&f=` on ONE record, so each clause here names one param of it; unscoped, none of them
+       was about this endpoint, and the conjunction was satisfied by any run that emitted those four strings
+       anywhere — including one that put the `e` spelling on the `f` param and the `f` spelling on `e`, which
+       is precisely the confusion between `for...of` and `forEach` these two clauses exist to tell apart.
+       THE `BADTHIS` CLAUSE IS GONE BECAUSE THE EXACT `f` VALUE ALREADY REFUSES IT, and that is the whole
+       reason to say so here: the callback appends `BADTHIS` after any pair whose third argument is not the
+       headers object, so a run with a wrong `this` cannot produce an `f` equal to the string below. Asked as a
+       whole-document `!strstr` it was a weaker claim wearing the shape of an extra one — it could be defeated
+       by no statement of this fixture and satisfied by every one — and a reader who re-derives the missing
+       clause would re-introduce a check that `param_value_only` already subsumes.
+       `_only` throughout: every one of these four is a value the code DETERMINED from a real Headers list, so
+       a second entry means the flow forked where this statement cannot. AND THE EXISTENCE CLAUSE LEADS. */
+    const char *hdriter_why = NULL; int hdriter = 1;
+    fold_row(&hdriter, &hdriter_why, strstr(js, "\"/api/hdriter\"") != NULL,
+             "NOT REACHED: there is no /api/hdriter record at all, so the §5.2 iterable<> statement never ran "
+             "and none of the four behaviours below is being reported on. That is the SCHEDULE");
+    fold_row(&hdriter, &hdriter_why,
+             param_value_only(js, "/api/hdriter", "k", "set-cookie|set-cookie|x-a|x-b"),
+             "§5.2 keys() SORTS by name and keeps one entry per set-cookie VALUE: /api/hdriter' `k` is not "
+             "exactly `set-cookie|set-cookie|x-a|x-b` — the two x-a appends did not combine into one key, or "
+             "the two set-cookies did, or the names came back unsorted");
+    fold_row(&hdriter, &hdriter_why, param_value_only(js, "/api/hdriter", "v", "c1|c2|1, 9|2"),
+             "§5.2 values() COMBINES a name's values and does NOT combine set-cookie: /api/hdriter' `v` is not "
+             "exactly `c1|c2|1, 9|2` — x-a's two values did not join as `1, 9`, or set-cookie's two did");
+    fold_row(&hdriter, &hdriter_why,
+             param_value_only(js, "/api/hdriter", "e", "set-cookie=c1;set-cookie=c2;x-a=1, 9;x-b=2;"),
+             "§3.7.9 @@iterator and entries are the SAME function object, so `for...of` over the Headers walks "
+             "PAIRS: /api/hdriter' `e` is not exactly the entries spelling — for...of found no pair iterator, "
+             "or found one that is not entries");
+    fold_row(&hdriter, &hdriter_why,
+             param_value_only(js, "/api/hdriter", "f", "set-cookie:c1;set-cookie:c2;x-a:1, 9;x-b:2;"),
+             "§5.2 forEach hands the callback (value, key, headers) IN THAT ORDER: /api/hdriter' `f` is not "
+             "exactly the forEach spelling — the first two arguments arrived swapped, or the third was not the "
+             "headers object, which appends BADTHIS and is why no separate clause looks for it");
     /* §5.1's sequence arm: a generator init (the protocol, not an array walk), a Map (iterable, not an array),
        an array, a malformed pair, and null — which is NOT "no init". */
     int hdrseq = (param_value_only(js, "/api/hdrseq", "g", "g1, g2") &&
@@ -7966,9 +8014,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
         { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
         { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE, hdrs_why },
-        { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE },
+        { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE, hdrproxy_why },
         { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE },
-        { "hdr-iter", hdriter, "/api/hdriter", SESS_EXPLORE },
+        { "hdr-iter", hdriter, "/api/hdriter", SESS_EXPLORE, hdriter_why },
         { "hdr-seq", hdrseq, "/api/hdrseq", SESS_EXPLORE },
         { "hdr-record", hdrrec, "/api/hdrrec", SESS_EXPLORE },
         { "mp-escape", mpesc, "/api/mpesc", SESS_EXPLORE },
