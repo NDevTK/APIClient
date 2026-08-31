@@ -5786,9 +5786,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `dom-attr`/`dom-node`/`accessor` at 0 beside a `role-public` it read as 1 to mean the public arm had
        "reached its fetch and not survived the three writes beside it" — a per-flow DOM-isolation finding,
        inferred from rows that cannot state one. AND THE READING'S OWN PREMISE DID NOT REPRODUCE, which is the
-       sharper half: across the two smoke logs on disk when this was checked, `role-public` was 0 in ALL 513
-       samples that carried a census — so the 1 the inference rested on is not a number those runs produce,
-       and nothing in the census said which state any given sample was in.
+       sharper half: across the two smoke logs on disk when this was checked, `role-public` was 0 in ALL 515
+       census samples they contain — so the 1 the inference rested on is not a number those runs produce, and
+       nothing in the census said which state any given sample was in.
 
        AND THE ROW THAT MADE THAT READING POSSIBLE WAS NOT MEASURING THIS STATEMENT AT ALL. `role_admin` and
        `role_public` were `strstr(js, "admin")` and `strstr(js, "public")` — unanchored bare words over the
