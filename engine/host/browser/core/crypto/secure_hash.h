@@ -44,6 +44,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CRYPTO_SECURE_HASH_H
 #define ENGINE_HOST_BROWSER_CORE_CRYPTO_SECURE_HASH_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -90,6 +91,15 @@ typedef struct {
 size_t secure_hash_digest_size(SecureHashAlgorithm alg);
 /* FIPS 180-4 Figure 1's Block Size for `alg`, in bytes — what a preemptible caller advances by. */
 size_t secure_hash_block_size(SecureHashAlgorithm alg);
+
+/* WEB CRYPTOGRAPHY §32.2 Registration's NAME for `alg` — one of the four the paragraph above quotes. It is
+   declared here rather than in whichever component needs one because the sentence that names them is the same
+   sentence that says why this enum has four members: which four, and what each is called, are one fact. */
+const char *secure_hash_name(SecureHashAlgorithm alg);
+/* Its inverse over the same four rows, by EXACT match — the input is a name this engine wrote, not the page's,
+   so §18.4.4 step 5's case-insensitive comparison is a different question and stays where the page's string
+   arrives. False for anything else, which is a name §32.2 does not register. */
+bool secure_hash_by_name(const char *name, SecureHashAlgorithm *out);
 
 /* §5.3's SETTING THE INITIAL HASH VALUE. */
 void secure_hash_init(SecureHash *h, SecureHashAlgorithm alg);

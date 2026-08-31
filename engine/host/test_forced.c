@@ -8,6 +8,7 @@
 #include "solver/decide.h"
 #include "solver/flow.h"
 #include "solver/world.h"
+#include "core/crypto/hmac.h"
 #include "core/crypto/secure_hash.h"
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
@@ -3600,6 +3601,188 @@ static void secure_hash_selftest(void)
                   "a message split across two updates hashed differently from the same message in one — the "
                   "digest a page gets would then depend on where the scheduler happened to preempt the walk");
         }
+    }
+}
+
+/* FIPS PUB 198-1, CHECKED AGAINST PUBLISHED KNOWN ANSWERS, for secure_hash_selftest's reason exactly: a
+ * cryptographic primitive that agrees with itself proves nothing at all, and HMAC is the one construction whose
+ * mistakes all produce a plausible-looking wrong answer. Every expected value below is transcribed from an IETF
+ * document that ships the vectors — RFC 4231 §4 Test Vectors for the SHA-2 rows ("The test vectors in this
+ * document have been cross-verified by three independent implementations") and RFC 2202 §3 Test Cases for
+ * HMAC-SHA-1 for the SHA-1 rows.
+ *
+ * THE ROWS ARE CHOSEN FOR FIPS 198-1 §4 Table 1's THREE KEY BRANCHES AND NOT FOR VARIETY, which is what makes
+ * this a test of the construction rather than of the hash under it:
+ *   Step 3 (len(K) < B)  — RFC 4231's 20-byte key, and RFC 2202's four-byte "Jefe".
+ *   Step 2 (len(K) > B)  — RFC 4231 Test Case 6's 131-byte key, which exceeds B for SHA-256 (64) AND for
+ *                          SHA-384/SHA-512 (128), and RFC 2202 Test Case 6's 80-byte key, which exceeds
+ *                          SHA-1's 64. This is the branch that HASHES the key, and it is the branch a walk
+ *                          that forgot to be preemptible would still get right while freezing the frontier.
+ *   Step 1 (len(K) = B)  — a key of exactly B bytes, cut from Test Case 6's, whose expected MAC has no
+ *                          published vector and is therefore NOT asserted against a constant: it is asserted
+ *                          to equal what step 3 answers for the SAME key zero-extended to B, which is the one
+ *                          statement steps 1 and 3 make about each other and needs no oracle.
+ * A row per hash function is what makes B and L parameters rather than the constants 64 and 20. */
+static void hmac_selftest(void)
+{
+    /* RFC 4231 §4.2/§4.3/§4.7 and RFC 2202 §3, as bytes. The repeated-byte keys and messages are FILLED rather
+       than written out, because a 131-byte literal is a transcription error waiting to happen. */
+    static const uint8_t K_0B[20] = {
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b
+    };
+    static const char D_HI[]   = "Hi There";
+    static const char K_JEFE[] = "Jefe";
+    static const char D_WHAT[] = "what do ya want for nothing?";
+    static const char D_LARGE[] = "Test Using Larger Than Block-Size Key - Hash Key First";
+    static const char HEX[] = "0123456789ABCDEF";
+    uint8_t k_aa131[131], k_aa80[80];
+    size_t i;
+
+    struct Row { SecureHashAlgorithm alg; const uint8_t *k; size_t klen; const uint8_t *d; size_t dlen;
+                 const char *hex; };
+    struct Row KAT[10];
+    size_t nk = 0, r;
+
+    for (i = 0; i < sizeof k_aa131; i++) k_aa131[i] = 0xaa;
+    for (i = 0; i < sizeof k_aa80; i++)  k_aa80[i]  = 0xaa;
+
+    /* RFC 4231 §4.2 Test Case 1 — a 20-byte key, so Table 1 step 3 for every one of these block sizes. */
+    KAT[nk].alg = SECURE_HASH_SHA256; KAT[nk].k = K_0B; KAT[nk].klen = sizeof K_0B;
+    KAT[nk].d = (const uint8_t *)D_HI; KAT[nk].dlen = sizeof D_HI - 1;
+    KAT[nk++].hex = "B0344C61D8DB38535CA8AFCEAF0BF12B881DC200C9833DA726E9376C2E32CFF7";
+    KAT[nk].alg = SECURE_HASH_SHA384; KAT[nk].k = K_0B; KAT[nk].klen = sizeof K_0B;
+    KAT[nk].d = (const uint8_t *)D_HI; KAT[nk].dlen = sizeof D_HI - 1;
+    KAT[nk++].hex = "AFD03944D84895626B0825F4AB46907F15F9DADBE4101EC682AA034C7CEBC59C"
+                    "FAEA9EA9076EDE7F4AF152E8B2FA9CB6";
+    KAT[nk].alg = SECURE_HASH_SHA512; KAT[nk].k = K_0B; KAT[nk].klen = sizeof K_0B;
+    KAT[nk].d = (const uint8_t *)D_HI; KAT[nk].dlen = sizeof D_HI - 1;
+    KAT[nk++].hex = "87AA7CDEA5EF619D4FF0B4241A1D6CB02379F4E2CE4EC2787AD0B30545E17CDE"
+                    "DAA833B7D6B8A702038B274EAEA3F4E4BE9D914EEB61F1702E696C203A126854";
+    /* RFC 2202 §3 test case 1 — the same key and data, SHA-1. */
+    KAT[nk].alg = SECURE_HASH_SHA1; KAT[nk].k = K_0B; KAT[nk].klen = sizeof K_0B;
+    KAT[nk].d = (const uint8_t *)D_HI; KAT[nk].dlen = sizeof D_HI - 1;
+    KAT[nk++].hex = "B617318655057264E28BC0B6FB378C8EF146BE00";
+    /* RFC 4231 §4.3 / RFC 2202 §3 test case 2 — a four-byte key, the shortest Table 1 step 3 case there is. */
+    KAT[nk].alg = SECURE_HASH_SHA256; KAT[nk].k = (const uint8_t *)K_JEFE; KAT[nk].klen = sizeof K_JEFE - 1;
+    KAT[nk].d = (const uint8_t *)D_WHAT; KAT[nk].dlen = sizeof D_WHAT - 1;
+    KAT[nk++].hex = "5BDCC146BF60754E6A042426089575C75A003F089D2739839DEC58B964EC3843";
+    KAT[nk].alg = SECURE_HASH_SHA1; KAT[nk].k = (const uint8_t *)K_JEFE; KAT[nk].klen = sizeof K_JEFE - 1;
+    KAT[nk].d = (const uint8_t *)D_WHAT; KAT[nk].dlen = sizeof D_WHAT - 1;
+    KAT[nk++].hex = "EFFCDF6AE5EB2FA2D27416D5F184DF9C259A7C79";
+    /* RFC 4231 §4.7 Test Case 6 — "Test with a key larger than 128 bytes (= block-size of SHA-384 and
+       SHA-512)", so Table 1 step 2 HASHES the key, for all three of these. */
+    KAT[nk].alg = SECURE_HASH_SHA256; KAT[nk].k = k_aa131; KAT[nk].klen = sizeof k_aa131;
+    KAT[nk].d = (const uint8_t *)D_LARGE; KAT[nk].dlen = sizeof D_LARGE - 1;
+    KAT[nk++].hex = "60E431591EE0B67F0D8A26AACBF5B77F8E0BC6213728C5140546040F0EE37F54";
+    KAT[nk].alg = SECURE_HASH_SHA384; KAT[nk].k = k_aa131; KAT[nk].klen = sizeof k_aa131;
+    KAT[nk].d = (const uint8_t *)D_LARGE; KAT[nk].dlen = sizeof D_LARGE - 1;
+    KAT[nk++].hex = "4ECE084485813E9088D2C63A041BC5B44F9EF1012A2B588F3CD11F05033AC4C6"
+                    "0C2EF6AB4030FE8296248DF163F44952";
+    KAT[nk].alg = SECURE_HASH_SHA512; KAT[nk].k = k_aa131; KAT[nk].klen = sizeof k_aa131;
+    KAT[nk].d = (const uint8_t *)D_LARGE; KAT[nk].dlen = sizeof D_LARGE - 1;
+    KAT[nk++].hex = "80B24263C7C1A3EBB71493C1DD7BE8B49B46D1F41B4AEEC1121B013783F8F352"
+                    "6B56D037E05F2598BD0FD2215D6A1E5295E64F73F63F0AEC8B915A985D786598";
+    /* RFC 2202 §3 test case 6 — an 80-byte key, larger than SHA-1's 64-byte block. */
+    KAT[nk].alg = SECURE_HASH_SHA1; KAT[nk].k = k_aa80; KAT[nk].klen = sizeof k_aa80;
+    KAT[nk].d = (const uint8_t *)D_LARGE; KAT[nk].dlen = sizeof D_LARGE - 1;
+    KAT[nk++].hex = "AA4AE5E15272D00E95705637CE8A3B55ED402112";
+    CHECK(nk == sizeof KAT / sizeof KAT[0],
+          "the HMAC known-answer table was filled with a different number of rows than it was declared with");
+
+    /* THE WALK IS DRIVEN AT EVERY TURN SIZE FROM ONE BYTE TO ONE BLOCK, which is the property the sign and
+       verify members depend on and the one a one-shot implementation could not have. Both spans park — the
+       key's (Table 1 step 2) and the message's (step 5) — so a scheduler that sliced them differently on two
+       runs must still produce the same MAC. A partial-block buffer that mishandled a boundary would answer
+       correctly at the one turn size a fixture happened to pick. */
+    for (r = 0; r < nk; r++) {
+        size_t block = secure_hash_block_size(KAT[r].alg);
+        size_t turn;
+
+        for (turn = 1; turn <= block; turn++) {
+            uint8_t mac[SECURE_HASH_MAX_DIGEST];
+            char got[2 * SECURE_HASH_MAX_DIGEST + 1];
+            size_t n = hmac_mac_size(KAT[r].alg), off;
+            Hmac m;
+
+            hmac_begin(&m, KAT[r].alg, (uint64_t)KAT[r].klen);
+            for (off = 0; off < KAT[r].klen; off += turn) {
+                size_t take = KAT[r].klen - off < turn ? KAT[r].klen - off : turn;
+
+                hmac_key_update(&m, KAT[r].k + off, take);
+            }
+            hmac_key_end(&m);
+            for (off = 0; off < KAT[r].dlen; off += turn) {
+                size_t take = KAT[r].dlen - off < turn ? KAT[r].dlen - off : turn;
+
+                hmac_text_update(&m, KAT[r].d + off, take);
+            }
+            hmac_finish(&m, mac, sizeof mac);
+            for (i = 0; i < n; i++) { got[2 * i] = HEX[mac[i] >> 4]; got[2 * i + 1] = HEX[mac[i] & 15]; }
+            got[2 * n] = 0;
+            CHECK(strlen(KAT[r].hex) == 2 * n,
+                  "an HMAC known-answer row's MAC is not FIPS 198-1 §2.3's L for its hash function — the row "
+                  "and the table disagree, and one of them is a transcription error");
+            CHECK(strcmp(got, KAT[r].hex) == 0,
+                  "FIPS 198-1 answered a PUBLISHED known-answer vector wrongly, or answered it differently "
+                  "depending on how the walk was sliced — either way every MAC this engine has produced is "
+                  "wrong with it");
+        }
+    }
+
+    /* TABLE 1 STEP 1 (len(K) = B) HAS NO PUBLISHED VECTOR, so it is checked against the STATEMENT the standard
+       makes about it rather than against a constant. Step 1 sets K0 = K and step 3 sets K0 = K || zeros, so a
+       key of exactly B bytes and the same key one byte shorter, zero-extended by the caller, must produce the
+       SAME MAC — and that is the only equality the two steps assert. It is the boundary an off-by-one in the
+       `>` of §3's "a K longer than B-bytes" gets wrong, and both directions of that mistake are caught: taking
+       step 2 for a B-byte key hashes it, and taking step 3 for a (B+1)-byte one truncates it. */
+    {
+        static const SecureHashAlgorithm ALGS[] = {
+            SECURE_HASH_SHA1, SECURE_HASH_SHA256, SECURE_HASH_SHA384, SECURE_HASH_SHA512
+        };
+        size_t a;
+
+        for (a = 0; a < sizeof ALGS / sizeof ALGS[0]; a++) {
+            size_t block = secure_hash_block_size(ALGS[a]);
+            uint8_t exact[SECURE_HASH_MAX_BLOCK], padded[SECURE_HASH_MAX_BLOCK];
+            uint8_t mac_a[SECURE_HASH_MAX_DIGEST], mac_b[SECURE_HASH_MAX_DIGEST];
+            size_t n = hmac_mac_size(ALGS[a]);
+            Hmac m;
+
+            for (i = 0; i < block; i++) exact[i] = padded[i] = 0xaa;
+            exact[block - 1] = 0x00;   /* the last byte of the B-byte key is the zero step 3 would have added */
+            padded[block - 1] = 0x00;
+            /* Step 1's arm: a key of exactly B bytes. */
+            hmac_begin(&m, ALGS[a], (uint64_t)block);
+            hmac_key_update(&m, exact, block);
+            hmac_key_end(&m);
+            hmac_text_update(&m, (const uint8_t *)D_HI, sizeof D_HI - 1);
+            hmac_finish(&m, mac_a, sizeof mac_a);
+            /* Step 3's arm: the same key one byte short, which step 3 zero-extends to exactly `exact`. */
+            hmac_begin(&m, ALGS[a], (uint64_t)(block - 1));
+            hmac_key_update(&m, padded, block - 1);
+            hmac_key_end(&m);
+            hmac_text_update(&m, (const uint8_t *)D_HI, sizeof D_HI - 1);
+            hmac_finish(&m, mac_b, sizeof mac_b);
+            CHECK(memcmp(mac_a, mac_b, n) == 0,
+                  "FIPS 198-1 Table 1 steps 1 and 3 disagreed about a key of exactly B bytes — step 1 sets "
+                  "K0 = K and step 3 appends zeros to reach B, so a B-byte key and the same key one byte "
+                  "shorter must produce the same MAC, and the branch on len(K) against B is off by one");
+        }
+    }
+
+    /* §31.6.2 Verify step 2's comparison, both ways round. A comparison that answered `true` for everything
+       would pass every row above, because nothing above ever calls it. */
+    {
+        static const uint8_t A[4] = { 1, 2, 3, 4 };
+        static const uint8_t B[4] = { 1, 2, 3, 5 };
+
+        CHECK(hmac_mac_equal(A, sizeof A, A, sizeof A), "§31.6.2's comparison rejected two equal MACs");
+        CHECK(!hmac_mac_equal(A, sizeof A, B, sizeof B),
+              "§31.6.2's comparison accepted two MACs that differ in their last byte — an accumulating "
+              "difference that is only tested at the front is a comparison that verifies any signature");
+        CHECK(!hmac_mac_equal(A, sizeof A, A, 3),
+              "§31.6.2's comparison accepted a signature shorter than the MAC — a prefix is not a MAC");
     }
 }
 
@@ -13308,6 +13491,7 @@ int main(int argc, char **argv) {
     /* BEFORE the CSP element matching, because that check's hash arm is this primitive: a failure here would
        otherwise be reported as a CSP verdict being wrong. */
     secure_hash_selftest();
+    hmac_selftest();
     html_scripting_flag_selftest();   /* HTML §13.2.4.5's scripting flag, read through §13.2.6.4.7's
                                         `noscript` rule — both arms, because one arm alone passes for a
                                         parser that never reads the flag */

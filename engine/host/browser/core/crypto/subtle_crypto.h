@@ -1,23 +1,36 @@
-/* Web Cryptography API §14 SubtleCrypto interface — and, of its twelve methods, the ONE this engine performs.
+/* Web Cryptography API §14 SubtleCrypto interface — and, of its twelve methods, the FOUR this engine performs.
  *
  *   [SecureContext,Exposed=(Window,Worker)]
  *   interface SubtleCrypto {
  *     …
+ *     Promise<ArrayBuffer> sign(AlgorithmIdentifier algorithm, CryptoKey key, BufferSource data);
+ *     Promise<boolean> verify(AlgorithmIdentifier algorithm, CryptoKey key, BufferSource signature,
+ *                             BufferSource data);
  *     Promise<ArrayBuffer> digest(AlgorithmIdentifier algorithm, BufferSource data);
+ *     …
+ *     Promise<CryptoKey> importKey(KeyFormat format, (BufferSource or JsonWebKey) keyData,
+ *                                  AlgorithmIdentifier algorithm, boolean extractable,
+ *                                  sequence<KeyUsage> keyUsages);
  *     …
  *   };
  *
- * WHY DIGEST WAS FIRST, stated so the audit's list reads as a plan rather than as neglect. §14.3.5 is the one
- * method whose whole answer is a computation over bytes: it takes no CryptoKey, mints none, and reaches
- * neither §18.4's registry beyond the four SHA rows nor the ASN.1/JWK import and export formats §20-§34
- * define. Every other method stands on §13's CryptoKey, whose interface and internal slots are
- * core/crypto/crypto_key.c — and what each still needs beyond it is an ALGORITHM: a key to mint means
- * §20.9.3/§27.7.3/§31.6.3's Generate Key or §31.6.4's Import Key, and a key to use means the operation itself.
- * So `encrypt`, `sign`, `importKey` and the rest are ABSENT — the page's own TypeError names each, and
- * engine/idlgen.mjs's audit prints the list — and the component they belong to is this one, which is why they
- * are named here rather than left to be rediscovered. The first of them to build is §14.3.9's `importKey`
- * restricted to the "raw" arm of §31.6.4 HMAC Import Key, because that is the one arm needing neither §9
- * Terminology's "parse an ASN.1 structure" nor its "parse a JWK".
+ * THE ORDER THESE WERE BUILT IN IS THE ORDER THEIR DEPENDENCIES ALLOW, stated so the audit's remaining list
+ * reads as a plan rather than as neglect. §14.3.5's digest was first because it is the one method whose whole
+ * answer is a computation over bytes: it takes no CryptoKey, mints none, and reaches neither §18.4's registry
+ * beyond the four SHA rows nor the ASN.1/JWK import and export formats §20-§34 define. Every other method
+ * stands on §13's CryptoKey, whose interface and internal slots are core/crypto/crypto_key.c — and what each
+ * still needs beyond it is an ALGORITHM. §31 HMAC is the only algorithm of §20-§34 that needs no primitive this
+ * engine lacks, because FIPS 198-1 §4 is a CONSTRUCTION over the message digest already here (core/crypto/
+ * hmac.h walks the ladder), so `importKey`, `sign` and `verify` follow it and nothing else can.
+ *
+ * WHAT REMAINS ABSENT, AND WHY IT IS NOT AN ORDERING ANYONE CHOSE. `encrypt`, `decrypt`, `generateKey`,
+ * `deriveKey`, `deriveBits`, `exportKey`, `wrapKey` and `unwrapKey` are absent — the page's own TypeError names
+ * each, and engine/idlgen.mjs's audit prints the list. Every remaining algorithm behind them (AES, RSA,
+ * ECDSA/ECDH, X25519/Ed25519) needs a field or bignum layer this engine does not have and cannot bind to, so
+ * they are a different and larger piece of work rather than the next one. The two of them that HMAC alone could
+ * reach are §31.6.3's Generate Key, which needs §10.1.1's random source spent on key material, and §31.6.5's
+ * Export Key, whose "raw" arm is small and whose "jwk" arm needs the same JSON Web Key layer §31.6.4's jwk arm
+ * does (named as a residual at hmac.h's `hmac_import_key`).
  *
  * WHAT DIGEST IS FOR IN THIS ENGINE, WHICH IS TWO THINGS AND NEITHER IS OPTIONAL. Real bundles call it: an
  * IDL triage over this corpus found `crypto.subtle.digest` referenced by two bundles across twenty call sites,
@@ -41,9 +54,13 @@
  * So the settle is enqueued rather than performed, and a `Promise.resolve().then(…)` written after the digest
  * call runs FIRST — which is what real Chrome does and is observable in three lines.
  *
- * §14.4's EXCEPTIONS are the two this method can raise: a "NotSupportedError" DOMException from §18.4.4 for an
- * algorithm name no row registers, and an "OperationError" for a digest operation that fails — which, for a
- * pure function over bytes with no device behind it, cannot happen, and is asserted rather than written. */
+ * §14.4's EXCEPTIONS, over the four methods that exist. A "NotSupportedError" DOMException from §18.4.4 for an
+ * algorithm name no row registers, at all four. An "InvalidAccessError" from §14.3.3 step 9 / step 10 and
+ * §14.3.4 step 10 / step 11, for a key minted for another algorithm or without the usage the call needs. A
+ * "DataError" and a "SyntaxError" from §31.6.4's steps 1, 3, 7 and 8, plus §14.3.9 step 10's SyntaxError for a
+ * secret key imported with no usages. And an "OperationError" for an operation that FAILS, which none of these
+ * four can: they are pure functions over bytes with no device behind them, so that exception is asserted
+ * against rather than written. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CRYPTO_SUBTLE_CRYPTO_H
 #define ENGINE_HOST_BROWSER_CORE_CRYPTO_SUBTLE_CRYPTO_H
 

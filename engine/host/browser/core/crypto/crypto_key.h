@@ -28,24 +28,30 @@
  * algorithms of §20-§34 consult. Modelling the pair as one value answers `key.algorithm === key.algorithm`
  * correctly and then lets `key.algorithm.name = 'AES-CBC'` change which cipher the key IS.
  *
- * WHAT [[handle]] IS AND WHY IT IS NOT HERE YET — a NAMED RESIDUAL, because this is narrower than §13.3 rather
- * than wrong. §13.3's seventh slot holds "whatever data the underlying cryptographic implementation uses to
- * represent a logical key", and nothing in this build has keying material to put in one: no §14 method mints a
- * key, so the set of CryptoKeys a page can obtain is EMPTY and a slot for their bytes would be a field with no
- * producer. THE NEXT DIFF is §14.3.9's `importKey` restricted to the "raw" arm of §31.6.4 HMAC Import Key —
- * the one import arm that needs neither §9's "parse an ASN.1 structure" (SPKI and PKCS#8) nor its "parse a
- * JWK" — and it adds [[handle]] as the byte sequence it stores together with §31.4's HmacKeyAlgorithm as
- * [[algorithm]]. ITS ABSENCE SHOWS as `crypto.subtle.importKey` being a TypeError on a missing member, which
- * is the honest ABSENT §NO STUBS asks for, and as this header's `crypto_key_new` having no caller.
+ * WHAT [[handle]] IS AND WHERE THE BYTES LIVE. §13.3's seventh slot holds "whatever data the underlying
+ * cryptographic implementation uses to represent a logical key", and for a §31 HMAC key that is the byte
+ * sequence §31.6.4 step 9 names. IT IS A JS ArrayBuffer IN THE SLOT RECORD, never a malloc'd C buffer behind
+ * JS_SetOpaque, and CLAUDE.md §PLATFORM-DATA states the rule while §5.2 Key Storage states the use that forces
+ * it: a key is handed to IndexedDB, held in a page's closure and read back in another turn, so its bytes must
+ * FORK per flow and PARK to the cold tier with the flow that holds them. A property write is already captured
+ * by the per-flow COW delta and the snapshot machinery already carries a JS value; a C pointer captured as a
+ * pointer reverts on a context switch and leaves the bytes reachable from nothing — a leak the runtime's own
+ * GC walk cannot see, so no gate reports it. Being a JS value costs the key nothing in opacity: the record it
+ * hangs off is keyed by a private Symbol the page never receives, so §13.1's "opaque reference to keying
+ * material" holds exactly as it does for the other six slots.
  *
- * AND §13.5's SERIALIZATION IS THE SECOND RESIDUAL. The interface is `[Serializable]` and §13.5 gives the five
- * serialization and five deserialization steps, which structured_clone.c would have to route — its writer
- * currently answers a platform object it does not know with HTML §2.7's "DataCloneError" DOMException, so a
- * `structuredClone(key)` or a `postMessage(key)` throws where a browser clones. That is correct-and-narrower
- * only while no key exists; the diff that adds [[handle]] is the diff that must add §13.5 beside it, because a
- * clone that drops the handle would produce a key that is not the key. ITS ABSENCE SHOWS as that
- * DataCloneError, from a page that round-trips a key through an IndexedDB store — which is §5.2 Key Storage's
- * own stated use of this interface.
+ * §13.5's SERIALIZATION IS A RESIDUAL, AND ITS OLD STATEMENT OF WHY WAS WRONG — recorded here rather than
+ * silently rewritten, because the next reader will otherwise re-derive the claim it made. That statement said
+ * "the diff that adds [[handle]] is the diff that must add §13.5 beside it, because a clone that drops the
+ * handle would produce a key that is not the key." The premise does not hold: structured_clone.c's writer
+ * answers a platform object it does not know with HTML §2.7's "DataCloneError" DOMException, which is a REFUSAL
+ * and not a drop — there is no path on which a clone silently loses the handle, so adding the slot creates no
+ * obligation on that file at all. WHAT IS ACTUALLY NOT COVERED is §13.5's five serialization and five
+ * deserialization steps, which structured_clone.c would have to route. WHAT THE NEXT DIFF BUILDS is that
+ * routing, over the six slots below plus this handle. HOW ITS ABSENCE SHOWS is a `structuredClone(key)` or a
+ * `postMessage(key)` throwing a DataCloneError where a browser hands back an equal key — reachable from three
+ * lines, and from any page that round-trips a key through an IndexedDB store, which is §5.2 Key Storage's own
+ * stated use of this interface.
  *
  * §13.2's TWO ENUMS ARE C ENUMS AND THE USAGES ONE IS A BITMASK, which is not a compression of §13.3's
  * "Sequence<KeyUsage>" but a faithful model of it: §9 Terminology defines the "usage intersection" of two
@@ -99,8 +105,30 @@ void crypto_key_free(void);
    `algorithm` is the [[algorithm]] slot — the KeyAlgorithm (§12) or the derivation of one that the minting
    algorithm built, e.g. §31.4's HmacKeyAlgorithm — and is CONSUMED. It is never handed to the page: §13.4's
    `algorithm` answers with §9's cached ECMAScript object, which this builds beside it.
-   `usages` is §9's normalized value as a mask of CryptoKeyUsage bits. */
+   `usages` is §9's normalized value as a mask of CryptoKeyUsage bits.
+   `handle` is §13.3's [[handle]] — the keying material, as an ArrayBuffer — and is CONSUMED. It is a required
+   parameter and not an optional one: §13.3 declares the slot on every CryptoKey, so a mint that could omit it
+   is a mint that can produce a key with no key in it, and the first algorithm to read one would find a hole
+   where a default would otherwise hide it. */
 JSValue crypto_key_new(JSContext *ctx, CryptoKeyType type, bool extractable, JSValue algorithm,
-                       uint32_t usages);
+                       uint32_t usages, JSValue handle);
+
+/* §13.3's [[handle]], as the ArrayBuffer the mint was given. OWNED: the caller frees. Read by the §20-§34
+   operation that uses the key — §31.6.1 Sign's "the key represented by the [[handle]] internal slot of key". */
+JSValue crypto_key_handle(JSContext *ctx, JSValueConst key);
+
+/* §13.3's [[algorithm]] — the SLOT and not §13.4's cached ECMAScript object, which is the distinction the file
+   comment above is entirely about. OWNED: the caller frees. Read by §14.3.3 step 9 and §14.3.4 step 10 ("the
+   name attribute of the [[algorithm]] internal slot of key") and by each algorithm's own operation. */
+JSValue crypto_key_algorithm(JSContext *ctx, JSValueConst key);
+
+/* §13.3's [[usages]], as §9's normalized mask — what §14.3.3 step 10's "does not contain an entry that is
+   \"sign\"" asks about. */
+uint32_t crypto_key_usages(JSContext *ctx, JSValueConst key);
+
+/* THE CLASS §3.2.15 Interface types' BRAND TESTS AGAINST for a `CryptoKey key` argument position — what
+   idl_iface_brand is given by every §14.3 method that declares one. It is this component's fact: the class is
+   what cannot be forged, because §13.3's slots live in an own property anything could be given. */
+JSClassID crypto_key_class(void);
 
 #endif

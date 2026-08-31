@@ -51,14 +51,15 @@ _Static_assert(CRYPTO_KEY_USAGES_ALL == (1u << 8) - 1u,
                "Web Cryptography §13.2's list of recognized key usage values and CRYPTO_KEY_USAGES_ALL have "
                "come apart — the mask is the set of entries of that list and there is no third statement of it");
 
-/* THE FIELDS ARE §13.3's INTERNAL SLOTS, NAMED AS §13.3 NAMES THEM. Six of the seven: [[handle]] is the
-   residual crypto_key.h states. */
+/* THE FIELDS ARE §13.3's INTERNAL SLOTS, NAMED AS §13.3 NAMES THEM — all seven. [[handle]] holds the keying
+   material as an ArrayBuffer, which is a JS value for the reason crypto_key.h states at length. */
 #define CK_SLOT_TYPE       "type"
 #define CK_SLOT_EXTRACT    "extractable"
 #define CK_SLOT_ALGORITHM  "algorithm"
 #define CK_SLOT_ALG_CACHED "algorithm_cached"
 #define CK_SLOT_USAGES     "usages"
 #define CK_SLOT_USE_CACHED "usages_cached"
+#define CK_SLOT_HANDLE     "handle"
 
 /* The getter's magic — which member of §13.4 is being read. */
 enum { CK_M_TYPE = 0, CK_M_EXTRACTABLE, CK_M_ALGORITHM, CK_M_USAGES };
@@ -239,14 +240,71 @@ static JSValue js_ck_get(JSContext *ctx, JSValueConst this_val, int magic)
     return v;
 }
 
+/* ---- §13.3's slots, read by the algorithms of §20-§34 ------------------------------------------------------ */
+
+/* THE READERS GO THROUGH ck_slots, WHICH IS THE BRAND — so an algorithm handed something that is not a
+   CryptoKey aborts at the read rather than answering out of an own property anything could carry. They are
+   separate from js_ck_get because they answer with the SLOT and js_ck_get answers with §13.4's member, and for
+   [[algorithm]] those are deliberately two different objects. */
+JSValue crypto_key_handle(JSContext *ctx, JSValueConst key)
+{
+    JSValue st = ck_slots(ctx, key), v;
+
+    DCHECK(!JS_IsException(st), "an algorithm read the [[handle]] of something that is not a CryptoKey — the "
+                                "§3.2.15 brand at the argument position is what keeps one out");
+    v = JS_GetPropertyStr(ctx, st, CK_SLOT_HANDLE);
+    JS_FreeValue(ctx, st);
+    DCHECK(JS_IsArrayBuffer(v),
+           "a CryptoKey's [[handle]] is not the ArrayBuffer its mint was given — §13.3 declares the slot on "
+           "every key and crypto_key_new is the only writer, so a key without one was built somewhere else");
+    return v;
+}
+
+JSValue crypto_key_algorithm(JSContext *ctx, JSValueConst key)
+{
+    JSValue st = ck_slots(ctx, key), v;
+
+    DCHECK(!JS_IsException(st), "an algorithm read the [[algorithm]] of something that is not a CryptoKey");
+    v = JS_GetPropertyStr(ctx, st, CK_SLOT_ALGORITHM);
+    JS_FreeValue(ctx, st);
+    DCHECK(JS_IsObject(v), "a CryptoKey's [[algorithm]] slot is not a dictionary");
+    return v;
+}
+
+uint32_t crypto_key_usages(JSContext *ctx, JSValueConst key)
+{
+    JSValue st = ck_slots(ctx, key), v;
+    int64_t u = 0;
+
+    DCHECK(!JS_IsException(st), "an algorithm read the [[usages]] of something that is not a CryptoKey");
+    v = JS_GetPropertyStr(ctx, st, CK_SLOT_USAGES);
+    JS_ToInt64(ctx, &u, v);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, st);
+    DCHECK(u >= 0 && (uint64_t)u <= (uint64_t)CRYPTO_KEY_USAGES_ALL,
+           "a CryptoKey's [[usages]] slot holds a bit §13.2 does not recognize — the slot is §9 Terminology's "
+           "normalized value of a usages list, which cannot contain one");
+    return (uint32_t)u;
+}
+
+JSClassID crypto_key_class(void)
+{
+    DCHECK(g_ready, "a CryptoKey argument position was declared before crypto_key_init declared the class");
+    return g_key_class;
+}
+
 /* ---- the mint --------------------------------------------------------------------------------------------- */
 
 JSValue crypto_key_new(JSContext *ctx, CryptoKeyType type, bool extractable, JSValue algorithm,
-                       uint32_t usages)
+                       uint32_t usages, JSValue handle)
 {
     JSValue key, st, proto;
 
     DCHECK(g_ready, "a CryptoKey was minted before crypto_key_init declared the interface");
+    DCHECK(JS_IsArrayBuffer(handle),
+           "a CryptoKey was minted with a [[handle]] that is not an ArrayBuffer — §13.3's seventh slot holds "
+           "the keying material, and it is a JS value so that it forks per flow and parks with the flow that "
+           "holds it (crypto_key.h states why at length)");
     DCHECK((int)type >= 0 && type < CRYPTO_KEY_TYPE_N,
            "a CryptoKey was minted with a [[type]] §13.2's KeyType does not declare");
     /* §9's "normalized value of a usages list" IS what [[usages]] holds — the usage intersection against every
@@ -271,6 +329,11 @@ JSValue crypto_key_new(JSContext *ctx, CryptoKeyType type, bool extractable, JSV
     JS_SetPropertyStr(ctx, st, CK_SLOT_ALGORITHM, algorithm);   /* CONSUMED */
     JS_SetPropertyStr(ctx, st, CK_SLOT_USAGES, JS_NewInt32(ctx, (int32_t)usages));
     JS_SetPropertyStr(ctx, st, CK_SLOT_USE_CACHED, ck_usages_to_es_object(ctx, usages));
+    /* §13.3's [[handle]]. It has NO CACHED OBJECT beside it and no member of §13.4 answers with it: §13.1 calls
+       a CryptoKey "an opaque reference to keying material", and the whole of that opacity is that the bytes are
+       reachable only from this record, which hangs off a private Symbol. §31.6.5 Export Key is the one
+       operation that ever reads them back out to the page, and it is gated on [[extractable]]. */
+    JS_SetPropertyStr(ctx, st, CK_SLOT_HANDLE, handle);         /* CONSUMED */
     JS_SetProperty(ctx, key, g_slot_atom, st);
     return key;
 }

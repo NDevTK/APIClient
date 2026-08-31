@@ -154,6 +154,44 @@ size_t secure_hash_block_size(SecureHashAlgorithm alg)
     return 0;
 }
 
+/* ---- Web Cryptography §32.2 Registration's four names, which this enum already IS ----------------------- */
+
+/* THE NAMES LIVE BESIDE THE ENUM BECAUSE THE ENUM'S MEMBERSHIP IS THEIR SENTENCE. secure_hash.h quotes §32.2
+   Registration to say why there are exactly four rows and not FIPS 180-4's seven — "The recognized algorithm
+   names are "SHA-1", "SHA-256", "SHA-384", and "SHA-512" for the respective SHA algorithms" — so which four and
+   what each is called are one fact, and a second table of these strings in whichever component needs one is the
+   copy that drifts. §31.6.4 step 14 writes one of these into a key's HmacKeyAlgorithm and §18.4.4 step 5 looks
+   one up; both read this. */
+const char *secure_hash_name(SecureHashAlgorithm alg)
+{
+    switch (alg) {
+    case SECURE_HASH_SHA1:   return "SHA-1";
+    case SECURE_HASH_SHA256: return "SHA-256";
+    case SECURE_HASH_SHA384: return "SHA-384";
+    case SECURE_HASH_SHA512: return "SHA-512";
+    }
+    DFAIL("a §32.2 algorithm name was asked for a value this enum does not declare");
+    return "";
+}
+
+/* THE INVERSE, AND IT IS AN EXACT MATCH RATHER THAN §18.4.4 step 5's CASE-INSENSITIVE ONE. That step's input is
+   the PAGE'S string and so its comparison is "a case-insensitive string match for algName"; this one's input is
+   a name THIS ENGINE wrote — out of secure_hash_name, into a key's [[algorithm]] — so a mismatch of case would
+   be a defect in this file rather than a spelling a page is entitled to. The two questions are not the same
+   question and sharing one comparison would answer the page's leniently or this engine's strictly. */
+bool secure_hash_by_name(const char *name, SecureHashAlgorithm *out)
+{
+    static const SecureHashAlgorithm ALL[] = {
+        SECURE_HASH_SHA1, SECURE_HASH_SHA256, SECURE_HASH_SHA384, SECURE_HASH_SHA512
+    };
+    size_t i;
+
+    DCHECK(name != NULL && out != NULL, "secure_hash_by_name was given no name or nowhere to put the answer");
+    for (i = 0; i < sizeof ALL / sizeof ALL[0]; i++)
+        if (strcmp(name, secure_hash_name(ALL[i])) == 0) { *out = ALL[i]; return true; }
+    return false;
+}
+
 /* ---- FIPS 180-4 §6.1.2: ONE SHA-1 message block -------------------------------------------------------- */
 static void sha1_block(SecureHash *h, const uint8_t *m)
 {
