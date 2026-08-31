@@ -4384,10 +4384,25 @@ function _level1Record(pool, rd) {
            "0/1 state or a weight over a non-empty population, and the one value that is legitimately not a " +
            "number (an engine's -Infinity for a drained frontier) is reported as the `drained` COUNT rather " +
            "than folded into an extremum, so a non-finite here is a term that lost its presence rule");
-  DCHECK(r.hot <= r.pool && r.booting <= r.pool,
-         "the Level-1 census reports " + r.hot + " hot and " + r.booting + " booting record(s) in a pool of " +
-         r.pool + " — both are subsets of the pool this round ranked, so a larger one is a reading taken " +
-         "across a mutation of the pool rather than of one instant");
+  /* THE ONE-INSTANT HALF OF THIS, AND THE HALF THAT WAS NEVER A RELATION AT ALL. `booting` and `pool` are
+     read on the same line above, so a booting count that outruns the pool IS a reading taken across a
+     mutation, which is what this says. `hot` is not: it is the round's own scan, taken before the step, and
+     this record's whole doctrine is stated three paragraphs up — "a round has no single instant, so each row
+     names its own AND THE DIFFERENCES BETWEEN THEM ARE FACTS". `hot: 1` beside `pool: 0` is the round having
+     FINALIZED that engine, which is the one thing a terminal round does; the paragraph's own example is the
+     mirror of it (`candDocs: 1` beside `waiting: 0` is the round having SEATED a document).
+     SO THIS CLAUSE ASSERTED THAT THE ROUND HAD MUTATED NOTHING, WHICH EVERY TERMINAL ROUND MUTATES BY DESIGN.
+     `finish` splices the engine out of the pool and `_level1Record` runs from the round's own `finally`
+     afterwards, so a pool whose members were all hot — one tab, the ordinary case — reached this with hot 1
+     and pool 0 and aborted, out of an exit that is EVERY exit, taking the Level-1 scheduler down on the round
+     that COMPLETED a document. It is the same defect shape as the accounting sum that named two of three
+     kinds: an instrument built so a census could not go quiet, killing the loop it measures, on correct code.
+     The relation it wanted is structural and holds where it is computed — `hot` is a FILTER of `pool`, a
+     subset at the line that makes it, with nothing there left to assert. */
+  DCHECK(r.booting <= r.pool,
+         "the Level-1 census reports " + r.booting + " booting record(s) in a pool of " + r.pool + " — both " +
+         "are read at the same instant, at the end of the round, and a reservation is a member of the pool " +
+         "it is counted against, so a booting count that outruns it is a reading taken across a mutation");
   DCHECK(("wTop" in r) === ("wMin" in r) && ("wTop" in r) === (r.drained !== undefined && r.hot - r.drained > 0),
          "the Level-1 census reports a resident order whose extrema and whose rankable population disagree — " +
          "the weights exist exactly when there is a rankable engine to have them, and a `wTop` beside a " +
