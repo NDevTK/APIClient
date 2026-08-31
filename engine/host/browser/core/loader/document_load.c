@@ -48,7 +48,8 @@ struct DocumentLoad {
 
 DocumentLoad *document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
                                   HtmlScriptingMode scripting,
-                                  const MimeType *type, const lxb_char_t *text, size_t size)
+                                  const MimeType *type, int encoding,
+                                  const lxb_char_t *text, size_t size)
 {
     DocumentLoad    *l;
     DocumentLoadType arm;
@@ -57,6 +58,25 @@ DocumentLoad *document_load_begin(lxb_html_document_t *document, DomParseRootKin
            "HTML §7.4.5's load-a-document was reached without both halves of what it loads — a Document to "
            "load into and the characters of the response it loads; a caller with only one of them is one that "
            "has no response, and §7.4's initial about:blank is not asked this question at all");
+    /* THE OTHER HALF OF WHAT THESE BYTES ARE, AND THE CLOSURE ON THE ENTRY THAT SKIPS IT. §7.4.5's WHICH-
+       DOCUMENT dispatch is answered above by a component every entry reaches; §13.2.3.2's WHICH-DECODER
+       dispatch is answered before this call, and an entry that never asked it has no id to hand over. It
+       cannot stay silent about that — the id is a parameter — so the state this refuses is a caller that
+       reached a parser with bytes NOBODY DECODED, which is what two of the three entries used to do: the
+       response's own bytes went to a tokenizer that reads UTF-8, and a document served in any other encoding
+       came back a real tree full of U+FFFD with a `characterSet` of UTF-8 and nothing to say so.
+       WHY THIS IS THE PLACE. §13.2.3.1 Parsing with a known character encoding makes every arm below operate
+       on a KNOWN encoding whether or not one was determined, so the last moment the question can be asked at
+       all is the one before the arm opens — and this router is the only thing in the engine ever handed a
+       response to ask it about. A route added later that reaches a §7.5 loader with an encoding nobody
+       determined FIRES HERE rather than widening the old wrong answer in silence. */
+    DCHECK(encoding >= 0,
+           "an HTML §7.4.5 load-a-document was opened for a response whose ENCODING nobody determined — HTML "
+           "§13.2.3.2 Determining the character encoding is what states otherwise than DOM §4.5's utf-8 "
+           "default, and §13.2.3.1 Parsing with a known character encoding then has this parse operate on that "
+           "encoding with certain confidence. Run core/loader/document_load_decode.h over the RESPONSE (its "
+           "header list and its bytes) at the entry that fetched it, parse what it decoded, and hand its "
+           "answer here; the bytes a response arrived in are not the characters a parser takes");
     arm = document_load_type_of(type);
     switch (arm) {
     case DOC_LOAD_HTML:
@@ -183,7 +203,8 @@ void document_load_abort(DocumentLoad *load)
 
 lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
                            HtmlScriptingMode scripting,
-                           const MimeType *type, const lxb_char_t *text, size_t size)
+                           const MimeType *type, int encoding,
+                           const lxb_char_t *text, size_t size)
 {
     DocumentLoad *load;
 
@@ -221,7 +242,7 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
            "finishes it — rather than from this loop, which exists for the two callers that run before the "
            "frontier has a member and have no driver to park in");
 
-    load = document_load_begin(document, root_kind, scripting, type, text, size);
+    load = document_load_begin(document, root_kind, scripting, type, encoding, text, size);
     if (load == NULL)
         return LXB_STATUS_ERROR_NOT_EXISTS;   /* the release half of the unbuilt-arm crash — see the header */
     while (!document_load_ended(load))

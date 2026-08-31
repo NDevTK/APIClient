@@ -21,6 +21,21 @@
  * Document the caller created and has not parsed into; `text` is the characters that response decoded to and
  * `size` may be zero; `root_kind` is core/html/html_parse.h's.
  *
+ * `encoding` IS THE OTHER HALF OF WHAT THESE BYTES ARE, AND IT IS A PARAMETER SO THAT IT CANNOT BE SKIPPED
+ * SILENTLY. It is the id HTML §13.2.3.2 "Determining the character encoding" answered for this response, and
+ * `text` must be what core/loader/document_load_decode.h's decode of these same bytes under it produced.
+ * §13.2.3.1 "Parsing with a known character encoding" is the sentence that makes it load-bearing: "When the
+ * HTML parser is to operate on an input byte stream that has a known definite encoding, then the character
+ * encoding is that encoding and the confidence is certain" — so every §7.5 arm below is operating on a KNOWN
+ * encoding whether or not anybody determined one, and an entry that determined none was asserting UTF-8 by
+ * omission. Two of the three entries did exactly that, and the result was a real tree with U+FFFD wherever the
+ * response had a byte above 0x7F, and a `document.characterSet` of UTF-8 — no crash and nothing to read.
+ *
+ * IT IS ASKED HERE AND NOT AT THE THREE §7.5 LOADERS, and the line is not a compromise: the encoding is a fact
+ * about a RESPONSE, and this router is the only thing in the engine that is ever handed one. Each §7.5 arm is
+ * handed CHARACTERS and has no response left to ask about, which is why the assert those arms carry is the
+ * one they CAN make — that the type they were given is the arm they serve.
+ *
  * A RESPONSE IS WHAT THIS TAKES, WHICH IS WHY §7.4's INITIAL `about:blank` DOES NOT COME THROUGH IT. That
  * Document has no response, so there is no type to compute and nothing to dispatch on: it is an HTML document
  * by §7.4 and its caller parses its skeleton directly. Every OTHER document built out of bytes this engine
@@ -89,7 +104,8 @@ typedef struct DocumentLoad DocumentLoad;
    already crashed by name in a dev build — the same two halves `document_load` returns a status for. */
 DocumentLoad *document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
                                   HtmlScriptingMode scripting,
-                                  const MimeType *type, const lxb_char_t *text, size_t size);
+                                  const MimeType *type, int encoding,
+                                  const lxb_char_t *text, size_t size);
 
 /* IS THERE NOTHING LEFT TO DO? What a driver's loop tests; stepping past it is a DCHECK. */
 bool document_load_ended(const DocumentLoad *load);
@@ -122,6 +138,7 @@ void document_load_abort(DocumentLoad *load);
    fatal CHECK on the status is what makes the release half real. */
 lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
                            HtmlScriptingMode scripting,
-                           const MimeType *type, const lxb_char_t *text, size_t size);
+                           const MimeType *type, int encoding,
+                           const lxb_char_t *text, size_t size);
 
 #endif

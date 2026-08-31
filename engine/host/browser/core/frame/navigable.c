@@ -25,7 +25,7 @@
 #include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src`, stated once for its three callers */
-#include "core/html/html_encoding_sniff.h"  /* §13.2.3.2: WHICH ENCODING a navigated response's bytes are in */
+#include "core/loader/document_load_decode.h"  /* §13.2.3.2: WHICH DECODER a navigated response's bytes need */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "core/loader/document_load_type.h"  /* §7.4.5: a response's COMPUTED TYPE, and which document it loads as */
 #include "core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection that arm runs */
@@ -261,7 +261,7 @@ static bool child_in_this_agent(const Origin *child_origin)
    Sniffing §7 computed a type for it out of its bytes, which is why this function no longer sees a header
    value at all. */
 static lxb_html_document_t *child_document(const char *body, size_t body_len, const MimeType *computed_type,
-                                           DocumentLoad **out_load)
+                                           int encoding, DocumentLoad **out_load)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom;
@@ -332,7 +332,7 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
        one quantity that matters and there is nothing for a driver to step. */
     if (body) {
         *out_load = document_load_begin(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED, computed_type,
-                                        (const lxb_char_t *)body, body_len);
+                                        encoding, (const lxb_char_t *)body, body_len);
         CHECK(*out_load != NULL,
               "a child navigable's response took an HTML §7.4.5 arm this build has no §7.5 loader for — the "
               "router has already named the subsection in a dev build, and in release this is where the "
@@ -577,7 +577,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
                                        const Origin *origin, const Origin *top_level_origin,
                                        OpenerPolicyValue opener_policy, bool navigates,
                                        const char *body, size_t body_len,
-                                       const char *content_type, const MimeType *computed_type,
+                                       const HeaderList *response_headers, const MimeType *computed_type,
                                        SerializedPolicyContainer policy,
                                        SerializedResponsePermissionsPolicy permissions_policy,
                                        const char *about_base_url, SandboxFlags sandbox_flags)
@@ -649,9 +649,13 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
        copies — and this buffer is now OWNED BY THIS RECORD rather than freed at the call, because the §7.5
        load BORROWS it across every suspension until it is finished. */
     if (body) {
-        encoding = html_encoding_sniff(body, body_len, content_type, document_encoding(ctx));
-        decoded = encoding_decode(body, body_len, encoding, &decoded_len);
-        CHECK(decoded != NULL, "navigable: OOM decoding a child navigable's response body");
+        /* ONE COMPONENT FOR BOTH STEPS, AND FOR THE `Content-Type` READ THEY RUN ON — this site used to hold
+           the sniff, the decode and its own read of the header, and it was the ONLY entry that held any of
+           them, so the other two handed a tokenizer that reads UTF-8 the response's own bytes. A rule spelled
+           at one of three entries is not a rule; core/loader/document_load_decode.h is where it lives now,
+           beside the WHICH-DOCUMENT dispatch it is the other half of. */
+        encoding = document_load_decode(&decoded, &decoded_len, response_headers, body, body_len,
+                                        document_encoding(ctx));
     }
 
     w = calloc(1, sizeof *w);
@@ -682,7 +686,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
        anything at that point would be reading it at the wrong time. §7.3.2.1 "Creating browsing contexts"'s
        constant is the answer for the no-response arm — this create's own §7.4 initial `about:blank`. */
     w->kind = computed_type ? document_load_kind(computed_type) : document_kind_initial_about_blank();
-    w->dom = child_document(body ? decoded : NULL, decoded_len, computed_type, &w->load);
+    w->dom = child_document(body ? decoded : NULL, decoded_len, computed_type, encoding, &w->load);
     return w;
 }
 
@@ -1095,9 +1099,6 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        enforced value and §10.1 inserts a second call with the report-only one, so one response feeds two
        policies and this frame reads both. Same ownership as `resp_csp`, and freed with it. */
     char *resp_pp = NULL, *resp_pp_report_only = NULL;
-    /* The JOINED `Content-Type`, which is Fetch §2.2.2 "Headers"'s input and therefore §13.2.3.2's; same ownership as
-       resp_csp above. The type §7.4.5 dispatches on is NOT computed from it — see the read below. */
-    char *resp_ctype = NULL;
     /* §7.4.5's COMPUTED TYPE for this response — a record this frame owns and frees on every path.
        `computed_defined` is "there was a response to compute it from" as a positive statement: a fetch that
        did not load has no resource, which is a DIFFERENT fact from a response that carried no `Content-Type`
@@ -1254,17 +1255,16 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            core/frame/navigation_params.c and says nothing about the framed document's own headers. */
         resp_pp = header_list_get(&response_headers, "permissions-policy");
         resp_pp_report_only = header_list_get(&response_headers, "permissions-policy-report-only");
-        /* THE RESPONSE'S `Content-Type`, TWICE, BECAUSE TWO STANDARDS READ IT DIFFERENTLY AND BOTH ARE RIGHT.
-           Fetch §2.2.2's `get` JOINS every value with ", " and that is what Fetch §2.2.2 "Headers"'s "extract a MIME
-           type" takes — the form HTML §13.2.3.2 "Determining the character encoding" needs, since Fetch §3.5's
-           "legacy extract an encoding" runs on the extraction's record. MIME Sniffing §5.1's supplied MIME type
-           detection takes "the value of the LAST `Content-Type` header" UNJOINED, because §5's
-           check-for-apache-bug flag is a byte-exact comparison a joined list can never satisfy. Reading one and
-           calling it the other is how a component ends up answering a question nobody asked. So the JOINED one
-           is read here, for the encoding, and the UNJOINED one is read out of this same list by the component
-           that runs §5.1 and §7 (core/loader/document_load_type.h) — two reads of one header because they are
-           two algorithms, never one read passed to both. */
-        resp_ctype = header_list_get(&response_headers, "content-type");
+        /* THE RESPONSE'S `Content-Type` IS READ TWICE, BY TWO STANDARDS, AND NEITHER READ IS THIS FRAME'S ANY
+           MORE. Fetch §2.2.2 "Headers"' `get` JOINS every value with a comma and a space, which is what HTML
+           §13.2.3.2 "Determining the character encoding" runs on; MIME Sniffing §5.1 "Interpreting the
+           resource metadata" takes the LAST value UNJOINED, because §5's check-for-apache-bug flag is a
+           byte-exact comparison a joined list can never satisfy. Each read now lives inside the component
+           whose algorithm defines it — core/loader/document_load_decode.h and
+           core/loader/document_load_type.h — and this frame carries the LIST, so no entry can hand one
+           algorithm the other one's operand. It used to read the joined value here and pass it down, which is
+           the shape that let two of the three entries that build a Document out of a response never ask this
+           question at all. */
         /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
            field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
            run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
@@ -1594,7 +1594,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             }
         }
     }
-    header_list_free(&response_headers);
+    /* THE RESPONSE'S HEADER LIST OUTLIVES THIS POINT NOW, and it has to: HTML §13.2.3.2 "Determining the
+       character encoding" reads the `Content-Type` header in a form of its own (Fetch §2.2.2 "Headers"' get,
+       joined) and that read belongs INSIDE the component that runs the algorithm, not to this frame. The list
+       is therefore released beside the other bytes this frame owns, after the creation below has taken what
+       it needs — see the free at the end of this function. */
     if (!swapped) {
         /* HTML §7.4.5 "Populating a session history entry", from the list of conditions that block a navigation
            before its Document is created: "navigationParams's RESERVED ENVIRONMENT is non-null and the result
@@ -1633,7 +1637,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            because the record COPIES what a park does not carry, and this frame's locals are all freed below.
            `navigates` is TRUE: this is a navigation, so the navigable takes the Document as its active one. */
         s->create = nav_create_begin(ctx, doc, dest_url, tlu, origin, tlo, response_coop.value,
-                                     /*navigates*/true, (const char *)body, body_len, resp_ctype,
+                                     /*navigates*/true, (const char *)body, body_len, &response_headers,
                                      computed_defined ? &computed : NULL,
                                      policy,
                                      serialized_response_permissions_policy(resp_pp, resp_pp_report_only),
@@ -1654,7 +1658,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     free(resp_csp);
     free(resp_pp);
     free(resp_pp_report_only);
-    free(resp_ctype);
+    /* AND THE LIST ITSELF, HERE RATHER THAN BEFORE THE CREATION ABOVE — see the note at the site it moved
+       from. The creation reads it through core/loader/document_load_decode.h at its OPEN and never after, so
+       the list owes nothing to the far side of a suspension. */
+    header_list_free(&response_headers);
     /* CSP §2.2.2's SELF-ORIGIN BYTES, WHICH THIS FRAME OWNS AND THE CONTAINER HAS COPIED — the same ownership
        as `resp_csp` beside it, and freed after nav_create_begin for the same reason: the container the
        creation record was opened with names these bytes until that record has taken its own copy — which it

@@ -48,6 +48,7 @@
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/loader/document_load_type.h"  /* §7.4.5: WHICH document a response loads as, and its computed type */
 #include "core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection that arm runs */
+#include "core/loader/document_load_decode.h" /* §13.2.3.2: WHICH DECODER that response's bytes need */
 #include "core/frame/navigation_params.h"
 #include "core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
 #include "core/frame/secure_context.h"
@@ -2801,6 +2802,14 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
     /* §7.5.1's TYPE AND CONTENT TYPE for the document this runner loads, decided by the same §7.4.5 dispatch
        the parse runs and carried to the install rather than restated there. */
     DocumentKind root_kind;
+    /* HTML §13.2.3.2 "Determining the character encoding"'s answer for this response, and the characters its
+       decode produced. `decoded` REPLACES `src` at the parse when there is a response, and it lives across the
+       whole function for `computed`'s reason: core/loader/document_load.h borrows the characters for the life
+       of the load. -1 is the no-response arm — §7.4's initial about:blank keeps DOM §4.5 "Interface Document"'s
+       utf-8 default because there is nothing to sniff. */
+    int root_encoding = -1;
+    char *decoded = NULL;
+    size_t decoded_n = 0;
     NavigationParams np;
     const char *src = html;
     JSRuntime *rt;
@@ -2880,12 +2889,25 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        true about the bytes, and pointing at the wrong subsystem for a document that was never JavaScript. The
        SAME files reached through an iframe already crashed by name, because that path goes through
        child_document: one absent capability reporting under two names depending on which loader arrived. */
+    /* AND HTML §13.2.3.2 "Determining the character encoding" BESIDE IT, over the same response and the same
+       raw bytes, because it is the same defect one question over: this runner asked NEITHER, so a test file
+       served `windows-1252` — or one whose own `<meta charset>` says so — reached the tree builder with every
+       byte above 0x7F already replaced by U+FFFD, and its `document.characterSet` answered UTF-8. The child
+       navigable sniffed and decoded; this entry did not. THE TYPE IS COMPUTED FROM THE RAW BYTES AND THE PARSE
+       RUNS ON THE DECODE: MIME Sniffing §5.2 "Reading the resource header" reads the resource's own bytes,
+       while HTML §13.2.3.1 "Parsing with a known character encoding" is what the parser then operates under.
+       NO PARENT ENCODING — this is the runner's top-level document and §13.2.3.2's container step has no
+       container to read. */
     if (response) {
         document_load_computed_type(&computed, response, src, html_n);
         computed_defined = true;
+        root_encoding = document_load_decode(&decoded, &decoded_n, response, src, html_n,
+                                             /*parent_encoding*/-1);
     }
     /* THE RECORD OUTLIVES THE HEADER LIST IT WAS COMPUTED FROM — mime_sniff_computed's answer owns its own
-       strings — so the list is released here, at the last read of it, and the type travels on alone. */
+       strings — so the list is released here, at the last read of it, and the type travels on alone. The
+       decode above is the other thing that had to happen before this free: §13.2.3.2 reads the `Content-Type`
+       header and there is no reading it afterwards. */
     header_list_free(&response_headers);
 
     rt = JS_NewRuntime();
@@ -2906,9 +2928,12 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        serve is at that loader (core/loader/html_document.c), where the parse is. */
     /* §13.2.4.5 ENABLED: this runner executes the test document's scripts, which is the whole of what it is
        for, so its parser takes the same arm a browser's does. */
+    /* THE RESPONSE ARM PARSES THE DECODE AND THE NO-RESPONSE ARM PARSES THE BYTES IT WAS HANDED, which is the
+       same split as the two calls themselves: there is nothing to decode a document that came from no response
+       with, and its markup is this build's own constant or a WPT wrapper. */
     CHECK((computed_defined
-             ? document_load(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed,
-                             (const lxb_char_t *)src, html_n)
+             ? document_load(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed, root_encoding,
+                             (const lxb_char_t *)decoded, decoded_n)
              : html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED,
                                    (const lxb_char_t *)src, html_n)) == LXB_STATUS_OK,
           "the runner's document did not parse");
@@ -2920,6 +2945,9 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
     if (computed_defined)
         mime_type_free(&computed);
     free(fetched);
+    /* THE DECODE IS BORROWED FOR THE LIFE OF THE LOAD (core/loader/document_load.h) and the load above was the
+       completing one, so the borrow has ended and these bytes are this frame's to release. */
+    free(decoded);
 
     /* THE ROOT NAVIGABLE IS THE HOST'S, so its §7.2.3 proxy is minted here — the same rule as every child,
        whose creator mints it. A navigable has one, and whoever owns the navigable is who makes it. */
@@ -2991,6 +3019,13 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                           serialized_response_permissions_policy(np.permissions_policy,
                                                                  np.permissions_policy_report_only),
                           np.sandbox_flags, world_local_doc(), root_proxy);
+        /* AND HTML §13.2.3.2 "Determining the character encoding"'s ANSWER ONTO THE DOCUMENT IT IS ABOUT —
+           here, for the reason core/frame/navigable.c and main.c both write it here: the Document record is
+           the install's product, so this is the first moment there is anything to write it on. -1 is the
+           no-response arm, which keeps DOM §4.5 "Interface Document"'s default rather than overwriting it
+           with an id nothing determined. */
+        if (root_encoding >= 0)
+            document_set_encoding(ctx, root_encoding);
         JS_FreeValue(ctx, root_proxy);
     }
     navigation_params_free(&np);   /* document_install built its container from it and keeps no pointer */

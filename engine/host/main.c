@@ -34,6 +34,7 @@
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
 #include "browser/core/loader/document_load_type.h"  /* §7.4.5: WHICH document a response loads as */
+#include "browser/core/loader/document_load_decode.h"  /* §13.2.3.2: WHICH DECODER that response's bytes need */
 #include "browser/core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection it runs */
 #include "browser/core/mime/mime_type.h"             /* §7.4.5's computed type is a MIME type RECORD */
 #include "browser/core/frame/navigable.h"
@@ -292,12 +293,25 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
    computed type this function dispatches the parse on. It is handed BACK rather than recomputed at the
    install below for the reason the dispatch is one component: the response is here and nowhere else, and an
    install that classified it a second time would be the second entry asking one question. */
+/* `out_encoding` IS THE SAME SENTENCE FOR THE OTHER HALF OF WHAT THESE BYTES ARE — HTML §13.2.3.2 "Determining
+   the character encoding"'s answer, which DOM §4.5 "Interface Document"'s `characterSet` reports and which
+   this host must write onto the Document once its realm exists. It is handed back for `out_kind`'s reason
+   exactly: the RESPONSE is here and nowhere else, and the realm is built after this returns.
+   THIS ENTRY ASKED NEITHER QUESTION AND THEN ASKED ONE OF THEM. It used to hand the response's own bytes
+   straight to the parser, so a document served in anything but UTF-8 reached the tree builder with every byte
+   above 0x7F already replaced by U+FFFD, and `document.characterSet` answered UTF-8 — while the child-navigable
+   entry, over the same kind of response, sniffed and decoded. One capability, two names, and the name this
+   host wore was silence: nothing crashed, and the tree it produced was REAL. */
 static lxb_html_document_t *engine_parse_document(const char *html, size_t html_n,
-                                                  const HeaderList *response_headers, DocumentKind *out_kind)
+                                                  const HeaderList *response_headers, DocumentKind *out_kind,
+                                                  int *out_encoding)
 {
     lxb_html_document_t *dom;
     MimeType computed;
     lxb_status_t st;
+    char *decoded;
+    size_t decoded_n;
+    int encoding;
 
     /* NO `html ? html : ""` ANYWHERE HERE. That ternary turned "the caller handed over no document" into a
        document that parses to nothing — a successful analysis of an empty page, which reads exactly like a
@@ -315,6 +329,15 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
            "what HTML §7.4.5 dispatches on, and a caller with bytes and no headers is one that never asked "
            "which kind of document it fetched");
     document_load_computed_type(&computed, response_headers, html, html_n);
+    /* §13.2.3.2 OVER THE SAME RESPONSE, AND THE DECODE ITS ANSWER NAMES — asked here for the reason the line
+       above is: this is where the response is, and both questions are about the RAW bytes. The type is
+       computed from `html` and not from `decoded` deliberately: MIME Sniffing §5.2 "Reading the resource
+       header" reads the resource's own bytes, and a decode has already turned some of them into other bytes.
+       NO PARENT ENCODING. §13.2.3.2's container-document step is about a document whose navigable has a
+       parent, and this Document is the one this instance was rooted on — the child navigable's entry passes
+       its container's encoding, and this one has none to pass, which is a positive statement and not a hole. */
+    encoding = document_load_decode(&decoded, &decoded_n, response_headers, html, html_n,
+                                    /*parent_encoding*/-1);
     dom = dom_document_create();
 
     CHECK(dom != NULL, "the document allocation failed");
@@ -330,15 +353,28 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
        statements below and the boot flow drives every one of them, so its parser takes the arm a browser's
        does — and it cannot be read off the Document here, because the navigable and the realm are given to it
        AFTER this returns (core/html/html_parse.h states why the flag is a parameter). */
-    st = document_load(dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed,
-                       (const lxb_char_t *)html, html_n);
+    /* WHAT THE PARSER IS GIVEN IS THE DECODE, NEVER THE RESPONSE'S BYTES — HTML §13.2.3.1 "Parsing with a
+       known character encoding": "When the HTML parser is to operate on an input byte stream that has a known
+       definite encoding, then the character encoding is that encoding and the confidence is certain". The
+       encoding travels beside the characters so the loader can refuse a caller that determined none. */
+    st = document_load(dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed, encoding,
+                       (const lxb_char_t *)decoded, decoded_n);
     /* BEFORE THE RECORD IS FREED, because the pair is read out of it. */
     DCHECK(out_kind != NULL, "a document was parsed with nowhere to put its §7.5.1 type and content type — "
                              "the Document those two facts belong to is installed by this host and there is "
                              "exactly one caller shape, so a null here is an entry that will install a "
                              "Document without knowing what was fetched");
-    *out_kind = document_load_kind(&computed);
+    DCHECK(out_encoding != NULL,
+           "a document was parsed with nowhere to put HTML §13.2.3.2 Determining the character encoding's "
+           "answer — the Document it belongs to is installed by this host after this returns, so a null here "
+           "is an entry that will install a Document reporting DOM §4.5's utf-8 default for a response that "
+           "was decoded as something else");
+    *out_kind     = document_load_kind(&computed);
+    *out_encoding = encoding;
     mime_type_free(&computed);
+    /* THE DECODE IS BORROWED FOR THE LIFE OF THE LOAD (core/loader/document_load.h) and this load is the
+       completing one, so the borrow ended at the line above and these bytes are this frame's to release. */
+    free(decoded);
     if (st != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
     return dom;
@@ -562,6 +598,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     /* §7.5.1's TYPE AND CONTENT TYPE for the Document this entry installs, decided by the same §7.4.5
        dispatch the parse below runs and carried to the install rather than restated there. */
     DocumentKind      root_kind;
+    int               root_encoding;
     NavigationParams np;
 
     /* THIS ENTRY ROOTS THE AGENT AT ONE DOCUMENT, which is not the same statement as "one instance is one
@@ -692,7 +729,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     concolic_install_hooks();
     concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
 
-    g_dom = engine_parse_document(html, html_len, &response_headers, &root_kind);
+    g_dom = engine_parse_document(html, html_len, &response_headers, &root_kind, &root_encoding);
     header_list_free(&response_headers);
 
     /* Identity and script inventory from the DOM's OWN executable scripts: a concatenation of them cannot
@@ -765,6 +802,12 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                                                                     np.permissions_policy_report_only),
                              np.sandbox_flags,
                              world_local_doc(), root_proxy);
+        /* AND HTML §13.2.3.2 "Determining the character encoding"'s ANSWER ONTO THE DOCUMENT IT IS ABOUT —
+           here, for core/frame/navigable.c's reason and in the same place as it: the Document record is the
+           realm builder's product, so this is the first moment there is anything to write it on, and the
+           bytes the parse consumed were already decoded with it. Without this line DOM §4.5 "Interface
+           Document"'s default stands and `document.characterSet` answers UTF-8 for every response. */
+        document_set_encoding(g_ctx, root_encoding);
         JS_FreeValue(g_ctx, root_proxy);
     }
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
@@ -864,6 +907,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     /* §7.5.1's TYPE AND CONTENT TYPE for the Document this entry installs, decided by the same §7.4.5
        dispatch the parse below runs and carried to the install rather than restated there. */
     DocumentKind      joined_kind;
+    int               joined_encoding;
     NavigationParams np;
     lxb_html_document_t *dom;
     JSContext *cctx;
@@ -964,7 +1008,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "to it resolving to whichever of the two the registry wrote last");
     world_doc_adopt(doc);
 
-    dom = engine_parse_document(html, html_len, &response_headers, &joined_kind);
+    dom = engine_parse_document(html, html_len, &response_headers, &joined_kind, &joined_encoding);
     header_list_free(&response_headers);
     cctx = engine_realm_new(g_rt, top_level_url);
     {
@@ -1012,6 +1056,10 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                              serialized_response_permissions_policy(np.permissions_policy,
                                                                     np.permissions_policy_report_only),
                              np.sandbox_flags, doc, proxy);
+        /* §13.2.3.2's ANSWER ONTO THIS DOCUMENT, for the reason `qjs_init` states at its own install: a
+           second document of this cluster is a second response, decoded with its own encoding, and reading
+           the root's would be one document reporting another's. */
+        document_set_encoding(cctx, joined_encoding);
         JS_FreeValue(cctx, proxy);
     }
 
