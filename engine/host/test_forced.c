@@ -5766,6 +5766,12 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
    table that adding a statement is an edit to the table alone, and the abort behind it is what says so the day
    that stops being true. */
 #define PROBE_MAX 320
+/* AND THE ROOM FOR THE NAMES OF THE ROWS THAT ARE 0, which is what the run's verdict SENTENCE is composed of.
+   DERIVED FROM THE TABLE'S OWN CAP rather than typed, for the reason the cap above is not typed against the
+   table's current length: a number sized to today's names is a number the next lane to add a longer one spends
+   without meaning to. Thirty-two bytes a row is not a claim that every name fits in thirty-two — the CHECK in
+   probes_report is what says so, and it names this constant when it fires. */
+#define PROBE_UNANSWERED_MAX (PROBE_MAX * 32)
 
 /* WHAT THIS INVOCATION IS: the document whose statements are being answered, which of the three sessions it is,
    and the realm the result document is rendered from. Set once in main before the scheduler runs, because the
@@ -8464,20 +8470,44 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        NOT answer the replies its members are parked on, so each member converts the arrival to a row and then
        re-blocks at the cursor it was already owed a reply at, leaving the token on an un-run appended row while
        every member is host-owed — which is the stall exit, and the one slice end that is a statement rather
-       than a race. HOW ITS ABSENCE SHOWS: this row reads 0 while `park-remoteop-once` reads 1, which is the
-       arrival-slot half of the same call having run without the row half.
-       `park-remoteop-once` is the LAST-HOLDER rule, and it is the only one of the two that a per-flow hand-back
-       would fail. engine_perform attaches one question to EVERY live timeline, so a notice per holder would be
-       one hand-back repeated once per member — and worse than noisy: the zone would be told to forget a token
-       a surviving timeline is about to answer under, which its own assert catches one seam away from the engine
-       that caused it. One question asked, many holders, exactly one notice, and `flows > 1` is what makes the
-       `back == 1` half say something. */
+       than a race. (The seam that clause rests on is flow_step's own order: the `flow_perform_pending` branch
+       sits under `if (!f->frame)` and ABOVE the fetch-await branches, so a member with no live frame that is
+       owed a reply converts an arrival to a row on one step and reports OWED on a later one. A member parked
+       MID-FRAME never reaches that branch at all — JS_ResumeParkedFlow answers first — which is why the clause
+       says "at the cursor it was already owed a reply at" and not "mid-expression".)
+       HOW ITS ABSENCE SHOWS: this row reads 0 while all three rungs below it read 1 — the arrival-slot half of
+       the same call having run over many timelines, handed back once, without the row half ever existing.
+       AND THE THREE RUNGS BELOW IT ARE A LADDER FOR THE ACCESSOR'S REASON, WHICH IS THE CORRECTION THIS
+       PARAGRAPH NEEDED MOST. The clause above says a 0 here shows "while `park-remoteop-once` reads 1" — and
+       that clause was resting on a row which, at 0, could not have told the reader which of THREE things had
+       happened. `flows > 1 && back == 1` folded the last-holder rule together with the precondition that makes
+       it say anything, so a 0 was "the question was never asked" (nothing called engine_perform, or it attached
+       to nothing), "it was asked and this document held it on ONE timeline" (a fixture problem — the row below
+       asserts nothing over a single holder), and "it was asked, many timelines held it, and MORE THAN ONE
+       notice left" (the per-flow hand-back, an engine defect). Those take three different fixes and had one
+       column. Each rung has a strictly earlier observation site than the one above it, so the LOWEST 0 is the
+       localisation, and every one of them is read off the same census — no rung is a new fact, which is what
+       makes this a split rather than an addition.
+       `park-remoteop-once` is the LAST-HOLDER rule and is the only rung a per-flow hand-back would fail.
+       engine_perform attaches one question to EVERY live timeline, so a notice per holder would be one
+       hand-back repeated once per member — and worse than noisy: the zone would be told to forget a token a
+       surviving timeline is about to answer under, which its own assert catches one seam away from the engine
+       that caused it. One question asked, many holders, exactly one notice. */
     long retract_flows = 0, retract_started = 0, retract_back = 0;
-    int cold_park_remoteop, cold_park_remoteop_once;
+    int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
 
     engine_retract_census(&retract_flows, &retract_started, &retract_back);
+    /* Rung 1: the park MET a peer's question at all. A 0 here says nothing was ever attached — read
+       fixture_ask_remote_op and the moment that gates it, not engine_retract_span. */
+    cold_park_remoteop_asked = g_sess == SESS_PARK && retract_flows > 0;
+    /* Rung 2: MANY timelines held the one question, which is the precondition that makes the rung above it a
+       statement about a RULE rather than about a single free(). A 0 here with rung 1 at 1 is a document that
+       did not fork, so it is this fixture that needs fixing and not the hand-back. */
+    cold_park_remoteop_many = g_sess == SESS_PARK && retract_flows > 1;
+    /* Rung 3: and exactly ONE notice left for it. */
+    cold_park_remoteop_once = g_sess == SESS_PARK && retract_back == 1;
+    /* Rung 4: the named residual — a STARTED operation was met and its row stripped. */
     cold_park_remoteop      = g_sess == SESS_PARK && retract_started > 0;
-    cold_park_remoteop_once = g_sess == SESS_PARK && retract_flows > 1 && retract_back == 1;
     /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
        correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
        is a statement about a program this session does not run: the moment fixture_want_park picks is the moment
@@ -8918,8 +8948,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            is asked by the host and no document contains it — but what makes the hand-back a mechanism rather
            than a single free() is that ONE question is held by MANY timelines, and this is the line that makes
            this document have many. */
-        { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK },
+        /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
+        { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK },
+        { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK },
         { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK },
+        { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK },
     };
     /* WHICH ROWS THIS INVOCATION CARRIES — its SESSION, and whether its document contains the statement. */
     int n = 0;
@@ -8964,10 +8997,27 @@ static int probes_eval(const char *js, Probe *out, int cap) {
    the run's verdict, where a 0 is genuinely FAIL. This composes with the harness backstop directly — a killed
    run's last line now reads INCOMPLETE beside a HUNG stage, which together say what happened, where the old
    pair said HUNG beside a FAIL that had nothing to do with the kill. */
-static int probes_report(const char *js, bool final) {
+/* AND IT HANDS THE 0 ROWS BACK BY NAME, WHICH IS THE ONLY THING A VERDICT SENTENCE MAY BE MADE OF. The
+   sentence its caller prints used to be a CAUSE typed beside the table — "the cross-session round trip did not
+   exercise the tier — read the 0 rows above" — and that is the defect this file names everywhere else, arriving
+   in the one line a reader trusts most: a run that parked 24 records with five of six cold rows at 1 printed a
+   sentence saying the tier had gone unexercised, and pointed at "the 0 rows" in the plural when there was
+   exactly one. A reader who believes it goes looking for a tier that is working, which is strictly worse than
+   no sentence at all — the same shape as an `aborted` column standing for three unrelated diagnoses.
+   A CAUSE IS NOT DERIVABLE FROM A CONJUNCTION AND A NAME IS, so the name is what leaves this function. */
+static int probes_report(const char *js, bool final, char *unanswered, size_t cap) {
     Probe rows[PROBE_MAX];
     int n = probes_eval(js, rows, PROBE_MAX), ok = 1, i;
+    size_t at = 0;
 
+    /* A CHECK AND NOT A DCHECK, because the write on the very next line is unconditional in EVERY build: a
+       dev-only guard over a pointer a release build dereferences trades a named abort for a segfault, and the
+       promotion is part of the line that added the dereference rather than a later decision. */
+    CHECK(unanswered != NULL && cap > 0,
+          "the probe report was given nowhere to state which rows are 0 — its caller's verdict sentence is "
+          "composed of exactly those names, so with no room for them the caller is back to restating a cause "
+          "the table never established");
+    unanswered[0] = 0;
     /* THE STATEMENT BEHIND A FOLDED 0, ON ITS OWN LINE AND BEFORE THE VERDICT. Before, because this function's
        own rule is that the LAST line of a killed run is the verdict — the file already carries the measurement
        that 177 of 179 samples of a passing run were read backwards by a `tail`, and appending sentences after
@@ -8978,9 +9028,30 @@ static int probes_report(const char *js, bool final) {
     for (i = 0; i < n; i++) {
         ok = ok && rows[i].ok;
         printf("%s=%d ", rows[i].name, rows[i].ok);
+        if (!rows[i].ok) {
+            size_t nl = strlen(rows[i].name);
+
+            /* A VERDICT NAMING A PREFIX OF WHAT FAILED IS THE FOLDED ANSWER THIS TABLE EXISTS TO REFUSE, so a
+               list that will not fit aborts rather than being cut — and it is a CHECK because the write below
+               is unconditional in every build, so a dev-only guard would leave release running off the end of
+               the caller's buffer. */
+            CHECK(at + (at ? 1u : 0u) + nl + 1u <= cap,
+                  "the names of this run's 0 rows do not fit the room its caller gave them — raise "
+                  "PROBE_UNANSWERED_MAX; a verdict that named only the rows that fit would be a sentence about "
+                  "a prefix of the table presented as a sentence about the table");
+            if (at) unanswered[at++] = ' ';
+            memcpy(unanswered + at, rows[i].name, nl + 1u);
+            at += nl;
+        }
     }
     printf("=> %s\n", ok ? "OK" : (final ? "FAIL" : "INCOMPLETE"));
     fflush(stdout);
+    /* THE TWO ANSWERS AGREE, asserted here because they are computed by two different walks of the same array
+       and nothing else would notice them parting: `ok` is the conjunction and `unanswered` is the list of its
+       false terms, so an empty list under a false `ok` is a verdict with nothing to name. */
+    DCHECK(ok == (unanswered[0] == 0),
+           "the run's verdict and the list of rows behind it disagree — either a 0 row left no name for the "
+           "sentence to carry, or a name was written for a row that is 1");
     return ok;
 }
 
@@ -9015,7 +9086,14 @@ static int fixture_have_answers(void) {
               "functions of that one string, so the run can neither report nor decide it is finished");
     /* A SAMPLE, so a 0 row is INCOMPLETE and not a failure — this hook's whole question is whether every row is
        1 YET, and the run continues when the answer is no. */
-    ok = probes_report(js, false);
+    /* A SAMPLE COMPOSES THE LIST AND PRINTS NO SENTENCE, because a sample has no verdict to state — the 0 rows
+       are already on the stream beside it. The room is passed anyway rather than made optional: an out-param a
+       caller may omit is a field the next caller defaults, and the report's own agreement assert is what would
+       stop being asked. */
+    {
+        char unanswered[PROBE_UNANSWERED_MAX];
+        ok = probes_report(js, false, unanswered, sizeof unanswered);
+    }
     /* …AND THE @S SEARCHES THEMSELVES, BECAUSE THIS IS THE ONLY PLACE THEY CAN BE OBSERVED AT ALL. The probe
        row says whether a sink FIRED and nothing about how far the search that is trying to got — that is what
        the parked entry's own numbers are for — the record solve.h documents at `parked search`, which OWNS that
@@ -9167,9 +9245,10 @@ static int fixture_have_answers(void) {
  * neither is a thing this fixture states — the quantum is a race, which §Testing names as the shape a loaded
  * machine falsifies, so a row resting on it would be a flaky green rather than a measurement.
  * WHAT THE PARK THEREFORE EXERCISES HERE is engine_retract_span's ARRIVAL-SLOT half over every timeline the one
- * question was attached to, plus the last-holder rule that decides how many notices leave — which is
- * `park-remoteop-once`, and which the row comment above the census says is the half a per-flow hand-back would
- * fail. The `dyn_token` half is named where its row is. */
+ * question was attached to, plus the last-holder rule that decides how many notices leave — which is the three
+ * rungs `park-remoteop-asked`, `park-remoteop-many` and `park-remoteop-once`, split apart because a single
+ * folded row could not say which of those three a 0 was about. The last of them is the one a per-flow hand-back
+ * would fail. The `dyn_token` half is named where its row is. */
 static int g_cold_moment, g_op_asked;
 
 static int fixture_cold_moment(void) {
@@ -13731,13 +13810,14 @@ int main(int argc, char **argv) {
               "there is nothing to report and nothing to assert");
     printf("@RESULT %s\n", js);
     /* THE VERDICT, so a 0 row is FAIL: the run is over and the row will not be reached. */
-    int h_ok = probes_report(js, true);
+    char unanswered[PROBE_UNANSWERED_MAX];
+    int h_ok = probes_report(js, true, unanswered, sizeof unanswered);
 
-    /* THE SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
+    /* THE PASS SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
        reporting their verdict over it would be a claim about a program it did not run — the same defect the
        probe key exists to prevent, one table above. */
-    if (cold_doc)
-        printf("%s\n", h_ok
+    if (h_ok)
+        printf("%s\n", cold_doc
             ? (cold_park_path
                 ? "PASS: the frontier was written to this host's cold-tier store as recipes — @S candidate "
                   "sessions and the arms still exploring, each standing on the decision segments it forked at, "
@@ -13745,17 +13825,25 @@ int main(int argc, char **argv) {
                   "capability nothing here has) — resume it with --cold-resume over the same path"
                 : "PASS: the parked residue was rebuilt into the ONE frontier, and a resumed @S candidate "
                   "replayed its recorded arms back to the sink it was suspended in front of and FIRED there")
-            : "FAIL: the cross-session round trip did not exercise the tier — read the 0 rows above and the "
-              "@COLDPARK/@COLDRESUME census beside them");
+            /* AND THE NON-COLD PASS NAMES NO STATEMENT EITHER, which is the correction the derived selector
+               forced on it. It read "@S eval + innerHTML + location + a REAL Location source", which is the
+               FULL document's list — the minimal one has no `location.hash` sink at all, so under --min the
+               PASS line was naming two rows that were never selected. What is true of both is the table:
+               every statement THIS document makes, answered. */
+            : "PASS: every statement this document makes has been answered — the @H row above is which, and "
+              "the residue left over is real and parked (@COLDPARK, and `_park` in the result document)");
     else
-    /* THE SENTENCE NAMES NO STATEMENT, and that is the correction the derived selector forces on it. It read
-       "@S eval + innerHTML + location + a REAL Location source", which is the FULL document's list — the
-       minimal one has no `location.hash` sink at all, so under --min the PASS line was naming two rows that
-       were never selected. What is true of both is the table: every statement THIS document makes, answered. */
-    printf("%s\n", h_ok
-        ? "PASS: every statement this document makes has been answered — the @H row above is which, and the "
-          "residue left over is real and parked (@COLDPARK, and `_park` in the result document)"
-        : "FAIL: a statement this document makes went unanswered — the 0 rows above name which");
+        /* AND THE FAILURE SENTENCE IS ONE SENTENCE FOR BOTH, BECAUSE IT IS DERIVED AND THERE IS NOTHING LEFT
+           FOR A SESSION TO CONTRIBUTE TO IT. There were two, and the cold one asserted a CAUSE the table had
+           not established — measured, on `native cold`: 24 records parked, five of the six cold rows at 1, one
+           row (`park-remoteop`) at 0, and the line printed said the round trip "did not exercise the tier" and
+           sent the reader to "the 0 rows" in the plural. That is a cause belonging to a different run, stated
+           with the authority of a verdict, and it is the same three-states-behind-one-answer defect the ladders
+           above this table exist to refuse — arriving in the last line, which is the line a killed run leaves
+           and a `tail` reads. Naming the rows says strictly more and can never be wrong about this run: the
+           conjunction's false terms ARE what failed, and each row already carries its own `why` above. */
+        printf("FAIL: %s — that is the whole of what this run left unanswered; each named row states its own "
+               "claim where it is computed, and the @H stream above carries its diagnostic\n", unanswered);
 
     free(js);
     /* THE FRONTIER FIRST, BECAUSE A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER — solver/engine.h states
