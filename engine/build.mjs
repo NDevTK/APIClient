@@ -1766,10 +1766,34 @@ function runOutcome(label, t, hint) {
      `bad` rather than added at each arm — an arm added later would otherwise be the one that drops it, and
      the arm most likely to be added later is another failure arm. */
   const pe = pageErrorText(t.captured) + consoleSeverityText(t.captured);
+  /* AND WHERE THE RUN GOT TO, ON THE SAME RULE AND FOR THE SAME REASON — computed once and folded into `bad`,
+     because three arms below already asked probeStanding for the FRACTION and exactly ONE of them printed the
+     ROWS behind it, so the two arms that drop it are the two that KILL the child.
+     THAT IS THE WORST PLACE TO DROP IT, because a row's 0 is TWO different findings and a kill decides which:
+     a statement this run answered WRONGLY, or one it never REACHED. They send a reader to opposite places —
+     the mechanism the row names, or the budget — and a killed run is where the second is overwhelmingly the
+     answer. The fraction alone does not separate them: it says how many rows are 0 and nothing about WHICH,
+     so a reader with a row list in front of them and 83/177 above it can still take one 0 as a verdict on the
+     builtin it names. THE NAMES ARE WHAT SEPARATE THEM — `sortbranch` standing beside `fefork owfork genfork
+     setaddfork redfork rerepfork toprimfork gcallfork hostreq-fork` is visibly a run that stopped part-way,
+     and `sortbranch` alone in a list of one would be a builtin that broke. Measured, and it cost a lane a
+     session: a budget-killed smoke that answered 83/177 was read row by row, one 0 among ninety-odd was
+     singled out, and a lane was dispatched to fix a fork-clone gap in Array.prototype.sort's step machine
+     that no evidence supported — the eight rows quoted at it split one-world-passes / two-world-fails, which
+     reads as a defect in forking and IS the shape "the second world never got there" makes.
+     `unanswered` was already computed for all of them; only its reader was missing from the arms that needed
+     it most, which is the mirror of the defect the comment over probeStanding describes. */
+  const stand = probeStanding(t.captured);
   const bad = (verdict, code, why) => {
     console.error(`[build] ${label} ${why}`);
     console.error(runNumbers(t));
     if (hint) console.error(`[build]   ${hint}`);
+    if (stand && stand.unanswered.length)
+      console.error(`[build]   the rows still 0 (${stand.unanswered.length} of ${stand.asked}): ` +
+                    stand.unanswered.join(" ") + `\n` +
+                    `[build]   each of those is EITHER a statement this run answered wrongly OR one it never ` +
+                    `reached — read them against the standing in the verdict above, and never read a single ` +
+                    `0 as a verdict on the mechanism its row names while the others beside it are 0 too.`);
     return { label, verdict: verdict + pe, code };
   };
   /* THE BUDGET INSTALL, WHICH MUST NEVER FAIL QUIETLY. A run without its rlimit is an UNMEASURED run wearing a
@@ -1785,7 +1809,7 @@ function runOutcome(label, t, hint) {
      fixture's own standing both belong in the verdict rather than in a hint under it. */
   if (t.signal === "SIGXCPU") {
     const cause = hungCause(t.captured);
-    return bad(`CPU BUDGET SPENT — ${standingText(probeStanding(t.captured))} — ${causeName(cause)}`, 2,
+    return bad(`CPU BUDGET SPENT — ${standingText(stand)} — ${causeName(cause)}`, 2,
       `SPENT ITS WHOLE ${RUN_CPU_BUDGET_S / 60} min CPU BUDGET — killed by the KERNEL at the rlimit, which is ` +
       `the verdict measure and is invariant to what else this box was doing.\n` +
       `[build]   the census says it was ${cause}`);
@@ -1796,7 +1820,7 @@ function runOutcome(label, t, hint) {
      minutes was STARVED of the thread rather than deadlocked on it, and the reader can see which. */
   if (t.error && t.error.code === "ETIMEDOUT") {
     const cause = hungCause(t.captured);
-    return bad(`DEADLOCK BACKSTOP — ${standingText(probeStanding(t.captured))} — ${causeName(cause)}`, 4,
+    return bad(`DEADLOCK BACKSTOP — ${standingText(stand)} — ${causeName(cause)}`, 4,
       `RAN ${RUN_DEADLOCK_MS / 60000} min OF WALL CLOCK WITHOUT REACHING ITS ${RUN_CPU_BUDGET_S / 60} min CPU ` +
       `BUDGET — killed by the harness, NOT by the kernel. Read the CPU figure below: near the budget means ` +
       `this child was starved of the thread, near zero means it was waiting on something that never came.\n` +
@@ -1833,13 +1857,13 @@ function runOutcome(label, t, hint) {
      fixture was answered" is the entire content of the result, and it read `FAILED rc=1` with the number
      computed and dropped exactly as the budget arms did. */
   if (t.status !== 0) {
-    const stand = probeStanding(t.captured);
+    /* THE ROW LIST THAT USED TO BE SPELLED OUT HERE IS GONE FROM THIS ARM and is not lost with it: `bad`
+       prints it for EVERY verdict now, which is what put it in front of the two killing arms that never had
+       it. Keeping a second copy here would print it twice and would be the per-arm plumbing folding it into
+       `bad` exists to end. */
     return bad("FAILED rc=" + t.status + (stand ? " — " + standingText(stand) : ""), t.status || 1,
       `FAILED rc=${t.status} with NO assertion line in its output — this is the program's own verdict on ` +
-      `itself (for the smoke, test_forced.c's probe table reporting INCOMPLETE), not a crash` +
-      (stand && stand.unanswered.length
-        ? `\n[build]   the rows still 0: ${stand.unanswered.join(" ")}`
-        : ""));
+      `itself (for the smoke, test_forced.c's probe table reporting INCOMPLETE), not a crash`);
   }
   /* A ZERO EXIT OVER AN ABORT WITNESS IS AN IMPOSSIBLE STATE. Every emitter of those two shapes aborts on its
      next statement, so a run that printed one and exited 0 either swallowed the abort or something else is
@@ -1855,7 +1879,8 @@ function runOutcome(label, t, hint) {
      spends is the one number that says a revision made the fixture cheaper or dearer to answer — which is
      invisible if it is only ever printed on the runs that failed. */
   console.log(runNumbers(t));
-  const stand = probeStanding(t.captured);
+  /* `stand` IS THE ONE HOISTED TO THE TOP OF THIS FUNCTION — the second `probeStanding(t.captured)` that stood
+     here was a fourth reading of one input, taken in the arm least likely to disagree with the other three. */
   /* THE PASS ARM CARRIES IT TOO, AND IT IS THE ARM THAT NEEDS IT MOST — see pageErrorText. A run that answers
      every statement it makes while one of the page's scripts died is still a PASS of the probe table and is
      not a clean run of the document, and those two are the same green line without this. */
