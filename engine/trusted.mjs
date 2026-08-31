@@ -88,8 +88,15 @@
  * is navigated; a FORCED one waits on the PER-ORIGIN WIDENING (`--explore <origin>`), which is a person saying
  * "at this host, navigate what the bundle reaches past a forced gate" and is the zone's to own; and a record
  * that states nothing now THROWS rather than declining, which is the crash that bullet asks for.
- * WHAT REMAINS UNSAID IS A *FETCH*'S authorisation, not a navigation's — see UNSTATED_PROVENANCE, which is
- * about `workFetch` and is a different decision over a different record. */
+ * WHAT REMAINS UNSAID IS A *FETCH*'S authorisation, not a navigation's — see PROVENANCE_DECLINE, which is
+ * about `workFetch` and is a different decision over a different record. IT IS NOT THE CLASSIFICATION, and
+ * that has to be said here because a constant named UNSTATED_PROVENANCE stood at that cross-reference after
+ * the provenance began being stated: dead, unreferenced by any decline path, and describing a zone that could
+ * not tell a page `fetch()` from a forced arm's. A refusal whose stated reason outlives the absence it
+ * describes is the stale-`DFAIL` failure with a network policy on it — it reads as a decision somebody made
+ * while naming a capability that is already there — so the reason a running-code park is refused travels with
+ * the park's own class (PROVENANCE_DECLINE is keyed on it) and nothing here is left to describe it a second
+ * time. */
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -180,25 +187,6 @@ const ABSENT = '-';
    refused is the party that knows why: a stall whose reason is guessed by the process that did not make the
    decision is the stale-`DFAIL` failure with a process boundary in the middle. */
 function decline(reason) { return `decline\t${b64(reason)}`; }
-
-const UNSTATED_PROVENANCE =
-  'a park made by RUNNING CODE, whose provenance this zone cannot establish. CLAUDE.md ' +
-  '§A-REQUEST-CARRIES-THE-PROVENANCE splits an outbound request into OBSERVED / DERIVED / FORCED and makes a ' +
-  'reply to a FORCED one evidence about what a server says to a request no client makes — plausible, ' +
-  'unattributable, and it PROPAGATES, because one invented field is the example that shapes the next ' +
-  'endpoint. The pending register STATES which of the three this park is (solver/engine.h\'s ' +
-  'PENDING_PROVENANCE_*, composed at the park from HTML §4.12.1\'s parser-inserted flag and whether the ' +
-  'parking flow\'s path had taken an arm its own concrete example contradicts), so a page fetch() and a ' +
-  'forced arm\'s fetch() are no longer one class — and this zone still fires neither, for the reasons below ' +
-  'rather than because it cannot tell them apart. TWO THINGS WOULD LIFT IT, in order: a flow that RECORDS ' +
-  'whether its path took a forced arm, which is what separates DERIVED from FORCED; and the per-origin ' +
-  'configuration CLAUDE.md requires before a forced request may be fired at all. The FIRST now exists ' +
-  '(solver/flow.h\'s `path_forced`). The SECOND now exists and covers NAVIGATIONS only ' +
-  '(`--explore <origin>`, see NAVIGATION_WIDENING). What a FETCH is still waiting for is that same widening ' +
-  'said about fetches: the pending line now carries the CORB class too (Fetch §2.2.5\'s destination), so the ' +
-  'reason a running-code park is refused here is no longer that this zone could not classify it — it is that ' +
-  'nobody has said "at this host, fire what the bundle derives", and CLAUDE.md makes that a person\'s ' +
-  'sentence rather than an inference';
 
 /* WHY A PARK THIS ZONE CAN CLASSIFY IS STILL NOT FIRED, IN ITS OWN WORDS AND PER CLASS. Three states behind
  * one answer is the defect CLAUDE.md names at §@S ("a rung whose ABSENCE and whose ZERO read alike"), and a
@@ -722,10 +710,16 @@ async function main() {
        that nothing NAVIGATED to: the bundle merely NAMED the route, which is precisely the surface
        §What-the-tool-produces exists for and the one forced execution alone could never reach, because the
        code walks nowhere.
-       IT IS THE ONE RECORD THAT STATES ITS OWN PROVENANCE, and that is what lets it be navigated without the
-       per-origin widening a `navigable.create` needs: the create says nothing about who named the address, and
-       this says `derived` or `forced` outright (solver/route_seed.h — `observed` is unreachable for it,
-       because no load of anything produces a declaration).
+       IT IS UNDER THE SAME WIDENING AS EVERY OTHER NAVIGATION, AND THE SENTENCE HERE USED TO SAY OTHERWISE.
+       It read "it is the ONE record that states its own provenance … the create says nothing about who named
+       the address", which was true when this arm was written and is contradicted by this file's own header and
+       by the call three blocks up: `navigable.create` states it at field 15, `navigable.swap` at field 4, and
+       all three go through the one `navigate`, where a `forced` address waits on `--explore <origin>` and a
+       `derived` one is loaded. A record's provenance is a fact about the ACT, so no record is privileged by
+       carrying one — and a comment claiming a privilege the code does not grant is worse than one claiming a
+       gap, because a reader acts on a permission. What IS this record's own is which words it can carry:
+       `derived` or `forced` and never `observed` (solver/route_seed.h — no load of anything produces a
+       declaration, so §4.12.1's parser-inserted conjunct is unreachable for it).
        THE DOCUMENT IS NAMED BY THIS ZONE, unlike a child navigable's. The engine mints a name for a navigable
        it CREATED because a page already holds a WindowProxy for it and a delivery has to route there; nothing
        holds a proxy for a declared route — it is a top-level traversable in a browsing-context group of its

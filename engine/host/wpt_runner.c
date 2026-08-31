@@ -1855,7 +1855,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            and not a derivation of those two: its steps read the parent Document's own recorded list, that
            Document's ORIGIN RECORD and the container element, and the origin RECORD is exactly what a
            serialization drops — §7.1.1 decides an opaque origin by IDENTITY. They all come BEFORE the policy
-           at field 14 because the policy is the record's remainder: neither an origin's serialization, nor an
+           at FIELD 16 because the policy is the record's remainder: neither an origin's serialization, nor an
            §7.1.4 value's token, nor remote_object.h's base64 identity, nor §4.1's feature tokens with §4.2's
            two words, nor a SPACE-separated list of origin serializations (URL §3.2 "Host miscellaneous" makes
            both TAB and SPACE forbidden host code points) can contain a tab, while a raw CSP header may.
@@ -1863,18 +1863,31 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            statement about it rather than an item of the container, since §7.1.7's container is five policies
            and none of them is a flag set. §7.1.5's two inputs are the embedder ELEMENT's iframe sandboxing
            flag set and that element's node document's active set, so the algorithm runs in the instance that
-           holds the element and its RESULT crosses. It sits before the policy at FIELD 15 for the reason
+           holds the element and its RESULT crosses. It sits before the policy at FIELD 16 for the reason
            everything else does, and its members are separated by COMMA rather than by the SPACE that joins
            §3.1.3's list and §9.5's answer: §7.1.5's flag names CONTAIN SPACES ("sandboxed navigation browsing
            context flag"), so a space-joined set could not be taken apart at all.
            FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF (CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's
-           `observed`/`derived`/`forced`) AND THIS RUNNER READS IT NOWHERE, WHICH IS NOT A DEFAULTED FIELD.
-           The field exists so a host can decide whether to spend the network — and whose SESSION — on an
-           address the page's own code chose; this host fetches only from the corpus's own wptserve, with no
-           cookie jar and no person to act as, so it has no such decision to make and states none. What it
-           MUST do is stop reading the policy off the index the provenance now occupies, which is why the
-           number below moved: the record grew and the count moved with it, so a build that missed one of the
-           two would take a provenance token for a CSP header rather than reading past the end. */
+           `observed`/`derived`/`forced`) AND THIS RUNNER DECIDES NOTHING FROM IT, WHICH IS NOT A DEFAULTED
+           FIELD. The field exists so a host can decide whether to spend the network — and whose SESSION — on
+           an address the page's own code chose; this host fetches only from the corpus's own wptserve, with no
+           cookie jar and no person to act as, so it has no such decision to make and states none.
+           BUT IT IS READ, AND WHAT IT IS READ FOR IS THE GRAMMAR RATHER THAN THE POLICY — the assert below,
+           which is the only thing standing between this walk and the drift that already happened twice in the
+           prose above. Two fields were inserted before the policy (§7.1.5's flag set, then this one) and the
+           sentences naming the policy's index were left saying 14 and 15 while the code moved to 16; the count
+           guard cannot catch a third, because the split CAPS at 17 and glues everything past it onto the last
+           field, so an inserted field would leave `nf == 17` true, hand the policy `<provenance>\t<csp>` and
+           spawn the child under a container whose first directive is the word `derived`. A token whose
+           vocabulary is three fixed words IS the index check: an insertion shifts it and this fires, at the
+           record, naming what moved. That is the same read wpt_route_pending already makes of the pending
+           line's provenance for the same reason — counted, never acted on. */
+        DCHECK(!strcmp(f[15], PENDING_PROVENANCE_OBSERVED) || !strcmp(f[15], PENDING_PROVENANCE_DERIVED) ||
+               !strcmp(f[15], PENDING_PROVENANCE_FORCED),
+               "the create notice's fifteenth field is not one of the three provenance tokens engine.h "
+               "declares — a field was inserted into the record and this walk's indices did not move with it, "
+               "so the CSP container below is about to be taken from one field too early and the policy text "
+               "carries the token that displaced it");
         wpt_spawn_child(f[1], f[3], f[4], f[16], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
                         f[14]);
         free(whole);

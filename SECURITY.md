@@ -247,11 +247,22 @@ guarantees, in one auditable place:
   A seeded document whose own address carries a listed token (`/settings/delete-account`) is now refused
   `blocked-destructive:<token>` and reported unanalysed. The list exists because forced execution builds
   requests no real client makes, and a seeded navigation is one the person's own browser made seconds ago in
-  this profile — the harm condition is *credentialed AND not-observed*, and `safe-fetch.js` can see only the
-  first half because nothing in this system yet DECLARES a request's provenance. That vocabulary
-  (OBSERVED / DERIVED / FORCED, stated beside the method and the credential state, with the chokepoint
-  deciding from it) is the next subproblem, and it is not invented here as a one-valued flag. Until it
-  exists the list stays armed: over-broad is its cheap direction — one unfired request, reported with its
+  this profile — the harm condition is *credentialed AND not-observed*, and `safe-fetch.js` sees only the
+  first half. **THE REASON IS NO LONGER THAT THE VOCABULARY IS MISSING, AND THIS SENTENCE SAID SO FOR LONGER
+  THAN IT WAS TRUE.** It read "nothing in this system yet DECLARES a request's provenance … that vocabulary is
+  the next subproblem", and live code cited this passage by name as its authority for leaving a gate unbuilt
+  while the vocabulary existed — the stale standing claim CLAUDE.md ranks above a missing mechanism, because a
+  missing mechanism is discovered by the next reader and a stale one is BELIEVED. OBSERVED / DERIVED / FORCED
+  is composed in the engine at the PARK, out of the two facts that own it — the park's own kind (HTML §4.12.1
+  "The script element"'s parser-inserted flag) and whether the parking flow's path had stood on an arm its own
+  concrete example contradicts — and it rides the pending line beside the method and the destination, where
+  both hosts' doors already refuse a token outside the three. What is missing is the READER: `bridge.js`
+  validates the field and does not pass it to `safeFetch`, so the chokepoint that owns every risk decision is
+  the one zone that cannot see it. That is deliberate rather than an omission — a field the chokepoint asserts
+  and decides nothing from is a computed writer with no reader, which is the mirror of the defaulted field and
+  is just as invisible — so the field arrives at the gate in the same diff as the thing that reads it: the
+  per-origin authorisation, which is a person's sentence and never an inference. Until then the list stays
+  armed: over-broad is its cheap direction — one unfired request, reported with its
   token — and loosening a gate as a side effect of turning cookies on is its expensive one.
   **THE LEARNED-GET REPLAY IS STILL UNCREDENTIALED, AND THAT IS PROVENANCE AND NOT PLUMBING.** `bridge.js`'s
   `fetched` passes no `pageOrigin` and nothing writes `msg.credentialed`. A navigation is OBSERVED — the
@@ -316,8 +327,20 @@ guarantees, in one auditable place:
   caller had to KNOW a load was code and remember to say so, which is how a document's own `<script src>`
   reached the rule unclassified and took the exempt arm by SILENCE. A destination is a property of every
   request and the engine states one at every park, so there is no longer a caller that can forget — and
-  `_destinationOf` DCHECKs its presence rather than defaulting it, because a caller who never thought about
-  it must never read as one who answered "data". Centralised so a new code-loader can't forget it.
+  `_destinationOf` refuses anything outside §2.2.5's enumeration rather than defaulting it, because a caller
+  who never thought about it must never read as one who answered "data". Centralised so a new code-loader
+  can't forget it.
+  **AND THAT REFUSAL IS A `CHECK`, WHICH IS THE HALF THIS BULLET GOT WRONG WHEN IT CLOSED THE KEYWORD'S HOLE.**
+  It was a DCHECK on presence alone, and both of those are the fail-open direction. `_isScriptLike` answers
+  false for every value it does not recognise, so an ABSENT destination and an INVENTED one take one arm and it
+  is the exempt one — which means the dev-only assert was the entire enforcement and release had the keyword's
+  hole back under a new spelling. The discriminator is the one stated for `opts.pageUrl` in the bullet below:
+  a DCHECK is right where release can still PROCEED correctly with the check compiled out, and this field fails
+  that test in the opposite direction. The value also crosses from the UNTRUSTED engine, whose own join and
+  splitter assert §2.2.5's enumeration with DCHECKs of their own — so "the producer will not emit a bad token"
+  was never a check this zone held. `bridge.js` CHECKs that line's INITIATOR and PROVENANCE, the two fields no
+  ingestion is decided from; the field it IS decided from is asserted at the chokepoint instead of in either
+  host's splitter, which is what makes it one check covering the extension and `engine/trusted.mjs` both.
 - **per-call principal** (`opts.pageUrl` = the requesting DOCUMENT's own `sender.url`, never the tab's) —
   **not a shared global**: the trusted zone drives many renderers concurrently and interleaves their rounds,
   so a global principal would let one page's origin contaminate another's fetch.
