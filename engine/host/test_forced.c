@@ -6512,10 +6512,41 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                     param_value_is(js, "/api/verb", "p", "vPOST"));
     /* §5 Headers: the record fill ran (acc), the list keeps repeats (sc=2 with both values), `get` combines
        them (join=k1, k2), `set` replaces them all (set=k3), a name is matched case-insensitively (has=truefalse)
-       and an absent header is null rather than "". */
-    int hdrs = (strstr(js, "\"/api/hdrs\"") && strstr(js, "application/json") &&
-                strstr(js, "2:a=1:b=2") && strstr(js, "k1, k2") &&
-                strstr(js, "\"k3\"") && strstr(js, "truefalse") && strstr(js, "\"null\""));
+       and an absent header is null rather than "".
+       SIX FACTS, SIX PARAMS, AND THEY WERE SIX WHOLE-DOCUMENT EXISTENCES. The statement builds
+       `?acc=&sc=&join=&set=&has=&miss=` on ONE record, so every clause here names one param of it — and asked
+       unscoped, none of them was about this endpoint at all. Two are reachable rather than merely possible.
+       `application/json` is a CONTENT TYPE, so any statement that sets a JSON content-type, and any header
+       record the ENGINE synthesises, spells it — and probegate's own footer puts engine-synthesised tokens
+       outside its universe, so the scan that reports this needle unique is the scan that cannot see the class
+       of token most likely to contain it. `"null"` is worse: it is the spelling of an ABSENT value, which is
+       the most widely emitted token there is, and the clause meant to prove that THIS header read back null
+       rather than `""` was satisfied by any absent value anywhere in the document.
+       ASKED AS `_only` AND NOT `_is`, FOR THE REASON THE SIBLING ROW BELOW IS: every one of these six is a
+       value the code DETERMINED — a real `Headers` object answering a real `get` — so a SECOND entry on any of
+       them means the flow forked where this statement cannot, which is a finding rather than a match.
+       AND THE EXISTENCE CLAUSE LEADS, so "§5 never ran" and "§5 ran and got one of these six wrong" are two
+       readings; folded, they were one 0 that named neither. */
+    const char *hdrs_why = NULL; int hdrs = 1;
+    fold_row(&hdrs, &hdrs_why, strstr(js, "\"/api/hdrs\"") != NULL,
+             "NOT REACHED: there is no /api/hdrs record at all, so the §5 Headers statement never ran and none "
+             "of the six facts below is being reported on. That is the SCHEDULE");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "acc", "application/json"),
+             "§5 the record fill: /api/hdrs' `acc` is not exactly `application/json` — the Headers record "
+             "constructor did not take the init bag's entry, or `get` did not read it back");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "sc", "2:a=1:b=2"),
+             "§5 the list keeps REPEATS: /api/hdrs' `sc` is not exactly `2:a=1:b=2` — two `Set-Cookie` appends "
+             "did not stay two entries, so getSetCookie read a map rather than a header list");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "join", "k1, k2"),
+             "§5 §2.2.2 `get` COMBINES: /api/hdrs' `join` is not exactly `k1, k2` — append did not keep both "
+             "entries, or get returned one instead of the combined value");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "set", "k3"),
+             "§5 `set` REPLACES every entry with that name: /api/hdrs' `set` is not exactly `k3`");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "has", "truefalse"),
+             "§5 a name is matched CASE-INSENSITIVELY: /api/hdrs' `has` is not exactly `truefalse` — `accept` "
+             "did not find the header stored as `Accept`, or `nope` found one that is not there");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "miss", "null"),
+             "§5 an ABSENT header is null and not \"\": /api/hdrs' `miss` is not exactly `null`");
     /* The record arm through a PROXY: its ownKeys and its get ran as the page's code (seen == 'trapped') and
        the header still arrived. */
     int hdrproxy = (strstr(js, "\"/api/hdrproxy\"") && strstr(js, "\"tv\"") && strstr(js, "trapped"));
@@ -7934,7 +7965,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
         { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
-        { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE },
+        { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE, hdrs_why },
         { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE },
         { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE },
         { "hdr-iter", hdriter, "/api/hdriter", SESS_EXPLORE },
