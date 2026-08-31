@@ -2660,6 +2660,47 @@ function audit(argv, opts = {}) {
    * 120 of each kind" and an unaudited standard is a finding of a kind, so this is the flag's existing promise
    * applied to the one list that was outside it. */
   const full = argv.includes("--all");
+
+  /* AN ELISION IS DISCLOSED IN THE AXIS ITS ITEMS ARE KEYED BY, NEVER ONLY AS A TOTAL — and the line this
+   * replaces obeyed the second half of that sentence and not the first. `… 348 more (--all)` is a TRUE
+   * statement about a POPULATION, and the question every reader of this tool actually asks is about a FILE:
+   * does the file I am editing carry a finding? A total cannot answer that, so the answer a grep of the
+   * default run returns is ZERO — the silent-zero shape this file names everywhere else, arriving in the
+   * auditor itself, where it is worse than anywhere: a zero from the thing whose job is to disagree reads as
+   * agreement. It has already been paid for. A lane read a default run, found no `host/main.c` line in it,
+   * and reported that queue as finished; `node engine/citegen.mjs engine/host/main.c` prints three findings
+   * and fourteen undecided in 0.7 seconds, and the default run mentions that file nowhere.
+   *
+   * MEASURED at the revision this was written: 319 files carry at least one finding and 111 of them appear in
+   * the default output — 208 files answer a grep of it with a zero that is a property of the instrument. And
+   * the elision is not a sample. The head is in file-walk order, so it is an ALPHABETICAL CUT: of 468
+   * MISATTRIBUTED, the printed 120 are core/dom, core/css and core/events, while the whole of core/html (45),
+   * core/frame (73), core/streams (35), core/layout (29) and the fork's own quickjs.c (82) are absent from
+   * the default report of that population — not one line. A reader of the default run would conclude this
+   * tree's citation problems live in three directories.
+   *
+   * SO THE BODIES STAY CAPPED AND THE KEYS DO NOT. The readability argument the header makes above is an
+   * argument about BODIES — two lines per finding, one of them a hundred characters of source text, and a
+   * category that size is read once and never again. That argument is sound and it was silently extended to
+   * the KEYS, which cost one short token apiece: the roll below is ~90 names where the bodies it stands for
+   * are ~700 lines. The roll is UNCAPPED, because a capped roll is this same defect one level in.
+   *
+   * AND IT NAMES THE CHEAP EXACT ANSWER. A path argument audits that path alone, prints all of it, and costs
+   * under a second against the full run's forty-four — the mode a reader standing in one file should use, and
+   * the one thing this report has never said out loud. */
+  const named = new Set();
+  const head = (all, cap) => { const s = all.slice(0, cap); for (const f of s) named.add(f.file); return s; };
+  const elided = (all, cap, what) => {
+    const rest = all.slice(cap);
+    if (!rest.length) return;
+    const by = new Map();
+    for (const f of rest) by.set(f.file, (by.get(f.file) || 0) + 1);
+    console.log(`  … ${rest.length} more ${what} NOT PRINTED — the head above is in file order, not a sample. ` +
+      `They stand in ${by.size} file(s): ` +
+      [...by].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(" "));
+    console.log(`      (--all prints them; \`node engine/citegen.mjs <path>\` audits one path and prints every finding in it)`);
+  };
+
   if (byOther.size) {
     const all = [...byOther].sort((a, b) => b[1] - a[1]), shown = full ? all : all.slice(0, 14);
     console.log(`  standards seen but not indexed: ${shown.map(([k, v]) => `${k}=${v}`).join(" ")}${tail(all, shown)}`);
@@ -2700,11 +2741,11 @@ function audit(argv, opts = {}) {
     console.log(`  (the standard in parentheses is this audit's INFERENCE from the file's other citations, never the citation's own claim.`);
     console.log(`   Writing the standard's name at the site is what turns each of these into something any later run can check.)`);
     const cap = argv.includes("--all") ? Infinity : 120;
-    for (const v of [...solid, ...thin].slice(0, cap)) {
+    for (const v of head([...solid, ...thin], cap)) {
       console.log(`  ${v.file}:${v.line}  §${v.no} (${v.spec}${v.has ? "" : ", which has no such section"})`);
       console.log(`      ${v.text.trim()}`);
     }
-    if (crash.length > cap) console.log(`  … ${crash.length - cap} more (--all)`);
+    elided([...solid, ...thin], cap, "file-voted crash citation(s)");
   }
 
   /* THE QUOTATION REPORT NAMES ITS AXIS AND ITS DENOMINATOR IN THE SAME LINE. CLAUDE.md: a coverage figure
@@ -2740,11 +2781,11 @@ function audit(argv, opts = {}) {
        * listed first — the same ordering, and the same reason, as --unanchored's. */
       const rank = (q) => (q.crash ? 0 : 2) + (q.div && q.div.matched < MIN_FRAGMENT_WORDS ? 0 : 1);
       const ord = [...g].sort((a, b) => rank(a) - rank(b));
-      for (const q of ord.slice(0, qlimit)) {
+      for (const q of head(ord, qlimit)) {
         console.log(`  ${q.file}:${q.line}  ${quoteMsg(q)}`);
         console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
       }
-      if (g.length > qlimit) console.log(`  … ${g.length - qlimit} more (--all)`);
+      elided(ord, qlimit, kind);
     }
   }
 
@@ -2755,21 +2796,27 @@ function audit(argv, opts = {}) {
   for (const kind of ["UNKNOWN-SECTION", "MISATTRIBUTED", "TITLE-MISMATCH"]) {
     const g = groups.get(kind) || [];
     console.log(`${kind}: ${g.length}`);
-    for (const f of g.slice(0, limit)) {
+    for (const f of head(g, limit)) {
       console.log(`  ${f.file}:${f.line}  ${f.msg}`);
       console.log(`      ${f.text.trim()}`);
     }
-    if (g.length > limit) console.log(`  … ${g.length - limit} more (--all)`);
+    elided(g, limit, kind);
   }
   console.log(`\nUNDECIDED-ON-A-DIAGNOSED-NUMBER: ${suspects.length}`);
   console.log(`  (these name no term, so the tool cannot decide them; they cite a number whose OTHER sites in the same file are misattributed above. A human must read each one — a guess here is the defect this file exists to find.)`);
-  for (const f of suspects.slice(0, limit)) {
+  for (const f of head(suspects, limit)) {
     console.log(`  ${f.file}:${f.line}  §${f.no} — the decided sites on this number in this file point to ${tallyOf(f)}`);
     console.log(`      ${f.text.trim()}`);
   }
-  if (suspects.length > limit) console.log(`  … ${suspects.length - limit} more (--all)`);
+  elided(suspects, limit, "undecided site(s)");
 
-  console.log(`\n${findings.length} finding(s), ${suspects.length} undecided beside them. This auditor REPORTS; it exits 0 by design — see the header.`);
+  /* AND THE LAST LINE CARRIES THE SAME FACT ON THE SAME AXIS, because it is the line a reader keeps. A count
+   * of findings says nothing about whether this output mentioned the file they came to ask about, and this is
+   * the one place a per-file coverage figure can be stated once for every list above it. */
+  const allFiles = new Set([...findings, ...suspects, ...quoteFindings].map((f) => f.file));
+  console.log(`\n${findings.length} finding(s), ${suspects.length} undecided beside them, ` +
+    `standing in ${allFiles.size} file(s) of which ${named.size} are named above (the rest are rolled up by the "NOT PRINTED" lines). ` +
+    `This auditor REPORTS; it exits 0 by design — see the header.`);
 }
 
 /* ---- --since: what THIS diff introduced ------------------------------------------------------------------ */
