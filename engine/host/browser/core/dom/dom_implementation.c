@@ -244,9 +244,18 @@ static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, in
         JS_FreeCString(ctx, qname);
     }
     if (doctype) {                                       /* step 4 */
+        /* THE BRAND IS `node_class_id()` AND THE IDL TYPE IS `DocumentType?`, WHICH ARE NOT THE SAME SET — every
+           DOM node wrapper is one class, so `createDocument(null, "x", document.createElement("div"))` passes
+           §3.2.15's class test and arrives here, where the spec owes a TypeError. This assert names what closes
+           it: a `bool document_type_is(JSValueConst)` in core/dom/document_type.{c,h} and an
+           `idl_iface_narrow(document_type_is)` beside the brand in dom_implementation_init — the same pairing
+           core/dom/shadow_root.h states and core/dom/slot.c, element_internals.c and intersection_observer.c
+           already declare. Until it exists this fires on ordinary page input rather than throwing, which is
+           what the message must say instead of claiming the case cannot arise. */
         DCHECK(doctype->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
-               "createDocument's third argument is a `DocumentType?` and the declaration brands it, so anything "
-               "else cannot reach here");
+               "createDocument was handed a Node that is not a DocumentType — §4.5.1 declares the position "
+               "`DocumentType?` and this declaration brands it only against the NODE class, so §3.2.15's "
+               "refusal never ran. Declare idl_iface_narrow(document_type_is) beside idl_iface_brand here");
         dom_cow_append_child(node_of(doc), doctype);
     }
     if (!JS_IsUndefined(element)) {                      /* step 5 */
@@ -297,10 +306,18 @@ void dom_implementation_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_impl_class, &d);
     g_id_doctype = idl_method_id(ctx, IDL_3STR, 3, js_impl_create_doctype, 0);
     {
-        /* §4.5.1: `(DOMString? namespace, [LegacyNullToEmptyString] DOMString qualifiedName,
-           optional DocumentType? doctype = null)`. The third is an interface type, branded against the node
-           class — anything that is not a node is a TypeError before step 1. */
-        static const IdlArgType CREATE_DOC[3] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING_NULLABLE, IDL_INTERFACE };
+        /* DOM §4.5.1 Interface DOMImplementation: `[NewObject] XMLDocument createDocument(DOMString? namespace,
+           [LegacyNullToEmptyString] DOMString qualifiedName, optional DocumentType? doctype = null)`. The third
+           is an interface type, branded against the node class — anything that is not a node is a TypeError
+           before step 1.
+           THE `?` IS THE TYPE AND NOT DECORATION, and it was dropped: declared IDL_INTERFACE, §3.2.15's brand
+           test refused `null`, so `createDocument(ns, name, null)` threw a TypeError — over the IDL's OWN
+           DEFAULT VALUE, which every browser answers with a doctype-less document. IDL_INTERFACE_NULLABLE is
+           §3.2.20's rule and nothing else: null and undefined become the IDL null, and what survives takes
+           §3.2.15's brand exactly as before. The body already reads the position with `node_of`, which answers
+           NULL for a non-object, so step 4 is skipped for the null the type now admits. */
+        static const IdlArgType CREATE_DOC[3] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING_NULLABLE,
+                                                  IDL_INTERFACE_NULLABLE };
         g_id_document = idl_method_id(ctx, CREATE_DOC, 3, js_impl_create_document, 0);
         idl_iface_brand(node_class_id());
         idl_optional_from(2);
