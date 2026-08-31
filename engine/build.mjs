@@ -1606,24 +1606,73 @@ function hungCauseCensus(out) {
                `written out with its substitution and not its ladder (solver/flow.h), so those ` +
                `${b.soldCands - a.soldCands} re-enter the frontier having to re-earn the rungs they had.`
              : `.`);
+  /* THE EVIDENCE HAS TWO AXES AND THIS HALF OF THE TABLE ASKED ONLY ONE OF THEM. Above, a RETIRING frontier is
+     crossed against the probe stream — `WORK THAT ADVANCES NO STATEMENT` where nothing reached 1, a healthy
+     frontier where something did. Below, a frontier that retires NOTHING went straight to `a STALL` however
+     many statements the document had just made, because `flipped` was computed once and read on the retiring
+     side only. One quadrant of the table was therefore missing, and it is the quadrant a FAIRLY ORDERED
+     frontier lives in.
+     RETIREMENT IS A FACT ABOUT IDENTITY AND EMISSION IS THE OUTPUT, which is why they may not be collapsed:
+     §NO BOUNDS says "Only EMITTED OUTPUT — never identity — proves a flow is done", and `finished` is the
+     other one. A member retires when its OWN path runs out of continuations, and under a fair order that
+     happens only once every member ahead of it has advanced as far — so a breadth-first frontier retires in
+     WAVES and reads 0 between them, while the document goes on answering statements throughout.
+     MEASURED, in a smoke log that was already on disk when this was written and needed no run to produce:
+     `finishedFlows` froze at 49 at census 11 of 182 and never moved again, while the @H stream first reached 1
+     on `s-evalc`, `s-evalc-atsink`, `s-html-atsink`, `s-html`, `s-url-atsink`, `s-url`, `s-eval` and
+     `s-eval-atsink` at samples 53, 73, 79, 84, 90 and 94 of 171 — eight statements, every one of them after
+     the freeze, and every one of them an @S breakout, which is the highest-value thing this document
+     produces. The two streams have different cadences and both span the whole run, so which came after which
+     is not in question.
+     WHAT THAT LOG DOES AND DOES NOT ESTABLISH, because the difference is the whole discipline here. It
+     establishes that the two axes are INDEPENDENT — a frontier retired nothing for 170 censuses and answered
+     eight statements inside them — and that is what makes reading one of them a verdict about half the table.
+     It does NOT establish that this arm would have relabelled that run: the comparison is over the LAST
+     `hwidth` samples, its last new statement landed at sample 94 of 171, and at HUNG_WINDOW_CENSUSES = 20 its
+     final window flips nothing, so it is `a STALL` at its end under this reader and under the one before it,
+     correctly. Whether a given run lands in this quadrant is a fact about its final window and is settled per
+     run; what is settled here is that the quadrant exists and had nowhere to go. */
+  if (b.live >= a.live && h.length >= 2 && flipped.length > 0)
+    return `a FRONTIER ADVANCING WITHOUT RETIRING${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — no ` +
+           `member retired across the window, nothing was paged out and nothing was waiting on the host, so ` +
+           `work is being ADMITTED and not retired — and ${flipped.length} probe row(s) reached 1 in that same ` +
+           `window (${flipped.join(" ")}), so this document ADVANCED STATEMENTS while retiring nothing. Those ` +
+           `two are independent and only the second is output: a member retires when its own path runs out of ` +
+           `continuations, which under a fair order waits on every member ahead of it, so a breadth-first ` +
+           `frontier retires in waves and reads 0 between them. ` +
+           (lastRetire < 0
+             ? `Nothing has retired in this run at all, and that is a reading of WHERE THE WAVE IS rather than ` +
+               `evidence that a flow of this document cannot terminate — the terminating shape is the ` +
+               `fall-through of solver/engine.c's flow_step, which no term of the order gates.`
+             : `finished last rose at census ${lastRetire} of ${n}, so a wave has completed in this run and ` +
+               `the ${n - 1 - lastRetire} census(es) since — ${(n - 1 - lastRetire) * PROGRESS_EVERY} units of ` +
+               `engine work — are the run inside the next one.`) +
+           ` The question this run poses is what the WORKING SET is made of, not why nothing retires. ` +
+           `${wfq.whose}.`;
   if (b.live >= a.live)
     return `a STALL${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — no flow finished across the window, ` +
-           `nothing was paged out and nothing was waiting on the host, so work is being admitted and not ` +
-           `retired. ` +
+           `nothing was paged out, nothing was waiting on the host and ` +
+           (h.length < 2
+             ? `this run printed no @H stream to read, so retirement is the ONLY axis there was evidence on ` +
+               `and this verdict is made of one of the two: `
+             : `not one probe row reached 1 in that window either, so BOTH axes are silent — this is the ` +
+               `quadrant that is a stall rather than a wave: `) +
+           `work is being admitted and not retired. ` +
            (lastRetire < 0
              ? `AND NOTHING HAS RETIRED IN THIS RUN AT ALL, which is the stronger statement: this is not a ` +
-               `frontier that stopped retiring, it is one that never did, so the first question is whether any ` +
-               `flow of this document has a terminating shape rather than why these ones do not.`
+               `frontier that stopped retiring, it is one that never did.`
              : `finished last rose at census ${lastRetire} of ${n}, so the silence is the ` +
                `${n - 1 - lastRetire} census(es) — ${(n - 1 - lastRetire) * PROGRESS_EVERY} units of engine ` +
                `work — since then, and THAT is the number two runs of one revision must agree on.`) +
            /* AND WHOSE REWARD THE ADMITTED WORK IS RANKED ON, which is the one thing this arm can say about the
               ORDER and used to leave inside `wfq.text` for the reader to derive. A frontier that admits and
-              does not retire is ranked almost entirely on inheritance — every arm carries its parent's `val`
-              (flow_fork_inherit) and every from-baseline newcomer carries the incumbent's
-              (flow_arrive_at_virtual_time) — so this number is what separates "the members ahead are the ones
-              that produced the findings" from "the members ahead produced nothing and are standing on an
-              ancestor that did", and the two take different work. */
+              does not retire is ranked on an account almost none of whose members filled — a fork JOINS its
+              parent's family rather than copying its reward (flow.c's flow_fork_inherit), and a from-baseline
+              newcomer arrives at the incumbent's (flow_arrive_at_virtual_time) — so this number is what
+              separates "the members ahead are the ones that produced the findings" from "the members ahead
+              produced nothing and are standing on an account some other arm filled", and the two take
+              different work. It said every arm CARRIES its parent's `val`, which was the per-chain prefix
+              flow.c retired; the reward is the fork family's and there is nothing for an arm to carry. */
            ` ${wfq.whose}.`;
   /* THE UNMODELLED ARM CARRIES THE MOST EVIDENCE, NOT THE LEAST, which is the inversion it used to be. It
      said "the two censuses above are the measurement to start from" and printed neither the heap, the delta
