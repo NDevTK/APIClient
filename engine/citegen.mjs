@@ -238,6 +238,28 @@ const SPECS = [
     base: "https://xhr.spec.whatwg.org/", anchors: ["xhr", "xmlhttprequest"] },
   { key: "fileapi", label: "File API", kind: "bikeshed",
     base: "https://w3c.github.io/FileAPI/", anchors: ["file api", "fileapi"] },
+  /* THE FILE SYSTEM STANDARD, PROMOTED OUT OF OTHER_SPECS, AND THE PROMOTION IS THE WHOLE POINT: a foreign row
+     STOPS the resolver guessing and an indexed row ANSWERS. Both were needed and in that order. The foreign row
+     ended a WRONG ANSWER — `file_system_writable.c` cites this standard's §2.5 `write a chunk` in its
+     step-machine strings and the file vote, in a streams-dense file, read every one as Streams §2.5 "Internal
+     queues and queuing strategies" — but it bought that with silence, and this standard is one whose citations
+     are LABELS A CRASH PRINTS: a step machine's stage names ride a parked flow to the cold tier and come back
+     in a `@WHY`. Silence there is the shape CLAUDE.md calls a silent zero rather than a clean bill.
+     WHAT THE SILENCE WAS HIDING, and the reason this row is worth more than its citation count: THIS STANDARD
+     ENDS AT §3. The twenty-seven headings this row commits are §1 Introduction, §2 Files and Directories with
+     its interface subsections, and §3 Accessing the Bucket File System — so every `§4.x` written under its
+     name is a number the standard does not have, and an anchored citation is exactly what the UNKNOWN-SECTION
+     check is asked of. A foreign row cannot ask it; only an index can.
+     ITS ANCHORS ARE THE TWO-WORD NAME AND THE ABBREVIATION THIS TREE ACTUALLY WRITES. anchorTokens strips a
+     trailing `Standard`, so `File System Standard §2.4.1` and `File System §2.5` are one spelling by the time
+     classifyAnchor sees them; `FS §2.2` is the other, and it is admitted because a tail is only ever a WHOLE
+     word — the token scan requires whitespace between words, so `refs`/`prefs` can never present a bare `fs`.
+     AND IT IS THE `database` HAZARD — a common noun this tree writes in prose — SO IT WAS CHECKED RATHER THAN
+     ASSUMED: every `File System §` in engine/host is a citation of this standard, and the noun is written
+     without a number. `file system access` and `fsa` stay on the foreign list one screen below, and must: that
+     is a DIFFERENT document whose numbers collide with this one head-on. */
+  { key: "fs", label: "File System Standard", kind: "bikeshed",
+    base: "https://fs.spec.whatwg.org/", anchors: ["file system", "fs"] },
   { key: "permissions", label: "Permissions", kind: "respec",
     base: "https://w3c.github.io/permissions/", anchors: ["permissions"] },
   /* PERMISSIONS POLICY IS A DIFFERENT STANDARD FROM PERMISSIONS AND THE ROW ABOVE DOES NOT COVER IT — which is
@@ -809,25 +831,17 @@ const OTHER_SPECS = [
      its dominant standard, so the vote answered `process accept types` with Web IDL §3.2.1 "any" and
      `remember a picked directory` with §3.2.2 "undefined". Both real numbers, neither the right document. */
   "file system access",
-  /* AND THE FILE SYSTEM STANDARD IS A DIFFERENT DOCUMENT WHOSE NUMBERS COLLIDE WITH IT HEAD-ON, which is why
-     both rows exist and why neither may be spelled loosely. FS §2.2 is "The FileSystemHandle interface" and
-     FSA §2.2 is "Permissions"; FS §2.3 is "The FileSystemFileHandle interface" and FSA §2.3 is "The
-     FileSystemHandle interface". `core/file/file_system_handle.h` cites BOTH, correctly, four lines apart —
-     `§2.2's INTERFACE PROTOTYPE OBJECT, which File System Access §2.3's partial interface installs
-     queryPermission and requestPermission on` is FS §2.2 and FSA §2.3 in one sentence. A tokenizer that reads
-     neither name files the whole file under whatever it votes for, and the vote there was WEB IDL: it raised
-     `"partial interface" is defined in idl §2.2 — nothing defines it at §2.3`, an accusation against a
-     citation that was right. anchorTokens strips a trailing `Standard`, so this row is the two words that
-     survive it, and `file system access` above is a longer tail that is tried first.
-     AND IT IS THE `database` HAZARD — a common noun this tree writes in prose — SO IT WAS CHECKED RATHER THAN
-     ASSUMED. Every occurrence of `File System §` in engine/host is a citation of that standard and not one is
-     the noun; the tree writes the noun without a number. The risk direction is also the safe one: a wrongly
-     anchored site becomes FOREIGN and is never judged, where the vote it replaces was judging it. Measured on
-     the diff that added this row: `file_system_writable.c` cites File System §2.5's `write a chunk` eleven
-     times in its step-machine strings, and the vote — the file is streams-dense — read every one as Streams
-     §2.5 "Internal queues and queuing strategies" and reported ten of them as misattributed. File System
-     Standard §2.5 defines `write a chunk`, so all ten were false and all ten are gone. */
-  "file system",
+  /* AND ITS ABBREVIATION, WHICH BECAME LOAD-BEARING THE MOMENT THE FILE SYSTEM STANDARD GAINED AN INDEX ROW.
+     The two documents' numbers collide head-on: FS §2.2 is "The FileSystemHandle interface" and FSA §2.2 is
+     "Permissions"; FS §2.3 is "The FileSystemFileHandle interface" and FSA §2.3 is "The FileSystemHandle
+     interface". `core/file/file_system_handle.h` writes `FS §2.2`/`FS §2.3` and `FSA §2.2`/`FSA §2.3` in
+     adjacent lines, correctly. While neither ABBREVIATION was known — the spelled-out `File System Access` was
+     on this list and its four letters were on no list at all — both fell to the file vote together and were
+     wrong together. Indexing FS alone would have been WORSE THAN THAT rather than better: `fs` becomes that
+     file's dominant anchor, so the four-letter sites keep falling to a vote and the vote now confidently
+     answers FSA's numbers out of the File System Standard — a wrong answer manufactured by adding a right one.
+     A foreign row is what refuses that: an `other:` anchor is never judged at all. */
+  "fsa",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",
@@ -1088,7 +1102,8 @@ function audit(argv, opts = {}) {
   const findings = [];
   const undecided = [];
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
-                 confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, unverified: 0, multiSpec: 0,
+                 confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
+                 unverified: 0, multiSpec: 0,
                  foreignTerm: 0, titleRefused: 0 };
   const byKey = new Map();
   /* Per standard, how many of its audited citations were placed there by the file vote rather than by their
@@ -1185,6 +1200,34 @@ function audit(argv, opts = {}) {
     const fallback = best >= 3 && best >= 2 * second ? dominant : null;
 
     /* PASS 2 — term evidence per citation, independent of any file-level guess. */
+    /* A RUN OF ADJACENT NUMBERS IS ONE CITATION WITH SEVERAL TARGETS, AND ONLY ITS LAST MEMBER CARRIES THE
+     * PROSE — which is exactly the shape that manufactures a finding against a citation that is right. A
+     * distributive citation names the sections and the things in parallel: `§2.3/§2.4's create a new
+     * FileSystemFileHandle / FileSystemDirectoryHandle`, `§9.1, §9.2 and §4.7's …`. The term scan reads the
+     * WHOLE trailing phrase from each number, so the earlier members see prose beginning with a NUMBER and
+     * decide nothing, while the LAST member is charged with the FIRST thing in the list — which the FIRST
+     * number defines. Measured on the diff that indexed the File System Standard: four of its five findings
+     * were one `§2.3/§2.4` pair written four times, and every one of them was correct as written.
+     * THE RUN IS READ BACKWARD ONLY, because that asymmetry is a fact about the resolver rather than a
+     * shortcut: a `§` is not a word character, so `§2.3/§2.4's create a new …` leaves the §2.3 site's prose
+     * starting `2.4 create a new …`, which no lookup can match. Nothing forward needs collecting.
+     * WHAT SEPARATES A RUN FROM TWO SENTENCES IS THE SEPARATOR AND NOTHING ELSE. A list separator, a
+     * conjunction or a dash joins two numbers into one citation; a period, a word, or anything longer than a
+     * few characters ends the first citation, and `§4.7's X. §4.8's Y` must stay two claims. */
+    const RUN_JOIN = /^[ \t]*(?:[/,&+]|and|or|through|to|[-‐-―])?[ \t]*$/;
+    for (let i = 0; i < cites.length; i++) {
+      const c = cites[i];
+      if (c.bare) continue;                 /* a bare number's admission is PASS 3's question, not this one */
+      const run = [c.no];
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = cites[j], next = cites[j + 1];
+        if (prev.bare) break;
+        const gapAt = prev.at + prev.len;
+        if (next.at - gapAt > 8 || !RUN_JOIN.test(src.slice(gapAt, next.at))) break;
+        run.push(prev.no);
+      }
+      if (run.length > 1) c.run = run;
+    }
     for (const c of cites) {
       const after = src.slice(c.at + c.len, c.at + c.len + 220).replace(/\n\s*\*?\s*/g, " ");
       c.quoted = (/^['"’“]?s?['"’“]?\s*["“]([^"”]{2,90})["”]/.exec(after) || [])[1] || null;
@@ -1332,6 +1375,14 @@ function audit(argv, opts = {}) {
           const ok = c.ev.hits.find((h) => h.defAt);
           const under = c.ev.hits.find((h) => h.underAt);
           const used = c.ev.hits.find((h) => h.useAt);
+          /* AND THE OTHER MEMBERS OF THIS CITATION'S OWN RUN COUNT AS CITED, because the author wrote them.
+           * The claim a MISATTRIBUTED makes — "you cited §N and the thing is numbered somewhere else" — is
+           * simply FALSE when "somewhere else" is a number standing three characters to the left under the
+           * same `'s`. This is the same asymmetry as the paragraph below: a confirmation may quantify over
+           * anything the citation actually says, and a finding may only assert what it can prove. */
+          const inRun = c.run
+            ? c.ev.hits.find((h) => h.where.some((d) => c.run.some((r) => d === r || contains(r, d))))
+            : null;
           /* CONFIRMATION QUANTIFIES OVER EVERY STANDARD; A FINDING DOES NOT — AND THAT ASYMMETRY IS THE WHOLE
            * DIFFERENCE BETWEEN A CHECKABLE CLAIM AND A COINCIDENCE. A confirmation says "some standard does
            * define this here", which is true or false on its own. A finding says "the standard you cited
@@ -1353,6 +1404,7 @@ function audit(argv, opts = {}) {
           if (ok) verdict = { kind: "OK-TERM" };
           else if (under) verdict = { kind: "OK-CONTAINS" };
           else if (used) verdict = { kind: "OK-USE" };
+          else if (inRun) verdict = { kind: "OK-RUN" };
           else if (!owned) { stat.foreignTerm++; }
           else {
             const where = c.ev.hits.map((h) => {
@@ -1402,7 +1454,8 @@ function audit(argv, opts = {}) {
         undecided.push(rec);
         continue;
       }
-      if (verdict.kind === "OK-USE" || verdict.kind === "OK-CONTAINS") { stat.confirmed++; stat[verdict.kind === "OK-USE" ? "confirmedByUse" : "confirmedByContainment"]++; continue; }
+      const COUNTED_OK = { "OK-USE": "confirmedByUse", "OK-CONTAINS": "confirmedByContainment", "OK-RUN": "confirmedByRun" };
+      if (COUNTED_OK[verdict.kind]) { stat.confirmed++; stat[COUNTED_OK[verdict.kind]]++; continue; }
       if (verdict.kind.startsWith("OK")) { stat.confirmed++; continue; }
       findings.push({ ...rec, ...verdict });
     }
@@ -1441,7 +1494,8 @@ function audit(argv, opts = {}) {
   console.log(`  ${stat.other} belong to a standard this audit does not index; ${stat.skipped} name no standard and no term it knows`);
   console.log(`  audited by standard (in parentheses, how many of them only a file vote placed there): ` +
     `${[...byKey].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}(${byKeyVoted.get(k) || 0})`).join(" ")}`);
-  console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ${stat.confirmedByUse} by a prominent use rather than the definition site), ` +
+  console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ${stat.confirmedByUse} by a prominent use rather than the definition site, ` +
+    `${stat.confirmedByRun} by another number in the same citation's own run), ` +
     `${stat.unverified} carry no title and no term any index knows, ${stat.multiSpec} name a term more than one standard defines`);
   console.log(`  ${stat.foreignTerm} name a term only ANOTHER standard defines, so the standard they cite numbers nothing this audit could hold them to`);
   /* A TRUNCATED LIST THAT DOES NOT SAY IT IS TRUNCATED IS READ AS THE WHOLE LIST, AND THESE TWO LINES ARE THE

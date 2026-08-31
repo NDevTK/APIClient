@@ -650,7 +650,7 @@ void file_system_init(JSContext *ctx)
     g_fs_ctx = ctx;
     g_ready = 1;
     agent_state_flag(FS_COMPONENT, &g_ready, "the declaration latch");
-    agent_state_value(FS_COMPONENT, &g_bucket_root, "§2.1's bucket file system root directory entry");
+    agent_state_value(FS_COMPONENT, &g_bucket_root, "§3's bucket file system root, a §2.1 directory entry");
     agent_state_value(FS_COMPONENT, &g_local_root, "§2.1's local root directory entry");
     agent_state_ptr(FS_COMPONENT, &g_fs_ctx, "the realm the two roots were built in");
 }

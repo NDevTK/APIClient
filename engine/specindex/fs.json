@@ -1,0 +1,445 @@
+{
+ "spec": "File System Standard",
+ "key": "fs",
+ "base": "https://fs.spec.whatwg.org/",
+ "specUpdated": "15 March 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Files and Directories",
+   "page": "",
+   "id": "files-and-directories"
+  },
+  "3": {
+   "title": "Accessing the Bucket File System",
+   "page": "",
+   "id": "sandboxed-filesystem"
+  },
+  "2.1": {
+   "title": "Concepts",
+   "page": "",
+   "id": "concepts"
+  },
+  "2.2": {
+   "title": "The FileSystemHandle interface",
+   "page": "",
+   "id": "api-filesystemhandle"
+  },
+  "2.2.1": {
+   "title": "The isSameEntry() method",
+   "page": "",
+   "id": "api-filesystemhandle-issameentry"
+  },
+  "2.3": {
+   "title": "The FileSystemFileHandle interface",
+   "page": "",
+   "id": "api-filesystemfilehandle"
+  },
+  "2.3.1": {
+   "title": "The getFile() method",
+   "page": "",
+   "id": "api-filesystemfilehandle-getfile"
+  },
+  "2.3.2": {
+   "title": "The createWritable() method",
+   "page": "",
+   "id": "api-filesystemfilehandle-createwritable"
+  },
+  "2.3.3": {
+   "title": "The createSyncAccessHandle() method",
+   "page": "",
+   "id": "api-filesystemfilehandle-createsyncaccesshandle"
+  },
+  "2.4": {
+   "title": "The FileSystemDirectoryHandle interface",
+   "page": "",
+   "id": "api-filesystemdirectoryhandle"
+  },
+  "2.4.1": {
+   "title": "Directory iteration",
+   "page": "",
+   "id": "api-filesystemdirectoryhandle-asynciterable"
+  },
+  "2.4.2": {
+   "title": "The getFileHandle() method",
+   "page": "",
+   "id": "api-filesystemdirectoryhandle-getfilehandle"
+  },
+  "2.4.3": {
+   "title": "The getDirectoryHandle() method",
+   "page": "",
+   "id": "api-filesystemdirectoryhandle-getdirectoryhandle"
+  },
+  "2.4.4": {
+   "title": "The removeEntry() method",
+   "page": "",
+   "id": "api-filesystemdirectoryhandle-removeentry"
+  },
+  "2.4.5": {
+   "title": "The resolve() method",
+   "page": "",
+   "id": "api-filesystemdirectoryhandle-resolve"
+  },
+  "2.5": {
+   "title": "The FileSystemWritableFileStream interface",
+   "page": "",
+   "id": "api-filesystemwritablefilestream"
+  },
+  "2.5.1": {
+   "title": "The write() method",
+   "page": "",
+   "id": "api-filesystemwritablefilestream-write"
+  },
+  "2.5.2": {
+   "title": "The seek() method",
+   "page": "",
+   "id": "api-filesystemwritablefilestream-seek"
+  },
+  "2.5.3": {
+   "title": "The truncate() method",
+   "page": "",
+   "id": "api-filesystemwritablefilestream-truncate"
+  },
+  "2.6": {
+   "title": "The FileSystemSyncAccessHandle interface",
+   "page": "",
+   "id": "api-filesystemsyncaccesshandle"
+  },
+  "2.6.1": {
+   "title": "The read() method",
+   "page": "",
+   "id": "api-filesystemsyncaccesshandle-read"
+  },
+  "2.6.2": {
+   "title": "The write() method",
+   "page": "",
+   "id": "api-filesystemsyncaccesshandle-write"
+  },
+  "2.6.3": {
+   "title": "The truncate() method",
+   "page": "",
+   "id": "api-filesystemsyncaccesshandle-truncate"
+  },
+  "2.6.4": {
+   "title": "The getSize() method",
+   "page": "",
+   "id": "api-filesystemsyncaccesshandle-getsize"
+  },
+  "2.6.5": {
+   "title": "The flush() method",
+   "page": "",
+   "id": "api-filesystemsyncaccesshandle-flush"
+  },
+  "2.6.6": {
+   "title": "The close() method",
+   "page": "",
+   "id": "api-filesystemsyncaccesshandle-close"
+  }
+ },
+ "dfns": {
+  "binary data": [
+   "2.1"
+  ],
+  "bucket file system": [
+   "3"
+  ],
+  "create a child filesystemdirectoryhandle": [
+   "2.4"
+  ],
+  "create a child filesystemfilehandle": [
+   "2.3"
+  ],
+  "create a new filesystemdirectoryhandle": [
+   "2.4"
+  ],
+  "create a new filesystemfilehandle": [
+   "2.3"
+  ],
+  "create a new filesystemsyncaccesshandle": [
+   "2.6"
+  ],
+  "create a new filesystemwritablefilestream": [
+   "2.5"
+  ],
+  "createwritable( options )": [
+   "2.3.2"
+  ],
+  "creating a child filesystemdirectoryhandle": [
+   "2.4"
+  ],
+  "creating a child filesystemfilehandle": [
+   "2.3"
+  ],
+  "creating a new filesystemdirectoryhandle": [
+   "2.4"
+  ],
+  "creating a new filesystemfilehandle": [
+   "2.3"
+  ],
+  "directory entry": [
+   "2.1"
+  ],
+  "directory locator": [
+   "2.1"
+  ],
+  "error name": [
+   "2.1"
+  ],
+  "file entry": [
+   "2.1"
+  ],
+  "file locator": [
+   "2.1"
+  ],
+  "file position cursor": [
+   "2.6"
+  ],
+  "file system access result": [
+   "2.1"
+  ],
+  "file system entry": [
+   "2.1"
+  ],
+  "file system locator": [
+   "2.1"
+  ],
+  "file system path": [
+   "2.1"
+  ],
+  "file system queue": [
+   "2.1"
+  ],
+  "file system root": [
+   "2.1"
+  ],
+  "get the locator": [
+   "2.1"
+  ],
+  "getdirectoryhandle( name options )": [
+   "2.4.3"
+  ],
+  "getdirectoryhandle(name options)": [
+   "2.4.3"
+  ],
+  "getfilehandle( name options )": [
+   "2.4.2"
+  ],
+  "getfilehandle(name options)": [
+   "2.4.2"
+  ],
+  "getting the locator": [
+   "2.1"
+  ],
+  "is in a bucket file system": [
+   "2.2"
+  ],
+  "issameentry( other )": [
+   "2.2.1"
+  ],
+  "locate an entry": [
+   "2.1"
+  ],
+  "locating an entry": [
+   "2.1"
+  ],
+  "modification timestamp": [
+   "2.1"
+  ],
+  "past results": [
+   "2.4.1"
+  ],
+  "permission state": [
+   "2.1"
+  ],
+  "query access": [
+   "2.1"
+  ],
+  "read( buffer filesystemreadwriteoptions options )": [
+   "2.6.1"
+  ],
+  "read(buffer options)": [
+   "2.6"
+  ],
+  "removeentry( name options )": [
+   "2.4.4"
+  ],
+  "removeentry(name options)": [
+   "2.4.4"
+  ],
+  "request access": [
+   "2.1"
+  ],
+  "resolve( possibledescendant )": [
+   "2.4.5"
+  ],
+  "seek( position )": [
+   "2.5.2"
+  ],
+  "shared lock count": [
+   "2.1"
+  ],
+  "the same entry as": [
+   "2.1"
+  ],
+  "the same locator as": [
+   "2.1"
+  ],
+  "the same path as": [
+   "2.1"
+  ],
+  "truncate( newsize )": [
+   "2.6.3"
+  ],
+  "truncate( size )": [
+   "2.5.3"
+  ],
+  "valid file name": [
+   "2.1"
+  ],
+  "write a chunk": [
+   "2.5"
+  ],
+  "write( buffer filesystemreadwriteoptions options )": [
+   "2.6.2"
+  ],
+  "write( data )": [
+   "2.5.1"
+  ],
+  "write(buffer options)": [
+   "2.6"
+  ]
+ },
+ "uses": {
+  "binary data": {
+   "2.6.2": 3,
+   "2.6.3": 4
+  },
+  "bucket file system": {
+   "2.5": 2
+  },
+  "create a child filesystemdirectoryhandle": {
+   "2.4.3": 2
+  },
+  "create a child filesystemfilehandle": {
+   "2.4.2": 2
+  },
+  "create a new filesystemdirectoryhandle": {
+   "3": 2
+  },
+  "create a new filesystemsyncaccesshandle": {
+   "3": 2
+  },
+  "create a new filesystemwritablefilestream": {
+   "3": 2
+  },
+  "createwritable( options )": {
+   "3": 3
+  },
+  "directory entry": {
+   "3": 3,
+   "2.4.1": 2,
+   "2.4.2": 4,
+   "2.4.3": 4,
+   "2.4.4": 4
+  },
+  "error name": {
+   "3": 2,
+   "2.5": 2
+  },
+  "file entry": {
+   "2.3.1": 2,
+   "2.3.2": 4,
+   "2.3.3": 3,
+   "2.5": 2,
+   "2.6": 2
+  },
+  "file position cursor": {
+   "2.6.1": 3,
+   "2.6.2": 3,
+   "2.6.3": 2
+  },
+  "file system access result": {
+   "3": 2
+  },
+  "file system locator": {
+   "2.2": 2,
+   "2.3": 2,
+   "2.4": 2
+  },
+  "file system queue": {
+   "2.5": 4
+  },
+  "getdirectoryhandle( name options )": {
+   "3": 3
+  },
+  "getfilehandle( name options )": {
+   "3": 3
+  },
+  "is in a bucket file system": {
+   "2.3.3": 2
+  },
+  "issameentry( other )": {
+   "3": 2
+  },
+  "locate an entry": {
+   "3": 2,
+   "2.3.1": 2,
+   "2.3.2": 4,
+   "2.3.3": 3,
+   "2.4.1": 2,
+   "2.4.2": 3,
+   "2.4.3": 3,
+   "2.4.4": 3
+  },
+  "permission state": {
+   "3": 2,
+   "2.5": 2
+  },
+  "query access": {
+   "3": 2,
+   "2.4.2": 2,
+   "2.4.3": 2,
+   "2.5": 2
+  },
+  "read(buffer options)": {
+   "3": 3,
+   "2.6.1": 4
+  },
+  "removeentry( name options )": {
+   "3": 3
+  },
+  "request access": {
+   "3": 2,
+   "2.4.2": 2,
+   "2.4.3": 2
+  },
+  "resolve( possibledescendant )": {
+   "3": 2
+  },
+  "seek( position )": {
+   "3": 2
+  },
+  "the same entry as": {
+   "3": 2
+  },
+  "truncate( newsize )": {
+   "3": 2
+  },
+  "truncate( size )": {
+   "3": 2
+  },
+  "write( data )": {
+   "3": 2,
+   "2.5": 2
+  },
+  "write(buffer options)": {
+   "3": 3,
+   "2.6.2": 4
+  }
+ }
+}
