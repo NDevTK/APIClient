@@ -1930,9 +1930,25 @@ const WORK = join(ENGINE, ".work");
 const EMSDK = join(WORK, "emsdk");
 const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" ? "emcc.bat" : "emcc");
 
-if (!existsSync(EMCC)) {
-  /* A fresh container has no toolchain, and "emcc not found" on its own sends whoever hits it hunting for the
-     version that was used. Say exactly what to run — the same reason the lexbor tag below is pinned here. */
+/* ASKED WHERE EMCC IS SPAWNED, NOT AT THE TOP OF THE FILE — the same fact the `--list-sources` header two
+   screens down states about buildLexbor, one step further up. That header says "a mode whose whole contract is
+   'answer and exit' had a compiler under it" and moved the COMPILE below both questions; the compiler's
+   PRESENCE REQUIREMENT stayed above them, so the questions still could not be asked without the toolchain, and
+   a requirement is as load-bearing as a call when it exits 1.
+   Three things need no emscripten and all three were refused by it:
+     * `--list-include-roots` and `--list-sources`, whose ENTIRE consumer is a lane running `clang
+       -fsyntax-only` — the check CLAUDE.md §Testing requires of every change. A lane on a box with clang and no
+       emsdk could not compute its own include roots, so the one verification a non-building lane owes was
+       gated behind the toolchain for a host it was not touching.
+     * the NATIVE target, which links `lexbor-native` with clang and never spawns EMCC at all. CLAUDE.md calls
+       that host the engine's home — "real threads, a real CPU clock, a real `fork()` and a real sanitizer" —
+       and the wasm host "ONE host among several"; requiring the one to build the other inverts that exactly,
+       and it is also the host that carries ASan, which §Architecture prescribes BY NAME for memory crashes and
+       which wasm32 cannot run.
+   So the check is a function called at each spawn site. The message is unchanged and still says exactly what to
+   run, which is the half worth keeping: "emcc not found" alone sends whoever hits it hunting for the version. */
+function requireEmcc() {
+  if (existsSync(EMCC)) return EMCC;
   console.error("[build] emcc not found at " + EMCC + "\n" +
                 "[build] provision it with:\n" +
                 "  git clone --depth 1 https://github.com/emscripten-core/emsdk.git " + EMSDK + "\n" +
@@ -2002,7 +2018,7 @@ function buildLexbor(force) {
   const rsp = join(WORK, "lexbor.rsp");
   const fwd = (s) => s.replace(/\\/g, "/");   // response-file backslashes are clang escapes -> forward-slash paths
   writeFileSync(rsp, [...srcs.map(fwd), "-I", fwd(LEXBOR_INC), "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r", "-o", fwd(LEXBOR_LIB)].join("\n"));
-  const r = spawnSync(EMCC, ["@" + rsp], { stdio: "inherit", shell: true, cwd: ENGINE });
+  const r = spawnSync(requireEmcc(), ["@" + rsp], { stdio: "inherit", shell: true, cwd: ENGINE });
   if (r.status !== 0) { console.error("[build] lexbor FAILED rc=" + r.status); process.exit(r.status || 1); }
   /* STAMPED ONLY ON SUCCESS, and only after the archive exists: a failed compile that recorded the id would
      make the next build skip it and link whatever object was there before, which is the stale-link this
@@ -2463,7 +2479,7 @@ mkdirSync(OBJDIR, { recursive: true });
    names both the emscripten and the clang commit, and goes through `unroot` like every other string here. */
 const unroot = (s) => s.split(EMSDK).join("<emsdk>").split(ROOT).join("<root>");
 const TOOLCHAIN_ID = (() => {
-  const v = spawnSync(EMCC, ["-v"], { encoding: "utf8" });
+  const v = spawnSync(requireEmcc(), ["-v"], { encoding: "utf8" });
   const text = unroot(((v.stdout || "") + (v.stderr || "")).split("\n")
                         .filter((l) => !l.startsWith("InstalledDir")).join("\n"));
   if (!/^emcc \(/m.test(text)) {
@@ -2574,7 +2590,7 @@ if (stale.length) {
            name they both arrive at is the same one, and arriving there is a rename, which is atomic. */
         const tmp = join(OBJDIR, ".tmp-" + process.pid + "-" + tmpSeq++);
         running++;
-        const p = spawn(EMCC, [...CFLAGS, "-MMD", "-MF", tmp + ".d", "-c", src, "-o", tmp + ".o"],
+        const p = spawn(requireEmcc(), [...CFLAGS, "-MMD", "-MF", tmp + ".d", "-c", src, "-o", tmp + ".o"],
                         { stdio: "inherit", shell: true, cwd: QJS });
         /* THE NAMING, AND IT IS THE ONLY PLACE AN OBJECT EVER GETS A NAME. It runs on a compile that exited 0,
            over the dependency list THAT compile just wrote, so the invariant the lookup rests on holds by
@@ -2657,7 +2673,7 @@ const OBJS_SHARED = SHARED_SOURCES.map(mustObj);
    smoke program is a host of the `qjs_*` bodies now, and a parameter that could only ever name one would have
    to be worked around at the one call site that needs both. */
 function link(what, entryObjs, ldflags, out) {
-  const l = spawnSync(EMCC, [...OBJS_SHARED, ...entryObjs, ...LDFLAGS_COMMON, ...ldflags, "-o", out],
+  const l = spawnSync(requireEmcc(), [...OBJS_SHARED, ...entryObjs, ...LDFLAGS_COMMON, ...ldflags, "-o", out],
                       { stdio: "inherit", shell: true, cwd: QJS });
   if (l.status !== 0) {
     console.error("[build] " + what + " LINK FAILED rc=" + l.status);
