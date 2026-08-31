@@ -2488,9 +2488,38 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
        can fork, so a re-entered node is collected exactly once. A REMOVAL contributes nothing: `remove` has no
        staticNodeList and no post-connection steps, so its walk ends at the first phase. */
     if (e->inserted) tree_steps_list_append(ctx, b, n);
-    if (n->first_child) { e->cursor = n->first_child; return JS_STEP_YIELD; }
-    while (n && !n->next) n = (n == e->root) ? NULL : n->parent;
-    n = n ? n->next : NULL;
+    /* THE WALK IS SHADOW-INCLUDING, and that is the whole of what §4.2.3 asks for on BOTH sides of a tree
+       change. `insert` step 7.7 is "For each shadow-including inclusive descendant inclusiveDescendant of node,
+       in shadow-including tree order: Run the insertion steps with inclusiveDescendant. … If inclusiveDescendant
+       is custom, then enqueue a custom element callback reaction with inclusiveDescendant, callback name
+       "connectedCallback", and « ». Otherwise, try to upgrade inclusiveDescendant."; `remove` states the same
+       set from the other end — "Run the removing steps with node, true, and parent. … For each shadow-including
+       descendant descendant of node, in shadow-including tree order: Run the removing steps with descendant,
+       false, and parent. If descendant is custom and isParentConnected is true, then enqueue a custom element
+       callback reaction with descendant, callback name "disconnectedCallback", and « »." — node itself first,
+       then its shadow-including descendants, which is one walk over the shadow-including INCLUSIVE descendants.
+       A PLAIN `first_child`/`next`/`parent` WALK IS A DIFFERENT NODE SET, not a cheaper spelling of this one:
+       it stops at every shadow host, so a custom element the page built inside a shadow tree got neither
+       callback when its HOST was inserted or removed — the element was live, its constructor had run, and the
+       one hook a component uses to register routes, start fetches and subscribe was simply never called. That
+       is the §RUN-DON'T-MATCH surface disappearing silently, since nothing throws and the tree is correct.
+       §4.2.3 step 11's staticNodeList is stated over the SAME set in the SAME order ("For each node of nodes,
+       in tree order: For each shadow-including inclusive descendant inclusiveDescendant of node, in
+       shadow-including tree order: append inclusiveDescendant to staticNodeList"), which is why the collection
+       above rides this cursor rather than re-traversing — and why the two could not be made to agree while
+       this advance and that sentence described different walks. */
+    n = shadow_root_next_in_shadow_including(ctx, n, e->root);
+    /* §4.2's shadow-including tree order NEVER LEAVES THE SUBTREE THE RECORD NAMED, and the successor is what
+       the whole batch's connectedness rests on: element_tree_changed recorded this root because it was
+       connected, and every node this walk reaches is connected exactly because it is a shadow-including
+       inclusive descendant of that root. A successor outside it would be a node whose insertion steps this
+       member never caused, run under a realm resolved from the wrong document — and step 11's own
+       `node_is_connected` assert would then fire one node later, naming the collection rather than the walk
+       that fed it. Asserted HERE, at the advance, which is the only place that knows both ends. */
+    DCHECK(n == NULL || shadow_root_is_shadow_including_inclusive_ancestor(e->root, n),
+           "§4.2.3's tree-steps walk stepped to a node that is not a shadow-including inclusive descendant of "
+           "the subtree element_tree_changed recorded — the successor is bounded by that root by construction, "
+           "so the tree moved under the walk, which §4.2.3 forbids the insertion steps to do");
     e->cursor = n;
     if (n) return JS_STEP_YIELD;
     if (++b->i < b->n) return JS_STEP_YIELD;
@@ -2981,6 +3010,12 @@ void element_install_proto(JSContext *ctx)
     /* §4.9's two Shadow DOM members — `attachShadow` and the `shadowRoot` getter, which the interface
        declares on Element and not on HTMLElement. */
     shadow_root_install_element_members(ctx, proto);
+    /* §4.9's THIRD member of that family — `readonly attribute CustomElementRegistry? customElementRegistry;`,
+       whose getter steps are "to return this's custom element registry". It is installed FROM
+       core/html/custom_elements.c for the same reason `attachShadow` is installed from shadow_root.c: the
+       registry a node carries, its derivation and the once-only association rule are that component's record,
+       and a getter written here would be a second answer to what a node's registry is. */
+    custom_elements_install_element_member(ctx, proto);
     /* §4.2.9: `Element includes Slottable`. */
     slot_install_slottable_mixin(ctx, proto);
     /* CSSOM VIEW §6's `partial interface Element` — the scroll and client geometry. Per realm because its

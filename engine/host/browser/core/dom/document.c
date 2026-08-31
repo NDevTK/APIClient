@@ -2989,6 +2989,13 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
        THAT tree's collection and not in this one. `adoptedStyleSheets`, the mixin's other member, is an
        `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is absent with the constructor. */
     style_sheet_list_install_mixin(ctx, proto);
+    /* DOM §4.2.5 "Mixin DocumentOrShadowRoot"'s OWN member — `readonly attribute CustomElementRegistry?
+       customElementRegistry;` — of which `Document includes DocumentOrShadowRoot` makes this one of the two
+       hosts; ShadowRoot gets the identical call from its own component. Its steps branch on the receiver only
+       to reach the same field twice ("If this is a document, then return this's custom element registry.
+       Assert: this is a ShadowRoot node. Return this's custom element registry."), which is why one getter in
+       core/html/custom_elements.c serves both and why neither host writes one of its own. */
+    custom_elements_install_document_or_shadow_root_member(ctx, proto);
 }
 
 /* HTML §7.1.7 "Policy containers"' container for THIS document, from BOTH halves of the policy list.

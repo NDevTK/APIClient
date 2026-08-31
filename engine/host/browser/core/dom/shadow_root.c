@@ -767,6 +767,12 @@ void shadow_root_install_proto(JSContext *ctx)
        in this one. That is why the member is installed here rather than inherited: DocumentFragment does not
        include DocumentOrShadowRoot, so nothing on the chain below could have supplied it. */
     style_sheet_list_install_mixin(ctx, proto);
+    /* DOM §4.2.5 "Mixin DocumentOrShadowRoot"'s own member, the OTHER half of `Document includes
+       DocumentOrShadowRoot; ShadowRoot includes DocumentOrShadowRoot;`. A shadow root's registry is the one
+       piece of §4.2.5 that a SCOPED registry makes observable — `attachShadow({customElementRegistry: r})`
+       above stores it, `initialize` stamps it, and DOM §4.5 adopt step 3.2 is guarded so it survives an
+       adoption — and until this getter existed a page had no way to read back any of the three. */
+    custom_elements_install_document_or_shadow_root_member(ctx, proto);
     /* §4.8's ONE event handler IDL attribute. It is declared on ShadowRoot itself and not through
        GlobalEventHandlers, which is why it needs its own bit rather than riding EH_GLOBAL's mask. */
     event_target_install_handlers(ctx, proto, EH_SHADOW_ROOT);

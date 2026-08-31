@@ -75,6 +75,7 @@
 #include "core/dom/document.h"        /* DOM §4.5's type — §8.5.4 step 2's whole condition */
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
+#include "core/html/custom_elements.h"  /* §13.3 step 4.2.9's two registry reads — the record is that file's */
 #include "core/html/fragment_serializer.h"
 #include "core/loader/data_block.h"   /* HTML §4.12.1: §13.3 over a data block's children IS its text */
 #include "core/idl_args.h"
@@ -324,12 +325,39 @@ static void ser_shadow_start_tag(JSContext *ctx, FragSerState *s, lxb_dom_node_t
     if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_SERIALIZABLE))    ser_str(ctx, s, " shadowrootserializable=\"\"");
     if (shadow_root_slot_assignment_is_manual(ctx, shadow))         ser_str(ctx, s, " shadowrootslotassignment=\"manual\"");
     if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_CLONABLE))        ser_str(ctx, s, " shadowrootclonable=\"\"");
-    /* Step 4.2.9's `shouldAppendRegistryAttribute` is DECIDED here rather than absent: it asks whether the
-       shadow root's custom element registry differs from its node document's, and this engine has exactly one
-       registry — the document's — which shadow_root.c records by name as the reason `ShadowRootInit`'s
-       `customElementRegistry` member does not exist. Both reads therefore answer the same global registry and
-       step 4.2.9.2 returns false, so the attribute is never appended. It becomes a real read in the diff that
-       makes a scoped registry attachable. */
+    /* HTML §13.3 "Serializing HTML fragments"' `shouldAppendRegistryAttribute`, AS ITS OWN FIVE STEPS AND NOT
+       AS A DIFFERENCE. The standard states them verbatim: "Let documentRegistry be shadow's node document's
+       custom element registry. Let shadowRegistry be shadow's custom element registry. If documentRegistry is
+       null and shadowRegistry is null, then return false. If documentRegistry is a global custom element
+       registry and shadowRegistry is a global custom element registry, then return false. Return true." —
+       which is NOT "do the two differ": two DIFFERENT global registries return false at step 4, and one
+       registry that is null on one side and global on the other returns TRUE at step 5 having differed in a
+       way step 3 does not excuse.
+       THIS STOOD AS A COMMENT ASSERTING THE ATTRIBUTE COULD NEVER BE APPENDED, on the argument that this engine
+       has exactly one registry and that `ShadowRootInit`'s `customElementRegistry` member does not exist. Both
+       halves of that argument are retired — CustomElementRegistry is constructible and scoped, core/dom/
+       shadow_root.c declares and reads the init member, and DOM §4.5 adopt re-derives a node's registry — so
+       the paragraph was instructing the next reader in a rule the tree no longer obeys, and the `>` it fell
+       through to was silently emitting a `<template shadowrootmode>` that reparses into the WRONG registry.
+       The two reads are custom_elements.c's, because the registry a node carries is that component's record. */
+    {
+        JSValue shadow_wrap = node_wrap(ctx, shadow);
+        JSValue doc_wrap = node_wrap(ctx, lxb_dom_interface_node(shadow->owner_document));
+        JSValue shadow_reg = custom_elements_node_registry(ctx, shadow_wrap);
+        JSValue doc_reg = custom_elements_node_registry(ctx, doc_wrap);
+        bool append = true;
+
+        if (JS_IsNull(doc_reg) && JS_IsNull(shadow_reg))                              /* step 3 */
+            append = false;
+        else if (custom_elements_registry_is_global(ctx, doc_reg)
+                 && custom_elements_registry_is_global(ctx, shadow_reg))              /* step 4 */
+            append = false;
+        if (append) ser_str(ctx, s, " shadowrootcustomelementregistry=\"\"");          /* step 5 */
+        JS_FreeValue(ctx, doc_reg);
+        JS_FreeValue(ctx, shadow_reg);
+        JS_FreeValue(ctx, doc_wrap);
+        JS_FreeValue(ctx, shadow_wrap);
+    }
     ser_str(ctx, s, ">");
 }
 

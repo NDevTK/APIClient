@@ -1950,6 +1950,20 @@ static JSValue ce_registry_effective_global(JSContext *ctx, JSValue reg)
     return JS_NULL;
 }
 
+bool custom_elements_registry_is_global(JSContext *ctx, JSValueConst reg)
+{
+    /* THE NULL ARM IS THE PREDICATE'S OWN, so what must not reach it is a THIRD kind of value: DOM states the
+       definition over "null or a CustomElementRegistry object", and a caller holding anything else is one that
+       read a registry field wrong rather than one exercising the null arm. ce_registry_is_global's own
+       `JS_IsObject` would silently answer false for it, so the wrong read would look like a legitimate "not
+       global" and the step that asked would take the arm the standard reserves for null. */
+    DCHECK(JS_IsNull(reg) || custom_elements_is_registry(reg),
+           "DOM §4.5's `is a global custom element registry` was asked of a value that is neither null nor a "
+           "CustomElementRegistry — the definition is stated over exactly those two, so the caller is holding "
+           "something no registry field of a node, a document or a shadow root can contain");
+    return ce_registry_is_global(ctx, reg);
+}
+
 void custom_elements_node_adopted(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_document_t *document,
                                   lxb_dom_document_t *old_document)
 {
@@ -3149,6 +3163,84 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
         JS_FreeValue(ctx, proto);
         JS_SetPropertyStr(ctx, (JSValue)global, "CustomElementRegistry", ctor);
     }
+}
+
+/* DOM'S `customElementRegistry` ATTRIBUTE — TWO IDL SURFACES, ONE GETTER, BECAUSE THE STANDARD WRITES ONE
+ * ANSWER TWICE.
+ *
+ * DOM §4.9 "Interface Element" declares `readonly attribute CustomElementRegistry? customElementRegistry;` and
+ * states its steps in one sentence: "The customElementRegistry getter steps are to return this's custom element
+ * registry."  DOM §4.2.5 "Mixin DocumentOrShadowRoot" declares the same member on the mixin that `Document
+ * includes` and `ShadowRoot includes`, and its steps are "1. If this is a document, then return this's custom
+ * element registry. 2. Assert: this is a ShadowRoot node. 3. Return this's custom element registry." — two arms
+ * that read the SAME field, its assert standing in for the absence of a third interface including the mixin.
+ *
+ * IT IS THIS COMPONENT'S MEMBER AND NOT element.c's OR document.c's, for the reason the header already gives
+ * about the association: the record, the derivation and the once-only rule are this component's, and a second
+ * reader of them is a second answer to what a node's registry is. So the two install entry points below are
+ * called with the prototypes that carry the member, exactly as shadow_root.c hands Element `shadowRoot`.
+ *
+ * THE SURFACE IS THE MAGIC, so a receiver a surface does not admit is a Web IDL §3.7.5 brand failure — a
+ * TypeError thrown before the getter steps, which is what `Object.getOwnPropertyDescriptor(Element.prototype,
+ * "customElementRegistry").get.call(document)` must produce. Asking instead whether the receiver is ANY node
+ * that can carry a registry would make the Element member answer for a Document — a member on the wrong
+ * interface answering, rather than an implementation detail.
+ *
+ * WHAT IS ASSERTED IS THE ANSWER'S TYPE AND NOT THE RECEIVER'S. The IDL type is `CustomElementRegistry?`, so
+ * the only two values this may produce are JS_NULL and a registry, and every writer of the slot goes through
+ * ce_node_set_registry — this read is where that contract is checked, at ONE site with ONE caller, so the abort
+ * names the member a page asked for rather than a helper five algorithms share. */
+enum { CE_REG_ON_ELEMENT = 0, CE_REG_ON_DOCUMENT_OR_SHADOW_ROOT = 1 };
+
+static JSValue js_ce_node_registry(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    JSValue reg;
+    bool ok;
+
+    if (magic == CE_REG_ON_ELEMENT) {
+        ok = n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
+        if (!ok)
+            return JS_ThrowTypeError(ctx, "the customElementRegistry getter of DOM §4.9's Element ran on "
+                                          "something that is not an element");
+    } else {
+        DCHECK(magic == CE_REG_ON_DOCUMENT_OR_SHADOW_ROOT,
+               "the customElementRegistry getter was installed with a surface DOM declares it on neither of — "
+               "§4.9's Element and §4.2.5's DocumentOrShadowRoot are the whole of the member's IDL");
+        /* §4.2.5 steps 1 and 2 together: a Document takes step 1's arm, and step 2's "Assert: this is a
+           ShadowRoot node" is what the other arm rests on — so a receiver that is neither never reaches the
+           getter steps at all. */
+        ok = n != NULL && (n->type == LXB_DOM_NODE_TYPE_DOCUMENT || shadow_root_is(n));
+        if (!ok)
+            return JS_ThrowTypeError(ctx, "the customElementRegistry getter of DOM §4.2.5's "
+                                          "DocumentOrShadowRoot ran on something that is neither a Document "
+                                          "nor a ShadowRoot");
+    }
+    reg = ce_registry_of_node(ctx, this_val);
+    DCHECK(JS_IsNull(reg) || custom_elements_is_registry(reg),
+           "DOM's `CustomElementRegistry? customElementRegistry` answered a value that is neither null nor a "
+           "CustomElementRegistry — every writer of a node's registry slot goes through ce_node_set_registry, "
+           "so a third kind of value here is a writer that bypassed it or a derivation that invented one");
+    return reg;
+}
+
+/* DOM §4.9 "Interface Element"'s own declaration of the member. Called by core/dom/element.c with Element's
+   prototype, because that is the interface it belongs to. */
+void custom_elements_install_element_member(JSContext *ctx, JSValueConst element_proto)
+{
+    DCHECK(g_ready, "§4.9's customElementRegistry was installed before custom_elements_init ran");
+    idl_install_accessor(ctx, element_proto, "customElementRegistry", js_ce_node_registry,
+                         CE_REG_ON_ELEMENT, -1);
+}
+
+/* DOM §4.2.5 "Mixin DocumentOrShadowRoot" — ONE call per interface that INCLUDES the mixin (`Document includes
+   DocumentOrShadowRoot; ShadowRoot includes DocumentOrShadowRoot;`), which is why it takes the target rather
+   than reaching for two prototypes it would have to know how to find. */
+void custom_elements_install_document_or_shadow_root_member(JSContext *ctx, JSValueConst target)
+{
+    DCHECK(g_ready, "§4.2.5's customElementRegistry was installed before custom_elements_init ran");
+    idl_install_accessor(ctx, target, "customElementRegistry", js_ce_node_registry,
+                         CE_REG_ON_DOCUMENT_OR_SHADOW_ROOT, -1);
 }
 
 /* §4.13.4's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. The members live HERE and not on the instance, which is

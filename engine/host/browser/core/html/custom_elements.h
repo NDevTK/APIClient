@@ -112,6 +112,13 @@ JSValue custom_elements_definition_lookup_for_element(JSContext *ctx, JSValueCon
    is per-flow state on it. */
 bool    custom_elements_is_registry(JSValueConst v);
 bool    custom_elements_registry_is_scoped(JSContext *ctx, JSValueConst reg);
+/* DOM §4.5 "Interface Document": "Null or a CustomElementRegistry object registry is a GLOBAL CUSTOM ELEMENT
+   REGISTRY if registry is non-null and registry's is scoped is false." It takes a value that may be JS_NULL,
+   which is the whole difference between it and the predicate above — every caller is a spec step stated over
+   "null or a CustomElementRegistry object", so a null-refusing form would push the null arm out to each of
+   them and they would not agree for long. HTML §13.3 "Serializing HTML fragments"' shouldAppendRegistryAttribute
+   asks it twice in one step and is why it is exported. */
+bool    custom_elements_registry_is_global(JSContext *ctx, JSValueConst reg);
 void    custom_elements_node_associate_registry(JSContext *ctx, JSValueConst wrap, JSValueConst reg);
 JSValue custom_elements_document_registry(JSContext *ctx);
 /* A NODE'S own registry, derived where it holds none — for an algorithm that PASSES one on rather than looking
@@ -167,6 +174,17 @@ void custom_elements_install(JSContext *ctx, JSValueConst global);
 /* §4.13.4's interface PROTOTYPE for ONE realm — declared into core/realm.h's list, because the members on it
    answer out of the realm that defined them. */
 void custom_elements_install_proto(JSContext *ctx);
+
+/* DOM'S `readonly attribute CustomElementRegistry? customElementRegistry;`, ON THE TWO SURFACES THAT DECLARE
+   IT — §4.9 "Interface Element" (its own member) and §4.2.5 "Mixin DocumentOrShadowRoot" (which `Document
+   includes` and `ShadowRoot includes`, so the second entry is called once per including interface). The member
+   is INSTALLED FROM HERE and merely HOSTED there, because the node's registry, its derivation and the
+   once-only association rule are this component's record — the same reason attachShadow and create-an-element
+   ask the questions above rather than deriving them. The two are separate entry points and not one because
+   they are separate IDL declarations with separate brand checks: an Element's member must throw for a
+   Document receiver, and a member that admitted every node kind would be one interface answering for another. */
+void custom_elements_install_element_member(JSContext *ctx, JSValueConst element_proto);
+void custom_elements_install_document_or_shadow_root_member(JSContext *ctx, JSValueConst target);
 
 /* §4.13.4 step 15'S THREE BOOLEAN FIELDS OF A DEFINITION, named so a reader outside this component can ask for
    one without knowing how a definition is stored. `disable shadow` has TWO readers and they refuse at
