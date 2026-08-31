@@ -318,9 +318,19 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
     return obj;
 }
 
-/* §5.2's members. Every argument is a ByteString, which the IDL machine has already made a real string by the
-   time a body runs — so what is left here is the BYTE range, which ToString does not enforce and which is the
-   whole of what makes a ByteString different from a DOMString. */
+/* §5.1's members DECLARE `ByteString` — `append(ByteString name, ByteString value)` and the four beside it —
+   so Web IDL §3.2.11 ByteString's refusal is the TYPE'S and runs inside the conversion: step 1 "Let x be ?
+   ToString(V)" and step 2 "If the value of any element of x is greater than 255, then throw a TypeError."
+   §3.6 Overload resolution algorithm converts the arguments "from left to right", one position finishing
+   before the next begins, so an out-of-range name refuses BEFORE the value's own ToString is issued — which
+   is a page's own code, and running it where the standard runs nothing is an extra chance for that code to
+   fork, emit or throw inside an operation the spec treats as inert. NOTHING BELOW REPEATS THAT RANGE FOR AN
+   ARGUMENT; what is left here is Fetch §2.2.2 Headers' SYNTAX, a different refusal on an already-typed string.
+   THE FILL'S THREE CONVERSIONS ARE NOT ARGUMENTS AND STILL OWE IT. `HeadersInit`'s `record<ByteString,
+   ByteString>` converts a key (§3.2.23 Records step 4.2.1) and a value (step 4.2.3), and its
+   `sequence<sequence<ByteString>>` converts each element (§3.2.21.1 Creating a sequence from an iterable), and
+   no declaration reaches any of the three — so each performs §3.2.11 step 2 itself, at its own conversion.
+   headers_bytestring is that step, stated once for the three of them. */
 /* EVERY CHECK HERE IS LENGTH-DELIMITED, because U+0000 IS A ByteString CHARACTER. These read a C string and
    stopped at the first NUL, so `new Headers({"set-cookie": "\0"})` presented an EMPTY value, normalized to
    empty, validated clean, and was stored — where the spec forbids 0x00 in a header value and wpt asserts the
@@ -328,6 +338,20 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
    What survives validation is provably NUL-free (a name is a token, a value forbids 0x00), which is why the
    LIST may still hold plain C strings — and header_check DCHECKs exactly that before handing one over. */
 
+
+/* WEB IDL §3.2.11 ByteString STEP 2, over the UTF-8 the engine hands out: "If the value of any element of x
+   is greater than 255, then throw a TypeError." `what` names which half of the pair it refused, because a
+   fill converts three things and a message that did not say which named no site at all.
+   IT IS UNREACHABLE FROM A MEMBER'S ARGUMENT — those are converted by the declaration, in §3.6's order — and
+   is only ever the fill's own conversions, which is why it is a helper here rather than idl_args.c's
+   argument-side one. */
+static int headers_bytestring(JSContext *ctx, const char *utf8, size_t len, const char *what)
+{
+    if (idl_is_bytestring(utf8, len))
+        return 0;
+    JS_ThrowTypeError(ctx, "a header %s is not a ByteString", what);
+    return -1;
+}
 
 /* §5.1 "HTTP whitespace" — these FOUR and not isspace()'s set. \f is not one of them, which is what makes
    wpt's "\t\f\tnewLine\n" normalize to "\f\tnewLine" rather than to "newLine". */
@@ -398,10 +422,14 @@ static int header_check(JSContext *ctx, const char *name, size_t name_len,
     char *norm;
     size_t norm_len;
     if (pnorm) *pnorm = NULL;
-    if (!idl_is_bytestring(name, name_len) || (value && !idl_is_bytestring(value, value_len))) {
-        JS_ThrowTypeError(ctx, "a header name or value is not a ByteString");
-        return -1;
-    }
+    /* §3.2.11's RANGE HAS ALREADY RUN, AT WHATEVER CONVERTED THESE BYTES — the member's declared ByteString
+       for an argument, headers_bytestring for each of the fill's three. This ASSERTS that instead of
+       repeating it, so a fourth road into §2.2.2's syntax cannot quietly put a code point above U+00FF into a
+       header list whose entries are bytes. The condition reads two buffers and writes nothing. */
+    DCHECK(idl_is_bytestring(name, name_len) && (!value || idl_is_bytestring(value, value_len)),
+           "a header name or value reached Fetch §2.2.2 Headers' syntax check without Web IDL §3.2.11 "
+           "ByteString's range — every road here converts to ByteString first (the member's declared type, or "
+           "headers_bytestring at the fill's own conversion)");
     if (!header_name_is_valid(name, name_len)) {
         JS_ThrowTypeError(ctx, "invalid header name");
         return -1;
@@ -934,7 +962,7 @@ static int headers_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
 {
     size_t kn_len = 0;
     const char *kn;
-    int ok;
+    int r;
 
     (void)user;
     if (JS_IsSymbol(key)) {
@@ -943,13 +971,9 @@ static int headers_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
     }
     kn = JS_ToCStringLen(ctx, &kn_len, key);
     if (!kn) return -1;
-    ok = idl_is_bytestring(kn, kn_len);
+    r = headers_bytestring(ctx, kn, kn_len, "name");
     JS_FreeCString(ctx, kn);
-    if (!ok) {
-        JS_ThrowTypeError(ctx, "a header name is not a ByteString");
-        return -1;
-    }
-    return 0;
+    return r;
 }
 
 int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst init, HeaderList *out,
@@ -1077,6 +1101,15 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 if (kv) JS_FreeCString(ctx, kv);
                 return -1;
             }
+            /* THE OTHER HALF OF §3.2.21.1's ELEMENT CONVERSION. Its "converting next to an IDL value of type
+               T" is ToString — the two ToCStringLens above, which the DCHECKs make run nothing — followed by
+               §3.2.11 step 2, and the element the standard converts FIRST is the one it refuses first. */
+            if (headers_bytestring(ctx, kn, kn_len, "name") < 0 ||
+                headers_bytestring(ctx, kv, kv_len, "value") < 0) {
+                JS_FreeCString(ctx, kn);
+                JS_FreeCString(ctx, kv);
+                return -1;
+            }
             bad = header_check(ctx, kn, kn_len, kv, kv_len, &norm) < 0;
             /* §5.1 fill appends THROUGH the append algorithm — every step of it, not just the guard: a
                Request built with {headers:{Host:"x"}} silently drops it, and a no-cors one drops every
@@ -1143,6 +1176,17 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         if (!kname || !kval) {
             if (kname) JS_FreeCString(ctx, kname);
             if (kval) JS_FreeCString(ctx, kval);
+            return -1;
+        }
+        /* §3.2.23 step 4.2.3's `typedValue = value converted to V`, and V is ByteString: the ToString is the
+           request above, and this is the range that completes it. It is asked HERE, at the conversion, and
+           not inside §5.1's syntax check, because it is the TYPE's refusal — the key's own already ran one
+           step earlier, in the cursor, which is what makes `{"Ā": "v"}` refuse before the [[Get]].
+           THE CONCOLIC ARM TAKES IT TOO: the projected shape is the bytes this header would carry, and a
+           header the engine cannot state as bytes is not one it may report. */
+        if (headers_bytestring(ctx, kval, kval_len, "value") < 0) {
+            JS_FreeCString(ctx, kname);
+            JS_FreeCString(ctx, kval);
             return -1;
         }
         {
@@ -1244,7 +1288,11 @@ void headers_init(JSContext *ctx)
 {
     JSClassDef def = { "Headers", .finalizer = headers_finalizer };
     JSRuntime *rt = JS_GetRuntime(ctx);
-    static const IdlArgType TWO_STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
+    /* Fetch §5.1 Headers class writes `ByteString` at every one of these positions, and the type is the whole
+       of where §3.2.11's range refusal happens — see the note above header_normalize_value. It was
+       IDL_DOMSTRING, which converts and does NOT refuse, so the refusal fell to the body: `append` then ran
+       the value's ToString — the page's own code — for a name §3.2.11 had already made a TypeError. */
+    static const IdlArgType TWO_BYTESTR[2] = { IDL_BYTESTRING, IDL_BYTESTRING };
     static const IdlArgType ONE_ANY[1] = { IDL_ANY };   /* HeadersInit: a union the fill converts, not the machine */
 
     DCHECK(g_headers_rt == NULL || g_headers_rt == rt,
@@ -1255,12 +1303,12 @@ void headers_init(JSContext *ctx)
     g_headers_rt = rt;
     JS_NewClassID(rt, &g_headers_class);
     JS_NewClass(rt, g_headers_class, &def);
-    g_id[HDR_APPEND]       = idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_APPEND);
-    g_id[HDR_SET]          = idl_method_id(ctx, TWO_STR, 2, js_headers_member, HDR_SET);
-    g_id[HDR_DELETE]       = idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_DELETE);
-    g_id[HDR_GET]          = idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_GET);
-    g_id[HDR_HAS]          = idl_method_id(ctx, TWO_STR, 1, js_headers_member, HDR_HAS);
-    g_id[HDR_GETSETCOOKIE] = idl_method_id(ctx, TWO_STR, 0, js_headers_member, HDR_GETSETCOOKIE);
+    g_id[HDR_APPEND]       = idl_method_id(ctx, TWO_BYTESTR, 2, js_headers_member, HDR_APPEND);
+    g_id[HDR_SET]          = idl_method_id(ctx, TWO_BYTESTR, 2, js_headers_member, HDR_SET);
+    g_id[HDR_DELETE]       = idl_method_id(ctx, TWO_BYTESTR, 1, js_headers_member, HDR_DELETE);
+    g_id[HDR_GET]          = idl_method_id(ctx, TWO_BYTESTR, 1, js_headers_member, HDR_GET);
+    g_id[HDR_HAS]          = idl_method_id(ctx, TWO_BYTESTR, 1, js_headers_member, HDR_HAS);
+    g_id[HDR_GETSETCOOKIE] = idl_method_id(ctx, TWO_BYTESTR, 0, js_headers_member, HDR_GETSETCOOKIE);
     g_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_headers_ctor_decl, 0);
     idl_optional_from(0);   /* §5.1: `constructor(optional HeadersInit init)` */
 
