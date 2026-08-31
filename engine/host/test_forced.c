@@ -6239,8 +6239,32 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        map_add COW capture. Both seA and seP present ⇒ each arm consumed into its own COW-isolated Set. */
     int setfork_tt = (strstr(js, "\"/api/setfork\"") && strstr(js, "seA") && strstr(js, "seP"));
     /* SHARED-MAP overwrite/delete isolation: one arm overwrites a pre-fork Map key, the other deletes it. Both mmA
-       and gone present ⇒ the map_mutate undo-log capture isolated each arm's mutation (restored on unapply). */
-    int mapmutfork_tt = (strstr(js, "\"/api/mapmutfork\"") && strstr(js, "mmA") && strstr(js, "gone"));
+       and gone present ⇒ the map_mutate undo-log capture isolated each arm's mutation (restored on unapply).
+       THIS ROW IS A FOLD AND ITS SIBLINGS ABOVE ARE NOT, FOR A REASON THAT IS ABOUT ITS TOKENS AND NOT ITS STYLE.
+       Every other member of this family names its two worlds with a pair minted for it alone (afA/afP, spA/spP,
+       sadA/sadP, seA/seP), so an unscoped `strstr` for one of those can only match the statement that emits it.
+       `gone` is an ENGLISH WORD this fixture already emits from four earlier statements — `/api/cegone?v=isgone`,
+       `&removed=gone`, `&del=gone` and the IDB record's `made77gone` — and all four sit EARLIER in this document
+       than the Map statement does. So the delete-arm clause was satisfied by whichever of those ran first and
+       could not fail here: §5558's "a term that cannot fail" defect, in the one row of the family whose token was
+       not minted. The row therefore never asserted the delete world at all, and what it actually measured was
+       `mmA` — reachability of the OVERWRITE arm — while reading as a two-world claim.
+       That is what made its 0 unreadable in a run the CPU budget cut short: a bare conjunction has no `why`, so
+       "the statement never ran" and "one arm's mutation leaked into the other" print the same byte, and a
+       truncated run's 0 is indistinguishable from a COW-isolation regression. Both halves are fixed here — the
+       value clauses are scoped to this endpoint's own `v` param so `gone` means THIS statement's delete arm, and
+       the reachability clause is separated so a 0 says which of the two it is. */
+    const char *mapmutfork_why = NULL;
+    int mapmutfork_tt = 1;
+    fold_row(&mapmutfork_tt, &mapmutfork_why, !!strstr(js, "\"/api/mapmutfork\""),
+             "the Map statement never ran: there is no /api/mapmutfork record at all, so the two clauses below "
+             "are about how far this run got and not about the map_mutate capture");
+    fold_row(&mapmutfork_tt, &mapmutfork_why, param_value_is(js, "/api/mapmutfork", "v", "mmA"),
+             "the admin arm overwrote the pre-fork key and read back something else — its map_mutate undo-log "
+             "entry restored the baseline value under it, or the two arms shared one Map");
+    fold_row(&mapmutfork_tt, &mapmutfork_why, param_value_is(js, "/api/mapmutfork", "v", "gone"),
+             "the else arm deleted the pre-fork key and still found one — the delete's undo-log entry re-added "
+             "the baseline value into the deleting arm's own delta, or the arms shared one Map");
     /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer
        (CONT_ASYNC_FROM_SYNC). Both afsA and afsP present ⇒ clone_deep_flow cloned the JSAsyncFromSync state with a
        fresh wrapper promise per arm, so each for-await arm delivered its OWN value. */
@@ -7279,7 +7303,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "spreadfork", spreadfork_tt, "/api/spreadfork", SESS_EXPLORE },
         { "setaddfork", setaddfork_tt, "/api/setaddfork", SESS_EXPLORE },
         { "setfork", setfork_tt, "/api/setfork", SESS_EXPLORE },
-        { "mapmutfork", mapmutfork_tt, "/api/mapmutfork", SESS_EXPLORE },
+        { "mapmutfork", mapmutfork_tt, "/api/mapmutfork", SESS_EXPLORE, mapmutfork_why },
         { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE },
         { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE },
         { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE },
