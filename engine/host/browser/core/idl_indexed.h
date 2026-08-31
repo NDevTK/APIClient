@@ -55,6 +55,25 @@ int idl_indexed_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
 int idl_indexed_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj,
                                    const IdlIndexedDecl *decl);
 
+/* THE WRITE HALF OF THE SAME TWO ALGORITHMS — Web IDL §3.9.3 [[DefineOwnProperty]] and §3.9.4 [[Delete]], for
+ * the same `decl` and under the same NULL contract as the pair above.
+ *
+ * A READER OF THIS HEADER SHOULD KNOW WHY THEY ARE NOT OPTIONAL. §3.9.1's descriptor is non-writable, so a
+ * [[Set]] of a SUPPORTED index is already refused by ECMAScript 10.1.9.2 OrdinarySetWithOwnDescriptor step 2.a
+ * without any hook at all. An index PAST the end is a different path entirely: there is no own descriptor to be
+ * non-writable, the prototype walk finds nothing, and step 2.d.ii's CreateDataProperty performs
+ * [[DefineOwnProperty]] on the receiver — which without this hook is the ORDINARY define and CREATES a real own
+ * property that shadows the getter at that index for the rest of the object's life. §3.9.3 step 1.2's answer is
+ * `false`, and it is the same answer Object.defineProperty gets.
+ *
+ * `flags`, `val`, `getter` and `setter` are quickjs's exotic define_own_property contract; the return values are
+ * that contract's too — true/false, or -1 with an exception pending, which is what a refusal becomes for
+ * Object.defineProperty and for a STRICT-mode assignment (see JS_RefuseOrThrowTypeError). */
+int idl_indexed_define_own_property(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val,
+                                    JSValueConst getter, JSValueConst setter, int flags,
+                                    const IdlIndexedDecl *decl);
+int idl_indexed_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop, const IdlIndexedDecl *decl);
+
 /* Web IDL §3.7.9 Iterable declarations' define the iteration methods, step 1.1: an interface with an indexed
    property getter and an integer `length` gets %Array.prototype.values% as its @@iterator. Installed on the
    PROTOTYPE, which is where the IDL puts it.

@@ -3485,9 +3485,37 @@ static int rule_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32
     return idl_indexed_own_property_names(ctx, ptab, plen, obj, rule_indexed_decl(obj));
 }
 
+/* THE WRITE HALF OF THE SAME §3.9, through the same one decl resolver — Web IDL §3.9.3 [[DefineOwnProperty]]
+   and §3.9.4 [[Delete]]. A `@keyframes` rule is a legacy platform object and `kf[0] = x` must not create an own
+   property that shadows its indexed getter for ever; every other CSSRule resolves NULL and both algorithms then
+   do exactly what the class did before they existed. */
+static int rule_define_own_property(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val,
+                                    JSValueConst getter, JSValueConst setter, int flags)
+{
+    return idl_indexed_define_own_property(ctx, obj, prop, val, getter, setter, flags, rule_indexed_decl(obj));
+}
+
+static int rule_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    return idl_indexed_delete_property(ctx, obj, prop, rule_indexed_decl(obj));
+}
+
+/* §3.9.5 [[PreventExtensions]] — and this class is exactly why that answer is asked PER OBJECT. A CSSRule is a
+   legacy platform object only when it is the `@keyframes` rule that carries §6.3.3's indexed getter, so
+   `Object.freeze(keyframesRule)` must throw and `Object.freeze(styleRule)` must succeed. One flag on the class
+   could not have said that; the decl resolver already does. */
+static int rule_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx;
+    return rule_indexed_decl(obj) ? 0 : 1;
+}
+
 static JSClassExoticMethods g_rule_exotic = {
     .get_own_property = rule_get_own_property,
     .get_own_property_names = rule_own_property_names,
+    .define_own_property = rule_define_own_property,
+    .delete_property = rule_delete_property,
+    .prevent_extensions = rule_prevent_extensions,
     /* An index parse and a read of this component's own Array. A Web IDL indexed property getter has no
        accessor by construction, which is what lets the engine's own read path run it from C. */
     .get_own_property_no_user_code = true,
