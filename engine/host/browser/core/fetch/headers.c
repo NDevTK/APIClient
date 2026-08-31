@@ -6,9 +6,12 @@
  * engine never emitted, because `fetch` read `init.method` and `init.url` and nothing else. This is the first of
  * the three things that closes: the LIST, and the interface a page builds one with.
  *
- * THE LIST IS NOT A MAP. §5.1 keeps (name, value) PAIRS and appends rather than replacing, because `Set-Cookie`
- * is genuinely repeated and `getSetCookie` reads those repeats back; `get` is what combines, joining with ", "
- * per §2.2.4. A map keyed by name would answer `get` correctly and lose every repeat, which is exactly the
+ * THE LIST IS NOT A MAP, AND THE LIST IS NOT THE CLASS. Fetch §2.2.2 Headers defines the header list — "a
+ * specialized multimap: an ordered list of key-value pairs with potentially duplicate keys" — so it keeps
+ * (name, value) PAIRS and appends rather than replacing, because `Set-Cookie` is genuinely repeated and §5.1
+ * Headers class' `getSetCookie` reads those repeats back. §2.2.2's own `get` is what combines, returning the
+ * matching values "separated from each other by 0x2C 0x20, in order" (§2.2.4 is Bodies, and stood here for
+ * that join). A map keyed by name would answer `get` correctly and lose every repeat, which is exactly the
  * header the difference exists for.
  *
  * THE FILL IS A REQUEST SEQUENCE, not a C walk. `new Headers({'X-Api-Key': k})` converts a Web IDL
@@ -34,8 +37,26 @@ static JSRuntime *g_headers_rt;
 
 /* ---- the header list ---------------------------------------------------------------------------------- */
 
-/* §5.1 normalizes a header NAME to lowercase; a value keeps its case. Done on the way IN, so every comparison
-   below is a plain strcmp and no consumer has to remember. */
+/* THE LIST THIS ENGINE KEEPS IS LOWERCASE, AND NO PART OF FETCH SAYS TO MAKE IT SO. What stood here cited
+   §5.1 for a header-NAME normalization; §5.1 Headers class has no such step, and neither does anything else in
+   the standard. Fetch §2.2.2 Headers defines a name that KEEPS ITS CASE and comparisons that ignore it: "A
+   header name is a byte sequence that matches the field-name token production", with no case rule; `contains`,
+   `get` and `delete` match "byte-case-insensitive"; and §2.2.2's own append REUSES the stored spelling — "If
+   list contains name, then set name to the first such header's name." The single place the standard
+   lowercases is §2.2.2's "sort and combine", via "convert header names to a sorted-lowercase set", and that is
+   what §5.1's iteration yields.
+   SO THE SENTENCE WAS TRUE ABOUT THIS ENGINE AND FALSE ABOUT THE STANDARD, which is the worse of the two
+   failures — a number a reader can look up and a claim they cannot. Lowercasing on the way IN is still right
+   for every READ: it makes each comparison below a plain strcmp, which is precisely the byte-case-insensitive
+   match §2.2.2 asks for, and iteration lowercases regardless.
+   NAMED RESIDUAL. NOT COVERED: the CASE a name was appended with. §2.2.2's append preserves it and this list
+   discards it, so a stored name is a canonicalization rather than the bytes the page wrote. That is not wrong
+   on the wire — RFC 9110 §5.1 Field Names: "Field names are case-insensitive" — and no §5.1 read can observe
+   it, which is why this is a residual and not a DCHECK. WHAT THE NEXT DIFF BUILDS: an entry that stores the
+   name AS GIVEN, compares byte-case-insensitively, and runs §2.2.2's append rule of adopting the first
+   matching header's spelling. HOW ITS ABSENCE SHOWS: the emitted `requiredHeaders` record is built from these
+   very bytes, so a bundle that sends `X-Api-Key` is reported as requiring `x-api-key` — a header the run
+   canonicalized, presented where the report otherwise states what it observed. */
 static char *header_lower(const char *s)
 {
     size_t i, n = strlen(s);
@@ -167,8 +188,9 @@ void header_list_parse_field_lines(HeaderList *l, const char *block)
         CHECK(name != NULL, "headers: OOM reading a response field line");
         memcpy(name, p, (size_t)(colon - p));
         name[colon - p] = 0;
-        /* §5.1's grammar, asked of input that came from outside this engine. A name that is not a TOKEN could
-           not have come off a `Headers` object, so it is the same disagreement the colon check names. */
+        /* Fetch §2.2.2 Headers' grammar for a header name, asked of input that came from outside this
+           engine. A name that is not a TOKEN could not have come off a `Headers` object, so it is the same
+           disagreement the colon check names. */
         DCHECK(header_name_valid(name, strlen(name)),
                "a response field block carries a line whose name is not an HTTP token — a header list stores "
                "what a response delivered, and a name Fetch would have rejected never was one");
@@ -177,9 +199,10 @@ void header_list_parse_field_lines(HeaderList *l, const char *block)
             CHECK(value != NULL, "headers: OOM reading a response field value");
             memcpy(value, vs, (size_t)(end - vs));
             value[end - vs] = 0;
-            /* APPEND, NEVER SET: §5.1 keeps repeats, and §7.1.4.1's own table turns on them — two
-               `Cross-Origin-Embedder-Policy: require-corp` headers must combine into a value that FAILS to
-               parse as an item, which a list that replaced would have quietly turned into one that succeeds. */
+            /* APPEND, NEVER SET: Fetch §2.2.2 Headers' header list keeps repeats, and §7.1.4.1's own table
+               turns on them — two `Cross-Origin-Embedder-Policy: require-corp` headers must combine into a
+               value that FAILS to parse as an item, which a list that replaced would have quietly turned into
+               one that succeeds. */
             header_list_append(l, name, value);
             free(value);
         }
@@ -353,11 +376,13 @@ static int headers_bytestring(JSContext *ctx, const char *utf8, size_t len, cons
     return -1;
 }
 
-/* §5.1 "HTTP whitespace" — these FOUR and not isspace()'s set. \f is not one of them, which is what makes
-   wpt's "\t\f\tnewLine\n" normalize to "\f\tnewLine" rather than to "newLine". */
+/* Fetch §2.2 HTTP's "HTTP whitespace" — these FOUR and not isspace()'s set. \f is not one of them, which is
+   what makes wpt's "\t\f\tnewLine\n" normalize to "\f\tnewLine" rather than to "newLine". */
 static int header_is_ws(unsigned char c) { return c == 0x09 || c == 0x0a || c == 0x0d || c == 0x20; }
 
-/* §5.1 "normalize a header value": strip LEADING and TRAILING HTTP whitespace, never inner. Caller frees.
+/* Fetch §2.2.2 Headers' normalize, whose whole text is "remove any leading and trailing HTTP whitespace bytes
+   from potentialValue" — leading and trailing, never inner. §5.1's append and set are the two callers that
+   invoke it, which is why the algorithm reads as theirs and is defined here. Caller frees.
    `*pn` is the normalized LENGTH, which is not strlen(out) when the value carries an embedded NUL — the case
    the validation below exists to reject. */
 static char *header_normalize_value(const char *v, size_t len, size_t *pn)
@@ -376,7 +401,9 @@ static char *header_normalize_value(const char *v, size_t len, size_t *pn)
     return out;
 }
 
-/* §5.1 "a header name is a NAME": an RFC 7230 token — one or more tchar and nothing else. `{}` reaches this as
+/* Fetch §2.2.2 Headers: "A header name is a byte sequence that matches the field-name token production" —
+   and the production it links is RFC 9110 §5.1 Field Names' `field-name = token`, one or more tchar and
+   nothing else. (RFC 7230 stood here; 9110 obsoletes it and is what Fetch cites.) `{}` reaches this as
    "[object Object]", and the space and brackets are what make it a TypeError rather than a header. */
 static int header_name_is_valid(const char *s, size_t len)
 {
@@ -391,8 +418,9 @@ static int header_name_is_valid(const char *s, size_t len)
     return 1;
 }
 
-/* §5.1 "a header value is a VALUE": no NUL, CR or LF anywhere. The leading/trailing whitespace the definition
-   also forbids is what normalization has already removed. */
+/* Fetch §2.2.2 Headers' header value: "Contains no 0x00 (NUL) or HTTP newline bytes" — no NUL, CR or LF
+   anywhere. The leading/trailing whitespace the definition also forbids is what normalization has already
+   removed. */
 static int header_value_is_valid(const char *s, size_t len)
 {
     size_t i;
@@ -463,7 +491,7 @@ static int header_ci_eq(const char *lower_name, const char *lit)
     return !strcmp(lower_name, lit);
 }
 
-/* §5.1 "forbidden method": the three a page may never send, however it spells them. */
+/* Fetch §2.2.1 Methods' "forbidden method": the three a page may never send, however it spells them. */
 static int header_is_forbidden_method(const char *m, size_t len)
 {
     static const char *const METHODS[] = { "connect", "trace", "track" };
@@ -478,9 +506,10 @@ static int header_is_forbidden_method(const char *m, size_t len)
     return 0;
 }
 
-/* §5.1 "getting, decoding, and splitting" a value, for the method-override headers: split on ",", strip HTTP
-   whitespace around each token, and ask whether ANY of them is a forbidden method. `X-HTTP-Method: ",TRACE,"`
-   is forbidden for the same reason `X-HTTP-Method: TRACE` is — the server would see both. */
+/* Fetch §2.2.2 Headers' "get, decode, and split" a header value, for the method-override headers: split on
+   ",", strip HTTP whitespace around each token, and ask whether ANY of them is a forbidden method.
+   `X-HTTP-Method: ",TRACE,"` is forbidden for the same reason `X-HTTP-Method: TRACE` is — the server would
+   see both. */
 static int header_value_has_forbidden_method(const char *v)
 {
     const char *p = v;
@@ -495,8 +524,9 @@ static int header_value_has_forbidden_method(const char *v)
     }
 }
 
-/* §5.1's OWN list, in the standard's own order and containing nothing else — so a name added to or removed
-   from this array is a diff against the spec text and can be read as one. Fetch's list is not the whole of the
+/* FETCH §2.2.2 Headers' OWN list, in the standard's own order and containing nothing else — so a name added
+   to or removed from this array is a diff against the spec text and can be read as one. Fetch's list is not
+   the whole of the
    platform's, and the way a reader tells the difference is that the other standards' entries are BELOW, each
    under the sentence that adds it. */
 static const char *const FORBIDDEN_REQUEST_FETCH[] = {
@@ -518,7 +548,7 @@ static const char *const FORBIDDEN_REQUEST_FETCH[] = {
  * standard that adds to it, and this is a live specification adding to it in those words — so keeping it IS
  * "implement the spec at the root", and Chrome shipping it is the CONFIRMATION, in that order and not the
  * other. The array it lives in is separate so that stays legible without a reader having to trust a comment:
- * two lists, two standards, and the Fetch one still diffs clean against §5.1.
+ * two lists, two standards, and the Fetch one still diffs clean against §2.2.2 Headers.
  *
  * The consequence this engine is built for follows the same way. What a request CARRIES is the report's claim,
  * and a header the user agent strips is a header the report must not carry — so a bundle that sets this name
@@ -529,8 +559,8 @@ static const char *const FORBIDDEN_REQUEST_PNA[] = {
     "access-control-request-private-network",
 };
 
-/* §5.1 "forbidden request-header". The name arrives LOWERCASED (header_lower is what every entry point runs
-   first), so these comparisons are the spec's byte-case-insensitive match. */
+/* Fetch §2.2.2 Headers' "forbidden request-header". The name arrives LOWERCASED (header_lower is what every
+   entry point runs first), so these comparisons are the spec's byte-case-insensitive match. */
 static int header_is_forbidden_request(const char *lower_name, const char *value)
 {
     size_t i;
@@ -552,26 +582,28 @@ bool header_forbidden_request(const char *lower_name, const char *value)
     return header_is_forbidden_request(lower_name, value) != 0;
 }
 
-/* §5.1 "forbidden response-header name": the two a page may not put on a response it did not receive. */
+/* Fetch §2.2.2 Headers' "forbidden response-header name": the two a page may not put on a response it did not
+   receive. */
 static int header_is_forbidden_response(const char *lower_name)
 {
     return header_ci_eq(lower_name, "set-cookie") || header_ci_eq(lower_name, "set-cookie2");
 }
 
-/* §5.1's "CORS-unsafe request-header byte": what a safelisted value may not contain. */
+/* Fetch §2.2.2 Headers' "CORS-unsafe request-header byte": what a safelisted value may not contain. */
 static int header_is_cors_unsafe_byte(unsigned char c)
 {
     return (c < 0x20 && c != 0x09) || c == 0x7f || !!strchr("\"():<>?@[\\]{}", (char)c);
 }
 
-/* §5.1's "CORS-safelisted request-header". The names each have their OWN value rule — this is not a name
-   list with a length cap bolted on, and treating it as one would let `Content-Type: application/json` through
-   as safelisted, which is the whole difference between a preflighted request and one that is not. */
+/* Fetch §2.2.2 Headers' "CORS-safelisted request-header". The names each have their OWN value rule — this is
+   not a name list with a length cap bolted on, and treating it as one would let
+   `Content-Type: application/json` through as safelisted, which is the whole difference between a preflighted
+   request and one that is not. */
 static int header_is_cors_safelisted(const char *lower_name, const char *value)
 {
     size_t i, n = strlen(value);
 
-    /* §5.1 HAS A FIFTH ARM THIS COMPONENT HAS NOT BUILT: "`range`: Let rangeValue be the result of parsing a
+    /* §2.2.2 HAS A FIFTH ARM THIS COMPONENT HAS NOT BUILT: "`range`: Let rangeValue be the result of parsing a
        single range header value given value and false. If rangeValue is failure, then return false. If
        rangeValue[0] is null, then return false." — a suffix range like `bytes=-500` is deliberately NOT
        safelisted. Every caller today reaches this through the no-CORS safelist, whose four names do not
@@ -579,8 +611,8 @@ static int header_is_cors_safelisted(const char *lower_name, const char *value)
        request-header names (the preflight computation) asks the question for real, rather than quietly
        answering false and preflighting a request Chrome sends directly. */
     DCHECK(strcmp(lower_name, "range") != 0,
-           "§5.1's CORS-safelisted request-header was asked about `range`, whose arm parses a single range "
-           "header value and is not built — build it here rather than letting this answer false");
+           "Fetch §2.2.2 Headers' CORS-safelisted request-header was asked about `range`, whose arm parses a "
+           "single range header value and is not built — build it here rather than letting this answer false");
     if (n > 128) return 0;
     if (!strcmp(lower_name, "accept")) {
         for (i = 0; i < n; i++) if (header_is_cors_unsafe_byte((unsigned char)value[i])) return 0;
@@ -615,23 +647,25 @@ static int header_is_cors_safelisted(const char *lower_name, const char *value)
     return 0;
 }
 
-/* §5.1's "no-CORS-safelisted request-header NAME": one of four. It is its own predicate because `delete` asks
-   the NAME question on its own — with no value to ask the value question about. */
+/* Fetch §2.2.2 Headers' "no-CORS-safelisted request-header NAME": one of four. It is its own predicate
+   because `delete` asks the NAME question on its own — with no value to ask the value question about. */
 static int header_is_no_cors_safelisted_name(const char *lower_name)
 {
     return !strcmp(lower_name, "accept") || !strcmp(lower_name, "accept-language") ||
            !strcmp(lower_name, "content-language") || !strcmp(lower_name, "content-type");
 }
 
-/* §5.1's "no-CORS-safelisted request-header": one of those four names, and then the CORS rule for its value. */
+/* Fetch §2.2.2 Headers' "no-CORS-safelisted request-header": one of those four names, and then the CORS rule
+   for its value. */
 static int header_is_no_cors_safelisted(const char *lower_name, const char *value)
 {
     return header_is_no_cors_safelisted_name(lower_name) && header_is_cors_safelisted(lower_name, value);
 }
 
-/* §5.1's "privileged no-CORS request-header names" — stated ONCE, because two things read it: `delete`, which
-   lets one THROUGH (the browser's header is exactly what unprivileged code is allowed to drop), and "remove
-   privileged no-CORS request-headers", which strips every one of them after any unprivileged write. */
+/* Fetch §2.2.2 Headers' "privileged no-CORS request-header name" — stated ONCE, because two things read it:
+   §5.1's `delete`, which lets one THROUGH (the browser's header is exactly what unprivileged code is allowed
+   to drop), and §5.1's "remove privileged no-CORS request-headers", which strips every one of them after any
+   unprivileged write. The NAMES are §2.2.2's; both algorithms that consult them are the class's. */
 static const char *const HEADER_PRIVILEGED_NO_CORS[] = { "range" };
 
 static int header_is_privileged_no_cors(const char *lower_name)
@@ -719,12 +753,13 @@ static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, cons
 }
 
 /* …AND THE SAME ALGORITHM FOR A CALLER THAT HOLDS A LIST AND A GUARD RATHER THAN A `Headers` OBJECT — Fetch
-   §5.4 new Request(input, init) step 34's "If headers is a Headers object, then for each header of its header
-   list, APPEND header to this's headers". That arm is a §5.1 append per entry, under the NEW request's guard,
-   and it is a different algorithm from headers_fill_run: fill resolves §3.2.25's union through the value's own
-   @@iterator, which step 34 must not do for a header list the constructor is carrying forward. Exported rather
-   than re-derived at the caller, because a second copy of "which headers this guard drops" is a second thing to
-   keep in step with §5.1's two lists. */
+   §5.4 Request class' new Request(input, init) step 33's "If headers is a Headers object, then for each header
+   of its header list, APPEND header to this's headers" (step 34 stood here; 34 is "Let inputBody be input's
+   request's body …", and 33 is the one that holds this sub-step). That arm is a §5.1 append per entry, under
+   the NEW request's guard, and it is a different algorithm from headers_fill_run: fill resolves §3.2.25's
+   union through the value's own @@iterator, which step 33 must not do for a header list the constructor is
+   carrying forward. Exported rather than re-derived at the caller, because a second copy of "which headers
+   this guard drops" is a second thing to keep in step with §2.2.2 Headers' two forbidden lists. */
 int header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
                                const char *name, const char *value)
 {
@@ -868,7 +903,7 @@ static void header_sort_and_combine(const HeaderList *l, HeaderList *out)
         size_t total = 0;
         for (j = 0; j < i; j++) if (!strcmp(l->e[j].name, name)) { seen = 1; break; }
         if (seen) continue;
-        if (!strcmp(name, "set-cookie")) {            /* each value on its own, per §5.1 */
+        if (!strcmp(name, "set-cookie")) {            /* each value on its own, per §2.2.2's sort and combine */
             for (j = 0; j < l->n; j++)
                 if (!strcmp(l->e[j].name, name)) header_list_append(out, name, l->e[j].value);
             continue;
