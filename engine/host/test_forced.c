@@ -5542,8 +5542,10 @@ static char *tf_park_load(const char *path) {
    that is not a localisation — it is the count-with-no-name-in-it CLAUDE.md §C-stack forbids, wearing a
    measurement's clothes instead of an engine's. It cost a real prediction this session: a report predicted a
    probe called `ce-async` green, and there is no such row — the assertion it named (`/api/ceasync` carrying
-   `ceAWAIT`, the custom-element reaction that parks at a loop and at an await) is one of NODE_ALGOS' 98 rows,
-   has no name of its own, and was therefore never asked as itself. A row that cannot be named cannot be
+   `ceAWAIT`, the custom-element reaction that parks at a loop and at an await) is one row of the NODE_ALGOS
+   table, has no name of its own, and was therefore never asked as itself. The count that stood here was 98
+   and the table is longer than that now, which is the point rather than a typo: a number in a comment is a
+   census, it is falsifiable by one command, and it belongs where that command can be re-run. A row that cannot be named cannot be
    predicted against, cannot be cited when it goes red, and cannot be reported verbatim.
    NULL for every row that is its own statement (the omitted trailing initialiser), because those already name
    themselves — `iframe-nav` is `/api/iframenav` carrying `ifnav` and nothing else, so its 0 is already a
@@ -5562,12 +5564,15 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
     if (!*why) *why = what;
 }
 /* THE CALLER'S ROOM FOR THE SELECTED ROWS — a buffer size with an abort behind it (probes_eval's `n < cap`),
-   never a limit on how many statements a document may make. Raised with the @S stage rows, and NOT to a
-   number derived from the table's current length: the full document selects nearly all of the rows, so a cap
-   sized to fit today is a cap the next lane to add a row spends without meaning to — which is what the old
-   128 was. It is deliberately far above the table so that adding a statement is an edit to the table alone,
-   and the abort behind it is what says so if that ever stops being true. */
-#define PROBE_MAX 192
+   never a limit on how many statements a document may make. NOT a number derived from the table's current
+   length: the full document selects nearly all of the rows, so a cap sized to fit today is a cap the next lane
+   to add a row spends without meaning to — which is what the old 128 was, and what 192 had quietly become by
+   the time the derived searches' middle rungs were added (the table stood at 191 rows against it, one clear).
+   That is the shape this comment claimed to have ruled out, so the number is raised again AND the claim is
+   stated as something a reader can check rather than trust: the room is meant to sit far enough above the
+   table that adding a statement is an edit to the table alone, and the abort behind it is what says so the day
+   that stops being true. */
+#define PROBE_MAX 320
 
 /* WHAT THIS INVOCATION IS: the document whose statements are being answered, which of the three sessions it is,
    and the realm the result document is rendered from. Set once in main before the scheduler runs, because the
@@ -5615,31 +5620,76 @@ static const char *param_value_next(const char *v, const char **pb, size_t *pn) 
     return v + 1;
 }
 
+/* ONE ENDPOINT'S OWN RECORD, WITHOUT ITS ADDRESS — the bounds every reader below is a question asked INSIDE,
+   and the same rule `s_record` states for an @S entry: a `strstr` over the whole document reaches a field from
+   ANY endpoint, so a two-clause row can be answered by a token its own statement never emitted.
+   THE SPAN STARTS PAST THE URL BECAUSE AN ADDRESS IS NOT AN OBSERVATION. A row asking (endpoint, token) whose
+   token is a substring of the endpoint's own address is a ONE-clause row wearing two — reaching the statement
+   at all satisfies both — which is the `touch` defect this file already carries an annotation for, and it is
+   what `{ "/api/baseuri", "base" }` was. Everything the record STATES (its params, their names, locations and
+   values) is inside this span; the only thing outside it is the address the caller already named.
+   Answers the first byte after this endpoint's url string and writes the distance to the next endpoint's, or
+   NULL when there is no such record.
+   NAMED FOR THE DOCUMENT IT READS, NOT FOR THE THING THE DOCUMENT DESCRIBES. `endpoint_record` is already
+   taken, by solver/endpoint.h, for the engine entry that WRITES one — and this translation unit includes that
+   header, so the obvious name is not merely confusing here, it does not compile. The pair is a READER over the
+   emitted result document, which is the only subject any probe in this file has, so `emitted_` says which side
+   of the engine a reader is standing on and leaves the producer's name to the producer. */
+static const char *emitted_record_span(const char *js, const char *url, size_t *span) {
+    char pat[160];
+    const char *e, *end;
+    int k = snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "an endpoint row's url pattern did not fit its buffer — a truncated pattern matches a PREFIX of the "
+          "address, so the row would read a field out of some other endpoint's record");
+    DCHECK(span != NULL, "an endpoint record was located with nowhere to put its bounds");
+    if (!(e = strstr(js, pat))) return NULL;
+    e += (size_t)k;
+    end = strstr(e, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
+    *span = end ? (size_t)(end - e) : strlen(e);
+    return e;
+}
+
+/* DOES ONE ENDPOINT'S RECORD CARRY `needle` — the scope a row whose claim is (this endpoint, this token) and
+   no finer. It is what the two-column probe table needs and the whole-document `strstr` it replaced could not
+   give: the cross-STATEMENT axis is gone by construction, because no byte of another endpoint's record is in
+   the range. It remains a substring test WITHIN this record, so a row that can say WHICH PARAM carries the
+   value says so through param_value_is instead — a claim about a value is not a claim about a record. */
+static int emitted_record_has(const char *js, const char *url, const char *needle) {
+    size_t span, n = strlen(needle);
+    const char *e = emitted_record_span(js, url, &span), *p;
+
+    if (!e || span < n) return 0;
+    for (p = e; p + n <= e + span; p++)
+        if (memcmp(p, needle, n) == 0) return 1;
+    return 0;
+}
+
 /* The first byte INSIDE one param's validValues array, or NULL when this endpoint or this param is absent. */
 static const char *param_values_span(const char *js, const char *url, const char *pname) {
     char pat[160];
     const char *e, *end, *p, *v;
+    size_t span;
 
-    snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
-    e = strstr(js, pat);
-    if (!e) return NULL;
-    end = strstr(e + 1, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
+    if (!(e = emitted_record_span(js, url, &span))) return NULL;
+    end = e + span;
     snprintf(pat, sizeof pat, "\"name\":\"%s\",\"location\":", pname);
     p = strstr(e, pat);
-    if (!p || (end && p >= end)) {
+    if (!p || p >= end) {
         snprintf(pat, sizeof pat, "\"name\":\"%s\"", pname);
         p = strstr(e, pat);
-        DCHECK(!p || (end && p >= end),
+        DCHECK(!p || p >= end,
                "endpoint_json_array writes a param object this reader cannot parse: the `\"name\"` is there and "
                "the `,\"location\":` that must follow it is not, so every probe term over this param's values "
                "reads 0 for a reason that is not about the engine");
         return NULL;
     }
     v = strstr(p, "\"validValues\":[");
-    DCHECK(v != NULL && (!end || v < end),
+    DCHECK(v != NULL && v < end,
            "a param object carried a name and a location and no validValues array — endpoint_json_array emits "
            "all three of them unconditionally");
-    if (!v || (end && v >= end)) return NULL;
+    if (!v || v >= end) return NULL;
     return v + strlen("\"validValues\":[");
 }
 
@@ -5655,26 +5705,18 @@ static int param_value_count(const char *js, const char *url, const char *pname)
     return k;
 }
 
-/* DOES ONE PARAM OF ONE ENDPOINT CARRY A VALUE CONTAINING `needle` — for a row whose claim is about what a
-   value IS rather than how many there are (here, that the record read back out of an object store is still the
-   CONCOLIC that went in). Scoped to the endpoint AND to one entry: the taint rendering appears in this document
-   from the XSS statements as well, so an unscoped strstr is the term that cannot fail. */
-static int param_value_has(const char *js, const char *url, const char *pname, const char *needle) {
-    const char *v = param_values_span(js, url, pname), *b;
-    size_t n, m = strlen(needle), i;
-
-    while (v && (v = param_value_next(v, &b, &n)) != NULL)
-        for (i = 0; m <= n && i <= n - m; i++)
-            if (memcmp(b + i, needle, m) == 0) return 1;
-    return 0;
-}
-
 /* ONE PARAM OF ONE ENDPOINT CARRIES `val` AS ONE OF ITS VALUES, MATCHED WHOLE — the primitive a MERGED param
    needs and the one this file did not have. `_only` is the wrong instrument wherever the fixture SAYS the
    param carries several values (a fork's two arms merging into one record is the headline claim of this
-   document, not a finding against it), and `_has` is the wrong instrument for the same claim because it is a
-   substring test: `_has(…, "admin")` is satisfied by an arm that emitted `adminX`, and by a value some later
-   statement of this document puts on the same param. Whole-entry equality is what "this arm emitted" means.
+   document, not a finding against it). Whole-entry equality is what "this arm emitted" means, and it is the
+   ONLY primitive over a param's values here: the containment twin that used to stand beside it is gone,
+   because a containment test cannot fail for exactly the two things a probe most needs to refuse. An arm that
+   emitted `adminX` satisfies a claim about `admin`; and — the one that is not obvious and is why every
+   surviving caller is an equality — a DERIVED unknown's display shape is composed OVER its operand's
+   (`"%s.%s()"` and `"%s.%s"`, solver/concolic.c), so a claim about a SOURCE is satisfied by any value derived
+   from that source, and the control asking for the bare source and the row asking for what a member did to it
+   read the same 1. A row whose claim really is about a substring of a RECORD says so through emitted_record_has,
+   which names the scope it is asking in; there is no substring reader over a VALUE.
    The escape check is `param_value_only`'s and is here for the same reason — a `val` needing a JSON escape is
    being compared against a spelling json_buf_str never writes, which reads as a row stuck at 0. */
 static int param_value_is(const char *js, const char *url, const char *pname, const char *val) {
@@ -5887,9 +5929,15 @@ static int s_num(const char *js, const char *sink, const char *src, const char *
                      "establishes the record exists before asking it anything");
     for (p = e; p + (size_t)w <= e + span; p++)
         if (!memcmp(p, k, (size_t)w)) return atoi(p + w);
-    DFAILF("a parked @S entry carries no `%s` — solve.h declares the parked shape and every count in it "
-           "is emitted unconditionally, so an absent one is the producer's shape having moved under this "
-           "reader, and reading it as 0 would state a measurement the run never took", key);
+    /* THE RECORD IS NAMED, NOT ONLY THE KEY. This reader has one line and, since the middle rungs are read for
+       every derived search rather than for one of them, many callers — so a message naming only the field says
+       "some @S entry lost a count" and leaves the reader to open all of them. `witnessed` is emitted only where
+       the class DERIVES (solve.c gates it on `derive != SINK_DERIVE_NONE`), so the FIRST way this fires is a
+       caller asking it of a single-context class, and that caller is identified by exactly this pair. */
+    DFAILF("the parked @S entry %s <- %s carries no `%s` — solve.h declares the parked shape and every count in "
+           "it is emitted unconditionally for the classes that have it, so an absent one is either the "
+           "producer's shape having moved under this reader or this key being asked of a class that does not "
+           "emit it, and reading it as 0 would state a measurement the run never took", sink, src, key);
     return 0;
 }
 
@@ -5925,8 +5973,9 @@ static int s_arraylen(const char *js, const char *sink, const char *src, const c
                    "be taken over bytes belonging to the next entry");
             return n;
         }
-    DFAIL("a parked @S entry carries none of the arrays solve.h declares for it — the shape has moved under "
-          "this reader and a length read off it would be a fact about nothing");
+    DFAILF("the parked @S entry %s <- %s carries no `%s` — solve.h declares that array for every parked entry, "
+           "so the shape has moved under this reader and a length read off it would be a fact about nothing",
+           sink, src, key);
     return 0;
 }
 
@@ -5985,6 +6034,77 @@ static int s_stage(const char *js, const char *sink, const char *src) {
     if (s_num(js, sink, src, "turns")   > 0) return S_RAN;
     return atoi(e + sizeof PARKED - 1) > 0 ? S_SEEDED : S_SEEN;
 }
+
+/* THE TWO RUNGS BETWEEN `RAN` AND `ARRIVED`, AND THEY ARE READ FOR EVERY DERIVED SEARCH RATHER THAN FOR ONE.
+ * A DERIVED class builds nothing until its CONTEXT PROBE reaches the sink — the §12 / §13.2.5 state is read off
+ * the string a REAL run handed the write and there is no other observation to read one off — so `-atsink=0`
+ * stands for FOUR facts that take four different actions: never scheduled, scheduled and never got to the sink,
+ * got there and built no escape, built one that never arrived. `-seen`/`-ran` split the first off. These two
+ * split the rest, and they were computed for exactly ONE of the five derived searches this fixture drives while
+ * the producer emitted them for all of them — a rung whose ABSENCE and whose ZERO read alike, which is the tell
+ * §@S names, present in the very instrument built to end it.
+ * THE FACTS ARE THE PRODUCER'S AND ARE NOT RE-DERIVED HERE. solve.h declares `witnessed` as the number of
+ * DISTINCT sink writes whose string this search stored (learn_witness dedups by text), `probes` as how many of
+ * `payloads`' LEADING entries are inert locators, and `survivedBy` as one entry per `payloads` entry — so
+ * `survivedBy` length past `probes` IS "this search has constructed an escape", stated at the field's own
+ * declaration and asserted at queue_derived. Deciding either from POSITION would be a view restating a producer
+ * fact it cannot check.
+ * THE FIRED ARM IS A POSITIVE STATEMENT AND NOT A HOLE: a fired record carries the reproduction envelope in
+ * place of the search's counters, and a search that fired has BY CONSTRUCTION witnessed a context and built the
+ * escape that fired. S_UNSEEN is the other end — there is no record to ask, and asking one would abort inside
+ * s_num for a document that simply never detected this sink.
+ * ASKED ONLY OF A DERIVING CLASS. `witnessed` is emitted on the class's `derive` column, so a single-context
+ * class (SINK_URL states its two written-down vectors at detection and runs no probe at all) has no such field,
+ * and a 0 read for one would say "the probe never arrived" about a search that has none. s_num aborts there by
+ * name rather than defaulting, which is what keeps that a routing question and not a silent zero. */
+static int s_witnessed(const char *js, const char *sink, const char *src, int stage) {
+    if (stage == S_FIRED)  return 1;
+    if (stage == S_UNSEEN) return 0;
+    return s_num(js, sink, src, "witnessed") > 0;
+}
+static int s_derived(const char *js, const char *sink, const char *src, int stage) {
+    if (stage == S_FIRED)  return 1;
+    if (stage == S_UNSEEN) return 0;
+    return s_arraylen(js, sink, src, "survivedBy") > s_num(js, sink, src, "probes");
+}
+
+/* AND THE LADDER IS MONOTONE, ASSERTED AT EACH SEARCH RATHER THAN ONCE FOR ALL OF THEM. Every implication below
+ * is an invariant the ENGINE already asserts at the site that establishes it, read back off the emitted
+ * document — breakout_arrived DCHECKs `npl > nprobe` at the arrival, derive_from_witness runs only on a stored
+ * witness, learn_witness DCHECKs `turns > 0`, and escape_reached DCHECKs `reached > 0` — so a pair can only
+ * disagree if a number is being written about a different quantity than the field it lands in.
+ * IT IS A MACRO AND NOT A FUNCTION, WHICH IS THE POINT. A DCHECK stamps the line it is WRITTEN at, so five
+ * searches sharing one helper would share one reported line and the remedy ("open this search's record") would
+ * name an action with no object — the defect CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY describes, which is why
+ * that section says an invariant over a transition is a macro expanded at each site. The (sink, source) pair is
+ * carried in the message besides, because it is the key the record is found by and therefore the whole of the
+ * address a reader needs.
+ * ONE DIRECTION ONLY on the first two, because only one direction is an implication: a witnessed search that has
+ * built nothing is the CORRECT and final answer for a source whose percent-encode set holds every byte the
+ * state's exit needs, which is exactly what the raw-fragment markup search must report. */
+#define S_LADDER_MONOTONE(js, sink, src, stage, wit, built)                                                     \
+    do {                                                                                                        \
+        DCHECKF((stage) < S_ARRIVED || (built),                                                                  \
+                "the @S search %s <- %s reports a BREAKOUT arriving at its sink while its own record says it "   \
+                "has constructed none — solve.c asserts `npl > nprobe` at the arrival itself, so these two "     \
+                "numbers are about different searches or `probes`/`survivedBy` no longer mean what solve.h "     \
+                "declares", (sink), (src));                                                                      \
+        DCHECKF(!(built) || (wit),                                                                               \
+                "the @S search %s <- %s constructed a breakout with no context witness behind it — a derived "   \
+                "class reads its lexical state off the string a real run handed the sink and has no other "      \
+                "observation to read one off, so an escape with no witness was built from a static shape of "    \
+                "the expression", (sink), (src));                                                                \
+        DCHECKF(!(wit) || (stage) >= S_RAN,                                                                      \
+                "the @S search %s <- %s witnessed a context while the scheduler reports it has never been "      \
+                "given a turn — learn_witness DCHECKs `turns > 0` at the site that stores a witness, so "        \
+                "`turns` is counting something other than the flows that do this search's work and `turns:0` "   \
+                "would be read as WFQ starvation for a search that has run the whole document",                  \
+                (sink), (src));                                                                                  \
+        DCHECKF((stage) != S_ESCAPED || s_num((js), (sink), (src), "reached") > 0,                                \
+                "the @S search %s <- %s reports its marker at an EXECUTABLE position while no breakout of it "   \
+                "has been recorded as ARRIVING — escape_reached asserts the arrival at the escape site itself, " \
+                "so these are two counts about two different strings", (sink), (src));                           \
+    } while (0)
 
 /* A FIRE-VERIFIED PoC IS A FIELD OF ITS OWN RECORD, NEVER A SUBSTRING OF THE DOCUMENT — and reading it the
  * other way made the fixture's ONE passing @S row a false green, in a run that had fired nothing at all.
@@ -6191,16 +6311,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "setter instead of reverting the backing _f slot, or the arms shared one _f");
     /* ASYNC-AS-FLOW: each flow's promise .then reaction fired under its OWN COW -> both thenADMIN and thenPUBLIC
        present ⇒ microtask reactions run as first-class per-flow flows (not a dropped/global-drained job). */
-    int async_tt = (strstr(js, "\"/api/then\"") && strstr(js, "thenADMIN") && strstr(js, "thenPUBLIC"));
+    const char *async_why = NULL; int async_tt = 1;
+    FORK_ROW(js, &async_tt, &async_why, "/api/then", "v",
+             "the per-flow microtask reaction, which is what makes a `.then` fire under the COW of the flow "
+             "that queued it rather than out of one globally drained job list",
+             "thenADMIN", "thenPUBLIC");
     /* AWAIT + FORK: the ternary (cfg.admin) is a concolic branch INSIDE the nested async function, so it forks
        via a deep SNAPSHOT fork of the async body's live tramp chain (clone_deep_flow: the async frame's state is
        cloned from async_data->func_state.frame with a FRESH promise capability — never a re-run). Both awADMIN and
        awPUBLIC present ⇒ await suspend/resume works AND the deep async-branch fork is correct per flow. */
-    int await_tt = (strstr(js, "\"/api/await\"") && strstr(js, "awADMIN") && strstr(js, "awPUBLIC"));
+    const char *await_why = NULL; int await_tt = 1;
+    FORK_ROW(js, &await_tt, &await_why, "/api/await", "w",
+             "clone_deep_flow's deep snapshot of the async body's live tramp chain, which is what forks a "
+             "concolic branch INSIDE a suspended async frame with a fresh promise capability",
+             "awADMIN", "awPUBLIC");
     /* ASYNC-AS-CALLER deep fork: the concolic branch is in a HELPER called by the async body (chain base->async->
        helper), so the async frame is a mid-chain CALLER whose func_state.frame is the deeper frame's caller buffer.
        Both acADMIN and acPUBLIC ⇒ clone_deep_flow sourced the async caller's stack correctly (tramp_buf_base). */
-    int asynccall_tt = (strstr(js, "\"/api/asynccall\"") && strstr(js, "acADMIN") && strstr(js, "acPUBLIC"));
+    const char *asynccall_why = NULL; int asynccall_tt = 1;
+    FORK_ROW(js, &asynccall_tt, &asynccall_why, "/api/asynccall", "w",
+             "clone_deep_flow's sourcing of an async frame that is a mid-chain CALLER (tramp_buf_base), which "
+             "is what forks a branch taken in a helper the async body called",
+             "acADMIN", "acPUBLIC");
     /* ASYNC THROW: a heap-resident async body that throws becomes a REJECTED promise; the .catch reaction fires
        and records /api/caught — proving the exception unwind of an async tramp frame (reject, not propagate). */
     int async_throw = (strstr(js, "\"/api/caught\"") && strstr(js, "asyncThrew"));
@@ -6236,6 +6368,49 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        reaching it is the claim. */
     int orphan_update = strstr(js, "\"/api/orphan/update\"") != NULL;
     int orphan_clamp  = strstr(js, "\"/api/orphan/clamp\"") != NULL;
+    /* AND WHICH OF THREE THINGS A 0 ON ANY OF THE SEVEN ROWS ABOVE IS — the one clause none of them could make.
+       Every one of them is `is there a record for this endpoint`, so its 0 folds three findings that take
+       OPPOSITE actions: no flow of this run ever RAN OUT OF WORK, so the frontier never reached the question at
+       all; a flow did reach it and every walk of the heap found no untaken body; or bodies WERE driven and this
+       statement's endpoint is still not on the surface. The first is the SCHEDULE and says nothing whatever
+       about orphan-invoke, the second is the take, and the third is this row.
+       THE SPLIT IS THE ENGINE'S OWN AND IS ASKED OF IT, never re-derived out of `js`. solver/engine.h's orphan
+       census is exactly this split — its own comment says `driven == 0` alone is "this bundle ships no uncalled
+       code", "no flow ever reached the end of its own work" and "the walk happened and the heap had none" at
+       once — and the pair reached NOTHING that could act on it: its only reader is the result document, which
+       this host prints after run_scheduler returns, and a run whose frontier does not drain never gets there.
+       That is the same computed-writer-with-no-reader the @SCENSUS line below exists to end, in the surface
+       §What-the-tool-produces calls the headline, and it is why seven rows could read 0 together with the
+       fixture unable to say whether orphan-invoke had been tried once.
+       ONE SENTENCE FOR THE SEVEN, because when the cause is one of the first two it IS one cause and printing
+       seven paraphrases of it would be seven lines for one finding; probes_report prefixes each line with the
+       row's own name, so nothing is anonymous. */
+    long orphans_driven = 0, orphans_asked = 0;
+    static char orphan_why_[512];
+    const char *orphan_why;
+    engine_orphan_census(&orphans_driven, &orphans_asked);
+    if (orphans_asked == 0)
+        snprintf(orphan_why_, sizeof orphan_why_,
+                 "NOT ASKED: no flow of this run has run out of work yet, so the frontier has never reached the "
+                 "question orphan-invoke answers (engine_orphan_census: asked=0, driven=0). That is the "
+                 "SCHEDULE — engine_orphan_fork is reached only where a flow has no program, job, lifecycle "
+                 "event, timer, rendering opportunity or outstanding reply left — and it says nothing about "
+                 "the take, the drive or this endpoint. The seven orphan rows are 0 together for this one "
+                 "reason and stay so until some flow finishes its own work");
+    else if (orphans_driven == 0)
+        snprintf(orphan_why_, sizeof orphan_why_,
+                 "ASKED %ld TIMES AND DROVE NOTHING: a flow did run out of work and no walk found an untaken "
+                 "body, while this document declares seven functions nothing calls. That is the TAKE — "
+                 "JS_OrphanTakeOne's `entered`/`is_program`/bytecode filter, or the orphan-generation memo "
+                 "answering for a heap that has moved — and not the schedule and not this endpoint",
+                 orphans_asked);
+    else
+        snprintf(orphan_why_, sizeof orphan_why_,
+                 "%ld bodies WERE driven (asked %ld times) and this statement's endpoint is not on the surface: "
+                 "either this drive is seeded and has not been picked, or it ran and emitted nothing. This "
+                 "clause is about THIS row — orphan-invoke itself is answered by whichever of the seven are 1",
+                 orphans_driven, orphans_asked);
+    orphan_why = orphan_why_;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
        API-value learning, through the Response the shipped fetch component actually hands back.
@@ -6260,9 +6435,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `text()` on the identical bytes emit nothing at all.
        ASKED THROUGH THE PARAM READER AND NOT AN `strstr`, for the reason those helpers were written: both tags
        are values of ONE param of ONE endpoint, and an unscoped match would find `chain2-us-west-2` in any
-       other statement that happens to carry the region. */
-    int then_chain = (param_value_has(js, "/api/chain", "at", "chain1") &&
-                      param_value_has(js, "/api/chain", "at", "chain2-us-west-2"));
+       other statement that happens to carry the region. WHOLE-VALUE AND NOT `_has`, because each tag IS one
+       whole value the statement builds (`?at=chain1`, and `'chain2-' + c.region` with nothing after it), so
+       containment asserts strictly less than the claim and admits an `at` some later statement spells
+       `chain1b`. */
+    int then_chain = (param_value_is(js, "/api/chain", "at", "chain1") &&
+                      param_value_is(js, "/api/chain", "at", "chain2-us-west-2"));
     /* §6.4 clone(): the copy read the body, the ORIGINAL still read it afterwards, and cloning a read body
        threw where the page put its catch. A caching layer's first move is `res.clone()`, so without it the
        reply — and every endpoint behind it — was lost at that line.
@@ -6287,16 +6465,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* THE LATCH TIME-TRAVELS: two arms forked BEFORE either read one shared reply, and BOTH read it. If the
        body-used flag did not ride the COW delta, the second arm's read would throw and only one tag would be
        here — which is exactly what it did, as a `body stream already read` page error. */
-    int body_iso = (strstr(js, "\"/api/bodyiso\"") && strstr(js, "us-west-2-bodyADMIN") &&
-                    strstr(js, "us-west-2-bodyPUBLIC"));
+    const char *body_iso_why = NULL; int body_iso = 1;
+    FORK_ROW(js, &body_iso, &body_iso_why, "/api/bodyiso", "v",
+             "the COW capture of §6.4's body-used latch, which is what lets two arms forked before the read "
+             "both read one shared reply instead of the second throwing `body stream already read`",
+             "us-west-2-bodyADMIN", "us-west-2-bodyPUBLIC");
     /* THE REQUEST'S IDENTITY IS THE PAIR: a GET and a POST of ONE address were listed as one request and
        answered with one reply, so the POST's promise settled with the GET's. `p` is the method the fixture host
        ECHOED onto the reply the POST's flow actually received, so `POST` here is the seam delivering each flow
        the answer to its own question — and the old `p=GET` is exactly the wrong answer this probe exists for.
        The `v` prefix is what makes the assert about THIS value: a bare `POST` also appears as an endpoint
        record's own method field, so the probe would pass on a record that says nothing about which reply
-       arrived. `vPOST` can only have come through the header on the POST's own reply. */
-    int verb_key = (strstr(js, "\"/api/verb\"") && strstr(js, "vGET") && strstr(js, "vPOST"));
+       arrived. `vPOST` can only have come through the header on the POST's own reply.
+       AND THE PREFIX IS NOT THE SCOPE — the two echoes are values of TWO DIFFERENT params of this one record
+       (`?g=v…&p=v…`), which is why this is a pair of whole-value reads and not a FORK_ROW: the worlds a
+       FORK_ROW folds are values of ONE param, and asking for `vPOST` on `g` would be a different claim from
+       the one this row makes. The `v` prefix stays because it is what distinguishes an ECHOED method from the
+       record's own method field; what it never was is a guarantee that no other statement spells it. */
+    int verb_key = (param_value_is(js, "/api/verb", "g", "vGET") &&
+                    param_value_is(js, "/api/verb", "p", "vPOST"));
     /* §5 Headers: the record fill ran (acc), the list keeps repeats (sc=2 with both values), `get` combines
        them (join=k1, k2), `set` replaces them all (set=k3), a name is matched case-insensitively (has=truefalse)
        and an absent header is null rather than "". */
@@ -6344,11 +6531,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* PER-FLOW PROMISE STATE: a promise created BEFORE a snapshot fork and settled per-flow with a DIFFERENT
        value in each arm; both shBETA and shSTABLE present ⇒ the shared promise's settlement is isolated per
        flow (no cross-flow contamination) — async STATE time-travels, not just async execution. */
-    int promise_state = (strstr(js, "\"/api/shared\"") && strstr(js, "shBETA") && strstr(js, "shSTABLE"));
+    const char *promise_state_why = NULL; int promise_state = 1;
+    FORK_ROW(js, &promise_state, &promise_state_why, "/api/shared", "v",
+             "the COW capture of a promise's SETTLEMENT, which is what lets one pre-fork promise settle with a "
+             "different value in each arm instead of one arm's value surviving for both",
+             "shBETA", "shSTABLE");
     /* DELETE ISOLATION: the gamma-true flow deletes a SHARED baseline object's key; the gamma-false flow must
        still see keepVAL. Both present ⇒ the delete time-travels. FAILS under the snapshot fork (it shares the
        flow_local object across siblings) — a real unsoundness this asserts LOUD rather than leaving unchecked. */
-    int delete_iso = (strstr(js, "\"/api/tok\"") && strstr(js, "wasDeleted") && strstr(js, "keepVAL"));
+    const char *delete_iso_why = NULL; int delete_iso = 1;
+    FORK_ROW(js, &delete_iso, &delete_iso_why, "/api/tok", "t",
+             "the delta's capture of a slot REMOVAL on a shared baseline object, which is what leaves the "
+             "sibling arm still reading the key this arm deleted",
+             "wasDeleted", "keepVAL");
     /* THE SAME ISOLATION OVER THE EXOTIC GLOBAL, which is a different code path and not a second spelling of the
        row above. A slot removal on the global misses the shape (the name is not one of the Window class's
        supported indices) and reaches the exotic [[Delete]] dispatch, which the swap must not consult: 10.5.10
@@ -6356,8 +6551,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        captured on the object that owns it, so consulting either removes state the delta never named. gdSOLE on
        BOTH arms says each flow read back its own creation AND that neither absent-slot delete left a slot
        standing for the sibling. */
-    int global_delete = (strstr(js, "\"/api/gdel\"") && strstr(js, "gdADMINgdSOLE") &&
-                         strstr(js, "gdPUBLICgdSOLE"));
+    const char *global_delete_why = NULL; int global_delete = 1;
+    FORK_ROW(js, &global_delete, &global_delete_why, "/api/gdel", "v",
+             "the delta's capture of a slot removal on the EXOTIC global, which reaches 10.5.10 [[Delete]] and "
+             "must not consult a hook that is a VIEW over storage the delta never named",
+             "gdADMINgdSOLE", "gdPUBLICgdSOLE");
     /* FLOW-LOCAL post-fork isolation: an object created before a concolic fork (flow_local at creation) is SHARED
        by the snapshot; each arm's mutation must be per-flow. Both values present ⇒ cow_delta_fork's forked=1 keeps
        post-fork flow_local mutations captured — no leak (the older 'snapshot shares flow_local (unsound)' claim). */
@@ -6660,7 +6858,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        the call that asked for it — hr0hr1hr2 in order, never interleaved or reused. */
     int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
     /* AND ACROSS A FORK: each arm re-issued its own request under its own world, so BOTH answers exist. */
-    int hostreqfork_tt = (strstr(js, "\"/api/hostreqfork\"") && strstr(js, "hrA") && strstr(js, "hrP"));
+    const char *hostreqfork_why = NULL; int hostreqfork_tt = 1;
+    FORK_ROW(js, &hostreqfork_tt, &hostreqfork_why, "/api/hostreqfork", "v",
+             "the per-flow re-issue of a suspended host read, which is what gives each arm the answer to its "
+             "own question instead of one arm's answer to both",
+             "hrA", "hrP");
     /* §7.4 returned a WindowProxy for a child document the host minted, after suspending for it.
        SCOPED BECAUSE `proxy` IS A SUBSTRING OF `/api/hdrproxy`, which this same document learns from the
        §5 Headers proxy statement — so the old term read 1 whenever THAT endpoint existed, including on the
@@ -6816,9 +7018,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `idb-record-taint` is the half a browser's own suite cannot have: `location.hash` goes into a store and
        has to come back out STILL CONCOLIC, because a page keeps its session in here and reads it into gated
        code. It is a claim about §5.11's clone and §6.1 step 4's serialization, not about transactions at all —
-       a store that de-tainted on the way in would emit the EXAMPLE and read as a perfectly healthy endpoint. */
+       a store that de-tainted on the way in would emit the EXAMPLE and read as a perfectly healthy endpoint.
+       AND IT IS A WHOLE-VALUE CLAIM, WHICH IS THE DIFFERENCE BETWEEN THE TWO WAYS THIS CAN GO WRONG. §5.11's
+       clone seeds §2.7.1's `memory` with the concolic itself — core/indexeddb/idb_database.c states it in as
+       many words, "the SAME symbol rather than a second one about which the flow's narrowing says nothing" —
+       so what comes back out has the source's own shape and `?t=` carries exactly it. A containment test
+       cannot tell that from a clone that DERIVED a new unknown from it, because a derived shape is composed
+       over its operand's (`"%s.%s()"`, solver/concolic.c) and therefore contains it: the row would read 1 for
+       a value carrying a narrowing this flow never made, which is the plausible datum the row exists to
+       refuse. Whole-value equality is what "the same symbol" means. */
     int idbrec_tt = strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") != NULL;
-    int idbtaint_tt = param_value_has(js, "/api/idbrec", "t", LOCATION_HASH_SHAPE);
+    int idbtaint_tt = param_value_is(js, "/api/idbrec", "t", LOCATION_HASH_SHAPE);
     /* THE CONTROL, read off the same endpoint record: the same source, the same param list, no store in
        between. A 0 on BOTH means the loss is upstream of Indexed Database and a 0 on `t` alone means §5.11's
        clone or §6.1 step 4's serialization is where the triple collapses to its example.
@@ -6830,8 +7040,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        loss upstream of the store: there was no loss. `location.hash` reached the @H param carrying its domain
        the whole time, and a row asserting a name no producer writes reports a healthy mechanism as broken
        forever — which is exactly the defect `idb-open` above is annotated for, one file away. Bound to the
-       macro now: a probe cannot ask about a spelling the component does not have. */
-    int lochash_tt = param_value_has(js, "/api/idbrec", "h", LOCATION_HASH_SHAPE);
+       macro now: a probe cannot ask about a spelling the component does not have. A CONTROL IS ONLY A CONTROL
+       IF IT ASKS THE SAME QUESTION: `?h=` is `location.hash` with nothing concatenated after it, so this is
+       the same whole-value equality `t` is, and a containment test here would have gone on passing for a
+       derived shape while `t`'s equality failed — the two rows would then disagree for a reason that is about
+       the instruments and not about the store. */
+    int lochash_tt = param_value_is(js, "/api/idbrec", "h", LOCATION_HASH_SHAPE);
 
     /* §5.12's `count` OVER A VALUE NOBODY KNOWS, AND THE ORDER ITS TYPE DECIDES — four rows, because these are
        four independent facts and a conjunction over them would name none of them.
@@ -6865,10 +7079,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        the answer is an unknown NAMING ITS SOURCE, which is what keeps `if (classList.contains(x))` a fork.
        A COLLAPSE IS NOT AN ABSENCE HERE, and that is why the SHAPE is the term rather than the endpoint: a
        decided answer emits a perfectly healthy record whose `v` reads `false`, so a row asking only whether
-       the endpoint arrived would read 1 for the defect it exists to catch. */
+       the endpoint arrived would read 1 for the defect it exists to catch.
+       AND THE CLAIM IS THE DERIVED SHAPE, NOT THE SOURCE INSIDE IT — the two rows below were asking the same
+       bytes of two different params, and a containment test cannot tell the answer this member OWES from the
+       one failure it must refuse. `contains` derives its result through solver/concolic.c's builtin hook,
+       whose shape is composed as `"%s.%s()"` over the OPERAND's, with the operation core/dom/dom_token_list.c
+       names at the call — so `v` is the source's shape with this member's name appended, and `h` is the bare
+       source. Asked as containment, BOTH rows read 1 for a member that simply handed its argument back
+       unchanged: the control and the claim would then carry identical bytes, and the whole point of having
+       both is that they do not. The hook's own DCHECK says why the operation is in the shape — it "is what
+       tells two derivations from one operand apart" — so a probe that erases it is asking the weaker
+       question the engine deliberately refuses to answer. */
     int clunk_ran_tt = param_value_only(js, "/api/clunknown", "c", "true");
-    int clunk_src_tt = param_value_has(js, "/api/clunknown", "h", LOCATION_HASH_SHAPE);
-    int clunk_tt     = param_value_has(js, "/api/clunknown", "v", LOCATION_HASH_SHAPE);
+    int clunk_src_tt = param_value_is(js, "/api/clunknown", "h", LOCATION_HASH_SHAPE);
+    int clunk_tt     = param_value_is(js, "/api/clunknown", "v",
+                                      LOCATION_HASH_SHAPE ".DOMTokenList.contains()");
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -6997,172 +7222,185 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int csrestore_tt = (strstr(js, "\"/api/cstimer\"") && strstr(js, "\"/api/csmod\"") &&
                         !strstr(js, "\"LEAK\""));
     int csinject_tt = (strstr(js, "\"/api/csinj\"") && strstr(js, "\"csINJ\""));
-    /* The §4.4 algorithms, each proved by its own endpoint carrying a token only the right answer produces. */
+    /* The §4.4 algorithms, each proved by its own endpoint carrying a token only the right answer produces.
+       READ INSIDE THE ENDPOINT'S OWN RECORD, which is what the address column is for and is the whole reason
+       it is no longer written quoted. Spelled as two whole-document `strstr`s this was a hundred-odd
+       two-clause rows whose second clause any OTHER statement could answer, and a scan of what the fixture
+       can emit says so in numbers: `isiface` sits inside `/api/iface2`'s own `isiface2`, `isreflect` inside
+       `isreflect2`, `isro` inside `isroot`, `iscl` inside `isclamp` and `isclick`, `issyn` inside `issync`
+       and `issyntax`, `isdflt` inside `isdflt2`, `isonce` inside `isonce1`, `ismin` inside `isminwins`,
+       `isce` inside `iscentred`, `AB` inside five values including `ABC` and `NOABORT`, `Element` inside the
+       ifacestep chain, `node` inside seven other endpoints' addresses, `1:1` inside `2:1:1`, `64` inside a
+       srcset's `640w`, `448` inside `44850`, and `base` inside `/api/baseuri` — the row's OWN address, which
+       is why the record span starts past it. Every one of those rows could be answered by a world it never
+       observed, and none of them could have said so. The claim each row makes is (this endpoint, this token),
+       so the scope it is asked in is this endpoint's record and nothing wider; a row that can name WHICH
+       PARAM carries the value belongs on param_value_is instead and several below already are. */
     static const char *const NODE_ALGOS[][2] = {
-        { "\"/api/nodeconst\"",   "isconst" },   /* Node.ELEMENT_NODE, the constants on the interface object */
-        { "\"/api/docnode\"",     "isnode"  },   /* Document IS a Node: nodeType 9, and contains() walks */
-        { "\"/api/baseuri\"",     "base"    },
-        { "\"/api/rootnode\"",    "isroot"  },   /* the option read parked on a page getter and resumed */
-        { "\"/api/equalnode\"",   "iseq"    },   /* cloneNode(true) then isEqualNode/isSameNode */
-        { "\"/api/deepequal\"",  "isdeep"  },   /* …and a nested chain of it, parking at every pair */
-        { "\"/api/normalize\"",   "AB"      },   /* two Text children merged into one */
-        { "\"/api/insertbefore\"","isfirst" },
-        { "\"/api/connected\"",   "isconn"  },
-        { "\"/api/position\"",    "isdisc"  },
+        { "/api/nodeconst",   "isconst" },   /* Node.ELEMENT_NODE, the constants on the interface object */
+        { "/api/docnode",     "isnode"  },   /* Document IS a Node: nodeType 9, and contains() walks */
+        { "/api/baseuri",     "base"    },
+        { "/api/rootnode",    "isroot"  },   /* the option read parked on a page getter and resumed */
+        { "/api/equalnode",   "iseq"    },   /* cloneNode(true) then isEqualNode/isSameNode */
+        { "/api/deepequal",  "isdeep"  },   /* …and a nested chain of it, parking at every pair */
+        { "/api/normalize",   "AB"      },   /* two Text children merged into one */
+        { "/api/insertbefore","isfirst" },
+        { "/api/connected",   "isconn"  },
+        { "/api/position",    "isdisc"  },
         /* the four arms of compareDocumentPosition the disconnected assertion never reached */
-        { "\"/api/posbits\"",    "containedby" },
+        { "/api/posbits",    "containedby" },
         /* normalize's inner run: 3 children left (the merged text, the <hr>, the merged tail), and the two
            merged strings are the 40 digits and the 5 z's — an off-by-one in the run gives a shorter one */
-        { "\"/api/normrun\"",    "0123456789012345678901234567890123456789" },
-        { "\"/api/iface\"",       "isiface" },   /* instanceof up the chain + inherited interface constants */
-        { "\"/api/event\"",       "isevent" },   /* new Event(type, EventInit) with a dictionary getter */
-        { "\"/api/evcancel\"",    "iscancel"},   /* preventDefault over the canceled slot */
-        { "\"/api/dispatch\"",    "isdispatch"},/* §2.9 synchronous dispatch, suspended inside a listener */
-        { "\"/api/stopimmediate\"", "isstop" },
-        { "\"/api/handler\"",     "ishandler"},  /* §8.1.7 the handler slot keeps its position */
-        { "\"/api/handlernull\"", "isnull"  },
-        { "\"/api/onglobal\"",    "isglobal"},   /* the mixins land on window and Document too */
-        { "\"/api/iface2\"",     "isiface2"},   /* HTML's element-interface table, up the whole chain */
+        { "/api/normrun",    "0123456789012345678901234567890123456789" },
+        { "/api/iface",       "isiface" },   /* instanceof up the chain + inherited interface constants */
+        { "/api/event",       "isevent" },   /* new Event(type, EventInit) with a dictionary getter */
+        { "/api/evcancel",    "iscancel"},   /* preventDefault over the canceled slot */
+        { "/api/dispatch",    "isdispatch"},/* §2.9 synchronous dispatch, suspended inside a listener */
+        { "/api/stopimmediate", "isstop" },
+        { "/api/handler",     "ishandler"},  /* §8.1.7 the handler slot keeps its position */
+        { "/api/handlernull", "isnull"  },
+        { "/api/onglobal",    "isglobal"},   /* the mixins land on window and Document too */
+        { "/api/iface2",     "isiface2"},   /* HTML's element-interface table, up the whole chain */
         /* HTML §3.2.2's steps, read off the class string the element actually carries. Every one of these six
            answered HTMLUnknownElement while the table held 71 of the standard's 141 rows and the resolver ran
            steps 4, 6 and 7 only, so the expected string is also the one that names which step is missing. */
-        { "\"/api/ifacestep\"",
+        { "/api/ifacestep",
           "HTMLElement-HTMLElement-HTMLProgressElement-HTMLPreElement-HTMLUnknownElement-HTMLUnknownElement" },
         /* step 6's predicate is §4.13.3's five requirements and not a hyphen search */
-        { "\"/api/ifacecename\"", "HTMLElement-HTMLUnknownElement-HTMLUnknownElement" },
+        { "/api/ifacecename", "HTMLElement-HTMLUnknownElement-HTMLUnknownElement" },
         /* the namespace gate, and the named residual behind it: DOM §4.5's default, not SVGAElement */
-        { "\"/api/ifacesvgns\"",  "Element" },
+        { "/api/ifacesvgns",  "Element" },
         /* §4.6.3: `a.href` is NOT the attribute — it RESOLVES against the document base and re-serialises, so
            `fetch(ia.href)` after `ia.href = '/api/reflected?v=isreflect'` requests the ABSOLUTE URL. This
            expected the relative one, which is what an attribute MIRROR answers and what a browser does not;
            the mirror is gone and the recorded endpoint is the resolved address. */
-        { "\"https://x.test/api/reflected\"",  "isreflect"},
-        { "\"/api/reflect2\"",   "isreflect2"},
-        { "\"/api/reflectbool\"","isbool"  },   /* presence-based booleans, and removeAttribute */
+        { "https://x.test/api/reflected",  "isreflect"},
+        { "/api/reflect2",   "isreflect2"},
+        { "/api/reflectbool","isbool"  },   /* presence-based booleans, and removeAttribute */
         /* §2.6.1's URL reflection, which the audit cannot measure: absolute on read, raw in the attribute,
            path-relative resolved against the document's path, and an unparseable value read back verbatim. */
-        { "\"/api/refurlabsent\"", "isempty" },
-        { "\"/api/refurl\"",       "isabs"   },
-        { "\"/api/refurlrel\"",    "isrel"   },
-        { "\"/api/refurlbad\"",    "israw"   },
-        { "\"/api/refurlproto\"",  "isone"   },
+        { "/api/refurlabsent", "isempty" },
+        { "/api/refurl",       "isabs"   },
+        { "/api/refurlrel",    "isrel"   },
+        { "/api/refurlbad",    "israw"   },
+        { "/api/refurlproto",  "isone"   },
         /* §2.6.1's unsigned long: the range and the default are separate steps, overflow clamps rather than
            falling to the default, and the SETTER does neither. */
-        { "\"/api/ulabsent\"",   "isdflt"   },
-        { "\"/api/ulrange\"",    "isrange"  },
-        { "\"/api/uldflt\"",     "isdflt2"  },
-        { "\"/api/uloverflow\"", "isclamp"  },
-        { "\"/api/ulset\"",      "isnoclamp"},
-        { "\"/api/ulwindow\"",   "isdefaultwritten" },
-        { "\"/api/ulmin\"",      "ismin"    },
-        { "\"/api/click\"",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
-        { "\"/api/cascade\"",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
-        { "\"/api/cssinline\"",  "isinline"},   /* inline layers over the author cascade */
-        { "\"/api/cssua\"",      "isua"    },   /* the UA default, and the initial value below it */
+        { "/api/ulabsent",   "isdflt"   },
+        { "/api/ulrange",    "isrange"  },
+        { "/api/uldflt",     "isdflt2"  },
+        { "/api/uloverflow", "isclamp"  },
+        { "/api/ulset",      "isnoclamp"},
+        { "/api/ulwindow",   "isdefaultwritten" },
+        { "/api/ulmin",      "ismin"    },
+        { "/api/click",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
+        { "/api/cascade",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
+        { "/api/cssinline",  "isinline"},   /* inline layers over the author cascade */
+        { "/api/cssua",      "isua"    },   /* the UA default, and the initial value below it */
         /* css-fonts-4 §2.5's computed font-size, and css-values-4 §6.1.1's two font-size-relative units. The
            `larger`, the `150%` and the `1.5em` INSIDE font-size are all a ratio of the PARENT's size, while
            the `2em` in a margin is a ratio of the element's OWN — §6.1.1's font-affecting rule is the whole of
            the difference. /api/fontroot has no token: its base is CSS_ENV_DEFAULT_FONT_SIZE, so what it proves
            is that a `rem` on the root resolved against the INITIAL size instead of recursing into itself. */
-        { "\"/api/fontsize\"",   "isfs"    },
-        { "\"/api/fontrem\"",    "isrem"   },
-        { "\"/api/cssset\"",     "isset"   },   /* writes land in the style attribute, [SameObject] holds */
-        { "\"/api/cssdel\"",     "isdel"   },
+        { "/api/fontsize",   "isfs"    },
+        { "/api/fontrem",    "isrem"   },
+        { "/api/cssset",     "isset"   },   /* writes land in the style attribute, [SameObject] holds */
+        { "/api/cssdel",     "isdel"   },
         /* §6.6.1's `getter CSSOMString item(unsigned long index)` — the GETTER half, which is a lookup and not
            the method. Both entries have to hold: /api/cssidx reads the positions, the supported-property-index
            boundary (undefined and `!(3 in style)` where item(3) is the empty string), the array-index-property
            -name parse and Web IDL §3.7.9's @@iterator; /api/cssidxlive is what a snapshot taken at mint fails,
            because the indices shift when a declaration is removed. */
-        { "\"/api/cssidx\"",     "isidx"   },
-        { "\"/api/cssidxlive\"", "islive"  },
-        { "\"/api/cssro\"",      "isro"    },   /* a computed declaration throws rather than silently ignoring */
-        { "\"/api/bubble\"",     "isbubble"},   /* §2.9's path: target fixed, currentTarget and phase moving */
-        { "\"/api/nobubble\"",   "isnobub" },   /* a non-bubbling event, and stopPropagation */
-        { "\"/api/capture\"",    "iscap"   },   /* the CAPTURING leg, before the target and before bubbling */
-        { "\"/api/dedup\"",      "isdedup" },   /* §2.7's key is (type, callback, capture) */
-        { "\"/api/once\"",       "isonce1" },   /* removed BEFORE the call, so a re-entrant fire cannot re-run it */
-        { "\"/api/dclbubble\"",  "isdcl"   },   /* the ENGINE's own fire walks the same path to the window */
-        { "\"/api/abortsync\"",  "issync"  },   /* §3.2 abort() has run its listeners before it returns */
-        { "\"/api/abortonce\"",  "isonce"  },   /* and a second abort() fires nothing */
-        { "\"/api/formstate\"",  "isform"  },   /* a control's value state, the form's listed elements */
-        { "\"/api/celife\"",     "isce"    },   /* §4.13 connectedCallback ran — code nothing else calls */
-        { "\"/api/ceearly\"",    "isearly" },   /* the retroactive upgrade, and the wrapper's identity surviving */
-        { "\"/api/ceasync\"",    "ceAWAIT" },   /* the reaction is a flow: it parked at a loop and at an await */
-        { "\"/api/cename\"",     "issyntax"},   /* §4.13.3 a name with no hyphen is refused */
+        { "/api/cssidx",     "isidx"   },
+        { "/api/cssidxlive", "islive"  },
+        { "/api/cssro",      "isro"    },   /* a computed declaration throws rather than silently ignoring */
+        { "/api/bubble",     "isbubble"},   /* §2.9's path: target fixed, currentTarget and phase moving */
+        { "/api/nobubble",   "isnobub" },   /* a non-bubbling event, and stopPropagation */
+        { "/api/capture",    "iscap"   },   /* the CAPTURING leg, before the target and before bubbling */
+        { "/api/dedup",      "isdedup" },   /* §2.7's key is (type, callback, capture) */
+        { "/api/once",       "isonce1" },   /* removed BEFORE the call, so a re-entrant fire cannot re-run it */
+        { "/api/dclbubble",  "isdcl"   },   /* the ENGINE's own fire walks the same path to the window */
+        { "/api/abortsync",  "issync"  },   /* §3.2 abort() has run its listeners before it returns */
+        { "/api/abortonce",  "isonce"  },   /* and a second abort() fires nothing */
+        { "/api/formstate",  "isform"  },   /* a control's value state, the form's listed elements */
+        { "/api/celife",     "isce"    },   /* §4.13 connectedCallback ran — code nothing else calls */
+        { "/api/ceearly",    "isearly" },   /* the retroactive upgrade, and the wrapper's identity surviving */
+        { "/api/ceasync",    "ceAWAIT" },   /* the reaction is a flow: it parked at a loop and at an await */
+        { "/api/cename",     "issyntax"},   /* §4.13.3 a name with no hyphen is refused */
         /* …and the three requirements that refusal cannot speak for, told apart by the REASON the one
            SyntaxError carries. A row that only checked the throw stays green with these clauses deleted. */
-        { "\"/api/cereserved\"", "SyntaxError-isreserved" },
-        { "\"/api/ceupper\"",    "SyntaxError-isupper" },
-        { "\"/api/celocal\"",    "SyntaxError-islocal" },
+        { "/api/cereserved", "SyntaxError-isreserved" },
+        { "/api/ceupper",    "SyntaxError-isupper" },
+        { "/api/celocal",    "SyntaxError-islocal" },
         /* …and the ACCEPTANCE no refusal can prove: an astral code point is a legal custom element name,
            because §4.13.3's first bullet is DOM §1.4's predicate and not a character class. */
-        { "\"/api/ceuni\"",      "isuni"   },
-        { "\"/api/ceget\"",      "isget"   },
-        { "\"/api/ceext\"",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
-        { "\"/api/cedeep\"",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */
-        { "\"/api/cegone\"",     "isgone"  },   /* …and the removing steps run disconnectedCallback */
-        { "\"/api/ceattr\"",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
-        { "\"/api/classlist\"",  "iscl"    },   /* §7.1 add/remove/toggle/replace over the class attribute */
-        { "\"/api/clview\"",     "isview"  },   /* …and the list is a VIEW, with nothing to keep in step */
-        { "\"/api/clindex\"",    "isindex" },   /* §3.9 list[i], and §3.7.9's @@iterator */
-        { "\"/api/matches\"",    "ismatch" },   /* §4.9 matches, and closest walking INCLUSIVE ancestors */
-        { "\"/api/matchbad\"",   "issyn"   },
-        { "\"/api/serialize\"",  "%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E" },   /* §8.4, and `<br>` is void */
-        { "\"/api/mixin\"",      "%3Cli%3E%3C%2Fli%3E%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cem%3E%3C%2Fem%3Etail" },
-        { "\"/api/mixin2\"",     "%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cb%3E%3C%2Fb%3Etail" },
-        { "\"/api/mixin3\"",     "%3Cspan%3E%3C%2Fspan%3E" },
-        { "\"/api/variadic\"",   "%3Cli%3E%3C%2Fli%3En1770abcdefg" },   /* nine arguments, one a page toString */
-        { "\"/api/live\"",       "islive"  },   /* childNodes and children track the tree; qSA does not */
+        { "/api/ceuni",      "isuni"   },
+        { "/api/ceget",      "isget"   },
+        { "/api/ceext",      "isext"   },   /* a DOMString dictionary member, read AND coerced as requests */
+        { "/api/cedeep",     "isdeep"  },   /* the insertion steps walk the SUBTREE, and insertBefore runs them */
+        { "/api/cegone",     "isgone"  },   /* …and the removing steps run disconnectedCallback */
+        { "/api/ceattr",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
+        { "/api/classlist",  "iscl"    },   /* §7.1 add/remove/toggle/replace over the class attribute */
+        { "/api/clview",     "isview"  },   /* …and the list is a VIEW, with nothing to keep in step */
+        { "/api/clindex",    "isindex" },   /* §3.9 list[i], and §3.7.9's @@iterator */
+        { "/api/matches",    "ismatch" },   /* §4.9 matches, and closest walking INCLUSIVE ancestors */
+        { "/api/matchbad",   "issyn"   },
+        { "/api/serialize",  "%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E" },   /* §8.4, and `<br>` is void */
+        { "/api/mixin",      "%3Cli%3E%3C%2Fli%3E%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cem%3E%3C%2Fem%3Etail" },
+        { "/api/mixin2",     "%3Chr%3E%3Cli%3E%3C%2Fli%3E%3Cb%3E%3C%2Fb%3Etail" },
+        { "/api/mixin3",     "%3Cspan%3E%3C%2Fspan%3E" },
+        { "/api/variadic",   "%3Cli%3E%3C%2Fli%3En1770abcdefg" },   /* nine arguments, one a page toString */
+        { "/api/live",       "islive"  },   /* childNodes and children track the tree; qSA does not */
         /* §4.2.6 moveBefore / §4.2.3 move — the three rows of the one block above. */
-        { "\"/api/movebefore\"",      "ismoved" },       /* the reorder, and `moveBefore(n, n)` as a no-op */
+        { "/api/movebefore",      "ismoved" },       /* the reorder, and `moveBefore(n, n)` as a no-op */
         /* move's SIX validity steps where they diverge from pre-insert's eleven: step 1 first (which is why
            the fragment reads HierarchyRequestError and not step 4's), then step 3, then step 4's doctype. */
-        { "\"/api/movebeforethrow\"",
+        { "/api/movebeforethrow",
           "HierarchyRequestError%3AHierarchyRequestError%3ANotFoundError%3AHierarchyRequestError" },
-        { "\"/api/movebeforece\"",    "ispreserved" },   /* connectedMoveCallback ONLY — not the c/d pair */
-        { "\"/api/named\"",      "isnamed" },
+        { "/api/movebeforece",    "ispreserved" },   /* connectedMoveCallback ONLY — not the c/d pair */
+        { "/api/named",      "isnamed" },
         /* §4.2.6 installed from ONE place: Document gets the reads it never had, and the lookups scope to
            whichever node they were called on rather than to the global document */
-        { "\"/api/parentmixin\"", "scoped" },
+        { "/api/parentmixin", "scoped" },
         /* §4.7's interface, its two mixins, and §4.12.3's [SameObject] content */
-        { "\"/api/fragment\"",   "content" },
+        { "/api/fragment",   "content" },
         /* the upgrade is done by the time appendChild returns, and one insert ran 121 elements' steps */
-        { "\"/api/insertsteps\"", "121" },
+        { "/api/insertsteps", "121" },
         /* 17 <li>, 17 <b>, the tail element's class, and 448 bytes of markup = 448 suspensions in one parse */
-        { "\"/api/bigparse\"",   "448" },
+        { "/api/bigparse",   "448" },
         /* one JS object per node, over 34 of them reached two different ways */
-        { "\"/api/nodeident\"",  "same" },
+        { "/api/nodeident",  "same" },
         /* 3 <i>, 2 with class a, 1 with both, 4 elements — then one more of each after an insert */
-        { "\"/api/byname\"",     "4:3:2:5" },
+        { "/api/byname",     "4:3:2:5" },
         /* Text nodes only: the comment and the <template>'s content are both absent from `aBc` */
-        { "\"/api/textwalk\"",   "aBc" },
+        { "/api/textwalk",   "aBc" },
         /* §4.2.6 scoped matching, the SyntaxError all four members owe, and closest's inclusive walk */
-        { "\"/api/scopesel\"",   "SyntaxError:SyntaxError" },
+        { "/api/scopesel",   "SyntaxError:SyntaxError" },
         /* §3.2.2's mapping both ways, its two refusals, [SameObject], and the deleter */
-        { "\"/api/dataset\"",    "roleName,userId,x" },
+        { "/api/dataset",    "roleName,userId,x" },
         /* the map, its iterator, the value setter, the NotFoundError, and an Attr's node identity */
-        { "\"/api/attrs\"",      "node" },
+        { "/api/attrs",      "node" },
         /* 1 form -> 2 after an insert (live), the two hrefs, and a fragment that empties when appended */
-        { "\"/api/docshort\"",   "/l1,/l2" },
+        { "/api/docshort",   "/l1,/l2" },
         /* the index cache: forwards, backwards, and shifted by a front insertion between two reads */
-        { "\"/api/idxcache\"",   "shifted" },
-        { "\"/api/adjacent\"",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
-        { "\"/api/fragctx\"",    "%3Ctd%3Ecell%3C%2Ftd%3E" },   /* §13.4: parsed in the ROW's context */
-        { "\"/api/outerset\"",   "%3Ch1%3Ereplaced%3C%2Fh1%3E" },
-        { "\"/api/adjbad\"",     "issyn"   },
-        { "\"/api/heading\"",    "%3Ch1%3Ea%3C%2Fh1%3Etail" },   /* the heading CLOSES; `tail` is its sibling */
+        { "/api/idxcache",   "shifted" },
+        { "/api/adjacent",   "%3Ci%3Ebb%3C%2Fi%3E%3Cp%3ET%3Cb%3Eab%3C%2Fb%3E%3Cu%3Ebe%3C%2Fu%3E%3Cq%3E%3C%2Fq%3E%3C%2Fp%3E%3Cs%3Eae%3C%2Fs%3E" },
+        { "/api/fragctx",    "%3Ctd%3Ecell%3C%2Ftd%3E" },   /* §13.4: parsed in the ROW's context */
+        { "/api/outerset",   "%3Ch1%3Ereplaced%3C%2Fh1%3E" },
+        { "/api/adjbad",     "issyn"   },
+        { "/api/heading",    "%3Ch1%3Ea%3C%2Fh1%3Etail" },   /* the heading CLOSES; `tail` is its sibling */
         /* §4.10 the walk LEAVES THE TREE for `<template>`'s content fragment and comes back, twice over. */
-        { "\"/api/template\"",   "%3Ctemplate%3E%3Ci%3Ex%3C%2Fi%3E%3Ctemplate%3E%3Cb%3Ey%3C%2Fb%3E"
+        { "/api/template",   "%3Ctemplate%3E%3Ci%3Ex%3C%2Fi%3E%3Ctemplate%3E%3Cb%3Ey%3C%2Fb%3E"
                                  "%3C%2Ftemplate%3Ez%3C%2Ftemplate%3Eafter" },
-        { "\"/api/serdeep\"",    "64" },   /* 64 open, 64 close, the text once — 128 suspensions in one walk */
-        { "\"/api/clone\"",      "untouched" },   /* §4.4: shallow/deep, attributes, detached, original intact */
-        { "\"/api/clonetpl\"",   "%3Ctemplate%3E%3Cb%3Etc%3C%2Fb%3E%3C%2Ftemplate%3E" },
+        { "/api/serdeep",    "64" },   /* 64 open, 64 close, the text once — 128 suspensions in one walk */
+        { "/api/clone",      "untouched" },   /* §4.4: shallow/deep, attributes, detached, original intact */
+        { "/api/clonetpl",   "%3Ctemplate%3E%3Cb%3Etc%3C%2Fb%3E%3C%2Ftemplate%3E" },
         /* a template's TWO child lists. The clone copies both — 1 ordinary child in, 1 out, and it is the <u>.
            The serialisation shows only the content, which is §13.3 replacing the template with its contents. */
-        { "\"/api/tplboth\"",    "1:1" },
-        { "\"/api/rejevent\"",  "isrej"   },   /* §8.1.4.7's cancelable event reached a page listener */
-        { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
-        { "\"/api/prector\"",   "isctor"  },
+        { "/api/tplboth",    "1:1" },
+        { "/api/rejevent",  "isrej"   },   /* §8.1.4.7's cancelable event reached a page listener */
+        { "/api/prereq",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
+        { "/api/prector",   "isctor"  },
     };
     /* EVERY ONE OF THESE NAMES ITSELF NOW (fold_row above). They were a hundred bare `nodealgo_tt = 0`
        assignments, and the row is currently 0, so what the gate has been reporting for this whole session is
@@ -7223,7 +7461,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§8.1.4.7 the rejection a listener CANCELLED is not reported");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         fold_row(&nodealgo_tt, &nodealgo_why,
-                 strstr(js, NODE_ALGOS[ai][0]) && strstr(js, NODE_ALGOS[ai][1]), NODE_ALGOS[ai][0]);
+                 emitted_record_has(js, NODE_ALGOS[ai][0], NODE_ALGOS[ai][1]), NODE_ALGOS[ai][0]);
     /* THE OUTCOME FORK, both halves. Positive: ONE run reached BOTH completions of `JSON.parse` over unknown
        text, which can only happen by a snapshot fork taken inside the builtin — the throw arm carries the real
        SyntaxError, so `catch` ran with a real Error object rather than a shape. Negative: the same builtin over
@@ -7321,24 +7559,34 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int st_loc   = s_stage(ss, "eval",      LOCATION_HASH_SRC);
     int st_lpark = s_stage(ss, "innerHTML", LOCATION_HASH_SRC);
     int st_attr  = s_stage(ss, "innerHTML", ATTR_SRC);
-    /* AND THE TWO PRODUCER FACTS THAT SPLIT `-ran=1, -atsink=0` INTO THE THINGS IT HAS BEEN SAYING AT ONCE.
-       A derived class cannot construct anything until its CONTEXT PROBE reaches the sink — the §13.2.5 state is
-       read off the string a real run handed the write, and there is no other observation to read one off — so
-       between "scheduled" and "a breakout arrived" sit two more facts, and with neither of them read a 0 on
-       `-atsink` named four states rather than one: never scheduled, scheduled and never got to the sink, got
-       there and built no escape, built one that never arrived. Those take four different actions.
-       `witnessed` IS THE PROBE'S ARRIVAL and `survivedBy` past `probes` IS THE CONSTRUCTION, both read off the
-       producer's own emission rather than re-derived here: solve.h states that `probes` counts the LEADING
-       entries that are probes and that a consumer must not decide it from position, and `survivedBy` is
-       declared one entry per `payloads` entry, so its length IS the candidate count.
-       THE FIRED ARM IS THE POSITIVE STATEMENT AND NOT A HOLE. A fired record carries the envelope, not the
-       search's counters, so both rows read their fact off the verdict once the search has solved — a search
-       that fired has by construction witnessed a context and constructed the escape that fired. */
-    int attr_parked  = st_attr != S_UNSEEN && st_attr != S_FIRED;
-    int s_attr_wit   = st_attr == S_FIRED || (attr_parked && s_num(ss, "innerHTML", ATTR_SRC, "witnessed") > 0);
-    int s_attr_built = st_attr == S_FIRED ||
-                       (attr_parked && s_arraylen(ss, "innerHTML", ATTR_SRC, "survivedBy")
-                                       > s_num(ss, "innerHTML", ATTR_SRC, "probes"));
+    /* AND THE TWO PRODUCER FACTS THAT SPLIT `-ran=1, -atsink=0` INTO THE THINGS IT HAS BEEN SAYING AT ONCE —
+       FOR EVERY DERIVED SEARCH, WHICH IS THE HALF THAT WAS MISSING. s_witnessed/s_derived state why the pair is
+       the right two facts; what belongs here is why it is read six times and not once. Five of this fixture's
+       seven @S searches DERIVE their breakouts (both eval sinks, all three markup ones) and exactly ONE of them
+       had these rows, so for the other four a 0 on `-atsink` went on naming four states — and it was read as
+       one, out loud, in a hand-off that classified `-ran=1, -atsink=0` as "the candidate reached the sink with
+       the wrong bytes" for searches whose context probe may never have got there at all. The producer emitted
+       both numbers for every one of them the whole time.
+       THE SIXTH IS `location` <- `{state}.next` AND IT IS DELIBERATELY ABSENT. SINK_URL declares
+       SINK_DERIVE_NONE and opens with its two written-down vectors, so it runs no context probe, stores no
+       witness, and solve.c emits no `witnessed` for it — a row there would be a claim about a mechanism that
+       class has not got, and s_num aborts by name rather than reading the absent key as a zero. That asymmetry
+       is also the ANSWER to why the URL search is the one that arrives: its FIRST seeded candidate is already a
+       breakout, so it needs ONE traversal of the document to raise `reached`, where a derived search needs the
+       probe to arrive, the witness to be read, the escape to be built and THEN a second traversal to deliver it.
+       Four scheduling round trips against one, through the same document, at the same statement offset. */
+    int s_eval_wit    = s_witnessed(ss, "eval",      "{state}.code",      st_eval);
+    int s_eval_built  = s_derived  (ss, "eval",      "{state}.code",      st_eval);
+    int s_evalc_wit   = s_witnessed(ss, "eval",      "{state}.note",      st_evalc);
+    int s_evalc_built = s_derived  (ss, "eval",      "{state}.note",      st_evalc);
+    int s_html_wit    = s_witnessed(ss, "innerHTML", "{state}.html",      st_html);
+    int s_html_built  = s_derived  (ss, "innerHTML", "{state}.html",      st_html);
+    int s_loc_wit     = s_witnessed(ss, "eval",      LOCATION_HASH_SRC,   st_loc);
+    int s_loc_built   = s_derived  (ss, "eval",      LOCATION_HASH_SRC,   st_loc);
+    int s_park_wit    = s_witnessed(ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
+    int s_park_built  = s_derived  (ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
+    int s_attr_wit    = s_witnessed(ss, "innerHTML", ATTR_SRC,            st_attr);
+    int s_attr_built  = s_derived  (ss, "innerHTML", ATTR_SRC,            st_attr);
 
     /* …AND THE TWO SETS ARE HELD AGAINST EACH OTHER, WHICH IS WHAT WOULD HAVE CAUGHT THE FALSE GREEN THE DAY
        IT APPEARED. A verdict row and its stage row are computed from the SAME bytes about the SAME record, so
@@ -7363,42 +7611,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                                             "stage says it carries no PoC");
     DCHECK(!s_attr  || st_attr  == S_FIRED, "the @S attribute-value verdict is green for a record whose own "
                                             "stage says it carries no PoC");
-    /* AND THE LADDER IS MONOTONE, WHICH IS WHAT STOPS A DEAD STATE BEING REACHED IN SILENCE. Each of the three
-       implications below is an invariant the ENGINE already asserts at the site that establishes it, read back
-       off the emitted document — so the pair can only disagree if a number is being written about a different
-       quantity than the field it lands in, which is exactly the failure the old `-ran` row had and which
-       nothing could see because nothing held two of these against each other.
-         breakout_arrived DCHECKs `npl > nprobe` at the arrival, so an ARRIVAL with no construction behind it is
-         impossible; derive_from_witness runs only on a stored witness, so a construction with no witness behind
-         it is impossible; and learn_witness now DCHECKs `turns > 0`, because a witness is produced by one of
-         this search's own candidate flows reaching the sink.
-       ONE DIRECTION ONLY, because only one direction is an implication: a witnessed search that has built
-       nothing is the CORRECT and final answer for a source whose percent-encode set holds every byte the state's
-       exit needs, and it is what the sibling raw-fragment search reports. */
-    DCHECK(st_attr < S_ARRIVED || s_attr_built,
-           "the @S attribute search reports a BREAKOUT arriving at its sink while its own record says it has "
-           "constructed none — solve.c asserts `npl > nprobe` at the arrival itself, so these two numbers are "
-           "about different searches or `probes`/`survivedBy` no longer mean what solve.h declares");
-    DCHECK(!s_attr_built || s_attr_wit,
-           "the @S attribute search constructed a breakout with no context witness behind it — a derived class "
-           "reads its §13.2.5 state off the string a real run handed the sink and has no other observation to "
-           "read one off, so an escape with no witness was built from a static shape of the expression");
-    /* AND THE ONE RUNG THE LADDER ITSELF CANNOT ORDER. `escaped` is read BEFORE `reached` — a search that got
-       out of its context has by definition arrived, so the higher rung answers first and the lower one is never
-       consulted for it. That makes the ordering an assumption rather than a reading, and it is exactly the
-       assumption solve.c's escape_reached asserts at the site that establishes it (`e->reached > 0`, "every
-       escape site runs downstream of breakout_arrived on the same string"). Held here too, so the two ends
-       cannot drift: a record reporting an executable position with no arrival behind it means the two counts
-       are being taken about different strings. */
-    DCHECK(st_attr != S_ESCAPED || s_num(ss, "innerHTML", ATTR_SRC, "reached") > 0,
-           "the @S attribute search reports its marker at an EXECUTABLE position while no breakout of it has "
-           "been recorded as ARRIVING — solve.c asserts the arrival at the escape site itself, so these are "
-           "two counts about two different strings");
-    DCHECK(!s_attr_wit || st_attr >= S_RAN,
-           "the @S attribute search's context probe reached the sink while the scheduler reports it has never "
-           "given the search a turn — a witness is produced by one of this search's own candidate flows, so "
-           "`turns` is counting something other than the flows that do this search's work, and `turns:0` would "
-           "be read as a WFQ starvation for a search that has run the whole document");
+    /* AND THE LADDER IS MONOTONE, WHICH IS WHAT STOPS A DEAD STATE BEING REACHED IN SILENCE — HELD FOR EVERY
+       DERIVED SEARCH AND NOT FOR THE ONE THAT HAPPENED TO HAVE THE ROWS. The four implications live in
+       S_LADDER_MONOTONE, which states them once and is EXPANDED at each site so the crash names the search;
+       what belongs here is that the set is the same six searches whose middle rungs are read above, so a
+       search cannot gain a row without gaining the invariants that keep the row honest, and the URL search is
+       absent from both for the one reason (it derives nothing, so there is no witness for any of these to be
+       about). */
+    S_LADDER_MONOTONE(ss, "eval",      "{state}.code",    st_eval,  s_eval_wit,  s_eval_built);
+    S_LADDER_MONOTONE(ss, "eval",      "{state}.note",    st_evalc, s_evalc_wit, s_evalc_built);
+    S_LADDER_MONOTONE(ss, "innerHTML", "{state}.html",    st_html,  s_html_wit,  s_html_built);
+    S_LADDER_MONOTONE(ss, "eval",      LOCATION_HASH_SRC, st_loc,   s_loc_wit,   s_loc_built);
+    S_LADDER_MONOTONE(ss, "innerHTML", LOCATION_HASH_SRC, st_lpark, s_park_wit,  s_park_built);
+    S_LADDER_MONOTONE(ss, "innerHTML", ATTR_SRC,          st_attr,  s_attr_wit,  s_attr_built);
     /* AND THE TWO HALVES OF THE ONE SOURCE CANNOT BOTH BE THE SAME VERDICT, which is what makes this pair a
        measurement of the DERIVATION rather than of the transform. Both writes are fed from `location.hash`
        and both are markup sinks; the only thing that differs is the §13.2.5 state the bytes land in and
@@ -7523,12 +7748,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int getter_url = strstr(js, "\"url\":\"/api/getfork\"") != NULL;
     /* Rung 2: the getter returned a value the run DETERMINED. A 0 here with rung 1 at 1 says the ternary
        propagated its operand instead of forking — the value is a shape, and no count of it is about the
-       clone. */
-    int getter_concrete = (param_value_has(js, "/api/getfork", "v", "gxADMIN") ||
-                           param_value_has(js, "/api/getfork", "v", "gxPUBLIC"));
+       clone.
+       AND THE TERM IS WHOLE-VALUE EQUALITY, BECAUSE THAT IS THE ONLY WAY THIS RUNG STATES ITS OWN CLAIM. The
+       failure it exists to report is "the value is a SHAPE", and a shape is composed OVER its operands, so a
+       containment test is satisfied by exactly the thing the rung is supposed to refuse. `?v=' + _gx.x` puts
+       the accessor's whole answer in the param, so `gxADMIN` is a value or it is not. */
+    int getter_concrete = (param_value_is(js, "/api/getfork", "v", "gxADMIN") ||
+                           param_value_is(js, "/api/getfork", "v", "gxPUBLIC"));
     /* Rung 3: BOTH arms reached the sink, which is the claim (2b) is in the document to make. */
-    int getter_fork = (param_value_has(js, "/api/getfork", "v", "gxADMIN") &&
-                       param_value_has(js, "/api/getfork", "v", "gxPUBLIC"));
+    int getter_fork = (param_value_is(js, "/api/getfork", "v", "gxADMIN") &&
+                       param_value_is(js, "/api/getfork", "v", "gxPUBLIC"));
     /* Rung 4: and exactly two — a third value is a flow that got there some way this fixture does not
        describe, which is a finding rather than a stronger pass. */
     int getter_arms = (param_value_count(js, "/api/getfork", "v") == 2);
@@ -7536,9 +7765,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        source in the same frame with no accessor in the way: `base_fork` at 1 while `getter_fork` is 0 isolates
        the difference to the accessor, and `base_fork` at 0 says `cfg.admin` is not two-armed at this point in
        the document at all — in which case (2b) asserts something no run can satisfy and the fixture is what
-       needs fixing. Without this row those two are one number, and the wrong one gets worked on. */
-    int base_fork = (param_value_has(js, "/api/getbase", "v", "gbADMIN") &&
-                     param_value_has(js, "/api/getbase", "v", "gbPUBLIC"));
+       needs fixing. Without this row those two are one number, and the wrong one gets worked on. A CONTROL
+       ASKS THE SAME QUESTION AS THE THING IT CONTROLS, so this is whole-value equality for rung 3's reason:
+       a control that could be satisfied by a shape while the claim could not is a control that answers a
+       different question and cannot isolate anything. */
+    int base_fork = (param_value_is(js, "/api/getbase", "v", "gbADMIN") &&
+                     param_value_is(js, "/api/getbase", "v", "gbPUBLIC"));
 
     /* THE CONSTRUCT-TIME THROW HAPPENED. Without this row a green `con_shape` below is also what a statement
        that never threw produces, which is the failure mode of asserting only the consequence. */
@@ -7614,23 +7846,27 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "td-plain", td_plain, "Symbol.asyncDispose", SESS_EXPLORE },
         { "td-accessor", td_acc, "Object.defineProperty(_tdT", SESS_EXPLORE },
         { "td-preverr", td_prev, "tdboom", SESS_EXPLORE },
-        { "async", async_tt, "/api/then", SESS_EXPLORE },
-        { "await", await_tt, "/api/await", SESS_EXPLORE },
-        { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE },
+        { "async", async_tt, "/api/then", SESS_EXPLORE, async_why },
+        { "await", await_tt, "/api/await", SESS_EXPLORE, await_why },
+        { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE, asynccall_why },
         { "throw", async_throw, "/api/caught", SESS_EXPLORE },
         { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE },
-        { "orphan", orphan_driven, "orphanNeverCalled", SESS_EXPLORE },
-        { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE },
-        { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE },
-        { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE },
-        { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE },
-        { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE },
-        { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE },
+        /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
+           where it is composed above. Each row still names its own endpoint; what the shared clause adds is
+           which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can
+           reach because the answer is not in the document at all. */
+        { "orphan", orphan_driven, "orphanNeverCalled", SESS_EXPLORE, orphan_why },
+        { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE, orphan_why },
+        { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE, orphan_why },
+        { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE, orphan_why },
+        { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
+        { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
+        { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
-        { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE },
+        { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
         { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
         { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE },
         { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE },
@@ -7640,9 +7876,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "hdr-record", hdrrec, "/api/hdrrec", SESS_EXPLORE },
         { "mp-escape", mpesc, "/api/mpesc", SESS_EXPLORE },
         { "pending", pending_await, "/api/lazy", SESS_EXPLORE },
-        { "promise-state", promise_state, "/api/shared", SESS_EXPLORE },
-        { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE },
-        { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE },
+        { "promise-state", promise_state, "/api/shared", SESS_EXPLORE, promise_state_why },
+        { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE, delete_iso_why },
+        { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE, global_delete_why },
         { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE, floc_iso_why },
         { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE, uafork_why },
         { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE, touchfork_why },
@@ -7706,7 +7942,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE, gapplyfork_why },
         { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE, grefapplyfork_why },
         { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE },
-        { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE },
+        { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE, hostreqfork_why },
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE },
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE },
@@ -7746,21 +7982,40 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-park-nodeliver", s_nodeliver, "location.hash", SESS_EXPLORE },
         { "s-attr", s_attr, "location.hash", SESS_EXPLORE },
         { "s-attr-nodeliver", s_attrd, "location.hash", SESS_EXPLORE },
-        /* THE STAGES, so a 0 above names one. Each row carries its parent's key, so selection is unchanged. */
+        /* THE STAGES, so a 0 above names one. Each row carries its parent's key, so selection is unchanged.
+           AND THE FOUR DERIVED LADDERS ARE THE SEVEN-RUNG ONE, NOT A THREE-RUNG PREFIX OF IT. `-seen`/`-ran`/
+           `-atsink` alone leaves `-atsink=0` standing for four states — never scheduled, scheduled and never
+           got to the sink, got there and built no escape, built one that never arrived — of which `-ran`
+           splits off only the first. The two the producer emits and nothing read are `-witnessed` (the CONTEXT
+           PROBE reached the sink: `witnessed`) and `-derived` (an escape was constructed from what it saw:
+           `survivedBy` length past `probes`), and they are in the order the search climbs them, between the
+           scheduling rung and the arrival rung, because that is where the two missing facts sit.
+           THE URL LADDER STAYS THREE RUNGS AND THAT IS A STATEMENT RATHER THAN AN OMISSION: SINK_URL declares
+           SINK_DERIVE_NONE, its first seeded candidate is already a breakout, and its record carries no
+           `witnessed` at all — so it climbs from `-ran` straight to `-atsink` with nothing in between, and
+           that is exactly why it is the one search of the five that arrives. */
         { "s-eval-seen", st_eval >= S_SEEN, "state.code", SESS_EXPLORE },
         { "s-eval-ran", st_eval >= S_RAN, "state.code", SESS_EXPLORE },
+        { "s-eval-witnessed", s_eval_wit, "state.code", SESS_EXPLORE },
+        { "s-eval-derived", s_eval_built, "state.code", SESS_EXPLORE },
         { "s-eval-atsink", st_eval >= S_ARRIVED, "state.code", SESS_EXPLORE },
         { "s-evalc-seen", st_evalc >= S_SEEN, "state.note", SESS_EXPLORE },
         { "s-evalc-ran", st_evalc >= S_RAN, "state.note", SESS_EXPLORE },
+        { "s-evalc-witnessed", s_evalc_wit, "state.note", SESS_EXPLORE },
+        { "s-evalc-derived", s_evalc_built, "state.note", SESS_EXPLORE },
         { "s-evalc-atsink", st_evalc >= S_ARRIVED, "state.note", SESS_EXPLORE },
         { "s-html-seen", st_html >= S_SEEN, "state.html", SESS_EXPLORE },
         { "s-html-ran", st_html >= S_RAN, "state.html", SESS_EXPLORE },
+        { "s-html-witnessed", s_html_wit, "state.html", SESS_EXPLORE },
+        { "s-html-derived", s_html_built, "state.html", SESS_EXPLORE },
         { "s-html-atsink", st_html >= S_ARRIVED, "state.html", SESS_EXPLORE },
         { "s-url-seen", st_url >= S_SEEN, "state.next", SESS_EXPLORE },
         { "s-url-ran", st_url >= S_RAN, "state.next", SESS_EXPLORE },
         { "s-url-atsink", st_url >= S_ARRIVED, "state.next", SESS_EXPLORE },
         { "s-loc-seen", st_loc >= S_SEEN, "location.hash", SESS_EXPLORE },
         { "s-loc-ran", st_loc >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-loc-witnessed", s_loc_wit, "location.hash", SESS_EXPLORE },
+        { "s-loc-derived", s_loc_built, "location.hash", SESS_EXPLORE },
         { "s-loc-atsink", st_loc >= S_ARRIVED, "location.hash", SESS_EXPLORE },
         /* AND THE NEGATIVE HALF'S MISSING PREMISE. `s-park` asserts the markup sink fed from `location.hash`
            produces NO PoC and is still REPORTED — but "the sink was reached and the search genuinely failed"
@@ -7776,6 +8031,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            probes the WFQ runs first. What replaces it as the statement of a genuine failure is
            `s-park-nodeliver`, which is the observation itself. */
         { "s-park-ran", st_lpark >= S_RAN, "location.hash", SESS_EXPLORE },
+        /* …AND THE REST OF THAT PREMISE, WHICH `-ran` ALONE DOES NOT MAKE. `s-park` says this search emits no
+           PoC and is still reported; `s-park-ran` says its candidates executed. Neither says the sink was ever
+           SEEN by one of them, and until it has been, "the fragment percent-encode set defeated the derivation"
+           is a claim about a search that may simply not have got there — the false negative this half exists to
+           catch, arriving one rung higher than the detection question it already guards. `-witnessed` is the
+           observation that closes it: the context probe reached the write and §13.2.5.1's state was read off
+           the string a real run handed it.
+           `-nobuild` IS THE NEGATIVE ITSELF, AT THE RUNG WHERE IT IS DECIDED. §13.2.5.1 "Data state" is left
+           only through `<`, the fragment set holds `<`, and the delivery probe OBSERVES that it does not reach
+           the write — so the derivation must construct NOTHING, and `survivedBy` staying level with `probes` is
+           that statement in the producer's own numbers. It sits below `s-park` (no PoC) and below
+           `s-park-noescape` (no executable position) because a build is what would have to happen first: a
+           spelling constructed out of the data state would show up here before it could ever arrive, escape or
+           fire, which makes this the earliest rung at which a regressed transform is visible. */
+        { "s-park-witnessed", s_park_wit, "location.hash", SESS_EXPLORE },
+        { "s-park-nobuild", !s_park_built, "location.hash", SESS_EXPLORE },
         /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one — and now names ONE. The three
            rows that stood here read `seen`, `ran` and `atsink`, and the middle one was computed from `tried`,
            which is raised where a candidate FLOW IS CREATED: it said 1 for a search whose flows the scheduler
@@ -8005,6 +8276,26 @@ static int fixture_have_answers(void) {
         printf("@SCENSUS {\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
                "\"_sinkSuppressed\":%ld}\n",
                concolic_source_reads(), reached, tainted, suppressed);
+    }
+    /* …AND THE SAME FOR THE OTHER SURFACE, FOR THE SAME REASON AND WITH THE SAME ARGUMENT. §What-the-tool-
+       produces makes orphan-invoke the headline ("a sniffer shows what FIRED; this shows what the bundle CAN do
+       but didn't"), and solver/engine.h's census is the pair that says whether this engine ever got to it:
+       `asked` is how many times a flow ran out of work and put the question, `driven` is how many bodies it
+       took. They reached ONLY `result_json`, which this host prints after run_scheduler returns — so on exactly
+       the runs where the orphan half is stuck, the pair is computed at every sample of this hook and freed
+       unread, which is the sentence the @S block above already makes about its own four numbers.
+       A TIME SERIES AND NOT A SNAPSHOT, which is the fact a reader needs and the row `why` cannot give: `asked`
+       rising while `driven` stays 0 is the TAKE failing, `asked` flat at 0 while `live` climbs is the SCHEDULE
+       never reaching the question, and both rising is the mechanism working. Those take opposite work and a
+       single final number could not tell them apart even on a run that reached one.
+       IT SPELLS THEM THE WAY THE DOCUMENT DOES for the reason stated directly above — one namespace, one
+       spelling — so a reader who learns `_orphansDriven`/`_orphansAsked` off the result document, off
+       bridge.js or off solvergate.mjs reads the same two names here. */
+    {
+        long driven = 0, asked = 0;
+
+        engine_orphan_census(&driven, &asked);
+        printf("@OCENSUS {\"_orphansDriven\":%ld,\"_orphansAsked\":%ld}\n", driven, asked);
     }
     free(js);
     return ok;
