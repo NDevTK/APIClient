@@ -996,6 +996,32 @@ void idl_iface_brand(JSClassID iface);
    idl_iface_brand and idl_optional_from do. */
 void idl_iface_narrow(bool (*is)(JSValueConst v));
 
+/* DECLARE THE INTERFACE THIS MEMBER'S *RECEIVER* MUST IMPLEMENT — Web IDL §3.7 Interfaces' implementation-check
+ * an object, step 3: "If object does not implement interface, then throw a TypeError."
+ *
+ * THE TWO BRANDS ARE DIFFERENT QUESTIONS AND THIS IS THE OTHER ONE. idl_iface_brand above states what an
+ * ARGUMENT position admits; this states what `this` must be. They are declared side by side because they read
+ * alike and they are answered at opposite ends of the member: §3.7.7 Operations' create an operation function
+ * asks the receiver's in its try-list's step 2.1.2.3, BEFORE step 2.1.4 computes the effective overload set and
+ * therefore before §3.6 Overload resolution algorithm converts one argument, while an argument's own brand is
+ * part of that conversion.
+ *
+ * WHICH IS WHY THE RECEIVER'S BRAND CANNOT LIVE IN A BODY. A member's body runs after every conversion, so a
+ * brand test written there lets `Iface.prototype.member.call({}, { toString() { … } })` run the page's
+ * `toString` and only then throw — where a browser throws with nothing of the page's code having run. The order
+ * is observable, so it is the spec's and not a convenience.
+ *
+ * THE PREDICATE IS THE WHOLE OF THE TEST, unlike idl_iface_brand's class-plus-narrowing pair, and the reason is
+ * §3.7.6 Attributes / §3.7.7 Operations' word "implement": a member declared on Element is reached on an
+ * HTMLDivElement, whose wrapper carries a DIFFERENT class id, so a class comparison answers the wrong question
+ * for every interface anything inherits from. The component that owns the interface already states the right
+ * one (its `…_is` predicate), so this names that rather than restating it.
+ *
+ * `iface` is the interface's IDL identifier, used only to say which interface the TypeError is about; it must
+ * outlive the declaration, so every caller passes a static. Set after the declaration, naming the member the
+ * LAST one made, exactly as idl_iface_brand and idl_optional_from do and for the same reason. */
+void idl_this_iface(bool (*is)(JSValueConst v), const char *iface);
+
 /* DECLARE THE VALUES AN IDL_ENUM POSITION ADMITS — §3.2.18's enumeration, whose value list IS the type. A
    NULL-terminated array of the identifiers the IDL lists, which the conversion checks the string ToString
    produced against and throws a TypeError for anything else.

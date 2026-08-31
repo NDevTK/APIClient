@@ -357,6 +357,17 @@ typedef struct {
        call site instead would be a per-member `if` over a receiver, which is exactly what HTML §7.2.1's own
        failure mode is — see window_proxy.c's §7.2.1.1 Integration with IDL. */
     uint8_t    sec_kind;
+    /* WEB IDL §3.7 Interfaces' implementation-check an object, its `interface` INPUT — "If object does not
+       implement interface, then throw a TypeError". Stated at the DECLARATION beside the argument types,
+       because it is the same kind of fact they are: what this member accepts. The predicate is the component's
+       own (`idb_object_store_is`, `element_of_value`), never a class comparison — see idl_this_iface for why a
+       class cannot answer "implements" for an interface anything inherits from.
+       NULL is the member that has not stated one; see idl_implementation_check for what that means and what
+       remains to be converted. */
+    bool     (*this_is)(JSValueConst v);
+    /* The interface's IDL identifier, for the TypeError §3.7 step 3 throws. Set with the predicate and never
+       without it — a name with no test to go with it is a message about a check nobody makes. */
+    const char *this_iface;
 } IdlMember;
 
 /* The four values of that field. IDL_SEC_NONE is FIRST so a zeroed pool entry is "not one of §3.5's three",
@@ -2246,6 +2257,103 @@ static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *
     return 0;
 }
 
+/* WEB IDL §3.7 Interfaces' `implementation-check an object`, WHICH IS THE STANDARD'S OWN NAME FOR THIS AND THE
+ * WHOLE REASON THE TWO HALVES BELOW ARE ONE FUNCTION. §3.7 defines it as four steps —
+ *
+ *   "To implementation-check an object jsValue against the interface interface, with the identifier name and
+ *    the type type: 1. Let object to ? ToObject(jsValue). 2. If object is a platform object, then perform a
+ *    security check, passing: the platform object object, the identifier name, the type type. 3. If object does
+ *    not implement interface, then throw a TypeError. 4. Return object."
+ *
+ * — and adds, in its own note, "This algo is not yet consistently used everywhere." That note is about the
+ * SPEC's own sections: §3.7.7 Operations' create an operation function and §3.7.6 Attributes' create an
+ * attribute getter / create an attribute setter each still spell the same three steps out inline. They are the
+ * same three steps, in the same order, so this engine asks them once.
+ *
+ * THE ORDER IS THE POINT AND IT IS OBSERVABLE. In §3.7.7's try-list the security check is step 2.1.2.2 and the
+ * brand TypeError is 2.1.2.3, and only afterwards does 2.1.4 compute the effective overload set that 2.1.5 hands
+ * to §3.6 Overload resolution algorithm — so BOTH refusals precede §3.6's arity TypeError and every argument
+ * conversion. A receiver brand written in a member's BODY runs after all of that, which is what
+ * `Iface.prototype.member.call({}, {toString(){ … }})` reads: the page's `toString` runs, and only then does the
+ * TypeError arrive. A browser runs none of it. §3.7.6's two algorithms put the same pair at the same place —
+ * the getter's try-list at 2.1.2.2 / 2.1.2.3 and the setter at step 4.5.2 / 4.5.4, whose 4.5.3 computes
+ * `validThis` — and the setter's `V` is only READ at step 4.2, never converted, until step 4.6.
+ *
+ * (§3.7.7 step 2 and §3.7.6's attribute-getter step 1 each hold TWO sibling lists — the try-list, and the "And
+ * then, if an exception E was thrown" list that both restart at .1 — so the sub-numbers above are the try-list's;
+ * the setter's step 4 holds exactly one list, so 4.5.2 is unambiguous.)
+ *
+ * STEP 1's ToObject IS PERFORMED BY NOT ALLOCATING, and that is a claim about what it can be observed to do
+ * rather than a shortcut. ToObject runs no user code — it has no [Symbol.toPrimitive] arm and no getter — so
+ * for a non-object receiver its only effect here is to hand steps 2 and 3 a fresh wrapper, which is not a
+ * platform object (step 2 returns) and implements no interface (step 3 throws). Testing the primitive directly
+ * reaches the identical TypeError with no wrapper minted. It cannot throw either, because §3.7.7 step 2.1.2.1
+ * and §3.7.6's 1.1.2.1 / 4.5.1 have already replaced a null or undefined `this` before ToObject could see one —
+ * see the second named residual below for what this engine does and does not do about that replacement.
+ *
+ * Returns 0 when the member may proceed, or -1 with §3.5's "SecurityError" or §3.7's TypeError live. */
+static int idl_implementation_check(JSContext *ctx, const IdlMember *m, JSValueConst js_value)
+{
+    /* §3.7 STEP 2, whose `type` is §3.5 Security's third input — "method", "getter" or "setter" — stated at the
+     * member's MINT and not asked at the call: `idl_step_function` mints an operation, `idl_mint_accessor` an
+     * attribute's getter or setter, and `idl_step_constructor` something §3.7.7's create an operation function
+     * never runs at all, which is why §3.5 has no fourth value.
+     *
+     * IT IS ASKED HERE BECAUSE HERE IS WHERE EVERY DECLARED MEMBER CONVERGES, and that is the whole mechanism.
+     * HTML §7.2.1's own failure mode is SILENCE: a check written per member is a check the next member added
+     * does not have, and nothing says so. There is exactly one opening block every declared member passes
+     * through, so the member that forgets cannot exist, and the only thing a member states is WHAT IT IS. */
+    if (m->sec_kind != IDL_SEC_NONE) {
+        static const WindowProxySecurityType SEC[] = {
+            WP_SEC_METHOD,   /* IDL_SEC_METHOD */
+            WP_SEC_GETTER,   /* IDL_SEC_GETTER */
+            WP_SEC_SETTER,   /* IDL_SEC_SETTER */
+        };
+        DCHECK(m->sec_kind - 1 < (int)(sizeof SEC / sizeof SEC[0]),
+               "a pool entry carries a Web IDL §3.5 Security type this machine has no row for — the four "
+               "values are declared beside IdlMember and every one of them is set at a mint");
+        if (window_proxy_security_check(ctx, js_value, m->name, SEC[m->sec_kind - 1]) < 0) return -1;
+    }
+    /* §3.7 STEP 3 — "If object does not implement interface, then throw a TypeError."
+     *
+     * THE MEMBER STATES THE INTERFACE, NEVER THE REMEDY, exactly as it states its argument types: what it
+     * accepts as `this` is a fact about the DECLARATION, and the predicate that answers it belongs to whichever
+     * component owns the interface (see idl_this_iface).
+     *
+     * NAMED RESIDUAL — THE MEMBERS THAT HAVE NOT STATED ONE YET. WHAT IS NOT COVERED: a member whose
+     * declaration makes no idl_this_iface call is not brand-checked here; its own body still performs the
+     * equivalent test, which is where every such test was before this machine existed and is correct except in
+     * its ORDER — it runs after §3.6's conversions rather than before them. WHAT THE NEXT DIFF BUILDS: the next
+     * component's declarations call idl_this_iface and its bodies' own receiver tests are DELETED in that same
+     * diff, exactly as core/indexeddb/idb_object_store.c's sixteen declarations gained the call and the eleven
+     * `os_brand` call sites its pool members reached were deleted.
+     * HOW ITS ABSENCE SHOWS: for an unconverted member,
+     * `Iface.prototype.member.call({}, {toString(){ window.ran = true; return "x"; }})` leaves `window.ran`
+     * true and throws afterwards, where a browser throws with `window.ran` still undefined; and its arity
+     * refusal answers "N arguments required" where §3.7.7's try-list reaches 2.1.2.3 before 2.1.4 and a browser
+     * says the receiver is wrong. */
+    if (m->this_is) {
+        /* SECOND NAMED RESIDUAL — §3.7.7's step 2.1.2.1 (and §3.7.6's 1.1.2.1 and 4.5.1), "Let jsValue be the
+           this value, if it is not null or undefined, or realm's global object otherwise". WHAT IS NOT COVERED:
+           this engine does not substitute, so a null or undefined receiver is tested as itself. That is the
+           SAME ANSWER for every interface that is not the realm's global — `Iface.prototype.m.call(undefined)`
+           throws §3.7 step 3's TypeError either way, and step 2 returns either way because neither `undefined`
+           nor this realm's own Window is refused — which is why the code is narrower rather than wrong. WHAT
+           THE NEXT DIFF BUILDS: the substitution written onto the state's receiver, before this is called, so
+           the substituted object is also §3.7.7 step 2.1.2.4's `idlObject` — the receiver the member's own BODY
+           is handed — rather than a value only this predicate sees. HOW ITS ABSENCE SHOWS: the first [Global]
+           interface member declared with idl_this_iface makes `const f = window.<member>; f()` throw
+           "does not implement interface Window" where every browser runs it. */
+        if (!m->this_is(js_value)) {
+            JS_ThrowTypeError(ctx,
+                              "'%s' called on an object that does not implement interface %s",
+                              m->name ? m->name : "(unnamed member)", m->this_iface);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSIdlArgsState *s = st;
@@ -2310,23 +2418,17 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         DCHECK(!g_tree || !g_tree->recorded(),
                "a DOM mutation recorded tree steps outside any declared member — declare that member so it "
                "converges on this machine, which is the only thing that drains them");
-        /* WEB IDL §3.7.7 Operations' create an operation function, THE TRY-LIST'S SECURITY CHECK, and §3.7.6
-         * Attributes' identical step in create an attribute getter and create an attribute setter. The
-         * sentence is one line in all three: "If jsValue is a platform object, then perform a security check,
-         * passing jsValue, id, and "method"" — with "getter" and "setter" in the other two.
+        /* WEB IDL §3.7 Interfaces' IMPLEMENTATION-CHECK, WHICH IS THE ONE ALGORITHM §3.7.7 Operations' and
+         * §3.7.6 Attributes' opening steps both spell out — the security check and the receiver's brand, in
+         * that order. It is asked HERE because here is where every declared member converges: see
+         * idl_implementation_check for the algorithm, the order, and the two residuals.
          *
-         * IT IS ASKED HERE BECAUSE HERE IS WHERE EVERY DECLARED MEMBER CONVERGES, and that is the whole
-         * mechanism. §7.2.1's own failure mode is SILENCE: a check written per member is a check the next
-         * member added does not have, and nothing says so. There is exactly one opening block every step
-         * member passes through — this one — so the member that forgets cannot exist, and the only thing a
-         * member states is WHAT IT IS (`sec_kind`, at its mint) rather than what to do about it.
-         *
-         * AND IT IS BEFORE §3.6 Overload resolution algorithm's ARITY TypeError, WHICH IS OBSERVABLE.
-         * §3.7.7's try-list performs the check at its step 2's sub-list and only reaches "compute the
-         * effective overload set" afterwards — so
-         * `setTimeout.call(crossOriginFrame)` with NO arguments is a "SecurityError" and not
-         * "1 argument required, but only 0 present". A page reads the difference: the first says "you may not
-         * look at that window", the second says "you called it wrong", and only one of them is true.
+         * AND IT IS BEFORE §3.6 Overload resolution algorithm's ARITY TypeError AND BEFORE EVERY CONVERSION,
+         * WHICH IS OBSERVABLE TWICE OVER. §3.7.7's try-list performs both refusals at its step 2.1.2 and only
+         * reaches "compute the effective overload set" at 2.1.4 — so `setTimeout.call(crossOriginFrame)` with
+         * NO arguments is a "SecurityError" and not "1 argument required, but only 0 present", and
+         * `store.put.call({}, v, {valueOf(){…}})` throws before the page's `valueOf` runs rather than after. A
+         * page reads both differences.
          *
          * A PROMISE-RETURNING MEMBER REJECTS RATHER THAN THROWS, and that needs no line here: the `Try` this
          * abrupt returns into is closed by js_idl_args_step above, whose last two steps turn any abrupt from a
@@ -2336,30 +2438,23 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
          *
          * THE RESIDUAL IS THE PLAIN-C GETTER, AND IT IS NAMED HERE BECAUSE THIS IS THE SITE IT WOULD REACH.
          * idl_install_accessor takes an `IdlGetter` — a raw JS_CFUNC_getter_magic with NO pool entry — so an
-         * attribute whose read runs none of the page's code never arrives at this machine and its "getter"
-         * check is not performed. The §7.2.2 The Window object attributes core/frame/window.c installs are
-         * every one of them that shape (`name`, `opener`, `status`, `closed`, `frameElement`,
-         * `isSecureContext` — grep idl_install_accessor there), so
-         * `Object.getOwnPropertyDescriptor(window, "status").get.call(crossOriginFrame)` answers instead of
-         * throwing a "SecurityError". WHAT THE NEXT DIFF BUILDS: route idl_define_accessor's getter through a
-         * pool entry the way its setter already goes through idl_mint_accessor, so the getter has a member to
-         * carry IDL_SEC_GETTER and reaches this block. HOW ITS ABSENCE SHOWS: WPT
+         * attribute whose read runs none of the page's code never arrives at this machine, and NEITHER of
+         * §3.7's two steps is performed for it: not §3.5's "getter" security check and not step 3's brand. The
+         * §7.2.2 The Window object attributes core/frame/window.c installs are every one of them that shape
+         * (`name`, `opener`, `status`, `closed`, `frameElement`, `isSecureContext` — grep idl_install_accessor
+         * there), and so are the five IndexedDB §4.5 The IDBObjectStore interface attributes whose bodies still
+         * call `os_brand` after its pool members' eleven calls were deleted. WHAT THE NEXT DIFF BUILDS: a pool entry
+         * for a plain getter — `idl_mint_accessor` takes a STEP id and asks the pool for it, so there is no
+         * entry to route an `IdlGetter` through and one has to be minted for it, at idl_define_accessor, the
+         * one place every plain getter is created. HOW ITS ABSENCE SHOWS: WPT
          * html/browsers/origin/cross-origin-objects/cross-origin-objects.html's "Cross-origin access to
          * methods and getters/setters" fails every `desc.get.bind(otherObj)` assertion for a name outside
-         * windowAllowlists.getters while passing every method assertion beside it. */
-        if (m->sec_kind != IDL_SEC_NONE) {
-            static const WindowProxySecurityType SEC[] = {
-                WP_SEC_METHOD,   /* IDL_SEC_METHOD */
-                WP_SEC_GETTER,   /* IDL_SEC_GETTER */
-                WP_SEC_SETTER,   /* IDL_SEC_SETTER */
-            };
-            DCHECK(m->sec_kind - 1 < (int)(sizeof SEC / sizeof SEC[0]),
-                   "a pool entry carries a Web IDL §3.5 Security type this machine has no row for — the four "
-                   "values are declared beside IdlMember and every one of them is set at a mint");
-            if (window_proxy_security_check(ctx, s->hdr.this_val, m->name, SEC[m->sec_kind - 1]) < 0) {
-                JS_FreeValue(ctx, cb_result);
-                return JS_STEP_ABRUPT;
-            }
+         * windowAllowlists.getters while passing every method assertion beside it; and
+         * `Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "name").get.call({})` throws from the
+         * body's own test rather than from this one. */
+        if (idl_implementation_check(ctx, m, s->hdr.this_val) < 0) {
+            JS_FreeValue(ctx, cb_result);
+            return JS_STEP_ABRUPT;
         }
         /* A NON-VARIADIC member's arguments ARE its declared ones: a position the IDL does not list is not
            part of the member, so there is nothing past `nargs` to convert, to store, or to hand the body. A
@@ -3627,6 +3722,10 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_member(idx)->nsteps = 0;
     idl_member(idx)->variadic = false;
     idl_member(idx)->iface = 0;
+    /* NO RECEIVER INTERFACE STATED — see idl_implementation_check. Cleared here and never anywhere else, so a
+       pool slot reused across a runtime cannot inherit the previous member's brand. */
+    idl_member(idx)->this_is = NULL;
+    idl_member(idx)->this_iface = NULL;
     idl_member(idx)->enum_values = NULL;
     /* THE STATE CARRIES THE MEMBER'S OWN ARGUMENT VECTOR AND NESTED-CONVERSION FRAMES, which is why its size is
        per-member and not a constant: a getter pays for neither, a fifteen-argument legacy initializer gets
@@ -3913,6 +4012,30 @@ void idl_iface_narrow(bool (*is)(JSValueConst v))
            "brand has to be there to narrow");
     DCHECK(is != NULL, "an interface narrowing named no predicate");
     idl_member(g_n - 1)->iface_narrow = is;
+}
+
+/* WEB IDL §3.7 Interfaces' implementation-check an object, its `interface` INPUT — see idl_args.h for why this
+   is a different question from idl_iface_brand's and why it is a predicate rather than a class. */
+void idl_this_iface(bool (*is)(JSValueConst v), const char *iface)
+{
+    DCHECK(g_n > 0, "a receiver interface was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    DCHECK(is != NULL,
+           "a receiver interface named no predicate — Web IDL §3.7 Interfaces' implementation-check step 3 is "
+           "\"if object does not implement interface\", and the component that owns the interface is the only "
+           "thing that can answer it");
+    DCHECK(iface != NULL && *iface,
+           "a receiver interface named no identifier — the TypeError §3.7 Interfaces' implementation-check "
+           "step 3 throws says which interface the receiver failed to implement, and a member that cannot say "
+           "sends its reader to grep for the predicate instead");
+    /* ONE STATEMENT PER MEMBER. A member is DECLARED once (idl_method_id_all) however many realms mint it, so a
+       second declaration here is two answers to §3.7's one `interface` input — the shape idl_mint_step already
+       refuses for §3.5's `type`, asked at the other end of the same algorithm. */
+    DCHECK(idl_member(g_n - 1)->this_is == NULL,
+           "one member declared its receiver interface twice — Web IDL §3.7 Interfaces' implementation-check "
+           "takes ONE `interface`, so a second is a second answer and the first one silently wins");
+    idl_member(g_n - 1)->this_is = is;
+    idl_member(g_n - 1)->this_iface = iface;
 }
 
 /* WEB IDL §3.3.10 [PutForwards]'s FORWARDING HALF, WHICH IS A BINDING RULE AND NOT A COMPONENT'S ALGORITHM.
@@ -4871,6 +4994,18 @@ JSValue idl_step_constructor(JSContext *ctx, const char *name, int stepid)
        object's construct steps are a different algorithm with no such step. The receiver slot of a
        JS_CFUNC_step_ctor call carries NEW.TARGET rather than a `this` value, so asking §7.2.1.1 Integration
        with IDL about it would be asking about the wrong object entirely. */
+    /* AND §3.7's BRAND HAS NO PLACE HERE FOR THE SAME REASON, WHICH IS WHY IT IS ASSERTED AND NOT ASSUMED. Both
+       halves of implementation-check read the receiver slot, and for a constructor that slot is new.target — so
+       a declaration that stated a receiver interface would brand-check the CONSTRUCTOR the page reached the
+       member through, and `new Iface()` would throw for a receiver §3.7.1 Interface object's construct steps
+       never look at. The pool cannot see which mint a declaration will get, so the mint is where the pair is
+       checked. */
+    DCHECK(idl_member_of_step(stepid) < 0 ||
+           idl_member(idl_member_of_step(stepid))->this_is == NULL,
+           "a step CONSTRUCTOR declared a receiver interface with idl_this_iface — Web IDL §3.7.1 Interface "
+           "object's construct steps run no implementation-check, and the receiver slot of a "
+           "JS_CFUNC_step_ctor call carries new.target rather than a `this` value, so the brand would be "
+           "asked of the wrong object");
     return idl_mint_step(ctx, name, stepid, JS_CFUNC_step_ctor, IDL_SEC_NONE);
 }
 

@@ -129,6 +129,15 @@ bool idb_object_store_is(JSValueConst v)
     return g_os_class != 0 && JS_GetClassID(v) == g_os_class;
 }
 
+/* WEB IDL §3.7 Interfaces' implementation-check step 3 — "If object does not implement interface, then throw a
+   TypeError" — FOR THE FIVE MEMBERS OF THIS INTERFACE THAT DO NOT REACH THE ONE PLACE IT IS ASKED. Every
+   OPERATION and the `name` setter state `idl_this_iface(idb_object_store_is, "IDBObjectStore")` at their
+   declaration and are checked by core/idl_args.c's idl_implementation_check, before §3.6 Overload resolution
+   algorithm converts an argument; the eleven bodies those sixteen declarations reach no longer call this. What
+   is left is §4.5's five ATTRIBUTE
+   GETTERS, which idl_install_accessor mints as plain JS_CFUNC_getter_magic functions with no pool entry, so
+   nothing about them converges on that machine — the residual idl_args.c names at the site it would reach. When
+   a plain getter gains a pool entry, these five calls and this function go with them. */
 static bool os_brand(JSContext *ctx, JSValueConst this_val)
 {
     if (idb_object_store_is(this_val)) return true;
@@ -692,7 +701,6 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
         s->key = JS_UNDEFINED;
         s->key_path = JS_UNDEFINED;
         s->clone = JS_UNDEFINED;
-        if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         if (os_check(ctx, hdr->this_val, /*writes*/ true, &s->store, &s->tx) < 0)   /* STEPS 1-5 */
             return JS_STEP_ABRUPT;
         /* §2.2's key path is HELD until the in-line-key step below has walked it — "store uses in-line keys" is
@@ -899,7 +907,6 @@ static int js_os_delete(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         JS_FreeValue(ctx, cb_result);
         s->store = JS_UNDEFINED;
         s->tx = JS_UNDEFINED;
-        if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         if (os_check(ctx, hdr->this_val, /*writes*/ true, &s->store, &s->tx) < 0)   /* STEPS 1-5 */
             return JS_STEP_ABRUPT;
         return idb_key_range_walk_start(ctx, hdr, &s->rw, argv[0], /*null_disallowed*/ true,
@@ -942,7 +949,6 @@ static JSValue js_os_clear(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, op, req;
 
     (void)argc; (void)argv; (void)magic;
-    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
     if (os_check(ctx, this_val, /*writes*/ true, &store, &tx) < 0) return JS_EXCEPTION;
     data[OP_CLEAR_TX] = tx;
     data[OP_CLEAR_STORE] = store;
@@ -982,7 +988,6 @@ static int js_os_get(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
         JS_FreeValue(ctx, cb_result);
         s->store = JS_UNDEFINED;
         s->tx = JS_UNDEFINED;
-        if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         /* NEITHER of these writes, so the read-only refusal does not apply — §4.5 puts them under a different
            heading for exactly that reason ("the following methods throw a TransactionInactiveError ..."). */
         if (os_check(ctx, hdr->this_val, /*writes*/ false, &s->store, &s->tx) < 0)   /* STEPS 1-4 */
@@ -1075,7 +1080,6 @@ static int js_os_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         int r;
 
         JS_FreeValue(ctx, cb_result);
-        if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.3.6 [EnforceRange]'s refusal precedes
            §5.12 step 2's: `deletedStore.getAll(q, -1)` is a TypeError and not an "InvalidStateError". That is
            the DECLARATION's doing now (IDL_UNSIGNED_LONG_ENFORCE) rather than a call this body has to make in
@@ -1166,7 +1170,6 @@ static int js_os_count(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         JS_FreeValue(ctx, cb_result);
         s->store = JS_UNDEFINED;
         s->tx = JS_UNDEFINED;
-        if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         if (os_check(ctx, hdr->this_val, /*writes*/ false, &s->store, &s->tx) < 0)   /* STEPS 1-4 */
             return JS_STEP_ABRUPT;
         return idb_key_range_walk_start(ctx, hdr, &s->rw, argc > 0 ? argv[0] : JS_UNDEFINED,
@@ -1245,7 +1248,6 @@ static int js_os_open_cursor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         JS_FreeValue(ctx, cb_result);
         s->store = JS_UNDEFINED;
         s->tx = JS_UNDEFINED;
-        if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         /* Neither member writes, so the read-only refusal does not apply — §4.5 groups them with `get` and
            `count` for exactly that reason. */
         if (os_check(ctx, hdr->this_val, /*writes*/ false, &s->store, &s->tx) < 0)   /* STEPS 1-4 */
@@ -1403,7 +1405,6 @@ static JSValue js_os_set_name(JSContext *ctx, JSValueConst this_val, JSValueCons
     int same;
 
     (void)magic;
-    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
     store = os_get(ctx, this_val, OS_STORE);
     tx = os_get(ctx, this_val, OS_TRANSACTION);
     DCHECK(JS_IsObject(store) && idb_transaction_is(tx), "an object store handle carried no store or no "
@@ -1493,7 +1494,6 @@ static JSValue js_os_index(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     const char *name;
 
     (void)argc; (void)magic;
-    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
     store = os_get(ctx, this_val, OS_STORE);
     tx = os_get(ctx, this_val, OS_TRANSACTION);
     DCHECK(JS_IsObject(store) && idb_transaction_is(tx), "an object store handle carried no store or no "
@@ -1584,7 +1584,6 @@ static JSValue js_os_create_index(JSContext *ctx, JSValueConst this_val, int arg
     DCHECK(JS_IsObject(options), "§4.5's createIndex was handed no options dictionary — the IDL writes "
                                  "`optional IDBIndexParameters options = {}`, so the conversion builds one "
                                  "with every member at its default even for `createIndex(n, k)`");
-    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
     if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_EXCEPTION;      /* STEPS 1-5 */
     name = JS_ToCString(ctx, argv[0]);
     if (name == NULL) goto fail;
@@ -1656,7 +1655,6 @@ static JSValue js_os_delete_index(JSContext *ctx, JSValueConst this_val, int arg
     bool found;
 
     (void)argc; (void)magic;
-    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
     if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_EXCEPTION;      /* STEPS 1-5 */
     name = JS_ToCString(ctx, argv[0]);
     if (name == NULL) { JS_FreeValue(ctx, store); JS_FreeValue(ctx, tx); return JS_EXCEPTION; }
@@ -1798,52 +1796,82 @@ void idb_object_store_init(JSContext *ctx)
        declaration's MAGIC, which is also what the operation closure is minted with, and the body is written
        once. A declaration cannot be shared between the two members of a pair, because the magic IS the
        difference and it belongs to the declaration. */
+    /* AND WHAT EACH ONE ACCEPTS AS ITS RECEIVER — Web IDL §3.7 Interfaces' implementation-check an object, step
+       3's `interface`, stated at the declaration beside the argument types because it is the same kind of fact
+       they are. §3.7.7 Operations' create an operation function asks it in its try-list's step 2.1.2.3, before
+       step 2.1.4 computes the effective overload set, so it precedes §3.6 Overload resolution algorithm's arity
+       TypeError and every conversion this member declares: `store.createIndex.call({}, {toString(){…}}, "k")`
+       throws with none of the page's code having run, which is what a browser does and what a test written in
+       this body could not achieve — a body runs after the conversions.
+       IT IS ONE LINE PER MEMBER AND NOT ONE PER INTERFACE. A "every declaration from here on takes this
+       receiver" bracket would be sticky state that outlives this function, and a component that forgot to close
+       it would brand another interface's members with IDBObjectStore. */
     g_id_put = idl_method_id_step(ctx, PUT_ARGS, 2, NULL, 0, &PUT_STEP, OS_PUT);
     idl_optional_from(1);                        /* `optional any key` */
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_add = idl_method_id_step(ctx, PUT_ARGS, 2, NULL, 0, &PUT_STEP, OS_ADD);
     idl_optional_from(1);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_get = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &GET_STEP, OS_GET_VALUE);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_get_key = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &GET_STEP, OS_GET_KEY);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     /* ONE DECLARATION PER MEMBER over ONE body: §4.5 states the three as one algorithm differing in `kind`, so
        the kind is the declaration's MAGIC — the same shape `get`/`getKey` and `put`/`add` already have, and
        the same reason a declaration cannot be shared between them. */
     g_id_get_all = idl_method_id_step(ctx, GET_ALL_ARGS, 2, NULL, 0, &GET_ALL_STEP, IDB_GET_ALL_VALUE);
     idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_get_all_keys = idl_method_id_step(ctx, GET_ALL_ARGS, 2, NULL, 0, &GET_ALL_STEP, IDB_GET_ALL_KEY);
     idl_optional_from(0);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_get_all_records = idl_method_id_step(ctx, GET_ALL_RECORDS_ARGS, 1, IDB_GET_ALL_OPTIONS,
                                               (int)(sizeof IDB_GET_ALL_OPTIONS /
                                                     sizeof IDB_GET_ALL_OPTIONS[0]),
                                               &GET_ALL_STEP, IDB_GET_ALL_RECORD);
     idl_optional_from(0);                        /* `optional IDBGetAllOptions options = {}` */
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     /* §6.4 and §6.6 are two algorithms and not one with a flag, so neither takes a magic — unlike the two
        pairs above, whose magic IS the difference the standard states. */
     g_id_delete = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &DELETE_STEP, 0);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_clear = idl_method_id(ctx, NULL, 0, js_os_clear, 0);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_count = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &COUNT_STEP, 0);
     idl_optional_from(0);                        /* `count(optional any query)` */
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     /* ONE BODY, TWO DECLARATIONS: §4.5 states the pair as one step list differing in the key only flag, which
        IS the magic, so a declaration cannot be shared between them. */
     g_id_open_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &OPEN_CURSOR_STEP, OS_WITH_VALUE);
     idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
     idl_enum_values(IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");   /* §3.6 steps 15.4.1 and 16.1's `= "next"` */
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_open_key_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &OPEN_CURSOR_STEP, OS_KEY_ONLY);
     idl_optional_from(0);
     idl_enum_values(IDB_CURSOR_DIRECTIONS);
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     /* `IDBIndex index(DOMString name)`, `IDBIndex createIndex(DOMString name, (DOMString or
        sequence<DOMString>) keyPath, optional IDBIndexParameters options = {})` and
        `undefined deleteIndex(DOMString name)`. The union is NOT nullable here, unlike createObjectStore's
        `keyPath` — §2.6 gives every index a key path — and the dictionary's two members carry the IDL's own
        `= false`, so the body reads values that are there. */
     g_id_index = idl_method_id(ctx, INDEX_ARGS, 1, js_os_index, 0);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_create_index = idl_method_id_dict(ctx, CREATE_INDEX_ARGS, 3, INDEX_PARAMETERS,
                                            (int)(sizeof INDEX_PARAMETERS / sizeof INDEX_PARAMETERS[0]),
                                            js_os_create_index, 0);
     idl_optional_from(2);                        /* `optional IDBIndexParameters options = {}` */
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_delete_index = idl_method_id(ctx, INDEX_ARGS, 1, js_os_delete_index, 0);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
+    /* §3.7.6 Attributes' create an attribute setter puts the SAME pair at its step 4.5.2 and 4.5.4 — the
+       security check, then `validThis` and its TypeError — and its step 4.6 converts `V` only afterwards. So
+       `Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "name").set.call({}, {toString(){…}})` throws
+       before the page's `toString`, exactly as the operations above do. */
     g_setter_name = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ false, js_os_set_name, 0);
+    idl_this_iface(idb_object_store_is, "IDBObjectStore");
     /* §6.1's operation, which §4.5 step 12 mints one of per `put`/`add`. It is a step machine because §6.1
        step 5 drives §7.1 and therefore §7.4's array arm — see js_idb_store_operation. */
     g_store_op_stepid = JS_RegisterStepDef(rt, &js_idb_store_op_def);
