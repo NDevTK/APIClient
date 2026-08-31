@@ -1665,7 +1665,28 @@ function quantumDenomination(out) {
   return { ...rows[0], instances: rows.length };
 }
 /* THE SAME FACT AT EVERY OUTCOME, PASS INCLUDED, because the runs a reader compares are the ones that finished
-   — a caveat printed only on the failures is a caveat absent from precisely the comparison it is about. */
+   — a caveat printed only on the failures is a caveat absent from precisely the comparison it is about.
+   AND THE SAME INSTRUCTION AT EVERY HOST, WHICH IS THAT SENTENCE APPLIED ONE LEVEL IN AND IS THE CORRECTION
+   THIS BLOCK CARRIES. `Compare two runs of one revision` used to be printed ONLY on the non-CPU arm, and the
+   CPU arm said the opposite in as many words: "that is real thread CPU, so this run's census series is
+   invariant to what else this box was doing". THAT CLAIM IS FALSE, and it is false in the direction that
+   costs — it licenses reading a SINGLE native run as a measurement, which is the exact reading §Testing calls
+   an artifact of HOW a run ran reported as a fact about WHAT ran.
+   WHAT A CPU CLOCK ACTUALLY BUYS, stated at the strength the mechanism supports. `flow_age_running` bills
+   `quantum_thread_us()` (solver/engine.c), which natively is CLOCK_THREAD_CPUTIME_ID — so every microsecond
+   charged is one the flow HELD THE THREAD FOR, and no flow is demoted for time the OS spent elsewhere. That is
+   a statement about WHOSE BILL a charge lands on, and it is the whole of the difference between the two arms.
+   WHAT IT DOES NOT BUY IS A REPRODUCIBLE ORDER, because the SLICE is denominated in that same CPU and the work
+   a flow completes inside one CPU-microsecond is not a constant of the program: a contended box costs the same
+   opcode sequence more thread CPU (stall cycles are on-CPU time), so the quantum's timer fires at a DIFFERENT
+   opcode and the suspend point moves. It reaches the order a second way with no timer in it at all:
+   solver/flow.h's `flow_silence_notch` is a FLOOR over whole quanta of accumulated thread time and is a term
+   of `flow_weight`, so the step at which a flow crosses a notch — and therefore the pick that follows —
+   depends on what a microsecond bought. Both are load-sensitive on a host with a perfect CPU clock.
+   SO THE TWO ARMS DIFFER IN THE KIND OF ERROR, NOT IN WHETHER THERE IS ONE, and the instruction is
+   unconditional. §NO BOUNDS forbids the cures that would make it conditional (drop the quantum and it is a
+   drive-to-completion; denominate the slice in steps or work and it is a cap), so what is owed a reader is the
+   truth about the instrument, not a number that stops moving. */
 const quantumText = (q) =>
   q === null
     ? `[build]   no @QUANTUM line — this stage opened no engine slice, so it has no scheduler denomination ` +
@@ -1673,12 +1694,18 @@ const quantumText = (q) =>
     : `[build]   the engine's slice (${q.sliceMs} ms) and the WFQ's aging charge are denominated in ` +
       `${q.measure}` + (q.instances > 1 ? ` — ${q.instances} instances, all agreeing` : ``) +
       (q.cpu
-        ? `\n[build]   that is real thread CPU, so this run's census series is invariant to what else this ` +
-          `box was doing`
+        ? `\n[build]   that is real thread CPU, so every microsecond the aging charge bills is one the flow ` +
+          `HELD THE THREAD for — no flow is demoted for time the OS spent elsewhere. It does NOT make the ` +
+          `order reproducible: the slice is that same CPU, and a loaded box costs one opcode sequence more ` +
+          `thread CPU, so the quantum fires at a different opcode and flow_silence_notch's floor is crossed ` +
+          `at a different step.`
         : `\n[build]   THAT IS NOT CPU: this run's census series is a reading of ONE INTERLEAVING. The aging ` +
-          `charge bills wall time to whichever flow the OS happened to leave running, so the frontier ORDER ` +
-          `— and therefore every census below it — varies run to run on one artifact. Compare two runs of ` +
-          `one revision before reading a difference between two revisions.`);
+          `charge bills wall time to whichever flow the OS happened to leave running, so a descheduling ` +
+          `nothing in the program chose lands on one flow's rank alone — a second and larger source of ` +
+          `variance on top of the one the CPU arm has.`) +
+      `\n[build]   EITHER WAY: compare two runs of ONE revision before reading a difference between two ` +
+      `revisions. The frontier ORDER — and therefore every census below it — moves run to run on one artifact ` +
+      `on BOTH hosts; only the reason differs.`;
 
 /* A DIAGNOSIS DERIVED FROM A SIGNAL THE SUBJECT DOES NOT EMIT IS A CLAIM ABOUT THE INSTRUMENT, NOT THE RUN.
    This discriminator reads @COLD, which only a stage that drives a scheduler prints. Applied to a stage that

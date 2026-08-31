@@ -134,7 +134,31 @@ int64_t quantum_thread_us(void);
 const char *quantum_measure(void);
 /* …and the same fact as a PREDICATE, for the one thing a string cannot be used for: gating an ASSERTION on
    whether quantum_thread_us() is real CPU. §Testing forbids a verdict a loaded machine can falsify, so a check
-   that aborts on consumed time may only run where consumed time is what is being read. Asked, never assumed. */
+   that aborts on consumed time may only run where consumed time is what is being read. Asked, never assumed.
+
+   WHAT A TRUE ANSWER MEANS, AND — THE HALF EVERY READER OF IT GOT WRONG — WHAT IT DOES NOT. Two renderers
+   branch on this to tell a person whether one run's numbers may be compared with another's (engine/build.mjs's
+   quantumText, extension/popup.js's `denom`), and BOTH used to render the true arm as "real thread CPU, so this
+   run's census series is invariant to what else this box was doing". That is FALSE, and false in the direction
+   that costs: it licenses reading a SINGLE run as a measurement, which is §Testing's artifact-of-HOW reported
+   as a fact about WHAT ran — the defect this whole component exists to end, arriving in the sentence the
+   component supplies to end it.
+     TRUE BUYS AN ATTRIBUTION. solver/engine.c bills `flow_age_running(quantum_thread_us() - t0)`, so where this
+     answers 1 every microsecond charged is one the flow HELD THE THREAD for, and no flow is demoted for time
+     the OS spent elsewhere. That is the whole of the difference from a wall-clocked host, and it is a
+     statement about WHOSE BILL a charge lands on.
+     IT DOES NOT BUY A REPRODUCIBLE ORDER, and cannot, because the SLICE is denominated in this same quantity
+     while the WORK a flow completes inside one microsecond of it is not a constant of the program: a contended
+     machine costs one opcode sequence more thread CPU (a stall cycle is on-CPU time), so the timer fires at a
+     different opcode and the suspend point moves. It reaches the order a second way with no timer in it at
+     all — solver/flow.h's `flow_silence_notch` is a FLOOR over whole quanta of this quantity and is a term of
+     `flow_weight`, so the step at which a flow crosses a notch, and the pick that follows it, move with what a
+     microsecond bought.
+   SO THE TWO ARMS DIFFER IN THE SOURCE OF THE VARIANCE, NEVER IN WHETHER THERE IS ONE, and any instruction to
+   compare two runs of one revision before reading a difference between two revisions is UNCONDITIONAL. §NO
+   BOUNDS forbids the cures that would make it conditional — drop the quantum and it is a drive-to-completion,
+   denominate the slice in steps or in work and it is a cap — so what a reader is owed is the truth about the
+   instrument and never a number that has stopped moving. */
 int quantum_measure_is_cpu(void);
 /* THE THREE OF THEM AS ONE DOCUMENT — `{"measure":…,"isCpu":…,"sliceMs":…}`, malloc'd, caller frees; NULL only
    on allocation failure, which is the shape solver/result.c's other composers answer in and which result_json

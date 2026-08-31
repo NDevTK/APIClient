@@ -1378,9 +1378,20 @@ function renderEngineRuns() {
        rendered generically from whatever rows they carry; this is three NAMED facts about the host, one of
        which is a string and one a boolean, so it is read by name — and it is written as a SENTENCE rather than
        `isCpu false`, because the consequence is what a reader needs and the field name is not it.
-       ONLY THE CAVEAT IS LOUD. `isCpu` true is the positive statement that none of this applies, said in one
-       clause; a warning printed on every run is a warning nobody reads, which is the same reason
-       engine/build.mjs marks its verdict `WALL-SLICED` only where it is false. */
+       ONLY THE CAVEAT IS LOUD, AND THE INSTRUCTION IS NOT PART OF IT — which is the correction this block
+       carries. `isCpu` true used to render "real thread CPU, so this run's order is invariant to what else the
+       machine was doing", and the "compare two runs" instruction was on the OTHER arm only. That is the same
+       defect as a caveat printed on failures alone, one level in: the instruction was withheld from precisely
+       the reader who would act on it, and the sentence standing in its place was FALSE.
+       WHAT A CPU CLOCK BUYS IS AN ATTRIBUTION, NOT A REPRODUCIBLE ORDER. `flow_age_running` bills
+       `quantum_thread_us()`, so where that is CLOCK_THREAD_CPUTIME_ID every microsecond charged is one the flow
+       HELD THE THREAD for and no flow is demoted for time the OS spent elsewhere — the wall arm's whole defect.
+       But the SLICE is that same CPU and a contended machine costs one opcode sequence more thread CPU (stall
+       cycles are on-CPU time), so the quantum fires at a different opcode; and solver/flow.h's
+       `flow_silence_notch` is a FLOOR over whole quanta and a term of `flow_weight`, so the step at which a
+       flow crosses a notch moves with what a microsecond bought. The order moves on BOTH hosts.
+       SO THE ARMS DIFFER IN THE SOURCE OF THE VARIANCE AND THE INSTRUCTION IS UNCONDITIONAL. §NO BOUNDS forbids
+       both cures, so what this panel owes a person comparing two rows is the truth about the instrument. */
     DCHECK(m.quantum && typeof m.quantum === "object" && typeof m.quantum.isCpu === "boolean"
            && typeof m.quantum.measure === "string" && typeof m.quantum.sliceMs === "number",
            "an engine run record reached the popup with no `quantum` denomination — solver/quantum.c composes " +
@@ -1390,10 +1401,14 @@ function renderEngineRuns() {
     const denom = `<span class="deep-label">`
       + `scheduler slice ${esc(String(m.quantum.sliceMs))} ms, billed in ${esc(m.quantum.measure)}`
       + (m.quantum.isCpu
-          ? ` — real thread CPU, so this run's order is invariant to what else the machine was doing`
+          ? ` — real thread CPU, so every microsecond the aging charge bills is one the flow held the thread `
+            + `for. That does not make the order reproducible: the slice is that same CPU, and a loaded `
+            + `machine costs one opcode sequence more of it.`
           : ` — NOT CPU: the aging charge that produced the order above bills wall time to whichever flow the `
-            + `OS left running, so two runs of THIS SAME build over this same page take different orders. `
-            + `Compare two runs of one build before reading a difference between two builds.`)
+            + `OS left running, so a descheduling nothing in the page chose moves one flow's rank alone — a `
+            + `second and larger source of variance on top of the one a CPU-clocked host has.`)
+      + ` Either way, two runs of THIS SAME build over this same page take different orders: compare two runs `
+      + `of one build before reading a difference between two builds.`
       + `</span>`;
     /* AND THE THREE SUBSYSTEMS UNDER THE ORDER — solver/result.c's `_cold`, `_heap`, `_swap` and decide.c's
        `_forkAt`, relayed whole by bridge.js. Same defect as `_wfq` and four times the size: each was printed

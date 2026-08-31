@@ -34,6 +34,12 @@
  * What was missing is only that the series did not SAY which denomination produced it, so a reader could not
  * tell a frontier difference from an artefact of slicing. This line is that statement and nothing else.
  *
+ * AND IT IS THE LARGER SOURCE OF THAT VARIANCE, NEVER THE ONLY ONE — read the paragraph at
+ * quantum_measure_is_cpu()'s declaration before concluding that a `true` answer makes a single run a
+ * measurement. A CPU clock fixes WHOSE BILL a charge lands on; it cannot fix the ORDER, because the slice is
+ * denominated in that same CPU while the work one microsecond of it buys is a property of the machine. Two
+ * renderers of this fact asserted otherwise on their `isCpu` arm and had to be corrected.
+ *
  * UNCONDITIONAL, NOT DEV-ONLY, because a CONSUMER's contract is checked against it and a consumer may not hold
  * a second answer for a release build: engine/build.mjs THROWS when a run printed the frontier census and not
  * this line. That is §Architecture's field contract — a name read somewhere and written nowhere is a broken
