@@ -101,9 +101,15 @@ static JSClassID g_pre_class;
    that answers instead of failing. */
 static int g_id_pre_ctor = -1;
 static JSValue g_pre_key = JS_UNDEFINED;
-/* THE NOTIFICATION DRIVER IS PER REALM, and that is §8.1.4.7's own requirement rather than tidiness: the event
-   is fired at "the promise's relevant global object", and this driver reads its global off the ctx it runs
-   under — which, for one function object held for the agent, is whichever realm minted it. Every child
+/* THE NOTIFICATION DRIVER IS PER REALM, and that is the standard's own requirement rather than tidiness. The
+   global is fixed at the REJECTION and not at the notify: HTML §8.1.6.4 HostPromiseRejectionTracker(promise,
+   operation) — which `rejection_tracker` below IS — lets "global be settingsObject's global object" for the
+   running script's settings object and appends the promise to THAT global's about-to-be-notified rejected
+   promises list; HTML §8.1.4.7 Unhandled promise rejections then fires `unhandledrejection` "at global". So
+   this driver reads its global off the ctx it runs under — which, for one function object held for the agent,
+   is whichever realm minted it. (A quoted phrase attributing the fire to the PROMISE's relevant global object
+   stood here as though it were §8.1.4.7's; neither section contains it, and a promise answers no such
+   question — the global is the running script's settings object's, fixed at the reject.) Every child
    document's unhandled rejection fired at the ROOT window, which is the same defect a shared
    EventTarget.prototype has one link up. A rejection RECORDS the driver of the realm it rejected in, so the
    job carries its realm with it rather than the notify pass guessing one. */

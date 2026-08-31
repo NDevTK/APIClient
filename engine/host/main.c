@@ -1533,9 +1533,11 @@ QJS_EXPORT const char *qjs_pending(void)
    delivery machine already rejects with the TypeError §5.6 names.
    …AND THE BODY CROSSES AS BYTES, BESIDE IT, BECAUSE JSON CANNOT SAY A BYTE SEQUENCE. §2.2.4 Bodies makes a
    body's source one, and the only way to put one in JSON is to run an algorithm over it first — which is the
-   defect: `safe-fetch.js` ran Fetch §5.2's `text()`, "run consume body with this and UTF-8 decode", so a script
-   served `charset=windows-1252` reached HTML §8.1.4.2's classic decode already mangled and the label that
-   algorithm exists to honour decided nothing. The trusted zone owns SOP/CORS/PNA/CORB and owns no decodes; the
+   defect: `safe-fetch.js` ran Fetch §5.3 Body mixin's `text()`, whose steps are "to return the result of
+   running consume body with this and UTF-8 decode" — §5.2 stood here and is "BodyInit unions", which EXTRACTS
+   a body rather than consuming one, so the number read as checked while naming the opposite direction. A script
+   served `charset=windows-1252` therefore reached HTML §8.1.4.2's classic decode already mangled and the label
+   that algorithm exists to honour decided nothing. The trusted zone owns SOP/CORS/PNA/CORB and owns no decodes; the
    bytes are copied into this instance's own linear memory and read here without a transform in between. A
    NETWORK ERROR carries none (`body == NULL`, `body_len == 0`), which is a different statement from a 204's
    empty one.
@@ -1577,9 +1579,11 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
             fetch_reply_set_body(g_ctx, v, (const uint8_t *)body, (size_t)body_len);
         else
             DCHECK(body_len == 0,
-                   "a NETWORK ERROR arrived carrying bytes — §5.6's network error is a response with no body "
-                   "at all, and the delivery machine rejects on it rather than reading one, so these bytes "
-                   "name a reply the trusted zone did and did not have at the same time");
+                   "a NETWORK ERROR arrived carrying bytes — Fetch §2.2.6 Responses defines a network error as "
+                   "a response whose body is null, and the delivery machine rejects on it rather than reading "
+                   "one, so these bytes name a reply the trusted zone did and did not have at the same time "
+                   "(§5.6 stood on this sentence and is Fetch methods, where fetch() REJECTS over a network "
+                   "error rather than where one is defined)");
         n = engine_provide(g_ctx, method, url, v);
         JS_FreeValue(g_ctx, v);
         /* NOBODY IS PARKED ON IT, AND THERE ARE NOW TWO WAYS THAT HAPPENS. The one this asserts against is the
