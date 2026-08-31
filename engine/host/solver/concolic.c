@@ -2549,9 +2549,17 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
 
 /* A BUILTIN OVER AN UNKNOWN OPERAND — see the hook's contract in quickjs.h. The shape records WHICH operation
    produced it, so an @H shape reads as the expression the page actually wrote and an @S search knows which
-   source to solve for. Example-free: this engine does not yet run the operation on the operand's example (a
-   regex match over a known query string HAS a concrete answer, and producing it is the next step here), and
-   inventing one would be a fabricated observation. */
+   source to solve for.
+   THIS IS NOT EXAMPLE-FREE, AND THE SENTENCE THAT SAID SO OUTLIVED THE PARAMETER THAT REFUTES IT. The header
+   used to state that this engine does not yet run the operation on the operand's example — while the signature
+   already TOOK one and the body fifteen lines down already said it "is what the operator got by RUNNING THE
+   REAL OPERATION on this operand's own example". Two paragraphs of one comment contradicting each other is the
+   stale-claim failure at its shortest range, and the wrong half was the one a reader meets FIRST: it reads as
+   a completed statement about the engine, so nobody greps, and a caller that could have run its real operation
+   passes JS_UNDEFINED because the comment told it there was no point. Which operators DO run it is a fact
+   about their call sites and is stated at each of them, never here — a list here would be the next sentence to
+   go stale. What is true of THIS function is only its contract: it derives from the operand and attaches
+   whatever example it is handed, JS_UNDEFINED included, and never computes or predicts one itself. */
 JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {
     const char *src, *root, *sh, *f[2];
     char *shape, *ident;
