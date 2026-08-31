@@ -50,14 +50,24 @@
  * none before its 126th census, while the seam this now rides carried one in 178 — and no flow FINISHED in
  * any census of any run, which is the drain the old position was waiting for.
  *
- * NAMED RESIDUAL — `rejectionhandled` IS STILL NOT FIRED, and the reason it used to be absent is now gone.
- * NOT COVERED: §8.1.4.7's retraction edge. Notifying per checkpoint means a promise handled AFTER its report
- * now has an early report to retract, which is precisely what the old position did not produce. The handled
- * edge is already tracked (the tracker empties the slot in place), so what the next diff builds is the FIRE:
- * a `rejectionhandled` PromiseRejectionEvent at the global for a promise the outstanding set holds, queued on
- * the same task source as the `unhandledrejection` fire beside it. HOW ITS ABSENCE SHOWS: a page whose
- * `unhandledrejection` handler records an error and whose `rejectionhandled` handler would erase it reports an
- * error it went on to handle — one report too many, where the old position gave none at all.
+ * NAMED RESIDUAL — THE EVENT IS FIRED AND THE CONSOLE STILL SAYS THE OLD THING. §8.1.6.4 step 7.4's
+ * `rejectionhandled` now reaches the page, and a page that ships a reporter learns of the retraction and can
+ * withdraw its own entry. What has NOT moved is this engine's OWN console: step 4.1.3 reported through
+ * `g_report` into solver/result.h's `pageErrors`, and nothing takes that back, so a bundle that catches in a
+ * later task still leaves a finding about a page that did nothing wrong.
+ * IT IS NOT A LINE TO ADD HERE, AND THAT IS THE POINT OF NAMING IT: the store cannot express the operation.
+ * `pageErrors` is keyed on (message, throw site) and DEDUPED ON INSERT, so one row can stand for any number of
+ * occurrences, and a retraction keyed the same way would erase a report belonging to a rejection nobody
+ * handled. The row has to carry an occurrence count before a retraction can decrement one — that is a
+ * capability of solver/result.c and it is the next diff, not a `||` here. AND IT IS ONLY HALF EXPRESSIBLE
+ * EVEN THEN: result.h declares two routes for a page error and a host picks one, and the STREAM route has
+ * already PRINTED the line — a printed line has no retraction, only a second line saying so. The document
+ * route (result_page_errors_ride_the_document, which is what main.c takes) composes `pageErrors` at the end
+ * and can withdraw a row outright.
+ * WHAT THE SPEC ITSELF LEAVES UNRETRACTABLE, so it is not mistaken for the same gap: a handler attached by an
+ * `unhandledrejection` listener DURING the fire. Step 4.1.3 has already reported by then and step 4.1.4
+ * declines to append, so no `rejectionhandled` is ever owed. That is the standard's own accepted cost and not
+ * a hole in this component.
  *
  * THE EVENT IS THE PAGE'S CHANCE TO ANSWER, and it is CANCELABLE, so the report is not this component's to
  * make: §8.1.4.7 fires `unhandledrejection` at the global and reports only if nothing called preventDefault.
@@ -84,8 +94,32 @@
    of a slot is what the handled edge finds it by and compacting would move the ones behind it. */
 static JSValue g_list;
 static int     g_ready;
-/* PromiseRejectionEvent: its prototype, and the private Symbol its two slots live under. A page cannot forge a
-   slot bag it cannot name, which is the same shape Event uses for its own. */
+/* §8.1.3.3's OTHER container — "a global object has an outstanding rejected promises WEAK SET" — and the word
+   weak is the whole of why this one is not a second `g_list`. Its members are exactly the promises this global
+   already REPORTED (step 4.1.4 appends only what survived the `unhandledrejection` fire still unhandled), and a
+   page that rejects in a loop produces one member per iteration; a strong list of them would keep every
+   rejected promise of every origin ever visited alive for the life of the agent, against a frontier §NO BOUNDS
+   says is never reset.
+   SO THE SET IS NOT A CONTAINER AT ALL — IT IS A STAMP ON THE PROMISE, under the Symbol below. Weakness is then
+   structural rather than a policy: this component holds nothing, the promise holds a marker, and the marker
+   dies with the promise. It costs nothing in fidelity because membership is only ever ASKED with the promise in
+   hand: §8.1.6.4's handle arm is the sole reader, and "is p in global g's set" is exactly "does p carry g's
+   marker". THE MARKER IS THE REALM'S OWN `rejectionhandled` DRIVER, so one read answers both halves of steps
+   7.2-7.4 — whether this global holds it, and which global's task source to queue the fire on. A promise enters
+   at most one set (it rejects once, so it is appended to one global's about-to-be-notified list), which is why
+   a single-valued stamp is a set membership and not a lossy one.
+   AND IT IS PAGE-VISIBLE, WHICH IS WHY NOTHING HERE ASSERTS ITS ABSENCE. `Object.getOwnPropertySymbols` lists
+   an ordinary Symbol key, so a page can read the marker off one of its own outstanding promises and stamp it
+   onto another. That buys it a spurious `rejectionhandled` at its own global — which it can already fire with
+   `window.dispatchEvent(new PromiseRejectionEvent("rejectionhandled", {promise: p}))`, legal per this very
+   section's IDL — so the forgery grants nothing, and an assert on the stamp's absence would be a DCHECK on
+   attacker input, which is banned. The removal below CAN assert, because no page code runs between its
+   membership read and its delete. */
+static JSValue g_out_key = JS_UNDEFINED;
+/* PromiseRejectionEvent: its prototype, and the Symbol its two slots live under — the same shape Event uses for
+   its own. A claim that a page "cannot forge a slot bag it cannot name" stood here and is FALSE of an ordinary
+   Symbol: `Object.getOwnPropertySymbols` on the event a listener is handed names it. What the slot buys is that
+   the bag is not a property LOOKUP (see pre_slot) and is not writable; it is not a capability boundary. */
 /* PER REALM, for the reason event.c states — a C member runs in the realm that DEFINED it. Held in quickjs's
    own per-context class-proto slot. */
 /* THE CLASS ID IS AGENT STATE AND IS GIVEN BACK AT 0 — core/agent_state.h states the one policy and the
@@ -114,6 +148,12 @@ static JSValue g_pre_key = JS_UNDEFINED;
    EventTarget.prototype has one link up. A rejection RECORDS the driver of the realm it rejected in, so the
    job carries its realm with it rather than the notify pass guessing one. */
 static int g_notify_slot = -1, g_notify_stepid = -1;
+/* §8.1.6.4 step 7.4's fire, which is a DIFFERENT ALGORITHM from step 4.1's and gets its own machine rather than
+   a mode flag on that one: it fires a NON-cancelable event, reports nothing, and appends to nothing. Sharing a
+   driver would mean one `.algorithm` string naming two sections, which is the citation defect this component's
+   own header is about. It is per realm for the same reason the notify driver is, and it is ALSO the marker
+   §8.1.3.3's weak set is spelled with — see g_out_key. */
+static int g_handled_slot = -1, g_handled_stepid = -1;
 static void  (*g_report)(JSContext *ctx, JSValueConst reason);
 
 void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason)) { g_report = fn; }
@@ -125,6 +165,51 @@ static uint32_t list_len(JSContext *ctx)
     JS_ToUint32(ctx, &n, v);
     JS_FreeValue(ctx, v);
     return n;
+}
+
+/* ---- §8.1.3.3's outstanding rejected promises weak set — see g_out_key for the structure --------------- */
+static JSAtom outstanding_atom(JSContext *ctx)
+{
+    JSAtom k = JS_ValueToAtom(ctx, g_out_key);
+    CHECK(k != JS_ATOM_NULL, "the outstanding-rejected-promises marker key could not be reached");
+    return k;
+}
+
+/* WHICH global's set holds this promise — its `rejectionhandled` driver, or undefined for none. OWNED.
+   AN OWN SLOT, never a property LOOKUP, for pre_slot's reason: a lookup walks the prototype chain into the
+   solver's absent-state seam and would mint a concolic marker for a promise nobody stamped. */
+static JSValue outstanding_holder(JSContext *ctx, JSValueConst promise)
+{
+    JSAtom k = outstanding_atom(ctx);
+    JSValue v;
+    if (JS_GetOwnSlot(ctx, &v, promise, k) <= 0) v = JS_UNDEFINED;
+    JS_FreeAtom(ctx, k);
+    return v;
+}
+
+/* §8.1.4.7 step 4.1.4's append. CONSUMES `holder`. Configurable, because §8.1.6.4 step 7.3 REMOVES — a
+   non-configurable slot would make the set one you can only join. */
+static void outstanding_add(JSContext *ctx, JSValueConst promise, JSValue holder)
+{
+    JSAtom k = outstanding_atom(ctx);
+    int r = JS_DefinePropertyValue(ctx, promise, k, holder, JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, k);
+    CHECK(r >= 0, "unhandled rejections: OOM appending to the outstanding rejected promises weak set — a lost "
+                  "member is a report this engine can never retract");
+}
+
+/* §8.1.6.4 step 7.3's removal. */
+static void outstanding_remove(JSContext *ctx, JSValueConst promise)
+{
+    JSAtom k = outstanding_atom(ctx);
+    int r = JS_DeleteProperty(ctx, promise, k, 0);
+    JS_FreeAtom(ctx, k);
+    /* SAFE TO ASSERT, unlike the append: the caller read the membership one line up and no page code runs in
+       between, so a delete that finds nothing is this component disagreeing with itself rather than a page
+       having deleted a marker it can name. */
+    DCHECK(r > 0, "§8.1.6.4 step 7.3 removed a promise the membership test one line above had just found in "
+                  "this global's outstanding rejected promises weak set, and the slot was not there — the read "
+                  "and the write are naming different keys");
 }
 
 static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst reason,
@@ -148,8 +233,9 @@ static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst
         JS_SetPropertyUint32(ctx, g_list, n, e);
         return;
     }
-    /* "remove promise from the about-to-be-notified rejected promises list" — a handler attached after the
-       rejection, which is ordinary code, not an error. */
+    /* §8.1.6.4 step 7.1: "If global's about-to-be-notified rejected promises list contains promise, then remove
+       promise from that list and RETURN" — a handler attached after the rejection but before the checkpoint,
+       which is ordinary code, not an error, and which is never reported and never announced. */
     for (i = 0; i < n; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, g_list, i), p;
         bool same;
@@ -160,8 +246,43 @@ static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst
         JS_FreeValue(ctx, e);
         if (same) { JS_SetPropertyUint32(ctx, g_list, i, JS_UNDEFINED); return; }
     }
-    /* Not in the list is the ordinary case: the runtime reports the handled edge for every rejected promise,
-       including ones handled in the same turn they rejected, which never reached the list at all. */
+    /* §8.1.6.4 steps 7.2-7.4. The promise is not awaiting notification, so the only remaining question is
+       whether it was already NOTIFIED — i.e. whether this global's outstanding rejected promises weak set holds
+       it — and if so the page is owed the retraction event.
+       STEP 7.2 IS A NORMATIVE EARLY RETURN AND IS NOT AN IMPOSSIBLE STATE. It is the ORDINARY case, three ways
+       over, and asserting here would abort on correct pages: the runtime reports the handled edge for EVERY
+       rejected promise, including one handled in the same turn it rejected (never listed at all), one handled
+       between the checkpoint and its queued task (the list was emptied at step 3 and step 4.1.4 has not run),
+       and one handled by an `unhandledrejection` listener during its own fire (step 4.1.4 then declines to
+       append it, which is how the spec spends its one un-retractable report). */
+    {
+        JSValue holder = outstanding_holder(ctx, promise), mine;
+        bool contains;
+
+        /* Step 7.2, first half — in NO global's set, which is every promise that was never notified about, and
+           is the overwhelmingly common shape. Answered without asking the realm anything, so the ordinary path
+           costs one own-slot read. */
+        if (!JS_IsFunction(ctx, holder)) { JS_FreeValue(ctx, holder); return; }
+        /* Step 7.2, second half — "THIS global's" set. The marker is the realm's own driver object, so identity
+           of the two IS the membership test. A promise rejected in another realm carries that realm's marker
+           and is not in this one's set, which is §8.1.6.4's own answer: global is the running script's settings
+           object's global, never the promise's. */
+        mine = realm_value_get(ctx, g_handled_slot);
+        contains = JS_VALUE_GET_PTR(holder) == JS_VALUE_GET_PTR(mine);
+        JS_FreeValue(ctx, holder);
+        if (!contains) { JS_FreeValue(ctx, mine); return; }
+        outstanding_remove(ctx, promise);                     /* step 7.3 */
+        {
+            /* Step 7.4: "queue a global task on the DOM manipulation task source given global to fire an event
+               named rejectionhandled at global, with the promise attribute initialized to promise and the
+               reason attribute initialized to promise.[[PromiseResult]]" — which is the `reason` this hook was
+               handed, read off the promise by call_promise_rejection_tracker. */
+            JSValueConst argv[2];
+            argv[0] = promise; argv[1] = reason;
+            JS_EnqueueCallTask(ctx, mine, 2, argv);
+        }
+        JS_FreeValue(ctx, mine);
+    }
 }
 
 /* ---- PromiseRejectionEvent — §8.1.4.7's own interface ------------------------------------------------------ */
@@ -292,6 +413,13 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
     if (s->hdr.stage == REJECT_EVENT) {
         s->ev = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        /* §8.1.4.7 step 4.1.1: "If p.[[PromiseIsHandled]] is true, then CONTINUE." The check is inside the
+           QUEUED TASK, not at the checkpoint that queued it, and that gap is real work: `var p = f();` followed
+           by a `.catch` in a later task is ordinary correct code, and this engine widens the gap further by
+           queueing one task PER PROMISE — so a listener on the first rejection can attach a handler to the
+           second before the second's task runs. Without this line every one of those is reported, and a
+           reported rejection is a `pageErrors` entry about a page that did nothing wrong. */
+        if (JS_IsPromiseHandled(ctx, promise)) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
         STEP_GOTO(s->hdr.stage, REJECT_FIRE, &s->fphase, NULL);
         /* §8.1.4.7: `unhandledrejection` does not bubble and IS cancelable — the cancel is the whole point. */
         s->ev = pre_new(ctx, event_new(ctx, "unhandledrejection", false, true), promise, reason);
@@ -303,10 +431,20 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
                               out_cb, out_argc);
     JS_FreeValue(ctx, global);
     if (r > 0) return r;
-    /* "If the event was not canceled, report the exception." A page that cancels is doing its own reporting,
-       which is code with a fetch in it — the endpoint that reporter posts to is learned either way. */
+    /* Step 4.1.3: "If notCanceled is true, then the user agent MAY report p.[[PromiseResult]] to a developer
+       console." A page that cancels is doing its own reporting, which is code with a fetch in it — the endpoint
+       that reporter posts to is learned either way. Gated on the CANCEL and not on handled-ness, which is why
+       step 4.1.4 below can still decline to append a promise this line has already reported. */
     if (s->not_canceled && g_report)
         g_report(ctx, reason);
+    /* Step 4.1.4: "If p.[[PromiseIsHandled]] is FALSE, then append p to global's outstanding rejected promises
+       weak set." Checked AGAIN, after the listeners ran: one of them may have attached a handler, and a promise
+       that leaves this task handled is not owed a `rejectionhandled` — it is the one case where the spec
+       reports and never retracts. The global is THIS ctx's, which is the rejecting realm's: the driver object
+       this machine runs under was minted per realm, and js_call_c_function enters a C function in the realm
+       that defined it. */
+    if (!JS_IsPromiseHandled(ctx, promise))
+        outstanding_add(ctx, promise, realm_value_get(ctx, g_handled_slot));
     return JS_STEP_DONE;
 }
 
@@ -314,6 +452,72 @@ static const JSTrampStepDef js_reject_notify_def = {
     sizeof(JSRejectNotify), js_reject_notify_step, NULL, 0, .visit = js_reject_notify_visit,
     .algorithm = "HTML §8.1.4.7 notify about rejected promises — step 4's queued task, one promise",
     .steps = REJECT_NOTIFY_STEPS
+};
+
+/* ---- the RETRACTION — §8.1.6.4 step 7.4's queued task ------------------------------------------------------ */
+/* The other edge, and the one this component reported and never announced: a promise this global already told
+   the page about has since been handled. A separate machine rather than a mode on the one above, because it is
+   a separate algorithm in a separate section — non-cancelable (there is nothing to prevent; the report already
+   happened), with no report step and no set to append to. Its two stages are 7.4's single sentence split at its
+   one suspension point, which is the dispatch: §2.9 is synchronous and its listeners are the page's code. */
+#define REJECT_HANDLED_STAGES(X) \
+    X(HANDLED_EVENT, "HTML §8.1.6.4 step 7.4 (the PromiseRejectionEvent for a promise that has since been " \
+                     "handled)") \
+    X(HANDLED_FIRE,  "HTML §8.1.6.4 step 7.4 (fire rejectionhandled at the global)")
+enum { REJECT_HANDLED_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const REJECT_HANDLED_STEPS[] = { REJECT_HANDLED_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct JSRejectHandled {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   fphase;
+    /* §8.1.6.4 fires a NON-cancelable event, so this is written by the fire and read by nobody. It exists
+       because event_target_fire_run's contract requires somewhere to put it, which is a different fact from
+       this algorithm having a use for it — stating that here is what stops the next reader adding a branch on
+       a value the spec gives no meaning. */
+    bool      not_canceled;
+    JSValue   ev;
+    EventFireCb   cb;
+} JSRejectHandled;
+
+static void js_reject_handled_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSRejectHandled *s = st;
+    int k;
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k)
+        v->val(ctx, &s->cb[k]);
+}
+
+static int js_reject_handled_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSRejectHandled *s = st;
+    JSValueConst promise = step_arg(&s->hdr, 0), reason = step_arg(&s->hdr, 1);
+    JSValue global;
+    int r, k;
+
+    if (s->hdr.stage == HANDLED_EVENT) {
+        s->ev = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        STEP_GOTO(s->hdr.stage, HANDLED_FIRE, &s->fphase, NULL);
+        /* NO re-check of [[PromiseIsHandled]] here, and its absence is the spec's: §8.1.6.4 step 7.3 REMOVED
+           the promise from the set before queueing this, so the fire is already committed. The flag is a
+           one-way latch besides — nothing un-handles a promise — so a re-check could only ever be true. */
+        s->ev = pre_new(ctx, event_new(ctx, "rejectionhandled", false, false), promise, reason);
+        if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
+    }
+    DCHECK(s->hdr.stage == HANDLED_FIRE, "the rejection-handled fire resumed into a stage §8.1.6.4 does not have");
+    global = JS_GetGlobalObject(ctx);
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), global, s->ev, JS_UNDEFINED, cb_result,
+                              &s->not_canceled, out_cb, out_argc);
+    JS_FreeValue(ctx, global);
+    if (r > 0) return r;
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_reject_handled_def = {
+    sizeof(JSRejectHandled), js_reject_handled_step, NULL, 0, .visit = js_reject_handled_visit,
+    .algorithm = "HTML §8.1.6.4 HostPromiseRejectionTracker — step 7.4's queued rejectionhandled fire",
+    .steps = REJECT_HANDLED_STEPS
 };
 
 int unhandled_rejection_notify(JSContext *ctx)
@@ -380,6 +584,9 @@ void unhandled_rejection_init(JSContext *ctx)
     CHECK(!JS_IsException(g_list), "the rejected-promise list could not be allocated");
     g_pre_key = JS_NewSymbol(ctx, "promiseRejectionSlots", false);
     CHECK(!JS_IsException(g_pre_key), "the PromiseRejectionEvent slot key allocation failed");
+    /* §8.1.3.3's weak set has no allocation of its own — see g_out_key. This is the whole of it. */
+    g_out_key = JS_NewSymbol(ctx, "outstandingRejectedPromise", false);
+    CHECK(!JS_IsException(g_out_key), "the outstanding-rejected-promises marker key allocation failed");
     {
         JSClassDef d = { "PromiseRejectionEvent" };
         JS_NewClassID(JS_GetRuntime(ctx), &g_pre_class);
@@ -389,6 +596,9 @@ void unhandled_rejection_init(JSContext *ctx)
     g_notify_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reject_notify_def);
     CHECK(g_notify_stepid >= 0, "no step id for the rejection-notification driver");
     g_notify_slot = realm_value_declare(ctx, "§8.1.4.7 notifyRejected");
+    g_handled_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_reject_handled_def);
+    CHECK(g_handled_stepid >= 0, "no step id for the rejection-handled driver");
+    g_handled_slot = realm_value_declare(ctx, "§8.1.6.4 fireRejectionHandled");
     g_ready = 1;
     JS_SetHostPromiseRejectionTracker(JS_GetRuntime(ctx), rejection_tracker, NULL);
     /* THE CONSTRUCTOR'S DECLARATION IS THE AGENT'S — one pool entry per member; every realm's interface object
@@ -398,8 +608,12 @@ void unhandled_rejection_init(JSContext *ctx)
     agent_state_flag("unhandled_rejection", &g_ready, "the declaration latch");
     agent_state_value("unhandled_rejection", &g_list, "§8.1.3.3's about-to-be-notified rejected promises list");
     agent_state_value("unhandled_rejection", &g_pre_key, "PromiseRejectionEvent's internal-slot key");
+    agent_state_value("unhandled_rejection", &g_out_key,
+                      "§8.1.3.3's outstanding rejected promises weak set — its marker key IS the set");
     agent_state_id("unhandled_rejection", &g_notify_slot, "§8.1.4.7's notifyRejected realm slot");
     agent_state_id("unhandled_rejection", &g_notify_stepid, "§8.1.4.7's notification driver machine");
+    agent_state_id("unhandled_rejection", &g_handled_slot, "§8.1.6.4's fireRejectionHandled realm slot");
+    agent_state_id("unhandled_rejection", &g_handled_stepid, "§8.1.6.4's rejectionhandled driver machine");
     agent_state_class("unhandled_rejection", &g_pre_class, "§8.1.4.7's PromiseRejectionEvent class");
     agent_state_id("unhandled_rejection", &g_id_pre_ctor, "§8.1.4.7's PromiseRejectionEvent constructor declaration");
     /* THE REPORT HOOK WAS GIVEN BACK BY THE RELEASE AND DECLARED BY NOBODY — a slot on the released side of a
@@ -434,6 +648,14 @@ void unhandled_rejection_install_proto(JSContext *ctx)
         JSValue fn = JS_NewCFunction2(ctx, NULL, "notifyRejected", 2, JS_CFUNC_step, g_notify_stepid);
         CHECK(!JS_IsException(fn), "the rejection-notification driver could not be allocated");
         realm_value_set(ctx, g_notify_slot, fn);
+    }
+    {
+        /* AND THE RETRACTION'S, which is this realm's IDENTITY as well as its driver: §8.1.3.3's weak set is
+           spelled as this object stamped on the promises this global has notified about, so a realm without it
+           is a realm whose set can never be joined and whose reports can never be taken back. */
+        JSValue fn = JS_NewCFunction2(ctx, NULL, "fireRejectionHandled", 2, JS_CFUNC_step, g_handled_stepid);
+        CHECK(!JS_IsException(fn), "the rejection-handled driver could not be allocated");
+        realm_value_set(ctx, g_handled_slot, fn);
     }
 }
 
@@ -481,11 +703,15 @@ void unhandled_rejection_free(JSRuntime *rt)
     g_ready = 0;
     JS_FreeValueRT(rt, g_list);   /* the prototypes are the REALMS' — each is released with its context */
     JS_FreeValueRT(rt, g_pre_key);
-    g_list = g_pre_key = JS_UNDEFINED;   /* the per-realm driver is released with its context */
+    /* THE WEAK SET NEEDS NOTHING RELEASED BUT ITS KEY, which is the property that made it weak: every member is
+       a marker on a promise, so the members go when the promises do and there is no container to walk. */
+    JS_FreeValueRT(rt, g_out_key);
+    g_list = g_pre_key = g_out_key = JS_UNDEFINED;   /* the per-realm drivers are released with their contexts */
     /* THE TWO REGISTRATIONS, GIVEN BACK. They name a realm slot and a step machine in a runtime that is going
        away — but they are also what the init above would find set, and this file's own paragraph about the
        early-return is the argument for why leaving them is not harmless. */
     g_notify_slot = g_notify_stepid = -1;
+    g_handled_slot = g_handled_stepid = -1;
     /* AND THE CLASS WITH ITS CONSTRUCTOR'S POOL ENTRY. The class is registered in `rt`, which is going away;
        the pool entry names a member declaration of an agent that is going away. Neither is freed by anything —
        what makes leaving them wrong is that both are READ by the next agent, the class id by `JS_NewClassID`
