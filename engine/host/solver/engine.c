@@ -6530,18 +6530,21 @@ static int flow_step(JSContext *ctx, Flow *f) {
            cannot be put there while the slot is still occupied. NULL for every completion that owes none, which
            is every completion but a classic script's abrupt one. */
         JSValue *report = NULL;
+        /* IS THE FRAME ABOUT TO RUN A PROGRAM OR A CALL — asked of the FRAME, before it can complete and be
+           freed, because the two completions mean different things below and nothing else can tell them
+           apart. A driven orphan's flow runs its call and then goes on to run whatever that call queued
+           (a lazy chunk it loaded is an ordinary program of this flow's sequence), so `f->orphan` says what
+           the FLOW is and this says what THIS completion is. The position in the sequence cannot answer it:
+           a row queued by the running call moves the cursor back inside the sequence while the call frame
+           is still live.
+           DECLARED OUT HERE FOR THE SAME REASON `report` IS, and that is a correction rather than a tidy-up: it
+           was scoped to the block below, so the one consumer that is BELOW the block — the cursor advance at
+           the tail — could not ask it and advanced for a call as if a call were a row. See that site. */
+        int is_call = JS_FlowIsCall((JSValue *)f->frame);
         {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
                taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
             JSValue cv = JS_UNDEFINED;
-            /* IS THE FRAME ABOUT TO RUN A PROGRAM OR A CALL — asked of the FRAME, before it can complete and be
-               freed, because the two completions mean different things below and nothing else can tell them
-               apart. A driven orphan's flow runs its call and then goes on to run whatever that call queued
-               (a lazy chunk it loaded is an ordinary program of this flow's sequence), so `f->orphan` says what
-               the FLOW is and this says what THIS completion is. The position in the sequence cannot answer it:
-               a row queued by the running call moves the cursor back inside the sequence while the call frame
-               is still live. */
-            int is_call = JS_FlowIsCall((JSValue *)f->frame);
             g_step_unit = STEP_UNIT_RESUME_PROGRAM;
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
             /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED FIRST because the two readings
@@ -6660,9 +6663,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "session. Route the restore through whatever drives the detached continuation");
                 /* THIS ROW IS OVER, WHICH THE CURSOR ALREADY SAYS AND THE FLAG MUST SAY WITH IT. A frame this
                    flow no longer owns cannot be §8.1.4.4 step 8's report of the row the cursor is about to
-                   leave; left standing, the flag would make the NEXT program's completion read as a report. */
+                   leave; left standing, the flag would make the NEXT program's completion read as a report.
+                   AND THE CURSOR MOVES ONLY FOR A FRAME THAT IS THIS ROW'S WORK — the same predicate the
+                   restore below and the tail both use, expanded here rather than shared, for the reason the
+                   tail gives. A detaching base is a MODULE body's continuation, so `is_call` is false here
+                   today and this reads as an unconditional advance; it is written as the predicate anyway
+                   because the day a CALL detaches, an unconditional advance is the tail's defect reproduced at
+                   a site nobody would think to look at. */
+                if (f->reporting || !is_call) {
+                    f->script_i++;
+                    DCHECK(f->script_i <= f->dyn_n,
+                           "a flow's cursor advanced past the end of its own program queue — flow.c's "
+                           "flow_programs_unstarted_for_document states the contract this breaks (\"between "
+                           "two programs the cursor stands one past the last started row\"), so a cursor "
+                           "beyond `dyn_n` is ahead of the slot every APPEND takes: the next program queued "
+                           "onto this flow lands at `dyn_n`, which this cursor has already passed, and is "
+                           "never run and never counted as unstarted. The completion that moved it was not a "
+                           "row of the sequence");
+                }
                 f->reporting = 0;
-                f->frame = NULL; f->script_i++;
+                f->frame = NULL;
                 return 0;
             }
             /* THE PROGRAM RAN TO ITS END — the ONE event that moves this document's completed depth, recorded
@@ -6705,8 +6725,41 @@ static int flow_step(JSContext *ctx, Flow *f) {
            step 8.3.2's microtask checkpoint first among them — is skipped for as long as this frame lives,
            which is the order §8.1.4.4 states and the reason the report is a frame at all. */
         if (report) { f->frame = report; f->reporting = 1; return 0; }
+        /* THIS SCRIPT DONE -> NEXT, AND ONLY WHEN THE FRAME THAT FINISHED WAS A SCRIPT. The cursor names a ROW,
+           and the two consumers three lines up already know that a CALL is not one: `g_completed` is guarded by
+           `!is_call` and §4.12.1.1 step 4's restore by `f->reporting || !is_call`. This line was the third
+           consumer of the same fact and the only one that was never given it, because `is_call` was scoped to
+           the block above and this line is below it — so a DRIVEN ORPHAN'S CALL, whose frame holds no row at
+           all, moved the row cursor.
+           WHAT THAT COSTS IS NOT AN OFF-BY-ONE IN A DIAGNOSTIC, IT IS DROPPED WORK. A drive is assembled with
+           its parent's cursor, which stands at `dyn_n` (the parent had run out of rows — that is WHY the
+           orphan arm was reached), so the call's completion left the cursor at `dyn_n + 1`. Every APPEND takes
+           slot `dyn_n`. From that instant the flow was one slot AHEAD of every program anything could ever
+           queue onto it: the row is written, `dyn_n` grows past the cursor, and the row is never compiled and
+           never run. flow_programs_unstarted_for_document then answers 0 for it as well — it selects
+           `k >= script_i` — so HTML §7.5.10 "Destroying documents" step 7's count of tasks to remove reads
+           zero for a row that is unstarted, and nothing anywhere says a program was lost.
+           MEASURED, on the `--cold-park` fixture: an orphan drive at `script_i=3, dyn_n=2, last_compiled=1`
+           was handed a cross-agent operation, which engine_perform appends to EVERY live timeline. It landed
+           at row 2, behind the cursor, was never turned into a program, and the flow finished still holding
+           the peer's rendezvous token — flow_finish's `!flow_owes_answer(f)`, which is that peer suspended at
+           the line that asked with nothing coming. The same slot is where a lazy chunk a driven function loads
+           and a `<script>` it appends both land, so the operation is what CRASHED and never what was unique.
+           THE PREDICATE IS THE RESTORE'S, VERBATIM, and read BEFORE `f->reporting` is cleared: `f->reporting`
+           is what tells the ONE call frame that IS this row's remaining work (§8.1.4.4 step 8's report) from
+           the one that is somebody else's. */
+        if (f->reporting || !is_call) {
+            f->script_i++;
+            DCHECK(f->script_i <= f->dyn_n,
+                   "a flow's cursor advanced past the end of its own program queue — flow.c's "
+                   "flow_programs_unstarted_for_document states the contract this breaks (\"between two "
+                   "programs the cursor stands one past the last started row\"), so a cursor beyond `dyn_n` is "
+                   "ahead of the slot every APPEND takes: the next program queued onto this flow lands at "
+                   "`dyn_n`, which this cursor has already passed, and is never run and never counted as "
+                   "unstarted. The completion that moved it was not a row of the sequence");
+        }
         f->reporting = 0;
-        f->frame = NULL; f->script_i++;   /* this script done -> next */
+        f->frame = NULL;
         return 0;
     }
 }
