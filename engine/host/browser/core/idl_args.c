@@ -2266,9 +2266,17 @@ static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *
  *    not implement interface, then throw a TypeError. 4. Return object."
  *
  * — and adds, in its own note, "This algo is not yet consistently used everywhere." That note is about the
- * SPEC's own sections: §3.7.7 Operations' create an operation function and §3.7.6 Attributes' create an
- * attribute getter / create an attribute setter each still spell the same three steps out inline. They are the
- * same three steps, in the same order, so this engine asks them once.
+ * SPEC's own sections: §3.7.7 Operations' create an operation function and §3.7.6 Attributes' creating an
+ * attribute getter / creating an attribute setter each still spell the same three steps out inline. They are
+ * the same three steps, in the same order, so this engine asks them once.
+ * (THE GETTER'S NAME IS "creating an attribute getter" AND THIS LINE SAID "create an attribute getter", which
+ * is a phrase that occurs NOWHERE in Web IDL — §3.7.6's define the regular attributes says "Let getter be the
+ * result of creating an attribute getter given attr, definition, and realm", and the algorithm itself opens
+ * "The attribute getter is created as follows". The SETTER has both spellings — the same call site says
+ * "creating an attribute setter" and the note beside it says "the algorithm to create an attribute setter" —
+ * so only the getter's was wrong. Corrected here, at the site the claim was made, after fetching the spec:
+ * a wrong algorithm NAME is the §Browser-half quotation hazard rather than the citation one, because citegen
+ * resolves the SECTION and can say nothing about the words beside it.)
  *
  * THE ORDER IS THE POINT AND IT IS OBSERVABLE. In §3.7.7's try-list the security check is step 2.1.2.2 and the
  * brand TypeError is 2.1.2.3, and only afterwards does 2.1.4 compute the effective overload set that 2.1.5 hands
@@ -2442,8 +2450,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
          * §3.7's two steps is performed for it: not §3.5's "getter" security check and not step 3's brand. The
          * §7.2.2 The Window object attributes core/frame/window.c installs are every one of them that shape
          * (`name`, `opener`, `status`, `closed`, `frameElement`, `isSecureContext` — grep idl_install_accessor
-         * there), and so are the five IndexedDB §4.5 The IDBObjectStore interface attributes whose bodies still
-         * call `os_brand` after its pool members' eleven calls were deleted. WHAT THE NEXT DIFF BUILDS: a pool entry
+         * there). AND EVERY INTERFACE CONVERTED TO idl_this_iface LEAVES EXACTLY ITS ATTRIBUTE GETTERS BEHIND,
+         * which is why this names the SHAPE and not a list of them: converting a component deletes its
+         * operations' and setters' own brand tests and cannot touch its getters', so each conversion adds
+         * members to this residual rather than retiring it. `grep -l idl_this_iface` names the components that
+         * have been converted; the brand helper still standing in each of them is what is left.
+         * WHAT THE NEXT DIFF BUILDS: a pool entry
          * for a plain getter — `idl_mint_accessor` takes a STEP id and asks the pool for it, so there is no
          * entry to route an `IdlGetter` through and one has to be minted for it, at idl_define_accessor, the
          * one place every plain getter is created. HOW ITS ABSENCE SHOWS: WPT
@@ -4673,7 +4685,8 @@ int idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, J
 
 /* WEB IDL §3.7.6's `jsValue`, FOR THE TWO ACCESSORS THIS FILE MINTS ITSELF — resolved and brand-checked.
  *
- * §3.7.6 puts BOTH of these steps in "create an attribute getter" and "create an attribute setter", ahead of
+ * §3.7.6 puts BOTH of these steps in "creating an attribute getter" and "creating an attribute setter" — the
+ * spec's own names for the two algorithms, as define the regular attributes invokes them — ahead of
  * the member's own getter/setter steps: "Let jsValue be the this value, if it is not null or undefined, or
  * realm's global object otherwise", and then "If jsValue does not implement target ... throw a TypeError".
  * They are the ACCESSOR MACHINERY'S work, not the member's — which is why they belong here, and why every

@@ -85,6 +85,29 @@ bool idb_index_handle_is(JSValueConst v)
     return g_ix_class != 0 && JS_GetClassID(v) == g_ix_class;
 }
 
+/* WEB IDL §3.7 Interfaces' implementation-check an object, step 3 — "If object does not implement interface,
+   then throw a TypeError" — FOR THE FOUR BODIES OF THIS INTERFACE THAT DO NOT REACH THE ONE PLACE IT IS ASKED.
+   Every OPERATION and the `name` setter state `idl_this_iface(idb_index_handle_is, "IDBIndex")` at their
+   declaration and are checked by core/idl_args.c's idl_implementation_check, before §3.6 Overload resolution
+   algorithm converts an argument; the five bodies those nine declarations reach no longer call this.
+
+   NAMED RESIDUAL. WHAT IS NOT COVERED: §4.6's five attribute GETTERS — `name`, `objectStore`, `keyPath`,
+   `multiEntry` and `unique` (so `name` is SPLIT: its setter is converted and its getter is not) — whose four
+   bodies are the four call sites left below. idl_install_accessor mints a getter as a plain
+   JS_CFUNC_getter_magic with NO pool entry, so nothing about one converges on that machine and NEITHER of
+   §3.7's two steps runs for it: not §3.5 Security's "getter" check and not step 3's brand. The test below is
+   therefore CORRECT and merely narrower rather than mis-ordered — a getter declares no argument, so it converts
+   nothing and has no page code to run ahead of itself, and §3.7.6 Attributes' creating an attribute getter puts
+   the brand at its try-list's step 1.1.2.3, two steps ahead of 1.1.3's own getter steps with nothing between
+   them that runs the page's code.
+   WHAT THE NEXT DIFF BUILDS: a pool entry minted for a plain getter at idl_define_accessor — idl_mint_accessor
+   takes a STEP id and asks the pool for it, so an IdlGetter has no entry to be routed through and one has to be
+   made. When that exists, these four calls and this function go with it.
+   HOW ITS ABSENCE SHOWS: `Object.getOwnPropertyDescriptor(IDBIndex.prototype, "keyPath").get.call({})` throws
+   the message below, naming IDBIndex in this file's own words, rather than idl_implementation_check's
+   "'keyPath' called on an object that does not implement interface IDBIndex"; and the same getter reached on a
+   cross-origin platform object answers instead of throwing a "SecurityError", because §3.5's check is the half
+   of the pair that has no substitute here at all. */
 static bool ix_brand(JSContext *ctx, JSValueConst this_val)
 {
     if (idb_index_handle_is(this_val)) return true;
@@ -276,7 +299,6 @@ static int js_ix_get(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
         JS_FreeValue(ctx, cb_result);
         s->index = JS_UNDEFINED;
         s->tx = JS_UNDEFINED;
-        if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         if (ix_check(ctx, hdr->this_val, &s->index, &s->tx) < 0)                     /* STEPS 1-4 */
             return JS_STEP_ABRUPT;
         /* "Let range be the result of converting a value to a key range with query AND TRUE" — the
@@ -373,7 +395,6 @@ static int js_ix_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         int r;
 
         JS_FreeValue(ctx, cb_result);
-        if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so §3.3.6 [EnforceRange]'s refusal precedes
            §5.12 step 2's: `deletedIndex.getAll(q, -1)` is a TypeError and not an "InvalidStateError". That is
            the DECLARATION's doing now (IDL_UNSIGNED_LONG_ENFORCE) rather than a call this body has to make in
@@ -455,7 +476,6 @@ static int js_ix_count(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         JS_FreeValue(ctx, cb_result);
         s->index = JS_UNDEFINED;
         s->tx = JS_UNDEFINED;
-        if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         if (ix_check(ctx, hdr->this_val, &s->index, &s->tx) < 0)                     /* STEPS 1-4 */
             return JS_STEP_ABRUPT;
         return idb_key_range_walk_start(ctx, hdr, &s->rw, argc > 0 ? argv[0] : JS_UNDEFINED,
@@ -532,7 +552,6 @@ static int js_ix_open_cursor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         JS_FreeValue(ctx, cb_result);
         s->index = JS_UNDEFINED;
         s->tx = JS_UNDEFINED;
-        if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
         if (ix_check(ctx, hdr->this_val, &s->index, &s->tx) < 0)                      /* STEPS 1-4 */
             return JS_STEP_ABRUPT;
         return idb_key_range_walk_start(ctx, hdr, &s->rw, argc > 0 ? argv[0] : JS_UNDEFINED,
@@ -655,7 +674,6 @@ static JSValue js_ix_set_name(JSContext *ctx, JSValueConst this_val, JSValueCons
     int same;
 
     (void)magic;
-    if (!ix_brand(ctx, this_val)) return JS_EXCEPTION;
     index = idb_index_handle_index(ctx, this_val);
     tx = ix_transaction(ctx, this_val);
     store = idb_index_store(ctx, index);
@@ -786,30 +804,55 @@ void idb_index_handle_init(JSContext *ctx)
     JS_NewClassID(rt, &g_ix_class);
     CHECK(JS_NewClass(rt, g_ix_class, &d) == 0,
           "IDBIndex: the per-realm prototype slot could not be declared");
+    /* AND WHAT EACH ONE ACCEPTS AS ITS RECEIVER — Web IDL §3.7 Interfaces' implementation-check an object,
+       step 3's `interface`, stated at the declaration beside the argument types because it is the same kind of
+       fact they are. §3.7.7 Operations' create an operation function asks it in its try-list's step 2.1.2.3,
+       and step 2.1.4's "compute the effective overload set" — the input §3.6 Overload resolution algorithm
+       converts from — is two steps later, so the refusal precedes every conversion this interface declares.
+       §4.6 has two positions where that is observable rather than merely earlier: `openCursor`'s `direction` is
+       a §3.2.18 Enumeration types value, whose conversion opens with a ToString on the page's object, and
+       `getAll`'s `count` is §3.3.6 [EnforceRange] §3.2.4.6 unsigned long, whose §3.2.4.9 Abstract operations
+       ConvertToInt opens with a ToNumber on it. Either one runs the page's code; a test written in the body
+       runs after both.
+       §3.7.6 Attributes' creating an attribute setter puts the same refusal at its step 4.5.4 — step 4 holds
+       exactly one list, so that number is unambiguous — and step 4.6 is where `V` is converted, which for
+       `name` is the ToString of whatever was assigned. So the `name` setter carries the declaration too.
+       IT IS ONE LINE PER MEMBER AND NOT ONE PER INTERFACE: a "from here on" bracket would be sticky state
+       outliving this function, and the component that forgot to close it would brand a later interface's
+       members with IDBIndex. */
     g_id_get = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_GET_STEP, IX_GET_REFERENCED);
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_get_key = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_GET_STEP, IX_GET_KEY);
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     /* ONE DECLARATION PER MEMBER over ONE body: §4.6 states the three as one algorithm differing in `kind`,
        so the kind is the declaration's MAGIC. */
     g_id_get_all = idl_method_id_step(ctx, GET_ALL_ARGS, 2, NULL, 0, &IX_GET_ALL_STEP, IDB_GET_ALL_VALUE);
     idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_get_all_keys = idl_method_id_step(ctx, GET_ALL_ARGS, 2, NULL, 0, &IX_GET_ALL_STEP, IDB_GET_ALL_KEY);
     idl_optional_from(0);
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_get_all_records = idl_method_id_step(ctx, GET_ALL_RECORDS_ARGS, 1, IDB_GET_ALL_OPTIONS,
                                               (int)(sizeof IDB_GET_ALL_OPTIONS /
                                                     sizeof IDB_GET_ALL_OPTIONS[0]),
                                               &IX_GET_ALL_STEP, IDB_GET_ALL_RECORD);
     idl_optional_from(0);                        /* `optional IDBGetAllOptions options = {}` */
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_count = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_COUNT_STEP, 0);
     idl_optional_from(0);                        /* `count(optional any query)` */
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_open_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &IX_OPEN_CURSOR_STEP, IX_WITH_VALUE);
     idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
     idl_enum_values(IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");   /* §3.6 steps 15.4.1 and 16.1's `= "next"` */
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_id_open_key_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &IX_OPEN_CURSOR_STEP, IX_KEY_ONLY);
     idl_optional_from(0);
     idl_enum_values(IDB_CURSOR_DIRECTIONS);
     idl_arg_default(1, IDL_DEFAULT_STRING, "next");
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_setter_name = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ false, js_ix_set_name, 0);
+    idl_this_iface(idb_index_handle_is, "IDBIndex");
     g_ready = 1;
     agent_state_flag("idb_index_handle", &g_ready, "the declaration latch");
     agent_state_ptr("idb_index_handle", &g_ix_rt, "the runtime §2.6.1's slot key was minted in");
