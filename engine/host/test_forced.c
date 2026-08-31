@@ -2206,6 +2206,42 @@ static const char *HTML =
     "var _rr = 'x1y2'.replace(/\\d/g, function(d){ return cfg.admin ? 'rrA'+d : 'rrP'+d; }); fetch('/api/rerepfork?v=' + _rr);"   /* @@replace CALLBACK fork (JSReRep): an OBJECT searchValue dispatches to RegExp.prototype[@@replace], whose machine holds THREE things across each callback — the collected match array, the spec's captures List in its own block, and the StringBuffer accumulator with nextSourcePosition. The replacer branches on opaque state at the FIRST of two matches, so the sibling must get its own copy of all three or the second match lands in the wrong accumulator. Pure paths xrrA1yrrA2 and xrrP1yrrP2 both present => each arm substituted BOTH matches into its OWN buffer. */
     "var _red=[1,2].reduce(function(acc,x){ return acc + (cfg.admin ? 'rA' : 'rP') + x; }, 'r:'); fetch('/api/redfork?v=' + _red);"   /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold, so clone_deep_flow clones the JSArrayReduce accumulator per arm. The pure paths r:rA1rA2 and r:rP1rP2 both present ⇒ each arm threaded its OWN accumulator across both elements (never a shared/contaminated acc) */
     "var _tpj={toString:function(){ return cfg.admin ? 'tpA' : 'tpP'; }}; fetch('/api/toprimfork?v=' + ['x','y'].join(_tpj));"   /* MACHINE-MODE ToPrimitive fork: 23.1.3.18 Array.prototype.join coerces its SEPARATOR, so §7.1.1 ToPrimitive runs the page's toString ON THE TRAMP with the JSArrayJoin machine as the JSToPrim's OUTER requester — a machine that owns no frame and is reachable only through `outer`. The branch is INSIDE that toString. Both pure paths xtpAy and xtpPy present ⇒ tramp_cont_relink_outer cloned the machine as well as the sequence, so each arm finished its own join with its own separator (a shared machine would leave one arm's separator in the other's buffer, or free the cursor twice) */
+    /* SORT'S COMPARISON OVER UNKNOWN EXTERNAL INPUT — the ONE branch a builtin makes ON ITS OWN operand that
+       must NOT fork. §23.1.3.30.2 CompareArrayElements ( x, y, comparator ) step 4.a coerces what the
+       comparator returned, and when that answer is unknown input the ordering it states is meaningless: the
+       comparison collapses to the +0 step 4.b already gives a NaN, and §23.1.3.30.1 SortIndexedProperties
+       ( obj, length, sortCompare, holes )'s stability condition turns that into the identity permutation. The
+       PROBE IS THAT THE ELEMENTS SURVIVE AS THEMSELVES: `sc0sc1-2` can only be read off a real Array of two
+       real objects, so it is false both when the merge aborts and when the machine's completion is replaced
+       by a derived unknown (which has no `[0]`, no `.u` and no `.length` the page ever computed). */
+    "var _sc=[{u:'sc0'},{u:'sc1'}].sort(function(a,b){ return state.rank; }); fetch('/api/sortcollapse?v=' + _sc[0].u + _sc[1].u + '-' + _sc.length);"
+    /* THE SECOND WAY IN, which a pre-check on the comparator's result cannot see: an ORDINARY object whose
+       valueOf answers with unknown input, so §7.1.1 ToPrimitive is what discovers it, one hop after any
+       look-before-you-coerce would have run. Same collapse, reached from the coercion's own report. */
+    "var _sv=[{u:'sv0'},{u:'sv1'}].sort(function(a,b){ return { valueOf: function(){ return state.rank; } }; }); fetch('/api/sortvalueof?v=' + _sv[0].u + _sv[1].u);"
+    /* A REST PARAMETER, which is the ONE argument shape that can see a callback frame borrowing slots it does
+       not own: every other spelling takes the identical path and cannot find it. `-2` is the rest array having
+       received both of CompareArrayElements' operands. */
+    "var _srn=-1; var _sr=[{u:'sr0'},{u:'sr1'}].sort(function(...r){ _srn=r.length; return state.rank; }); fetch('/api/sortrest?v=' + _sr[0].u + _sr[1].u + '-' + _srn);"
+    /* THE DEFAULT ORDERING'S HALF OF THE SAME QUESTION — no comparator, so §23.1.3.30.2 steps 5-6 ToString both
+       operands and an unknown element has no String for steps 7-10 to test. The two concrete elements must
+       still be ORDERED against each other (sd1 before sd2), which is what makes this different from suppressing
+       the comparison altogether, and the unknown must still be an element (length 3). */
+    "var _sd=['sd2','sd1',state.rank].sort(); fetch('/api/sortdefault?v=' + _sd[0] + _sd[1] + '-' + _sd.length);"
+    /* AND THE TYPED-ARRAY SORT, whose elements are all real Numbers the engine read out of the buffer — so a
+       completion replaced by a derived unknown costs a list of concrete values and gains nothing.
+       §23.2.4.8 CompareTypedArrayElements ( x, y, comparator ) step 2.b is the same +0. `same` is the receiver
+       coming back (a derived unknown is a different object), and the three digits are the write-back having
+       run at all. */
+    "var _ta=new Int32Array([3,1,2]); var _tr=_ta.sort(function(a,b){ return state.rank; }); fetch('/api/sortta?v=' + (_tr===_ta?'same':'other') + '-' + _tr.length + '-' + _ta[0] + _ta[1] + _ta[2]);"
+    /* THREE CONTROLS, IDENTICAL ON BOTH SIDES OF THAT CHANGE. (1) NaN takes the very predicate the collapse
+       now leaves through, so a collapse written as its own branch instead of as `v = 0` would show here first.
+       (2) The default ordering with nothing unknown in it. (3) THE FORK THAT MUST SURVIVE: the branch is INSIDE
+       the comparator's body, not over its result, so both orderings must still be reached — removing that one
+       is how a collapse turns into the arm-pruning it is supposed to avoid. */
+    "var _cn=['n1','n2','n3','n4'].sort(function(){ return NaN; }); fetch('/api/sortnan?v=' + _cn.join(''));"
+    "var _cd=['cdb','cda','cdc'].sort(); fetch('/api/sortdefctl?v=' + _cd.join(''));"
+    "var _cb=[{u:'cb0'},{u:'cb1'}].sort(function(a,b){ return cfg.admin ? 1 : -1; }); fetch('/api/sortbranch?v=' + _cb[0].u + _cb[1].u);"
     "function* gcf(){ if (cfg.admin) { yield 'gcA'; } else { yield 'gcP'; } } var gci=gcf(); fetch('/api/gcallfork?v=' + gci.next.call(gci).value);"   /* generator .next() driven via .call BYPASS: gci.next.call(gci) reshapes at do_forward_call to the [this=gen, f=next] shape and is now routed onto do_generator_tramp (not the js_generator_next drive-to-completion). The body branches -> both gcA and gcP, never a DFAIL */
     "function* gapf(){ if (cfg.admin) { yield 'gapA'; } else { yield 'gapP'; } } var gapi=gapf(); fetch('/api/gapplyfork?v=' + gapi.next.apply(gapi, []).value);"   /* generator .next() via Function.prototype.apply BYPASS: reshaped at OP_call_method to [this=gen, next, arg0] and routed onto do_generator_tramp -> both gapA and gapP, never drive-to-completion */
     "function* graf(){ if (cfg.admin) { yield 'graA'; } else { yield 'graP'; } } var grai=graf(); fetch('/api/grefapplyfork?v=' + Reflect.apply(grai.next, grai, []).value);"   /* generator .next() via Reflect.apply BYPASS: [Reflect,apply,target,this,argsList] reshaped to [this=gen, next, arg0] and routed onto do_generator_tramp -> both graA and graP */
@@ -6202,6 +6238,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        through `outer`, so nothing but the requester walk clones it. Both xtpAy and xtpPy present ⇒ each arm
        finished its own join with its own separator off its own machine. */
     int toprimfork_tt = (strstr(js, "\"/api/toprimfork\"") && strstr(js, "xtpAy") && strstr(js, "xtpPy"));
+    /* SORT'S COMPARISON OVER UNKNOWN EXTERNAL INPUT, COLLAPSED RATHER THAN FORKED OR PROPAGATED. Each needle is
+       a string that can ONLY be composed from a real Array of real elements, so it is false in both directions
+       the collapse can be got wrong: the comparison forking (two arms, neither of which is the identity order)
+       and the machine's completion becoming a derived unknown (which has no [0], no .u and no .length the page
+       ever computed). `sc0sc1-2` is the direct concolic result; `sv0sv1` is the same through an ordinary object
+       whose valueOf answers unknown, which no pre-check on the comparator's result could have seen; `sr0sr1-2`
+       adds the REST PARAMETER, the one argument shape that can see a callback frame borrowing slots it does
+       not own; `sd1sd2-3` is the DEFAULT ordering, where the two concrete elements must still be ordered
+       against each other and the unknown must still be an element; `same-3-312` is the typed-array sort's
+       receiver coming back with its write-back performed. */
+    int sortcollapse_tt = (strstr(js, "\"/api/sortcollapse\"") && strstr(js, "sc0sc1-2"));
+    int sortvalueof_tt  = (strstr(js, "\"/api/sortvalueof\"") && strstr(js, "sv0sv1"));
+    int sortrest_tt     = (strstr(js, "\"/api/sortrest\"") && strstr(js, "sr0sr1-2"));
+    int sortdefault_tt  = (strstr(js, "\"/api/sortdefault\"") && strstr(js, "sd1sd2-3"));
+    int sortta_tt       = (strstr(js, "\"/api/sortta\"") && strstr(js, "same-3-312"));
+    /* THE CONTROLS, which must read the same before and after that collapse exists. sortnan takes the very
+       predicate the collapse leaves through (23.1.3.30.2 step 4.b's +0 for NaN), sortdefctl is the default
+       ordering with nothing unknown in it, and sortbranch is THE FORK THAT MUST SURVIVE — the branch is inside
+       the comparator's BODY rather than over its result, so both orderings are still two worlds. */
+    int sortnan_tt      = (strstr(js, "\"/api/sortnan\"") && strstr(js, "n1n2n3n4"));
+    int sortdefctl_tt   = (strstr(js, "\"/api/sortdefctl\"") && strstr(js, "cdacdbcdc"));
+    int sortbranch_tt   = (strstr(js, "\"/api/sortbranch\"") && strstr(js, "cb0cb1") && strstr(js, "cb1cb0"));
     /* generator .next() driven via .call (gci.next.call(gci)): the reflection bypass that previously DFAILed as a
        drive-to-completion is now routed onto do_generator_tramp at do_forward_call. Both gcA and gcP present ⇒ the
        branch inside the .call-driven generator body snapshot-forks per arm, never drives to completion. */
@@ -7137,6 +7195,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE },
         { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE },
         { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE },
+        { "sortcollapse", sortcollapse_tt, "/api/sortcollapse", SESS_EXPLORE },
+        { "sortvalueof", sortvalueof_tt, "/api/sortvalueof", SESS_EXPLORE },
+        { "sortrest", sortrest_tt, "/api/sortrest", SESS_EXPLORE },
+        { "sortdefault", sortdefault_tt, "/api/sortdefault", SESS_EXPLORE },
+        { "sortta", sortta_tt, "/api/sortta", SESS_EXPLORE },
+        { "sortnan", sortnan_tt, "/api/sortnan", SESS_EXPLORE },
+        { "sortdefctl", sortdefctl_tt, "/api/sortdefctl", SESS_EXPLORE },
+        { "sortbranch", sortbranch_tt, "/api/sortbranch", SESS_EXPLORE },
         { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE },
         { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE },
         { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE },
