@@ -7,6 +7,9 @@
 #include "core/agent_state.h"
 #include "core/frame/remote_object.h"
 #include "core/frame/remote_op.h"
+/* §7.2.1.3.1 CrossOriginProperties ( O )'s list, asked rather than copied — a `windowproxy.get` names a member
+   and this agent must not perform one the standard does not list. */
+#include "core/frame/window_proxy.h"
 #include "core/realm.h"
 
 /* WHICH OPERATION A RECORD IS, and everything that is a fact about it, on one row. The verb, how many fields
@@ -171,8 +174,29 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
     DCHECK(op != NULL, "the program of a cross-agent operation that was never parsed");
     g = JS_GetGlobalObject(ctx);
     if (op->op == OP_WPGET) {
-        /* THE MEMBER NAME IS NOT AN ENCODED VALUE. §7.2.1's list is a fixed twelve of this engine's own
-           spelling (window_proxy.c's PROXY_MEMBER), so it crosses as itself. */
+        /* THE MEMBER NAME IS NOT AN ENCODED VALUE. HTML §7.2.1.3.1 CrossOriginProperties ( O ) names THIRTEEN
+           cross-origin accessible window property names, and they are this engine's own spelling
+           (window_proxy.c's PROXY_MEMBER), so the member crosses as itself rather than through
+           remote_object.c's value grammar. */
+        /* AND IT IS CHECKED AGAINST THAT LIST HERE, WHICH IS THE ONLY END OF THIS SEAM THAT CAN. The ASKING
+           half cannot emit an unlisted name — window_proxy.c builds the record out of `PROXY_MEMBER[magic]`,
+           an index into a fixed table — but that is a fact about one writer, and what arrives here is TEXT
+           from another instance, relayed by a zone whose contract is that it does not read what it routes and
+           could not judge this if it did (remote_op.h: "only an engine knows what a name means"). SECURITY.md
+           makes every WASM instance untrusted, so this program's operand is attacker-reachable input, and
+           `globalThis[k]` for an unlisted `k` is a CROSS-ORIGIN READ of a member §7.2.1.3.1 does not list —
+           `document`, `cookie`, anything the peer's global carries — computed by the peer and relayed to the
+           asker as an ordinary completion. Nothing downstream can tell that answer from a listed one: it is a
+           real value of the peer's, which is the defaulted-field failure with an origin boundary under it.
+           A CHECK AND NOT A DCHECK, for the same reason the field count above is one and one step stronger:
+           this is §Offensive-programming's security boundary, so the release build must not perform the read
+           either. There is deliberately nothing to fall back to — a record naming an unlisted member was not
+           written by this engine's asking half, and answering it at all is the defect. */
+        CHECK(window_proxy_cross_origin_property(op->f[3]) != NULL,
+              "a cross-agent record asked this agent to read a Window member HTML §7.2.1.3.1 CrossOriginProperties "
+              "( O ) does not list among the cross-origin accessible window property names — performing it "
+              "would compute a cross-origin read of this document's own global and relay it to the asking "
+              "instance as an ordinary answer");
         JS_SetPropertyStr(ctx, g, "__apiclientKey", JS_NewString(ctx, op->f[3]));
     } else {
         /* THE OBJECT IS NAMED BY (GENERATION, ID) — see remote_object.h. An id alone is an index into

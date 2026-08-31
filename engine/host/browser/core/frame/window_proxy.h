@@ -404,6 +404,14 @@ typedef struct {
 int window_proxy_security_check(JSContext *ctx, JSValueConst platform_object, const char *identifier,
                                 WindowProxySecurityType type);
 
+/* §7.2.1.3.1 CrossOriginProperties ( O )'s WINDOW ARM, ASKED BY NAME — its record, or NULL for a name the
+   standard does not list. The check above answers "may THIS access proceed" for an object in this heap; this
+   answers the prior question "is this name on the list at all", which is what the PERFORMING end of a
+   cross-instance read has to ask before it runs a program for a member another instance named. Two callers,
+   ONE list: a second table of the thirteen wherever the second question is asked is exactly the copy
+   window_proxy.c's capture-time loop exists to make impossible. Side-effect-free; needs no realm. */
+const CrossOriginProperty *window_proxy_cross_origin_property(const char *name);
+
 /* AND WHETHER THAT RECEIVER IS THE ONE THE MEMBER'S OWN REALM ANSWERS FOR. An attribute whose value the realm
    ALREADY HOLDS is correct exactly while §3.7.6's idlObject is this realm's Window — normally true, because
    each realm installs its own getter over its own value and js_call_c_function sets ctx to the member's realm.

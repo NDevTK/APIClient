@@ -22,13 +22,20 @@
    FORKING the segment record 1 created. That fork is world_segment's nearest-first materialization, and until
    this fixture drove it, nothing outside a self-test had ever called it.
 
-   AND IT ASKS THE READ, which is the half the ABI has no entry for and which nothing had ever asked. §7.2.5.1's
-   cross-origin allowlist is a fixed twelve, and of them exactly ONE cannot be answered by the navigable's own
-   record: `length` is the child-navigable count of the peer's ACTIVE DOCUMENT (window_proxy.c answers every
-   other one in the asking turn). So `w.length` is the whole of this engine's synchronous cross-instance read
-   surface, and until this fixture wrote it the request record `windowproxy.get` had never been emitted by the
-   production entry at all — the sender's half was written, reviewed, and unexercised in exactly the way the
-   world registry was.
+   AND IT ASKS THE READ, which is the half the ABI has no entry for and which nothing had ever asked. HTML
+   §7.2.1.3.1 CrossOriginProperties ( O )'s cross-origin allowlist is a fixed THIRTEEN, and of them TWO cannot
+   be answered out of the asking agent's own record: `length` is the child-navigable count of the peer's ACTIVE
+   DOCUMENT, and `closed` is a fact only the agent that ran §7.2.2.1 opening and closing windows' close() holds
+   — a local `true` is terminal and answered here, but a local `false` says nothing about the peer, which is
+   why that one crosses too. (window_proxy.c answers the other eleven in the asking turn.) Those two ARE this
+   engine's synchronous cross-instance read surface, and until this fixture wrote them the request record
+   `windowproxy.get` had never been emitted by the production entry at all — the sender's half was written,
+   reviewed, and unexercised in exactly the way the world registry was.
+   THE COUNTS ABOVE WERE BOTH WRONG AND THE DRIVE ITSELF IS WHAT REFUTED THEM: this paragraph said a fixed
+   TWELVE (the standard's Window arm is thirteen, and its own list below names thirteen) and said `w.length`
+   was the WHOLE of that surface, while every run of this file crosses `closed` far more often than `length`.
+   A claim about THIS TREE inside a comment is checked by the instrument standing next to it, and here the
+   instrument was this driver's own output.
 
    IT IS PLACED LAST AND ITS RESULT IS POSTED, so the read is a load-bearing part of the measurement rather
    than a statement whose value is discarded: the fourth and fifth records cannot be emitted until the read is
@@ -457,7 +464,8 @@ async function service(e) {
                        by: [] });
       console.log(`  [${e.tag}] cross-agent read asked: ${op}`);
       /* THE PEER IS ASKED, AND NOTHING IS ANSWERED INSIDE THAT CALL. It answers by RUNNING A PROGRAM — the IDL
-         getter §7.2.5.1 defines the member as — as a flow on its own frontier, so the completion arrives on a
+         getter HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper ( O, P ) reaches the member through, as a flow
+         on its own frontier, so the completion arrives on a
          later step of that instance and comes out through its notices like every other emission. Pumping it
          here is this zone's job precisely because the answer is not a return value. */
       holder.M.ccall('qjs_perform', 'void', ['number','number'], [holder.cs(key), holder.cs(op)]);
@@ -1087,13 +1095,14 @@ if (!got.length)
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
                   'and never used, which is the state this driver exists to detect');
 /* ASKED IS THE FIRST HALF AND IT IS NOW TRUE. A zero here would mean `w.length` resolved WITHOUT reaching the
-   peer, which is a §7.2.5.1 fidelity bug and not a transport gap: `length` is the child-navigable count of the
-   OTHER document, so an answer produced in the asking instance counted this document's frames and called them
-   the other's. */
+   peer, which is a §7.2.2.2 fidelity bug and not a transport gap: HTML §7.2.2.2 Indexed access on the Window
+   object writes the getter as "return this's associated Document's document-tree child navigables's size", and
+   that Document is the OTHER one — so an answer produced in the asking instance counted this document's frames
+   and called them the other's. */
 if (!reads.size)
-  fail('`w.length` on a cross-origin WindowProxy asked the peer nothing — §7.2.5.1 answers it from the child-' +
-       "navigable count of the PEER's active document, so an answer that never left this instance counted the " +
-       "asking document's own frames");
+  fail('`w.length` on a cross-origin WindowProxy asked the peer nothing — HTML §7.2.2.2 Indexed access on the ' +
+       "Window object answers it from the document-tree child navigables of the PEER's active document, so an " +
+       "answer that never left this instance counted the asking document's own frames");
 /* AND ANSWERED IS THE SECOND, AND IT IS THE HALF THAT CARRIES A VALUE BACK. Everything above this line is the
    ASKING half — the world vector, its ancestry, the segment the peer materializes from it, the origin stamp. A
    read that is asked and never answered leaves the asking flow parked with its snapshot intact, which is the

@@ -1745,6 +1745,36 @@ static JSAtom g_xo_atom[CROSS_ORIGIN_NAME_N];
 #define XO_FALLBACK_N 4
 static JSAtom g_xo_fallback[XO_FALLBACK_N];
 
+/* §7.2.1.3.1 CrossOriginProperties ( O )'s WINDOW ARM, ASKED BY NAME — the one list answering one more caller.
+ *
+ * IT IS EXPORTED BECAUSE THE OTHER END OF THE CROSS-INSTANCE SEAM HAD NO WAY TO ASK IT. Everything above
+ * decides what THIS agent hands out for a name a page wrote, and the asking half of a cross-document read is
+ * correct by construction — it can only emit `PROXY_MEMBER[magic]`, an index into a fixed table. The
+ * PERFORMING half receives that member as TEXT from another instance, through a routing zone whose whole
+ * contract is that it does not read what it routes, and SECURITY.md makes every WASM instance untrusted. So
+ * the name a peer performs `globalThis[name]` for is the one place on this seam where an unlisted member
+ * would be read across origins and relayed, and until this entry existed there was nothing there to ask.
+ *
+ * IT IS A LOOKUP AND NOT A PREDICATE because the caller needs the RECORD: §7.2.1.3.1 writes each entry with
+ * its [[NeedsGetter]] and [[NeedsSetter]], and a `bool` here would be the second copy this file's own
+ * capture-time loop exists to make impossible — the flags would then have to be re-derived wherever the
+ * second question is asked. NULL for a name the standard does not list, which is the caller's to crash on:
+ * what a refusal MEANS differs by end (a page gets §7.2.1.3.2's SecurityError; a peer performing a record
+ * gets an abort, because a record naming an unlisted member was written by something that is not this
+ * engine's asking half). Side-effect-free, and the list is static, so it is answerable with no realm. */
+const CrossOriginProperty *window_proxy_cross_origin_property(const char *name)
+{
+    int i;
+
+    DCHECK(name != NULL,
+           "§7.2.1.3.1 CrossOriginProperties ( O ) was asked about no name — its own step is a SameValue "
+           "against each entry's [[Property]], so an unnamed member would match nothing and be reported "
+           "unlisted, which is the answer that reads as a refusal rather than as a broken caller");
+    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
+        if (!strcmp(CROSS_ORIGIN[i].name, name)) return &CROSS_ORIGIN[i];
+    return NULL;
+}
+
 /* CAPTURED ONCE PER AGENT, from THIS realm's %Symbol%, before any page script runs — the same rule and the same
    reason as remote_object.c's well-known table: `Symbol` is a global a page may replace, and a well-known
    symbol resolved after that names whatever the page put there. Atoms are the RUNTIME's, and an agent is one
