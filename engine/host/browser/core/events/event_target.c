@@ -1179,6 +1179,40 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onwebkitanimationstart", "webkitAnimationStart", EH_GLOBAL)                                               \
     X("onwebkittransitionend", "webkitTransitionEnd", EH_GLOBAL)                                                 \
     X("onwheel", "wheel", EH_GLOBAL)                                                                             \
+    /* POINTER EVENTS LEVEL 3 §6 Extensions to the `GlobalEventHandlers` mixin — TEN of that section's eleven.   \
+       §6's IDL is a `partial interface mixin GlobalEventHandlers`, so these are GlobalEventHandlers members     \
+       exactly like §8.1.8.2.1's own, and EH_GLOBAL is the whole of what installs them: every HTML element, every\
+       Document and every Window that already gets `onclick` gets these by the same bit and the same accessor.   \
+       THEY ARE EVENT HANDLER CONTENT ATTRIBUTES TOO, and that is HTML §8.1.8.1 Event handlers' own statement    \
+       rather than this list's inference — "Event handlers are exposed in two ways. The first way, common to all \
+       event handlers, is as an event handler IDL attribute. The second way is as an event handler content       \
+       attribute. Event handlers on HTML elements and some of the event handlers on Window objects are exposed in\
+       this way." Pointer Events itself says nothing about content attributes (the phrase does not occur in it), \
+       which is exactly why the answer has to come from HTML: the set is the names of the event handler IDL      \
+       attributes, so these ten reach Trusted Types §3.8's TrustedScript test and HTML §8.6.2's remove-unsafe    \
+       deny-list through the one list below, and `<img onpointerover=…>` stops being an attribute the Sanitizer  \
+       keeps.                                                                                                    \
+       NOT COVERED: §6's eleventh row, `[SecureContext] attribute EventHandler onpointerrawupdate`. Every other  \
+       row here installs unconditionally and that one must not, so its exposure is a per-REALM question this     \
+       installer cannot ask: event_target_install_handlers selects rows by ONE constant mask, and                \
+       engine/idl_installed.mjs resolves exactly that one row filter — its `selectorOf` matches a single         \
+       `if (!(TBL[i] & param)) continue;` and nothing else — so a second per-row condition would be invisible to \
+       it and the name would be credited to every caller in every realm, a false COMPLETE the audit cannot print.\
+       THE NEXT DIFF BUILDS a per-realm exposure selector at this installer, answered by                         \
+       core/frame/secure_context.h's `secure_context_is`, together with the reading in idl_installed.mjs that    \
+       attributes it. ITS ABSENCE SHOWS as `"onpointerrawupdate" in el` answering false on a secure page — an    \
+       assignment to it stays an ordinary JS property that no `pointerrawupdate` dispatch reaches — and as       \
+       engine/idlgen.mjs reporting it ABSENT on HTMLElement, Document and Window. */                             \
+    X("onpointerover", "pointerover", EH_GLOBAL)                                                                 \
+    X("onpointerenter", "pointerenter", EH_GLOBAL)                                                               \
+    X("onpointerdown", "pointerdown", EH_GLOBAL)                                                                 \
+    X("onpointermove", "pointermove", EH_GLOBAL)                                                                 \
+    X("onpointerup", "pointerup", EH_GLOBAL)                                                                     \
+    X("onpointercancel", "pointercancel", EH_GLOBAL)                                                             \
+    X("onpointerout", "pointerout", EH_GLOBAL)                                                                   \
+    X("onpointerleave", "pointerleave", EH_GLOBAL)                                                               \
+    X("ongotpointercapture", "gotpointercapture", EH_GLOBAL)                                                     \
+    X("onlostpointercapture", "lostpointercapture", EH_GLOBAL)                                                   \
     /* WindowEventHandlers — §8.1.8.2's THIRD table, "reified as event handler IDL attributes through the        \
        WindowEventHandlers interface mixin". It was called the second table here and said the set was            \
        Document's; §8.1.8.2's second table is the six Window-reflecting names above, and the mixin is included   \
@@ -1272,12 +1306,33 @@ static const int EH_MASK[] = {
    written and a typo in either is a handler that never fires with nothing to say so. */
 static void eh_assert_types(void)
 {
-    int i, reflecting = 0, window = 0;
+    int i, j, reflecting = 0, window = 0;
 
     for (i = 0; i < EH_COUNT; i++) {
         const char *n = EH_NAME[i], *t = EH_TYPE[i];
         DCHECK(n[0] == 'o' && n[1] == 'n' && n[2] != 0,
                "an event handler IDL attribute was declared with a name that is not `on` plus an event type");
+        /* BOTH COLUMNS ARE KEYS, AND NEITHER IS CHECKED BY THE C COMPILER. The NAME column is the property key
+           this file interns and defines an accessor pair under, so two rows sharing one name define the same
+           property twice and the second install silently wins — a row nobody can reach through its own
+           interface. The TYPE column is worse, because it is the key of a MAP: js_handler_set writes the
+           handler at `EH_TYPE[magic]` in the target's §8.1.8.1 event handler map and registers the marker
+           listener for that same type, so two rows sharing one type share ONE handler slot and ONE listener —
+           assigning `el.onA = f` would answer `el.onB` and would fire on B's dispatch. Every mask bit is a
+           reason to add another row over the SAME event, which is exactly how a duplicate arrives, and until
+           now the two hand-written columns were checked against each other and never against themselves. */
+        for (j = 0; j < i; j++) {
+            DCHECK(strcmp(EH_NAME[j], n) != 0,
+                   "two rows of the event handler list declare the SAME attribute name — the name is the "
+                   "property key this file defines an accessor pair under, so the later row's install "
+                   "replaces the earlier one and one of the two interfaces answers the other's member; a name "
+                   "belonging to several mixins is ONE row carrying several mask bits");
+            DCHECK(strcmp(EH_TYPE[j], t) != 0,
+                   "two rows of the event handler list name the SAME event type — HTML §8.1.8.1's event "
+                   "handler map is keyed by TYPE and so is the marker listener this file registers, so the "
+                   "two attributes would share one handler slot: setting either would be readable through "
+                   "both and would fire on the other's dispatch");
+        }
         DCHECK(strcmp(&n[2], t) == 0 || strncmp(n, "onwebkit", 8) == 0,
                "an event handler's event type is not its name past the `on`, and §8.1.8.2's table names only "
                "the four legacy webkit aliases as exceptions");
@@ -1555,7 +1610,7 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
     DCHECK(JS_IsObject(target), "event handlers were installed on something that is not an object");
     for (i = 0; i < EH_COUNT; i++) {
         /* WEB IDL §3.7.6 Attributes NAMES THE FUNCTIONS, NOT THE PROPERTY. An event handler is an ordinary IDL
-           attribute — HTML §8.1.7.1 Event handlers declares each as `attribute EventHandler onfoo` — so its
+           attribute — HTML §8.1.8.1 Event handlers declares each as `attribute EventHandler onfoo` — so its
            accessors are named by §3.7.6 like every other attribute's: "get onclick" and "set onclick", never
            the bare handler name. Both mints took EH_NAME[i], which is the PROPERTY key and is right for the
            atom below and wrong for the two functions. This is the largest attribute family in the engine and
