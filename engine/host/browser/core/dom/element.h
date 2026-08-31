@@ -122,6 +122,35 @@ void    element_attr_set_value(JSContext *ctx, JSValueConst el, const char *name
 char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name);
 void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value);
 
+/* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE `double` MODEL, both directions, for the
+ * members the enum above deliberately does not carry.
+ *
+ * WHY IT IS A PAIR OF FUNCTIONS AND NOT A `REFLECT_DOUBLE` ROW. §2.6.2's `[ReflectSetter]` says only the SETTER
+ * reflects, so every `double` member of §4.10.13 and §4.10.14 has a getter that is its own algorithm and a
+ * setter that is these steps — a row could not answer the getter, which is the half-implemented row the enum's
+ * own comment refuses. The one member whose BOTH directions are §2.6.1's is §4.10.13's `max`
+ * (`[ReflectPositive, ReflectDefault=1.0]`), and a row for it would compute "the maximum value of the progress
+ * bar" a SECOND time: §4.10.13's `value` and `position` are both defined over that number, so the component
+ * must have it anyway and two implementations of one number is the duplication a shared registry exists to
+ * remove. So §2.6.1's double model lives here, with §2.6.1's other models, and its callers are components.
+ *
+ * `member` NAMES THE DERIVATION, not the attribute: an unknown parked in a content attribute keeps its
+ * provenance through the parse exactly as REFLECT_ULONG's does, and the operation name is what tells
+ * `meter.low` and `meter.high` apart when both derive from one source.
+ *
+ * THE GETTER'S THREE FALLBACKS ARE §2.6.1'S OWN and are not interchangeable: a value that PARSES and is
+ * positive is returned; a value that parses and is not positive is returned only when the member is not
+ * `positive_only`; anything else is `dflt` when the member declares one and 0 when it does not. */
+JSValue element_reflect_double_get(JSContext *ctx, JSValueConst el, const char *attr, const char *member,
+                                   bool positive_only, bool has_dflt, double dflt);
+/* §2.6.1's double SETTER steps: "If the reflected IDL attribute is limited to only positive numbers and the
+   given value is not greater than 0, then return. Run this's set the content attribute with the given value,
+   converted to the best representation of the number as a floating-point number."
+   `val` has already crossed Web IDL §3.2.7's `double`, so a NaN or an infinity threw before this is reached —
+   EXCEPT for unknown external input, which §3.2.7 crosses as itself (idl_concolic_rule). */
+void element_reflect_double_set(JSContext *ctx, JSValueConst el, const char *attr, const char *member,
+                                JSValueConst val, bool positive_only);
+
 /* HTML §4.12.1.1 "Processing model"'s CHILDREN CHANGED STEPS, RECORDED FOR THE ONE DRAIN THAT CAN RUN THEM —
    see element.c. Their step 2 runs the post-connection steps, which end at step 36's "immediately execute the
    script element el", and the hook that carries them is called from inside the DOM mutation chokepoint, where

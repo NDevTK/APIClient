@@ -506,6 +506,19 @@ const INTERFACES = {
   HTMLLinkElement:     [...HTML_BASE],
   HTMLMetaElement:     [...HTML_BASE],
   HTMLDivElement:      [...HTML_BASE],
+  /* §4.10.13 The progress element and §4.10.14 The meter element — the two GAUGES, and the two interfaces whose
+     own members are an ALGORITHM over the element's attributes rather than a mirror of any one of them. They had
+     no row, so the audit found them only from their §3.7.3 tag and attributed their members to
+     core/html/html_element.c, which is where the wrong answer hid: `meter.min` and `meter.max` were declared
+     REFLECT_STRING in that file's per-tag table, so both names WERE installed — as strings, where §4.10.14
+     declares `attribute double` and its getter steps return "this's minimum value". A member-presence diff
+     cannot see that, which is why these rows name the components that own the algorithms.
+     core/html/html_form.c IS NOT NAMED in either row, and the cross-check is what would say so: `labels` is
+     INSTALLED by the component on its own interface's prototype, and what the form layer owns is the label
+     ASSOCIATION the member calls — a file that installs nothing on these prototypes is not what they are built
+     out of, the same rule DOM §6's three traverser rows state about NodeFilter. */
+  HTMLMeterElement:    [...HTML_BASE, "core/html/html_meter.c"],
+  HTMLProgressElement: [...HTML_BASE, "core/html/html_progress.c"],
   /* §3.1.1's partial interface is installed by THREE components and the row named one, which since attribution
      no longer changes the count — it changes what the CROSS-CHECK is over. Named here so that this row states
      what Document is really built out of: §3.1.4/§3.1.5's `cookie`, `referrer`, `lastModified` and

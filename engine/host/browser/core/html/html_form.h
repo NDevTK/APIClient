@@ -54,10 +54,13 @@ JSValue html_form_reset_owner(JSContext *ctx, JSValueConst wrap, bool *pchanged)
 JSValue html_form_reset_owner_with_attr(JSContext *ctx, JSValueConst wrap, const char *form_attr,
                                         size_t form_attr_len, bool *pchanged);
 
-/* HTML §4.10.19's "labels": every `label` element in the element's tree whose `for` attribute is the element's
-   ID, plus every ancestor label, in tree order — as a STATIC NodeList, the same named gap querySelectorAll
-   carries. Here rather than in the label element's own file because there is no label component: the algorithm
-   is the form layer's, and `ElementInternals.labels` is its one caller. */
+/* HTML §4.10.4 "The label element"'s `labels`: every `label` element in the element's tree whose LABELED
+   CONTROL is this element, in tree order — as a STATIC NodeList, the same named gap querySelectorAll carries.
+   Here rather than in the label element's own file because there is no label component: the algorithm is the
+   form layer's, and it is one predicate with §4.10.4's other direction (a label's own `control`).
+   THE CITATION WAS §4.10.19 AND THAT SECTION IS "Attributes common to form controls", which says nothing about
+   labels; the callers are the members of every LABELABLE element (§4.10.2 Categories lists the eight), of which
+   §4.10.13's `progress` and §4.10.14's `meter` are built. */
 JSValue html_form_labels_of(JSContext *ctx, JSValueConst wrap);
 
 /* HTML §4.10.19's "a form control is disabled": the element carries a `disabled` content attribute, or it is a

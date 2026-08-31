@@ -474,7 +474,8 @@ static JSValue js_internals_get(JSContext *ctx, JSValueConst this_val, int magic
         break;
     }
     case EI_LABELS:
-        /* §4.10.19 says "it must return that NodeList object, and that same value must always be returned" —
+        /* §4.10.4 The label element says "it must return that NodeList object, and that same value must always
+           be returned" —
            a LIVE collection, cached. This answers with a fresh STATIC one, which is content-correct and
            identity-wrong, and caching the static one would make it identity-right and CONTENT-wrong the first
            time a label is added. The right answer is a live collection over the label-association predicate,

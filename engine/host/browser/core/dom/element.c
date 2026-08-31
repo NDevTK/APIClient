@@ -13,6 +13,7 @@
  * setAttribute also carries TAINT. Lexbor stores bytes, so an attacker value written into an attribute and read
  * back would come out a plain string with its provenance gone; attr_shadow keeps the (element,name) -> concolic
  * association, so `el.setAttribute("data-x", location.hash)` followed later by a sink read is still solved. */
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -69,6 +70,7 @@
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include "core/html/integer_microsyntax.h"
+#include "core/html/number_microsyntax.h"   /* §2.3.4.3, which §2.6.1's `double` model parses and writes with */
 #include "core/url/url.h"
 #include <lexbor/ns/ns.h>
 
@@ -1428,6 +1430,108 @@ void element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const c
 
     element_attr_set_value(ctx, el, name, v);
     JS_FreeValue(ctx, v);
+}
+
+/* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE `double` MODEL. See element.h for why
+ * these are two functions rather than a kind of the registry above.
+ *
+ * THE GETTER'S SHAPE IS el_reflect_ulong's, and deliberately: read the attribute AS A VALUE so an unknown
+ * parked there arrives whole, run §2.3.4.3 "Floating-point numbers"' real rules on the concrete example, and
+ * re-wrap the numeric answer as a DERIVATION of that same unknown. A value with no example has no bytes for the
+ * rules to consume, which is §2.6.1's own "if contentAttributeValue is null" / parse-error arm rather than a
+ * hole — the algorithm's own fallback is then the example the derivation carries.
+ *
+ * AN ATTRIBUTE THAT PARSES TO ZERO OR A NEGATIVE IS NOT A PARSE ERROR, and the two arms answer differently for
+ * a `positive_only` member: §4.10.13's `<progress max="0">` reads 1.0 (the default), while a member that is not
+ * limited to positive numbers would read the 0. Writing this as one "did it parse" test collapses them. */
+JSValue element_reflect_double_get(JSContext *ctx, JSValueConst el, const char *attr, const char *member,
+                                   bool positive_only, bool has_dflt, double dflt)
+{
+    JSValue raw = element_attr_get_value(ctx, el, attr);
+    JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
+    double parsed = 0, answer;
+    bool ok = false;
+
+    DCHECK(member != NULL,
+           "§2.6.1's double getter was asked without naming the MEMBER it answers — the name is what tells two "
+           "derivations from one attribute apart, and it is the operation concolic_builtin_hook composes");
+    if (JS_IsString(concrete)) {
+        size_t len = 0;
+        const char *s = JS_ToCStringLen(ctx, &len, concrete);
+
+        if (!s) { JS_FreeValue(ctx, concrete); JS_FreeValue(ctx, raw); return JS_EXCEPTION; }
+        ok = html_parse_floating_point(s, len, &parsed, NULL);
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, concrete);
+
+    /* §2.6.1, in its own order: "If parsedValue is not an error and is greater than 0, then return parsedValue.
+       If parsedValue is not an error and the reflected IDL attribute is not limited to only positive numbers,
+       then return parsedValue. … If the reflected IDL attribute has a default value, then return defaultValue.
+       Return 0." */
+    if (ok && parsed > 0) answer = parsed;
+    else if (ok && !positive_only) answer = parsed;
+    else if (has_dflt) answer = dflt;
+    else answer = 0;
+
+    {
+        JSValue out = JS_NewFloat64(ctx, answer);
+
+        if (concolic_is(raw)) out = concolic_builtin_hook(ctx, raw, member, out);
+        JS_FreeValue(ctx, raw);
+        return out;
+    }
+}
+
+/* §2.6.1's double SETTER. Two steps, and the FIRST is a decision about the value rather than a conversion of
+ * it — which is the whole reason unknown external input cannot reach it. */
+void element_reflect_double_set(JSContext *ctx, JSValueConst el, const char *attr, const char *member,
+                                JSValueConst val, bool positive_only)
+{
+    double n = 0;
+    JSValue str;
+
+    DCHECK(member != NULL, "§2.6.1's double setter was asked without naming the MEMBER it writes");
+    if (concolic_is(val)) {
+        JSValue ex = concolic_example(ctx, val);
+
+        /* §3.2.7 crosses unknown external input as itself (idl_concolic_rule), so the value the body receives
+           is the triple and not a number. The CONVERSION is total and runs the real op on the example, exactly
+           as `+` does — but step 1 is a BRANCH on the value, and a page that writes `progress.max = cfg.cap`
+           reaches two worlds (the attribute written, and the attribute left alone) that the getter above tells
+           apart. Deciding it from the example would force one of them. */
+        DCHECK(!positive_only,
+               "§2.6.1's `limited to only positive numbers` setter step was reached with unknown external "
+               "input — its \"if the given value is not greater than 0, then return\" is a branch over a value "
+               "nothing is known about, so both worlds are feasible and one of them writes the attribute. "
+               "§4.10.13's `max` is the one member of this shape; fork it at this seam rather than picking");
+        if (JS_IsUndefined(ex) || JS_ToFloat64(ctx, &n, ex) < 0 || !isfinite(n)) {
+            /* NO BYTES TO WRITE. There is no example to run §2.3.4.3's best representation over, so the
+               attribute is set to the unknown ITSELF — which is what DOM §4.9's write already does with an
+               unknown attribute value, and which the getter above then reads back as its own parse-error arm
+               with the derivation intact. Inventing a numeral here would be a fabricated example. */
+            JS_FreeValue(ctx, ex);
+            element_attr_set_value(ctx, el, attr, val);
+            return;
+        }
+        JS_FreeValue(ctx, ex);
+        str = html_best_representation_of_number(ctx, n);
+        if (JS_IsException(str)) return;
+        str = concolic_builtin_hook(ctx, val, member, str);
+        element_attr_set_value(ctx, el, attr, str);
+        JS_FreeValue(ctx, str);
+        return;
+    }
+    /* §3.2.7 has already run: a NaN or an infinity threw at the boundary and never reaches a body. */
+    if (JS_ToFloat64(ctx, &n, val) < 0) return;
+    DCHECK(isfinite(n),
+           "§3.2.7 `double`'s restriction let a NaN or an infinity reach §2.6.1's setter — the type is what "
+           "throws for those, so a member that arrives here with one was declared IDL_UNRESTRICTED_DOUBLE");
+    if (positive_only && !(n > 0)) return;   /* §2.6.1 step 1 — and `!(n > 0)` so a NaN would also return */
+    str = html_best_representation_of_number(ctx, n);
+    if (JS_IsException(str)) return;
+    element_attr_set_value(ctx, el, attr, str);
+    JS_FreeValue(ctx, str);
 }
 
 /* A REFLECTION IS DECLARED ONCE AND INSTALLED PER REALM, like every other member — the registry entry and its

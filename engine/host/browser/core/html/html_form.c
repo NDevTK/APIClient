@@ -1653,13 +1653,46 @@ JSValue html_form_reset_owner(JSContext *ctx, JSValueConst wrap, bool *pchanged)
     return html_form_reset_owner_with_attr(ctx, wrap, v, len, pchanged);
 }
 
-/* ---- §4.10.19 label association ----------------------------------------------------------------------------
+/* ---- §4.10.4 The label element: label association -----------------------------------------------------------
  * A label's LABELED CONTROL is the element its `for` attribute names, when that element is labelable, and
- * otherwise its first labelable descendant. `labels` is the other direction over the same relation, which is
- * why both go through one predicate: written apart, the two stop agreeing. */
+ * otherwise its first labelable descendant. `labels` is the other direction over the same relation — §4.10.4
+ * again ("all input elements have a live NodeList object associated with them that represents the list of label
+ * elements, in tree order, whose labeled control is the element in question") — which is why both go through one
+ * predicate: written apart, the two stop agreeing.
+ *
+ * THE SECTION NUMBER WAS §4.10.19 HERE AND IN html_form.h, AND IT RESOLVED — to "Attributes common to form
+ * controls", which defines `name`, `dirname`, `maxlength`, `disabled` and the submission attributes and says
+ * nothing whatever about labels. That is the citation failure that is worse than none: it reads as authoritative
+ * and sends the reader to a section that does not contain the rule. */
+
+/* §4.10.2 Categories' LABELABLE ELEMENTS, exactly as that section lists them: "button, input (if the type
+   attribute is not in the Hidden state), meter, output, progress, select, textarea, form-associated custom
+   elements".
+   THREE OF THOSE EIGHT WERE MISSING and the Hidden exclusion was not made, which is not a shortfall in what the
+   walk below FINDS — it is a wrong answer for the elements it does find. `<label><progress></progress><input>`
+   has the progress as its labeled control, so the input must report NO label; with `progress` off the list the
+   walk stepped over it and handed the label to the input. */
+static bool form_is_labelable(JSContext *ctx, lxb_dom_node_t *n)
+{
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (tag_is(n, "input")) return html_form_input_state(n) != INPUT_STATE_HIDDEN;
+    if (tag_is(n, "button") || tag_is(n, "meter") || tag_is(n, "output") ||
+        tag_is(n, "progress") || tag_is(n, "select") || tag_is(n, "textarea"))
+        return true;
+    /* §4.13's "element is a form-associated custom element" — asked of the DEFINITION the element carries, so
+       it needs the wrapper. The walk below used to name the four built-in tags and never ask this at all, so a
+       form-associated custom element that was not the element in question did not stop the search. */
+    {
+        JSValue w = node_wrap(ctx, n);
+        bool face = custom_elements_is_form_associated(ctx, w);
+
+        JS_FreeValue(ctx, w);
+        return face;
+    }
+}
 
 /* Is `n` the labeled control of the label `lab`? */
-static bool form_label_controls(lxb_dom_node_t *lab, lxb_dom_node_t *n)
+static bool form_label_controls(JSContext *ctx, lxb_dom_node_t *lab, lxb_dom_node_t *n)
 {
     size_t len = 0;
     const char *f = attr_of(lxb_dom_interface_element(lab), "for", &len);
@@ -1667,13 +1700,17 @@ static bool form_label_controls(lxb_dom_node_t *lab, lxb_dom_node_t *n)
     if (f) {
         size_t idlen = 0;
         const char *id = attr_of(lxb_dom_interface_element(n), "id", &idlen);
-        /* The FIRST element in the label's tree with that ID, which is not necessarily this one. */
+        /* §4.10.4: "If the attribute is specified and there is an element in the tree whose ID is equal to the
+           value of the for attribute, and the first such element in tree order is a labelable element, then
+           that element is the label element's labeled control." The FIRST element in the label's tree with that
+           ID is not necessarily this one, and it is only the control when it IS labelable. */
         return id != NULL && idlen == len && memcmp(id, f, len) == 0 &&
-               form_first_by_id(node_root(lab), f, len) == n;
+               form_first_by_id(node_root(lab), f, len) == n && form_is_labelable(ctx, n);
     }
-    /* No `for`: the first LABELABLE descendant, which is where `<label><span><my-control>` finds its control
-       and where `<label><x-foo>` finds none. A form-associated custom element is labelable and so are the
-       built-in controls; nothing else in this engine is. */
+    /* §4.10.4: "If the for attribute is not specified, but the label element has a labelable element
+       descendant, then the first such descendant in tree order is the label element's labeled control." So the
+       walk stops at the FIRST labelable descendant whether or not it is the element being asked about — which
+       is where `<label><span><my-control>` finds its control and `<label><x-foo>` finds none. */
     {
         lxb_dom_node_t *c = lab;
 
@@ -1686,8 +1723,7 @@ static bool form_label_controls(lxb_dom_node_t *lab, lxb_dom_node_t *n)
             }
             if (!c || c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
             if (c == n) return true;
-            if (tag_is(c, "input") || tag_is(c, "select") || tag_is(c, "textarea") || tag_is(c, "button"))
-                return false;
+            if (form_is_labelable(ctx, c)) return false;
         }
     }
 }
@@ -1702,7 +1738,7 @@ JSValue html_form_labels_of(JSContext *ctx, JSValueConst wrap)
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return collections_static(ctx, arr);
     root = node_root(n);
     for (c = root; c; ) {
-        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && tag_is(c, "label") && form_label_controls(c, n))
+        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && tag_is(c, "label") && form_label_controls(ctx, c, n))
             JS_SetPropertyUint32(ctx, arr, k++, node_wrap(ctx, c));
         if (c->first_child) { c = c->first_child; continue; }
         while (c && !c->next) c = (c == root) ? NULL : c->parent;

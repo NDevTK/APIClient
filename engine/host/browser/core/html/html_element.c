@@ -56,6 +56,8 @@
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_base_element.h"
+#include "core/html/html_meter.h"
+#include "core/html/html_progress.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/slot.h"
@@ -281,7 +283,13 @@ static const ElReflect R_TEMPLATE[] = {
     { "shadowRootCustomElementRegistry", "shadowrootcustomelementregistry", REFLECT_STRING },
 };
 static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
-static const ElReflect R_METER[]  = { { "min", "min", REFLECT_STRING }, { "max", "max", REFLECT_STRING } };
+/* §4.10.14's `meter` HAS NO ROW HERE, and its absence is the point rather than an omission. It had one, holding
+   `min` and `max` as REFLECT_STRING, and both were WRONG members rather than partial ones: §4.10.14 declares
+   `attribute double min` whose getter steps are "return this's minimum value" — the NUMBER 0 for an absent
+   attribute, where a string reflection answered "". A member-presence audit cannot see that, because the name
+   was installed and only its type and its value were another thing. All six of the element's numbers are
+   core/html/html_meter.c's, over §4.10.14's own six-point algorithm; `progress` is core/html/html_progress.c's
+   for the same reason, and neither element reflects anything as a string. */
 
 /* THE FOUR GlobalEventHandlers MEMBERS THIS USER AGENT MUST NOT HAVE. Touch Events Level 2 puts them behind a
    condition it states in PROSE and not in its IDL — "User agents have an associated boolean `expose legacy
@@ -339,7 +347,6 @@ static const struct { const char *iface; const ElReflect *refl; int nrefl; } IFA
     { "HTMLMapElement",        RL(R_MAP) },
     { "HTMLTimeElement",       RL(R_TIME) },
     { "HTMLDataElement",       RL(R_DATA) },
-    { "HTMLMeterElement",      RL(R_METER) },
     { "HTMLQuoteElement",      RL(R_QUOTE) },
     { "HTMLModElement",        RL(R_MOD) },
     { "HTMLOListElement",      RL(R_OL) },
@@ -667,6 +674,12 @@ void html_element_init(JSContext *ctx)
        `load`/`error` — declared here because HTMLLinkElement is a row of the table above, exactly as §4.8.3's
        image requests are. */
     html_link_declare(ctx);
+    /* §4.10.14's six gauge points and §4.10.13's three progress numbers — declared here because
+       HTMLMeterElement and HTMLProgressElement are rows of the table above, and because every one of those
+       members is a `[ReflectSetter]` whose SETTER is §2.6.1's and whose GETTER is the section's own algorithm,
+       so each needs a setter id of its own rather than a reflection row. */
+    html_meter_declare(ctx);
+    html_progress_declare(ctx);
     /* §4.13.7 — declared here because `attachInternals` is an HTMLElement member, which is what this file
        owns the table of; the algorithms are element_internals.c's. */
     element_internals_declare(ctx);
@@ -808,6 +821,12 @@ void html_element_install_protos(JSContext *ctx)
            §4.12.1's `async` is. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLBaseElement"))
             html_base_element_install(ctx, p);
+        /* §4.10.14's six numbers and §4.10.13's three, each an algorithm over the element's attributes rather
+           than a mirror of one — handed the prototype for the reason §4.12.1's `async` is. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLMeterElement"))
+            html_meter_install(ctx, p);
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLProgressElement"))
+            html_progress_install(ctx, p);
         /* THE `[SameObject] readonly attribute DOMTokenList` REFLECTIONS, each on the interface whose IDL
            declares it. They are not reflections in R_* above because those produce a STRING: `link.rel` is the
            attribute's value and `link.relList` is §7.1's token list over the same attribute, and a page uses
