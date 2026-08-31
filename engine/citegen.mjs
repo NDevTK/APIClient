@@ -558,6 +558,17 @@ function regenBikeshed(spec) {
     if (IMPORTED.test(m[2])) continue;
     /* Bikeshed carries a dfn's other spellings in data-lt, pipe-separated — `attribute list|attribute lists`.
      * A comment naming the plural is naming the same definition, so every spelling is indexed. */
+    /* RESIDUAL — `data-dfn-for` IS READ BY NOTHING HERE, so a QUALIFIED one-word definition is dropped along
+     * with the common nouns keepTerm exists to drop. Bikeshed writes a scoped concept as a bare word plus its
+     * owner: the File System Standard defines its lock operations as `<dfn data-dfn-for="file entry/lock">take
+     * </dfn>` and the matching `release`, while its prose reads "To release a lock on a given file entry" — so
+     * the phrase a comment writes is not a spelling the index holds, and `take`/`release` alone are exactly the
+     * coincidence generators keepTerm refuses. WHAT THE NEXT DIFF BUILDS: index a `data-dfn-for` dfn under the
+     * composite its qualifier names (`file entry/lock` + `release` -> `release a lock`, `lock release`), which
+     * is multi-word and therefore admissible, so the qualifier earns the term its scope already implies.
+     * HOW ITS ABSENCE SHOWS: `core/file/file_system.c` cites `§2.1's release a lock` in two DCHECK messages,
+     * correctly, and the only standard whose index holds that phrase is Streams — which defines `release a
+     * lock` at §2.6 "Locking" — so both are reported as misattributed to a document they do not name. */
     const spellings = [normTerm(m[2])];
     const lt = attrOf(m[1], "data-lt");
     if (lt) for (const alt of lt.split("|")) spellings.push(normTerm(alt));
