@@ -502,6 +502,17 @@ static void r_module_loader(JSRuntime *rt) { module_loader_free(rt); }
    Both now give the ids back, and window_proxy's finalizer and gc_mark reach their record through
    JS_GetAnyOpaque because of it (remote_location's already did). */
 static void r_window_proxy(JSRuntime *rt) { window_proxy_free(rt); }
+/* HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's getters for this document's Window, captured before any of
+   its script runs — the document half of the row whose declare half is above. It is a per-DOCUMENT install and
+   not a per-realm intrinsic because the nine accessors it captures do not exist at intrinsic time: `location`
+   does (location.c declares one), and the other eight are installed by the `window` row of the column below,
+   which runs after every intrinsic. The row's POSITION in that column is therefore the whole contract, and
+   window_proxy.c's capture asserts it member by member rather than trusting this comment. */
+static void i_window_proxy(JSContext *c, JSValueConst g, const PlatformDocument *d)
+{
+    (void)d;
+    window_proxy_install_window_getters(c, g);
+}
 static void r_remote_object(JSRuntime *rt) { remote_object_free(rt); }
 static void r_remote_location(JSRuntime *rt) { remote_location_free(rt); }
 /* AND THE FOURTH OF THAT GROUP, WHOSE RELEASE COLUMN WAS EMPTY FOR A DIFFERENT REASON: its file already had a
@@ -838,7 +849,14 @@ static const PlatformComponent PLATFORM[] = {
        they are per-flow heap state, so the record has to exist before any flow can write one. */
     { "event_loop",          d_event_loop,          NULL,        r_event_loop },
     { "timer",               d_timer,               i_timer,     r_timer },
-    { "window_proxy",        d_window_proxy,        NULL,        r_window_proxy },
+    /* ITS INSTALL COLUMN IS AFTER `window` AND AFTER `location` BY CONSTRUCTION, and that ordering is what
+       §7.2.1.3.4's capture depends on: the nine cross-origin ACCESSOR members it takes the getters of are
+       installed by those two rows, and a capture running before either would take a hole for a member and
+       leave a peer answering it out of whatever the page later writes onto its global. Eight come from
+       `window`, whose install column is far above this one; the ninth is `location`, which location.c installs
+       as a REALM INTRINSIC and so is already there before this column begins at all. The capture's own DCHECK
+       names the member if either of those ever stops being true. */
+    { "window_proxy",        d_window_proxy,        i_window_proxy, r_window_proxy },
     { "remote_object",       d_remote_object,       NULL,        r_remote_object },
     /* The PEER's half of the same seam: what this agent does when it is ASKED to perform one. Its per-realm
        install captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could

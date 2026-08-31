@@ -1744,6 +1744,11 @@ static JSAtom g_xo_atom[CROSS_ORIGIN_NAME_N];
    chain, because §7.2.3.10 lists them among the own keys. */
 #define XO_FALLBACK_N 4
 static JSAtom g_xo_fallback[XO_FALLBACK_N];
+/* §7.2.1.3.4's getters for the entries above, ONE ARRAY PER REALM — see window_proxy.h. The array is indexed
+   by the CROSS_ORIGIN row, so the standard's own list is what says which slot is which and there is no second
+   ordering to keep in step. `-1` and not 0: realm_value_set's own assert is `slot > 0`, so a slot that was
+   never declared must not read as one that was. */
+static int g_xo_getter_slot = -1;
 
 /* §7.2.1.3.1 CrossOriginProperties ( O )'s WINDOW ARM, ASKED BY NAME — the one list answering one more caller.
  *
@@ -1847,6 +1852,109 @@ static void proxy_capture_names(JSContext *ctx)
                 "SecurityError out of the getter that descriptor names. Either the record is mistyped or "
                 "the member is not an attribute of this surface", PROXY_MEMBER[i]);
     }
+}
+
+/* §7.2.1.3.4 CrossOriginGetOwnPropertyHelper ( O, P )'s GETTERS FOR THIS REALM — see window_proxy.h for what
+ * the standard asks for and why an ordinary [[Get]] is not it.
+ *
+ * IT READS THE WINDOW'S OWN SLOT AND NOT THE MEMBER. §7.2.1.3.4's step is `OrdinaryGetOwnProperty(O, P)`, which
+ * is JS_GetOwnPropertyNoUserCode here — the internal method, performed with no accessor invoked and no page
+ * code run, which is the same call §7.2.3.5 step 3 already makes on a Window one file's-worth of lines up. A
+ * property GET would run the getter at capture time, in a C activation with no flow base under it.
+ *
+ * NINE OF THE THIRTEEN. The four entries the standard writes with neither flag are §7.2.1.3.4's OPERATION
+ * branch — `{ [[Property]]: "close" }` — whose value is a callable rather than a getter, so they have nothing
+ * to capture and their slot stays a hole. window_proxy_cross_origin_getter refuses one by name.
+ *
+ * WHAT ITS ASSERT IS FOR. This is the whole of the ordering contract between core/platform.c's rows: the eight
+ * that `window`'s row installs and the `location` that runs as a realm intrinsic before it must all be present,
+ * as accessors, at this instant. A member installed by a LATER row would be captured as absent — and then a
+ * peer would answer that one member out of whatever the page had left on its global, silently, which is the
+ * exact defect this capture exists to end. So the loop crashes naming the member rather than skipping it. */
+void window_proxy_install_window_getters(JSContext *ctx, JSValueConst global)
+{
+    JSValue getters;
+    int i;
+
+    DCHECK(g_xo_getter_slot > 0,
+           "§7.2.1.3.4's getters were captured for a realm before window_proxy_init declared the slot to hold "
+           "them — the declaration is core/platform.c's declare column and this is its install column, so "
+           "reaching here without it is an install into an agent that was never brought up");
+    DCHECK(JS_IsObject(global),
+           "§7.2.1.3.4's getters were captured off something that is not the global object — the standard reads "
+           "them off O, which for this seam is the peer document's Window");
+    getters = JS_NewArray(ctx);
+    CHECK(!JS_IsException(getters),
+          "window proxy: §7.2.1.3.4's per-realm getter table could not be allocated — without it every "
+          "cross-instance read of this document falls back to nothing at all");
+    for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) {
+        JSPropertyDescriptor d;
+        int has;
+
+        if (!CROSS_ORIGIN[i].needs_get) continue;   /* §7.2.1.3.4's operation branch — no getter exists */
+        has = JS_GetOwnPropertyNoUserCode(ctx, &d, global, g_xo_atom[i]);
+        /* A CHECK AND NOT A DCHECK, AND THE PROMOTION BELONGS TO THIS LOOP RATHER THAN TO ANYBODY'S JUDGEMENT
+           ABOUT HOW SERIOUS THE GAP IS. `JS_GetOwnPropertyNoUserCode` fills the descriptor ONLY on 1 — its
+           absent arm returns without touching it, and its throwing arm the same — so the three JS_FreeValues
+           below are the FIRST release-mode dereference of a record a dev-only assert was covering. The
+           question §Offensive-programming makes mechanical is which build the guard survives in, and the
+           answer changed because these lines exist. */
+        CHECKF(has == 1,
+               "HTML §7.2.1.3.1 CrossOriginProperties ( O ) lists `%s` with [[NeedsGetter]] true and this "
+               "realm's Window has no own property of that name at the instant §7.2.1.3.4's getters are "
+               "captured — core/platform.c's `window_proxy` row runs after the rows that install the nine, so "
+               "either a member moved to a later row or it is not installed at all, and a peer asked for it "
+               "would answer out of whatever the page leaves on its global",
+               CROSS_ORIGIN[i].name);
+        DCHECKF((d.flags & JS_PROP_GETSET) && JS_IsFunction(ctx, d.getter),
+                "HTML §7.2.1.3.1 CrossOriginProperties ( O ) lists `%s` with [[NeedsGetter]] true while this "
+                "realm's Window carries it as something other than an accessor with a callable getter — Web IDL "
+                "§3.7.6 Attributes makes every attribute an accessor, and §7.2.1.3.4 "
+                "CrossOriginGetOwnPropertyHelper has a getter's STEPS to perform or it has nothing",
+                CROSS_ORIGIN[i].name);
+        JS_SetPropertyUint32(ctx, getters, (uint32_t)i, JS_DupValue(ctx, d.getter));
+        JS_FreeValue(ctx, d.value);
+        JS_FreeValue(ctx, d.getter);
+        JS_FreeValue(ctx, d.setter);
+    }
+    realm_value_set(ctx, g_xo_getter_slot, getters);   /* asserts this realm captured exactly once */
+}
+
+JSValue window_proxy_cross_origin_getter(JSContext *ctx, const char *name)
+{
+    const CrossOriginProperty *e = window_proxy_cross_origin_property(name);
+    JSValue table, getter;
+
+    /* THE TWO REFUSALS ARE THE CALLER'S TO HAVE ALREADY MADE — remote_op.c asserts both where the record is
+       BORN, which is the only place both of its parse's callers reach. They are re-stated here as DCHECKs and
+       not as a second CHECK for the reason that file's own comment gives: a second copy of one invariant is a
+       copy that drifts. What these two add is the SITE — a caller that reaches this entry with an unlisted or
+       operation-only name is named here rather than dereferencing a NULL two lines down. */
+    DCHECKF(e != NULL,
+            "§7.2.1.3.4 CrossOriginGetOwnPropertyHelper's getter was asked for `%s`, which HTML §7.2.1.3.1 "
+            "CrossOriginProperties ( O ) does not list among the cross-origin accessible window property names",
+            name);
+    DCHECKF(e == NULL || e->needs_get,
+            "§7.2.1.3.4 CrossOriginGetOwnPropertyHelper's getter was asked for `%s`, whose §7.2.1.3.1 record "
+            "carries neither [[NeedsGetter]] nor [[NeedsSetter]] — that is §7.2.1.3.4 "
+            "CrossOriginGetOwnPropertyHelper ( O, P )'s OPERATION branch, whose answer is §7.2.1.3.4's \"an "
+            "anonymous built-in function, created in the current realm, that performs the same steps as the "
+            "IDL operation P on object O\" and not a getter's result. BUILD THE OPERATION BRANCH: a function "
+            "crosses this seam "
+            "only once core/frame/remote_object.c can name one, and until then this member has no answer that "
+            "is not a different member's",
+            name);
+    table = realm_value_get(ctx, g_xo_getter_slot);   /* asserts this realm ran the capture */
+    /* AN ORDINARY [[Get]] IS EXACTLY RIGHT HERE and is not the read the header argues against: the array is
+       this component's own, minted at the capture and reachable from no script, so there is no page-owned slot
+       between the index and the function. */
+    getter = JS_GetPropertyUint32(ctx, table, (uint32_t)(e - CROSS_ORIGIN));
+    JS_FreeValue(ctx, table);
+    DCHECKF(JS_IsFunction(ctx, getter),
+            "§7.2.1.3.4's captured getter for `%s` is not a function in this realm — the capture asserts every "
+            "listed accessor was one, so a hole here is a table built for a DIFFERENT list than the one this "
+            "lookup indexed into", name);
+    return getter;
 }
 
 /* HTML §7.2.1.1 "Integration with IDL", WHOLE — "When perform a security check is invoked, with a
@@ -2032,31 +2140,42 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
                document name, origin, browsing-context name, the parent's and the opener's document names —
                and resolves on the far side to that agent's own WindowProxy or to the one remote proxy it
                keeps per document (remote_object.c's nav_encode/nav_decode, window_proxy_for_document above).
-               So the ANSWER can be sent, and the PEER-SIDE PROGRAM was already built before that:
-               `windowproxy.get` runs `globalThis[__apiclientKey]` in the named document's own realm
-               (remote_op.c, engine.c's flow_perform), and §7.2.2.2's indexed access on that realm's global IS
-               this same step 2 performed there — so the member field carries the decimal index and the peer
-               needs nothing new to compute it.
-               WHAT IS MISSING IS THE SUSPEND, AND ONLY THAT. This is an exotic [[GetOwnProperty]] — a C hook
-               that must return a value — so it cannot park the flow the way `length` does, and `length` is
-               only able to because it is an IDL ACCESSOR driven as a step machine. There is exactly one read
-               shape this interpreter resolves at the operator site and drives on the trampoline
-               (remote_object.c's block comment, and quickjs.c's own DCHECK in tramp_walk_continues names the
-               route: the keyed entry's GP_GETOWNPROP). Route this class onto it and step 2 becomes a step
-               machine whose ASK stage posts (document, world+ancestry, decimal index) exactly as
-               proxy_get_step does and whose ANSWER stage is remote_object_decode of the identity that comes
-               back — parked at `otherW[0]`, resumed byte-identical, exactly as an await is. Answering
-               `undefined` here is what this hook exists to stop, and the SecurityError below is right only
-               once the index is known to be out of range. */
-            DFAIL("an INDEXED read of a WindowProxy whose active document is in ANOTHER INSTANCE. Every edge "
-                  "around it now exists: the peer computes the answer (`windowproxy.get` with the decimal "
-                  "index as the member runs §7.2.2.2's indexed access in that document's own realm) and a "
-                  "navigable crosses back as its IDENTITY and resolves to one WindowProxy per document "
-                  "(remote_object.c). What is left is the SUSPEND, which an exotic [[GetOwnProperty]] cannot "
-                  "do because it is a C hook that must return a value. Route this class onto the keyed "
-                  "entry's GP_GETOWNPROP — quickjs.c's tramp_walk_continues names that route in its own "
-                  "DCHECK — so step 2 is driven on the trampoline as a step machine, the way every other "
-                  "cross-instance read in this engine is");
+               So the ANSWER can be sent.
+               TWO THINGS ARE MISSING, AND THE SECOND ONE USED TO BE WRITTEN HERE AS ALREADY BUILT. This block
+               said the peer-side program existed — that `windowproxy.get` would carry the decimal index in its
+               member field, because that operation ran `globalThis[key]` and §7.2.2.2 Indexed access on the
+               Window object's indexed access on the peer's global IS this same step performed there. It does
+               not run that program any more: `windowproxy.get` performs §7.2.1.3.4 CrossOriginGetOwnProperty-
+               Helper's GETTER for a member of §7.2.1.3.1 CrossOriginProperties ( O )'s thirteen, selected in C
+               from a per-realm capture, and remote_op.c's parse REFUSES any member name outside that list —
+               which a decimal index is. §7.2.1.3.1 says so itself: "Indexed properties do not need to be
+               safelisted in this algorithm, as they are handled directly by the WindowProxy object", and they
+               are cross-origin accessible under the separate sentence that ends "or an array index property
+               name". An index is therefore a SECOND OPERATION on remote_op.c's grammar — its own verb, whose
+               program is §7.2.2.2's own step in the peer's realm — and not a member field that happens to
+               parse as a number.
+               THE FIRST IS THE SUSPEND. This is an exotic [[GetOwnProperty]] — a C hook that must return a
+               value — so it cannot park the flow the way `length` does, and `length` is only able to because
+               it is an IDL ACCESSOR driven as a step machine. There is exactly one read shape this interpreter
+               resolves at the operator site and drives on the trampoline (remote_object.c's block comment, and
+               quickjs.c's own DCHECK in tramp_walk_continues names the route: the keyed entry's
+               GP_GETOWNPROP). Route this class onto it and step 2 becomes a step machine whose ASK stage posts
+               (document, world+ancestry, index) exactly as proxy_get_step does and whose ANSWER stage is
+               remote_object_decode of the identity that comes back — parked at `otherW[0]`, resumed
+               byte-identical, exactly as an await is. Answering `undefined` here is what this hook exists to
+               stop, and the SecurityError below is right only once the index is known to be out of range. */
+            DFAIL("an INDEXED read of a WindowProxy whose active document is in ANOTHER INSTANCE. The ANSWER "
+                  "edge exists — a navigable crosses back as its IDENTITY and resolves to one WindowProxy per "
+                  "document (remote_object.c) — and TWO edges do not. (1) The PEER-SIDE PROGRAM: an array "
+                  "index is not one of §7.2.1.3.1 CrossOriginProperties ( O )'s thirteen entries (the standard "
+                  "excludes them by name: \"Indexed properties do not need to be safelisted in this "
+                  "algorithm\"), so `windowproxy.get` cannot carry one and remote_op.c's parse refuses it — "
+                  "build a SECOND VERB whose program is §7.2.2.2 Indexed access on the Window object's own "
+                  "step in the peer's realm. (2) The SUSPEND, which an exotic [[GetOwnProperty]] cannot do "
+                  "because it is a C hook that must return a value. Route this class onto the keyed entry's "
+                  "GP_GETOWNPROP — quickjs.c's tramp_walk_continues names that route in its own DCHECK — so "
+                  "step 2 is driven on the trampoline as a step machine, the way every other cross-instance "
+                  "read in this engine is");
         } else if (p->realm) {
             child = iframe_child_navigable(p->realm, (int)idx);
         }
@@ -3446,24 +3565,24 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         /* AND AGAINST §7.2.2's IDL TYPE FOR THE MEMBER THAT WAS ASKED. A throw is exempt: the thrown value is
            an Error OBJECT and crosses as a name, which is the point of layering the completion over the value
            grammar rather than beside it.
-           WHAT A HIT MEANS, AND IT IS ONE ORDERED PAIR RATHER THAN A LIST. Either the completion lost its TYPE
-           crossing the seam — the failure remote_object.h's leading byte exists to make impossible — or the
-           peer answered by an ORDINARY [[Get]] of its own global, which is what `windowproxy.get` performs
-           today (remote_op.c's OPS table: `globalThis[__apiclientKey]`). §7.2.1.3.4 CrossOriginGetOwnProperty-
-           Helper does not read a property: for a member with [[NeedsGetter]] it calls "an anonymous built-in
-           function, created in the current realm, that performs the same steps as the getter of the IDL
-           attribute P on object O". `length` is [Replaceable], so a peer page that assigns `window.length =
-           "0"` changes what an ordinary [[Get]] reads while a real browser still answers the child-navigable
-           count — and THIS agent answers the identical read out of the navigable's own tree in the hosted
-           branch above, so one fact is answered by the getter's steps locally and by whatever the page left on
-           its global remotely. The fix has this file's own idiom one file over: remote_op.c already captures
-           %Reflect.set% and %Reflect.apply% as realm intrinsics BEFORE any page script runs, precisely so a
-           peer performs an internal method through the intrinsic rather than through something the page owns;
-           capture §7.2.1.3.1's accessor members' original getters the same way and CALL one. */
+           WHAT A HIT MEANS IS NOW ONE THING, AND THE SECOND READING IS RETIRED RATHER THAN FORGOTTEN. This
+           assert used to name an ordered pair, the second half of which was that the peer answered by an
+           ORDINARY [[Get]] of its own global — which is what `windowproxy.get` used to perform. It performs
+           §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's getter now (remote_op.c's OPS table, over the table
+           window_proxy_install_window_getters captures), so a page's `window.length = 5` no longer reaches
+           this answer at all and there is nothing here for a type test to catch: Web IDL §3.3.11
+           [Replaceable]'s shadow is a NUMBER, indistinguishable from a real child-navigable count by any test
+           on the value, which is precisely why that half had to be fixed at the peer instead of detected here.
+           WHAT IS LEFT IS THE SEAM. A hit means the completion lost its TYPE crossing the boundary — the
+           failure core/frame/remote_object.h's leading byte exists to make impossible — and that is a fact
+           about the transport rather than about either document, which is the one thing this side can still
+           know on its own. */
         DCHECK(r != JS_STEP_DONE || proxy_answer_matches_idl(*presult, magic),
                "a peer answered a cross-instance WindowProxy member with a value §7.2.2 The Window object does "
                "not declare for it — `length` is an unsigned long and `closed` is a boolean, so the page's "
-               "`otherW.length === 0` is being decided against something that is not a number");
+               "`otherW.length === 0` is being decided against something that is not a number. The peer runs "
+               "§7.2.1.3.4's getter, whose result IS of the declared type, so the value changed shape between "
+               "that call and this line: core/frame/remote_object.c's encoding is what carries the type");
         return r;
     }
 }
@@ -3573,6 +3692,11 @@ void window_proxy_init(JSContext *ctx)
        reaches §7.2.4.5's filtered one — `href`'s setter is the one member BOTH of them have, which is why
        §7.2.1.3.1 CrossOriginProperties ( O ) lists `location` at all. */
     g_wp_location_setter_id = idl_setter_id_put_forwards(ctx, "location", "href");
+    /* §7.2.1.3.4's per-realm getter table, DECLARED HERE AND FILLED PER REALM — the slot is a class id, which
+       belongs to a runtime and therefore to the agent, while the ARRAY it holds is each realm's own. */
+    g_xo_getter_slot = realm_value_declare(ctx,
+                                           "HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's getters for this "
+                                           "realm's Window, captured before any page script ran");
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. THE POOL ENTRIES are why the
        declaration is worth making rather than merely tidy: the release gave back the atoms, the string
        list and the remote-navigable table and left every id exactly as this function set them, so a second
@@ -3595,6 +3719,8 @@ void window_proxy_init(JSContext *ctx)
                    "§7.2.2.1 Opening and closing windows' `close` declaration");
     agent_state_id(WP_COMPONENT, &g_wp_location_setter_id,
                    "§7.2.2 The Window object's `location` [PutForwards=href] setter declaration");
+    agent_state_id(WP_COMPONENT, &g_xo_getter_slot,
+                   "the realm-value slot holding §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's captured getters");
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
         agent_state_atom(WP_COMPONENT, &g_xo_atom[i],
                          "one of §7.2.1.3.1 CrossOriginProperties ( O )'s names, interned");
@@ -3656,6 +3782,10 @@ void window_proxy_free(JSRuntime *rt)
        §7.2.3's member surface out of whatever now sits at those indices. */
     g_wp_len_getter_id = g_wp_closed_getter_id = -1;
     g_wp_name_setter_id = g_wp_opener_setter_id = g_wp_close_id = g_wp_location_setter_id = -1;
+    /* AND THE REALM-VALUE SLOT, for the same sentence one line up: it is a class id in a runtime that is going
+       away, so a carried number is an index into a pool the next agent has not built — read by the first
+       cross-instance member read that agent performs, which would then run whatever function now sits there. */
+    g_xo_getter_slot = -1;
     /* AND THE CLASS ID, for the reason core/agent_state.h states: a class is registered in a runtime, the id
        doubles as no latch here but names a class that is gone, and every JS_GetOpaque against it would answer
        about whichever class the next agent's runtime hands that number to. proxy_finalizer and proxy_gc_mark

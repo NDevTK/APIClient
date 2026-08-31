@@ -20,9 +20,17 @@ enum { OP_WPGET, OP_GET, OP_SET, OP_DELETE, OP_APPLY, OP_N };
 /* `need` is the MINIMUM: `object.apply` carries one field per argument and there is no ceiling on how many may
    cross — a bound on the argument count is a bound on which calls this engine can make. */
 static const struct { const char *verb; int need; const char *program; } OPS[OP_N] = {
-    /* §7.2.1's member of THIS document's Window, read as the IDL getter it is. `globalThis[k]` and not
-       `self[k]`: the page may shadow `self`, and the global object is what the standard reads the member of. */
-    { "windowproxy.get", 4, "globalThis[__apiclientKey]" },
+    /* §7.2.1's member of THIS document's Window, read as the IDL getter it IS — §7.2.1.3.4
+       CrossOriginGetOwnPropertyHelper ( O, P ) calls "an anonymous built-in function, created in the current
+       realm, that performs the same steps as the getter of the IDL attribute P on object O", and this is that
+       call. It was `globalThis[__apiclientKey]`, an ordinary [[Get]], which is a DIFFERENT operation: Web IDL
+       §3.3.11 [Replaceable] makes `window.length = 5` create an own data property that "will shadow the
+       accessor property", so a peer page could decide what this agent answered a cross-origin reader — and
+       answer it with a plausible NUMBER, which no type test on the far side can tell from the real count.
+       NEITHER OPERAND IS THE PAGE'S. The getter is window_proxy.c's per-realm capture, taken before any of
+       this document's script ran; the receiver is JS_GetGlobalObject, not the `globalThis` binding, which is
+       an ordinary writable data property of the global that a page may reassign like any other. */
+    { "windowproxy.get", 4, "__apiclientOp(__apiclientGetter, __apiclientThis, __apiclientArgs)" },
     /* ECMA-262 10.1.8 — pure syntax, so nothing the page owns is between the operation and its answer. */
     { "object.get",      5, "__apiclientLent[__apiclientKey]" },
     /* 10.1.9 through %Reflect.set%: an assignment expression completes with the VALUE, and 10.5.9 step 8 asks
@@ -177,7 +185,33 @@ RemoteOp *remote_op_parse(const char *record)
           "a cross-agent record asked this agent to read a Window member HTML §7.2.1.3.1 CrossOriginProperties "
           "( O ) does not list among the cross-origin accessible window property names — performing it would "
           "compute a cross-origin read of this document's own global and relay it to the asking instance as an "
-          "ordinary answer");
+          "ordinary answer. AND ONE EMITTER IN THIS ENGINE REACHES IT: §7.3.1.3 Child navigables' content "
+          "document, whose cross-instance arm in core/html/html_iframe.c names the member `document` after "
+          "filtering for same origin-domain. That read is legitimate and this refusal is still right, because "
+          "the RECORD carries no claim about who is asking and a receiver cannot tell that emitter from an "
+          "untrusted instance naming the same member. What it needs is a verb of its own, and an answer: a "
+          "Document is an OBJECT, which crosses only once core/frame/remote_object.c can name one");
+    /* AND THAT THE ENTRY IS §7.2.1.3.4's ACCESSOR BRANCH, ASKED IN THE SAME BREATH AND OFF THE SAME LOOKUP.
+       §7.2.1.3.1 writes each entry with its [[NeedsGetter]] and [[NeedsSetter]], and the lookup above returns
+       the RECORD rather than a boolean precisely so the second question needs no second table. An entry with
+       neither flag — `{ [[Property]]: "close" }`, and `focus`, `blur`, `postMessage` beside it — is
+       §7.2.1.3.4's OPERATION branch, whose answer is an anonymous function and not a getter's result, and this
+       engine's `windowproxy.get` performs the accessor branch only.
+       A DCHECK AND NOT A CHECK, which is the one place this differs from the field count and the listed-member
+       CHECK above: both of those are memory or a security boundary, and this is neither. The name IS on
+       §7.2.1.3.1's list, so answering it leaks nothing the standard withholds — the release build simply runs
+       %Reflect.apply% over an absent getter and hands back a TypeError, which is a wrong answer rather than an
+       unsafe one. BUILD THE OPERATION BRANCH and this goes: it needs a function to be nameable across the
+       seam, which is core/frame/remote_object.c's remote-object handle. */
+    DCHECK(o->op != OP_WPGET || window_proxy_cross_origin_property(o->f[3])->needs_get,
+           "a cross-agent record asked this agent for a Window member whose HTML §7.2.1.3.1 "
+           "CrossOriginProperties ( O ) record carries neither [[NeedsGetter]] nor [[NeedsSetter]] — that is "
+           "§7.2.1.3.4 CrossOriginGetOwnPropertyHelper's OPERATION branch, whose answer is \"an anonymous "
+           "built-in function, created in the current realm, that performs the same steps as the IDL operation "
+           "P on object O\", and this "
+           "seam performs the getter branch only. The two members window_proxy.c's proxy_get_step can emit are "
+           "`length` and `closed`, both accessor entries, so a record naming an operation was written by "
+           "something other than that step machine");
     return o;
 }
 
@@ -203,12 +237,22 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
         /* THE MEMBER NAME IS NOT AN ENCODED VALUE. HTML §7.2.1.3.1 CrossOriginProperties ( O ) names THIRTEEN
            cross-origin accessible window property names, and they are this engine's own spelling
            (window_proxy.c's PROXY_MEMBER), so the member crosses as itself rather than through
-           remote_object.c's value grammar. */
-        /* THAT IT IS ONE OF THE THIRTEEN IS ALREADY TRUE HERE — remote_op_parse asserts it where the record is
-           born, which is the only place BOTH callers of the parse reach. It is not re-asked at this line: a
-           second CHECK of one invariant is a second copy of it, and the copy that drifts is the one further
-           from the record. */
-        JS_SetPropertyStr(ctx, g, "__apiclientKey", JS_NewString(ctx, op->f[3]));
+           remote_object.c's value grammar. It never reaches the PROGRAM now — it selects a captured getter
+           here, in C, and the program has no name in it at all. */
+        /* THAT IT IS ONE OF THE THIRTEEN, AND THAT ITS ENTRY CARRIES [[NeedsGetter]], ARE ALREADY TRUE HERE —
+           remote_op_parse asserts both where the record is born, which is the only place BOTH callers of the
+           parse reach. Neither is re-asked at this line: a second CHECK of one invariant is a second copy of
+           it, and the copy that drifts is the one further from the record. */
+        JSValue args = JS_NewArray(ctx);
+
+        CHECK(!JS_IsException(args),
+              "remote op: the empty argument list for §7.2.1.3.4's getter could not be allocated");
+        JS_SetPropertyStr(ctx, g, "__apiclientGetter", window_proxy_cross_origin_getter(ctx, op->f[3]));
+        /* §7.2.1.3.4 runs the getter's steps ON O, and O is the peer document's Window — this realm's global
+           object, taken from the runtime rather than read out of the realm under whatever name. */
+        JS_SetPropertyStr(ctx, g, "__apiclientThis", JS_GetGlobalObject(ctx));
+        JS_SetPropertyStr(ctx, g, "__apiclientArgs", args);
+        JS_SetPropertyStr(ctx, g, "__apiclientOp", realm_value_get(ctx, g_apply_slot));
     } else {
         /* THE OBJECT IS NAMED BY (GENERATION, ID) — see remote_object.h. An id alone is an index into
            whichever of this document's sessions happens to be running when the record lands, and it is IN

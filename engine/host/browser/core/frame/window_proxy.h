@@ -412,6 +412,39 @@ int window_proxy_security_check(JSContext *ctx, JSValueConst platform_object, co
    window_proxy.c's capture-time loop exists to make impossible. Side-effect-free; needs no realm. */
 const CrossOriginProperty *window_proxy_cross_origin_property(const char *name);
 
+/* §7.2.1.3.4 CrossOriginGetOwnPropertyHelper ( O, P )'s GETTER, CAPTURED PER REALM BEFORE ANY PAGE SCRIPT RUNS.
+ *
+ * WHAT THE STANDARD ASKS FOR IS NOT A PROPERTY READ. §7.2.1.3.4's accessor branch sets crossOriginGetter to
+ * "an anonymous built-in function, created in the current realm, that performs the same steps as the getter of
+ * the IDL attribute P on object O" — the getter's STEPS, reached without consulting the object's own slot. An
+ * ordinary [[Get]] of the peer's global is a different operation and answers differently the moment the page
+ * has written to the member: Web IDL §3.3.11 [Replaceable] says assigning to one of these "will result in an
+ * own property with the same name being created on the object which has the value being assigned. This
+ * property will shadow the accessor property" — so `window.length = 5` on the peer replaces the accessor
+ * outright, and an ordinary read then answers 5 where a browser still answers the child-navigable count.
+ * FOUR OF THE NINE ACCESSOR ENTRIES CARRY IT — HTML §7.2.2 The Window object's IDL marks `self`, `frames`,
+ * `length` and `parent` [Replaceable]; `opener` is a writable `attribute any`, which a page replaces through
+ * its own setter steps rather than by shadowing. Five of the nine members a peer can be asked for are
+ * therefore page-writable, and NO test on the ANSWER can tell a replaced number from a real one — which is
+ * why this is a capture and not a check.
+ *
+ * CAPTURED EAGERLY, AT THE ONE PER-DOCUMENT INSTALL EVERY REALM GOES THROUGH (core/platform.c's `window_proxy`
+ * row, which sits after the `window` and `location` rows that install these nine). A capture on first use
+ * would take whatever the flow that touched it first had already left on the global, which is the same defect
+ * one level in: a baseline fact minted inside one flow's world. It is held in a PER-REALM slot for the reason
+ * core/realm.h states — a getter is a function object of the realm that defined it, and a module static would
+ * answer every document's question out of whichever realm was built first.
+ *
+ * `name` is one of §7.2.1.3.1's thirteen and its entry's [[NeedsGetter]] must be true; an entry with neither
+ * flag is §7.2.1.3.4's OPERATION branch, which has no getter to run. OWNED: the caller frees. */
+JSValue window_proxy_cross_origin_getter(JSContext *ctx, const char *name);
+
+/* AND THE CAPTURE ITSELF — core/platform.c's per-document install column for this component. It runs after
+   every row that installs one of §7.2.1.3.1's accessor members, and its own assert is what says so: a member
+   installed later, or as something other than an accessor, aborts here naming itself rather than going quiet
+   and leaving a peer to answer that one member out of the page's own global. */
+void window_proxy_install_window_getters(JSContext *ctx, JSValueConst global);
+
 /* AND WHETHER THAT RECEIVER IS THE ONE THE MEMBER'S OWN REALM ANSWERS FOR. An attribute whose value the realm
    ALREADY HOLDS is correct exactly while §3.7.6's idlObject is this realm's Window — normally true, because
    each realm installs its own getter over its own value and js_call_c_function sets ctx to the member's realm.
