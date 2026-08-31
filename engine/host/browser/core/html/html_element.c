@@ -56,6 +56,7 @@
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_base_element.h"
+#include "core/html/nonce_attribute.h"   /* §2.5.6's `nonce`, whose getter is not a reflection */
 #include "core/html/html_meter.h"
 #include "core/html/html_progress.h"
 #include "core/events/event_target.h"
@@ -181,7 +182,11 @@ static const ElReflect R_HTML[] = {
     { "accessKey", "accesskey", REFLECT_STRING },
     { "enterKeyHint", "enterkeyhint", REFLECT_ENUM, .en = &ENTERKEYHINT_ATTR },
     { "inputMode", "inputmode", REFLECT_ENUM, .en = &INPUTMODE_ATTR },
-    { "nonce", "nonce", REFLECT_STRING },
+    /* NO `nonce` HERE. §2.5.6 Nonce attributes gives the member its own two sentences and neither is a
+       reflection: the getter returns the element's `[[CryptographicNonce]]` and the setter writes that slot,
+       and the section adds a note that the row here made false — "Note how the setter for the nonce IDL
+       attribute does not update the corresponding content attribute." Wrong in BOTH directions, which is why
+       it is core/html/nonce_attribute.c and not a new kind in the reflection enum. */
     { "popover", "popover", REFLECT_ENUM, .en = &POPOVER_ATTR },
     { "hidden", "hidden", REFLECT_BOOL }, { "inert", "inert", REFLECT_BOOL },
     { "autofocus", "autofocus", REFLECT_BOOL },
@@ -790,6 +795,8 @@ void html_element_init(JSContext *ctx)
                 break;
             }
     }
+    /* §2.5.6's `nonce` setter, declared beside the reflections it is deliberately not one of. */
+    nonce_attribute_init(ctx);
     /* EVERY REFLECTION DECLARED ONCE, here, with the base index each row's install names them by. */
     g_html_refl_base = element_declare_reflections(ctx, "HTMLElement", R_HTML,
                                                   (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
@@ -894,6 +901,10 @@ void html_element_install_protos(JSContext *ctx)
     /* §4.13.7 "Element internals"'s `ElementInternals attachInternals()` — an HTMLElement member, installed
        on THIS realm's prototype like every other. */
     element_internals_install_html_members(ctx, html_p);
+    /* §2.5.6 Nonce attributes' `nonce` — the third `HTMLOrSVGOrMathMLElement` member on this prototype, beside
+       the two below, and here rather than in R_HTML because its getter reads an internal slot and its setter
+       deliberately does not write the content attribute. */
+    nonce_attribute_install(ctx, html_p);
     /* §6.6.6's `HTMLOrSVGOrMathMLElement` members — `focus(options)` and `blur()`, the two entry points of
        §6.6.4's processing model, and §6.6.3's `tabIndex`. They were one body returning undefined; they are now
        the real algorithms, which move the document's focused area and fire the page's focus handlers
@@ -1163,6 +1174,7 @@ void html_element_free(JSRuntime *rt)
     node_set_element_resolver(NULL);
     event_target_set_handler_target_terms(NULL);
     dom_string_map_free(rt);
+    nonce_attribute_free();   /* §2.5.6's setter id, reset like core/html/html_base_element.c's */
     global_attributes_free();
     declarative_shadow_free();
     html_form_free(rt);

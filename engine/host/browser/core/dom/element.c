@@ -49,6 +49,7 @@
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
 #include "core/html/html_base_element.h"
+#include "core/html/nonce_attribute.h"   /* §2.5.6's attribute change steps, in the family below */
 #include "core/html/event_handler_attribute.h"   /* HTML §8.1.8.1's own attribute change steps */
 #include "core/html/html_form.h"    /* §2.1.4's moving steps step 2 — the form owner a move may have to reset */
 #include "core/html/html_style_element.h"
@@ -1434,8 +1435,14 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
        §3.2.4's modulo, so this runs none of the page's code and the value can only be 0..4294967295 — a page
        writing 3000000000 lands above 2147483647 and gets the default written, not a wrap. */
     if (g_reflect[magic].kind == REFLECT_ULONG) {
-        /* minimum is 0 until a [ReflectPositive] kind exists; it is spelled so the day it does, this reads. */
-        long long minimum = 0, given = 0, newValue;
+        /* minimum is 0 until a [ReflectPositive] kind exists; it is spelled so the day it does, this reads.
+           `given` IS THE CONVERSION'S OWN TYPE and was a `long long`, which is a CONSTRAINT VIOLATION rather
+           than a style point: `JS_ToInt64` takes an `int64_t *`, and on a target where those two spellings are
+           different types the compiler is entitled to assume the pointer does not alias what it was handed. It
+           compiled because the build passes `-w`, and it worked because both are 64 bits on this host — an
+           agreement no line here states and the wasm target does not share. */
+        long long minimum = 0, newValue;
+        int64_t given = 0;
 
         JS_ToInt64(ctx, &given, val);
         newValue = g_reflect[magic].has_dflt ? g_reflect[magic].dflt : minimum;
@@ -2795,6 +2802,16 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        for exactly one of them — and this member has three (`b.href =`, `setAttribute`, `attributes.href.value
        =`), all of which move where every relative URL in the document resolves. */
     html_base_element_attr_changed(rctx, el, ns, local);
+    /* HTML §2.5.6 Nonce attributes' OWN attribute change steps — the family's members are DOM §4.9's and this
+       standard states this one for every element that includes HTMLOrSVGOrMathMLElement. It is here for a
+       SHARPER version of the reason its neighbours are: they moved out of an IDL setter that answered for one
+       spelling, and §2.5.6's setter deliberately writes no attribute at all ("Note how the setter for the nonce
+       IDL attribute does not update the corresponding content attribute"), so there was never a setter for
+       these steps to be hiding in. This line is the ONLY road from `<script nonce=abc>` in the markup to the
+       `[[CryptographicNonce]]` the member answers out of; without it the slot stays at its initial empty string
+       for every element the page never assigned. LAST, because it reads the attribute BACK through
+       element_attr_get_value to keep a stashed source's triple, and every entry above may still write it. */
+    nonce_attribute_attr_changed(rctx, el, ns, local);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)

@@ -70,6 +70,7 @@
    boundary for the same reason. */
 #include "core/html/custom_elements.h"
 #include "core/html/html_script.h"
+#include "core/html/nonce_attribute.h"   /* §2.5.6's cloning steps, on §4.4 step 3 beside §4.12.1's */
 #include "solver/engine.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -2700,6 +2701,15 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
            `host.appendChild(parsed.cloneNode(true))` runs exactly the code §13.4's Inert mode exists to stop.
            It is unconditional on `subtree` because §4.12.1's steps are, unlike §4.12.3's above. */
         html_script_cloned(ctx, s->src, s->cnode);
+        /* AND HTML §2.5.6 Nonce attributes STATES A THIRD PAIR ON THIS SAME STEP, over a far wider set than
+           either of the two above: "The cloning steps for elements that include HTMLOrSVGOrMathMLElement given
+           node, copy, and subtree are to set copy's [[CryptographicNonce]] to node's [[CryptographicNonce]]" —
+           every HTML element, not one tag. It is not made redundant by the attribute the clone already copied:
+           §2.5.6 exists precisely to make the slot and the attribute stop agreeing, so a copy whose nonce came
+           from the attribute is the STALE one, and under a `script-src 'nonce-…'` policy that is the difference
+           between a cloned script that runs and one that does not. Unconditional on `subtree`, like §4.12.1's
+           above and unlike §4.12.3's. */
+        nonce_attribute_cloned(ctx, s->src, s->cnode);
         hdr->stage = base + NODE_CLONE_PHASE_CHILDREN;
         if (content && content->first_child) {
             /* Leave this tree for the template's, on both sides at once. The frame is everything to come back
