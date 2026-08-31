@@ -2802,7 +2802,6 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        document's own active set — are in this heap, and an element crosses no instance boundary. See the
        notice below. */
     char *sandbox_flags = NULL;
-    size_t n;
     /* HTML §7.3.2.1's CREATE A NEW BROWSING CONTEXT AND DOCUMENT, verbatim: "Let topLevelCreationURL be
        about:blank if embedder is null; otherwise embedder's relevant settings object's top-level creation
        URL." The embedder is the element this navigable is nested THROUGH, so `is_child` IS that condition —
@@ -3219,37 +3218,29 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
               "navigable: OOM stating §9.5's answer for this navigable's container to a peer instance");
         CHECK(ancestor_origins != NULL,
               "navigable: OOM stating §3.1.3's ancestor origins for this navigable to a peer instance");
-        DCHECK(!strchr(ancestor_origins, '\t'),
-               "§3.1.3's ancestor origins list was serialized with a TAB in it and this record is "
-               "tab-delimited — the list is §7.1.1 serializations of origins joined by SPACE, and URL §3.2 "
-               "\"Host miscellaneous\" makes both TAB and SPACE forbidden host code points, so a tab here is "
-               "that grammar having changed under a record that splits on one, and the creator's policy text "
-               "would land on the wrong field");
-        DCHECK(!strchr(container_policy, '\t'),
-               "Permissions Policy §9.5's answer was serialized with a TAB in it and this record is "
-               "tab-delimited — §4.1's feature tokens and §4.2's `Enabled`/`Disabled` contain none, so a tab "
-               "here is that grammar having changed under a record that splits on one, and the creator's "
-               "policy text would land on the wrong field");
         parent_id = remote_object_encode(ctx, is_child ? document_window_proxy(ctx) : JS_UNDEFINED);
         CHECK(parent_id != NULL, "navigable: OOM naming this navigable's §7.3.1.3 parent for a peer instance");
-        DCHECK(!strchr(parent_id, '\t'),
-               "§7.3.1.3's parent navigable was encoded with a TAB in it and this record is tab-delimited — "
-               "remote_object.c writes a one-letter tag and base64 fields terminated by '.', so a tab here is "
-               "that grammar having changed under a record that splits on one, and the creator's policy text "
-               "would land on the wrong field");
-        n = strlen(world_doc_name(child)) + strlen(world_doc_name(document_doc(ctx))) +
-            strlen(addr) + strlen(origin_serialized(origin)) +
-            strlen(creator_policy.csp ? creator_policy.csp : "") + strlen(tlu) +
-            strlen(creator_policy.self_origin) +
-            strlen(embedder_policy_value_token(creator_policy.embedder.value)) +
-            strlen(creator_policy.embedder.endpoint) +
-            strlen(embedder_policy_value_token(creator_policy.embedder.report_only_value)) +
-            strlen(creator_policy.embedder.report_only_endpoint) +
-            strlen(parent_id) + strlen(container_policy) + strlen(ancestor_origins) +
-            strlen(sandbox_flags) + strlen(provenance) + 32;
-        op = malloc(n);
-        CHECK(op != NULL, "navigable: OOM building the create notice");
-        /* AND THE FIFTEENTH FIELD IS WHAT THIS NAVIGATION IS EVIDENCE OF — CLAUDE.md
+        /* THE RECORD, FIELD BY FIELD, AND ITS SIZE IS A FUNCTION OF THIS ARRAY. engine_notice_build walks it
+           twice — once to size, once to write — so the TAB in front of every field is paid for by the same
+           edit that adds the field, and `sizeof fields / sizeof fields[0]` is the count nobody restates.
+           IT WAS A FORMAT STRING BESIDE A HAND-SUMMED LENGTH PLUS A SLACK CONSTANT, and the constant paid for
+           the operation name, the NUL and ONE TAB PER FIELD. Adding the provenance field below moved the sum
+           and left the constant, so the record was assembled one byte short and snprintf truncated it —
+           silently, because truncating is what snprintf is for. The byte it dropped was the record's last, the
+           last field is the policy, and the policy was EMPTY in the fixture that caught it: the final TAB
+           went, and seventeen fields reached every reader as sixteen. With a non-empty policy that same byte
+           comes off the END OF THE POLICY TEXT, which nothing counts and no reader can see.
+           NO FIELD BEFORE THE LAST MAY CONTAIN A TAB, and that is asserted for ALL of them in
+           engine_notice_build rather than for the three that were once spelled out here. The reasons are
+           per-field and they are this record's grammar: an origin's serialization cannot hold one (URL §3.2
+           "Host miscellaneous" makes TAB a forbidden host code point), nor can HTML §7.1.4's three fixed
+           tokens, nor RFC 8941 §3.3.3 "Strings"' `report-to` endpoints, nor remote_object.c's one-letter tag
+           over '.'-terminated base64, nor Permissions Policy §4.1's feature tokens and §4.2's
+           `Enabled`/`Disabled`, nor HTML §3.1.3's ancestor list (origin serializations joined by SPACE, and
+           §3.2 forbids SPACE in a host too), nor §7.1.5's flag names joined by COMMA. A tab in any of them is
+           that grammar having changed under a record that splits on one, and the creator's policy text would
+           land on the wrong field.
+           AND THE FIFTEENTH FIELD IS WHAT THIS NAVIGATION IS EVIDENCE OF — CLAUDE.md
            §A-REQUEST-CARRIES-THE-PROVENANCE's `observed`/`derived`/`forced`, the same word the SAME-ORIGIN arm
            puts on its load job, taken from the same local.
            IT IS THE ONE FIELD THE HOST'S DECISION TO SPEND THE NETWORK IS MADE FROM, and until it existed the
@@ -3260,20 +3251,26 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            IT SITS BEFORE THE POLICY FOR THE REASON EVERYTHING ELSE DOES: the policy is the record's remainder
            because a raw CSP header may contain HTAB, and this vocabulary is three words of ASCII lowercase
            letters (solver/engine.h), so it can never be the field that cannot be split. */
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
-                 world_doc_name(child),
-                 world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu,
-                 creator_policy.self_origin,
-                 embedder_policy_value_token(creator_policy.embedder.value),
-                 creator_policy.embedder.endpoint,
-                 embedder_policy_value_token(creator_policy.embedder.report_only_value),
-                 creator_policy.embedder.report_only_endpoint,
-                 parent_id,
-                 container_policy,
-                 ancestor_origins,
-                 sandbox_flags,
-                 provenance,
-                 creator_policy.csp ? creator_policy.csp : "");
+        const char *const fields[] = {
+            world_doc_name(child),
+            world_doc_name(document_doc(ctx)),
+            addr,
+            origin_serialized(origin),
+            tlu,
+            creator_policy.self_origin,
+            embedder_policy_value_token(creator_policy.embedder.value),
+            creator_policy.embedder.endpoint,
+            embedder_policy_value_token(creator_policy.embedder.report_only_value),
+            creator_policy.embedder.report_only_endpoint,
+            parent_id,
+            container_policy,
+            ancestor_origins,
+            sandbox_flags,
+            provenance,
+            creator_policy.csp ? creator_policy.csp : "",
+        };
+
+        op = engine_notice_build("navigable.create", fields, sizeof fields / sizeof fields[0]);
         engine_host_notify(ctx, op);
         free(op);
         free(parent_id);

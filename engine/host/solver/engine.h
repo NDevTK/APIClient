@@ -660,6 +660,29 @@ void        engine_host_notify(JSContext *ctx, const char *op);
 /* The notices posted since the last call, newline-joined, DRAINED by the call. "" when there are none. */
 const char *engine_host_notices(void);
 
+/* A TAB-DELIMITED RECORD BUILT FROM ITS FIELDS AND SIZED EXACTLY — the way a notice with more than one field
+   is assembled, because the alternative is a hand-written format string beside a hand-computed slack constant,
+   and those two drift INDEPENDENTLY. The caller frees.
+   MEASURED, AND THE REASON THIS EXISTS: a field added to `navigable.create` was added to the record's strlen
+   sum and NOT to the constant that pays for the TAB in front of it, so the sum was one byte short and snprintf
+   TRUNCATED — silently, because truncation is what snprintf is for. The dropped byte was the record's last,
+   and the record's last field is the raw CSP header, which was EMPTY in the fixture that caught it: the final
+   TAB went, seventeen fields arrived as sixteen, and every reader that counts them refused the record. WITH A
+   NON-EMPTY POLICY THE SAME ONE BYTE COMES OFF THE END OF THE POLICY TEXT — a Content-Security-Policy crossing
+   to a peer instance one character shorter than the one the server sent, which nothing counts and no reader
+   can see, and which is a security decision made on bytes no document ever stated.
+   THE COUNT IS THE CALLER'S `sizeof` AND NEVER A TERMINATOR — CLAUDE.md §UB-DOES-NOT-ONLY-CRASH: a
+   NULL-terminated variadic field list is a contract the optimiser is entitled to assume every caller keeps,
+   and the one it miscompiles into a two-byte self-jump for the caller that forgets. `sizeof a / sizeof a[0]`
+   at the call site is derived from the array the fields are written into, so a field added to that array is
+   counted, paid for and delimited by the same edit that adds it, and there is nothing left to keep in sync.
+   THE LAST FIELD IS THE REMAINDER and is the only one that may contain HTAB — a raw CSP header may hold one
+   (RFC 9110 §5.5 "Field Values" admits HTAB inside a field value), which is why the policy is last on every
+   record that carries one. Every field BEFORE it is checked for one HERE rather than at each call site: a
+   middle field carrying a tab is silently a record with an EXTRA field, which shifts every field after it, and
+   a shift is the one corruption a reader's field COUNT still passes. */
+char       *engine_notice_build(const char *op, const char *const *fields, size_t nfields);
+
 /* THE DEATH OF A WORLD, ANNOUNCED — `world.gone<TAB><world name>`, one notice per name, and the ONE writer of
    that record. The names come from world_flow_gone (a flow left the frontier) or world_session_gone (the whole
    frontier parked); both are lists, because a world's death frees every ancestor whose last live descendant it

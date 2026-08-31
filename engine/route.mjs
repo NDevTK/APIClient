@@ -592,6 +592,21 @@ async function drainNotices(e) {
        and two object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent
        and which nothing downstream could tell from the routing. */
     if (f[0] === 'navigable.create') {
+      /* SEVENTEEN FIELDS, COUNTED BEFORE ANY OF THEM IS READ — and this arm was the one reader of this record
+         that did not count. The `navigable.swap` arm below counts its five, `trusted.mjs` counts seventeen,
+         `bridge.js` DCHECKs seventeen and wpt_runner.c routes on `nf == 17`; this one indexed straight to
+         `f[6]`..`f[14]` and `f.slice(16)`, so a record one field short reached makeEngine with `undefined`
+         where a policy goes and `''` where the CSP goes — which is not a crash but a peer instance provisioned
+         under a policy container nobody stated. That is §A-FIELD-A-CONSUMER-DEFAULTS exactly: `slice(16)` on a
+         sixteen-field record is `[]` and joins to the empty string, which is indistinguishable from a document
+         that really sent no policy. The count is what tells those apart, and it is the only thing that can. */
+      if (f.length < 17)
+        fail(`a navigable.create notice was short of its fields (${f.length} of seventeen): ${n} — ` +
+             'navigable.c writes the child, the creator, the address, the origin, §8.1.3.1\'s top-level ' +
+             'creation URL, CSP §2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s ' +
+             'parent navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ancestor ' +
+             'origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION is evidence of, and ' +
+             'the policy');
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
       /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list, FIELDS 7-10 ARE §7.1.4's EMBEDDER POLICY —
          its value, its reporting endpoint, its report-only value and its report-only endpoint — FIELD 11 IS

@@ -53,7 +53,6 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
                                  SandboxFlags final_sandbox_flags, const char *provenance)
 {
     uint32_t swapped;
-    size_t n;
     char *op;
 
     DCHECK(url != NULL && *url && origin != NULL,
@@ -98,12 +97,6 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
        the navigable's CURRENT document, which is the one the swap supersedes, so the name is unique by the same
        induction every other document name here rests on. */
     swapped = world_mint_doc(window_proxy_doc(proxy));
-    n = strlen(world_doc_name(swapped)) + strlen(url) + strlen(origin_serialized(origin)) +
-        strlen(provenance) + 32;
-    op = malloc(n);
-    CHECK(op != NULL, "browsing context group: OOM building §7.1.3.2's swap record — a dropped record is a "
-                      "Document the host never provisions, and the navigable it belongs to has already been "
-                      "discarded, so the navigation would have destroyed a window and created nothing");
     /* NO CREATOR FIELD AND NO POLICY FIELD, because §7.3.2.3 creates this browsing context "with null, null,
        and group": there is no creator to clone a policy container from and none to inherit an opener policy
        from. A field that is always empty is a field no reader can validate, so the record does not carry one.
@@ -114,9 +107,21 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
        one field that is NOT derivable by the zone — every other fact here it can compute from the address or
        from §7.3.2.3's own "null, null, and group", and this one is a statement about the PATH the engine ran,
        which nothing outside the engine can see. TAB-SAFE by its vocabulary: solver/engine.h's three tokens are
-       ASCII lowercase letters. */
-    snprintf(op, n, "navigable.swap\t%s\t%s\t%s\t%s", world_doc_name(swapped), url, origin_serialized(origin),
-             provenance);
+       ASCII lowercase letters.
+       SIZED FROM THIS ARRAY AND NOT BY HAND — the same primitive the create arm uses, and it is here for a
+       reason that had not yet cost anything: this record's slack constant was written when it carried three
+       fields, the provenance field made it four, and the constant was generous enough to absorb the extra TAB.
+       The create arm's was EXACT and the identical edit truncated it. A producer that is correct only because
+       its hand-computed slack happened to be loose is one field away from the same defect, so the arithmetic
+       goes rather than being corrected. */
+    const char *const fields[] = {
+        world_doc_name(swapped),
+        url,
+        origin_serialized(origin),
+        provenance,
+    };
+
+    op = engine_notice_build("navigable.swap", fields, sizeof fields / sizeof fields[0]);
     engine_host_notify(ctx, op);
     free(op);
     /* AND THE OLD BROWSING CONTEXT IS DISCARDED — step 10's note, "browsingContext will not be used by the new

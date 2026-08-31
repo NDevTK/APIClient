@@ -1218,6 +1218,57 @@ void engine_host_notify(JSContext *ctx, const char *op) {
     g_notices[g_notices_n] = 0;
 }
 
+/* See engine.h. TWO WALKS OVER ONE ARRAY — the first sizes, the second writes — so the size is a FUNCTION of
+   the fields rather than a constant standing beside them. There is no format string here on purpose: a format
+   string is a second statement of the field count (one `%s` each) that a compiler checks against the ARGUMENT
+   list and never against the record's grammar, which is how a record can be well-formed C and still be
+   assembled one delimiter short. */
+char *engine_notice_build(const char *op, const char *const *fields, size_t nfields)
+{
+    size_t len, at, i, l;
+    char *rec;
+
+    DCHECK(op != NULL && *op, "a host notice was built under no operation name — the operation is what the "
+                              "host routes on, so a record without one is a payload addressed to nobody");
+    DCHECK(nfields == 0 || fields != NULL,
+           "a host notice was built from a field count with no fields behind it");
+    DCHECK(strchr(op, '\t') == NULL && strchr(op, '\n') == NULL,
+           "a host notice's operation name contains one of the record's own delimiters, so the name the host "
+           "routes on is not the name this record was built under");
+    len = strlen(op);
+    for (i = 0; i < nfields; i++) {
+        DCHECK(fields[i] != NULL,
+               "a host notice field is NULL — every field of a record is present or it is a different record, "
+               "and a value that is absent is stated in that field's own vocabulary (`u`, `null`, `none`) "
+               "rather than left out, because an empty field is a hole a reader can default");
+        DCHECK(i + 1 == nfields || strchr(fields[i], '\t') == NULL,
+               "a host notice's NON-FINAL field contains a TAB and the record is tab-delimited — the reader "
+               "counts one field too many and reads every field after it at the wrong offset, which is the "
+               "one corruption a field COUNT still passes. Only the LAST field is the remainder that may "
+               "hold a tab, which is why the raw policy is last on every record that carries one");
+        DCHECK(strchr(fields[i], '\n') == NULL,
+               "a host notice field contains a NEWLINE, which is the record separator — the host would read "
+               "one notice as two and route the tail as an operation");
+        len += 1 + strlen(fields[i]);   /* the TAB that precedes this field, then the field itself */
+    }
+    rec = malloc(len + 1);
+    CHECK(rec != NULL, "engine: OOM building a host notice — a dropped notice is a document the host never "
+                       "provisions, so every read through it parks its flow forever");
+    at = strlen(op);
+    memcpy(rec, op, at);
+    for (i = 0; i < nfields; i++) {
+        rec[at++] = '\t';
+        l = strlen(fields[i]);
+        memcpy(rec + at, fields[i], l);
+        at += l;
+    }
+    rec[at] = 0;
+    DCHECK(at == len, "a host notice was assembled to a length its own sizing walk did not predict — the two "
+                      "walks read different bytes, so a field changed between them and the record is either "
+                      "truncated or holds the tail of a buffer nobody owns");
+    return rec;
+}
+
 /* THE DEATH OF A WORLD, ANNOUNCED — see engine.h. One notice per name, written HERE and nowhere else: two
    spellings of this record would be two peers releasing different things, which is the same sentence
    world_serialize carries about the vector it writes. */
