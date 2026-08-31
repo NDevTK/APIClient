@@ -2480,27 +2480,18 @@ static inline int method_is_token(const char *m) {
     return 1;
 }
 
-/* FETCH §2.2.5 "Requests"' DESTINATION TYPE, ENUMERATED — "the empty string, `audio`, `audioworklet`,
-   `document`, `embed`, `font`, `frame`, `iframe`, `image`, `json`, `manifest`, `object`, `paintworklet`,
-   `report`, `script`, `serviceworker`, `sharedworker`, `style`, `text`, `track`, `video`, `webidentity`,
-   `worker`, or `xslt`". It is the PRODUCER'S CONTRACT and it is asked in both directions — the join will not
-   write a value the spec does not define, and the split will not believe one — because the field's consumer
-   decides from it whether a reply may be ingested as CODE, and a value it does not recognise is answered by
-   whichever of its arms was written first. A `static` beside `method_is_token` for that entry's reason: this
-   engine's only two uses of the vocabulary are those two asserts, and an export with no caller is the mirror
-   of the field nothing reads. */
-static int destination_is_type(const char *d) {
-    static const char *const TYPES[] = {
-        "", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe", "image", "json",
-        "manifest", "object", "paintworklet", "report", "script", "serviceworker", "sharedworker",
-        "style", "text", "track", "video", "webidentity", "worker", "xslt"
-    };
-    size_t i;
-    if (!d) return 0;
-    for (i = 0; i < sizeof TYPES / sizeof *TYPES; i++)
-        if (!strcmp(d, TYPES[i])) return 1;
-    return 0;
-}
+/* FETCH §2.2.5 "Requests"' DESTINATION TYPE IS ASKED OF `core/fetch/fetch.h`, WHICH OWNS THE FIELD — this file
+   used to keep its own copy of the enumeration, on the argument that "this engine's only two uses of the
+   vocabulary are those two asserts, and an export with no caller is the mirror of the field nothing reads".
+   The premise stopped being true the moment a THIRD site had to ask (Fetch §2.2.7 "Miscellaneous"' translate a
+   potential destination, at `core/html/html_link.c`'s preload), and the copy's cost is the one a moving
+   enumeration always has: a destination type added to one table and not the other is a request one half of
+   this program refuses and the other half fetches. The contract is still asked in BOTH directions here — the
+   join will not write a value the spec does not define and the split will not believe one — which is the point
+   of asking it at all, since a value the consumer does not recognise is answered by whichever of its arms was
+   written first. Only the table moved.
+   `method_is_token` above stays a `static` because it has no second caller yet; the day it does it goes the
+   same way, to the component whose record carries the method. */
 
 /* IS THIS DESTINATION SCRIPT-LIKE — §2.2.5: "A request's destination is script-like if it is `audioworklet`,
    `paintworklet`, `script`, `serviceworker`, `sharedworker`, or `worker`." The ENGINE does not decide CORB
@@ -2682,7 +2673,7 @@ const char *engine_pending_fetches(void) {
                        "gives every request one and the trusted zone reads it to decide whether the reply may "
                        "be ingested as CODE. The park that created it must state it (core/fetch/fetch.h's "
                        "request record carries the field; `` is a real answer and means DATA)");
-                DCHECK(destination_is_type(d),
+                DCHECK(fetch_is_destination_type(d),
                        "an outstanding request's DESTINATION is not one Fetch §2.2.5 Requests enumerates — the "
                        "consumer decides the CORB class by asking whether this value is SCRIPT-LIKE, so a "
                        "value outside the enumeration is read as `not code` by default and a script's reply is "
@@ -2879,7 +2870,7 @@ void engine_pending_split(char *line, const char **method, const char **destinat
     /* FETCH §2.2.5's ENUMERATION, ASKED OF THE LINE — the same test the join asked before writing it, at the
        other end, because a field is a contract and a contract is checked by both parties. The EMPTY STRING
        passes and must: §2.2.5's default is a destination like any other and it is what `fetch()` has. */
-    DCHECK(destination_is_type(*destination),
+    DCHECK(fetch_is_destination_type(*destination),
            "a pending line's DESTINATION is not one Fetch §2.2.5 Requests enumerates — the host decides from "
            "it whether this reply may be ingested as CODE, and a value it does not know takes the `not "
            "script-like` arm, which is how a script's cross-origin body gets read as data and compiled");

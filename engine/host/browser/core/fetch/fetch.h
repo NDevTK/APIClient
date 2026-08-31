@@ -54,6 +54,17 @@ typedef struct {
     size_t        body_len;
 } FetchRequest;
 
+/* IS THIS ONE OF FETCH §2.2.5 "Requests"' DESTINATION TYPES — the enumeration quoted in the paragraph above,
+ * as a predicate, in the component whose record carries the field.
+ * IT IS AN EXPORT BECAUSE THE FIELD HAS THREE CONSUMERS AND ALL THREE ASSERT AGAINST IT, and while it was a
+ * `static` in ONE of them the other two either restated the table or trusted a producer. `solver/engine.c`
+ * kept its own copy for the pending join and the pending splitter; `core/html/html_link.c` needs it for Fetch
+ * §2.2.7 "Miscellaneous"' translate-a-potential-destination assert; and `extension/lib/safe-fetch.js` holds the
+ * one on the other side of the ABI, where the answer decides whether a reply may be ingested as CODE. Two
+ * copies inside one program is what §2.2.5 being a moving enumeration makes expensive — a destination type
+ * added to one copy and not the other is a request one half of the engine refuses and the other half fetches. */
+bool fetch_is_destination_type(const char *destination);
+
 typedef struct {
     void (*owe)(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req);
 } FetchProvider;

@@ -350,25 +350,48 @@ static JSValue link_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSV
 
 /* ---- §4.6.8.20's destination and type checks -------------------------------------------------------------- */
 
-/* "A preload destination is `fetch`, `font`, `image`, `script`, `style`, or `track`." "To translate a preload
-   destination given a string destination: If destination is not a preload destination, then return null.
-   Return the result of translating destination."
-   THE STRING IS BOTH ANSWERS AT ONCE and that is Fetch's doing, not a shortcut: the six preload destinations
-   translate to Fetch §2.2.5 destinations spelled identically, and this engine's CSP entry takes a destination
-   as that same string (core/frame/policy_container.h: "`destination` IS FETCH §2.2.5's DESTINATION STRING").
+/* §4.6.8.20 "Link type `preload`": "A preload destination is `fetch`, `font`, `image`, `script`, `style`, or
+   `track`." This is the `as` attribute's STATE and nothing more — §4.6.8.20's step 3 is "let destination be the
+   result of TRANSLATING the keyword representing the state of el's `as` attribute", so the keyword and the
+   request's destination are two values and this returns the first.
+   THEY ARE NOT THE SAME STRING, AND THIS FUNCTION USED TO SAY THEY WERE. Its comment read "the six preload
+   destinations translate to Fetch §2.2.5 destinations spelled identically", which is true of five of them and
+   false of the one whose whole purpose is to differ: Fetch §2.2.7 "Miscellaneous" defines a POTENTIAL
+   destination as "`fetch` or a destination which is not the empty string" precisely because `fetch` is NOT a
+   destination — §2.2.5's enumeration does not contain it — and translating it yields the EMPTY string. So
+   `<link rel=preload as=fetch>` was putting the six characters `fetch` on a request's destination field, which
+   every consumer of that field asserts against §2.2.5's enumeration: the pending join's `fetch_is_destination_type`
+   aborts a DEV build on any page carrying one, and the trusted zone's chokepoint refuses the line. The two
+   consumers that did not abort got the right answer by ACCIDENT and are the reason this stood — CSP §6.8.1's
+   trailing "Return connect-src" for an unlisted row happens to be the same directive as the empty
+   destination's, and CORB's script-like predicate answers false for an unrecognised value as it does for `""`.
+   A field decided by three consumers of which two are right by luck is not a working field.
    NULL is "the `as` attribute names something that is not a preload destination" — including its ABSENCE, which
    is the `as` attribute in its missing-value-less state, and which is why `<link rel=preload href=x>` with no
    `as` fetches nothing in a browser either. */
-static const char *translate_preload_destination(lxb_dom_element_t *el)
+static const char *const PRELOAD_DESTINATIONS[] = { "fetch", "font", "image", "script", "style", "track" };
+
+/* THE SAME SIX, AS A PREDICATE — because the vocabulary is asked in two places and a second hand-written copy
+   of it in the assert below would be free to disagree with the list the answer is drawn FROM, which is the
+   exact shape that let the preload keyword and Fetch §2.2.5's destination be one variable in the first place. */
+static bool is_preload_destination(const char *d)
 {
-    static const char *const DESTINATIONS[] = { "fetch", "font", "image", "script", "style", "track" };
+    size_t i;
+    if (!d) return false;
+    for (i = 0; i < sizeof(PRELOAD_DESTINATIONS) / sizeof(PRELOAD_DESTINATIONS[0]); i++)
+        if (!strcmp(d, PRELOAD_DESTINATIONS[i])) return true;
+    return false;
+}
+
+static const char *preload_destination_of(lxb_dom_element_t *el)
+{
     size_t as_n = 0;
     const char *as = link_attr(el, "as", &as_n);
     size_t i;
 
     if (!as) return NULL;
-    for (i = 0; i < sizeof(DESTINATIONS) / sizeof(DESTINATIONS[0]); i++) {
-        size_t n = strlen(DESTINATIONS[i]);
+    for (i = 0; i < sizeof(PRELOAD_DESTINATIONS) / sizeof(PRELOAD_DESTINATIONS[0]); i++) {
+        size_t n = strlen(PRELOAD_DESTINATIONS[i]);
         size_t k;
         if (n != as_n) continue;
         /* §2.3's enumerated attributes are ASCII case-insensitive, which is what makes `as="SCRIPT"` the
@@ -376,11 +399,36 @@ static const char *translate_preload_destination(lxb_dom_element_t *el)
         for (k = 0; k < n; k++) {
             char c = as[k];
             if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-            if (c != DESTINATIONS[i][k]) break;
+            if (c != PRELOAD_DESTINATIONS[i][k]) break;
         }
-        if (k == n) return DESTINATIONS[i];
+        if (k == n) return PRELOAD_DESTINATIONS[i];
     }
     return NULL;
+}
+
+/* FETCH §2.2.7 "Miscellaneous"' TRANSLATE A POTENTIAL DESTINATION, verbatim: "If potentialDestination is
+   `fetch`, then return the empty string. Assert: potentialDestination is a destination. Return
+   potentialDestination."
+   IT IS A FUNCTION AND NOT AN `if` AT THE ONE CALLER because it is a fact about the VOCABULARY rather than
+   about preload: §4.6.8.20's "translate a preload destination" is defined as "if destination is not a preload
+   destination, return null; return the result of TRANSLATING destination", and `modulepreload` and the `Link:`
+   header path reach the same translation the day either is built. The spec's own ASSERT is the DCHECK — a
+   potential destination that is neither `fetch` nor a destination is a caller that skipped §2.2.5's
+   enumeration, and the value it would hand on is one the pending join refuses and the chokepoint aborts. */
+static const char *translate_potential_destination(const char *potential)
+{
+    DCHECK(potential != NULL,
+           "Fetch §2.2.7 Miscellaneous' translate a potential destination was given nothing — its input is "
+           "`fetch` or a destination which is not the empty string, and the absence of one is answered by the "
+           "caller returning before it gets here");
+    if (!strcmp(potential, "fetch"))
+        return "";
+    DCHECK(fetch_is_destination_type(potential),
+           "Fetch §2.2.7 Miscellaneous asserts its input is a destination once `fetch` is handled, and this "
+           "one is not in §2.2.5 Requests' enumeration — the value would land on a request's destination, "
+           "where the pending join, CSP §6.8.1's effective directive and the chokepoint's CORB class each "
+           "decide from it and none of the three can answer for a word the platform does not define");
+    return potential;
 }
 
 /* §4.6.8.20: "a string type matches a preload destination destination if the following algorithm returns true".
@@ -388,7 +436,14 @@ static const char *translate_preload_destination(lxb_dom_element_t *el)
    HERE, and that is a derivation rather than an omission: step 5 lists the five (destination, type-group) pairs
    this agent can serve and step 6 returns false for everything else, so a type this agent does not support
    either fails step 5 and reaches step 6, or matches step 5 and is by construction supported. Writing step 4
-   would be a second statement of which types are supported, free to disagree with the first. */
+   would be a second statement of which types are supported, free to disagree with the first.
+   ITS PARAMETER IS A PRELOAD DESTINATION AND NOT A DESTINATION, and the algorithm's own signature is what says
+   so — "a string type matches A PRELOAD DESTINATION destination" — which is why step 2 can ask whether it is
+   `fetch` at all. Handing it the TRANSLATED value would make step 2 dead code and silently change what
+   `<link rel=preload as=fetch type=…>` does: `""` reaches no arm of step 5 and step 6 returns false, so the
+   preload the standard accepts with any type would be dropped for stating one. The two vocabularies are one
+   character apart at exactly one member and this is the site where confusing them is invisible, so it is
+   asserted rather than commented. */
 static bool type_matches_preload_destination(lxb_dom_element_t *el, const char *destination)
 {
     size_t type_n = 0;
@@ -396,6 +451,11 @@ static bool type_matches_preload_destination(lxb_dom_element_t *el, const char *
     MimeType m;
     bool ok = false;
 
+    DCHECK(is_preload_destination(destination),
+           "§4.6.8.20's type-matches-a-preload-destination was given something that is not a PRELOAD "
+           "destination — the six are `fetch`, `font`, `image`, `script`, `style` and `track`, and the caller "
+           "that hands it Fetch §2.2.7 Miscellaneous' TRANSLATED destination instead makes step 2 unreachable "
+           "and drops every `<link rel=preload as=fetch>` that states a type");
     if (!type || type_n == 0) return true;                          /* step 1: the empty string matches */
     if (!strcmp(destination, "fetch")) return true;                 /* step 2 */
     /* Step 3: "Let mimeTypeRecord be the result of parsing type. If mimeTypeRecord is failure, return false."
@@ -499,19 +559,31 @@ static char *link_url_absolute(JSContext *ctx, const char *href, size_t href_n)
  */
 static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
 {
-    const char *destination;
+    const char *preload_destination, *destination;
     size_t href_n = 0;
     const char *href;
     char *abs;
     UrlRecord rec;
     JSValue wrap;
 
-    /* STEP 3: "Let destination be the result of translating the keyword representing the state of el's `as`
-       attribute. If destination is null, then return." */
-    destination = translate_preload_destination(el);
-    if (!destination) return;
+    /* STEP 3: "Let destination be the result of TRANSLATING the keyword representing the state of el's `as`
+       attribute. If destination is null, then return." — TWO values and two algorithms, which is what this
+       step was collapsing into one. The keyword is §4.6.8.20's PRELOAD destination and is what §4.6.8.20's own
+       type-match is defined over; the translation is Fetch §2.2.7 "Miscellaneous"' and is what step 4 sets
+       options's destination to, and therefore what the REQUEST carries. They differ at exactly one member —
+       `fetch` translates to the empty string — and while one variable held both, `<link rel=preload as=fetch>`
+       put a word Fetch §2.2.5 Requests does not define onto a request's destination field.
+       "If destination is null, then return" is asked of the KEYWORD, because that is the null the standard
+       means: "if destination is not a preload destination, then return null". */
+    preload_destination = preload_destination_of(el);
+    if (!preload_destination) return;
+    /* STEP 4: "Set options's destination to destination." This engine has no link-processing-options record to
+       set a field on — §4.6.8.20's other entry is `Link:` header processing and there is no header-link path —
+       so the local IS options's destination, and every later read that the standard writes as
+       "options's destination" reads it. */
+    destination = translate_potential_destination(preload_destination);
 
-    DCHECK(strcmp(destination, "image") != 0 ||
+    DCHECK(strcmp(preload_destination, "image") != 0 ||
            !lxb_dom_element_has_attribute(el, (const lxb_char_t *)"imagesrcset", 11),
            "§4.6.8.20's preload reached an `as=image` link carrying `imagesrcset` — its step 1 updates the "
            "source set and its step 2 selects an image source out of it, which is §4.8.4.3's grammar in "
@@ -519,8 +591,13 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
            "identical selection core/html/html_image.c already performs");
 
     /* "To preload given a link processing options options: 1. If options's type doesn't match options's
-       destination, then return." */
-    if (!type_matches_preload_destination(el, destination)) return;
+       destination, then return."
+       THE MATCH TAKES THE KEYWORD, because §4.6.8.20 declares its parameter as one ("a string type matches a
+       PRELOAD DESTINATION destination") and its step 2 asks whether that value is `fetch` — a question the
+       translated destination can never answer yes to, since `fetch` is exactly the member translation
+       removes. Reading step 1's "options's destination" as the post-translation value makes step 2 dead and
+       drops `<link rel=preload as=fetch type=…>`, which the standard accepts with any type at all. */
+    if (!type_matches_preload_destination(el, preload_destination)) return;
 
     /* §4.2.4.1 "Processing the media attribute"'s prescriptive `media` — stated there over every external
        resource link at once ("the user agent must apply the external resource WHEN the media attribute's value
@@ -586,7 +663,11 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        blocked by Content Security Policy returns blocked, then set response to a network error". It runs HERE,
        in the engine, because a policy is the DOCUMENT's; the destination computed above is what CSP §6.8.1
        "Get the effective directive for request" switches on, so `as=script` is governed by `script-src` and
-       `as=style` by `style-src`. A blocked request is a network error, and §4.6.8.20's processResponse fires
+       `as=style` by `style-src`. IT IS THE TRANSLATED VALUE and that matters at one member: `as=fetch` reaches
+       §6.8.1 as the EMPTY string and is governed by its FIRST row, `connect-src`. Passing the keyword got the
+       same directive out of §6.8.1's trailing "Return connect-src" for an unlisted destination — the right
+       answer for the wrong reason, which is a coincidence rather than a rule and would have moved the day
+       §2.2.5 or §6.8.1 gained a row. A blocked request is a network error, and §4.6.8.20's processResponse fires
        `error` for one — so the page's handler runs, and the `<script>` it would have injected is not created,
        which is exactly what a browser does under that policy. */
     url_record_init(&rec);
@@ -612,9 +693,12 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         CHECK(!JS_IsException(deliver), "§4.6.8.20: OOM allocating a preload's processResponse steps");
         req.method = "GET";
         req.url = abs;
-        /* THE DESTINATION §4.6.8.20 STEP 3 ALREADY COMPUTED, carried to the host rather than recomputed there.
-           `translate_preload_destination` above returns Fetch §2.2.5 "Requests"' destination string (its own
-           comment says why the two spellings are one), and the trusted zone reads it for exactly one decision:
+        /* OPTIONS'S DESTINATION — §4.6.8.20 step 3's TRANSLATION, carried to the host rather than recomputed
+           there, and never the `as` keyword step 3 translates FROM. That distinction is this field's whole
+           correctness: `fetch` is a POTENTIAL destination (Fetch §2.2.7 "Miscellaneous") and not a destination,
+           so an `as=fetch` preload carries the EMPTY string here, which is the same destination a `fetch()`
+           has and is what makes CSP §6.8.1 govern it with `connect-src` by its own first row rather than by
+           its trailing default. The trusted zone reads this field for exactly one decision:
            a SCRIPT-LIKE destination is bytes that will run as code, so its reply must be JS-typed or
            same-origin. `<link rel=preload as=script>` is therefore a code load and is classified as one at the
            chokepoint — which is the whole reason this field rides the request: the KIND of park cannot say it,

@@ -70,6 +70,29 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
 
 void fetch_set_provider(const FetchProvider *p) { g_provider = p; }
 
+/* FETCH §2.2.5 "Requests"' DESTINATION TYPE, ENUMERATED — see fetch.h for why it is an export of THIS
+   component rather than a `static` in one of its three consumers. The list is the standard's, in the
+   standard's order: "the empty string, `audio`, `audioworklet`, `document`, `embed`, `font`, `frame`,
+   `iframe`, `image`, `json`, `manifest`, `object`, `paintworklet`, `report`, `script`, `serviceworker`,
+   `sharedworker`, `style`, `text`, `track`, `video`, `webidentity`, `worker`, or `xslt`".
+   `fetch` IS NOT IN IT, and that absence is the whole reason §2.2.7 "Miscellaneous" has to define a POTENTIAL
+   destination separately ("`fetch` or a destination which is not the empty string") and a translation from one
+   to the other. A caller holding an `as`-attribute keyword holds a potential destination, not a destination. */
+bool fetch_is_destination_type(const char *destination)
+{
+    static const char *const TYPES[] = {
+        "", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe", "image", "json",
+        "manifest", "object", "paintworklet", "report", "script", "serviceworker", "sharedworker",
+        "style", "text", "track", "video", "webidentity", "worker", "xslt"
+    };
+    size_t i;
+
+    if (!destination) return false;
+    for (i = 0; i < sizeof TYPES / sizeof *TYPES; i++)
+        if (!strcmp(destination, TYPES[i])) return true;
+    return false;
+}
+
 /* THE SAME SEAM, FOR A COMPONENT WHOSE OWN STANDARD SAYS "FETCH REQUEST" — see fetch.h. `value` is the second
    parameter the provider takes and is JS_UNDEFINED here for the reason it is at `fetch()`'s own call: the
    URL form of the park owes its answer to the host, and a value supplied up front is a reply nobody asked
@@ -97,12 +120,21 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
        dropped it is still on the stack. Fetch §2.2.5 "Requests" gives every request a destination, and the
        trusted zone decides from it whether the reply may be ingested as CODE — so a component that reaches
        this seam without one is not making a request that lacks the field, it is making one whose reply will be
-       classified by silence. The EMPTY STRING is §2.2.5's own default and passes: what does not is NULL. */
-    DCHECK(req->destination != NULL,
-           "a request was owed to the host without stating its DESTINATION — Fetch §2.2.5 Requests gives every "
-           "request one (\"unless stated otherwise it is the empty string\"), and the CORB class is read off "
-           "it. State the destination the algorithm creating this request names (`image` at §4.8.4.3.5, "
-           "`script` at §8.1.4.2, the empty string at §5.6's fetch())");
+       classified by silence. The EMPTY STRING is §2.2.5's own default and passes: what does not is NULL.
+       AND IT IS THE ENUMERATION AND NOT MERELY PRESENCE, which is the correction. Asking only "is it there"
+       admitted a word §2.2.5 does not define, and the consumers do not fail alike on one: CSP §6.8.1's
+       trailing "Return connect-src" answers an unlisted row, the chokepoint's script-like predicate answers
+       false for one, and the pending join aborts — so a component stating `fetch` (the `as` keyword, which
+       §2.2.7 Miscellaneous translates to the EMPTY string and which is not a destination) reached three
+       consumers, was right at two of them by accident, and killed a dev build at the third with the producing
+       component long gone from the stack. Here it is still on it. */
+    DCHECK(fetch_is_destination_type(req->destination),
+           "a request was owed to the host stating a DESTINATION that is not one Fetch §2.2.5 Requests "
+           "enumerates — §2.2.5 gives every request one (\"unless stated otherwise it is the empty string\") "
+           "and the CORB class is read off it. State the destination the algorithm creating this request "
+           "names (`image` at §4.8.4.3.5, `script` at §8.1.4.2, the empty string at §5.6's fetch()), and if "
+           "you hold an `as`-attribute keyword run Fetch §2.2.7 Miscellaneous' translate a potential "
+           "destination over it first — `fetch` is a POTENTIAL destination and not a destination");
     /* §4.3 SCHEME FETCH, FIRST. A scheme this agent answers is answered here and the host is never told about
        it; only §4.3's "HTTP(S) scheme" arm reaches the provider. The blob URL entry is JS_UNDEFINED because no
        standard but §5.4's Request constructor has one to have captured (core/fetch/scheme_fetch.h). */
