@@ -341,18 +341,19 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
             IDB_KW_GOTO(hdr, base + IDB_KW_LEAVE);
             return JS_STEP_YIELD;
         }
-        /* MULTIENTRY'S TOP LEVEL HAS NO STEP 5.1 AT ALL — its loop is "let entry be Get(input, index)" and
-           nothing else — which is why `[10, , 20]` is a two-subkey multiEntry key where it is no key at all for
-           the ordinary conversion. Every level below is that ordinary conversion and asks. */
+        /* MULTIENTRY'S TOP LEVEL HAS NO STEP 5.1 AT ALL — its loop is Indexed Database §7.4's "Let entry be
+           Get(input, index)." and nothing else — which is why `[10, , 20]` is a two-subkey multiEntry key
+           where it is no key at all for the ordinary conversion. Every level below is that ordinary
+           conversion and asks. */
         if (w->multi && w->sp == 1) {
             JS_FreeValue(ctx, in);
             IDB_KW_GOTO(hdr, base + IDB_KW_ENTRY);
             return JS_STEP_YIELD;
         }
-        /* STEP 5.1: "Let hop be ? HasOwnProperty(input, index)" — 7.3.13, which is [[GetOwnProperty]] and a
-           test of whether the descriptor is undefined. The property key is ToPropertyKey of the NUMBER, which
-           is its canonical numeric string. The atom is held ON THE WALK across the request (see hop_atom) and
-           released only once it has answered. */
+        /* §7.4 STEP 5.1: "Let hop be ? HasOwnProperty(input, index)." — ECMAScript §7.3.13, which is
+           [[GetOwnProperty]] and a test of whether the descriptor is undefined. The property key is
+           ToPropertyKey of the NUMBER, which is its canonical numeric string. The atom is held ON THE WALK
+           across the request (see hop_atom) and released only once it has answered. */
         if (w->hop_atom == JS_ATOM_NULL) {
             w->hop_atom = JS_NewAtomUInt32(ctx, (uint32_t)f->index);
             CHECK(w->hop_atom != JS_ATOM_NULL, "IndexedDB: §7.4 step 5.1 could not intern an array index");

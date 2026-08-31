@@ -18,9 +18,9 @@
  * ampersand. So a scan that ran §4.1's [67] `Reference` over any of these three would not be a stricter
  * parser, it would be a WRONG one: `<![CDATA[&amp;]]>` would yield one character where the standard yields
  * five, and `<![CDATA[&foo;]]>` would report a [WFC: Entity Declared] fatal error about a document that is
- * well-formed. §2.5 and §2.6 say the same of themselves from the other side — "Parameter entity references
- * MUST NOT be recognized within comments" and "... within processing instructions" — and §2.4's own sentence
- * covers the general ones.
+ * well-formed. XML §2.5 Comments says the same of itself from the other side — "Parameter entity references
+ * MUST NOT be recognized within comments." — and XML §2.6 Processing Instructions says it of itself in the
+ * same words with "within processing instructions" at the end. §2.4's own sentence covers the general ones.
  *   This is also what decides what a `<script>` body is in an XHTML document: HTML §14.2 "Parsing XML
  * documents" runs an XML parser, which has no raw-text tokenizer state, so `<script><![CDATA[ … ]]></script>`
  * is §2.7's construct and its content is the program text as character data.

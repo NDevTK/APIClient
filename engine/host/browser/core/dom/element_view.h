@@ -4,14 +4,15 @@
  * THE BOX MODEL THIS ENGINE ACTUALLY HAS, stated once here because every member below is a branch over it and
  * because two of this engine's components had already answered it in opposite directions:
  *
- *   A BOX EXISTS wherever a user agent would generate one. HTML's "being rendered" is defined AS "has any
- *   associated CSS layout boxes", so §6's "associated box" and HTML's "being rendered" are ONE predicate under
- *   two names, and `element_view_has_box` below is that one predicate. It is decided from the element's
- *   connectedness, from whether its node document is some navigable's ACTIVE document and is being presented
- *   (viewport.h's `viewport_exists`), and from the COMPUTED `display` of the element and of its ancestors
- *   (core/css/css_computed_value.h) — `none` on any of them, or `contents` on the element itself, and there is
- *   no box. §15.3.1's UA-stylesheet rule for the `hidden` content attribute is one input to that value and is
- *   applied where every other UA rule is, in the cascade, rather than a second time here.
+ *   A BOX EXISTS wherever a user agent would generate one. HTML §15.1 Introduction defines it: "An element
+ *   is being rendered if it has any associated CSS layout boxes", so §6's "associated box" and HTML's "being
+ *   rendered" are ONE predicate under two names, and `element_view_has_box` below is that one predicate. It
+ *   is decided from the element's connectedness, from whether its node document is some navigable's ACTIVE
+ *   document and is being presented (viewport.h's `viewport_exists`), and from the COMPUTED `display` of the
+ *   element and of its ancestors (core/css/css_computed_value.h) — `none` on any of them, or `contents` on
+ *   the element itself, and there is no box. §15.3.1's UA-stylesheet rule for the `hidden` content attribute
+ *   is one input to that value and is applied where every other UA rule is, in the cascade, rather than a
+ *   second time here.
  *
  *   AN EXTENT AND A POSITION ARE TWO ANSWERS AND THEY COME FROM TWO COMPONENTS, and that split is what decides
  *   which §6 member below answers and which one crashes. It is not this component's distinction; it is the

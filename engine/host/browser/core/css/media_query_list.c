@@ -31,9 +31,9 @@ static JSRuntime *g_rt;
 typedef struct {
     MediaQuerySet *set;
     char          *media;         /* the serialization — computed once, immutable, so it never time-travels */
-    /* §4.2's "the last time these steps were run" state. THE one mutable field, and a POD latch, which is
-       exactly what cow_capture_host_state is for (cow.h: a byte copy of a JSValue would make an uncounted
-       reference, and there is no JSValue in this record). */
+    /* CSSOM View §4.2 The MediaQueryList Interface's "the last time these steps were run" state. THE one
+       mutable field, and a POD latch, which is exactly what cow_capture_host_state is for (cow.h: a byte
+       copy of a JSValue would make an uncounted reference, and there is no JSValue in this record). */
     bool           last_matches;
 } MqlData;
 
@@ -329,9 +329,10 @@ JSValue media_query_list_change(JSContext *ctx, uint32_t i, JSValue *ptarget)
        still owing it a change. */
     d->last_matches = now;
     *ptarget = target;
-    /* §4.2: "fire an event named change at target, using MediaQueryListEvent, with its matches attribute
-       initialized to target's matches state and its media attribute initialized to target's media". It does
-       not bubble and is not cancelable — nothing in the algorithm reads a canceled flag. */
+    /* CSSOM View §4.2: "fire an event named change at target using MediaQueryListEvent, with its isTrusted
+       attribute initialized to true, its media attribute initialized to target's media, and its matches
+       attribute initialized to target's matches state." It does not bubble and is not cancelable — nothing in
+       the algorithm reads a canceled flag. */
     return ev_new(ctx, event_new(ctx, "change", /*bubbles*/ false, /*cancelable*/ false),
                   JS_NewString(ctx, d->media), JS_NewBool(ctx, now));
 }
@@ -377,10 +378,10 @@ static JSValue js_match_media(JSContext *ctx, JSValueConst this_val, int argc, J
     d->media = media_query_serialize(d->set);
     CHECK(d->media != NULL, "matchMedia: OOM serializing a media query list");
     JS_SetOpaque(obj, d);
-    /* THE REPORTED STATE STARTS AT THE CURRENT ONE. §4.2 fires when the state has changed "since the last time
-       these steps were run", and a list created between two frames has not changed since it was created — a
-       zero-initialised latch would make every `matchMedia("(min-width: 1px)")` fire a spurious `change` on the
-       very next rendering opportunity. */
+    /* THE REPORTED STATE STARTS AT THE CURRENT ONE. CSSOM View §4.2 fires when the state has changed
+       "since the last time these steps were run", and a list created between two frames has not changed
+       since it was created — a zero-initialised latch would make every `matchMedia("(min-width: 1px)")`
+       fire a spurious `change` on the very next rendering opportunity. */
     d->last_matches = media_query_matches(ctx, d->set);
     /* CREATION ORDER is the order §4.2 walks, so the collection is appended to and never reordered. */
     arr = mql_collection(ctx);

@@ -2218,11 +2218,11 @@ void navigable_reload_begin(JSContext *ctx, NavigableReloadWork *w)
            NAV_RELOAD_ALGORITHM " was begun twice over one work record — a reload holds ONE destination and "
            "fires ONE navigate event, and the second begin would leave the first event ongoing at the "
            "Navigation with nothing left holding its destination");
-    /* STEP 1.2 AND STEP 1.3, WHICH ARE ONE READ OF THE ACTIVE ENTRY: "let destinationNavigationAPIState be
-       navigable's active session history entry's navigation API state. If navigationAPIState is not null, then
-       set destinationNavigationAPIState to navigationAPIState." §7.2.4's `reload()` passes null, so the
-       entry's state IS the answer — which is what a page's own `navigate` listener reads back out of
-       `event.destination.getState()`.
+    /* HTML §7.4.3 Reloading and traversing's STEP 1.2 AND STEP 1.3, WHICH ARE ONE READ OF THE ACTIVE ENTRY:
+       "Let destinationNavigationAPIState be navigable's active session history entry's navigation API state.
+       If navigationAPIState is not null, then set destinationNavigationAPIState to navigationAPIState."
+       §7.2.4's `reload()` passes null, so the entry's state IS the answer — which is what a page's own
+       `navigate` listener reads back out of `event.destination.getState()`.
        STEP 1.4's destinationURL is the same entry's URL, for the reason navigable.h gives: it and the
        Document's address are two fields with two writers. */
     w->url = session_history_active_entry_url(ctx);

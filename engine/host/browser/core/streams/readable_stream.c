@@ -2979,10 +2979,11 @@ static int js_from_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         }
         if (r > 0) return r;
         if (JS_IsException(out)) {
-            /* §4.2, in as many words: "If nextResult is an abrupt completion, return a promise REJECTED with
-               nextResult.[[Value]]" — the algorithm answers a promise either way and never propagates, which
-               is what makes a synchronously-throwing `next` error the stream through the same pull rejection
-               a rejecting one takes. */
+            /* Web IDL §3.2.22.1 Iterating async sequences, which is what §4.2's `async_sequence<any>` runs:
+               "If nextResult is an abrupt completion, return a promise rejected with nextResult.[[Value]]."
+               — the algorithm answers a promise either way and never propagates, which is what makes a
+               synchronously-throwing `next` error the stream through the same pull rejection a rejecting one
+               takes. */
             JS_FreeValue(ctx, s->value);
             s->value = JS_GetException(ctx);
             STEP_GOTO(s->hdr.stage, FS_REJECT, &s->phase, &s->hdr.get_phase, NULL);

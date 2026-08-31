@@ -104,7 +104,7 @@ JSValue custom_elements_html_constructor(JSContext *ctx);
    is no definition (including when the element's registry is null, which is the algorithm's step 1). */
 JSValue custom_elements_definition_lookup_for_element(JSContext *ctx, JSValueConst el_wrap);
 
-/* THE REGISTRY QUESTIONS §4.8's attachShadow AND §4.9's create-an-element ASK BEFORE THEY CAN ACT — this
+/* THE REGISTRY QUESTIONS DOM §4.9's attachShadow AND create-an-element ASK BEFORE THEY CAN ACT — this
    document's registry, whether a page-supplied value is a CustomElementRegistry at all, whether it is scoped,
    and the association itself. Neither algorithm lives here, and neither may re-derive them: the record, the
    `is scoped` flag, the once-only association rule and the scoped-registry latch are all this component's.
@@ -198,9 +198,9 @@ int custom_elements_state_of_element(JSContext *ctx, JSValueConst wrap);
    than a PCENChar list admits ("a large variety of names is allowed, to give maximum flexibility for use cases
    like <math-α> or <emotion-😍>", §4.13.3). A citation to a production the spec no longer contains reads as
    authoritative and sends the next reader to look for text that is not there.
-   Public because DOM §4.8's "valid shadow host name" is stated as "a valid custom element name, or one of
-   eighteen built-ins": a second copy of the requirements beside it would be a second answer to which names may
-   host a shadow tree. */
+   Public because DOM §4.9's "valid shadow host name" is stated as a valid custom element name or one of
+   eighteen named built-ins: a second copy of the requirements beside it would be a second answer to which
+   names may host a shadow tree. */
 /* WHICH OF THE FIVE FAILED, because §4.13.4's step 2 answers all five with ONE "SyntaxError" and the page's
    `catch` therefore cannot tell a missing hyphen from a reserved MathML name from an uppercase letter. That is
    not a cosmetic difference: a check that throws the right exception for the WRONG REASON passes any test that

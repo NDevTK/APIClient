@@ -84,13 +84,13 @@
 void hr_time_init(JSContext *ctx);
 void hr_time_free(void);
 
-/* §4's TIME ORIGIN of THIS realm's environment settings object, as a moment on the one virtual clock, COARSENED
-   at the read. §4 stores the raw moment ("that moment is stored in that settings object's time origin") and
-   `coarsen time` picks its resolution from the environment's cross-origin isolated capability — a field HTML
-   §7.2.2.6 defines over "window's associated DOCUMENT", which does not exist when the realm's install stamps
-   the slot. So the write is the moment and the read is the coarsening; hr_time.c's install says what asking it
-   the other way round cost. Exported because the day this engine has a `performance` object, `get time origin
-   timestamp` is its second reader. */
+/* High Resolution Time §4 Time Origin's TIME ORIGIN of THIS realm's environment settings object, as a moment
+   on the one virtual clock, COARSENED at the read. §4 stores the raw moment ("That moment is stored in that
+   settings object's time origin.") and `coarsen time` picks its resolution from the environment's
+   cross-origin isolated capability — a field HTML §7.2.2.6 defines over "window's associated DOCUMENT",
+   which does not exist when the realm's install stamps the slot. So the write is the moment and the read is
+   the coarsening; hr_time.c's install says what asking it the other way round cost. Exported because the day
+   this engine has a `performance` object, `get time origin timestamp` is its second reader. */
 JSValue hr_time_origin(JSContext *ctx);   /* OWNED */
 
 /* §4's COARSEN TIME, given an unsafe moment on the monotonic clock. §4's second argument is the environment's

@@ -46,8 +46,8 @@
 
 /* §2.5.10's ASYNCHRONOUS ITERATOR INITIALIZATION STEPS: "These receive the instance of the interface being
    iterated, the newly-created iterator object, and a list of IDL values representing the arguments passed, if
-   any." `pstate` is the iterator's own state slot (JS_UNDEFINED on entry) — the File System Standard's "set
-   iterator's past results to an empty set" is one assignment to it.
+   any." `pstate` is the iterator's own state slot (JS_UNDEFINED on entry) — File System §2.4.1 Directory
+   iteration's "Set iterator's past results to an empty set." is one assignment to it.
  *
  * IT IS A STEP, with the same return contract as the two algorithms below, because §3.7.10 step 3.1.6 runs it
  * INSIDE the member and what a standard writes there is not bounded by this file. Streams §4.2.5's step 1 is

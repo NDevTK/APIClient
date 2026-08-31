@@ -4,16 +4,17 @@
  * WHAT WAS MISSING. `shadowrootmode` was not read anywhere in this engine, so `<template shadowrootmode=open>`
  * parsed to an ordinary `<template>` element and stayed one: the host got no shadow root, the markup the author
  * wrote for the shadow tree stayed inside a fragment nothing renders, and every slot in it held nothing. It is
- * also the ONLY writer of a shadow root's `declarative`, which is what makes §4.8 "attach a shadow root" step 4
+ * also the ONLY writer of a shadow root's `declarative`, which is what makes DOM §4.9 "attach a shadow root" step 4
  * — the re-attach branch shadow_root.c writes out in full — reachable at all. A page that ships its components
  * as declarative shadow DOM (which is what server-rendered Web Components are) had NO shadow trees, so every
  * `host.shadowRoot.querySelector(...)` in its own script threw on the null.
  *
  * WHAT THE STANDARD SAYS, AND WHERE THIS PUTS IT. The step runs inside tree construction, on the START TAG: the
- * `<template>` is created and pushed onto the stack of open elements but NEVER INSERTED ("insert a foreign
- * element ... with HTML namespace and true"), a shadow root is attached to the adjusted current node, and the
- * template's TEMPLATE CONTENTS are then set to that shadow root — which is why the markup that follows lands in
- * the shadow tree: "the appropriate place for inserting a node" inside a template IS its template contents.
+ * `<template>` is created and pushed onto the stack of open elements but NEVER INSERTED (HTML §13.2.6.4.4's
+ * "insert a foreign element for templateStartTag, with HTML namespace and true"), a shadow root is attached to
+ * the adjusted current node, and the template's TEMPLATE CONTENTS are then set to that shadow root — which is
+ * why the markup that follows lands in the shadow tree: HTML §13.2.6.1 Creating and inserting nodes' "the
+ * appropriate place for inserting a node" inside a template IS its template contents.
  * Lexbor's tree builder has no such step: it inserts the template and fills its own content fragment. This
  * component therefore runs the step at the PARSE BOUNDARY, over the tree the parse produced, and joins the two
  * ends the standard never separates — the contents lexbor collected are MOVED into the shadow root and the

@@ -27,10 +27,10 @@
  *             engine WROTE it, and a value the engine wrote is a value it knows — `new AbortController()
  *             .signal.aborted` is false for the identical reason. A concolic store entry would fork a world
  *             its own writer contradicts.
- *   step 8  — "the permission state of feature, taking into account any permission state constraints". THE
- *             USER'S INTENT. Nothing in this engine has observed it, so this is the concolic: the domain is
- *             §3.1's three states and the EXAMPLE is the feature's own DEFAULT PERMISSION STATE, which §4 says
- *             is "prompt" unless the feature says otherwise.
+ *   step 8  — Permissions §5.1's "the permission state of feature, taking into account any permission state
+ *             constraints". THE USER'S INTENT. Nothing in this engine has observed it, so this is the
+ *             concolic: the domain is §3.1's three states and the EXAMPLE is the feature's own DEFAULT
+ *             PERMISSION STATE, which §4 says is "prompt" unless the feature says otherwise.
  *
  * THE UNKNOWN IS PER FEATURE AND PER AGENT, WHICH IS ALSO HOW THE ASPECT ORDER IS DISCHARGED. §3.2's store is
  * the USER AGENT's ("The user agent maintains a single permission store"), and the user's decision is about an

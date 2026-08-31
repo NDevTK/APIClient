@@ -633,9 +633,9 @@ static int fsdir_iter_init(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueCo
 /* §2.4.1 steps 2.3.3-2.3.8: the first child whose name `past` does not already contain, appended to `past` and
    turned into a child handle. Answers the two-element value pair a PAIR declaration resolves with — « child's
    name, result » — or Web IDL §2.5.10's end of iteration when there is no such child. OWNED, or JS_EXCEPTION.
-   THE SUB-NUMBERS HERE ARE COUNTED WITH LIST DEPTH. Step 2.3.2 CONTAINS a nested one-item list ("Assert:
-   directory is a directory entry"), so a flat count of the <li>s under step 2.3 promotes that assert to a peer
-   and every step from 2.3.3 down reads one too high — which is how this block came to cite 2.3.4-2.3.8 for an
+   THE SUB-NUMBERS HERE ARE COUNTED WITH LIST DEPTH. File System §2.4.1's step 2.3.2 CONTAINS a nested
+   one-item list ("Assert: directory is a directory entry."), so a flat count of the <li>s under step 2.3
+   promotes that assert to a peer and every step from 2.3.3 down reads one too high — which is how this block came to cite 2.3.4-2.3.8 for an
    algorithm whose last step IS 2.3.8. */
 static JSValue fsdir_iter_pick(JSContext *ctx, const FsLocator *l, JSValueConst dir, JSValueConst past)
 {

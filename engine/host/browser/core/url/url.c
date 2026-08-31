@@ -1356,7 +1356,7 @@ bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *b
    spec's vocabulary, so a caller writes the state its own section names ("with copyURL as url and host state
    as state override") and cannot express a state no standard sends it to.
    IT EXISTS BECAUSE THE SETTERS ARE NOT ALL IN THIS FILE. url.h used to publish `url_parse_into` with a raw
-   `int state_override` and a comment calling the values "private to url.c, which is where the setters live" —
+   `int state_override` and a comment calling the values private to url.c, which is where the setters live —
    a header that hands out a numbering while saying it is not public, and a claim the URL Standard itself
    contradicts in the scheme state: "This indication of failure is used exclusively by the Location object's
    protocol setter". HTML §7.2.4's setters are the other caller, and they are in core/frame/location.c.
@@ -1560,7 +1560,8 @@ char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
     for (i = 0; i < l->n; i++) {
         char *en, *ev;
         size_t need;
-        /* §5.2 step 3.1, WORD FOR WORD: "Assert: tuple's name and tuple's value are scalar value strings."
+        /* URL §5.2 application/x-www-form-urlencoded serializing step 3.1, WORD FOR WORD: "Assert: tuple's
+           name and tuple's value are scalar value strings."
            It is the serializer's assert and it is about its PRODUCERS — every one of them has to make it hold,
            which §5.1's parser does by running UTF-8 decode without BOM and §6.2's members do by taking
            USVString. It could not be written while the parser stored the raw percent-decoded bytes, because

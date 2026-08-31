@@ -232,7 +232,7 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
         return v && vl == nlen && memcmp(v, name, nlen) == 0;
     }
     if (kind == COLL_LINKS) {
-        /* §3.1.5 `document.links` is `a` AND `area` elements THAT HAVE AN href — the attribute is half the
+        /* §3.1.7 `document.links` is `a` AND `area` elements THAT HAVE AN href — the attribute is half the
            definition, so an anchor used as a scroll target is not a link. */
         size_t qn = 0, vl = 0;
         const lxb_char_t *q = lxb_dom_element_qualified_name((lxb_dom_element_t *)c, &qn);
@@ -637,7 +637,7 @@ JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns
     return coll_new_hc(ctx, COLL_BY_TAG_NS, owner, local, ns);
 }
 
-/* §3.1.5's `document.links` — `a`/`area` WITH an href, which is a predicate rather than a name, so it is its
+/* §3.1.7's `document.links` — `a`/`area` WITH an href, which is a predicate rather than a name, so it is its
    own kind rather than a by-tag collection that would also count the anchors with no href. */
 JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name)
 {

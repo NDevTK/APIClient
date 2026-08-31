@@ -346,11 +346,12 @@ const char *document_url_of(const lxb_dom_document_t *dom);
    record owns the bytes and outlives the tree they describe. */
 const char *document_content_type_of(const lxb_dom_document_t *dom);
 
-/* §4.5's OTHER creation fact for ONE document: "A document is said to be an XML document if its type is
-   `xml`; otherwise an HTML document." A SEPARATE READ from the content type beside it, never a compare
-   against those bytes — see DocumentKind above for the text document that makes the two disagree. §4.4's
-   "clone a single node" copies both ("set copy's encoding, content type, URL, origin, type, mode, and allow
-   declarative shadow roots to those of node"), which is the other reason the record has to hold both. */
+/* DOM §4.5 Interface Document's OTHER creation fact for ONE document: "A document is said to be an XML
+   document if its type is `xml`; otherwise an HTML document." A SEPARATE READ from the content type beside
+   it, never a compare against those bytes — see DocumentKind above for the text document that makes the two
+   disagree. §4.4's "clone a single node" copies both ("set copy's encoding, content type, URL, origin,
+   type, mode, and allow declarative shadow roots to those of node"), which is the other reason the record
+   has to hold both. */
 bool document_is_xml_of(const lxb_dom_document_t *dom);
 
 /* THE DOCUMENT IS ABOUT TO BE DESTROYED — release the record that names it, and everything the record holds

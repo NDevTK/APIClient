@@ -91,17 +91,17 @@ typedef enum {
    allowlist, so a row spelling one would be spelling a value §4.8 does not define. */
 typedef enum { PP_ALLOWLIST_STAR, PP_ALLOWLIST_SELF } PermissionsPolicyDefaultAllowlist;
 
-/* §4.2 "Policies": an inherited policy is "an ordered map from features to `Enabled` or `Disabled`", and every
-   §9 algorithm returns one of the same two words. They are the SAME type because the algorithms compose —
-   §9.10's result IS §9.9's return value — and a `bool` at any joint would let "Disabled" and "false" be read
-   for each other by a caller that meant one of them. */
+/* Permissions Policy §4.2 "Policies": an inherited policy is "an ordered map from features to `Enabled` or
+   `Disabled`", and every §9 algorithm returns one of the same two words. They are the SAME type because the
+   algorithms compose — §9.10's result IS §9.9's return value — and a `bool` at any joint would let
+   "Disabled" and "false" be read for each other by a caller that meant one of them. */
 typedef enum { PP_DISABLED = 0, PP_ENABLED = 1 } PermissionsPolicyValue;
 
-/* §4.2's PERMISSIONS POLICY — "a struct with the following items: inherited policy …, declared policy …".
-   OPAQUE AND HEAP-ALLOCATED, owned by the Document §9.5 created it for, exactly like §7.1.7's policy container
-   beside it on that record. A `PermissionsPolicy *` that is NULL is a Document that HAS no permissions policy
-   — a Document with no browsing context, which HTML §4.8.5's "allowed to use" step 1 refuses outright — and
-   is never a policy whose contents are unknown. */
+/* Permissions Policy §4.2's PERMISSIONS POLICY — "a struct with the following items: inherited policy …,
+   declared policy …". OPAQUE AND HEAP-ALLOCATED, owned by the Document §9.5 created it for, exactly like
+   §7.1.7's policy container beside it on that record. A `PermissionsPolicy *` that is NULL is a Document
+   that HAS no permissions policy — a Document with no browsing context, which HTML §4.8.5's "allowed to use"
+   step 1 refuses outright — and is never a policy whose contents are unknown. */
 typedef struct PermissionsPolicy PermissionsPolicy;
 
 /* §4.1's token for a feature, and §4.8's default allowlist of it. The token is what §9.2 and §9.3 match a

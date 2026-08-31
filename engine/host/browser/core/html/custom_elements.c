@@ -335,8 +335,8 @@ static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_node_reg, JS_DupValue(ctx, reg), CE_SLOT_FLAGS);
 }
 
-/* §4.8's attachShadow AND §4.9's create-an-element BOTH resolve a registry before they can act, and neither
- * lives here — so the questions they ask are exported rather than re-derived. They are the same ones §4.8's
+/* DOM §4.9's attachShadow AND create-an-element BOTH resolve a registry before they can act, and neither
+ * lives here — so the questions they ask are exported rather than re-derived. They are the same ones §4.9's
  * attachShadow steps 1-3 ask, in order: what is this document's registry, is a page-supplied one a
  * CustomElementRegistry at all, and is it scoped.
  *
@@ -354,7 +354,7 @@ static void ce_node_set_registry(JSContext *ctx, JSValueConst wrap, JSValueConst
    invisible to its sibling for free. Nothing here ever calls JS_SetOpaque.
    So the test this used to make — `JS_GetOpaque(v, g_registry_class) != NULL` — was NULL for every registry
    this file has ever minted, and answered FALSE for the real thing. It was not merely an assert that fired:
-   §4.8's attachShadow and §4.9's create-an-element both run it as their step 2 BRAND CHECK, so a page handing
+   §4.9's attachShadow and create-an-element both run it as their step 2 BRAND CHECK, so a page handing
    either one a genuine CustomElementRegistry got a TypeError, and the document's own registry could not pass
    its own step 3. `JS_NewObjectProtoClass` stamps the class id at the mint and nothing in the language can
    forge one, which is the whole of what a brand check needs. */
@@ -1648,10 +1648,11 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         JS_FreeValue(ctx, active);
         /* STEPS 2-5: THE REGISTRY FIRST, AND THE DEFINITION OUT OF IT. Step 3 is the agent's active custom
            element constructor map — set by §4.13.5 step 9 while an upgrade is constructing, and by DOM §4.9
-           step 5.1.3 while `create an element` is — and step 4 falls back to "the current global object's
-           associated Document's custom element registry" for a bare `new Router()`. Reading the document's set
-           unconditionally, which is what this did, made every class registered in a SCOPED registry throw a
-           TypeError from its own `super()`: the definition is real, it is just not in the set that was asked. */
+           step 5.1.3 while `create an element` is — and step 4 falls back to HTML §3.2.3's "the current
+           global object's associated Document's custom element registry" for a bare `new Router()`. Reading
+           the document's set unconditionally, which is what this did, made every class registered in a
+           SCOPED registry throw a TypeError from its own `super()`: the definition is real, it is just not
+           in the set that was asked. */
         {
             JSValue reg = ce_active_registry(ctx, ntgt);                          /* step 3 */
 
@@ -1700,7 +1701,7 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        `step_realm`/`js_callee_realm`, which answers `p->u.cfunc.realm` for the callee, so
        `html_element_proto(ctx)` is HTMLElement.prototype of the realm HTMLElement was installed in. That is
        exactly `realm` whenever NewTarget's function realm IS the active function
-       object's — and the spec's own note on step 11 says those two can differ ("The realm of the active
+       object's — and HTML §3.2.3's own note on step 11 says those two can differ ("The realm of the active
        function object might not be realm, so we are using the more general concept of 'the same interface'
        across realms").
        NAMED RESIDUAL — CORRECT for a same-realm NewTarget, NARROWER than step 11.1.

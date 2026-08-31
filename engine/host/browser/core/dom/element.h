@@ -145,7 +145,7 @@ void element_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **l
    terminated by nothing. NULL with `*len` 0 is §1.4's null prefix; `*len` is written on every path, which is
    the whole reason this exists rather than lxb_dom_element_prefix (see element.c). */
 const char *element_prefix(lxb_dom_element_t *el, size_t *len);
-/* DOM §4.5 "create an element internal"'s storage step — "Set element's namespace to namespace, namespace
+/* DOM §4.9 "create an element internal"'s storage step — "Set element's namespace to namespace, namespace
    prefix to prefix, local name to localName". The WRITER whose reader is the function above, which is why the
    two are declared together: what the standard calls "as given" is a property of how those three strings are
    interned, and lexbor's own element creation interns all three CASE-FOLDED. See element.c for the

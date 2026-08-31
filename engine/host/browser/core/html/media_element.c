@@ -1333,9 +1333,10 @@ static void media_load_algorithm(JSContext *ctx, JSValueConst el, JSValueConst s
  *
  * INSERTION IS NOT THE MOMENT, AND THAT IS THE STANDARD'S OWN DISTINCTION RATHER THAN A READING OF IT. DOM
  * §4.2.3 defines INSERTION STEPS as a named hook ("Specifications may define insertion steps for all or some
- * nodes"), HTML uses it for exactly this family one element over — "The source HTML element insertion steps,
- * given insertedNode, are: … if parent is a media element that has no src attribute and whose networkState has
- * the value NETWORK_EMPTY, then invoke that media element's resource selection algorithm" — and for the media
+ * nodes"), HTML uses it for exactly this family one element over — HTML §4.8.2 The source element's "The
+ * source HTML element insertion steps, given insertedNode, are: … If parent is a media element that has no src
+ * attribute and whose networkState has the value NETWORK_EMPTY, then invoke that media element's resource
+ * selection algorithm." — and for the media
  * element itself it says CREATED instead. The difference is observable in both directions: a `<video src=x>`
  * built by `createElement` + `setAttribute` and never inserted still loads, and a `<video>` created with no
  * `src` that is later moved into a document does not. Hooking insertion would get both backwards.

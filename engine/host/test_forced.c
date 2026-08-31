@@ -896,8 +896,9 @@ static const char *HTML =
     /* headingOffset has a range and NO default, so its fallback is the range's minimum. */
     "var ihd = document.createElement('div'); ihd.setAttribute('headingoffset', 'x');"
     "fetch('/api/ulmin?v=' + (ihd.headingOffset === 0 && ihd.headingReset === false ? 'ismin' : 'wrong'));"
-    /* §3.2.2 click() is "fire a synthetic pointer event named click" — the SAME dispatch, so a handler wired
-       with onclick sees an untrusted, cancelable, bubbling event and preventDefault reaches the caller. */
+    /* HTML §6.5's click() is "Fire a synthetic pointer event named click at this element, with the not
+       trusted flag set." — the SAME dispatch, so a handler wired with onclick sees an untrusted, cancelable,
+       bubbling event and preventDefault reaches the caller. */
     "var ck = 0; var ckt = null; idv.onclick = function(e){ ck++; ckt = e; e.preventDefault(); };"
     "idv.click();"
     "fetch('/api/click?v=' + (ck === 1 && ckt.type === 'click' && ckt.isTrusted === false &&"
@@ -1528,7 +1529,7 @@ static const char *HTML =
     "try { JSON.parse(location.hash); fetch('/api/jsonrawok'); }"
     "catch (jpe2) { fetch('/api/jsonrawthrew?n=' + jpe2.name); }"
     "fetch('/api/locsrc?o=' + location.origin + '&pn=' + location.pathname);"
-    /* §3.1.5's element shortcuts and §4.5's createDocumentFragment. All five shortcuts are LIVE
+    /* §3.1.7's element shortcuts and §4.5's createDocumentFragment. All five shortcuts are LIVE
        HTMLCollections over the document — a bundle scanner reaches for document.scripts and document.forms in
        particular, and with them absent the loop over them never ran and nothing said why.
        `links` is the one that is a PREDICATE rather than a tag: `a`/`area` WITH an href, so an anchor used as a
@@ -2120,8 +2121,8 @@ static const char *HTML =
        Web IDL §3.2.23 converts `record<ByteString, ByteString>` with "Let typedKey be key converted to an IDL
        value of type K … Set result[typedKey] to typedValue" — K is ByteString, which does not case-fold, so
        `X-Rec` and `x-rec` are TWO entries of the record and the fill sees both. §5.1's fill then "append(key,
-       value) to headers" for each, and §2.2.2 Headers' get returns "the values of all headers … separated from each
-       other by 0x2C 0x20": "r1, r2", over ONE name in the list. A replace loop matching the LOWERCASED name
+       value) to headers" for each, and Fetch §2.2.2 Headers' get returns "the values of all headers … separated
+       from each other by 0x2C 0x20": "r1, r2", over ONE name in the list. A replace loop matching the LOWERCASED name
        stood in the fill and answered "r2" — one pair silently discarded, which for this tool is a header the
        report would not carry. */
     "(function(){ var h = new Headers({'X-Rec': 'r1', 'x-rec': 'r2'});"
@@ -2430,12 +2431,13 @@ static const char *HTML =
        conversion of the store's list — Web IDL §3.2.21 makes it "a new Array object created as if by the
        expression []", so `plain` is the assertion that it is NOT a frozen array: `FrozenArray<T>` is a
        different parameterized type that neither the attribute's declaration (`readonly attribute any keyPath`)
-       nor §4.5's prose names. `same` is the note's identity ("it returns the same object instance every time
-       it is inspected"), which Web IDL §3.2.21 alone does not give since its own steps mint a new Array per
-       conversion. And the SECOND handle, over a transaction the page opens after the upgrade, is the other
-       half of that note: `perhandle` says two handles for one store answer with two Arrays, and the `a+b` that
-       precedes it says the `push` into the first one reached no object store — "changing the properties of the
-       object has no effect on the object store". `transaction('kp')` is also the first time §3.2.25's union
+       nor §4.5's prose names. `same` is Indexed Database §4.5's note's identity ("it returns the same object
+       instance every time it is inspected"), which Web IDL §3.2.21 alone does not give since its own steps
+       mint a new Array per conversion. And the SECOND handle, over a transaction the page opens after the
+       upgrade, is the other half of that note: `perhandle` says two handles for one store answer with two
+       Arrays, and the `a+b` that precedes it says the `push` into the first one reached no object store —
+       §4.5's "Changing the properties of the object has no effect on the object store." `transaction('kp')`
+       is also the first time §3.2.25's union
        takes its STRING arm from a page: a primitive string is not an Object, so §3.2.25 step 11.2's GetMethod
        is never reached and the store name is not iterated into 'k','p'.
        AND §7.1's IN-LINE KEYS, which is a `put` WITH NO KEY AT ALL — the store named it, and §7.1's walk reads
@@ -3049,9 +3051,9 @@ static void csp_url_matching_selftest(void)
        secure upgrade observable. */
     const Origin *https_self = origin_parse("https://x.test");
     const Origin *http_self = origin_parse("http://x.test");
-    /* An OPAQUE self-origin — §7.1.1's "no serialization it can be recreated from" — which §2.2's own note
-       says the field exists to carry. It matches nothing, and that must be a computed answer rather than a
-       crash on reading components it does not have. */
+    /* An OPAQUE self-origin — HTML §7.1.1 Origins' "no serialization it can be recreated from" — which
+       §2.2's own note says the field exists to carry. It matches nothing, and that must be a computed
+       answer rather than a crash on reading components it does not have. */
     const Origin *opaque_self = origin_parse("null");
     struct { const char *expr, *url; const Origin *self; CspMatch want; const char *why; } CASES[] = {
         /* §6.7.2.8 step 1 — `*` is HTTP(S), or the self-origin's own scheme, and nothing else. */
@@ -4915,10 +4917,11 @@ static int32_t idb_selftest_int(JSContext *ctx, JSValueConst v)
 }
 
 /* A TRANSACTION IN THE MODE §2.7 REQUIRES FOR THE CHANGE ABOUT TO BE MADE, over the connection §5.1 would have
-   opened. §2.7's first sentence is why the fixture needs one at all — "whenever data is read or written to the
-   database it is done by using a transaction" — and every algorithm below takes it as an operand because that
-   is who §5.5 step 2 reverts the change for. `stores` is the scope: empty for an upgrade transaction, which is
-   what §5.7 step 3 gives one for a database that has no object stores yet. OWNED. */
+   opened. Indexed Database §2.7 Transactions' first sentence is why the fixture needs one at all — "Whenever
+   data is read or written to the database it is done by using a transaction." — and every algorithm below
+   takes it as an operand because that is who §5.5 step 2 reverts the change for. `stores` is the scope:
+   empty for an upgrade transaction, which is what §5.7 step 3 gives one for a database that has no object
+   stores yet. OWNED. */
 static JSValue idb_selftest_tx(JSContext *ctx, JSValueConst conn, JSValueConst store, int mode)
 {
     JSValue scope = JS_NewArray(ctx);
@@ -4931,9 +4934,9 @@ static JSValue idb_selftest_tx(JSContext *ctx, JSValueConst conn, JSValueConst s
 
 /* §5.4's END OF A TRANSACTION, without the task that fires `complete`. The fixture is at the pre-boot baseline
    and no flow is running, so there is nothing a database task could be queued onto — and what the assertions
-   need from the ending is the one thing §2.7 states about it: "a transaction is said to be LIVE from when it is
-   created until its state is set to finished", so the next transaction this fixture creates is not blocked by
-   §2.7.2 on an overlapping scope. */
+   need from the ending is the one thing Indexed Database §2.7.1 Transaction lifecycle states about it: "A
+   transaction is said to be LIVE from when it is created until its state is set to finished.", so the next
+   transaction this fixture creates is not blocked by §2.7.2 on an overlapping scope. */
 static void idb_selftest_finish(JSContext *ctx, JSValue tx)   /* CONSUMES tx */
 {
     idb_transaction_set_state(ctx, tx, IDB_TX_FINISHED);
@@ -10165,7 +10168,7 @@ static void xml_document_selftest(void)
           "one" },
         { "<![CDATA[x]]><a/>", D_ROOT, 0, XML_DOCUMENT_ERR_PROLOG, NULL, NULL, XML_STANDALONE_ABSENT,
           XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
-          "§2.7 says CDATA sections \"may occur anywhere character data may occur\", and §2.4 says that is "
+          "XML §2.7 says CDATA sections \"may occur anywhere character data may occur\", and §2.4 says that is "
           "inside the document element — so a section in the prolog matches no production of [22]" },
         { "<!ENTITY x \"y\"><a/>", D_ROOT, 0, XML_DOCUMENT_ERR_PROLOG, NULL, NULL, XML_STANDALONE_ABSENT,
           XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,

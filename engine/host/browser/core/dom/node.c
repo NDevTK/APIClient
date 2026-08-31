@@ -288,7 +288,7 @@ static JSValue node_shadow_host_wrap(JSContext *ctx, const lxb_dom_node_t *n)
 {
     lxb_dom_element_t *host = shadow_root_host(n);
 
-    DCHECK(host != NULL, "§4.8's `attach a shadow root` sets the new root's host before anything can reach the "
+    DCHECK(host != NULL, "§4.9's `attach a shadow root` sets the new root's host before anything can reach the "
                          "root, so every shadow root has one — a null here is a shadow root this engine built "
                          "without going through that algorithm");
     return node_wrap(ctx, lxb_dom_interface_node(host));

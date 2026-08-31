@@ -75,9 +75,9 @@ bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *b
    state override"). Every other state §4.4 defines is an internal transition of the machine and no section
    sends a caller to one, so the enum is a CLOSED list rather than a subset someone stopped extending — the day
    a standard names an eighth, it arrives here and in the switch that maps it, together.
-   THIS USED TO PUBLISH `url_parse_into` WITH A RAW `int state_override`, described in this very comment as "the
-   parser's own state numbering … private to url.c, which is where the setters live". Both halves were wrong at
-   once: a header cannot hand out a numbering and call it private, and the setters are NOT all in url.c —
+   THIS USED TO PUBLISH `url_parse_into` WITH A RAW `int state_override`, described in this very comment as
+   the parser's own state numbering, private to url.c, which is where the setters live. Both halves were
+   wrong at once: a header cannot hand out a numbering and call it private, and the setters are NOT all in url.c —
    §4.4's scheme state says so itself, "This indication of failure is used exclusively by the Location object's
    protocol setter", and that setter is core/frame/location.c's. The function had no caller outside url.c at
    all, so what the header published was an invitation to depend on a numbering nobody had agreed to.

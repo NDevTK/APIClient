@@ -42,7 +42,7 @@ JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns
    because a page reads `.length` off it. */
 JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name);
 
-/* §3.1.5 `document.links` — `a`/`area` elements that HAVE an href. A predicate, not a name. */
+/* §3.1.7 `document.links` — `a`/`area` elements that HAVE an href. A predicate, not a name. */
 JSValue collections_links(JSContext *ctx, JSValueConst owner);
 
 #endif

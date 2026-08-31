@@ -381,8 +381,9 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         JSValue status = permission_status_new(ctx, &d);
         JSValueConst args[1];
 
-        /* STEP 8.4: "Queue a global task on the permissions task source with this's relevant global object to
-           resolve promise with status." A JOB, so the settle runs as a call-root flow like every other one. */
+        /* STEP 8.4, Permissions §6.2.1 query() method: "Queue a global task on the permissions task source
+           with this's relevant global object to resolve promise with status." A JOB, so the settle runs as
+           a call-root flow like every other one. */
         args[0] = status;
         JS_EnqueueCallJob(ctx, s->funcs[0], 1, args);
         JS_FreeValue(ctx, status);

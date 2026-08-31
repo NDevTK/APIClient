@@ -1,4 +1,5 @@
-/* THE ShadowRoot INTERFACE AND "attach a shadow root" — DOM §4.8, §4.9's two Element members, and §4.2's
+/* THE ShadowRoot INTERFACE AND "attach a shadow root" — DOM §4.8 Interface ShadowRoot, §4.9 Interface
+ * Element (which is where "attach a shadow root", "valid shadow host name" and the two Element members are), and §4.2's
  * shadow-including root.
  *
  * IT WAS ABSENT ENTIRELY. `attachShadow` was not a function, `ShadowRoot` was not a global, and the engine's
@@ -324,9 +325,9 @@ static JSValue js_sr_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-/* ---- §4.8 "attach a shadow root" ------------------------------------------------------------------------------ */
+/* ---- §4.9 "attach a shadow root" ------------------------------------------------------------------------------ */
 
-/* §4.8's VALID SHADOW HOST NAME: a valid custom element name, or one of eighteen built-ins. "This list is
+/* §4.9's VALID SHADOW HOST NAME: a valid custom element name, or one of eighteen built-ins. "This list is
    intentionally limited so that built-in elements can gain internal shadow trees over time as needed." */
 static const char *const SHADOW_HOST_NAMES[] = {
     "article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -343,10 +344,10 @@ static bool sr_valid_host_name(const char *name, size_t len)
     return false;
 }
 
-/* §4.8 "attach a shadow root", given element, mode, clonable, serializable, delegatesFocus, slotAssignment and
+/* §4.9 "attach a shadow root", given element, mode, clonable, serializable, delegatesFocus, slotAssignment and
    registry. Every one of its five refusals is a `NotSupportedError`, which a page's `catch (e) { e.name }`
    reads directly. Returns the shadow root's wrapper (OWNED) or JS_EXCEPTION. */
-/* `registry` is §4.8's own parameter — "null or a CustomElementRegistry object" — which step 14 sets on the
+/* `registry` is §4.9's own parameter — "null or a CustomElementRegistry object" — which step 14 sets on the
    shadow root. JS_NULL means the spec's null (a shadow tree that looks a definition up in nothing), and it is
    NOT the same as "use the document's": attachShadow resolves that default at its step 1 before calling, and a
    default resolved HERE would give a declaratively-parsed root a registry §13.2.6.4.4 did not ask for. */
@@ -381,7 +382,7 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
        `extends`), so no element in this engine can carry one. It becomes a real read in the diff that makes
        customized built-ins registrable. */
     if (custom_elements_name_is_valid((const char *)local, len)) {
-        /* §4.8 STEP 3.1 LOOKS THE DEFINITION UP AGAINST THE ELEMENT'S OWN REGISTRY — "given element's custom
+        /* §4.9 STEP 3.1 LOOKS THE DEFINITION UP AGAINST THE ELEMENT'S OWN REGISTRY — "given element's custom
            element registry, its namespace, its local name, and its is value" — not against the document's. A
            host inside a scoped tree must be refused by the definition ITS registry names, and answered by
            nothing when its registry is null. The by-name entry resolved the document's default and could not
@@ -427,7 +428,7 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
     JS_FreeValue(ctx, current);
     /* Step 5: "create a node that implements ShadowRoot, given element's node document". */
     sr = lxb_dom_shadow_root_interface_create(n->owner_document);
-    CHECK(sr != NULL, "§4.8 step 5's ShadowRoot node could not be allocated — handing back a null the page "
+    CHECK(sr != NULL, "§4.9 step 5's ShadowRoot node could not be allocated — handing back a null the page "
                       "cannot tell from a root it never asked for is not an option");
     /* Steps 6-7: the host and the mode, in the node's own fields. Written before the node is wrapped, so no
        reader can ever see a shadow root whose host is null. */
@@ -475,7 +476,7 @@ JSValue shadow_root_attach(JSContext *ctx, JSValueConst el_wrap, const char *mod
    deeply, because step 6.8 passes subtree TRUE whatever the caller asked for. Every field step 6 PASSES or SETS
    is read off the original's record — the one thing 6.5 hardcodes is `clonable` itself, which it passes as
    true, and that is the same value the original has because it is the condition for being here at all. What
-   the new root does NOT take from the original is `available to element internals`: that one is §4.8 step 9's,
+   the new root does NOT take from the original is `available to element internals`: that one is §4.9 step 9's,
    computed from the COPY's own custom element state, which is what the standard says it is. */
 JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *copy)
 {
@@ -503,7 +504,7 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
        association is a slot on a wrapper minted moments ago, so nothing can have attached one. */
     current = shadow_root_of_element_wrap(ctx, copy_wrap);
     DCHECK(!JS_IsObject(current), "§4.4 step 6.1: the copy is already a shadow host, so the attach below would "
-                                  "reach §4.8 step 4 and either throw or take over a root the clone invented");
+                                  "reach §4.9 step 4 and either throw or take over a root the clone invented");
     JS_FreeValue(ctx, current);
     /* STEPS 6.2-6.4: `shadowRootRegistry` is the ORIGINAL root's registry, which is now a real read — a host
        inside a scoped tree clones into a copy that looks its definitions up in the same scoped registry, which
@@ -518,7 +519,7 @@ JSValue shadow_root_clone_onto(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_nod
     JS_FreeValue(ctx, src_reg);
     /* Step 6.6: "Set copy's shadow root's declarative to node's shadow root's declarative." NOT
        shadow_root_mark_declarative, which is HTML §13.2.6.4.4's pair of writes: that one also sets `available
-       to element internals`, and step 6 does not — the clone's is whatever §4.8 step 9 just computed from the
+       to element internals`, and step 6 does not — the clone's is whatever §4.9 step 9 just computed from the
        COPY's own custom element state, which is the state the standard says it is. */
     declarative = sr_flag(ctx, src, SR_DECLARATIVE);
     /* STEP 6.7's flag is read HERE, beside step 6.6's, because both are read off the ORIGINAL and the original

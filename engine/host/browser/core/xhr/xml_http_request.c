@@ -1499,7 +1499,8 @@ static int xhr_fire_run(JSContext *ctx, JSXhrRunState *s, JSValueConst target, c
     return r;
 }
 
-/* §3.5.6 "extract a length from a header list": `Content-Length`, or 0 when it is not an integer. */
+/* Fetch §3.4 `Content-Length` header's "extract a length from a header list", which XHR §3.5.6 The send()
+   method runs over "this's response's header list": `Content-Length`, or 0 when it is not an integer. */
 static double xhr_response_length(JSContext *ctx, XhrData *d)
 {
     char *v = hl_get(ctx, d->response_headers, "content-length");

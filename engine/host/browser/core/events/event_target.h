@@ -186,8 +186,9 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
           includes on BroadcastChannel too, and no BroadcastChannel declares an `onclose`. A membership
           bit of its own is what keeps one name off a prototype whose IDL does not declare it. */
        EH_MESSAGE_PORT = 524288 };
-/* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
-   machine under a second entry rather than a second implementation of it. */
+/* HTML §6.5 Activation behavior of elements' click() — "Fire a synthetic pointer event named click at this
+   element, with the not trusted flag set." — which IS DOM §2.9 dispatch, so it is the same machine under a
+   second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
 /* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? HTML §8.1.8.1 defines that set as the names of the

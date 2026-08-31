@@ -15,9 +15,9 @@
  * expiry is enqueued through JS_EnqueueCallTask, which runs it as a call-root flow: preemptible, forkable and
  * parkable like any other program.
  *
- * IT IS A TASK, AND THE WORD IS LOAD-BEARING. §8.7 says "queue a global task on the timer task source", and
- * 8.1.7 says the event loop performs a MICROTASK CHECKPOINT between one task and the next — so every promise
- * reaction outstanding when a timer expires runs BEFORE the callback does. Enqueued as a microtask instead, a
+ * IT IS A TASK, AND THE WORD IS LOAD-BEARING. HTML §8.7 Timers says "queues a global task on the timer task
+ * source", and §8.1.7 says the event loop performs a MICROTASK CHECKPOINT between one task and the next —
+ * so every promise reaction outstanding when a timer expires runs BEFORE the callback does. Enqueued as a microtask instead, a
  * `setTimeout(f, 0)` cut into the middle of a promise chain: `delay(0)` observed a stream write that the chain
  * had not settled yet, and the failure looked like a stream bug rather than an event-loop one. Both hops are
  * tasks — the step that picks the earliest expiry and the callback it fires — so two timers set for the same

@@ -305,9 +305,10 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
     Flow *f = flow_running();
     /* §8.1.4.2's fetch, whose decode and whose evaluation entry the TYPE decides — and whose method is Fetch
        §2.2.5 Requests' `GET`.
-       …AND ITS DESTINATION IS `script` FOR BOTH TYPES THE PARK CARRIES. A classic external script is "fetch a
-       classic script", whose request is created with `script`; a `<script type=module src>` is "fetch an
-       external module script graph", which fetches a single module script with the destination `script` too.
+       …AND ITS DESTINATION IS `script` FOR BOTH TYPES THE PARK CARRIES. A classic external script is HTML
+       §8.1.4.2 Fetching scripts' "fetch a classic script", whose request is created with `script`; a
+       `<script type=module src>` is §8.1.4.2's "fetch an external module script graph", which fetches a
+       single module script with the destination `script` too.
        So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
        reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0 };

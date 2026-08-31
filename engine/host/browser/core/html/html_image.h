@@ -141,9 +141,9 @@ void html_image_update(JSContext *ctx, lxb_dom_element_t *el);
    spelling of those writes reaches (`img.src = u`, `setAttribute`, `attributes.src.value = u`), which is why
    it is here and not inside the reflection's setter. Asks whether `el` is an `img` itself, so core/dom's drain
    states no brand it would have to keep in step with this file.
-   AND THE `source` HALF OF THE SAME LIST — "The element's parent is a picture element and a source element that
-   is a previous sibling has its srcset, sizes, media, type, width or height attributes set, changed, or
-   removed" — which is a mutation on a DIFFERENT element that is relevant to THIS one, and is therefore asked
+   AND THE `source` HALF OF THE SAME §4.8.4.3.2 LIST — "The element's parent is a picture element and a
+   source element that is a previous sibling has its srcset, sizes, media, type, width or height attributes
+   set, changed, or removed" — which is a mutation on a DIFFERENT element that is relevant to THIS one, and is therefore asked
    here rather than at a second call site: core/dom's drain states one element and this file decides which img
    elements it moved. */
 void html_image_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);

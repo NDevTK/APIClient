@@ -235,7 +235,7 @@ const char *element_prefix(lxb_dom_element_t *el, size_t *len)
     return (const char *)lexbor_hash_entry_str(&d->entry);
 }
 
-/* ---- DOM §4.5 "create an element internal", THE STORAGE STEP ---------------------------------------------
+/* ---- DOM §4.9 Interface Element's "create an element internal", THE STORAGE STEP -----------------------
  *
  * "Set element's namespace to namespace, namespace prefix to prefix, local name to localName" — three strings
  * the algorithm was GIVEN, stored byte for byte. This engine stores each as an id into one of the document's
@@ -244,10 +244,10 @@ const char *element_prefix(lxb_dom_element_t *el, size_t *len)
  * standard says each of the three is a different name; the three sentences that stood here were moved there
  * whole when core/dom/attr_list.c turned out to need every one of them about the same hashes.
  *
- * WHAT REMAINS HERE IS §4.5's ORDER, and it is the reason this is a function rather than three calls at the
+ * WHAT REMAINS HERE IS §4.9's ORDER, and it is the reason this is a function rather than three calls at the
  * member: the ids are computed BEFORE the interface exists. lxb_dom_element_create interns and creates in one
  * breath, and the folded id had already CHOSEN THE INTERFACE — a lower-cased static probe answers LXB_NS_HTML
- * for "HTTP://WWW.W3.ORG/1999/XHTML", so lxb_html_interface_create built an HTML element struct for a namespace
+ * for `HTTP://WWW.W3.ORG/1999/XHTML`, so lxb_html_interface_create built an HTML element struct for a namespace
  * that is not the HTML namespace. An element whose struct disagrees with its namespace is a state this engine
  * must not be able to reach, so the namespace is decided first and the interface is created from it. Repairing
  * node->ns afterwards would leave the wrong struct in place, and a side table of unfolded names beside the tree

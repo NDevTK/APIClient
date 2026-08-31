@@ -129,7 +129,7 @@ static lxb_dom_element_t *es_principal_writing_mode_element(lxb_dom_node_t *doc)
            "css-writing-modes-4 §8's principal writing mode was asked of a document with no ROOT ELEMENT, while "
            "§6.1's ancestor walk had already reached that document's viewport — a viewport exists only for a "
            "document a navigable is presenting, and such a document has a root element");
-    /* "…a body child element whose display value is not none". `document_body_of` is HTML §3.1.5's body
+    /* "…a body child element whose display value is not none". `document_body_of` is HTML §3.1.7's body
        element, which is already the FIRST `body` or `frameset` child of the root; the display half is
        core/dom/element_view.h's one predicate, which reads the computed `display` of the element and of its
        ancestors and is the same question §8's clause asks. */

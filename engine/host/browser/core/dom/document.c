@@ -693,7 +693,7 @@ static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, 
 
 const IdlStepDecl *document_qs_decl(void) { return &QS_STEP; }
 
-/* §3.1.5 THE DOCUMENT'S ELEMENT SHORTCUTS — forms, images, scripts, embeds and links. Every one is a LIVE
+/* §3.1.7 DOM tree accessors' ELEMENT SHORTCUTS — forms, images, scripts, embeds and links. Every one is a LIVE
    HTMLCollection the spec defines as "the elements of type X in the document", so each is the by-name
    collection over the document with a tag baked in, and `links` is the one that is a predicate instead
    (`a`/`area` WITH an href). A page uses these to find its own markup, and a bundle scanner uses
@@ -844,7 +844,7 @@ static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, J
     /* WEB IDL §3.2.15 ON THE MEMBER'S DECLARED TYPE, which is `CustomElementRegistry?`. It runs BEFORE any of
        the algorithm's own steps because a conversion does, so `{is:"x-y", customElementRegistry:5}` is a
        TypeError and not step 3.2.1's NotSupportedError. It is here rather than in the declaration because the
-       class is custom_elements.c's own and this component may not name it — the shape §4.8's attachShadow uses
+       class is custom_elements.c's own and this component may not name it — the shape §4.9's attachShadow uses
        for the identical member. */
     if (!JS_IsUndefined(reg_v) && !JS_IsNull(reg_v) && !custom_elements_is_registry(reg_v)) {
         JS_FreeValue(ctx, is_v);
@@ -2442,10 +2442,10 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-/* §3.1.5's `title` AND §3.2.6.4's `dir`, AND WHY NEITHER IS A STORED STRING.
+/* §3.1.7 DOM tree accessors' `title` AND §3.2.6.4 The dir attribute's `dir`, AND WHY NEITHER IS A STORED STRING.
  *
  * `title` was one: install read `lxb_html_document_title` once and wrote the answer onto the `document` object.
- * That is wrong in all three of the ways §3.1.5's algorithm is an algorithm. It is wrong in TIME — the getter is
+ * That is wrong in all three of the ways §3.1.7's algorithm is an algorithm. It is wrong in TIME — the getter is
  * defined as a walk of the tree AS IT IS, so `document.querySelector("title").textContent = "x"` did not change
  * `document.title`, and neither did inserting a `<title>` into a document that had none. It is wrong in SUBJECT
  * — a value on one object cannot answer for a second Document. And it has no SETTER at all, so
@@ -2473,7 +2473,7 @@ static lxb_dom_node_t *doc_first_in_tree(lxb_dom_node_t *root, lxb_ns_id_t ns, c
     return NULL;
 }
 
-/* The same in ONE generation — §3.1.5's SVG arm says "the first SVG title element that is a CHILD OF the
+/* The same in ONE generation — §3.1.7's SVG arm says "the first SVG title element that is a CHILD OF the
    document element", which is a different lookup and not a narrowing of the one above. */
 static lxb_dom_node_t *doc_first_child_ns(lxb_dom_node_t *parent, lxb_ns_id_t ns, const char *name)
 {
@@ -2490,7 +2490,7 @@ static lxb_dom_node_t *doc_first_child_ns(lxb_dom_node_t *parent, lxb_ns_id_t ns
     return NULL;
 }
 
-/* §3.1.5's `title` GETTER, whose two remaining steps are DOM §4.4's CHILD TEXT CONTENT ("the concatenation of
+/* §3.1.7's `title` GETTER, whose two remaining steps are DOM §4.11 Interface Text's CHILD TEXT CONTENT ("the concatenation of
    the data of all the Text node CHILDREN of node, in tree order" — children, never descendants) and
    Infra's STRIP AND COLLAPSE ASCII WHITESPACE (every run of TAB/LF/FF/CR/SPACE becomes one U+0020, and the
    leading and trailing ones go). Both are done into one buffer because a collapse is a copy either way.
@@ -2575,14 +2575,14 @@ static JSValue js_doc_html_members(JSContext *ctx, JSValueConst this_val, int ma
         return JS_NewStringLen(ctx, "", 0);
     }
     DCHECK(magic == DOC_TITLE, "a Document HTML-member getter was declared with a magic this table does not name");
-    /* §3.1.5 STEP 1: an SVG document element answers from the first SVG `title` that is a CHILD of it. */
+    /* §3.1.7 STEP 1: an SVG document element answers from the first SVG `title` that is a CHILD of it. */
     if (de && de->ns == LXB_NS_SVG)
         return doc_child_text_stripped(ctx, doc_first_child_ns(de, LXB_NS_SVG, "title"));
     /* STEP 2: otherwise the TITLE ELEMENT, which is the first `title` in the document in tree order. */
     return doc_child_text_stripped(ctx, doc_first_in_tree(doc, LXB_NS_HTML, "title"));
 }
 
-/* DOM §4.4's STRING REPLACE ALL, which is where both of §3.1.5's setter branches end: remove every child
+/* DOM §4.4's STRING REPLACE ALL, which is where both of §3.1.7's setter branches end: remove every child
    through the per-flow chokepoint, then append ONE Text node — and only if the string is not empty, because
    "string replace all" with the empty string adds no node and a page reading `firstChild` can tell. */
 static void doc_string_replace_all(JSContext *ctx, lxb_dom_node_t *el, const char *s, size_t len)
@@ -2603,7 +2603,7 @@ static void doc_string_replace_all(JSContext *ctx, lxb_dom_node_t *el, const cha
     }
 }
 
-/* §3.1.5's `title` SETTER and §3.2.6.4's `dir` SETTER — "the steps corresponding to the FIRST MATCHING
+/* §3.1.7's `title` SETTER and §3.2.6.4's `dir` SETTER — "the steps corresponding to the FIRST MATCHING
    CONDITION", in the standard's own order, with its own "Otherwise: do nothing" as the last arm rather than as
    a guard in front. magic 0 = title, 1 = dir. */
 static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
@@ -2842,8 +2842,8 @@ static void document_declare_members(JSContext *ctx)
     agent_state_id("document", &g_id_create_range, "§4.5's createRange");
     agent_state_id("document", &g_id_create_event, "§4.5's createEvent");
     agent_state_id("document", &g_id_adopt_node, "§4.5's adoptNode");
-    agent_state_id("document", &g_id_title_set, "§3.1.5's `title` setter");
-    agent_state_id("document", &g_id_dir_set, "§3.1.5's `dir` setter");
+    agent_state_id("document", &g_id_title_set, "§3.1.7's `title` setter");
+    agent_state_id("document", &g_id_dir_set, "§3.2.6.4's `dir` setter");
     agent_state_id("document", &g_id_location_set, "§3.1.1's `location` [PutForwards=href] setter");
 }
 
@@ -2856,7 +2856,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createProcessingInstruction", g_id_create_pi);
     idl_install_method(ctx, proto, "createDocumentFragment", g_id_create_fragment);
     {
-        /* §3.1.5's five element shortcuts, each a LIVE HTMLCollection over the document. */
+        /* §3.1.7's five element shortcuts, each a LIVE HTMLCollection over the document. */
         static const char *const NAMES[] = { "forms", "images", "scripts", "embeds", "links" };
         unsigned k;
         for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++)
@@ -2904,7 +2904,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "charset",        js_doc_strings, 3, -1);
     idl_install_accessor(ctx, proto, "inputEncoding",  js_doc_strings, 3, -1);
     idl_install_accessor(ctx, proto, "implementation", js_doc_implementation, 0, -1);
-    /* §3.1.5's `title`, §3.2.6.4's `dir` and §7.2.2's `defaultView` — the first two READ-WRITE, which is what
+    /* §3.1.7's `title`, §3.2.6.4's `dir` and §7.2.2's `defaultView` — the first two READ-WRITE, which is what
        makes them accessors rather than a value: `title` was a string latched at install with no setter at all,
        so `document.title = "x"` stored a property where the standard creates a `<title>` element. */
     idl_install_accessor(ctx, proto, "title",       js_doc_html_members, DOC_TITLE, g_id_title_set);
@@ -4362,7 +4362,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
 
     /* `title`, `cookie`, `referrer` and `readyState` were SET HERE TOO, as own data properties — and the first
        three of them are worse than the tree members above, because each is an ALGORITHM and not a lookup:
-       §3.1.5's title getter walks the tree and its setter creates an element, and `cookie` is an ATTACKER SOURCE
+       §3.1.7's title getter walks the tree and its setter creates an element, and `cookie` is an ATTACKER SOURCE
        whose whole point is that it is minted PER READ so a candidate run can substitute it. They are accessors
        on Document.prototype now — `title` and `dir` beside the other tree members below, the three resource
        metadata members in core/dom/document_metadata.c. */
