@@ -110,10 +110,22 @@ JSValue element_proto(JSContext *ctx);
    this — "limited to only known values" is prose, so §2.6.2 gives it no extended attribute — which is why the
    spec-versus-tree audit that catches a missing member cannot see it, and why the whole class had to be found
    by reading §2.6.1 against every row rather than by any gate.
+   AND THE ENUM HAS A NULLABLE TWIN, because §2.6.1 states the limited-to-only-known-values branch TWICE and
+   the two endings differ. `DOMString`'s is "then return the empty string"; `DOMString?`'s is "then return
+   null", and its setter is the nullable string's — "If the given value is null, then run this's delete the
+   content attribute." So a `DOMString?` enumerated member declared REFLECT_ENUM is wrong in BOTH directions,
+   and the four `crossOrigin` rows were: §2.5.4's No CORS state has no keyword and IS the missing value
+   default, so `<video>.crossOrigin` answered "" where a browser answers null — and `img.crossOrigin === null`
+   is exactly how a page tests it — while `img.crossOrigin = null` wrote the four characters "null" into the
+   attribute instead of removing it. It is a KIND rather than a flag beside REFLECT_ENUM for the reason every
+   other row here is one: the pair (kind, definition) is what the declaration asserts over, and a boolean the
+   assert did not cover would be a third thing a row could get wrong silently.
+
    THE DEFINITION IS §2.3.3'S, NOT THIS TABLE'S: a row points at an `EnumeratedAttribute` that the section
    defining the attribute owns, so `method` and `formmethod` share one keyword table and differ only in their
    defaults, and the six interfaces that reflect `referrerpolicy` share one definition rather than six copies. */
-enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL, REFLECT_ULONG, REFLECT_ENUM };
+enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL, REFLECT_ULONG,
+       REFLECT_ENUM, REFLECT_ENUM_NULLABLE };
 /* The numeric fields are TRAILING so that every row declaring none of them is unchanged — an omitted brace
    initialiser zeroes them, and each is read only through the `has_` flag beside it. That flag is a POSITIVE
    statement that the IDL declares no default/range, never a hole a `?:` fills: §2.6.1's steps ask "if the

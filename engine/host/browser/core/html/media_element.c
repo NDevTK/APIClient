@@ -1919,7 +1919,7 @@ static const EnumeratedAttribute PRELOAD_ATTR = {
 
 static const ElReflect R_MEDIA[] = {
     { "src",         "src",         REFLECT_URL },
-    { "crossOrigin", "crossorigin", REFLECT_ENUM, .en = &CORS_SETTINGS_ATTRIBUTE },
+    { "crossOrigin", "crossorigin", REFLECT_ENUM_NULLABLE, .en = &CORS_SETTINGS_ATTRIBUTE },
     { "preload",     "preload",     REFLECT_ENUM, .en = &PRELOAD_ATTR },
     /* §4.8.11's `loading`, WHICH WAS A HAND-WRITTEN ACCESSOR PAIR IN THIS FILE. Its getter already knew it had
        to answer a canonical keyword — it said so, citing §2.6.1 — and implemented that by comparing the raw

@@ -1345,6 +1345,8 @@ static JSValue el_reflect_enum(JSContext *ctx, lxb_dom_element_t *el, const ElRe
 {
     int state;
 
+    DCHECK(r->kind == REFLECT_ENUM || r->kind == REFLECT_ENUM_NULLABLE,
+           "el_reflect_enum was handed a row of another kind");
     DCHECK(r->en != NULL,
            "§2.6.1's limited-to-only-known-values getter ran for a row with no §2.3.3 attribute definition — "
            "element_declare_reflections asserts that pairing at the declaration, so reaching it here is a "
@@ -1352,7 +1354,10 @@ static JSValue el_reflect_enum(JSContext *ctx, lxb_dom_element_t *el, const ElRe
     state = enumerated_attribute_state(el, r->attr, r->en->keywords,
                                        r->en->missing, r->en->empty, r->en->invalid);
     if (!enumerated_attribute_state_has_keyword(r->en->keywords, state))
-        return JS_NewStringLen(ctx, "", 0);
+        /* THE TWO MODELS DIFFER HERE AND NOWHERE ELSE. §2.6.1's `DOMString` enumerated branch ends "then return
+           the empty string"; its `DOMString?` branch ends "then return null". Everything above is shared, which
+           is why this is one body with one line that reads the kind rather than two getters. */
+        return r->kind == REFLECT_ENUM_NULLABLE ? JS_NULL : JS_NewStringLen(ctx, "", 0);
     return JS_NewString(ctx, enumerated_attribute_canonical_keyword(r->en->keywords, state));
 }
 
@@ -1365,6 +1370,7 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
            "a reflected property was declared with a magic the registry does not name");
     if (!el) return g_reflect[magic].kind == REFLECT_BOOL ? JS_FALSE
                   : g_reflect[magic].kind == REFLECT_STRING_NULLABLE ? JS_NULL
+                  : g_reflect[magic].kind == REFLECT_ENUM_NULLABLE ? JS_NULL
                   : g_reflect[magic].kind == REFLECT_ULONG
                     ? el_reflect_ulong(ctx, &g_reflect[magic], JS_NULL)
                   : JS_NewStringLen(ctx, "", 0);
@@ -1383,7 +1389,8 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     /* BEFORE the attribute is fetched, because §2.6.1's enumerated branch does not read contentAttributeValue
        at all — it reads the STATE, and §2.3.3 decides that from the attribute's presence as well as its bytes
        (`<img crossorigin>` is Anonymous and `<img>` is No CORS, which the value "" cannot tell apart). */
-    if (g_reflect[magic].kind == REFLECT_ENUM) return el_reflect_enum(ctx, el, &g_reflect[magic]);
+    if (g_reflect[magic].kind == REFLECT_ENUM || g_reflect[magic].kind == REFLECT_ENUM_NULLABLE)
+        return el_reflect_enum(ctx, el, &g_reflect[magic]);
     nv = JS_NewString(ctx, g_reflect[magic].attr);
     r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv, 0);   /* a real string already: the reflected NAME is the engine's */
     JS_FreeValue(ctx, nv);
@@ -1422,7 +1429,8 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
     if (!el) return JS_UNDEFINED;
     /* §2.6.1's `DOMString?` setter: "if the given value is null, then run this's delete the content
        attribute". The declared type is IDL_DOMSTRING_NULLABLE, so `undefined` is already this null. */
-    if (g_reflect[magic].kind == REFLECT_STRING_NULLABLE && JS_IsNull(val)) {
+    if ((g_reflect[magic].kind == REFLECT_STRING_NULLABLE ||
+         g_reflect[magic].kind == REFLECT_ENUM_NULLABLE) && JS_IsNull(val)) {
         dom_cow_remove_attribute(el, g_reflect[magic].attr);
         return JS_UNDEFINED;
     }
@@ -1675,6 +1683,12 @@ int element_declare_reflections(JSContext *ctx, const char *iface, const ElRefle
         /* §2.6.1 gives "limited to only known values" no type of its own — it is a `DOMString` whose GETTER has
            two extra branches — so the declared IDL type is the plain string's and only the getter differs. */
         case REFLECT_ENUM:            t = IDL_DOMSTRING; break;
+        /* And the nullable one declares the nullable string, which is what makes `img.crossOrigin =
+           null` DELETE the attribute — §2.6.1's `DOMString?` setter, verbatim: "If the given value
+           is null, then run this's delete the content attribute." With IDL_DOMSTRING it wrote the
+           four characters "null" into `crossorigin`, which is the Anonymous state's neighbour in
+           §2.5.4's table rather than the absent attribute the page asked for. */
+        case REFLECT_ENUM_NULLABLE:   t = IDL_DOMSTRING_NULLABLE; break;
         default:
             t = IDL_ANY;
             DFAIL("a reflection was declared with a kind §2.6.1 has no processing model for — give the kind "
@@ -1685,13 +1699,14 @@ int element_declare_reflections(JSContext *ctx, const char *iface, const ElRefle
            a definition on any other kind is the WORSE half — somebody wrote §2.3.3's table for that attribute
            and the getter reflects its bytes anyway, which is exactly the class REFLECT_ENUM was built to end,
            arriving through a table that exists. Neither is reachable from a page, so both are DCHECKs. */
-        DCHECKF((r[i].kind == REFLECT_ENUM) == (r[i].en != NULL),
+        DCHECKF(((r[i].kind == REFLECT_ENUM || r[i].kind == REFLECT_ENUM_NULLABLE) == (r[i].en != NULL)),
                 "%s.%s declares §2.6.1's limited-to-only-known-values kind and §2.3.3's attribute definition "
                 "%s — a REFLECT_ENUM row answers out of its definition's keyword table and has nothing else to "
                 "answer with, and a row that carries a definition on another kind reflects the attribute's raw "
                 "bytes while the table that would have been consulted sits beside it",
                 iface, r[i].idl,
-                r[i].kind == REFLECT_ENUM ? "without one" : "on a kind whose getter never reads it");
+                (r[i].kind == REFLECT_ENUM || r[i].kind == REFLECT_ENUM_NULLABLE)
+                    ? "without one" : "on a kind whose getter never reads it");
         /* §2.6.2 restricts BOTH augmenting attributes by TYPE — `[ReflectRange]` "must only be used on
            attributes with a type of unsigned long", `[ReflectDefault]` on double, long or unsigned long — so a
            row carrying either on a kind that has no step reading it is a declaration that silently does
