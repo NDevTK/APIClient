@@ -265,9 +265,27 @@ static char *errs_json_array(void) {
    quantity nothing resets, because the member did nothing to reset it — and `neverPickedGap` is how far the
    best of them stands behind the weight the pick actually returned, in the order's own points. Read them the
    way `jobsReady`/`jobWGap` are read: a large gap is the ordering WORKING (those members are outranked, and
-   the aging term is what reaches them), while a gap at or near ZERO with a non-zero count is a member standing
-   at the front of the order that the pick is not returning — which is starvation rather than ordering, and is
-   a defect in the dispatch rather than in the weight. Neither half is a reading alone.
+   the aging term is what reaches them). Neither half is a reading alone.
+
+   AND A GAP AT ZERO IS NOT THE OPPOSITE VERDICT — THIS PARAGRAPH USED TO SAY IT WAS, AND THE SENTENCE IS
+   RETIRED HERE RATHER THAN DELETED, because the reading it licensed is the one a reader re-derives. It said a
+   gap at or near ZERO beside a non-zero count was, in this file's own words and no standard's, a member
+   standing at the front of the order that the pick is not returning — starvation rather than ordering, a
+   defect in the dispatch rather than in the weight. That
+   does not follow, for a reason visible in flow_pick: the comparison is STRICT, so on a frontier carrying a
+   large EQUAL-WEIGHT cohort — which is the ordinary state of a one-family page, since every member of a family
+   reads one reward and an emission zeroes that family's silence at every arm at once — the pick returns ONE of
+   N tied maxima and the other N-1 are, at that instant, never-picked members standing exactly at the front.
+   Zero is then the EXPECTED reading of a healthy sweep, not evidence of anything, and the row cannot tell that
+   state from the one the retired sentence named.
+   MEASURED, which is why the sentence is going rather than being softened: six runs of the native fixture at
+   3ca1e281, 212 `@WFQ` censuses, `neverPickedGap` min 0.000 / median 0.476 / max 5.563 with SIXTY-THREE samples
+   at exactly 0.000 — spread across every run, including runs whose ladder drained all the way to the orphan
+   seed. A verdict that fires on 30% of samples of a frontier that is working is not a verdict.
+   WHAT THE PAIR HONESTLY SAYS is the count and the distance, and the reading that needs neither guessed is a
+   SERIES: `neverPicked` climbing across consecutive censuses while the frontier grows is the tail not being
+   reached, and that is a throughput statement. A single sample of this row — of any row here — characterises
+   an instant and never a run, which is the same rule §Testing states for every other number in this tree.
 
    AND `topSvc`/`topSvcFam`/`nonrewardMax` ARE WHAT TURN `valTop` FROM A DIGIT INTO A STATEMENT ABOUT THE
    LEADER. `valTop` is the front flow's fork FAMILY's ledger, and a ledger only climbs — so a reward that has
