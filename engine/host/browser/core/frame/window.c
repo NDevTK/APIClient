@@ -543,8 +543,11 @@ static int win_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst 
     (void)obj;
     if (!win_supported_index(ctx, prop, &v)) return 0;
     if (!desc) { JS_FreeValue(ctx, v); return 1; }
-    /* §7.2.2.2: { [[Value]]: the child's WindowProxy, [[Writable]]: false, [[Enumerable]]: true,
-       [[Configurable]]: true }. */
+    /* HTML §7.2.3.5 [[GetOwnProperty]] ( P ): "Return PropertyDescriptor { [[Value]]: value, [[Writable]]:
+       false, [[Enumerable]]: true, [[Configurable]]: true }." HTML §7.2.2.2 Indexed access on the Window
+       object is where a reader looks for this and it is NOT where the descriptor is — its whole normative
+       content on the subject is one sentence of delegation, "Indexed access to document-tree child navigables
+       is defined through the [[GetOwnProperty]] internal method of the WindowProxy object." */
     desc->flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE;
     desc->getter = JS_UNDEFINED;
     desc->setter = JS_UNDEFINED;
@@ -558,11 +561,21 @@ static int win_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValue
     uint32_t idx;
 
     if (JS_AtomIsIndex(ctx, &idx, prop)) {
-        if (flags & JS_PROP_THROW) {
-            JS_ThrowTypeError(ctx, "cannot define an indexed property on the window object");
-            return -1;
-        }
-        return 0;
+        /* THE SPEC'S ANSWER IS ONE WORD AND THE CALLERS MAKE FOUR OBSERVABLES OUT OF IT, so the word is spoken
+           once, to the engine, instead of being decoded here. `flags & JS_PROP_THROW` decoded exactly two of
+           the four: Object.defineProperty, which is ECMAScript §7.3.8 DefinePropertyOrThrow step 2 "If success
+           is false, throw a TypeError exception", and Reflect.defineProperty, which is §28.1.3
+           Reflect.defineProperty ( target, key, attrs ) step 4 "Return ? target.[[DefineOwnProperty]](
+           propertyKey, propertyDesc)" and so reports the boolean. A STRICT-mode assignment arrives carrying
+           JS_PROP_THROW_STRICT instead, which that test does not read, so ECMAScript §6.2.5.6 PutValue step
+           3.e — "If succeeded is false and refRecord.[[Strict]] is true, throw a TypeError exception" — never
+           fired, and `'use strict'; window[9] = "x"` on a page with fewer than ten child navigables completed
+           silently. Resolving JS_PROP_THROW_STRICT needs the running
+           frame's strictness, which lives inside quickjs, so JS_RefuseOrThrowTypeError is the only spelling of
+           "return false" available to a hook compiled outside that file — and being the only one is what keeps
+           the four observables from being re-derived, differently, in each class that grows a hook. */
+        return JS_RefuseOrThrowTypeError(ctx, flags,
+                                         "cannot define an indexed property on the window object");
     }
     /* EVERYTHING ELSE IS ORDINARY, and the exotic hook REPLACES the ordinary path rather than preceding it —
        so the ordinary path is re-entered here explicitly, with the exotic step suppressed. Forgetting this
@@ -588,8 +601,11 @@ static int win_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, 
     JSPropertyEnum *tab;
 
     (void)obj;
-    /* §7.2.2.2 [[OwnPropertyKeys]] lists the supported indices FIRST, in order. quickjs merges what this
-       returns with the object's ordinary keys, so only the indices belong here. */
+    /* HTML §7.2.3.10 [[OwnPropertyKeys]] ( ) lists the supported indices FIRST, in order: "Let keys be the
+       range 0 to maxProperties, exclusive." and then "return the concatenation of keys and
+       OrdinaryOwnPropertyKeys(W)". quickjs merges what this returns with the object's ordinary keys, so only
+       the indices belong here. (§7.2.2.2 Indexed access on the Window object states no [[OwnPropertyKeys]] at
+       all — it delegates the whole of indexed access to the WindowProxy's internal methods.) */
     tab = n ? js_malloc(ctx, sizeof(*tab) * (size_t)n) : NULL;
     if (n && !tab) return -1;
     for (i = 0; i < n; i++) {

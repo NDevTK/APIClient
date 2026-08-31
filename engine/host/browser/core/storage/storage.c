@@ -607,9 +607,23 @@ static int st_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, J
  * method), the NAMED PROPERTY SETTER is invoked with P and Desc.[[Value]]. §3.9.7's invoke-a-named-property-
  * setter converts that value to the setter's second argument type — DOMString — and performs setItem's steps.
  *
- * An ACCESSOR is step 2.2.2.1's `false`: "if the result of calling IsDataDescriptor(Desc) is false, then
- * return false." A Symbol P falls through to OrdinaryDefineOwnProperty, which is the ordinary path this hook
+ * An ACCESSOR is Web IDL §3.9.3 [[DefineOwnProperty]] step 2.2.2.1's `false` — "If the result of calling
+ * IsDataDescriptor(Desc) is false, then return false." — and the number is restated here rather than carried
+ * over from the paragraph above, because the nearest citation to these words was §3.9.7 and they are not
+ * §3.9.7's. A Symbol P falls through to OrdinaryDefineOwnProperty, which is the ordinary path this hook
  * re-enters with the exotic step suppressed.
+ *
+ * THAT `false` WAS RETURNED AS A BARE 0, WHICH IS A DIFFERENT ANSWER FROM THE SPEC'S. An internal method's
+ * "return false" is not an observable — the CALLER decides what it looks like, and the two callers that can
+ * reach this arm disagree. An accessor descriptor comes only from the defineProperty family (an assignment
+ * cannot carry one), so this arm is reached by Object.defineProperty, which is ECMAScript §7.3.8
+ * DefinePropertyOrThrow step 2 "If success is false, throw a TypeError exception", and by
+ * Reflect.defineProperty, which is §28.1.3 step 4 "Return ? target.[[DefineOwnProperty]](propertyKey,
+ * propertyDesc)" and reports the boolean. A bare 0 gave BOTH of them the second answer, so
+ * `Object.defineProperty(localStorage, "k", { get() {} })` returned the object instead of throwing — the
+ * refusal happened and nothing said so. quickjs carries which form the caller wants in `flags` and resolves
+ * JS_PROP_THROW_STRICT against the running frame, both internal to it, so JS_RefuseOrThrowTypeError is the
+ * one spelling of "return false" a hook compiled outside that file can make.
  *
  * A CONCOLIC VALUE CROSSES AS ITSELF, exactly as it does through a declared DOMString argument: `s.x =
  * location.hash` must keep its taint or the whole stored-source path goes quiet. */
@@ -623,7 +637,10 @@ static int st_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueC
     if (!st_atom_is_string(ctx, prop))
         return JS_DefineProperty(ctx, obj, prop, val, getter, setter, flags | JS_PROP_NO_EXOTIC);
     if (!JS_IsUndefined(getter) || !JS_IsUndefined(setter))
-        return 0;                                                        /* step 2.2.2.1 */
+        return JS_RefuseOrThrowTypeError(ctx, flags,                     /* step 2.2.2.1 */
+                                         "a named property of a Storage object is set through its named "
+                                         "property setter, so it cannot be defined from an accessor "
+                                         "descriptor");
 
     slots = st_slots(ctx, obj);
     if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return 0; }

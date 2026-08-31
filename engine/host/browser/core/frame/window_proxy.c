@@ -2246,11 +2246,22 @@ static int proxy_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVal
         return -1;
     }
     if (proxy_atom_index(ctx, prop, &idx)) {                            /* step 2.1: FALSE for every index */
-        if (flags & JS_PROP_THROW) {
-            JS_ThrowTypeError(ctx, "cannot define an indexed property on a WindowProxy");
-            return -1;
-        }
-        return 0;
+        /* HTML §7.2.3.6 step 2.1 IS "If P is an array index property name, return false." — one word, which
+           the CALLERS turn into four different observables, so it is spoken once to the engine rather than
+           decoded here. `flags & JS_PROP_THROW` decoded two of them: Object.defineProperty (ECMAScript §7.3.8
+           DefinePropertyOrThrow step 2, "If success is false, throw a TypeError exception") and
+           Reflect.defineProperty (ECMAScript §28.1.3 step 4, whose result IS the boolean). A STRICT assignment
+           arrives carrying JS_PROP_THROW_STRICT, which that test does not read, so ECMAScript §6.2.5.6
+           PutValue step 3.e — "If succeeded is false and refRecord.[[Strict]] is true, throw a TypeError
+           exception" — never fired.
+           HTML §7.2.3.8 [[Set]] ( P , V , Receiver ) step 3.1 reaches the same answer one internal method
+           earlier — "If P is an array index property name, then return false" — so an assignment is refused
+           whether or not the index is in range. THIS hook is where an OUT-OF-RANGE index lands: HTML §7.2.3.5
+           [[GetOwnProperty]] ( P ) leaves `value` undefined there and returns undefined for a same-origin W,
+           so proxy_get_own reports no own property and ECMAScript §10.1.9.2 OrdinarySetWithOwnDescriptor step
+           2.d.ii's CreateDataProperty arrives here instead. */
+        return JS_RefuseOrThrowTypeError(ctx, flags,
+                                         "cannot define an indexed property on a WindowProxy");
     }
     w = proxy_forward_window(ctx, obj, p, prop);
     /* §7.2.3's own surface is this object's, so a define of one of those names is the ORDINARY define on this
