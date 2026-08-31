@@ -210,7 +210,10 @@ qualifier is load-bearing, because the grep is not empty: `renderer-host.js` raw
 list (`check.js`, `mojo.js`, `mojom.js`, `lib/qjs/qjs.mjs`, `lib/qjs/qjs.wasm`) off our own extension origin
 to assemble a renderer's program, since an opaque-origin frame cannot load them by URL itself; and
 `content.js` raw-`fetch`es inside the untrusted renderer, which is the page-context relay's far end and is
-covered below. Neither takes an address from a bundle. `safeFetch` guarantees, in one auditable place:
+covered below. Neither takes an address from a bundle. **THIS PARAGRAPH IS ABOUT `fetch`, AND `fetch` IS NOT
+ALL EGRESS** — a socket frame, a port message and a top-level navigation are none of them a request this zone
+issues, and the complete enumeration with what places each is *Every way bytes leave*, below. `safeFetch`
+guarantees, in one auditable place:
 
 - **cookies omitted by default** (`credentials:"omit"`) — no credentialed exfiltration. In
   **credentialed mode** (`opts.credentialed` — replay a learned GET to read the real *authenticated*
@@ -296,13 +299,25 @@ covered below. Neither takes an address from a bundle. `safeFetch` guarantees, i
   RFC1918) is blocked **unless the page principal is itself private** — a public page cannot use the
   extension's host permissions to reach the user's localhost/intranet; a localhost page *may* reach
   localhost. Checked on the **initial URL and the post-redirect final URL**.
-- **CORB by load type (`opts.as`):** the enforcement is an EQUALITY on one value — `opts.as === "script"`
-  (a chunk/import that becomes executable code) must be JS-typed when cross-origin, so a cross-origin
-  HTML/JSON body is never read as code. Everything else is exempt because it is not executed, and that
-  exemption is the DEFAULT rather than an enumerated list: `"script"` is the only token `safe-fetch.js` tests
-  for and the only one any caller passes (`git grep -n 'as: *"' extension/`). This bullet used to name
-  `"sourcemap"` as a second exempt token, which no code has ever passed or tested — a vocabulary that existed
-  only here. Centralised so a new code-loader can't forget it.
+- **CORB by the request's DESTINATION, asked in Fetch §2.2.5 "Requests"' own words:** "A request's
+  destination is script-like if it is `audioworklet`, `paintworklet`, `script`, `serviceworker`,
+  `sharedworker`, or `worker`." That predicate (`_isScriptLike`) IS the CORB question, because script-like is
+  exactly "these bytes will RUN as code" — so a cross-origin script-like body must be JS-typed and a
+  cross-origin HTML/JSON body is never read as code, while every other destination is data and is exempt.
+  `xslt` is deliberately outside the predicate, and the spec's own note is the reason rather than an
+  oversight: it says algorithms using script-like "should also consider `xslt`", and considering it HERE
+  yields exclusion, since this rule demands a JavaScript MIME and an XSLT stylesheet is XML. The day the
+  engine loads one it needs its own rule, not this one.
+  **THIS BULLET DESCRIBED A KEYWORD THAT HAS BEEN DELETED, AND THE KEYWORD WAS THE HOLE.** It said the
+  enforcement was "an EQUALITY on one value — `opts.as === "script"`", that `"script"` was the only token any
+  caller passes, and it offered a grep for `as:` as the check. `opts.as` is gone; that grep now answers only
+  the comments recording its removal; and `safeFetch` DCHECKs `!("as" in opts)` at its entry, so a caller
+  still passing one ABORTS rather than being silently classified as data. The keyword's defect was that a
+  caller had to KNOW a load was code and remember to say so, which is how a document's own `<script src>`
+  reached the rule unclassified and took the exempt arm by SILENCE. A destination is a property of every
+  request and the engine states one at every park, so there is no longer a caller that can forget — and
+  `_destinationOf` DCHECKs its presence rather than defaulting it, because a caller who never thought about
+  it must never read as one who answered "data". Centralised so a new code-loader can't forget it.
 - **per-call principal** (`opts.pageUrl` = the requesting DOCUMENT's own `sender.url`, never the tab's) —
   **not a shared global**: the trusted zone drives many renderers concurrently and interleaves their rounds,
   so a global principal would let one page's origin contaminate another's fetch. Unknown principal → treated
@@ -310,6 +325,83 @@ covered below. Neither takes an address from a bundle. `safeFetch` guarantees, i
 
 A cross-origin script uses the **page's** origin, never the asset's own host (gstatic.com
 JS in google.com acts as google.com) — exactly what the principal encodes.
+
+### Every way bytes leave — and the three questions that place one
+
+**THE CHOKEPOINT RULE ABOVE IS ABOUT ANALYZER-DRIVEN HTTP, AND READ AS A STATEMENT ABOUT ALL EGRESS IT IS
+WRONG.** This extension has channels that are not `fetch` at all — a frame on a socket, a message on a port,
+a top-level navigation — and a reader auditing "every egress" against the paragraph above does not find them,
+concludes the list is complete, and is wrong in the one direction a threat model must not be wrong in. So the
+enumeration is stated here, and it is stated as CATEGORIES rather than call sites, because a census of call
+sites rots on the next commit while a category does not.
+
+**An egress is any path by which bytes this extension composed reach a peer it did not author**, and three
+questions place any one of them: **WHO CHOSE THE DESTINATION**, **WHOSE CREDENTIALS PAY FOR IT**, and **WHO
+COMPOSED THE BYTES**. A path answering "the analysed bundle" to the first is what the chokepoint exists for. A
+path answering "the page" to the first two confers no privilege and needs no gate — it is a DOWNGRADE, and
+the check that would stand there could only refuse something the page can already do for itself. A path
+answering "the operator" to the third is authorized by a human at a surface that shows them the bytes, and
+what it owes is that the destination be one this zone can name exactly.
+
+- **Analyzer-driven HTTP — `safeFetch`, the chokepoint.** The document load (`navigationLoad`, and
+  `frontierRederive` beside it), the learned-GET replay (`fetched`), and the page's own parked `fetch`/XHR
+  (`fetchedXhr`). Destination chosen from what the bundle computed; credentials omitted except on the
+  document load, where `navigationCarriesSession` bounds them. Every guarantee above is this row's.
+- **Requests issued AS THE PAGE — the page-context relay.** `pageContextGet` / `pageContextSend` /
+  `pageContextFetch` reach `content.js`'s `handlePageFetch`, whose raw `fetch` runs in the untrusted renderer.
+  Destination is this zone's; credentials are the page's own (`credentials:"same-origin"`); the enforcement is
+  the BROWSER's SOP/CORS rather than ours. Both directions are the subsection below, because they fail
+  differently and only one of them is a privilege question.
+- **Renderer program assembly — `renderer-host.js`.** A raw `fetch` of a FIXED name list off our own extension
+  origin, because an opaque-origin frame cannot load those files by URL itself. The destination is a constant
+  in this zone and no bundle influences it; adding a bundle-influenced name to that list would make it an
+  analyzer path, and it would then belong in the row above.
+- **The page's own traffic through a wrapper — `intercept.js`.** The `fetch`, `XMLHttpRequest`, `WebSocket`
+  and `EventSource` wrappers CALL the originals they replaced. No request exists here that the page did not
+  make: the wrapper is an observer and the egress is the page's. It runs in the MAIN world, so it holds no
+  privilege the page lacks and can confer none.
+- **Operator-composed writes into a channel the PAGE opened — the socket, port and window send relays.** A
+  frame on a `WebSocket` the page's own realm opened, a message on a `MessagePort` the page entangled, a
+  `postMessage` into a window the page holds. **This is a downgrade for a sharper reason than the fetch relay
+  is**: the extension does not choose the destination AT ALL. The connection, the port and the window were
+  opened by the page before this extension said anything, they are held in the page's own MAIN world, and
+  what the trusted zone supplies is a channel id and a payload the OPERATOR typed into the Send panel. The one
+  fact this zone does state is the window relay's `targetOrigin`, and it is asserted to be a single real
+  origin — never empty and never `"*"`, which would deliver an operator-typed payload to whichever document
+  holds that window by the time it lands.
+  Authorization is the ordinary document→document rule and nothing bespoke: the offscreen router admits the
+  command only on `sender.origin === chrome-extension://<id>` (so a sandboxed extension page, whose origin is
+  the opaque `"null"`, gets none of it and in any case holds no `chrome.*` to try with), the SW pins its
+  `__rpc` to the offscreen document by URL EQUALITY, and the `tabs.sendMessage` that carries it is routed
+  `documentId`-only — no `frameId` fallback, no target-less broadcast, no `documentId` → refuse. The far end
+  in `content.js` does not re-check its own sender, and that is sound by the PLATFORM's delivery rule rather
+  than by oversight: a content script's `onMessage` is reachable only by `chrome.tabs.sendMessage` from a
+  privileged extension context — a `chrome.runtime.sendMessage` broadcast is not delivered to content scripts
+  — and `manifest.json` declares no `externally_connectable`, so no other extension and no web page has a
+  door. A compromised renderer needs none of this: it already holds the socket.
+- **The live-verify NAVIGATION — the one egress that is not a request this zone issues.** The offscreen builds
+  the PoC's JavaScript as a `window.open` of the delivery address; the popup embeds `poc-sandbox.html`, an
+  opaque-origin sandboxed page, and hands it that string; the OPERATOR'S CLICK is the user activation that
+  lets it run. What results is a real top-level credentialed GET in the person's own profile, and it reaches
+  `safeFetch` never — there is no interception layer and none is wanted, because the whole value of the
+  signal is that CHROME answers rather than we do (§The live PoC verify).
+  **It is inside the model because of what the address IS, and that is a property of how it is built rather
+  than a promise.** `buildLiveDelivery` takes the page the sink was OBSERVED on, re-parses it through the URL
+  parser, clears its fragment and query, and appends the payload at the component the ENGINE declared — so
+  scheme, host and path are the ones the person's own browser already loaded, and the analyzer supplies only
+  a fragment or a query string. The harm condition the credentialed destructive-path deny list exists for is
+  *credentialed AND not-observed*, and the second half is false here by construction; that is why the list's
+  absence on this path is a statement of its scope and not a gap in it. An address that does not parse yields
+  no delivery at all, because a page with no parseable address has no origin a hit could be attributed to
+  either.
+
+**AND WHAT GREPS LIKE AN EGRESS AND IS NOT ONE**, because an enumeration is only worth having if it also
+refuses: `renderer.html`'s `import()` of a `blob:` URL assembled from bytes `renderer-host.js` had already
+fetched; every `indexedDB.open`; the popup's request formatters, which build a `fetch(…)` STRING for a human
+to copy; the page's `submit` listener in `content.js`, which OBSERVES a submission the page performed, while
+the driven `form.submit()` runs inside the ENGINE and leaves through the same host edges as the bundle's own
+code; and the `scripting.exec` / `tabs.create` / `tabs.remove` / `tabs.get` RPC arms, which have no callers at
+all (§Known residuals). None of these composes bytes for a peer.
 
 ### The page-context relay — the trusted zone borrows a privilege it does not have
 
@@ -560,11 +652,13 @@ config-loaded allowlist that no transform-expression or SMT encoding can.
 | Renderer forges `sender.id` | **Not a threat** — already has it; `sender.url` is the real gate |
 | Renderer forges `sender.url`/principal as a localhost origin to defeat SSRF | **Mitigated** — the principal is the browser-set `MessageSender`, never `msg.*`. (This row used to say the principal is `sender.tab.url`, which contradicts the corrected rule two sections above and restates the very bug that rule records: the SSRF principal is the frame's OWN `sender.url`.) |
 | Bundle `import()`s `http://127.0.0.1/…` or an intranet host (public page) | **Mitigated** — `safeFetch` origin-relative SSRF blocks public→private (initial + post-redirect) |
-| Bundle imports a cross-origin HTML/JSON endpoint as a "chunk" | **Mitigated** — `safeFetch as:"script"` CORB ingests JS-typed only |
+| Bundle imports a cross-origin HTML/JSON endpoint as a "chunk" | **Mitigated** — the import's Fetch §2.2.5 destination is script-like, which is the question `safeFetch`'s CORB rule asks, so a cross-origin body is ingested JS-typed only. (This row named `as:"script"`, the deleted load-type keyword; a caller that still passes one now aborts at the chokepoint's entry) |
 | Concurrent localhost-page grind lends its origin to a public page's fetch | **Mitigated** — principal is per-call, not a global shared across the concurrently-driven renderers |
 | A sub-frame in a tab whose TOP is `http://localhost/` reaches the user's intranet | **Mitigated** — the SSRF principal is the frame's own `sender.url`, never `sender.tab.url` (this was a real bug; `sender.tab.url` survives only as `topLevelUrl` for secure-context) |
 | Content script states its own `origin` / `pageUrl` and a future consumer reads one as the principal | **Mitigated** — no principal-shaped field is on the wire at all; every fact comes from `_browserFacts(sender)` and is re-asserted by `_statedFacts` (a release-fatal `CHECK`) |
 | Compromised renderer asks the relay for a fetch the offscreen never authorised | **Not a threat** — the relay confers no privilege the renderer lacks; it is a downgrade from `<all_urls>`, and the trusted call site is the only place a verb is chosen |
+| Compromised renderer drives the socket / port / window send relays to reach a peer it could not otherwise | **Not a threat** — it cannot reach them (a content script's `onMessage` is delivered only from a privileged extension context, and no `externally_connectable` entry exists), and if it could it would gain nothing: the connection, the port and the window are the page's own, opened in its own MAIN world, so the relay chooses no destination and confers no capability |
+| The live-verify PoC navigates the person's own profile, with cookies, outside the chokepoint | **In model, and it is the address that puts it there** — the delivery URL is the page the sink was OBSERVED on, re-parsed, with only a fragment or query the engine declared appended; the navigation needs the operator's click for its user activation; and the deny list's harm condition (*credentialed AND not-observed*) is false by construction rather than by a check |
 | Compromised renderer LIES about a relayed reply | **Residual** — the reply is attributed to the requested URL and vouched for by nobody; cross-origin cookies are withheld (`credentials:"same-origin"`) and CORS still applies, but the body is a claim |
 | A DIFFERENT document (other origin, other frame, second document of the target origin) calls `apiclientsink` with a marker it read | **Mitigated** — `_recordProbeHit` compares the browser's `MessageSender.origin`, the `frameId` and a latched `deliveredDocumentId` against what this zone actually delivered, and records the hit `attributed: false` with its reason rather than dropping it |
 | The DELIVERED page itself calls `apiclientsink` with the marker out of its own payload | **Residual, irreducible by this mechanism** — the hook is installed in that page's own main world, so a REAL EXPLOIT verdict is fabricable by the document under test |
