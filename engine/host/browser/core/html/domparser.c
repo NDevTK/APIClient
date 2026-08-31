@@ -207,7 +207,9 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
        which for this arm is "text/html", the string that makes a Document an HTML document. */
     /* §8.5.1 step 2's content type is `type`, which on THIS arm is the string "text/html" that selected it —
        and step 3's first sub-step, "Set document's type to `html`", is the other half of the pair. */
-    doc = document_new(ctx, dom, url, document_kind(/*is_xml*/false, "text/html"));
+    /* …and step 2's "a NEW DOCUMENT" is DOM §4.5's `Document` interface, which this arm shares with the XML one
+       below — see there for why the interface is stated rather than taken from the type. */
+    doc = document_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, document_kind(/*is_xml*/false, "text/html"));
     root = lxb_dom_interface_node(dom);
 
     /* THE PARSE BOUNDARY, and which seams belong to it is the STANDARD'S answer rather than a copy of
@@ -310,7 +312,13 @@ static JSValue parse_xml_from_a_string(JSContext *ctx, const char *url, const ch
        only the "text/html" arm's first sub-step sets it to `html` — so this arm is an XML DOCUMENT, which is
        what makes `parseFromString(…, "application/xml").createCDATASection(…)` work and what keeps HTML
        §13.2's parse-boundary correction (which this arm deliberately does not run) unreachable for it. */
-    return document_new(ctx, dom, url, document_kind(/*is_xml*/true, type));
+    /* …AND IT IMPLEMENTS `Document`, NOT `XMLDocument`, WHICH IS THE ONE PLACE THAT DISTINCTION IS OBSERVABLE
+       AND THE ONE PLACE A READER EXPECTS THE OTHER ANSWER. §8.5.1 step 2 is "Let document be a NEW DOCUMENT,
+       whose content type is type and URL is this's relevant global object's associated Document's URL" — a new
+       Document, where DOM §4.5.1's createDocument says "creating a document that implements XMLDocument". Same
+       §4.5 type, different interface, so `new DOMParser().parseFromString("<foo/>", "text/xml") instanceof
+       XMLDocument` is FALSE and `document.implementation.createDocument(ns, "")`'s is true. */
+    return document_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, document_kind(/*is_xml*/true, type));
 }
 
 /* §8.5.1 `parseFromString(string, type)`.

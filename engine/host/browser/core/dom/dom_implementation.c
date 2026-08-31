@@ -149,7 +149,11 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
        content type to `text/html`" — which is why they travel as one value; the address is §4.5's default
        `about:blank`. The record has to exist before any node of this tree is wrapped — node_wrap resolves a
        node's prototype through its document's realm. */
-    doc = document_new(ctx, dom, "about:blank", document_kind(/*is_xml*/false, "text/html"));
+    /* §4.5.1's createHTMLDocument step 1 names the interface itself — "Let doc be the result of creating a
+       document that implements Document, given this's relevant realm" — so this is `Document` by the standard's
+       own word and not by falling through to a default. */
+    doc = document_new(ctx, dom, "about:blank", DOCUMENT_IFACE_DOCUMENT,
+                       document_kind(/*is_xml*/false, "text/html"));
 
     if (argc >= 1 && !JS_IsUndefined(argv[0])) {   /* step 6, and only when the title was GIVEN */
         lxb_dom_node_t *head = NULL, *n, *root = node_of(doc)->first_child;
@@ -230,8 +234,14 @@ static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, in
     /* AND IT IS AN XML DOCUMENT — step 1 is "creating a document that implements XMLDocument", and §4.5's
        default type `xml` is what that leaves in place (only createHTMLDocument beside it sets `html`). So
        `createDocument(…).createCDATASection(…)` succeeds where an HTML document's must throw, which is the
-       one observable this pair decides here. */
-    doc = document_new(ctx, dom, "about:blank", document_kind(/*is_xml*/true, type));
+       one observable this pair decides here.
+       THE TWO ARE SEPARATE ARGUMENTS BECAUSE THEY ARE SEPARATE FACTS, AND THIS IS THE ONE ALGORITHM IN THE
+       PLATFORM THAT ANSWERS THE FIRST OF THEM `XMLDocument` — §4.5's `Document()` constructor and HTML §8.5.1's
+       parseFromString both produce `xml` documents that implement Document, so a reader who took the interface
+       from the type here would be right about this line and wrong about both of those. `doc instanceof
+       XMLDocument` and `doc.constructor` are what it decides, and DOM §4.4's clone carries it to the copy. */
+    doc = document_new(ctx, dom, "about:blank", DOCUMENT_IFACE_XML_DOCUMENT,
+                       document_kind(/*is_xml*/true, type));
 
     if (argc > 1 && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
         const char *qname = JS_ToCString(ctx, argv[1]);

@@ -289,6 +289,13 @@ typedef struct Document {
        for HTML §7.5.4's text document, which is an HTML document whose content type is not "text/html" and
        which every such compare therefore answered backwards. */
     bool                 is_xml;
+    /* DOM §4.5 "Interface Document"'s THIRD creation fact: WHICH INTERFACE this document implements — the argument of "create a document
+       that implements an interface", which §4.5.1's createDocument answers XMLDocument and every other creating
+       algorithm in the platform answers Document. A FIELD AND NOT A TEST ON `is_xml` ABOVE, for the reason
+       document.h states at DocumentInterface: a DOMParser `text/xml` parse and a createDocument agree about
+       `type` and disagree about the interface, so the derivation would report every DOMParser XML document as
+       an XMLDocument. It decides this document's wrapper's prototype, so it is read at node_wrap. */
+    DocumentInterface    iface;
     /* HTML §3.1.1's "Each Document has an encoding (an encoding), used for the document's character encoding"
        — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1 falls back to when a
        `<script>` has no `charset` attribute: "let encoding be el's node document's the encoding". It is a
@@ -1231,7 +1238,12 @@ static JSValue js_doc_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
        content type is `application/xml`, URL is `about:blank`, … type is `xml`". The constructor states
        nothing else, so both facts are the standard's initial values verbatim — and the `xml` half is what
        makes `new Document().createCDATASection(…)` succeed where an HTML document's must throw. */
-    return document_new(ctx, dom, "about:blank", document_kind(/*is_xml*/true, "application/xml"));
+    /* …AND THE INTERFACE IS `Document`, WHICH DOM §4.5 SAYS IN SO MANY WORDS RATHER THAN LEAVING TO BE INFERRED
+       FROM THE TYPE: "Unlike createDocument(), this constructor does not return an XMLDocument object, but a
+       document (Document object)." So this is the case that proves `type` does not decide the interface — an
+       `xml` document that is not an XMLDocument — and it is why DocumentInterface is a stated argument. */
+    return document_new(ctx, dom, "about:blank", DOCUMENT_IFACE_DOCUMENT,
+                        document_kind(/*is_xml*/true, "application/xml"));
 }
 
 /* §4.5.1 `createCDATASection(data)` and `createProcessingInstruction(target, data)` — the two node factories
@@ -2812,6 +2824,19 @@ static JSValue js_doc_create_event(JSContext *ctx, JSValueConst this_val, int ar
 /* THE DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S — the IDL pool is sealed after agent init, so
    a declaration minted from a per-realm install trips idl_declared_before_seal on the SECOND realm. */
 static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
+/* DOM §4.5 "Interface Document"'s OTHER INTERFACE, verbatim: `[Exposed=Window] interface XMLDocument : Document
+   {};`. A SECOND PROTOTYPE SLOT AND NOT A SECOND COMPONENT, and the reason is that the interface has no members
+   of its own to be a component about — its entire content is WHICH OBJECT a Document's wrapper wears, which is
+   DOM §4.5's "create a document that implements an interface" and is this file's subject. §4.5 declares both in one
+   section for the same reason.
+   IT IS A CLASS ID USED PURELY AS A PER-REALM PROTOTYPE SLOT — quickjs's JS_SetClassProto/JS_GetClassProto,
+   which is how core/html/html_element.c holds one slot per HTML element interface. No wrapper is branded with
+   it: every DOM node wrapper is core/dom/node.c's ONE node class, and it is the PROTOTYPE that differs, which
+   is exactly what DOM §4.5's own sentence asks for ("Return a new node that implements interface, in realm").
+   PER REALM, NOT A MODULE STATIC: a member reached through this prototype runs in the realm that DEFINED it, so
+   a second same-origin document sharing the first realm's XMLDocument.prototype would answer every inherited
+   Document member out of the wrong global. */
+static JSClassID g_xml_document_class;
 /* THE RUNTIME THIS COMPONENT DECLARED INTO, AND THE DECLARATION LATCH — one static answering both, the shape
    core/dom/element.c's `g_element_rt` states for the group this one is declared beside. `document_init` had no
    double-declaration assert at all, which is the defect core/agent_state.h records for window_message: a second
@@ -3904,6 +3929,15 @@ void document_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_document_class);
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
+    {
+        /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};` — its per-realm prototype slot. It
+           does NOT claim the DOCUMENT node type: node_claim_type asserts ONE claimant per type, which is
+           right, because the type does not decide between these two — the document's own record does, and
+           document_interface_proto is where it is asked. */
+        JSClassDef xd = { "XMLDocument" };
+        JS_NewClassID(JS_GetRuntime(ctx), &g_xml_document_class);
+        JS_NewClass(JS_GetRuntime(ctx), g_xml_document_class, &xd);
+    }
     /* HOW THIS COMPONENT'S RECORD REACHES THE COLLECTOR. Declared with the AGENT and for the RUNTIME, beside the
        class it belongs to and before any record can exist — doc_rec_new asserts that order from the other side,
        at the birth of each record. It is the mirror of the realm-teardown hook navigable.c declares: that one
@@ -3970,6 +4004,7 @@ void document_init(JSContext *ctx)
     agent_state_ptr("document", &g_document_rt,
                     "the runtime §4.5's interface and its ten sub-components declared into, and the latch");
     agent_state_class("document", &g_document_class, "§4.5's interface prototype slot and brand");
+    agent_state_class("document", &g_xml_document_class, "DOM §4.5's XMLDocument interface prototype slot");
     agent_state_id("document", &g_ready_slot, "the per-realm slot §3.1.5's current document readiness lives in");
     agent_state_id("document", &g_showing_slot, "the per-realm slot §7.5.9's page showing lives in");
 }
@@ -4015,6 +4050,22 @@ void document_install_proto(JSContext *ctx)
     /* HTML §6.6.7's per-document autofocus candidates and processed flag, built with the realm so an element
        inserted by the FIRST flow to run does not find a list that flow created. */
     autofocus_install_document(ctx);
+    {
+        /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};` — Web IDL §3.7.3 "Interface prototype
+           object" for an interface that declares NO members, so the object is EMPTY and everything a page reads
+           off an XMLDocument comes through the link below. It is created OVER Document.prototype rather than
+           created bare and re-parented, which is §3.7.3's own order ("Let proto be … the interface prototype
+           object in realm of that inherited interface", then OrdinaryObjectCreate(proto)) and is what
+           idl_interface_tag's inheritance assert reads one link up.
+           IT IS BUILT BEFORE THE JS_SetClassProto BELOW BECAUSE THAT CALL CONSUMES `proto`: quickjs's
+           JS_SetClassProto is a set_value into the realm's class_proto slot, so the local is no longer this
+           frame's to read after it. */
+        JSValue xproto = JS_NewObjectProto(ctx, proto);
+
+        CHECK(!JS_IsException(xproto), "XMLDocument.prototype could not be allocated");
+        idl_interface_tag(ctx, xproto, "XMLDocument");
+        JS_SetClassProto(ctx, g_xml_document_class, xproto);
+    }
     JS_SetClassProto(ctx, g_document_class, proto);
     /* THIS REALM'S DOCUMENT READINESS, built with the realm so it belongs to the pre-boot BASELINE — the same
        reason §8.12 Animation frames's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,
@@ -4073,7 +4124,8 @@ DocumentKind document_kind_initial_about_blank(void)
  * slot used to hold the REALM pointer, which was already the (document -> realm) answer §4.2.3 needs; holding
  * the record instead answers that question and every other per-document one through one indirection, with no
  * registry to keep in step — a registry is a second list of documents whose failure mode is a stale row. */
-static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentKind kind)
+static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentInterface iface,
+                             DocumentKind kind)
 {
     lxb_dom_document_t *dd = lxb_dom_interface_document(dom);
     Document *d;
@@ -4136,6 +4188,9 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
        asserted the content type is non-empty and fits, so this copy cannot be the one that truncates. */
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
     d->is_xml = kind.is_xml;
+    /* …AND DOM §4.5's THIRD, which the caller's own algorithm named: "create a document that implements an
+       interface interface". Stored beside the pair above and never derived from `is_xml` — see document.h. */
+    d->iface = iface;
     /* §3.1.1's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
        and one decode of them — so this is the real answer rather than an initial value waiting to be
        overwritten, and it is asked of the REGISTRY rather than written as a table index so that the set of
@@ -4222,9 +4277,10 @@ static JSValue doc_finish(JSContext *ctx, Document *d)
 }
 
 /* A SECOND DOCUMENT IN THIS REALM — see document.h. */
-JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentKind kind)
+JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentInterface iface,
+                     DocumentKind kind)
 {
-    Document *d = doc_rec_new(ctx, dom, url, kind);
+    Document *d = doc_rec_new(ctx, dom, url, iface, kind);
 
     /* WHO DESTROYS IT. A document a FLOW created is that flow's, exactly like a node it created: the COW delta
        owns it and destroys it when the delta is discarded, so the frontier does not accumulate one document per
@@ -4290,7 +4346,12 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
            document that implements Document" produces: §4.5's defaults, `application/xml` at `about:blank`
            with no browsing context. The CONTENT TYPE is the standard's default either way and never the
            creator's — §4.12.3 marks the owner an HTML document, it does not copy the response's type. */
-        inert = doc_rec_new(d->realm, dom, "about:blank",
+        /* …AND THE INTERFACE IS NAMED BY §4.12.3 ITSELF AND IS NOT INHERITED FROM `document`: "Let newDocument
+           be the result of creating a document that implements Document, given document's relevant realm". So
+           the owner of an XMLDocument's template contents is a Document, which is the one clause of this
+           algorithm that does NOT copy the source and is why the interface is stated here rather than read off
+           `d`. */
+        inert = doc_rec_new(d->realm, dom, "about:blank", DOCUMENT_IFACE_DOCUMENT,
                             document_kind(d->is_xml, d->is_xml ? "application/xml" : "text/html"));
         inert->is_inert_template = 1;
         doc_realm_owns(d->realm, inert);
@@ -4333,6 +4394,41 @@ bool document_is_xml_of(const lxb_dom_document_t *dom)
     return d->is_xml;
 }
 
+DocumentInterface document_interface_of(const lxb_dom_document_t *dom)
+{
+    Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "DOM §4.5's INTERFACE was read from a document with no record — \"create a document that "
+                      "implements an interface\" is what states it, and the two entries that run it are "
+                      "document_install and document_new, so a tree that came from neither never received one. "
+                      "It is read at the wrapper and by §4.4's clone, so a document reaching here with no "
+                      "record is one whose wrapper would have no prototype to wear");
+    return d->iface;
+}
+
+/* DOM §4.5 "Interface Document"'s `XMLDocument` interface prototype object, for THIS realm. OWNED. */
+static JSValue xml_document_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_xml_document_class);
+
+    DCHECK(!JS_IsNull(proto),
+           "XMLDocument.prototype was asked for in a realm that never ran document_install_proto — DOM §4.5 "
+           "declares XMLDocument beside Document and the two prototypes are built in one breath, so a realm "
+           "with one and not the other cannot exist; a document created implementing XMLDocument in such a "
+           "realm would wear no prototype at all");
+    return proto;
+}
+
+JSValue document_interface_proto(JSContext *ctx, const lxb_dom_document_t *dom)
+{
+    /* WHICH OF DOM §4.5's TWO INTERFACES, ASKED OF THE RECORD — and the Document arm goes through the node TYPE
+       table rather than a second slot of its own, because that IS where Document's prototype lives and a copy
+       of it here would be a second answer to one question. */
+    if (document_interface_of(dom) == DOCUMENT_IFACE_XML_DOCUMENT)
+        return xml_document_proto(ctx);
+    return node_type_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT);
+}
+
 /* DOM §4.9 "Interface Element"'s "create an element" with the HTML namespace NAMED — see document.h for the
    four standards sentences that name it and for why a creation states its namespace instead of asking a
    document field this engine does not maintain. One line, and it exists so that four call sites cannot drift
@@ -4369,7 +4465,17 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "a document was installed twice into one realm — that is a NAVIGATION, and its container is "
            "per-flow state: build it as a COW record (like ProxyData's PROXY_REC) captured in its accessor, so "
            "the flow that navigated and the sibling that did not each read their own");
-    d = doc_rec_new(ctx, dom, url, kind);
+    /* …AND THE INTERFACE IS `Document` FOR EVERY DOCUMENT THIS ENTRY BUILDS, which is why it is a constant here
+       rather than an argument of document_install. HTML §7.5.1 "Shared document creation infrastructure" — the
+       one algorithm every navigation's Document comes through, §7.5.2 "Loading HTML documents", §7.5.3 "Loading
+       XML documents" and §7.5.4 "Loading text documents" included — says "Let document be a new Document, with:
+       type type, content type contentType, …", and §7.3.2.1 "Creating browsing contexts"' initial `about:blank`
+       says the same. Not one of them names an interface other than Document, so an argument here would be a
+       question with a single answer. §7.5.3 is the one worth stating outright, because an XHTML document is
+       exactly where a reader expects XMLDocument: its text is "create and initialize a Document object
+       document, given \"xml\", type, and navigationParams", so the `xml` there is DOM §4.5's TYPE and nothing
+       else. */
+    d = doc_rec_new(ctx, dom, url, DOCUMENT_IFACE_DOCUMENT, kind);
     d->doc = doc_id;
     /* CSP §2.2's SELF-ORIGIN BECOMES A RECORD HERE, at the one point a document's facts stop being the bytes a
        host stated and start being the types the algorithms are written over. origin_parse is the transport
@@ -4531,6 +4637,35 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         node_install_interface_ctor(ctx, global, "Document", dp,
                                     idl_step_constructor(ctx, "Document", g_id_doc_ctor));
         JS_FreeValue(ctx, dp);
+    }
+    {
+        /* DOM §4.5's OTHER INTERFACE OBJECT — `[Exposed=Window] interface XMLDocument : Document {};`. It declares
+           NO constructor, so `new XMLDocument()` is Web IDL §3.7.1 Interface object's "Interface objects whose
+           interfaces are not declared with a constructor operation will throw when called, both as a function
+           and as a constructor", which is what idl_interface_object's shared throw is.
+           ITS [[Prototype]] IS THE `Document` INTERFACE OBJECT AND IS WRITTEN HERE RATHER THAN LEFT TO
+           node_install_interface_ctor, because that helper answers the base with `Node` for every caller —
+           correct for the interfaces that inherit Node directly and wrong for one that inherits Document.
+           §3.7.1 states the rule verbatim: "Let constructorProto be realm.[[Intrinsics]].[[%Function.prototype%]].
+           If I inherits from some other interface P, then set constructorProto to the interface object of P in
+           realm." It is read back OFF THE GLOBAL rather than kept in a local, so the object linked to is the one
+           the page can reach — a second one would make `XMLDocument.__proto__ === Document` false while every
+           other check passed.
+           INSTALLED AFTER `Document` and not before, because §3.7.1's rule needs P's interface object to exist:
+           this is the same declaration-order dependency core/realm.h states for prototypes, one level up. */
+        JSValue xdp = xml_document_proto(ctx);
+        JSValue xctor = idl_interface_object(ctx, "XMLDocument", xdp);
+        JSValue base = JS_GetPropertyStr(ctx, global, "Document");
+
+        DCHECK(JS_IsFunction(ctx, base),
+               "Web IDL §3.7.1's constructorProto for XMLDocument is \"the interface object of P in realm\" and "
+               "this realm's global has no `Document` function to be it — the Document interface object is "
+               "installed by the block directly above, so a failure here means that install stopped happening "
+               "or this one moved in front of it");
+        JS_SetPrototype(ctx, xctor, base);
+        JS_FreeValue(ctx, base);
+        JS_FreeValue(ctx, xdp);
+        JS_SetPropertyStr(ctx, (JSValue)global, "XMLDocument", xctor);
     }
     /* §4.8.5 FOR THE TREE THE PARSER BUILT. Insertion steps run during tree construction in a browser, so an
        <iframe> the page's own markup contains has a child navigable before the first script runs — and no
@@ -4762,7 +4897,7 @@ void document_agent_free(JSRuntime *rt)
     document_metadata_free();
     /* THE PROTOTYPES ARE THE REALMS' — each is in its own class-proto slot and released with its context. What
        this component itself holds is the class, the pool entries and the two realm-value slot ids. */
-    g_document_class = 0;
+    g_document_class = g_xml_document_class = 0;
     g_id_create_element = g_id_create_text = g_id_create_comment = g_id_create_fragment =
         g_id_create_element_ns = g_id_create_iterator = g_id_create_walker = g_id_create_range =
         g_id_create_event = g_id_create_cdata = g_id_create_pi = g_id_doc_ctor = g_id_adopt_node =

@@ -1201,9 +1201,15 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
         /* Steps 8-11, as on the HTML arm below and for its reasons. AN XML DOCUMENT: this arm's document is
            "the result of running the XML parser", and only the HTML arm carries §3.6.6's "Flag document as an
            HTML document" step — so §4.5's default type `xml` stands, which is what `responseXML` on an XML
-           response must be for `createCDATASection` and for the parse-boundary correction to stay away. */
+           response must be for `createCDATASection` and for the parse-boundary correction to stay away.
+           AND IT IMPLEMENTS `Document`: XHR §3.6.6 "set a document response" says "let document be a document
+           that represents the result of running the XML parser" and the word XMLDocument does not occur
+           anywhere in that standard, so `xhr.responseXML instanceof XMLDocument` is false — the same split
+           HTML §8.5.1's parseFromString makes, and the reason core/dom/document.h states the interface
+           separately from the type. */
         xhr_set(ctx, d, &d->response_object,
-                document_new(ctx, dom, url ? url : "", document_kind(/*is_xml*/true, content_type)));
+                document_new(ctx, dom, url ? url : "", DOCUMENT_IFACE_DOCUMENT,
+                             document_kind(/*is_xml*/true, content_type)));
         if (url) JS_FreeCString(ctx, url);
         free(content_type);
         return;
@@ -1238,7 +1244,8 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
        MIME type is not only "text/html" (`application/xhtml+xml` is an XML MIME type and takes the arm
        above, but `text/html;charset=…`'s essence is what lands here). */
     xhr_set(ctx, d, &d->response_object,
-            document_new(ctx, dom, url ? url : "", document_kind(/*is_xml*/false, content_type)));
+            document_new(ctx, dom, url ? url : "", DOCUMENT_IFACE_DOCUMENT,
+                         document_kind(/*is_xml*/false, content_type)));
     if (url) JS_FreeCString(ctx, url);
     free(content_type);
 }

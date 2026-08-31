@@ -46,6 +46,40 @@ DocumentKind document_kind(bool is_xml, const char *content_type);
    stated in ONE place because a constant spelled at each of the entries that creates one is that many rules. */
 DocumentKind document_kind_initial_about_blank(void);
 
+/* DOM §4.5 "Interface Document"'s THIRD CREATION FACT, WHICH IS NOT ONE OF THE PAIR ABOVE — WHICH INTERFACE THE
+ * DOCUMENT IMPLEMENTS. §4.5 declares two of them in one section: `interface Document : Node` and, verbatim,
+ * `[Exposed=Window] interface XMLDocument : Document {};`. It also states the operation that chooses between
+ * them, verbatim: "To create a document that implements an interface interface, given a realm realm: Assert:
+ * interface is Document or an interface that inherits from Document. Return a new node that implements
+ * interface, in realm." So the interface is an ARGUMENT of the creation, exactly as `type` and `content type`
+ * are — and it is what decides the wrapper's prototype, `doc.constructor` and `doc instanceof XMLDocument`.
+ *
+ * IT IS A SEPARATE FACT FROM §4.5's `type` AND NEITHER DERIVES THE OTHER, which is the whole reason it is
+ * stated rather than computed from `is_xml`. §4.5.1's createDocument creates "a document that implements
+ * XMLDocument" and §4.5's default type `xml` is what it leaves in place — so it is both. HTML §8.5.1 "The
+ * DOMParser interface"'s parseFromString says "Let document be a NEW DOCUMENT, whose content type is type and
+ * URL is this's relevant global object's associated Document's URL" and then switches on the type to pick a
+ * parser — so an `application/xml` parse is an XML document that implements Document and NOT XMLDocument. Those
+ * two are the same `type` and different interfaces, so a `document_is_xml_of` test in place of this field
+ * answers `doc instanceof XMLDocument` TRUE for every DOMParser XML parse, which is the answer
+ * domparsing/DOMParser-parseFromString-xml.html asserts against eight times. §4.5's own note on the `Document()`
+ * constructor states the same split from the other side, verbatim: "Unlike createDocument(), this constructor
+ * does not return an XMLDocument object, but a document (Document object)."
+ *
+ * WHO PASSES WHICH, AND IT IS A CLOSED SET BECAUSE THE STANDARDS ARE. Exactly one algorithm in the platform
+ * names XMLDocument: DOM §4.5.1's createDocument. HTML §7.5.1 "Shared document creation infrastructure" (and so
+ * §7.5.2, §7.5.3 "Loading XML documents" and §7.5.4), HTML §8.5.1's parseFromString, §4.5's `Document()`
+ * constructor, §4.5.1's createHTMLDocument and XMLHttpRequest §3.6.6's "set a document response" all say "a new
+ * Document" or "a document that implements Document"; XHR's text does not contain the word XMLDocument at all.
+ * The one other way a Document acquires the fact is by COPY: DOM §4.4 "Interface Node"'s clone a single node
+ * says "if node is a document, set copy to the result of creating a document that implements THE SAME
+ * INTERFACES AS NODE, given document's relevant realm" — which is why document_interface_of exists and why
+ * core/dom/node.c's clone reads it rather than re-deriving one. */
+typedef enum {
+    DOCUMENT_IFACE_DOCUMENT = 0,   /* §4.5's `interface Document : Node` */
+    DOCUMENT_IFACE_XML_DOCUMENT    /* §4.5's `[Exposed=Window] interface XMLDocument : Document {};` */
+} DocumentInterface;
+
 /* Install `document` for `dom`, addressed at `url`. THE REALM IS THE DOCUMENT: `ctx` is what this document's
    state hangs off from here on, so a second same-origin document in the same agent is a second JSContext in the
    same JSRuntime and not a second instance. Only the members this engine can answer TRUTHFULLY are
@@ -346,8 +380,15 @@ lxb_dom_node_t *document_target_element(JSContext *ctx);
    which this has none of).
    `dom` is CONSUMED: whoever ends up owning the document destroys it. That is the running flow's COW delta when
    capture is on — a document a flow created dies with the flow, exactly like a node it created — and the REALM
-   when it is off, since a creation made at baseline is baseline. Returns the document's wrapper, OWNED. */
-JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentKind kind);
+   when it is off, since a creation made at baseline is baseline. Returns the document's wrapper, OWNED.
+   `iface` IS DOM §4.5's "create a document that implements an interface"' OWN ARGUMENT and it is stated here
+   rather than derived from `kind`, for the reason DocumentInterface gives: createDocument and a DOMParser XML
+   parse agree about `type` and disagree about the interface. It is on THIS entry and not on document_install
+   because HTML §7.5.1 "Shared document creation infrastructure" — every navigation's creation — says "Let
+   document be a new Document" and has no arm that says otherwise, so an argument there would be a question with
+   one answer. */
+JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentInterface iface,
+                     DocumentKind kind);
 
 /* HTML §4.12.3's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT for `doc` — the inert Document a `<template>`'s
    contents belong to, so that a template's markup is NOT live: the owner has no browsing context, which is what
@@ -378,6 +419,20 @@ const char *document_content_type_of(const lxb_dom_document_t *dom);
    type, mode, and allow declarative shadow roots to those of node"), which is the other reason the record
    has to hold both. */
 bool document_is_xml_of(const lxb_dom_document_t *dom);
+
+/* …AND DOM §4.5's THIRD creation fact for ONE document: WHICH INTERFACE IT IMPLEMENTS — see DocumentInterface
+   above. Its ONE consumer beyond this file is DOM §4.4 "Interface Node"'s clone a single node, whose document
+   arm is "creating a document that implements THE SAME INTERFACES AS NODE": the copy is not re-classified, it
+   is given what the source has. */
+DocumentInterface document_interface_of(const lxb_dom_document_t *dom);
+
+/* …AND THE INTERFACE PROTOTYPE OBJECT THAT FACT NAMES, in `dom`'s OWN REALM — Web IDL §3.7.3 "Interface
+   prototype object"'s object for §4.5's `Document` or for its `XMLDocument`, whichever this document was
+   created implementing. It is asked at the ONE place a node wrapper is built (core/dom/node.c's node_wrap),
+   for the same reason an ELEMENT's interface is asked there rather than keyed by node type: a node TYPE table
+   cannot answer a question whose answer differs between two nodes of that type. OWNED, like every per-realm
+   prototype read. */
+JSValue document_interface_proto(JSContext *ctx, const lxb_dom_document_t *dom);
 
 /* DOM §4.9 "Interface Element"'s "CREATE AN ELEMENT" WITH THE HTML NAMESPACE NAMED — the shape four standards
    sentences spell out in full rather than deriving: HTML §8.5.5 "The outerHTML property" setter step 5 ("set

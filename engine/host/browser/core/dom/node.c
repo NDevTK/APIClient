@@ -2485,13 +2485,20 @@ static const char *const NODE_CLONE_STEPS[] = { NODE_CLONE_STAGES(JS_STEP_STAGE_
    WHICH OF THE SEVEN FIELDS THIS ENGINE HAS: the URL and the mode (lexbor's compat_mode, which
    `document.compatMode` reads) are copied; the ORIGIN is the realm's and the copy is made in the source's
    realm, so it is the same origin by construction; the ENCODING is UTF-8 for every document this engine builds
-   (document.c's characterSet answers exactly that), so there is nothing that could differ; the TYPE is the
-   interface set, which lexbor records as the document's dtype and which is the same because both documents are
-   made the same way; "allow declarative shadow roots" is a PARSE parameter here rather than stored state —
-   declarative_shadow.c takes it per parse — and no parse runs into a copy. The CONTENT TYPE is real state and
-   is read back off the source's record (document_content_type_of), because it is the one of the seven that a
-   copy could differ in: `new DOMParser().parseFromString(s, "text/xml").cloneNode()` is an XML document, and a
-   copy built with this engine's html default would answer "text/html" for a document that never was one. */
+   (document.c's characterSet answers exactly that), so there is nothing that could differ; "allow declarative
+   shadow roots" is a PARSE parameter here rather than stored state — declarative_shadow.c takes it per parse —
+   and no parse runs into a copy. THREE ARE REAL PER-DOCUMENT STATE AND ARE READ BACK OFF THE SOURCE'S RECORD,
+   because each is one a copy could differ in. The CONTENT TYPE: `new DOMParser().parseFromString(s,
+   "text/xml").cloneNode()` is an XML document, and a copy built with this engine's html default would answer
+   "text/html" for a document that never was one. The TYPE — §4.5's `xml`/`html`, which is what the list above
+   means by it — for the same reason, and not lexbor's dtype: a `text/plain` document is an HTML document whose
+   content type is not "text/html" (HTML §7.5.4 "Loading text documents"), so re-deriving one from the other
+   answers backwards. And the INTERFACE SET, which is NOT the type and is not in the seven-field list at all —
+   it is the algorithm's own first clause, "creating a document that implements the same interfaces as node".
+   The comment that stood here called the TYPE the interface set, and said the two documents agreed about it
+   because both were made the same way. Both halves were wrong: they are two facts (core/dom/document.h's
+   DocumentInterface), and the copy is NOT made the same way as the source — it is made HERE, by one entry,
+   for sources that six different algorithms created. */
 static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
 {
     JSContext *realm = document_realm_of(lxb_dom_interface_node(src));
@@ -2506,15 +2513,28 @@ static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
     CHECK(copy != NULL, "clone a single node: OOM creating the Document copy");
     cd = lxb_dom_interface_document(copy);
     cd->compat_mode = src->compat_mode;      /* "…and MODE": the quirks flag compatMode reports */
-    DCHECK(cd->type == src->type, "§4.4 creates a document implementing the SAME INTERFACES as node, and the "
-                                  "copy's lexbor dtype is not the source's — one of the two was built by "
-                                  "something other than lxb_html_document_create");
+    /* A LEXBOR INVARIANT AND NOT §4.4's INTERFACE CLAUSE, which is what this assert's message used to claim.
+       lexbor's `dtype` says which of ITS document structs this is; every document in this engine is built by
+       lxb_html_document_create, so the two agree, and a disagreement means one of them came from somewhere
+       else and the field copies below are being written into a struct of another shape. DOM §4.5's INTERFACE
+       is carried explicitly, at document_new below. */
+    DCHECK(cd->type == src->type, "a Document copy's lexbor dtype is not the source's — one of the two was "
+                                  "built by something other than lxb_html_document_create, so the record and "
+                                  "the tree beneath it do not have the shape this copy is about to write");
     /* §4.4 "clone a single node" copies BOTH of §4.5's creation facts and names them in one list — "set
        copy's encoding, content type, URL, origin, TYPE, mode, and allow declarative shadow roots to those of
        node" — so the copy takes the source's type as well as its content type. Taking only the content type
        and re-deriving the type from it would make a clone of a `text/plain` document an XML document, which
        is the derivation DocumentKind exists to make unspellable. */
-    w = document_new(realm, copy, document_url_of(src),
+    /* AND THE INTERFACE IS THE SOURCE'S, WHICH IS THE ALGORITHM'S OWN FIRST CLAUSE AND NOT ONE OF THE SEVEN
+       FIELDS ABOVE: "if node is a document, set copy to the result of creating a document that implements THE
+       SAME INTERFACES AS NODE, given document's relevant realm". So a clone of a §4.5.1 createDocument is an
+       XMLDocument and a clone of a DOMParser XML parse is not — the pair that a re-derivation from `type` would
+       collapse, and the pair dom/nodes/Node-cloneNode-XMLDocument.html asserts by reading `clone.constructor`.
+       It is READ OFF THE SOURCE'S RECORD for the same reason the content type below it is: the interface is
+       real per-document state that a copy could differ in, and there is nothing about an empty Document to
+       inspect that would recover it. */
+    w = document_new(realm, copy, document_url_of(src), document_interface_of(src),
                      document_kind(document_is_xml_of(src), document_content_type_of(src)));
     CHECK(JS_IsObject(w), "clone a single node: the Document copy's wrapper allocation failed");
     /* The RECORD holds the wrapper (document_new dup'd it) and the record lives as long as the document, so
@@ -3742,8 +3762,18 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
         DCHECK(rctx != NULL,
                "a node was wrapped in a document no realm was installed for — its prototype is that document's "
                "and there is none, so build the realm rather than lending it the wrapping flow's");
+        /* TWO NODE KINDS ANSWER THIS FROM THE NODE AND NOT FROM THE TYPE TABLE, and they are the two the
+           standards say so about. An ELEMENT's interface is HTML §3.2.2 "Elements in the DOM"'s tag mapping,
+           which the html layer registers above. A DOCUMENT's is DOM §4.5 "Interface Document"'s "create a
+           document that implements an interface" — the interface its creating algorithm NAMED, which for
+           §4.5.1's createDocument is `XMLDocument` and for every other creator is `Document`. Neither question
+           is answerable by a table keyed on node TYPE, which is exactly why both are asked here rather than
+           there: `node_claim_type` admits ONE claimant per type, and it is right to, because the type is not
+           what decides. */
         proto = (n->type == LXB_DOM_NODE_TYPE_ELEMENT && g_element_resolver)
                     ? g_element_resolver(rctx, lxb_dom_interface_element(n))
+              : (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
+                    ? document_interface_proto(rctx, lxb_dom_interface_document(n))
                     : node_type_proto(rctx, (int)n->type);
         obj = JS_NewObjectProtoClass(ctx, proto, g_node_class);
         JS_FreeValue(ctx, proto);
