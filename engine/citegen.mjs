@@ -17,6 +17,15 @@
  * claims. That failure mode has NO SYMPTOM: nothing crashes, no gate goes red, and the citation looks exactly
  * like a correct one. The only thing that can catch it is the spec text itself, so this reads the spec text.
  *
+ * AND THE SAME RULE RUNS BACKWARDS THROUGH THIS TOOL: a wrong FINDING is worse than none, for the identical
+ * reason. It reads as authoritative, it stands at a site nobody can repair, and it teaches the reader to skim
+ * the category it sits in — which is every real finding beside it. MENTION-NOT-CLAIM is where that is paid:
+ * a citation the prose is TALKING ABOUT (a retired number kept beside its replacement, a spelling displayed
+ * as a specimen) is not a citation the prose is MAKING, and accusing one is this file committing its own
+ * subject. See mentionNotClaim. Nothing is suppressed — the category prints every site with the verdict the
+ * checker withheld, and a retirement note that names a title its number does not carry becomes a finding of
+ * its own (RETIREMENT-NOTE-WRONG) rather than an exemption.
+ *
  * THE CHECK THAT MATTERS IS TERM ATTRIBUTION, NOT NUMBER VALIDITY. A wrong number is almost never a number the
  * standard does not have — it is a REAL section cited for an algorithm that lives in a DIFFERENT one, and
  * a checker that only asks "does §7.3.1 exist?" answers yes and reports nothing. `determine the origin`
@@ -1585,6 +1594,88 @@ function governedProse(src, spans, at, len, stopAt) {
     : raw.replace(/\n\s*\*?\s*/g, " ");
 }
 
+/* The same prose on the other side of the citation — everything from the start of the unit up to the number.
+ * `governedProse` reads forward because a claim is normally made AFTER a number; a DISCLAIMER is made BEFORE
+ * one, and nothing until now could see it. */
+function precedingProse(src, spans, at) {
+  const i = spanIdxAt(spans, at);
+  if (i < 0) return "";
+  const kind = spans[i][2];
+  let start = spans[i][0];
+  if (kind === "s") {
+    for (let k = i; k > 0 && spans[k - 1][2] === "s"; k--) {
+      if (!/^["\s]*$/.test(src.slice(spans[k - 1][1], spans[k][0]))) break;
+      start = spans[k - 1][0];
+    }
+  }
+  const raw = src.slice(start, at);
+  return kind === "s" ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, "")) : raw.replace(/\n\s*\*?\s*/g, " ");
+}
+
+/* USE VERSUS MENTION — A CITATION THE PROSE IS TALKING ABOUT IS NOT A CITATION THE PROSE IS MAKING, AND
+ * REPORTING ONE AS A FABRICATION IS A RED THE TOOL CANNOT BE RIGHT ABOUT.
+ *
+ * This tree's own rules produce the shape. CLAUDE.md requires a retired number to stay written beside the
+ * number that replaced it, so a correct repair READS as a fresh misattribution: `HTML §8.1.3.2 "Environment
+ * settings objects" API base URL (§4.4 stood here and is "Grouping content")` cites §4.4 in order to retire
+ * it, and every check in this file said the author had put the API base URL in Grouping content. The auditor
+ * accusing the note that records the fix is worse than a missed finding by a wide margin: a missed finding
+ * costs one wrong number, and a permanent red at a site nobody can repair teaches the reader to skim the
+ * category — which is every other finding in it.
+ *
+ * IT IS MEASURABLE IN THE AUDITOR ITSELF. Pointing this audit at seven of the tree's own gates returned 12
+ * MISATTRIBUTED, of which 4 were worked examples of wrongness — a comment reading "a file writing 7.4.9
+ * IteratorClose six times and 7.4.9 IteratorStepValue four times has the numbering of an older edition" is a
+ * sentence about a SPELLING, and reading it as a claim about §7.4.9 is reading the quotation marks off. That
+ * is why the gates are outside the default set, and closing this is what lets them in.
+ *
+ * TWO DETECTORS, AND EACH IS DEFENSIBLE ON ITS OWN.
+ *   SPECIMEN — the number and the phrase sit inside ONE backtick run. Backticks in this tree quote a spelling:
+ *     a name, a line of code, a citation being displayed. A citation being DISPLAYED makes no claim about
+ *     where a term lives, exactly as `"a header list contains a name"` in quotation marks is not this file
+ *     asserting it. A legitimate citation puts the backticks around the TERM alone, never around the section
+ *     sign and the term together, so the shape is narrow rather than common. PARITY IS THE TEST AND IT IS THE
+ *     WEAK HALF: one unbalanced backtick earlier in a long comment flips every citation below it, so the run
+ *     must also close within the prose the citation governs. That error runs in the direction that costs a
+ *     finding rather than the one that plants a red, and it is the reason this arm is stated as the shakier
+ *     of the two rather than trusted equally.
+ *   RETIREMENT — a closed set of phrases that state the number is HISTORICAL: it stood here, it used to be
+ *     written, this file cited it, it was cited as. Each says "this number WAS the claim" and none of them
+ *     can be read as making it.
+ *
+ * BARE NEGATION IS DELIBERATELY NOT IN THAT SET, and that is the line the whole mechanism turns on. A comment
+ * opening "NOT §4.6.2's a attribute" is CONTRASTIVE: it asserts that §4.6.2 HAS an `a` attribute and that this
+ * is a different one, so the number-and-term pair is a live claim and belongs in front of the checker. Reading
+ * `not` as a disclaimer would silence a large and legitimate population — this tree writes that construction
+ * constantly — for the sake of a handful of notes that already have unambiguous markers of their own. A
+ * retirement note says the number WAS here; a contrast says the number IS something else. Only the first
+ * disclaims.
+ *
+ * AND THIS IS NOT A SUPPRESSION LIST, on two counts that must both hold. It is a rule about the GRAMMAR of
+ * the sentence, never a file or a line, so it cannot rot into a register of sites somebody decided to ignore.
+ * And nothing is dropped: a disclaimed citation is REPORTED in its own counted category with the verdict the
+ * checker would have given it, so a reader can see every one and disagree. CLAUDE.md permits a match in the
+ * DENY direction for exactly this asymmetry — a wrong deny costs one finding a human can still find, a wrong
+ * assert plants a red nobody can clear. */
+const MENTION_RETIRED = /\b(?:stood(?: here)?|used to (?:be|say|read|stand|cite|carry)|previously (?:cited|read|said|stood)|formerly|this file cited|(?:was|were) (?:cited (?:as|at)|written here)|cited here as|mis-?cited|retired)\b[^.;]{0,100}$/i;
+const MENTION_RETIRED_AFTER = /^[^.;]{0,40}?\b(?:stood here|used to stand|stood at this site|was written here)\b/i;
+function mentionNotClaim(src, spans, at, after) {
+  const pre = precedingProse(src, spans, at);
+  /* An ODD number of backticks between the start of the prose unit and the number means the number stands
+   * inside an open run — and PARITY ALONE IS NOT ENOUGH, because one unbalanced backtick anywhere earlier in
+   * a long comment flips every citation below it into a mention and the findings vanish with nothing to say
+   * so. That is the tolerable direction of this rule's error and it is still not a direction to be careless
+   * in, so the run must also CLOSE: a backtick within the prose the citation governs. A stray opener has no
+   * closer near each later citation; a real specimen has one a few words along. */
+  if ((pre.match(/`/g) || []).length % 2 === 1 && after.includes("`"))
+    return "displayed inside a backtick run — a spelling being shown, not a section being cited";
+  const m = MENTION_RETIRED.exec(pre.slice(-140));
+  if (m) return `the prose before it says "${m[0].trim().slice(0, 60)}"`;
+  const a = MENTION_RETIRED_AFTER.exec(after || "");
+  if (a) return `the prose after it says "${a[0].trim().slice(0, 60)}"`;
+  return null;
+}
+
 /* EVERY C ESCAPE, NOT JUST THE BACKSLASH-PAIR — because the one this tree writes most in a spec quotation is
  * the one a naive `\\(.)` rule destroys. A standard's prose is full of curly apostrophes, so a message quoting
  * it writes `a transaction\u2019s scope`; dropping the backslash alone leaves the WORD `u2019` wedged into the
@@ -1909,6 +2000,7 @@ function audit(argv, opts = {}) {
 
   const findings = [];
   const undecided = [];
+  const mentions = [];
   const quotes = [];
   const qstat = { seen: 0, checked: 0, verified: 0, okNearby: 0, wrongSection: 0, wrongSectionAncestor: 0, wrongStandard: 0, notFound: 0, notFoundNothing: 0,
                   noCorpus: 0, noSection: 0, tooShort: 0, voted: 0 };
@@ -2471,6 +2563,66 @@ function audit(argv, opts = {}) {
 
       const rec = { file: relative(ROOT, file), line: lineOf(c.at), no, spec, how, bare: c.bare,
                     text: src.slice(c.at, c.at + 100).split("\n")[0] };
+
+      /* THE PROSE MAY DISCLAIM ITS OWN CITATION — see mentionNotClaim. Asked of EVERY resolved site, decided
+       * or not, because the suspect channel below turns an undecided site on a diagnosed number into a thing a
+       * human must read, and a retirement note is precisely a site standing on a number that IS diagnosed
+       * elsewhere in its file: the note gets swept in by the same rule that finds the real ones.
+       *
+       * AND A RETIREMENT NOTE IS CHECKED RATHER THAN EXCUSED, which is the difference between completing the
+       * primitive and adding a hole. `(§4.4 stood here and is "Grouping content")` makes a SECOND, falsifiable
+       * claim beside the one it withdraws: that §4.4 is titled "Grouping content". This audit holds every
+       * title of every indexed standard, so it grades it. A note whose title the index confirms is VERIFIED —
+       * the strongest state any citation in this tree reaches, because it has been checked in both directions.
+       * A note naming a title the cited number does not carry is a NEW finding and a worse one than the
+       * misattribution it was mistaken for: a wrong retirement note tells the next reader that a number they
+       * are about to correct is already understood. */
+      const after120 = governedProse(src, spans, c.at, c.len, null).slice(0, 120);
+      const disclaim = mentionNotClaim(src, spans, c.at, after120);
+      if (disclaim) {
+        /* THE NOTE'S TITLE CLAIM IS THE FIRST QUOTED RUN AFTER THE NUMBER AND NOTHING FURTHER OUT, and getting
+         * that wrong is this checker committing the defect it is here to end. The first attempt scanned 120
+         * characters for ANY quoted run that titled some other section, and its first output was a false red
+         * on this file's own header — the sentence recording that determine the origin was cited as §7.3.1
+         * Navigables across five files while the standard defines it one heading over — where Navigables IS
+         * §7.3.1's title and the sentence is exactly right. It matched the OTHER title in it, which
+         * belongs to the OTHER number in the same sentence. So the window stops at the next citation: a title
+         * that follows another number is that number's, and reaching past one to accuse the first is the same
+         * misattribution in the auditor that the auditor exists to report. */
+        const claimWin = after120.split(/§|(?<![\d.])\d+\.\d/)[0];
+        const tt = titleToNo.get(spec), real = sections[no] ? normTerm(sections[no].title) : null;
+        let note = null;
+        for (const q of quotedRuns(claimWin)) {
+          const n = normTerm(q.text);
+          if (!n) continue;
+          /* A QUOTED TITLE NEAR A RETIRED NUMBER IS NOT AUTOMATICALLY A CLAIM ABOUT THAT NUMBER, and the two
+           * shapes read almost identically. `§4.4 stood here and is "Grouping content"` asserts the title;
+           * `§13.2.5.41 was written here FOR "comment start state"` names the term the number was wrongly used
+           * for, and asserts nothing about §13.2.5.41's own title. The second is CLAUDE.md's own worked example
+           * of verifying a number before writing it, and the first version of this arm reported that sentence
+           * as a wrong retirement note — a permanent false red in the one document every lane reads, produced
+           * by the checker built to end permanent false reds.
+           *
+           * SO CONFIRMING AND ACCUSING ARE ASKED DIFFERENTLY, ON PURPOSE. A confirmation is additive: the site
+           * is already reclassified either way, so matching the number's real title anywhere in the window only
+           * adds a fact. An ACCUSATION plants a red, so it requires the sentence to actually make the claim —
+           * a copula binding the number to the title, with nothing but the note's own words between them. Same
+           * asymmetry CLAUDE.md draws between a deny and an assert, at the resolution of one verb. */
+          if (n === real) { note = { ok: true, title: q.text }; break; }
+          if (tt && tt.has(n) && /\b(?:is|was|are|were|reads|remains)\s*$/i.test(claimWin.slice(0, q.at)))
+            note = { ok: false, title: q.text, at: tt.get(n) };
+          break;
+        }
+        if (note && !note.ok) {
+          findings.push({ ...rec, kind: "RETIREMENT-NOTE-WRONG", target: `${spec} §${note.at.join(", §")}`,
+            msg: `the note retiring §${no} says it is "${note.title}" — that titles ${spec} §${note.at.join(", §")}; §${no} is "${sections[no].title}"` });
+          continue;
+        }
+        mentions.push({ ...rec, why: disclaim, note,
+          would: verdict && !verdict.kind.startsWith("OK") ? `${verdict.kind}: ${verdict.msg}` : null });
+        continue;
+      }
+
       if (!verdict) {
         stat.unverified++;
         const uk = `${spec} §${no}`;
@@ -2837,7 +2989,7 @@ function audit(argv, opts = {}) {
   for (const f of findings) { if (!groups.has(f.kind)) groups.set(f.kind, []); groups.get(f.kind).push(f); }
   const limit = argv.includes("--all") ? Infinity : 120;
   console.log("");
-  for (const kind of ["UNKNOWN-SECTION", "MISATTRIBUTED", "TITLE-MISMATCH"]) {
+  for (const kind of ["UNKNOWN-SECTION", "MISATTRIBUTED", "TITLE-MISMATCH", "RETIREMENT-NOTE-WRONG"]) {
     const g = groups.get(kind) || [];
     console.log(`${kind}: ${g.length}`);
     for (const f of head(g, limit)) {
@@ -2853,6 +3005,24 @@ function audit(argv, opts = {}) {
     console.log(`      ${f.text.trim()}`);
   }
   elided(suspects, limit, "undecided site(s)");
+
+  /* PRINTED, NOT SUPPRESSED — the whole difference between a rule and a mute button. Every site the grammar
+   * disclaimed is listed with the verdict the checker WOULD have given it, so a reader who thinks the tool got
+   * the grammar wrong can see the finding it withheld and say so. A category that hides its own contents is
+   * the silent zero this file is written against, and it would be no better for being a category of refusals.
+   * The verified split is stated first because it is the part that is a CHECK rather than a refusal. */
+  const noteOK = mentions.filter((m) => m.note && m.note.ok);
+  console.log(`\nMENTION-NOT-CLAIM: ${mentions.length} — the prose is TALKING ABOUT this citation, not making it`);
+  console.log(`  (${noteOK.length} of them are retirement notes whose OWN title claim this audit CONFIRMED against the index — checked in both directions, ` +
+    `the strongest state a citation here reaches. A note naming a title its number does not carry is reported as RETIREMENT-NOTE-WRONG above, not here.)`);
+  console.log(`  (a citation displayed inside a backtick run, or governed by "stood here"/"used to be"/"this file cited", is a MENTION. Bare "not §N" is NOT in that set — it is contrastive and stays a claim.)`);
+  for (const m of head(mentions, limit)) {
+    console.log(`  ${m.file}:${m.line}  §${m.no} (${m.spec}) — ${m.why}` +
+      (m.note ? `; its title claim "${m.note.title}" is CONFIRMED` : "") +
+      (m.would ? `; withheld ${m.would}` : "; the checker had no verdict on it either way"));
+    console.log(`      ${m.text.trim()}`);
+  }
+  elided(mentions, limit, "mention(s)");
 
   /* AND THE LAST LINE CARRIES THE SAME FACT ON THE SAME AXIS, because it is the line a reader keeps. A count
    * of findings says nothing about whether this output mentioned the file they came to ask about, and this is
