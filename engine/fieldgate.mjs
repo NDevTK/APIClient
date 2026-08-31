@@ -49,9 +49,14 @@
  * a `lastIndexOf` matching inside a longer identifier, an indirect call matching no pattern. A scan that
  * guesses hands the analysis a plausible answer and the refusal machinery never runs. So every name here is
  * taken OUT OF A CONSTRUCT: a JSON key position inside a resolved emission format, an object-literal key, a
- * member expression whose receiver this can normalize. A computed key, an unresolvable format argument, a
- * receiver that is not a normalizable chain, a file whose brackets do not balance — each is a REFUSAL with its
- * file and line, and zero refusals is the armed state.
+ * member expression whose receiver this can normalize, and a COMPUTED key resolved through the same declaration
+ * this file reads to type a receiver. An unresolvable format argument, a receiver that is not a normalizable
+ * chain, a computed key naming an identifier NO scope here binds (whose constant can be declared in another
+ * file), a file whose brackets do not balance — each is a REFUSAL with its file and line, and zero refusals is
+ * the armed state. WHAT IS NOT A REFUSAL IS A DECIDED NEGATIVE, and the line between them is whether a name
+ * could still be there: a key the program COMPUTES — a call, a member, a template, or an identifier a scope
+ * binds without a declaration this can read — names no string in this file, and `[expr]:` is the syntax that
+ * says so. Counting that as unreadable put three constructs in the refusal list that were the language.
  *
  * WHAT ANCHORS A READ TO A RECORD, which is the question that decides whether this report is signal or noise.
  * Every `.length` and `.textContent` in the corpus is a field read, and a gate that lists them lists nothing.
@@ -1409,58 +1414,55 @@ function functionScopes(struct, code) {
     while ((m = ID.exec(t))) if (t[m.index - 1] !== ".") s.binds.add(m[0]);
   }
 
-  /* A BINDING'S OWN INITIALIZER, which is a DECLARATION and not a dataflow. `const url = new URL(x)` states
-     what `url` is in the same construct that creates it, and reading that is the same kind of fact as reading a
-     `#define` body — it is not following a value through a call, a parameter or a promise, which is the flowed
-     identity this file refuses everywhere. It is recorded only where it is UNAMBIGUOUS: a name declared twice
-     in one body, or assigned again after its declaration, has no single initializer and gets none, exactly as
-     the return-domain namespace refuses a re-assigned binding. */
-  const inits = new Map();     // `${scopeKey}\0${name}` -> initializer text, or null once it is doubtful
-  const INIT = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?!=)/g;
+  /* A BINDING'S DECLARATION IS EVERY WRITE THAT NAMES IT, AND A DECLARATOR'S INITIALIZER IS NOT A SPECIAL KIND
+   * OF WRITE. `const url = new URL(x)` states what `url` is in the same construct that creates it, and reading
+   * that is the same kind of fact as reading a `#define` body — it is not following a value through a call, a
+   * parameter or a promise, which is the flowed identity this file refuses everywhere. `var parsed; try {
+   * parsed = new URL(x) } catch { return … }` states it just as flatly; the only reason the initializer moved is
+   * that the construction can THROW and the catch returns. So the two spellings are ONE construct read one way,
+   * and the with-initializer and without-initializer forms no longer have a rule each to disagree with.
+   *
+   * AND SEVERAL WRITES ARE NOT DOUBT — THEY ARE SEVERAL DECLARATIONS OF ONE IDENTITY, WHICH IS THE STANDARD
+   * §localParamSlot ALREADY APPLIES ONE CALL AWAY. That rule reads a parameter's type off EVERY argument passed
+   * to it and requires all of them to agree; this read a binding's type off exactly ONE write and refused the
+   * moment there were two. Those are two standards for one question, and the stricter one was arbitrary: a
+   * binding written `= new URL(a)` here and `= new URL(b)` there has ONE identity and the writes agree about it.
+   * Refusing it under-credits, so the receiver lands in AMBIGUOUS with nothing said about why — which is where a
+   * `URL` this gate decides at two dozen constructors sat, undecided, because the binding handed to the deny-list
+   * gate is assigned once at its declaration and once again after a redirect.
+   *
+   * A `null` OR `undefined` WRITE NAMES NO INTERFACE AND CONTRADICTS NONE. Web IDL §2.7.3's nullable type is the
+   * same declaration with the absent value added, and an absent object has no members for a read to anchor to —
+   * so `var x = null; try { x = new URL(u) } catch { x = null }` declares a `URL?` and is read as a URL, exactly
+   * as a nullable IDL argument is read as its type. It is skipped, never counted as a disagreement.
+   *
+   * WHAT IS STILL DOUBTFUL, and each is a construct rather than a caution: a name DECLARED TWICE in one scope
+   * (which of the two a read means is not decidable here), a COMPOUND or INCREMENT write (`rhs < 0`, a value
+   * derived from the old one, which declares nothing), and writes that DISAGREE about the interface they name. */
+  const inits = new Map();     // `${scopeKey}\0${name}` -> [declaration text, …], or null once it is doubtful
+  /* One regex for both spellings, because the initializer is just the first write and `assignmentSites` finds it
+     with all the others. A declaration with no write at all — `for (const n of xs)`, whose binding is the loop's
+     and not an assignment's — has no declaration text and is doubtful, which is what it was before this had a
+     construct that could see it. */
+  const DECL_NAME = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?![\w$])/g;
   let q;
-  while ((q = INIT.exec(struct))) {
+  while ((q = DECL_NAME.exec(struct))) {
     const s = innermost(q.index);
     const key = `${s ? s.open : "file"}\0${q[1]}`;
     if (inits.has(key)) { inits.set(key, null); continue; }   /* two declarations of one name — doubtful */
-    let e = q.index + q[0].length, d = 0;
-    for (; e < struct.length; e++) {
-      const ch = struct[e];
-      if (PAIRS[ch]) d++;
-      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
-      else if ((ch === ";" || ch === ",") && !d) break;
-    }
-    const from = q.index + q[0].length;
-    const span = s ? [s.open, s.close] : [0, struct.length];
-    /* One assignment is the declaration itself; a second is a value this cannot name at the read. */
-    if (assignmentsTo(struct, q[1], span[0], span[1]) > 1) { inits.set(key, null); continue; }
-    inits.set(key, code.slice(from, e).replace(/\s+/g, " ").trim());
-  }
-
-  /* A BINDING DECLARED EMPTY AND WRITTEN EXACTLY ONCE IS DECLARED BY THAT WRITE, and reading only the
-     `= <expr>` spelling answered one form of a construct and not its twin — the asymmetry that hides rather
-     than errs, the same one the expression-bodied arrow above records. `var parsed; try { parsed = new URL(x) }
-     catch { return … }` states what `parsed` is as flatly as `const parsed = new URL(x)` does; the only reason
-     the initializer moved is that the construction can THROW and the catch returns. Nothing here is followed
-     through a call, a parameter or a promise — the write IS the construct, and the SAME unambiguity rule
-     decides it: more than one write and the binding has no single declaration, exactly as a name declared twice
-     has none. A compound or increment write (`rhs < 0`) derives a value from the old one and declares nothing,
-     so it disqualifies the binding rather than being read as its initializer. */
-  const BARE = /\b(?:let|var)\s+([A-Za-z_$][\w$]*)\s*(?=[;,)\]}\n])/g;
-  while ((q = BARE.exec(struct))) {
-    const s = innermost(q.index);
-    const key = `${s ? s.open : "file"}\0${q[1]}`;
-    if (inits.has(key)) { inits.set(key, null); continue; }
     const span = s ? [s.open, s.close] : [0, struct.length];
     const writes = assignmentSites(struct, q[1], span[0], span[1]);
-    if (writes.length !== 1 || writes[0].rhs < 0) { inits.set(key, null); continue; }
-    let e = writes[0].rhs, d = 0;
-    for (; e < struct.length; e++) {
-      const ch = struct[e];
-      if (PAIRS[ch]) d++;
-      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
-      else if ((ch === ";" || ch === ",") && !d) break;
-    }
-    inits.set(key, code.slice(writes[0].rhs, e).replace(/\s+/g, " ").trim());
+    if (!writes.length || writes.some((w) => w.rhs < 0)) { inits.set(key, null); continue; }
+    inits.set(key, writes.map((w) => {
+      let e = w.rhs, d = 0;
+      for (; e < struct.length; e++) {
+        const ch = struct[e];
+        if (PAIRS[ch]) d++;
+        else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
+        else if ((ch === ";" || ch === ",") && !d) break;
+      }
+      return code.slice(w.rhs, e).replace(/\s+/g, " ").trim();
+    }));
   }
 
   /* The binder of `name` at `off`: the innermost enclosing body that binds it, or the file when none does. */
@@ -1497,8 +1499,8 @@ function functionScopes(struct, code) {
    *
    * NOT COVERED: a function bound by `const f = (…) => …` or `const f = function (…) …`. Only the
    * `function NAME(` spelling carries its name where this walk already reads one; the bound spellings put the
-   * name in a DECLARATOR whose initializer is the literal, so the next diff joins `inits` to the span that
-   * initializer opens and hands `fnName` over from there. ITS ABSENCE SHOWS as a receiver in AMBIGUOUS whose
+   * name in a DECLARATOR whose declaration text is the literal, so the next diff joins `inits` — which holds
+   * every write's text for a binding — to the span that literal opens and hands `fnName` over from there. ITS ABSENCE SHOWS as a receiver in AMBIGUOUS whose
    * reads are all members of one interface and whose enclosing function is arrow-bound — the same row this
    * rule removes for `function`-declared helpers, still standing beside them. */
   const localParamSlot = (name, off) => {
@@ -1555,6 +1557,43 @@ function scanJS(file, src) {
     for (const g of guards) if (g.key === k && off >= g.from && off < g.to) return { text: g.rhs, at: g.rhsAt };
     return null;
   };
+  /* WHAT A COMPUTED KEY NAMES — asked of the SAME declaration-reading construct that types a receiver, so a
+   * `[k]` is resolved rather than refused over. `{ [ct]: … }` with `const ct = "application/json"` above it is a
+   * key that is a STATIC FACT written in a movable way, and refusing it counted a decided thing as unreadable
+   * while a resolved one may be the very writer a read was missing.
+   *
+   * THREE ANSWERS, AND THE THIRD IS THE ONLY REFUSAL. A literal, or an identifier whose every declaration in
+   * this file is the SAME literal, NAMES that string. An expression the program COMPUTES — a call, a member, a
+   * template, an operator, or an identifier a scope binds without a `const`/`let`/`var` declaration (a
+   * parameter, a catch binding, a destructured name) — names no string in this file: its value is supplied at
+   * run time by a caller or by a computation, and `[expr]:` is the syntax that says so. That is DECIDED, not
+   * unreadable, exactly as a receiver bottoming out on a literal is. What stays REFUSED is an identifier NO
+   * scope here binds — an import or an ambient global — because the constant it names can be declared in
+   * another file and the name would then be hiding in the one place this cannot look.
+   *
+   * THE UNDER-CREDITING DIRECTION, STATED SO IT CAN BE ARGUED WITH: deciding a computed key declares no field
+   * loses a WRITE that only ever happens through one, whose name is also spelled statically at some read. That
+   * read is then reported READ-NO-WRITER with its file and line — a louder row than a refusal and one a person
+   * can open — where the refusal it replaces named a construct and no name at all. */
+  const STRING_LIT = /^(["'])((?:[^\\]|\\.)*)\1$/;
+  const constStringOf = (expr, off) => {
+    const t = (expr || "").trim();
+    const lit = STRING_LIT.exec(t);
+    if (lit) return { name: lit[2] };
+    if (!/^[A-Za-z_$][\w$]*$/.test(t)) return { computed: true };
+    const decls = initOf(t, off);
+    if (decls) {
+      let one = null;
+      for (const d of decls) {
+        const l = STRING_LIT.exec(d.trim());
+        if (!l || (one !== null && one !== l[2])) return { computed: true };
+        one = l[2];
+      }
+      return one === null ? { computed: true } : { name: one };
+    }
+    return binderOf(t, off) === "file" ? null : { computed: true };
+  };
+
   const localReads = [];   // {name, recv, key, off, form}
   const localWrites = [];  // {name, off}
   const wholeDefaults = [];// {off, keys, left, op} — a `|| { … }` substituting an entire record
@@ -1713,8 +1752,23 @@ function scanJS(file, src) {
       const km = /^\s*(?:(?:async|get|set)\s+)?\*?\s*(?:(["'])(.*?)\1|([A-Za-z_$][\w$]*))\s*(:|=|,|\(|$)/.exec(t);
       if (!km) {
         if (/^\s*\d/.test(t)) continue;   /* a numeric key is read, and is not a record field name */
-        if (/^\s*\[/.test(t)) refuse(file, lineOf(src, a), `a computed ${kind === "literal" ? "object-literal key" : "destructuring key"} — the field name is not a static fact`, t);
-        else if (kind === "literal") refuse(file, lineOf(src, a), "an object-literal entry whose key this cannot read", t);
+        if (/^\s*\[/.test(t)) {
+          const ob = a + t.indexOf("[");
+          const cb = matchAt(struct, ob);
+          const ans = cb < 0 ? null : constStringOf(code.slice(ob + 1, cb - 1), ob);
+          if (!ans) {
+            refuse(file, lineOf(src, a), `a computed ${kind === "literal" ? "object-literal key" : "destructuring key"} naming an identifier no scope in this file binds — the constant it names can be declared in another one`, t);
+            continue;
+          }
+          if (ans.computed) continue;   /* the program computes this key, so the entry declares no field name */
+          /* Resolved, and a resolved name that is not identifier-shaped declares no field — the same answer a
+             quoted `"application/json":` key already gets one branch below, reached by one more construct. */
+          if (!/^[A-Za-z_$][\w$]*$/.test(ans.name)) continue;
+          if (kind === "literal") { localWrites.push({ name: ans.name, off: ob }); litKeys.push(ans.name); }
+          else localReads.push({ name: ans.name, recv, key: keyOf(recv, i), off: ob, form: null });
+          continue;
+        }
+        if (kind === "literal") refuse(file, lineOf(src, a), "an object-literal entry whose key this cannot read", t);
         continue;
       }
       const name = km[2] !== undefined ? km[2] : km[3];
@@ -2524,7 +2578,13 @@ const oneFieldWhy = (shared, unwritten) =>
  * IDL type is Document; `await fetch(u)` is WindowOrWorkerGlobalScope's `fetch`, whose IDL return type is
  * `Promise<Response>`; `resp.clone()` is Response's own operation, returning Response. A binding's `= <expr>`
  * is a DECLARATION in the same sense a `#define` body is, so reading it is not the flowed identity this file
- * refuses — and it is taken only where it is unambiguous, never for a name declared twice or assigned again.
+ * refuses — and it is taken only where it is unambiguous. A binding written more than once is NOT thereby
+ * doubtful: every write is a declaration of the same identity and they must AGREE, which is the standard the
+ * parameter arm already applies to a call's arguments. What is doubtful is a name declared TWICE in one scope,
+ * a compound or increment write (which derives a value from the old one and declares nothing), and writes that
+ * name two different interfaces. A `null`/`undefined` write is Web IDL §2.13.27 Nullable types — T?'s absent
+ * half of the same declaration — it names no interface and contradicts none, so it is skipped rather than
+ * counted against, exactly as a nullable ARGUMENT is already read as the type it is nullable of.
  * A receiver whose declaration this cannot resolve is not a platform object as far as this gate is concerned,
  * and it goes back to the shape anchor and to AMBIGUOUS exactly as before.
  *
@@ -2728,13 +2788,29 @@ function ifaceOfExpr(text, off, scan, seen) {
   return null;
 }
 
-/* WHAT A BARE NAME'S OWN BINDING SAYS IT IS — the initializer, the global, the IDL-typed callback parameter, the
-   local parameter typed by its call sites. Every arm is a construct at the DECLARATION; none of them is a fact
+/* WHAT A BARE NAME'S OWN BINDING SAYS IT IS — its declarations (every write that names it, which must agree),
+   the global, the IDL-typed callback parameter, the local parameter typed by its call sites. Every arm is a construct at the DECLARATION; none of them is a fact
    about the point of use, which is why the caller can fall through to a guard when they all answer nothing. The
    cycle guard is the caller's, because it is the caller that keys it. */
 function identityOfBinding(t, off, scan, s) {
-  const init = scan.initOf(t, off);
-  if (init !== null && init !== "") return ifaceOfExpr(init, off, scan, s);
+  /* EVERY DECLARATION OF THE BINDING MUST ANSWER, AND ALL OF THEM MUST AGREE — the standard the parameter arm
+     below already applies to a call's arguments, asked here of a binding's writes. A `null`/`undefined` write is
+     the nullable half of the same declaration and names no interface, so it is skipped rather than counted as a
+     disagreement; one unreadable or one disagreeing write leaves the binding undecided, which is the
+     under-crediting direction this file takes everywhere. EACH WRITE GETS ITS OWN COPY OF THE CYCLE GUARD, for
+     the reason §localParamSlot records: two writes of the SAME identifier are not a cycle, and a shared set
+     would read the second as one and answer the whole question `null`. */
+  const decls = scan.initOf(t, off);
+  if (decls) {
+    let one = null;
+    for (const d of decls) {
+      if (!d || d === "null" || d === "undefined") continue;
+      const got = ifaceOfExpr(d, off, scan, new Set(s));
+      if (!got || (one !== null && one !== got)) return null;
+      one = got;
+    }
+    return one;
+  }
   if (scan.binderOf(t, off) === "file") return GLOBAL_IFACE.get(t) || null;
   /* A PARAMETER OF A CALLBACK THE PLATFORM CALLS IS TYPED BY THE IDL, and by nothing else in this file. The
      chain is three declarations long and every link is spec text: the callee's operation declares its

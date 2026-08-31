@@ -5581,11 +5581,19 @@ self.astDispatch = async function astDispatch(msg) {
            restored here for the same reason and in the same place. */
         await frontierResidency();
       }
-      return { success: true, result: { share: await frontierShare(), defaultShare: frontierDefaultShare(),
+      /* THE TWO AWAITS ARE NAMED BEFORE THE REPLY IS BUILT, in the order they already ran. A reply record is
+         this seam's own subject — the popup reads every one of these names — and an `await` INSIDE the literal
+         gives one of its entries a receiver that is an expression rather than a binding, which is a value no
+         auditor of the seam can anchor to a record. `frontierIndex` writes none of `_frontierStats` (it reads
+         the store, asserts each row's grammar and builds a ranking view), so hoisting it above those five reads
+         moves no number. */
+      const _share = await frontierShare();
+      const _index = await frontierIndex();
+      return { success: true, result: { share: _share, defaultShare: frontierDefaultShare(),
                                         docBytes: _frontierStats.docBytes, overShare: _frontierStats.overShare,
                                         shed: _frontierStats.shed, stranded: _frontierStats.stranded,
                                         rederived: _frontierStats.rederived,
-                                        entries: (await frontierIndex()).size } };
+                                        entries: _index.size } };
     }
     if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };
     /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every
