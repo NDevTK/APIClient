@@ -152,6 +152,32 @@ RemoteOp *remote_op_parse(const char *record)
     CHECK(o->nf >= OPS[o->op].need,
           "a cross-agent operation arrived with fewer fields than the operation carries — the instance that "
           "wrote it and this one disagree about the record's grammar");
+    /* AND A `windowproxy.get` NAMES A MEMBER HTML §7.2.1.3.1 CrossOriginProperties ( O ) LISTS — asserted HERE,
+       where the record is BORN in this agent, rather than where its operand is used.
+       IT IS THE SAME KIND OF INVARIANT AS THE FIELD COUNT ABOVE and belongs beside it: both are facts about
+       whether this record is well-formed at all, and neither is answerable anywhere else. The ASKING half of
+       this seam cannot emit an unlisted name — window_proxy.c builds the record out of `PROXY_MEMBER[magic]`,
+       an index into a fixed table — but that is a fact about one writer, and what arrives here is TEXT from
+       another instance, relayed by a zone whose contract is that it does not read what it routes and could not
+       judge this if it did (remote_op.h: "only an engine knows what a name means"). SECURITY.md makes every
+       WASM instance untrusted, so this field is attacker-reachable, and an unlisted one becomes
+       `globalThis[k]` — a CROSS-ORIGIN READ of this document's own global (`document`, `cookie`, anything it
+       carries) computed by this agent and relayed to the asker as an ordinary completion. Nothing downstream
+       can tell that answer from a listed member's: it is a real value of this document's, which is the
+       defaulted-field failure with an origin boundary under it.
+       AT THE PARSE AND NOT AT THE PROGRAM, because a record is parsed by TWO callers and only one of them goes
+       on to build a program — the arrival path parses the record, asserts what it names, and frees it, so a
+       check at the use site would let a malformed record through the entry that receives it. Both callers
+       reach this line.
+       A CHECK AND NOT A DCHECK, for the reason the field count above is one and one step stronger: this is
+       §Offensive-programming's security boundary, so the release build must not perform the read either. There
+       is deliberately nothing to fall back to — a record naming an unlisted member was not written by this
+       engine's asking half, and answering it at all is the defect. */
+    CHECK(o->op != OP_WPGET || window_proxy_cross_origin_property(o->f[3]) != NULL,
+          "a cross-agent record asked this agent to read a Window member HTML §7.2.1.3.1 CrossOriginProperties "
+          "( O ) does not list among the cross-origin accessible window property names — performing it would "
+          "compute a cross-origin read of this document's own global and relay it to the asking instance as an "
+          "ordinary answer");
     return o;
 }
 
@@ -178,25 +204,10 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
            cross-origin accessible window property names, and they are this engine's own spelling
            (window_proxy.c's PROXY_MEMBER), so the member crosses as itself rather than through
            remote_object.c's value grammar. */
-        /* AND IT IS CHECKED AGAINST THAT LIST HERE, WHICH IS THE ONLY END OF THIS SEAM THAT CAN. The ASKING
-           half cannot emit an unlisted name — window_proxy.c builds the record out of `PROXY_MEMBER[magic]`,
-           an index into a fixed table — but that is a fact about one writer, and what arrives here is TEXT
-           from another instance, relayed by a zone whose contract is that it does not read what it routes and
-           could not judge this if it did (remote_op.h: "only an engine knows what a name means"). SECURITY.md
-           makes every WASM instance untrusted, so this program's operand is attacker-reachable input, and
-           `globalThis[k]` for an unlisted `k` is a CROSS-ORIGIN READ of a member §7.2.1.3.1 does not list —
-           `document`, `cookie`, anything the peer's global carries — computed by the peer and relayed to the
-           asker as an ordinary completion. Nothing downstream can tell that answer from a listed one: it is a
-           real value of the peer's, which is the defaulted-field failure with an origin boundary under it.
-           A CHECK AND NOT A DCHECK, for the same reason the field count above is one and one step stronger:
-           this is §Offensive-programming's security boundary, so the release build must not perform the read
-           either. There is deliberately nothing to fall back to — a record naming an unlisted member was not
-           written by this engine's asking half, and answering it at all is the defect. */
-        CHECK(window_proxy_cross_origin_property(op->f[3]) != NULL,
-              "a cross-agent record asked this agent to read a Window member HTML §7.2.1.3.1 CrossOriginProperties "
-              "( O ) does not list among the cross-origin accessible window property names — performing it "
-              "would compute a cross-origin read of this document's own global and relay it to the asking "
-              "instance as an ordinary answer");
+        /* THAT IT IS ONE OF THE THIRTEEN IS ALREADY TRUE HERE — remote_op_parse asserts it where the record is
+           born, which is the only place BOTH callers of the parse reach. It is not re-asked at this line: a
+           second CHECK of one invariant is a second copy of it, and the copy that drifts is the one further
+           from the record. */
         JS_SetPropertyStr(ctx, g, "__apiclientKey", JS_NewString(ctx, op->f[3]));
     } else {
         /* THE OBJECT IS NAMED BY (GENERATION, ID) — see remote_object.h. An id alone is an index into
