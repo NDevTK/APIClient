@@ -952,9 +952,12 @@ typedef struct {
        every one of those emissions (flow_credit_emit). So on a frontier whose leading family is still
        emitting there is no spread at which the two ends converge, and reading this row as "aging will get
        there eventually" is reading a term that only ever pushes the tail further away. WHAT THE ORDER IS
-       ACTUALLY MADE OF is then this spread against `self_emit`: flow.c's flow_pick asserts that the reward gap
-       is the ONLY quantity that can put a never-run member behind the flow it picks, and `self_emit` says
-       whether that gap is something the members earned or something they were handed.
+       ACTUALLY MADE OF is then this spread against `self_emit`: flow.c's flow_nonreward BOUNDS every term of
+       the order except the reward, so the reward gap is the only quantity that can put a never-run member
+       behind the flow the pick returns, and `self_emit` says whether that gap is something the members earned
+       or something they were handed. The bound is asked of ONE member rather than of a pair — flow_pick's
+       comment says why the pair form could not be asked at all once a frontier stopped emitting — so this row
+       is read against a claim that holds on every frontier and not only on a freshly productive one.
        IT IS THE FORK FAMILY'S REWARD, READ PER MEMBER, AND THAT IS WHAT THE SPREAD NOW MEANS. The reward is
        held on the account the aging is charged to (flow.c's FlowAcct `val`), so every arm of one family reads
        one number and a frontier that is ONE family — which a real page's is, every flow descending from the

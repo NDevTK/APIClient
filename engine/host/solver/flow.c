@@ -575,9 +575,21 @@ void flow_credit_visit(Flow *f) {
  * (FlowAcct's `val`) the two are one account: every member of a family reads the SAME reward, so "members of
  * EQUAL reward" stops being the exception and becomes what a family IS, and §scheduler's guarantee holds
  * within one by construction — an arm's silence is frozen at the instant it was forked while the flow that
- * forked it goes on burning, so an unrun arm ranks AT or ABOVE the flow that made it, always, and the queue
- * drains oldest-arm-first. Between families the reward orders exactly what it is for, charged once against a
- * silence charged once.
+ * forked it goes on burning, so an unrun arm ranks at or above the flow that made it FOR AS LONG AS THAT FLOW
+ * NEITHER EMITS NOR ADVANCES ITS SEARCH, and the queue drains oldest-arm-first. Between families the reward
+ * orders exactly what it is for, charged once against a silence charged once.
+ * THAT CLAUSE IS A CORRECTION AND IT IS RECORDED RATHER THAN QUIETLY TIGHTENED, because the sentence it
+ * replaces said "always" and was carried forward into a hand-off as an IDENTITY to derive a new ordering
+ * guard from — which would have made the guard fire on healthy runs. The premise is true and the conclusion
+ * does not follow from it: a fork does freeze the arm's `cpu`, `visits` and rungs at the parent's readings,
+ * but TWO writers move the parent's the other way afterwards. flow_credit_emit sets the emitter's `cpu` and
+ * `visits` to zero AND the family's `fam_us` to zero, so an arm holding a frozen `cpu` of C and a frozen visit
+ * count of V is left worth `1/(1+V) − Q*floor(C/S)` against a parent worth a full `1.0` on the same reward —
+ * strictly less whenever V > 0 or C reaches one quantum. And flow_observe_survival/flow_observe_rung raise the
+ * parent's fitness monotonically while the arm's stays where it was born. Neither is a defect: a flow that has
+ * just produced something, or just carried its payload one rung further, is exactly the flow the frontier
+ * should be running. What is wrong is only the word "always", and it is worth keeping the refutation here
+ * because a reader who re-derives the freezing argument will re-derive the missing quantifier with it.
  * WHICH STATE A RUN IS IN IS STILL A MEASUREMENT rather than any sentence here: flow_wfq_census reports the
  * reward spread over the frontier and how many members have emitted anything themselves, and engine.c emits it
  * as @WFQ beside @PROGRESS and @COLD. A spread above 1.0 there is now a statement about SEVERAL FAMILIES, which
@@ -1957,18 +1969,15 @@ int64_t flow_silence_notch(const Flow *f) {
    an integer division of copied integers, so two flows that arrived at one another compare EQUAL here with no
    epsilon — which is the same property flow_fork_inherit's assert already rests on, and the reward half of it
    is now an identity of the structure rather than a property of two copies agreeing. */
-static double flow_queue_weight(const Flow *f) {
-    /* THE REWARD IS THE FORK FAMILY'S, NOT THE FLOW'S, and that is the one substantive thing this function
-       says. §scheduler's reward is "accumulated emitted VALUE", and the accumulator is the same account the
-       aging is charged to — one emission raises it once, one second of that account's silence gives one point
-       of it back, and the two terms are then commensurate at the same scope. Read off the FLOW it was a
-       per-chain prefix: two arms of one family held what their common parent held at two different instants,
-       so they differed by an amount NEITHER of them earned, that difference was unbounded while every other
-       term's range is at most 1.0, and the family charge that was supposed to cancel it is a common offset
-       that cancels out of the comparison instead. On a page whose whole frontier is one family — which is the
-       ordinary case, every flow descending from the boot flow — the order was then birth position read
-       newest-first, and no silence at any price could reach the tail. See FlowAcct's `val`. */
-    double reward = acct_family_val(f);
+/* EVERY TERM OF THE QUEUE COORDINATE EXCEPT THE REWARD, AND THE SPLIT IS STRUCTURAL RATHER THAN EDITORIAL.
+   "the reward is the only unranged term" is the sentence every ordering assertion in this file is derived from,
+   and until this split there was nowhere to ASK it: the remainder existed only as `flow_weight(f) − reward`,
+   which is a SUBTRACTION of two composed doubles and therefore both imprecise (catastrophic cancellation once
+   an account has accumulated) and, worse, re-derivable only by restating the formula at the asking site — the
+   second copy §Architecture's auditor rule forbids, and the copy that drifts. Written as a function it is the
+   SAME expression the weight is made of, so the bound below is asked of the quantity itself and a term added
+   here without a range added there is a fired assert rather than a silent widening. */
+static double flow_queue_nonreward(const Flow *f) {
     /* §scheduler'S THREE QUANTITIES, AND THIS FUNCTION USED TO HOLD TWO. "accumulated emitted VALUE + a UCB
        optimism bonus ∝ 1/(visits+1) − CPU-AGING" names emitted value, VISITS and CPU; the optimism term read
        `cpu / FLOW_SERVICE_US`, so thread time was in both non-reward terms at two scopes and the visit count
@@ -2061,9 +2070,12 @@ static double flow_queue_weight(const Flow *f) {
        improvement in a ratio — the increment between two fractions in [0,1], which is what keeps that rung
        worth at most one point over a search's whole life. The PRICE is unaffected, because it is priced
        against the ceiling; what the wrong claim would license is an ARITHMETIC one, and it nearly did: a
-       reader deriving an exactness argument from "`val` is integral" gets a bound that is off by an ulp on the
-       one comparison it is tight in (flow_pick's third guard says where, and takes an FPU epsilon for exactly
-       this reason). A claim about a value's SHAPE is checked at the writer or it is not a claim.
+       reader deriving an exactness argument from "`val` is integral" gets a bound that is off by an ulp the
+       moment a reward is carried across a subtraction. That is why flow_nonreward's bound is asked of a
+       quantity the reward never enters: the pairwise form it replaced subtracted two composed weights against
+       two raw rewards and needed an FPU epsilon at its corner, and this one is exact there because nothing in
+       it is a difference of two accumulated ledgers. A claim about a value's SHAPE is checked at the writer or
+       it is not a claim.
        WHAT THAT BUYS, TERM BY TERM. A flow that finishes its unit of work inside its quantum keeps the thread
        to the end of it and hands over on its VISIT — which is the optimism term doing the fairness. A flow
        inside a unit that never ends completes no visit, so the optimism term can never demote it, and this is
@@ -2072,12 +2084,36 @@ static double flow_queue_weight(const Flow *f) {
        O(1) to read: every flow points straight at its family's root, so this adds one indirection to the pick
        and no walk. It is why the preempt hook's seam assertion snapshots this notch and the visit count
        (engine.c) — between two of them a flow's weight cannot move except through an emission. */
-    return reward + ucb - (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
+    return ucb - (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
 }
 
-/* THE ORDER ITSELF — the queue coordinate above plus the one term that is a READING of the item rather than a
-   TAG on the queue. There is still exactly one comparator: every caller ranks by this, and the split names
-   which half an ARRIVAL can be placed at.
+/* THE QUEUE COORDINATE — the reward plus the remainder above, and this function is now the reward and nothing
+   else, which is the whole point of the split. It is what an ARRIVAL can be placed at (flow_arrive_at_virtual
+   _time), and every term of it is a TAG a newcomer copies rather than a reading of the newcomer's own payload.
+   THE REWARD IS THE FORK FAMILY'S, NOT THE FLOW'S, and that is the one substantive thing this function says.
+   §scheduler's reward is "accumulated emitted VALUE", and the accumulator is the same account the aging is
+   charged to — one emission raises it once, one second of that account's silence gives one point of it back,
+   and the two terms are then commensurate at the same scope. Read off the FLOW it was a per-chain prefix: two
+   arms of one family held what their common parent held at two different instants, so they differed by an
+   amount NEITHER of them earned, that difference was unbounded while every other term's range is at most 1.0,
+   and the family charge that was supposed to cancel it is a common offset that cancels out of the comparison
+   instead. On a page whose whole frontier is one family — which is the ordinary case, every flow descending
+   from the boot flow — the order was then birth position read newest-first, and no silence at any price could
+   reach the tail. See FlowAcct's `val`.
+   IT IS ALSO WHY THE REWARD HAS NO RANGE AND NEEDS NONE. Every other term answers "where does this item stand
+   NOW", which is a question with two ends; the reward answers "what has this account produced since the
+   session began", which is a LEDGER and is unbounded by §NO BOUNDS. Bounding it would be a cap on how much a
+   family may be worth. That asymmetry is exactly what flow_nonreward's bound rests on, and it is why that
+   bound is one-sided. */
+static double flow_queue_weight(const Flow *f) {
+    return acct_family_val(f) + flow_queue_nonreward(f);
+}
+
+/* THE ONE TERM OF THE ORDER THAT IS A READING OF THE ITEM RATHER THAN A TAG ON THE QUEUE — which is why it is
+   outside flow_queue_weight above and inside flow_nonreward below. There is still exactly one comparator:
+   every caller ranks by flow_weight, and the two splits name two different halves of it for two different
+   questions — the queue coordinate is what an ARRIVAL can be placed at, and the non-reward remainder is what a
+   RANGE can be asserted over. This term is on the far side of the first split and the near side of the second.
    §@S'S FITNESS, READ WHERE A FITNESS IS READ. "The search is DISTANCE-DIRECTED (a fitness of
    {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)" — and this function read
    `val`, so what the WFQ actually read was a LEDGER of what each search had learned. The two are different
@@ -2127,8 +2163,83 @@ double flow_distance(const Flow *f) {
     return (f->cand_surv + (double)f->cand_rung) / (double)FLOW_RUNGS_N;
 }
 
+/* THE RANGE OF EVERYTHING THE ORDER IS MADE OF EXCEPT THE REWARD — written as the DERIVATION and not as the
+   number it folds to, term by term against flow_nonreward's own summands, exactly as wfq_accounted_spread is
+   written against flow_weight's. Each line is one term at the end of its range that pushes the sum UP:
+     - the optimism bonus is 1/(1+visits), decreasing in a count that cannot go below zero, so its maximum is
+       its reading at zero visits — the value a never-run flow carries and the unit §scheduler prices one
+       emission against;
+     - the fitness distance is (cand_surv + cand_rung)/FLOW_RUNGS_N with cand_surv asserted in [0,1] at
+       flow_observe_survival and cand_rung asserted on the ladder at flow_observe_rung, whose top is
+       FLOW_RUNGS_N - 1, so its maximum is (1 + (N-1))/N = 1 exactly for ANY N — which is why the denominator
+       is read here rather than a literal, and why the day a rung is added beneath the others nothing in this
+       expression moves;
+     - the aging enters NEGATIVELY at FLOW_AGE_QUANTUM per notch and the notch is a floor of a sum of
+       microsecond counts that flow_age_running asserts non-negative, so the most it can contribute is nothing.
+   IT IS ONE-SIDED, AND THAT IS §NO BOUNDS AND NOT AN OMISSION. There is no floor here because the aging is
+   unbounded by design: a flow that burns the thread without emitting must be able to sink arbitrarily far, and
+   a lower bound on this quantity would be precisely the clamp §scheduler forbids — "a bound truncates distinct
+   work". What is bounded is how far a term may LIFT an item, because that is what decides whether a member can
+   be put behind something other than a finding. */
+#define FLOW_NONREWARD_MAX ( 1.0 / (1.0 + 0.0)                                          /* optimism, zero visits */ \
+                           + (1.0 + (double)(FLOW_RUNGS_N - 1)) / (double)FLOW_RUNGS_N  /* distance, top rung   */ \
+                           - 0.0 * FLOW_AGE_QUANTUM )                                   /* aging, no silence    */
+
+/* WHAT THE ORDER IS MADE OF BESIDES THE REWARD, AND THE ONE PLACE THE CLAIM "THE REWARD IS THE ONLY UNRANGED
+   TERM" IS ACTUALLY ASKED. Every ordering assertion in this file is derived from that claim and NONE of them
+   could ask it: each was written as a comparison against a REFERENCE MEMBER whose non-reward terms all stand
+   at zero, and that population empties (flow_pick says exactly when and why) — so on a frontier that has
+   stopped emitting, which is the state §scheduler's guarantee is about, the claim was asserted by nothing at
+   all. This is the same claim asked of ONE item, so its population is "every flow whose weight is read", which
+   is non-empty whenever the scheduler is doing anything whatever. A guard that cannot be reached is not a
+   weaker guard than one that can; it is the §Testing engagement ratio's empty denominator, and it reports the
+   same silence as a system that is correct.
+   IT SUPERSEDES THE PAIRWISE FORM RATHER THAN STANDING BESIDE IT, and the arithmetic says so rather than a
+   preference. flow_pick used to assert `w(best) − w(unrun) <= R(best) − R(unrun) + 1.0` over a reference
+   member `u` with every non-reward term at zero. Write N for this quantity: that inequality IS
+   `N(best) − N(u) <= 1.0`, and `N(u) = 1.0 + D_u >= 1.0` for such a `u`, so it says `N(best) <= 2.0 + D_u` —
+   which is this bound, weakened by `D_u` and gated on `u` existing. Nothing it caught is outside this, so
+   keeping both would be the dual system §Disposition forbids, with the weaker copy the one that runs.
+   WHAT IT CATCHES IS AN EDIT TO THE FORMULA, NOT A STATE OF TODAY'S FRONTIER — the three range facts the
+   pairwise form named, now each checkable on its own: an optimism term whose ceiling stops being 1, a fitness
+   comparator that stops being a fraction of FLOW_RUNGS_N, and an aging term allowed to go NEGATIVE (a
+   "freshness" bonus, a credit for waiting, a rank-lifting term for the tail — the shape every fix for a buried
+   backlog reaches for first). It also catches the shape none of them could: a term ADDED to the order that
+   nobody bounded, because a new summand here with no line in FLOW_NONREWARD_MAX fires on its first non-zero
+   reading.
+   THE BOUND IS EXACT AT ITS CORNER AND TAKES NO EPSILON, which is what keeps it a check rather than a
+   tolerance. The maximum is reached by a real member — a candidate at zero visits and zero silence whose bytes
+   have SURVIVED whole and ESCAPED — and every term of it is exact in binary at that corner: `1.0/(1.0+0.0)`
+   is 1.0, `(1.0 + (N-1))/N` is `N/N` for the small integral N this ladder has, and a zero notch times any
+   price is zero. So the comparison is `<=` against a value the arithmetic can actually produce, and any
+   epsilon added here would be room for the next unranged term to hide in — which is the same sentence the
+   pairwise form's own derivation ends on.
+   THE SITE IS THIS FUNCTION AND THE ADDRESS DOES NOT TRAVEL, which is §AN-ASSERT-THAT-NAMES-A-REMEDY asked
+   and answered rather than skipped. The rule's test is to count the call sites that can reach the abort and to
+   thread the caller's __FILE__/__LINE__ when that number is larger than one would read by hand — and the
+   reason it does not bite here is not the count, it is the REMEDY: every route into this function is a request
+   to RANK a flow, and the fix for a fired range is always an edit to the terms summed on the line below, in
+   this file. A caller's address would name which flow was being ranked at the moment, which is not the object
+   of the instruction. The tell that the rule does apply is the one absent here — a message whose remedy names
+   an action with no object; this one names a place, and the place is where the crash already points. */
+static double flow_nonreward(const Flow *f) {
+    double n = flow_queue_nonreward(f) + flow_distance(f);
+    DCHECK(n <= FLOW_NONREWARD_MAX,
+           "a term of the WFQ's order other than the REWARD lifted a flow further than one emission and a full "
+           "fitness reading can — so the ordering is no longer made of one unranged ledger plus terms that each "
+           "span at most a finding, and §scheduler's 'a never-run flow is never starved' is a claim about a "
+           "quantity nobody bounded. Bound the term in flow_queue_nonreward or flow_distance, or state its "
+           "range in FLOW_NONREWARD_MAX beside the three that are already stated there");
+    return n;
+}
+
+/* THE COMPARATOR ITSELF, WRITTEN AS THE ONE SENTENCE EVERY ASSERTION IN THIS FILE IS DERIVED FROM: the
+   account's ledger, plus everything else. It used to read `flow_queue_weight(f) + flow_distance(f)`, which is
+   the same number and a worse statement — it grouped the reward with the optimism and the aging because those
+   three share an ARRIVAL door, and the split the ORDER's guarantees are made along is a different one. Grouped
+   this way there is exactly one place a new term can go that is not the reward, and it is bounded there. */
 double flow_weight(const Flow *f) {
-    return flow_queue_weight(f) + flow_distance(f);
+    return acct_family_val(f) + flow_nonreward(f);
 }
 
 /* THE SILENCE AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's
@@ -2303,7 +2414,21 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        bit can only say that such a member exists. The census makes the same distinction one level up and
        makes it deliberately: `jobs_ready` is a count and `job_w_gap` is the reading the count cannot make,
        "denominated in the order's own unit" (flow.h). The population §scheduler's sentence is actually about
-       had the count and not the reading, so the guard below it could only ever restate a floor. */
+       had the count and not the reading, so the guard below it could only ever restate a floor.
+       AND THE POPULATION EMPTIES — WHICH IS A FACT ABOUT THIS TEST, NOT ABOUT THE FRONTIER, AND IT IS WHY THE
+       RANGE CLAIM THESE GUARDS RESTED ON NOW LIVES AT flow_nonreward INSTEAD. `flow_silence_notch` reads the
+       SHARED `fam_us`, so the second clause is a question about the whole FAMILY: once a family has burned one
+       cooperative quantum since any of its arms last emitted, `acct_family_us` alone exceeds FLOW_SERVICE_US
+       and NO member of it can answer this, whatever its own `cpu` is. On a real page the whole frontier is one
+       family, so `unrun` is NULL for all of it. NOR CAN A BIRTH REFILL IT: both doors copy the incumbent's
+       coordinates verbatim — a fork takes `parent->cpu` and joins its family (flow_fork_inherit), an arrival
+       takes `g_running->cpu` and its family's `fam_us` as a value (flow_arrive_at_virtual_time) — so a
+       newborn's notch and visit count are EXACTLY the incumbent's, and on a quiet frontier the incumbent is
+       not in this population either. The only writer that puts anything back is flow_credit_emit, which zeroes
+       the emitter's `cpu` and `visits` and the family's `fam_us` at once. So this population is non-empty only
+       within one quantum of an emission, and the two guards below — each of which short-circuits on it —
+       assert NOTHING on a frontier that has gone quiet, which is precisely the frontier §scheduler's sentence
+       is about. That is the §Testing empty-denominator defect standing in the guard written to catch it. */
     const Flow *unrun = NULL;   /* the best-weighted member with EVERY non-reward term of flow_weight at zero */
     double unrun_w = 0.0;
     DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
@@ -2364,60 +2489,40 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            "the WFQ picked a flow worth less than an untouched member of its own frontier — a never-run flow "
            "carries the whole optimism bonus and no aging, so nothing may be picked ahead of it below that "
            "floor; the optimism term is no longer the one §scheduler prices a never-starved flow against");
-    /* …AND THE DISTANCE ITSELF, WHICH IS WHAT MAKES "NEVER STARVED" A STATEMENT ABOUT A PAIR OF FLOWS RATHER
-       THAN A FLOOR UNDER ONE. The guard above is a floor on `best` alone: any member of a frontier whose
-       reward has grown satisfies `flow_weight(best) >= 1.0` however far the untouched member behind it has
-       been buried, so it passes with the whole backlog unreachable. This is the same claim asked of the two
-       flows it is actually about, and it says exactly ONE thing: everything the weight is made of EXCEPT the
-       reward spans at most one emission, so THE REWARD GAP IS THE ONLY QUANTITY THAT CAN PUT A NEVER-RUN
-       MEMBER BEHIND.
+    /* THE PAIRWISE DISTANCE THAT STOOD HERE IS GONE, AND IT MOVED RATHER THAN BEING DROPPED — see
+       flow_nonreward, which asks the same thing of ONE item and therefore of every item. It asserted
+       `w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`, whose whole content is that everything the weight is
+       made of EXCEPT the reward spans at most one emission. Written over a PAIR it needed `unrun`, and `unrun`
+       is empty on exactly the frontier the claim is about (see the population's own comment above), so the
+       three range facts it was built to catch — an optimism ceiling that stops being 1, a fitness that stops
+       being a fraction of FLOW_RUNGS_N, an aging term allowed to go NEGATIVE — were checkable only inside one
+       quantum of an emission. Asked of one item those three facts are a bound on a single quantity with no
+       reference member at all, and the pair inequality follows from it by subtraction, so keeping both would
+       have left a strictly weaker copy running beside the one that supersedes it.
+       WHAT THE PAIRWISE FORM SAID THAT THE BOUND DOES NOT, AND IT IS NOT AN ASSERTION: that a frontier whose
+       untouched members are unreachable is one whose REWARD gap is unreachable, never an aging or optimism
+       question — because the inequality was tight in the reward and slack in everything else. That is now a
+       consequence of flow_nonreward's bound rather than a separate check, and it is what makes the reward's
+       home load-bearing: members of one family read ONE reward, so within a family the gap is identically
+       zero and §scheduler's guarantee holds outright there. A gap is a gap between ACCOUNTS — two documents,
+       two searches, a resumed frontier's rebuilt recipes — and the census row that says which is `families`
+       beside the reward spread, with `self_emit` saying whether the leading account earned what it is ranked
+       on or was placed at it by the arrival rule.
 
-       THE DERIVATION, redone here rather than carried over, because that is what keeps this a check instead
-       of a number somebody believed. Write `R(f)` for the reward flow_queue_weight reads — the fork FAMILY's
-       accumulated value, not the member's own ledger, which ranks nothing. `unrun` has EVERY non-reward term
-       at zero, so its weight is exactly `R(u) + 1.0 + D_u` with `D_u` its fitness distance. Write `best`'s out
-       with `v` its visit count, `A` its silence notch and `Q` the price of a quantum:
-
-           w(best) − w(unrun) = (R(best) − R(u)) + 1/(1+v) − A*Q + D_best − 1.0 − D_u
-
-       and since `1/(1+v) <= 1`, `A*Q >= 0`, `D_best <= 1` (flow_distance is a fraction of FLOW_RUNGS_N) and
-       `D_u >= 0`, every one of the four non-reward differences is at most `+1.0 − 1.0 + 1.0 − 0` = 1.0. That
-       is this expression, and its slack is `(1 − 1/(1+v)) + A*Q + (1 − D_best) + D_u`.
-
-       THE EPSILON IS THE FPU AND NOTHING ELSE, AND THE CORNER IS WHY THERE HAS TO BE ONE. The slack is
-       EXACTLY zero in real arithmetic only when `best` is itself untouched (v = 0, A = 0) and carries the
-       comparator's full range against an unrun member carrying none, and the two sides then group the same
-       rewards differently: this side subtracts two composed weights, the other subtracts two raw rewards. That
-       is exact for INTEGRAL rewards and the reward is NOT integral — flow_credit_emit asserts only `v > 0.0`, and
-       @S's filter-survival ratchet credits the increment between two ratios (see FLOW_SILENCE_US above, which
-       used to claim otherwise). One ulp of a fractional reward is then the whole difference between the two
-       groupings at that corner, so the epsilon covers rounding and is not a tolerance on the CLAIM: away from
-       the corner the smallest step any of the four terms can take is a quantum of aging, 0.012, which is
-       eleven orders above it, so no real violation can hide under it. A larger slack would be a tolerance,
-       and a tolerance is where the next unranged term would hide.
-
-       WHAT IT CATCHES, AND IT IS THREE RANGE FACTS IN ONE INEQUALITY rather than a fourth restatement of one:
-       an optimism term whose ceiling stops being 1, a fitness comparator that stops being a fraction of
-       FLOW_RUNGS_N, and an aging term allowed to go NEGATIVE (a "freshness" bonus, a credit for waiting, a
-       rank-lifting term for the tail — the shape every fix for a buried backlog reaches for first). Each of
-       those makes "never starved" mean something else while the two guards above still pass, because neither
-       of them reads the untouched member at all.
-
-       AND IT IS WHERE THE READER LEARNS WHICH TERM BURIED THE BACKLOG. The inequality is tight in the reward
-       and slack in everything else, so a frontier whose untouched members are unreachable is one whose reward
-       GAP is unreachable — never an aging or optimism question. §scheduler's "never starved" is therefore true
-       among members of EQUAL reward and among no others, which is the arithmetic and not a policy.
-       WHICH IS WHY THE REWARD SITS ON THE FORK FAMILY. Members of one family read one reward, so within a
-       family — and a real page's whole frontier is one — the gap this inequality is tight in is IDENTICALLY
-       ZERO and the guarantee holds outright. A gap here is now a gap between ACCOUNTS: two documents, two
-       searches, a resumed frontier's several rebuilt recipes. The census row that says which is `families`
-       beside the reward spread, and `self_emit` beside them says whether the leading account earned what it is
-       ranked on or was placed at it by the arrival rule. */
-    DCHECK(worst || !best || !unrun ||
-           bw - unrun_w <= (acct_family_val(best) - acct_family_val(unrun)) + 1.0 + 1e-9,
-           "the WFQ put a never-run member further behind the flow it picked than the two flows' REWARD gap "
-           "plus one emission — so some term other than the reward has a range wider than a finding, and "
-           "§scheduler's 'a never-run flow is never starved' is now a claim about a term nobody bounded");
+       NAMED RESIDUAL — THE TWO GUARDS ABOVE ARE STILL GATED ON `unrun` AND STILL ASSERT NOTHING ON A QUIET
+       FRONTIER. Not covered: §scheduler's monopolizer-sinks sentence and its never-run floor, on any frontier
+       more than one cooperative quantum past its last emission — which is most of a long run. Both are RIGHT
+       where they fire and NARROWER than the sentence they cite, which is why they crash on nothing today: the
+       range claim they leaned on has moved to a guard that cannot be gated, and what is left in them is a
+       claim about a PAIR, which structurally needs a reference member whose weight is known — and the only
+       member whose weight is known without reading it is one at zero silence, which is the population that
+       empties. What the next diff builds: a reference the frontier cannot lose — the weight a member would
+       have at the family's own last emission, carried on FlowAcct beside `val` and `fam_us` so it is written
+       once per family per emission and read by every arm, which makes "how far behind the emitter does the
+       backlog stand" answerable with no member at zero silence anywhere. How its absence shows: identically to
+       today — a frontier whose census reports members at `turns:0` while `wTop` climbs, with every ordering
+       assertion in this file silent, and nothing distinguishing that from a frontier that is being served
+       correctly. */
     return best;
 }
 

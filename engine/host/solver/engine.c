@@ -5451,9 +5451,11 @@ static int preempt_hook(int kind) {
            assertion is about a STATE, and a state is whatever the weight is currently a function of.
            AND ONE TERM IS NOT A WEIGHT AT ALL — IT IS THE ELIGIBLE SET, which is why counting weight
            terms could never have found it. This clause list is complete for `flow_weight(cur)`, which is a pure
-           function of `val`, the completed-unit count and the silence notch; the comparison it appears in is
+           function of the FAMILY's reward, the completed-unit count, the silence notch and the fitness distance
+           — four, not the three this sentence used to name, and the fourth is in the DCHECK below because the
+           distance was added to the weight and the enumeration here was not moved with it; the comparison is
            `best-eligible-OTHER > cur`, and the SET that "eligible" ranges over is a term of that answer exactly
-           as the three weights are. A host-owed mark decides membership of it, and neither laying one nor
+           as the four weights are. A host-owed mark decides membership of it, and neither laying one nor
            clearing one raised the frontier generation — so a clear during the running flow's first step handed
            the rescan above a rival the loop's pick had never been shown, and this fired with all four terms
            correctly unchanged. It is FIXED AT THE ORIGIN rather than named as a fifth clause here: a mark change
