@@ -3641,6 +3641,14 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
              "refusal a real browser performing this same request also makes, so it is Fetch §5.6 \"Fetch " +
              "methods\"' network error and belongs on `Provide` as the JSON `null`; relaying it here would " +
              "leave the flow parked on a failure that IS a fact about the origin");
+      /* AND IT IS STILL SAID TO THE PERSON, NOT ONLY TO THE ENGINE. The refusal rides the engine's record now,
+         which is what makes the park and the fork possible — and nothing in this extension renders that record,
+         so relaying it only through the wire would store the one account anybody gets of a request this tool
+         chose not to make and show it to nobody. Two channels, two readers: the engine acts on the refusal,
+         this line is where a person reading a frontier that will not drain is told WHICH RULE holds it. */
+      console.warn("[bridge] " + method + " " + url + " — " + answer.refusal.reason +
+                   ". This zone DECLINED to make the request: the flow stays PARKED rather than being told " +
+                   "the server was unreachable, and one arm is forked to explore the page's failure path");
       await engineDecline(eng, method, url, answer.refusal.reason);
       continue;
     }

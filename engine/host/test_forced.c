@@ -13392,6 +13392,15 @@ static int abi_pay(void)
                   "as a reply is, so a half-named one refuses whichever request the engine's pairing assert "
                   "happens to fall on and leaves the flow that IS parked waiting for the session");
             qjs_decline(method, url, reason);
+            /* AND THE SENTENCE IS STILL READ ALOUD, WHICH THE ENGINE ALONE WOULD NOT DO. The refusal now rides
+               the engine's own record, which is what lets the flow park and fork — but nothing in this process
+               PRINTS a record, so a reason relayed only through the ABI would be stored, asserted, acted on,
+               and never once seen by the person reading a frontier that will not drain. That is the
+               emitted-with-no-reader defect arriving through a channel that made the value more useful rather
+               than less. `abi_report_declines` runs on the one path every exit passes through and this is
+               where its input comes from, so the two channels carry the same sentence for two different
+               readers: the engine acts on it, the person reads it. */
+            abi_declined(reason);
             free(reason);
             paid++;
         } else {
