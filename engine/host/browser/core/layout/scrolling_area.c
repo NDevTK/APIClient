@@ -9,6 +9,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/dom/document.h"
 #include "core/dom/element_view.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
@@ -65,7 +66,10 @@ bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool
    against a rectangle that belongs to an ANCESTOR of this element does not move when this element scrolls, so
    it is not in this element's scrolling area however deep in the tree it sits — an absolutely positioned
    descendant whose nearest positioned ancestor is above `el` is the case the sentence is written for. CSS 2.1
-   §10.1's four cases are core/layout/used_value.h's and are asked, never re-derived here. */
+   §10.1's four cases are core/layout/used_value.h's and are asked, never re-derived here.
+   THIS IS THE ELEMENT COLUMN'S CLAUSE AND THE VIEWPORT COLUMN HAS NONE, which is why the walk below takes an
+   exclusion ANCHOR and not a flag: the clause is stated over "an ancestor of THE ELEMENT", a viewport has no
+   ancestor, and §2 writes no such sentence in the viewport half of any of its four rows. */
 static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
 {
     lxb_dom_element_t *cb = used_value_containing_block(descendant);
@@ -155,8 +159,15 @@ static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool
    §9.2.2.1's rule about each text node only to check that some context has already covered it.
    THIS IS NOT THE HEIGHT WALK ASKED TWICE — that walk never sees the contents of a box with a declared height
    (core/layout/block_flow.c's `bf_height_needs_content`), and a text run overflowing a declared-height box is
-   exactly the case this member exists for. */
-static CssPx sa_descendants_extreme(lxb_dom_element_t *el, bool vertical, bool ending_at_hi, CssPx seed)
+   exactly the case this member exists for.
+   THE WALK ROOT AND THE EXCLUSION ANCHOR ARE TWO PARAMETERS BECAUSE §2's TWO COLUMNS SPLIT THEM. For an element
+   they are the same element: the subtree walked is its own and the excluded boxes are those whose containing
+   block is above it. For a VIEWPORT the subtree walked is the DOCUMENT ELEMENT's — a viewport's descendants are
+   every box in the document — and `exclude_under` is NULL, because §2's viewport column carries no exclusion
+   clause at all. A NULL anchor is the spec's own absence and not a mode switch: there is no ancestor of a
+   viewport for a containing block to be, so there is nothing for the test to be asked about. */
+static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *exclude_under,
+                                    bool vertical, bool ending_at_hi, CssPx seed)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(el), *n = root->first_child;
     /* `el`'s OWN formatting context first. `el` is not one of its own descendants and this is not a special
@@ -176,7 +187,7 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, bool vertical, bool e
                    `el`. So a descendant of an out-of-flow box is IN the scrolling area while the box itself is
                    out of it, and the inline formatting context an excluded box establishes is folded for the
                    same reason: the anonymous inline boxes on its lines have IT as their containing block. */
-                if (!sa_excluded(el, d)) {
+                if (exclude_under == NULL || !sa_excluded(exclude_under, d)) {
                     CssPx e = sa_descendant_edge(d, vertical, ending_at_hi);
 
                     best = ending_at_hi ? css_px_max(best, e) : css_px_min(best, e);
@@ -248,12 +259,119 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
        makes a scrolling area at least as large as the padding box for every element in every document. */
     lo = vertical ? origin.y : origin.x;
     hi = css_px_add(lo, padding);
-    if (ending_at_hi) hi = sa_descendants_extreme(el, vertical, true, hi);
-    else              lo = sa_descendants_extreme(el, vertical, false, lo);
+    if (ending_at_hi) hi = sa_descendants_extreme(el, el, vertical, true, hi);
+    else              lo = sa_descendants_extreme(el, el, vertical, false, lo);
     DCHECK(css_px_sub(hi, lo).px >= padding.px,
            "an element's scrolling area came out SMALLER than its own padding box. §2's table takes the ending "
            "edge as an extreme OVER that padding edge, so the padding box is one of the operands of the maximum "
            "and the result cannot be below it — a smaller answer is the beginning edge and the ending edge "
            "having been derived from different boxes");
+    return css_px_sub(hi, lo);
+}
+
+/* css-writing-modes-4 §8 "The Principal Writing Mode"' ELEMENT — the one whose used `writing-mode` and
+ * `direction` the VIEWPORT's overflow directions are those of. §8: "The principal writing mode of the document
+ * is determined by the used writing-mode, direction, and text-orientation values of the root element. This
+ * writing mode is used, for example, to determine the direction of scrolling"; §8.1 "Propagation to the Initial
+ * Containing Block": "The principal writing mode is propagated to the initial containing block and to the
+ * viewport, thereby affecting … the scrolling direction of the viewport."
+ * AND ITS HTML SPECIAL CASE IS THE WHOLE REASON THIS IS A FUNCTION RATHER THAN A READ OF THE ROOT. §8: "As a
+ * special case for handling HTML documents, if the root element has a body child element whose display value is
+ * not none, the used value of the of writing-mode and direction properties on root element are taken from the
+ * computed writing-mode and direction of the first such child element instead of from the root element's own
+ * values." So `<html><body dir=rtl>` gives the VIEWPORT a leftward inline-end overflow direction while the root
+ * element's own computed `direction` is still `ltr` — the propagation is on USED values and §8 says in so many
+ * words that it "does not affect the computed values … of the root element itself". Reading the root's computed
+ * value would answer the wrong direction for the single most common way an author writes a right-to-left page.
+ * IT LIVES IN THIS FILE BECAUSE §2's VIEWPORT ROW IS ONE OF ITS TWO READERS. It used to be a static in
+ * core/dom/element_scrolling.c, whose comment gave as the reason that §2's overflow directions were all anyone
+ * asked of it "so it is answered here rather than in core/frame/viewport.h, whose §2 column is the viewport's
+ * SCROLLING AREA — a rectangle this file does not touch and which that component derives as the initial
+ * containing block on both axes, WITH NO DIRECTION IN IT". That last clause was the argument, and building §2's
+ * viewport row below retires it: the scrolling area now has a direction in it, so the fact has two readers and
+ * belongs beside the table that is the reason both of them ask. */
+static lxb_dom_element_t *sa_principal_writing_mode_element(lxb_dom_node_t *doc)
+{
+    lxb_dom_node_t *root = document_document_element_of(doc);
+    lxb_dom_node_t *body = document_body_of(doc);
+
+    DCHECK(root != NULL && root->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "css-writing-modes-4 §8's principal writing mode was asked of a document with no ROOT ELEMENT. §8 "
+           "determines it from the root element's used values, and both readers reach here only for a document "
+           "that HAS a viewport — CSSOM VIEW §2's viewport scrolling-area row below and CSSOM VIEW §6.1's "
+           "ancestor walk — while a viewport exists only for a document a navigable is presenting, and such a "
+           "document has a root element");
+    /* "…a body child element whose display value is not none". `document_body_of` is HTML §3.1.7's body
+       element, which is already the FIRST `body` or `frameset` child of the root; the display half is
+       core/dom/element_view.h's one predicate, which reads the computed `display` of the element and of its
+       ancestors and is the same question §8's clause asks. */
+    if (body != NULL && element_view_has_box(body)) return lxb_dom_interface_element(body);
+    return lxb_dom_interface_element(root);
+}
+
+bool scrolling_area_viewport_ending_edge_at_higher_coordinate(lxb_dom_node_t *doc, bool vertical)
+{
+    DCHECK(doc != NULL && doc->type == LXB_DOM_NODE_TYPE_DOCUMENT,
+           "CSSOM VIEW §2's overflow directions for a VIEWPORT were asked of a node that is not a Document. The "
+           "directions are css-writing-modes-4 §8's principal writing mode, which §8 states over THE DOCUMENT's "
+           "root element, so there is no other node this question has an answer for");
+    /* §2 gives "a scrolling box of a viewport or element" ONE definition of its two overflow directions, so
+       once §8 has named the element whose used values the viewport's are, this is the element form and not a
+       second derivation of the same bit. */
+    return scrolling_area_ending_edge_at_higher_coordinate(sa_principal_writing_mode_element(doc), vertical);
+}
+
+CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)
+{
+    lxb_dom_node_t *rootn;
+    bool ending_at_hi;
+    CssPx lo, hi;
+
+    DCHECK(doc != NULL && doc->type == LXB_DOM_NODE_TYPE_DOCUMENT,
+           "CSSOM VIEW §2's scrolling area of a VIEWPORT was asked of a node that is not a Document — the row "
+           "is stated over the initial containing block and \"all of the viewport's descendants' boxes\", and "
+           "both of those are facts about the document a viewport is presenting");
+    DCHECK(icb_extent.px >= 0.0,
+           "CSS 2.2 §10.1 \"Definition of 'containing block'\" gives the initial containing block \"the "
+           "dimensions of the viewport\", and a viewport has no negative dimension — so this is the ICB extent "
+           "and its viewport having come apart, not a layout result");
+    rootn = document_document_element_of(doc);
+    DCHECK(rootn != NULL,
+           "CSSOM VIEW §2's scrolling area of a VIEWPORT was asked of a document with no DOCUMENT ELEMENT. The "
+           "extreme over \"all of the viewport's descendants' boxes\" is then over the EMPTY SET and the area "
+           "is the initial containing block alone — a derivation the caller makes for itself, because it is "
+           "the caller that knows a realm is presenting no document at all");
+    ending_at_hi = scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, vertical);
+    /* THE INITIAL CONTAINING BLOCK'S TWO EDGES ON THIS AXIS, which are the coordinates 0 and `icb_extent` and
+       are DERIVED rather than assumed: CSS 2.2 §10.1 anchors the ICB "at the canvas origin", and
+       core/layout/flow_position.h places every box in that same space ("THE COORDINATE SPACE IS THE INITIAL
+       CONTAINING BLOCK'S"), which is what lets a descendant's margin edge and the ICB's own edge be operands of
+       one extreme at all. §2's viewport row takes ONE of them as the beginning edge outright — "the top edge of
+       the initial containing block", "the left edge of the initial containing block" — and folds the OTHER into
+       the extreme on the ending side, so both appear here and neither is beside the walk. */
+    lo = css_px(0.0);
+    hi = icb_extent;
+    /* "ALL OF THE VIEWPORT'S DESCENDANTS' BOXES" — every box in the document, so the walk is the document
+       element's subtree with the DOCUMENT ELEMENT'S OWN margin edge folded in beside it. The root is one of the
+       viewport's descendants and it is the one box a walk over its own subtree cannot contribute for itself;
+       for an element the same box is the caller, which is why the element row has no such term.
+       A ROOT WITH NO BOX contributes nothing and neither does anything under it — core/dom/element_view.h's one
+       predicate is the same one the walk applies per descendant — so the extreme is over the empty set and the
+       area is the ICB. That is §2's answer for a `display: none` root, not a shrug at one. */
+    if (element_view_has_box(rootn)) {
+        lxb_dom_element_t *root = lxb_dom_interface_element(rootn);
+        CssPx own = sa_descendant_edge(root, vertical, ending_at_hi);
+
+        if (ending_at_hi) hi = sa_descendants_extreme(root, NULL, vertical, true,  css_px_max(hi, own));
+        else              lo = sa_descendants_extreme(root, NULL, vertical, false, css_px_min(lo, own));
+    }
+    DCHECK(css_px_sub(hi, lo).px >= icb_extent.px,
+           "a VIEWPORT's scrolling area came out SMALLER than its initial containing block. §2's viewport row "
+           "takes the ending edge as an extreme OVER the ICB's own edge on that side — \"the bottom-most edge "
+           "of the bottom edge of the initial containing block and the bottom margin edge of all of the "
+           "viewport's descendants' boxes\" — so the ICB extent is one of the operands of the extreme and the "
+           "result cannot be below it. This is the invariant CSSOM VIEW §6's `scrollWidth`/`scrollHeight` "
+           "max(area, viewport) and §4's `scroll()` clamp both rest on, and a smaller answer is the beginning "
+           "edge and the ending edge having been derived from different boxes");
     return css_px_sub(hi, lo);
 }

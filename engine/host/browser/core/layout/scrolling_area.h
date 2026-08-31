@@ -42,9 +42,26 @@
  * `scrollWidth` that answered the padding extent would equal `clientWidth` for every element in every
  * document, which is exactly the state a page tests for when it asks whether its content overflows.
  *
- * IT IS THE ELEMENT'S TABLE COLUMN AND NOT THE VIEWPORT'S. §2 gives the two different edges — the viewport's
- * are stated over the INITIAL CONTAINING BLOCK and over the viewport's descendants — and core/frame/viewport.h
- * owns that one. Two columns, two derivations, one term.
+ * IT IS BOTH OF §2's TABLE COLUMNS, WHICH DIFFER IN EXACTLY TWO PLACES AND SHARE EVERYTHING ELSE. This used to
+ * be the element's column alone and said core/frame/viewport.h owned the other — "two columns, two derivations,
+ * one term" — which is the shape §2 is written to avoid: the two columns are one table because one walk answers
+ * them, and the second derivation is what let the viewport's answer sit at the initial containing block long
+ * after this file could have extended it. The two differences, read off §2's own rows:
+ *   (1) THE BEGINNING EDGE. An element's is "the element's top padding edge"; a viewport's is "the top edge of
+ *       the initial containing block", and the extreme on the other side is taken over THAT edge rather than
+ *       over a padding edge — "the bottom-most edge of the bottom edge of the initial containing block and the
+ *       bottom margin edge of all of the viewport's descendants' boxes". CSS 2.2 §10.1 "Definition of
+ *       'containing block'" anchors the ICB "at the canvas origin" and core/layout/flow_position.h places every
+ *       box in the ICB's own coordinate space, so those two edges are the coordinate 0 and the ICB's own extent.
+ *   (2) THE EXCLUSION. The element's column ends "excluding boxes that have an ancestor of the element as their
+ *       containing block"; THE VIEWPORT'S COLUMN HAS NO SUCH CLAUSE, in any of §2's four rows. That is not an
+ *       omission to be read as an oversight — a viewport has no ancestor for a box's containing block to be, so
+ *       the clause has nothing to say and §2 does not write it. The walk below therefore takes the exclusion
+ *       ANCHOR as its own parameter rather than a flag, so the viewport's row states the absence by having no
+ *       anchor to exclude under.
+ * WHOSE DESCENDANTS: a viewport's are every box in the document, so the walk is entered at the DOCUMENT ELEMENT
+ * with the root's OWN margin edge folded in beside them — the root element is one of the viewport's descendants,
+ * and it is the one box the subtree walk cannot contribute for itself.
  *
  * A `CssPx` FOR core/layout/used_value.h's REASON: every operand is a used value or a placed coordinate whose
  * chain bottoms out in the initial containing block, so the extent carries the viewport's environment fact and
@@ -78,5 +95,30 @@ CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical);
    is one direction with two answers, free to disagree about `direction: rtl` in exactly the document where it
    matters. */
 bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vertical);
+
+/* THE WIDTH (`vertical` false) OR HEIGHT of the scrolling area of the VIEWPORT `doc` is presented in — §2's
+   other column, the same walk over the same margin edges with the two differences the header above states.
+   `icb_extent` IS THIS AXIS OF THE INITIAL CONTAINING BLOCK, passed in rather than read: CSS 2.2 §10.1 gives the
+   ICB "the dimensions of the viewport", which is core/frame/viewport.h's fact and not a layout one, and it
+   arrives as a `CssPx` so the environment fact every descendant's coordinate already carries is the one the
+   extreme is taken against. THE CALLER HAS ESTABLISHED THAT `doc` HAS A DOCUMENT ELEMENT, which is what makes a
+   viewport's descendants exist to be walked; a realm presenting no document has no scrolling area at all and
+   that is the caller's own answer over the empty set, not a value this component invents.
+   THE RESULT IS AT LEAST `icb_extent` for §2's own reason — the ICB's edge is one of the operands of the
+   extreme — which is the invariant CSSOM VIEW §6's `scrollWidth`/`scrollHeight` max() and §4's `scroll()` clamp
+   both rest on, and it is asserted here rather than at either of them. */
+CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical);
+
+/* §2's OVERFLOW DIRECTIONS for the VIEWPORT's scrolling box, in the same one bit — does the ENDING edge sit at
+   the LARGER coordinate on this axis. §2 gives "a scrolling box of a viewport or element" the same two
+   directions, and css-writing-modes-4 §8 "The Principal Writing Mode" is what a VIEWPORT has them by: §8.1
+   "Propagation to the Initial Containing Block" says the principal writing mode "is propagated to the initial
+   containing block and to the viewport, thereby affecting … the scrolling direction of the viewport".
+   IT IS EXPORTED BECAUSE §2's TABLE IS NOT ITS ONLY READER, exactly as the element form above is: §6.1's clamp
+   and its scroll-into-view position ask a viewport's overflow directions with no scrolling area in hand. It
+   lives here rather than in each of them because §8's HTML special case — a `body` child's COMPUTED values
+   standing in for the root's USED ones — is the whole content of the answer, and a second copy is one direction
+   with two answers, free to disagree about `<html><body dir=rtl>` in exactly the document where it matters. */
+bool scrolling_area_viewport_ending_edge_at_higher_coordinate(lxb_dom_node_t *doc, bool vertical);
 
 #endif

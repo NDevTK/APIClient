@@ -103,43 +103,17 @@ static void es_box_of_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
     }
 }
 
-/* css-writing-modes-4 §8 "The Principal Writing Mode"' ELEMENT — the one whose used `writing-mode` and
- * `direction` the VIEWPORT's overflow directions are those of. §8: "The principal writing mode of the document
- * is determined by the used writing-mode, direction, and text-orientation values of the root element. This
- * writing mode is used, for example, to determine the direction of scrolling"; §8.1 "Propagation to the Initial
- * Containing Block": "The principal writing mode is propagated to the initial containing block and to the
- * viewport, thereby affecting … the scrolling direction of the viewport."
- * AND ITS HTML SPECIAL CASE IS THE WHOLE REASON THIS IS A FUNCTION RATHER THAN A READ OF THE ROOT. §8: "As a
- * special case for handling HTML documents, if the root element has a body child element whose display value is
- * not none, the used value of the writing-mode and direction properties on root element are taken from the
- * COMPUTED writing-mode and direction of the first such child element instead of from the root element's own
- * values." So `<html><body dir=rtl>` gives the VIEWPORT a leftward inline-end overflow direction while the root
- * element's own computed `direction` is still `ltr` — the propagation is on USED values and §8 says in so many
- * words that it "does not affect the computed values … of the root element itself". Reading the root's computed
- * value would answer the wrong direction for the single most common way an author writes a right-to-left page.
- * WHAT IS ASKED OF THE ANSWER IS §2's OVERFLOW DIRECTIONS AND NOTHING ELSE, so it is answered here rather than
- * in core/frame/viewport.h, whose §2 column is the viewport's SCROLLING AREA — a rectangle this file does not
- * touch and which that component derives as the initial containing block on both axes, with no direction in it. */
-static lxb_dom_element_t *es_principal_writing_mode_element(lxb_dom_node_t *doc)
-{
-    lxb_dom_node_t *root = document_document_element_of(doc);
-    lxb_dom_node_t *body = document_body_of(doc);
-
-    DCHECK(root != NULL && root->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "css-writing-modes-4 §8's principal writing mode was asked of a document with no ROOT ELEMENT, while "
-           "§6.1's ancestor walk had already reached that document's viewport — a viewport exists only for a "
-           "document a navigable is presenting, and such a document has a root element");
-    /* "…a body child element whose display value is not none". `document_body_of` is HTML §3.1.7's body
-       element, which is already the FIRST `body` or `frameset` child of the root; the display half is
-       core/dom/element_view.h's one predicate, which reads the computed `display` of the element and of its
-       ancestors and is the same question §8's clause asks. */
-    if (body != NULL && element_view_has_box(body)) return lxb_dom_interface_element(body);
-    return lxb_dom_interface_element(root);
-}
-
+/* THE VIEWPORT'S EsBox. Its OVERFLOW DIRECTIONS used to be derived here, through a static that resolved
+ * css-writing-modes-4 §8 "The Principal Writing Mode"' element; the derivation is unchanged and has MOVED to
+ * core/layout/scrolling_area.h, which is where CSSOM VIEW §2's table lives and now answers both of its columns.
+ * The argument for keeping it here was that §2's overflow directions were all anyone asked of §8, "so it is
+ * answered here rather than in core/frame/viewport.h, whose §2 column is the viewport's SCROLLING AREA — a
+ * rectangle this file does not touch and which that component derives as the initial containing block on both
+ * axes, with no direction in it". That last clause is retired: §2's viewport row is built, the viewport's
+ * scrolling area has a direction in it, and the fact has two readers — so a copy here would be one direction
+ * with two answers, free to disagree about `<html><body dir=rtl>` in exactly the document where it matters. */
 static void es_box_of_viewport(lxb_dom_node_t *doc, JSContext *dctx, EsBox *b)
 {
-    lxb_dom_element_t *pwm = es_principal_writing_mode_element(doc);
     int a;
 
     DCHECK(viewport_exists(dctx),
@@ -158,7 +132,7 @@ static void es_box_of_viewport(lxb_dom_node_t *doc, JSContext *dctx, EsBox *b)
         b->hi[a] = b->extent[a];
         b->area[a] = css_px(vertical ? viewport_scrolling_area_height(dctx)
                                      : viewport_scrolling_area_width(dctx));
-        b->ending_at_hi[a] = scrolling_area_ending_edge_at_higher_coordinate(pwm, vertical);
+        b->ending_at_hi[a] = scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, vertical);
         b->cur[a] = viewport_window_scroll(dctx, vertical);
     }
 }

@@ -178,12 +178,12 @@ double viewport_scroll_y(JSContext *ctx);
 double viewport_window_scroll(JSContext *ctx, bool vertical);
 
 /* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the margin edges of all of the
-   viewport's descendants' boxes. IT ANSWERS THE ICB ALONE, AND THE EXTENSION IS UNBUILT RATHER THAN EMPTY:
-   every in-flow box in the document is placed (core/layout/flow_position.h) and §2's ELEMENT column is already
-   computed from those placements (core/layout/scrolling_area.h), so what is missing is the VIEWPORT row of that
-   one table. viewport.c states it at the derivation above `viewport_scroll_x` — what it makes wrong
-   (`document.documentElement.scrollHeight` answers 720 for a 1400-pixel-tall page, through the third reader
-   below), and the second public entry beside `scrolling_area_extent_px` that closes it.
+   viewport's descendants' boxes. THE EXTENSION IS COMPUTED, by core/layout/scrolling_area.h's VIEWPORT entry:
+   §2's table has two columns, one walk answers both, and this file owns only what the ICB is (CSS 2.2 §10.1
+   gives it "the dimensions of the viewport") and hands that in. It ANSWERED THE ICB ALONE for as long as the
+   walk had no viewport row, which was wrong for every document taller than its viewport and showed as
+   `document.documentElement.scrollHeight` reporting 720 for a 1400-pixel-tall page through the third reader
+   below; that is built, so this is a real extreme and the answer grows with the layout.
    Exported because THREE algorithms read it and none of them may state it for itself:
    §4's `scroll()` clamps against it, `scrollX`/`scrollY`'s single valid position is derived from it, and §6's
    `scrollWidth`/`scrollHeight` answer max(it, the viewport) for the root element. */
@@ -195,9 +195,11 @@ double viewport_scrolling_area_height(JSContext *ctx);
    a page overriding `window.scroll` cannot change what `el.scrollTop = 10` on the root element does).
    `x`/`y` are the REQUESTED position, with §3.2's normalize-non-finite already applied by the caller whose IDL
    type carries it. The steps clamp that request into the viewport's scrolling area and abort at step 11 when
-   the clamped position is the one the viewport already has — which is every request, while the scrolling area
-   is the ICB, and viewport.c asserts exactly that rather than assuming it. So the write is not ignored: it is
-   RUN, and the spec's own clamp is what makes it a no-op.
+   the clamped position is the one the viewport already has. That WAS every request, while the scrolling area
+   was the ICB; the area is now §2's real extreme, so a document taller than its viewport clamps to somewhere
+   else and step 11 does not abort — which viewport.c asserts rather than assumes, and which is the crash that
+   names §3.1's perform a scroll as the next thing to write. The write is still not ignored: it is RUN, and the
+   spec's own clamp is what decides it.
    IT IS NOT `window.scroll` — that member is a separate question, and INSTALLING IT WOULD NOT CHANGE ANYTHING
    THIS FILE DOES. §4's three Window members are §4's argument questions plus a call to this algorithm, so a
    build with them scrolls exactly as far as a build without them: nowhere. That is worth stating because six
@@ -205,9 +207,9 @@ double viewport_scrolling_area_height(JSContext *ctx);
    "a scrolling box can be MOVED", and this header used to name four of them as though the member were the
    capability. It is not, and the sites now ask the component that owns CSSOM VIEW §3.1 "Scrolling"'s perform a
    scroll (core/dom/element_scrolling.h's `element_scrolling_box_can_move`) — whose viewport half is derived
-   from the two operands of the clamp above, so the day this file's scrolling area stops being the initial
-   containing block, every step that drains what a scroll produces fires without anyone having to remember
-   them. Nothing here moves a box, and this is where that stops being true. */
+   from the two operands of the clamp above. That mechanism has now fired: the scrolling area stopped being the
+   initial containing block, and every step that drains what a scroll produces went off without anyone having
+   to remember it. Nothing here moves a box yet, and §3.1 is the one thing left between this and that. */
 void viewport_scroll(JSContext *ctx, double x, double y);
 
 /* CSSOM VIEW §13.1 step 1, as the one question the resize steps ask: "has doc's viewport had its width or

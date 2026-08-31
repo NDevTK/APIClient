@@ -13,6 +13,7 @@
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
+#include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -257,50 +258,44 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
  *
  * §2 defines a VIEWPORT's scrolling area as the initial containing block extended by the margin edges of ALL of
  * the viewport's DESCENDANTS' BOXES — with no exclusion clause, unlike the ELEMENT column of the same table.
- * A scrolling box whose scrolling area is its own size has one valid scroll position, its origin, so the left
- * of the viewport IS the ICB origin and 0 is a derived value rather than an absent one — AND THAT DERIVATION
- * NOW RESTS ON `viewport_scroll_x`'s OWN SECOND REASON BELOW RATHER THAN ON THE AREA.
+ * THAT ROW IS BUILT (core/layout/scrolling_area.h answers both of §2's columns), SO THE AREA IS NO LONGER THE
+ * ICB AND THIS IS NO LONGER A DERIVATION FROM IT. Two paragraphs stood here and each was a claim about this
+ * tree that outlived the day it was true: first "this engine generates no boxes", then "this engine gives
+ * GEOMETRY to exactly one box — the ICB — so no descendant has a margin edge to extend it by". The second was
+ * corrected into a named residual — the area is the ICB, which is WRONG for any document taller than the
+ * viewport — and this diff is the build that residual named. What it makes wrong is now nothing; what it makes
+ * TRUE is that `document.documentElement.scrollHeight` answers 1400 on a page whose content is 1400 CSS pixels
+ * tall, which is the single most common way a bundle asks whether its own page scrolls.
  *
- * BECAUSE THE AREA IS NOT DERIVED, IT IS UNBUILT, AND THIS PARAGRAPH SAID OTHERWISE FOR AS LONG AS IT WAS TRUE.
- * What stood here was "this engine gives GEOMETRY to exactly one box — the ICB — so no descendant has a margin
- * edge to extend it by". That has stopped being true: core/layout/flow_position.h PLACES every in-flow box in
- * the initial containing block's own coordinate space, and core/layout/scrolling_area.h already computes §2's
- * ELEMENT column from those placements, over the extreme of its descendants' margin edges. §2's VIEWPORT column
- * is the one nobody has written, so `viewport_scrolling_area_width`/`_height` below answer the ICB: right for a
- * document whose boxes all fit inside it, WRONG for every document taller than the viewport. It is stated here
- * rather than crashed at because the member it makes wrong is otherwise correct and a crash would abort nearly
- * every real document on it; what fixes it is the build, and the build is small and named.
- *   HOW THE ABSENCE SHOWS: viewport.h gives §6's `scrollWidth`/`scrollHeight` on the ROOT ELEMENT max(this
- *   area, the viewport), so `document.documentElement.scrollHeight` answers 720 on a page whose content is
- *   1400 CSS pixels tall, where a browser answers 1400 — the single most common way a bundle asks whether its
- *   own page scrolls.
- *   WHAT THE NEXT DIFF BUILDS: `sa_descendants_extreme` in core/layout/scrolling_area.c is already the walk —
- *   it takes the extreme over one element's descendants with `sa_excluded` applied per box. §2's viewport row
- *   is that same walk seeded with the ICB's edges, entered at the DOCUMENT ELEMENT with the root's own margin
- *   edge folded in, and with no exclusion, so what it needs is a second public entry beside
- *   `scrolling_area_extent_px` and not a second walk.
- *   WHAT DOES NOT CHANGE IN THAT DIFF: `scrollX`/`scrollY` stay zero, for the second reason rather than the
- *   first — a scroll position moves only when CSSOM VIEW §3.1 "Scrolling"'s perform a scroll runs, and nothing
- *   in this engine has ever reached one (core/dom/element_scrolling.h states both halves of that). What DOES
- *   change is that §4's clamp below stops collapsing, so its step-11 assert fires and names §3.1 next.
+ * SO THE ZERO BELOW RESTS ON ITS SECOND REASON ALONE, AND THAT IS THE WHOLE OF WHAT THIS DIFF LEAVES STANDING.
+ * A scrolling box whose scrolling area is its own size has one valid scroll position, its origin — that
+ * argument is GONE, because the area can now be larger. `scrollX`/`scrollY` stay zero for the other reason: a
+ * scroll position moves only when CSSOM VIEW §3.1 "Scrolling"'s perform a scroll runs, and nothing in this
+ * engine reaches one (core/dom/element_scrolling.h states both halves). That is not a second derivation kept as
+ * a fallback — it is the only one there ever was that did not depend on the area, and every site that DID
+ * depend on the area now crashes by name instead of agreeing with it: §4's clamp below stops collapsing, so its
+ * steps-6-9 and step-11 asserts fire, and core/dom/element_scrolling.h's perform-a-scroll capability answers
+ * TRUE for the first time, which fires update-the-rendering step 9, `focus()` step 4 and save-persisted-state.
+ * Those five are this diff's forcing function and each names its own next build.
  *
- * WHAT STOOD HERE BEFORE THAT SAID "THIS ENGINE GENERATES NO BOXES", which is a claim about box EXISTENCE and
- * was the wrong half: a user agent generates a box for the root element of a document it is presenting, this
- * engine presents every document it holds, and core/html/focus.c's §6.6.2 row 1 had already committed to the
- * opposite answer (a connected element that is not `hidden` IS being rendered). One fact with two answers — so
- * the box model is stated in ONE place, core/dom/element_view.h, which owns the predicate both files ask. Both
- * corrections are the same defect twice: a sentence about what this engine cannot do, outliving the day it
- * could not do it, and read by everyone downstream as the reason not to look.
+ * THE FIRST OF THOSE TWO WAS A CLAIM ABOUT BOX EXISTENCE and was the wrong half: a user agent generates a box
+ * for the root element of a document it is presenting, this engine presents every document it holds, and
+ * core/html/focus.c's §6.6.2 row 1 had already committed to the opposite answer (a connected element that is
+ * not `hidden` IS being rendered). One fact with two answers — so the box model is stated in ONE place,
+ * core/dom/element_view.h, which owns the predicate both files ask. All three corrections are the same defect:
+ * a sentence about what this engine cannot do, outliving the day it could not do it, and read by everyone
+ * downstream as the reason not to look.
  *
- * WHEN THE AREA IS BUILT AND §3.1 AFTER IT, this stops being a derivation at all: the position becomes real
- * per-flow state and this becomes the read of what perform-a-scroll wrote. The two-sided
- * assertion for that already exists and is in the right place — update-the-rendering step 9 (CSSOM VIEW §13.2
- * "Scrolling"'s SCROLL STEPS) asks core/dom/element_scrolling.h whether a box in the document can be at a
- * position other than the one this engine derives, so the step that would have to drain doc's pending scroll
- * events names itself first. §6's `scrollTop`/`scrollLeft` setter reaches `viewport_scroll` below and moves
- * nothing: its clamp collapses to the position the viewport already has, which is asserted there. SO DO §6's
- * `scroll()`, `scrollTo()` and `scrollBy()` ON AN ELEMENT, at their steps 8 and 9 — a root element and a
- * quirks-mode body route to this viewport algorithm by name.
+ * §3.1 IS NOW THE ONLY THING BETWEEN THIS AND A REAL POSITION. When perform a scroll is written this stops
+ * being a derivation at all: the position becomes real per-flow state and this becomes the read of what §3.1
+ * wrote. The two-sided assertions for that already exist and are in the right places, and with the area built
+ * they are LIVE rather than waiting — update-the-rendering step 9 (CSSOM VIEW §13.2 "Scrolling"'s SCROLL STEPS)
+ * asks core/dom/element_scrolling.h whether a box in the document can be at a position other than the one this
+ * engine derives, so the step that must drain doc's pending scroll events names itself first. §6's
+ * `scrollTop`/`scrollLeft` setter reaches `viewport_scroll` below, whose clamp no longer collapses on a
+ * document taller than its viewport — which is what its own step-11 assert says. SO DO §6's `scroll()`,
+ * `scrollTo()` and `scrollBy()` ON AN ELEMENT, at their steps 8 and 9 — a root element and a quirks-mode body
+ * route to this viewport algorithm by name.
  * THAT ASSERTION USED TO BE A [[HasProperty]] FOR `scrollTo` ON THE GLOBAL, and the paragraph that stood here
  * defended the choice: the WINDOW member was said to be the one whose arrival means the viewport can be moved,
  * with the ELEMENT member of the same name reaching this clamp exactly as the setter does. Both halves of that
@@ -327,19 +322,31 @@ double viewport_window_scroll(JSContext *ctx, bool vertical)
     return vertical ? viewport_scroll_y(ctx) : viewport_scroll_x(ctx);
 }
 
-/* §2's SCROLLING AREA OF A VIEWPORT — "the initial containing block extended by the margin edges of all of the
-   viewport's DESCENDANTS' BOXES". THE EXTENSION IS THE PART THAT IS NOT WRITTEN, and this answers the ICB
-   alone: see the derivation above `viewport_scroll_x` for what that makes wrong, how it shows, and the second
-   entry beside `scrolling_area_extent_px` that closes it. This is not "no box has geometry" — every in-flow box
-   in this document is placed (core/layout/flow_position.h) and §2's ELEMENT column is computed from those
-   placements (core/layout/scrolling_area.h); it is the viewport ROW of that one table that has no caller yet.
-   IT IS A FUNCTION AND NOT A CONSTANT because it is the fact TWO derivations read — the scroll position above
-   and §4's clamp below, with CSSOM VIEW §6's `scrollWidth`/`scrollHeight` a third reader through viewport.h. The
-   day the row is built, this grows, the clamp stops collapsing, and step 11's assert fires naming the
-   perform-a-scroll steps that must then be written. Written as a constant in each place, that day would arrive
-   silently in two of the three. */
-double viewport_scrolling_area_width(JSContext *ctx)  { return viewport_width(ctx); }
-double viewport_scrolling_area_height(JSContext *ctx) { return viewport_height(ctx); }
+/* §2's SCROLLING AREA OF A VIEWPORT — the initial containing block's edges extended, on the ENDING side of each
+   axis, by "the … margin edge of all of the viewport's descendants' boxes". §2's table is
+   core/layout/scrolling_area.h's, both columns of it, and this is the VIEWPORT column's one caller: this file
+   owns what the ICB IS (CSS 2.2 §10.1 "Definition of 'containing block'" gives it "the dimensions of the
+   viewport") and owns nothing about where a box was placed, so it hands the ICB extent in and the table answers.
+   THE DOCUMENT ELEMENT IS WHERE THE EXTREME OVER THE EMPTY SET IS DECIDED, and it is a derivation rather than a
+   guard. §2's ending edge is an extreme over the ICB's own edge AND the descendants' margin edges; a realm
+   presenting no document has no descendant box for the second operand, so the extreme is over the first alone
+   and the area IS the ICB. That is why `element_scrolling.h`'s perform-a-scroll capability can ask this of a
+   realm with no viewport and get a false comparison rather than a crash — the answer is right, not absent. */
+static double vp_scrolling_area(JSContext *ctx, bool vertical)
+{
+    CssPx icb = vertical ? viewport_icb_height(ctx) : viewport_icb_width(ctx);
+    lxb_dom_node_t *root = document_root_node(ctx);
+
+    if (root == NULL) return icb.px;
+    DCHECK(root->owner_document != NULL,
+           "this realm's document element has no owner document, so CSSOM VIEW §2's \"all of the viewport's "
+           "descendants' boxes\" has no tree to be taken over. A parsed root element belongs to the document "
+           "that parsed it — the two have come apart");
+    return scrolling_area_viewport_extent_px(lxb_dom_interface_node(root->owner_document), icb, vertical).px;
+}
+
+double viewport_scrolling_area_width(JSContext *ctx)  { return vp_scrolling_area(ctx, false); }
+double viewport_scrolling_area_height(JSContext *ctx) { return vp_scrolling_area(ctx, true); }
 
 /* CSSOM VIEW §4's scroll() STEPS, as the internal algorithm §2 requires a caller to invoke — see viewport.h.
    The steps are written in the spec's own order and the whole of the work is the CLAMP: it is what turns an
