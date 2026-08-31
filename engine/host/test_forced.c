@@ -5718,6 +5718,32 @@ static int param_value_is(const char *js, const char *url, const char *pname, co
  * endpoint, so a world token that happens to be a substring of another statement's value cannot satisfy it,
  * and no future statement can silently make a row unfalsifiable by choosing a longer name.
  *
+ * THE RULE THAT FALLS OUT OF IT, AND THE DIRECTION THAT DECIDES WHERE IT APPLIES. A bare `strstr(js, tok)` in
+ * a POSITIVE position asserts "no token this document will EVER emit contains `tok`", which is a claim about
+ * statements nobody has written yet — a mint is a hope and scoping is the proof. In a NEGATIVE position the
+ * same needle can only fire EARLY (a superstring makes it unable to pass, never unable to fail), and a false
+ * red is a reading somebody checks, so the whole-document form is correct there and is used deliberately:
+ * `!strstr(js,"wrong")` is the one row that means every statement in the fixture. So the discriminator is the
+ * SIGN, not the spelling — scope every positive world clause, and leave the negatives whole.
+ *
+ * HOW TO RE-DERIVE WHICH POSITIVES ARE STILL BARE, because the answer changes with every statement added and
+ * nothing here recomputes it: collect every `strstr(js, "…")` literal in this file with comments stripped
+ * (a needle wrapped in its own JSON quotes, `"\"X\""`, is a whole-token match and is not at risk), collect
+ * from the three document literals every token the run can emit — each `/api/…` path, each `?`/`&` parameter
+ * NAME, each single-quoted value, and each `{state}.…` source shape — and report any needle that is a proper
+ * substring of one of those tokens, or that equals one of them in a DIFFERENT field (a needle `live` matches
+ * `"name":"live"` as readily as a value). Every collision fixed here was found that way and none of them was
+ * visible in a passing run's output.
+ *
+ * NAMED RESIDUAL — NOT COVERED: nothing in this program enforces the paragraph above. The positives that are
+ * still bare are unique in HTML/HTML_MIN/HTML_COLD only by that scan having been run by hand, and the scan is
+ * re-run by nobody. WHAT MUST EXIST AFTERWARD: a gate that reads this file's own `strstr(js, …)` literals and
+ * this file's own three document literals — deriving both from the code that owns them, never from a list
+ * somebody typed — and FAILS on a needle that a document token contains. HOW ITS ABSENCE SHOWS: a two-world
+ * row reading 1 on a world it never observed, which is how `mapmutfork` (`gone` ⊂ four earlier statements'
+ * values), `afromfork` (`afA`/`afP` ⊂ `pafA`/`pafP`) and the nine fixed here were each found — one at a time,
+ * by a lane that had already lost a session to the row it was reading.
+ *
  * WHY A MACRO AND NOT A CALL: the ADDRESS of the failure is what the reader needs, and here the address is
  * the ENDPOINT rather than a file:line — one helper called from twenty rows would stamp one line for all of
  * them, which is the defect CLAUDE.md names at length. The endpoint, the param and the world token are
@@ -6226,9 +6252,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                       param_value_has(js, "/api/chain", "at", "chain2-us-west-2"));
     /* §6.4 clone(): the copy read the body, the ORIGINAL still read it afterwards, and cloning a read body
        threw where the page put its catch. A caching layer's first move is `res.clone()`, so without it the
-       reply — and every endpoint behind it — was lost at that line. */
-    int clone_body = (strstr(js, "\"/api/clonebody\"") && strstr(js, "\"copy\"") &&
-                      strstr(js, "\"orig\"") && strstr(js, "sync"));
+       reply — and every endpoint behind it — was lost at that line.
+       THE `used` CLAUSE WAS THE WORST UNSCOPED NEEDLE IN THIS FILE: `sync` is a substring of FIVE endpoints
+       this same document learns (`/api/abortsync`, `/api/asynccall`, `/api/asyncloop`, `/api/asyncmethod`,
+       `/api/ceasync`), of the value `issync` that `/api/abortsync` emits, of `asyncThrew`, and of the PARAM
+       NAME `sync` that `/api/insertsteps?sync=` puts in the document as `"name":"sync"`. So the term read 1
+       for any run in which ANY of those statements produced a record, whatever this one did — it could not
+       fail, and what it appeared to assert (the throw was synchronous) was never once measured. */
+    const char *clone_body_why = NULL; int clone_body = 1;
+    fold_row(&clone_body, &clone_body_why, !!strstr(js, "\"/api/clonebody\""),
+             "NOT REACHED: there is no /api/clonebody record at all, so this run did not answer the statement");
+    fold_row(&clone_body, &clone_body_why, strstr(js, "\"copy\"") && strstr(js, "\"orig\""),
+             "§6.4 the clone's read and the ORIGINAL's read did not both reach this endpoint");
+    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "used", "sync"),
+             "§6.4 clone() on an already-read body did not throw SYNCHRONOUSLY: `used` is not `sync`");
     /* §6.4.1/§6.4.2: the reply read as BYTES. 22 is the fixture reply's length and 123 is its leading '{' — the
        two agreeing is what says arrayBuffer() and bytes() are two views of ONE byte sequence, and a length the
        record carried rather than one a strlen guessed. */
@@ -6611,21 +6648,49 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
     /* AND ACROSS A FORK: each arm re-issued its own request under its own world, so BOTH answers exist. */
     int hostreqfork_tt = (strstr(js, "\"/api/hostreqfork\"") && strstr(js, "hrA") && strstr(js, "hrP"));
-    /* §7.4 returned a WindowProxy for a child document the host minted, after suspending for it. */
-    int navopen_tt = (strstr(js, "\"/api/navopen\"") && strstr(js, "proxy"));
+    /* §7.4 returned a WindowProxy for a child document the host minted, after suspending for it.
+       SCOPED BECAUSE `proxy` IS A SUBSTRING OF `/api/hdrproxy`, which this same document learns from the
+       §5 Headers proxy statement — so the old term read 1 whenever THAT endpoint existed, including on the
+       run where `open()` answered nothing and this statement emitted `v=null`. The failing spelling is a
+       value of this param, so asking for the value whole is what makes the row able to fail. */
+    const char *navopen_why = NULL; int navopen_tt = 1;
+    fold_row(&navopen_tt, &navopen_why, !!strstr(js, "\"/api/navopen\""),
+             "NOT REACHED: there is no /api/navopen record at all, so this run did not answer the statement");
+    fold_row(&navopen_tt, &navopen_why, param_value_is(js, "/api/navopen", "v", "proxy"),
+             "§7.4 open() handed back no WindowProxy — this statement's `v` is `null`");
     /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
     int sop_tt = (strstr(js, "\"/api/sop\"") && strstr(js, "SecurityError:closedok") && !strstr(js, "LEAKED"));
     /* A cross-document read suspended and resumed with the peer's answer. */
     int xdocread_tt = (strstr(js, "\"/api/xdocread\"") && strstr(js, "xread"));
     /* The same cross-document read reached from inside a QUEUED JOB, which parks the flow at a job root. */
     int xdocjob_tt = (strstr(js, "\"/api/xdocjob\"") && strstr(js, "jobread"));
-    /* §8.7 Timers + §8.1.7: the microtask ran first, then the two timers in the order they were set. */
-    int timer_tt = (strstr(js, "\"/api/timerfire\"") && strstr(js, "ABC"));
+    /* §8.7 Timers + §8.1.7: the microtask ran first, then the two timers in the order they were set.
+       A CONDITIONAL COLLISION, WHICH IS THE KIND A SCAN OF A PASSING RUN CANNOT SEE. No token this document
+       emits contains `ABC` while the document is RIGHT — but `/api/scriptorder`'s own failing spelling IS
+       `ABC` (see that row: `ABXC` is correct and `ABC` is the program pushed to the tail), so the moment the
+       script-order defect appears, this row stops being able to fail. Two rows entangled so that one's red
+       makes the other's green meaningless is worse than either being wrong alone, and it costs one param
+       lookup to sever. */
+    const char *timer_why = NULL; int timer_tt = 1;
+    fold_row(&timer_tt, &timer_why, !!strstr(js, "\"/api/timerfire\""),
+             "NOT REACHED: there is no /api/timerfire record at all, so this run did not answer the statement");
+    fold_row(&timer_tt, &timer_why, param_value_is(js, "/api/timerfire", "v", "ABC"),
+             "§8.1.7 the microtask and the two timers did not run in the order they were queued");
     /* §8.7's string handler was compiled and RUN as a program, and the handle the two arms hand back comes
        out of one per-global counter. Two endpoints because the two halves fail independently. */
     int timerstr_tt = (strstr(js, "\"/api/timerstr\"") && strstr(js, "strran"));
-    int timerhandle_tt = (strstr(js, "\"/api/timerhandle\"") && strstr(js, "next") &&
-                          !strstr(js, "reused"));
+    /* AND `next` IS NOT THIS STATEMENT'S ALONE. The @S URL sink's source renders as `{state}.next` in
+       `securitySinks` — the same spelling `s_poc`/`s_stage` ask for a few hundred lines down — so the old
+       unscoped term read 1 on every run that recorded the location sink at all, whatever the counter did.
+       It survived only because the sibling NEGATIVE (`reused`) happened to be the other spelling of the same
+       param; a defect that dropped the param instead of mis-numbering it would have passed both. */
+    const char *timerhandle_why = NULL; int timerhandle_tt = 1;
+    fold_row(&timerhandle_tt, &timerhandle_why, !!strstr(js, "\"/api/timerhandle\""),
+             "NOT REACHED: there is no /api/timerhandle record at all, so this run did not answer the statement");
+    fold_row(&timerhandle_tt, &timerhandle_why, param_value_is(js, "/api/timerhandle", "h", "next"),
+             "§8.7's handle counter did not give the second timer the identifier after the first's");
+    fold_row(&timerhandle_tt, &timerhandle_why, !param_value_is(js, "/api/timerhandle", "h", "reused"),
+             "§8.7's handle counter gave two LIVE timers one identifier, so clearTimeout would clear the wrong one");
     /* §8.7 step 4 asked about an unknown `timeout`: the fork has a consumer, so the document survives it.
        A 0 here is an ABORT at the fork seam and not a missing endpoint — see the statement that produces it. */
     int unkdelay_tt = (strstr(js, "\"/api/unkdelay\"") && strstr(js, "forked"));
@@ -6689,9 +6754,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* §6.1's TWO CLAIMS, as the tokens the page's own comparison emitted. The expected bytes are in the
        document (see `/api/cssprop` in HTML above) because that is where the read happens and where nothing
        percent-encodes them; what reaches here is a verdict, and its failing spelling carries the actual value
-       so a red row names what answered instead of only that something did. */
-    int cssprop_tt = strstr(js, "CSSPROPOK") != NULL;
-    int csspropText_tt = strstr(js, "CSSTEXTOK") != NULL;
+       so a red row names what answered instead of only that something did.
+       AND THE SECOND ONE COULD NOT FAIL. `CSSTEXTOK` is a SUFFIX of `CQCSSTEXTOK`, which the container-query
+       statement in this same document emits as the PASSING value of `/api/csscontainerText2` — so the row
+       read 1 out of its neighbour's success and said nothing about `@property`'s own `cssText` at all. Both
+       are asked of their own endpoint's own param here, which is what a mint alone never promises: a token is
+       unique until some later statement chooses a longer name that contains it. */
+    const char *cssprop_why = NULL; int cssprop_tt = 1;
+    fold_row(&cssprop_tt, &cssprop_why, !!strstr(js, "\"/api/cssprop\""),
+             "NOT REACHED: there is no /api/cssprop record at all, so this run did not answer the statement");
+    fold_row(&cssprop_tt, &cssprop_why, param_value_is(js, "/api/cssprop", "v", "CSSPROPOK"),
+             "§6.1 the CSSPropertyRule members did not answer as the page compared them (the record carries "
+             "the CSSPROPBAD: spelling with the value that answered instead)");
+    const char *csspropText_why = NULL; int csspropText_tt = 1;
+    fold_row(&csspropText_tt, &csspropText_why, !!strstr(js, "\"/api/csspropText\""),
+             "NOT REACHED: there is no /api/csspropText record at all, so this run did not answer the statement");
+    fold_row(&csspropText_tt, &csspropText_why, param_value_is(js, "/api/csspropText", "v", "CSSTEXTOK"),
+             "§6.1 the @property cssText serialisation is not what the page compared it against (the record "
+             "carries the CSSTEXTBAD: spelling with the value that answered instead)");
 
     /* CSS COMPATIBILITY STANDARD §3.1's ALIAS, as the two tokens the page's own comparisons emitted — see the
        `<style id=kfsheet>` block in HTML above for what each one covers and why they are two. A red row here
@@ -6779,10 +6859,27 @@ static int probes_eval(const char *js, Probe *out, int cap) {
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
-       arm and the sibling is never reached. Both arms present is the whole claim. */
-    int uafork_tt = (strstr(js, "\"/api/uafork\"") && strstr(js, "chrome") && strstr(js, "other"));
-    int touchfork_tt = (strstr(js, "\"/api/touch\"") && strstr(js, "touch") && strstr(js, "mouse"));
-    int layoutfork_tt = (strstr(js, "\"/api/layout\"") && strstr(js, "mobile") && strstr(js, "desktop"));
+       arm and the sibling is never reached. Both arms present is the whole claim.
+       AND `touch` WAS ENTAILED BY THIS ROW'S OWN FIRST CLAUSE. The world token is a substring of the very
+       endpoint the presence clause asks for — `"/api/touch"` CONTAINS `touch` — so the two-world row was a
+       one-clause row: reaching the statement at all satisfied both terms, and the `mouse` arm was the only
+       thing it could ever lose. `untouched`, which the §4.4 clone statement emits, satisfied it too.
+       THE OTHER TWO GO THE SAME WAY, and not because they were caught lying: `other` is a substring of the
+       `https://other.test/p` this document opens, and nothing in the layout pair collides today. A mint is a
+       claim about every token the document will EVER emit and scoping is the only proof of it, so a row that
+       is safe by inspection and one that is safe by construction must not sit in one block looking alike. */
+    const char *uafork_why = NULL; int uafork_tt = 1;
+    FORK_ROW(js, &uafork_tt, &uafork_why, "/api/uafork", "v",
+             "the UA-sniff gate, whose concolic userAgent must fork rather than decide on its example",
+             "chrome", "other");
+    const char *touchfork_why = NULL; int touchfork_tt = 1;
+    FORK_ROW(js, &touchfork_tt, &touchfork_why, "/api/touch", "v",
+             "the touch gate, whose concolic maxTouchPoints must fork rather than decide on its example",
+             "touch", "mouse");
+    const char *layoutfork_why = NULL; int layoutfork_tt = 1;
+    FORK_ROW(js, &layoutfork_tt, &layoutfork_why, "/api/layout", "v",
+             "the viewport gate, whose concolic screen.width must fork rather than decide on its example",
+             "mobile", "desktop");
     /* §2.7's FLATTENING OVER AN UNKNOWN OPTIONS BAG, and it is the SAME claim one level below the union arm:
        Web IDL §3.2.25 picks the arm, DOM §2.7's flatten options step 2 reads `capture` off it, and the value
        it reads is another unknown — so ONE registration is a capturing listener AND a bubbling one, which the
@@ -6818,15 +6915,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int bwfork_tt  = (strstr(js, "\"/api/bwfork\"") && strstr(js, "bwwide") && strstr(js, "bwnarrow"));
     int bwhash_tt  = (strstr(js, "\"/api/bwhash\"") != NULL);
     int bwtramp_tt = (strstr(js, "\"/api/bwtramp\"") && strstr(js, "bwand") && strstr(js, "bwzero"));
-    /* the controller's `abort` listener actually ran, and the timeout's unknown flag forked both ways */
-    int abortfire_tt = (strstr(js, "\"/api/aborted\"") && strstr(js, "fired"));
+    /* the controller's `abort` listener actually ran, and the timeout's unknown flag forked both ways.
+       SCOPED: `fired` is a substring of `/api/unkdelay/fired`, the endpoint the §8.7 unknown-timeout statement
+       learns from its own timer callback in this same document — so the old term read 1 out of THAT record's
+       url and could not tell a listener that ran from one that never did. */
+    const char *abortfire_why = NULL; int abortfire_tt = 1;
+    fold_row(&abortfire_tt, &abortfire_why, !!strstr(js, "\"/api/aborted\""),
+             "NOT REACHED: there is no /api/aborted record at all, so this run did not answer the statement");
+    fold_row(&abortfire_tt, &abortfire_why, param_value_is(js, "/api/aborted", "v", "fired"),
+             "the AbortSignal's `abort` listener did not run as a real event on this flow — `v` is not `fired`");
     /* a DOMString argument coerced through the PAGE's toString (with a loop in it), then used as the real
        event type — the listener firing proves the coerced value was the one it registered under */
     int idlcoerce_tt = (strstr(js, "\"/api/idlcoerce\"") && strstr(js, "coerced"));
     /* THE DOM INTERFACES. Each is one spec sentence the components used to get wrong, and each answers with a
-       token that only the correct behaviour can produce — `percopy`/`wrong`/`child` are what the old code said. */
-    int domproto_tt = (strstr(js, "\"/api/protoid\"") && strstr(js, "shared") && !strstr(js, "percopy"));
-    int cdnull_tt   = (strstr(js, "\"/api/cdnull\"")  && strstr(js, "empty"));
+       token that only the correct behaviour can produce — `percopy`/`wrong`/`child` are what the old code said.
+       TWO OF THE FIVE COULD NOT FAIL. `shared` is a substring of `/api/shared`, the endpoint the promise-state
+       statement learns in this same document, and `empty` is a substring of `isempty`, which the
+       `/api/refurlabsent` statement emits as ITS passing value — so `dom-idl` was reporting three claims and
+       calling it five. Each is now asked of its own endpoint's own param, and the negatives are asked of that
+       param too: a value that is neither spelling is what a fork or a dropped param produces, and that is a
+       finding, not a match. */
+    int domproto_tt = (strstr(js, "\"/api/protoid\"") &&
+                       param_value_is(js, "/api/protoid", "v", "shared") &&
+                       !param_value_is(js, "/api/protoid", "v", "percopy"));
+    int cdnull_tt   = (strstr(js, "\"/api/cdnull\"")  &&
+                       param_value_is(js, "/api/cdnull", "v", "empty"));
     int tcnull_tt   = (strstr(js, "\"/api/tcnull\"")  && strstr(js, "nochild") && !strstr(js, "\"child\""));
     int nodeval_tt  = (strstr(js, "\"/api/nodeval\"") && strstr(js, "\"null\""));
     int tcset_tt    = (strstr(js, "\"/api/tcset\"")   && strstr(js, "tcSET"));
@@ -7039,9 +7152,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     const char *nodealgo_why = NULL;
     /* THE WEAKEST-NAMED ONE, AND IT IS FIRST DELIBERATELY. `wrong` is the failure token of dozens of
        independent fixture statements, so this assertion genuinely cannot localise further — which is exactly
-       why it must say so rather than share the silence of the ones that can. */
+       why it must say so rather than share the silence of the ones that can.
+       IT IS ALSO THE ONE PLACE AN UNSCOPED NEEDLE IS THE RIGHT INSTRUMENT, AND THE DIRECTION IS WHY. Every
+       other bare `strstr(js, …)` in this function is a POSITIVE world clause, where a token that is a
+       substring of something else the document emits makes the term unable to FAIL. This one is a NEGATIVE
+       over the whole document, so a superstring can only make it unable to PASS — it fires early, never late,
+       and a false red is a reading somebody checks rather than a green nobody does. `-wrongreason` is exactly
+       that superstring (the three §4.13.3 refusal statements emit it when the right exception carries the
+       wrong reason), and it is itself a failure, so the message names both spellings rather than sending a
+       reader to look for a bare `wrong` that is not there. */
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "wrong"),
-             "some statement of the fixture recorded its `wrong` token");
+             "some statement of the fixture recorded its `wrong` token — or a §4.13.3 refusal recorded "
+             "`-wrongreason`, which is the right exception raised for the wrong reason");
     /* §4.10: submit() derived the GET; the named field carries its SOURCE rather than an invented value; a
        DISABLED control contributed nothing and an UNCHECKED box contributed nothing, both of which only an
        absence can prove; and the second submit AFTER checking it does include it. */
@@ -7090,8 +7212,30 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int jsonfork_tt = strstr(js, "\"/api/jsonok\"") && strstr(js, "\"/api/jsonthrew\"")
                    && strstr(js, "\"validValues\":[\"SyntaxError\"]")
                    && strstr(js, "\"/api/jsonrawthrew\"") && !strstr(js, "/api/jsonrawok");
-    int domidl_tt   = domproto_tt && cdnull_tt && tcnull_tt && nodeval_tt && tcset_tt;
-    int deadline_tt = (strstr(js, "\"/api/deadline\"") && strstr(js, "expired") && strstr(js, "live"));
+    /* FIVE INDEPENDENT SPEC SENTENCES UNDER ONE NAME, FOLDED so the 0 names which one. They are five different
+       components and five different endpoints, so a bare `&&` chain printed one byte for five findings — the
+       same count-with-no-name-in-it this file's own banner refuses one level up. */
+    const char *domidl_why = NULL; int domidl_tt = 1;
+    fold_row(&domidl_tt, &domidl_why, domproto_tt,
+             "§4.4 an interface member lives on the SHARED prototype, not a per-element copy (/api/protoid)");
+    fold_row(&domidl_tt, &domidl_why, cdnull_tt,
+             "§4.10 CharacterData created with no data reads back the EMPTY string (/api/cdnull)");
+    fold_row(&domidl_tt, &domidl_why, tcnull_tt,
+             "§4.4 setting textContent to null leaves NO child (/api/tcnull)");
+    fold_row(&domidl_tt, &domidl_why, nodeval_tt,
+             "§4.4 an Element's nodeValue is null (/api/nodeval)");
+    fold_row(&domidl_tt, &domidl_why, tcset_tt,
+             "§4.4 textContent read back what it was set to (/api/tcset)");
+    /* THE DEADLINE GATE. `live` was the single worst-scoped world token in this file after `sync`: it is a
+       substring of the endpoints `/api/live` and `/api/cssidxlive`, of the value `islive` that BOTH of those
+       emit, and it is the whole of a PARAM NAME (`/api/gbn?…&live=`) that reaches the document as
+       `"name":"live"` — so the fallback arm read 1 out of four other statements and this row could report a
+       fork it had never seen. */
+    const char *deadline_why = NULL; int deadline_tt = 1;
+    FORK_ROW(js, &deadline_tt, &deadline_why, "/api/deadline", "v",
+             "the timeout gate, whose UNKNOWN aborted flag must fork so the fallback path's endpoint is "
+             "learned too",
+             "expired", "live");
 
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */
@@ -7464,7 +7608,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
-        { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
+        { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE },
         { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
@@ -7480,13 +7624,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE },
         { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE },
         { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE, floc_iso_why },
-        { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE },
-        { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE },
+        { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE, uafork_why },
+        { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE, touchfork_why },
         /* THE SAME QUESTION ONE MEMBER OVER: a gate the bundle asks of the DOM rather than of the navigator. */
         { "cl-unknown-ran", clunk_ran_tt, "/api/clunknown", SESS_EXPLORE },
         { "cl-unknown-src", clunk_src_tt, "/api/clunknown", SESS_EXPLORE },
         { "cl-unknown", clunk_tt, "/api/clunknown", SESS_EXPLORE },
-        { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE },
+        { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE, layoutfork_why },
         { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE },
         /* WEB IDL §3.2.3 boolean OVER UNKNOWN INPUT — one row per ROUTE to the one conversion, plus the
            control that says the fork is not firing on values the page determined. */
@@ -7497,10 +7641,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE },
         { "bitwise-chain", bwhash_tt, "/api/bwhash", SESS_EXPLORE },
         { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE },
-        { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE },
-        { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE },
+        { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
+        { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
         { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE },
-        { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE },
+        { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE, domidl_why },
         { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
         { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
@@ -7544,13 +7688,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE },
         { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE },
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE },
-        { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE },
+        { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE },
         { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE },
-        { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE },
+        { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE, timer_why },
         { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE },
-        { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE },
+        { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
         { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE },
         { "route-seed", routeseed_tt, "/api/routeseed", SESS_EXPLORE, routeseed_why },
@@ -7565,8 +7709,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
         { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
-        { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE },
-        { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE },
+        { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE, cssprop_why },
+        { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE, csspropText_why },
         { "css-webkit-keyframes", csswkkf_tt, "/api/csswkkf?", SESS_EXPLORE },
         { "css-webkit-keyframes-text", csswkkfText_tt, "/api/csswkkfText", SESS_EXPLORE },
         { "css-nesting-selectortext", cssnestsel_tt, "/api/cssnestsel", SESS_EXPLORE },
