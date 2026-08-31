@@ -744,7 +744,12 @@ void event_target_erase_all(JSContext *ctx, JSValueConst target)
  * mapping is FIXED and is deliberately not the concolic's example: a decision vector records ARMS, and a
  * resumed flow re-derives its example values from CURRENT sources, so an example-keyed arm would name a
  * different boolean in the next session than in this one — the cross-session divergence a recorded path must
- * not have. */
+ * not have.
+ * AND THE NUMBER OF ARMS IS PER MEMBER, NOT PER TYPE. `capture` and `once` declare `= false`, so Web IDL
+ * §3.2.17 Dictionary types step 4.1.5 makes their ABSENT world their false world and two arms exhaust them.
+ * `passive` declares no default, so absent is a third answer flatten more options step 4.2's `exists` test
+ * distinguishes and add an event listener step 4 fills differently — see the AEL_PASSIVE stage, which asks its
+ * own three-completion question for that reason. */
 #define AEL_OP_CAPTURE "DOM §2.7 flatten options `capture`"
 #define AEL_OP_ONCE    "DOM §2.7 flatten more options `once`"
 #define AEL_OP_PASSIVE "DOM §2.7 flatten more options `passive`"
@@ -759,7 +764,8 @@ void event_target_erase_all(JSContext *ctx, JSValueConst target)
                    "every read of the options because Web IDL converts arguments in order)")                     \
     X(AEL_CAPTURE, "DOM §2.7 Interface EventTarget, flatten options step 2 (`capture`)")                          \
     X(AEL_ONCE,    "DOM §2.7 Interface EventTarget, flatten more options step 4.1 (`once`)")                      \
-    X(AEL_PASSIVE, "DOM §2.7 Interface EventTarget, flatten more options step 4.2 (`passive`)")                   \
+    X(AEL_PASSIVE, "DOM §2.7 Interface EventTarget, flatten more options step 4.2 (`passive`), whose `exists` "   \
+                   "test and whose two booleans are the three feasible completions of one unknown")              \
     X(AEL_SIGNAL,  "DOM §2.7 Interface EventTarget, flatten more options step 4.3 (`signal`), whose Web IDL "     \
                    "§3.2.15 Interface types conversion and whose add an event listener step 2 aborted test are "  \
                    "the feasible completions of one unknown")                                                    \
@@ -791,7 +797,15 @@ static void ael_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->signal);
 }
 
-/* ONE BOOLEAN MEMBER OF THE FLATTENING, ANSWERED WHERE IT BECOMES A C bool.
+/* ONE BOOLEAN MEMBER OF THE FLATTENING WHOSE ABSENT WORLD IS ITS FALSE WORLD, ANSWERED WHERE IT BECOMES A C
+   bool — `capture` and `once`, and deliberately NOT `passive`.
+   TWO ARMS IS COMPLETE HERE ONLY BECAUSE OF THE DEFAULT, and that is a fact about those two members rather than
+   about booleans. Web IDL §3.2.17 Dictionary types step 4.1.5 gives an absent member "member's default value",
+   and DOM §2.7 Interface EventTarget declares `boolean capture = false` on EventListenerOptions and
+   `boolean once = false` on AddEventListenerOptions — so "the page did not write it" and "the page wrote false"
+   are the SAME registration and there is no third world to ask for. `boolean passive;` declares no default, so
+   its absent world is null and observably its own; the AEL_PASSIVE stage asks the three-completion question
+   itself rather than reaching for this helper.
    `v` IS BORROWED AND IS DELIBERATELY NOT HELD ACROSS THE RETURN, AND WHOSE REFERENCE KEEPS IT ALIVE IS THE
    POINT. step_fork_run leaves a borrowed pointer to it on the header, which the driver reads after this
    machine has returned — and what it must NOT be borrowed from is the `argv` this body was handed, because
@@ -810,8 +824,10 @@ static int ael_flag_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, const ch
     rc = step_fork_run(ctx, hdr, v, op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
     if (rc) return rc;
     DCHECK(arm == 0 || arm == 1,
-           "§2.7's flattening of one boolean member came back on an arm that is neither of the two a boolean "
-           "has — the two worlds a flag names are all there are, and a third is a world nothing can be in");
+           "§2.7's flattening of `capture` or `once` came back on an arm that is neither of the two a boolean "
+           "has. Two is all these two members have BECAUSE THEY DECLARE `= false`, so §3.2.17 step 4.1.5 makes "
+           "their absent world their false world — a member with no default owes a third arm and asks for it "
+           "at its own stage, never here");
     *out = (uint8_t)arm;
     return 0;
 }
@@ -881,21 +897,52 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
     }
 
     if (hdr->stage == AEL_PASSIVE) {
-        /* STEP 4.2 IS AN `exists` TEST AND NOT A TRUTH TEST, and an unknown EXISTS — a concolic is a value the
-           page's object really carries, so the member is written and the tristate's -1 is not one of this
-           position's feasible answers. What is unknown is only which of the two booleans it is, which is the
-           fork below and not this test. */
+        /* STEP 4.2 IS AN `exists` TEST AND NOT A TRUTH TEST. DOM §2.7 Interface EventTarget, flatten more
+           options step 4.2: "If options["passive"] exists, then set passive to options["passive"]." SO OVER AN
+           UNKNOWN THE TEST ITSELF IS UNKNOWN, AND THAT IS THE WORLD THIS STAGE USED TO DELETE.
+           The claim that stood here was that "an unknown EXISTS — a concolic is a value
+           the page's object really carries", and it is FALSE ABOUT THIS VALUE: `v` is not a datum the page
+           wrote, it is what solver/concolic.c's member read MINTS for `Get(unknownBag, "passive")`, with an
+           unconstrained domain, and `undefined` is one of the values that domain contains. Asserting presence
+           here is the same collapse §3.2.25 Union types' arm had one level up (`JS_IsObject` is true of every
+           concolic, so every unknown went down the dictionary arm and the boolean world was deleted), arriving
+           one level down at the member's own presence.
+           THE THREE WORLDS ARE OBSERVABLY DIFFERENT, WHICH IS WHY THIS MEMBER NEEDS A THIRD ARM AND `capture`
+           AND `once` DO NOT. Web IDL §3.2.17 Dictionary types step 4.1.5 gives an absent member "member's
+           default value", so for `boolean capture = false` and `boolean once = false` the absent world IS the
+           false world and two arms are complete. AddEventListenerOptions declares `boolean passive;` with NO
+           default, so its absent world is null — which DOM §2.7 Interface EventTarget's add an event listener
+           step 4 then fills from the default passive value, TRUE for a "touchstart"/"touchmove"/"wheel"/
+           "mousewheel" listener on a Window or on its document, document element or body. `{passive:false}` and
+           `{}` are then different registrations, which is the difference the flag exists to express.
+           THE ABSENT ARM IS APPENDED AND THE TWO BOOLEANS KEEP THEIR NUMBERS. A decision vector records ARMS
+           against a key, and a parked flow replays them across a session — so RENUMBERING this question would
+           hand every recorded `passive` arm a different meaning on resume, which is the mutable-set defect
+           CLAUDE.md names. Outcome 0 stays false (the banner above states why it is the ordinary completion),
+           1 stays true, and the world the page never wrote is the one this diff ADDS, last. */
         v = idl_dict_get(ctx, opts, "passive");
         if (JS_IsUndefined(v)) {
             s->passive = -1;
             JS_FreeValue(ctx, v);
-        } else {
-            uint8_t b = 0;
+        } else if (concolic_is(v)) {
+            int arm = 0;
 
-            rc = ael_flag_run(ctx, hdr, v, AEL_OP_PASSIVE, &b);
+            rc = step_fork_run(ctx, hdr, v, AEL_OP_PASSIVE, 3, JS_OUTCOME_REAL_UNSTATED, &arm);
             JS_FreeValue(ctx, v);
             if (rc) return rc;
-            s->passive = (int8_t)b;
+            DCHECK(arm >= 0 && arm <= 2,
+                   "§2.7's `passive` question came back on a fourth arm — the member is absent, present-false "
+                   "or present-true, and a fourth is a state flatten more options step 4.2 has no value for");
+            s->passive = arm == 2 ? -1 : (int8_t)arm;
+        } else {
+            /* THE PAGE DETERMINED IT, so there is nothing to ask and nothing to park on: Web IDL §3.2.17
+               Dictionary types step 4.1.4's conversion of a `boolean` member is ToBoolean, which runs none of
+               the page's code. It is spelled here rather than routed through ael_flag_run because that helper's
+               whole body is the two-arm fork this branch has already established is not needed, and a call that
+               can only take the helper's first exit would leave a `return rc` no path reaches — an ignore in
+               release wearing a DCHECK in dev. */
+            s->passive = JS_ToBool(ctx, v) ? 1 : 0;
+            JS_FreeValue(ctx, v);
         }
         STEP_GOTO(hdr->stage, AEL_SIGNAL, NULL);
     }
