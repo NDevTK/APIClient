@@ -155,7 +155,12 @@ int  decide_cursor(void);
    would let the heaviest mechanism — one that fires on every orphan drive outweighs every individual branch
    beneath it — evict the predicates the census exists to name. A consumer that wants "which PREDICATE" rather
    than "which fork site" partitions the object by the same rule fork_key_count asserts: a constraint key opens
-   on concolic_ident_compose's decimal length prefix, a mechanism row on `(`.
+   on concolic_ident_compose's decimal length prefix, a mechanism row on `(`, and the census's own bound member
+   on `_`. THE OVERFLOW ROW IS MATCHED BY NAME BEFORE THAT TEST AND NEVER BY IT — it is prose, so it opens on
+   `(` exactly as a mechanism does, and it is the opposite kind of thing: a mechanism row NAMES a site this
+   tree wrote, the overflow row is the mass of the sites it CANNOT name. Splitting on the byte first and
+   subtracting after files the largest thing in the object under the population that is exact by construction,
+   which is the argmax reading inverted rather than approximated.
    READ THE COUNTS AS ARRIVALS, NOT AS PRODUCTION. Each row is how many flows REACHED that site, and every
    fork upstream doubles what reaches everything below it, so a program with k independent gates in sequence
    produces rows in a geometric series and the LAST site in program order is always the largest. A biggest row
@@ -180,20 +185,36 @@ int  decide_cursor(void);
    ever happened and no site was excluded; that row LEADING means more mass is unattributable than the
    best-proven site can claim, so the table has not answered and the argmax is not worth quoting; and below
    that, it is the bound on how far any one named row understates.
-   WHAT THE CENSUS CANNOT SAY IS WHICH KEYS ARE MISSING, AND A READER MUST NOT BE LEFT TO INFER IT. An evicted
+   WHAT THE CENSUS CANNOT SAY IS WHICH KEYS ARE MISSING, SO IT SAYS HOW BIG A MISSING ONE CAN BE. An evicted
    site and a site the document never reached are both ABSENT from this object and no arrangement of these rows
    tells them apart. A count of ZERO is not a third state and cannot occur: a row is claimed BY an arrival and
    only grows, so absence is this table's only way of saying "not seen". What separates the two absences is the
-   LIGHTEST resident count — it bounds the hits of every key the table is not holding, so a key below it may
-   have been evicted while a key above it cannot have been — and that number is not in this object. A consumer
-   that wants to distinguish them needs it emitted beside the rows; a consumer that wants a TIGHT per-row bound
-   rather than the summed one needs each row's own inherited error. Neither is emitted, because neither has a
-   reader, and a field written for nobody is the same broken contract as a field read from nobody.
+   LIGHTEST resident count — Space-Saving's guarantee is that a key the table is NOT holding has taken at most
+   that many, so a key below it may have been evicted while a key above it cannot have been — and it is emitted
+   beside the rows as a MEMBER of the object rather than a row of it, under a name opening on `_` that neither
+   namespace can spell, because it is a bound on hits and not a count of them and must never join the total.
+   IT RIDES EVERY OBJECT THAT HAS ROWS, AND ITS VALUE CARRIES THE STATE RATHER THAN ITS PRESENCE. Nothing is
+   excluded until an eviction happens and an eviction leaves an error no later eviction can clear, so a spill
+   of zero IS "every key ever seen is resident" and the bound is then exactly ZERO — a reading, not a sentinel,
+   and the tight answer rather than the algorithm's loose one. A member that came and went could not be told
+   from one a producer PREDATING IT never wrote, and a stale census would be partitioned happily with its old
+   overflow bucket — prose, opening on `(` — filed among the mechanism rows as the largest site this tree
+   names. Above zero it answers the question the summed spill structurally cannot: whether the excluded mass is ONE hot predicate
+   that fell out of the table or a long tail, which decide_fork_json's own note calls two readings with
+   opposite fixes. When the bound is below the largest named predicate's published floor, no excluded site can
+   outrank that row and the argmax is safe to quote WHATEVER the spill is — which is a stronger statement than
+   "the named rows are a floor", and it is not derivable from the rows.
+   WHAT IS STILL NOT EMITTED is each row's own inherited error, which would bound one row's understatement
+   tightly instead of by the whole spill. It has no reader and would need a shape change (`key -> [floor,
+   err]`) that extension/bridge.js's finite-number DCHECK and popup.js's generic renderer both refuse, so it
+   lands with those two consumers or not at all; a field written for nobody is the same broken contract as a
+   field read from nobody.
    It is keyed by the CONSTRAINT key rather than a file:line because that is what a predicate IS here — two
    forks at one source and operation are one predicate however many call sites spell it, and a chain (a source
    whose operation string carries a position) shows as `distinct` climbing with `total`, which distinguishes
    the two shapes on its own.
-   THE TABLE RENDERS ITSELF, as one JSON object of key→hits (caller frees) — see the composer for why the
+   THE TABLE RENDERS ITSELF, as one JSON object of key→hits plus the one `_`-named bound member above (caller
+   frees) — see the composer for why the
    escaping belongs here and for why it rides solver/result.c's document as `_forkAt` rather than a host's
    printf. The indexed accessor this replaces had exactly ONE caller, in `run_scheduler`, which the production
    ABI never enters. */

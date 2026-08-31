@@ -670,18 +670,58 @@ static void fork_key_count(const char *key, ForkRowKind kind)
    table saying it has not answered. And below that it is the bound on how far any one named row understates —
    a row's true count is at least its published floor and at most that floor plus this row — so "the named rows
    are a floor" stops being a caution and becomes the guarantee.
-   WHAT IT CANNOT SAY IS WHICH KEYS ARE IN IT, and it must not be read as though it could. An evicted site and a
-   site this document never reached are both simply ABSENT here, and no arrangement of these rows separates
-   them; what separates them is the lightest resident count, which bounds the hits of every key the table is not
-   holding, and which is a number this object does not carry. Caller frees. */
+   WHAT IT CANNOT SAY IS WHICH KEYS ARE IN IT, so it carries the ONE NUMBER THAT BOUNDS THE ONES IT IS NOT. An
+   evicted site and a site this document never reached are both simply ABSENT here, and no arrangement of the
+   ROWS separates them. Space-Saving does separate them, with a guarantee about a number the rows do not carry:
+   a key the table is not holding has taken AT MOST the lightest resident row's count. So that number is emitted
+   as a member of this object, and the two states stop being one silence — below it a key may have been evicted,
+   above it a key cannot have been, and a reader can say which of "one hot predicate fell out of the table" and
+   "a long tail" it is looking at, which decide.h names as two readings with opposite fixes.
+   IT IS A MEMBER AND NOT A ROW, AND THE DIFFERENCE IS THE WHOLE OF ITS ESCAPING: it is a BOUND on hits, not a
+   count OF hits, so summing it into the total would put mass in the denominator that no fork ever produced. It
+   is told apart from a row by its leading `_`, which neither namespace can spell — a constraint key opens on
+   concolic_ident_compose's decimal length prefix and a mechanism row on `(`, both asserted at fork_key_count
+   and again at the row loop below, where the consumer actually reads them.
+   IT IS PRESENT WITH EVERY OBJECT THAT HAS ROWS, AND ITS VALUE RATHER THAN ITS PRESENCE CARRIES THE STATE.
+   Zero is the exact answer where nothing was ever excluded, so the state a sentinel would have marked is a
+   real reading of a real number and there is nothing to decode. What that buys is at the consumer: a member
+   that appeared only sometimes could not be told from one a PRODUCER PREDATING IT never wrote, and a stale
+   census would then be partitioned happily — its old overflow bucket is prose opening on `(`, exactly like a
+   mechanism row, so it would be filed among the sites this tree names and reported as the largest of them.
+   Present with every non-empty object, absence beside rows means one thing only. The two statements are then
+   checked against each other instead: a positive bound and a non-zero overflow row are one fact stated twice
+   (a spill is an eviction's residue; an eviction is the only way a key leaves this table), so a consumer that
+   sees one without the other is looking at a census that contradicts itself.
+   WHAT IS STILL NOT EMITTED is each row's OWN inherited error, which would give a TIGHT per-row bound instead
+   of the summed one this object publishes as the overflow row. It needs a shape change (`key -> [floor, err]`)
+   that extension/bridge.js's "every value in this census is a finite number" DCHECK and popup.js's generic
+   `key x N` renderer both refuse, so it lands with those two readers or not at all. Its absence shows as a
+   reader that can bound a row's understatement only by the WHOLE spill: with one heavy row and 63 exact ones,
+   the exact rows are quoted as though they might each be understating by the entire inherited mass. Caller
+   frees. */
 char *decide_fork_json(void)
 {
     static const char OVERFLOW_KEY[] = "(forks the named rows cannot prove are their own)";
+    /* SPACE-SAVING'S BOUND ON EVERY KEY THIS TABLE IS NOT HOLDING — see above for why it is a member rather
+       than a row, and why it appears only beside the overflow row. IT IS NAMED AS THE SENTENCE IT IS because
+       the surface that renders this object renders it generically, as `key x N` (extension/popup.js), so a
+       terse field name would arrive at a person in the exact shape of a fork site with a count beside it —
+       which is the non-site-rendered-as-a-site defect this whole column exists to end, reintroduced one
+       consumer downstream. Read as prose with its value appended, this name states its own meaning.
+       IT IS WRITTEN WITH NO ESCAPING PASS, which is sound because it is this file's own literal and not a
+       page's bytes: the only way a quote or a control character could enter it is a backslash escape in the C
+       source, and engine/build.mjs reads this literal to tell the member from a row and REFUSES an escaped one
+       rather than half-decoding it — so the spelling that would break this write is the spelling that stops
+       the build. A key the loop below escapes is the PAGE's and has no such guarantee. */
+    static const char LIGHTEST_KEY[] = "_the most any site this table is not holding can have taken";
     size_t n = 3;   /* "{}" and the NUL */
     char *out;
     size_t len = 0;
-    int i, phase, rows = 0;
-    long spill = 0, sum = 0;
+    /* MEMBERS, NOT ROWS — the count exists to place the separating commas, and this object now has a member
+       that is not a row, so a name that said `rows` would be one of the two facts wearing the other's name in
+       the one function whose whole subject is telling them apart. */
+    int i, phase, members = 0;
+    long spill = 0, sum = 0, lightest;
 
     /* THE SIZE IS COUNTED FROM THE ROWS THEMSELVES rather than estimated, because a key is the PAGE's bytes
        and has no bound this file may assume. Every byte of a key can escape to six (`\u00XX`), a row costs the
@@ -690,9 +730,48 @@ char *decide_fork_json(void)
         if (g_fork_keys[i].key) { n += strlen(g_fork_keys[i].key) * 6 + 24; spill += g_fork_keys[i].err; }
     for (i = 0; i < g_fork_mech_n; i++) n += strlen(g_fork_mech[i].key) * 6 + 24;
     if (spill) n += sizeof OVERFLOW_KEY * 6 + 24;
+    if (g_fork_total) n += sizeof LIGHTEST_KEY * 6 + 24;
     out = malloc(n);
     if (!out) return NULL;
     out[len++] = '{';
+    /* THE BOUND FIRST, WHERE A READER MEETS IT BEFORE THE ROWS IT QUALIFIES, AND WITH EVERY OBJECT THAT HAS
+       ROWS AT ALL. Emitting it only where it BITES was the other candidate and it is the worse one for a
+       reason that is about the consumer rather than about this table: a member that comes and goes cannot be
+       told from a member a PRODUCER PREDATING IT never wrote, so a reader handed a stale line would partition
+       it happily and mis-file an old overflow bucket — prose, opening on `(` exactly as a mechanism row does —
+       among the sites this tree names. Present with every non-empty object, its absence beside rows is
+       structurally "this census predates this reader" and there is nothing else it can be.
+       AND THE VALUE IS THE TIGHT ONE IN BOTH STATES, so there is no sentinel to read as a number. Nothing is
+       excluded until an eviction, an eviction leaves an error no later eviction can clear (a displaced row
+       hands over `inherited >= 1` and admission never zeroes an err on a full table), so `spill == 0` IS
+       "every key ever seen is resident" and the most an absent site can have taken is exactly ZERO. Above
+       zero it is Space-Saving's bound, which holds only over a full table — and a full table is what a
+       non-zero spill proves. `{}` is untouched and still says this document never forked. */
+    lightest = spill ? fork_pred_min() : 0;
+    if (g_fork_total) {
+        DCHECK(lightest >= 0,
+               "the fork census has mass it cannot attribute and yet reports an unclaimed predicate row — an "
+               "eviction is the only thing that produces that mass and it only ever happens on a FULL table, "
+               "so this pair says a row was displaced out of a table that still had a free slot. The bound "
+               "about to be published is Space-Saving's, and it holds only over a table where every slot is "
+               "claimed: published off a partial one it would understate what an excluded key can have taken "
+               "and a reader would call an argmax safe that is not");
+        DCHECK((lightest > 0) == (spill > 0),
+               "the fork census's bound on its absent keys disagrees with its own overflow row about whether "
+               "anything was ever excluded — those two are one fact stated twice (a spill is the residue of "
+               "an eviction and an eviction is the only way a key leaves this table), so a reader that trusts "
+               "one is contradicted by the other and the pair no longer separates `evicted` from `never seen`");
+        DCHECK(LIGHTEST_KEY[0] == '_',
+               "the fork census's own bound is named in a namespace a ROW can spell — a consumer tells this "
+               "member from the rows by that leading `_` and by nothing else, so a name without it is summed "
+               "into the forks as though it were mass, and every percentage this object supports is then "
+               "taken against a denominator no fork produced");
+        members++;
+        len += (size_t)snprintf(out + len, n - len, "\"%s\":%ld", LIGHTEST_KEY, lightest);
+        DCHECK(len < n, "the fork census overran the size counted for its own bound — that member's key is "
+                        "this file's own literal and was priced from it, so it does not fit only if the "
+                        "pricing above stopped being over the same string");
+    }
     for (phase = 0; phase < 3; phase++)
     for (i = 0; i < (phase == 0 ? g_fork_mech_n : phase == 1 ? DECIDE_FORK_KEYS : 1); i++) {
         const char *k;
@@ -708,7 +787,18 @@ char *decide_fork_json(void)
             k = OVERFLOW_KEY; hits = spill;
         }
         sum += hits;
-        if (rows++) out[len++] = ',';
+        /* THE NAMESPACE, ASSERTED WHERE THE CONSUMER READS IT AND NOT ONLY WHERE THE ROW WAS FILED.
+           fork_key_count asserts each site files into the population it thinks it is; this asserts that what
+           comes OUT still carries the first byte the object is partitioned by. A reader that wants "which
+           PREDICATE" rather than "which fork site" splits these rows on exactly this test, so a third spelling
+           does not arrive as an unknown — it arrives as one of the other two, or as mass in neither. */
+        DCHECK(*k == '(' || (*k >= '0' && *k <= '9'),
+               "the fork census is emitting a row whose name opens on neither of its two namespaces — a "
+               "constraint key opens on concolic_ident_compose's decimal length prefix and a mechanism row on "
+               "`(`, and the object is partitioned by that byte alone. A row outside both is read as whichever "
+               "of the two its first byte happens to resemble, which files a mechanism's exact count among the "
+               "predicate floors or a page's predicate among rows a document cannot grow");
+        if (members++) out[len++] = ',';
         out[len++] = '"';
         for (; *k; k++) {
             if (*k == '"' || *k == '\\') { out[len++] = '\\'; out[len++] = *k; }
@@ -734,7 +824,9 @@ char *decide_fork_json(void)
            "hands back percentages of a denominator that is not the number of forks. The three phases are a "
            "partition of Space-Saving's counters (a mechanism's exact count, a predicate's floor `n - err`, "
            "and the errors summed once), so a mismatch is a phase that skipped a claimed row or double-counted "
-           "an error");
+           "an error. `sum` is over ROWS ONLY and the bound member is deliberately outside it — it is a bound "
+           "on hits and not a count of them, and adding it here would make this identity close over mass no "
+           "fork produced, which is the one way the check could pass while the object it checks is wrong");
     return out;
 }
 

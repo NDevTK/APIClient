@@ -261,53 +261,164 @@ function retiredReading(c) {
    — so a list of every row is a list, and the one row plus how much of all forking it is, is the reading.
    `{}` is the positive statement that nothing forked, which on a bundle that should have branched on opaque
    input is the loudest thing in this sentence and must not render as a blank.
-   AND THE OVERFLOW ROW IS NOT A PREDICATE, WHICH THIS READER STATED THAT IT WAS. decide.c's table is
-   FIXED-SIZE and claimed FIRST-COME, and everything past it lands in one prose-named row the composer renders
-   in the same object under the same shape as a real key — deliberately, because "an undercount that says so is
-   a measurement". Taking the argmax over the object therefore hands back a NON-SITE as the answer to "which
-   predicate is growing the frontier", and counts the prose row among the `predicate(s)`. solver/decide.h says
-   exactly this and says what follows from it: "while the overflow leads the table, the table has not answered,
-   and a reader who quotes the argmax has quoted the bucket". It had no reader that honoured it, and on a real
-   document the bucket has LED the table by a wide margin — so the one line anybody reads named a bucket as the
-   hot predicate, with a percentage beside it.
-   THE THREE STATES ARE SEPARATED RATHER THAN AVERAGED. The bucket LEADS (the table has not answered, and what
-   to build is named in decide.h — heavy-hitter admission, Misra-Gries or Space-Saving, never a bigger table,
-   which fixes one document and no other); the bucket is PRESENT but not largest (the top row is a real site
-   and the reading is honest, with the undercount stated beside it); the bucket is ABSENT (the table held
-   everything). An absent bucket and a zero one are the same fact here and ONLY here — decide.c omits the row
-   entirely unless it overflowed, so its absence is that composer's positive statement that nothing was
-   excluded, which is why this is not the defaulted-field defect.
-   THE KEY IS READ FROM decide.c, NEVER SPELLED HERE, for `hostDefine`'s reason: a second copy of a producer's
-   string goes stale in silence, and a reader that stopped recognising the bucket would quietly return to
-   reporting it as a predicate — the exact defect, restored by a rename.
+   AND THE OVERFLOW ROW IS NOT A PREDICATE, WHICH THIS READER STATED THAT IT WAS. decide.c's predicate table is
+   FIXED-SIZE, and the mass no resident row can prove is its own is published as one prose-named row the
+   composer renders in the same object under the same shape as a real key — deliberately, because "an
+   undercount that says so is a measurement". Taking the argmax over the object therefore hands back a NON-SITE
+   as the answer to "which predicate is growing the frontier", and counts the prose row among the
+   `predicate(s)`. It had no reader that honoured it, and on a real document that row has LED the table by a
+   wide margin — so the one line anybody reads named a bucket as the hot predicate, with a percentage beside it.
+   AND A MECHANISM IS NOT A PREDICATE EITHER, WHICH IS THE SAME DEFECT ONE LAYER IN AND IS THE ONE THE DATA
+   FORCED. This reader called every non-overflow row a `named predicate`, and the largest row of a real
+   document is `(a function the page never called was driven — no predicate was asked)` — an ORPHAN DRIVE,
+   which is a mechanism this tree performs and definitionally not a question the program asked. So the one line
+   anybody reads answered "which predicate is growing the frontier" with a row that is not one, exactly as it
+   did with the bucket, and the fix is the same: say WHAT KIND OF ROW leads. It is not to special-case that row
+   into second place — it legitimately leads, and decide.h says why (a mechanism that fires on every orphan
+   drive outweighs every individual branch beneath it).
+   THE DISCRIMINATOR IS THE PRODUCER'S OWN, NOT A SNIFF. decide.c asserts at `fork_key_count` and again at the
+   row loop of `decide_fork_json` that a constraint key opens on concolic_ident_compose's decimal length prefix
+   and a mechanism row on `(`, and that its own bound member opens on `_`. That is the rule used here, byte for
+   byte, so the two halves are one rule and not two spellings of one; a first byte outside all three THROWS,
+   because a row read as whichever namespace it resembles is the merge those asserts exist to prevent.
+   THE OVERFLOW ROW IS MATCHED BY NAME BEFORE THAT TEST. It is prose, so it opens on `(` exactly as a mechanism
+   does, and it is the opposite kind of thing — a mechanism row names a site this tree wrote, the overflow row
+   is the mass of the sites it CANNOT name. Split on the byte first and the largest thing in the object is
+   filed under the population that is exact by construction.
+   AND THE `spill > top` HEURISTIC IS GONE, REPLACED RATHER THAN KEPT BESIDE ITS REPLACEMENT. It was a proxy
+   for the only question that matters about an exclusion — could a site the table dropped outrank the one it
+   named — and it was a proxy in the wrong units twice over: it compared the spill against the largest row of
+   EITHER population, so a mechanism row (exact, never at risk of eviction, and typically the largest thing
+   here) decided a question about the predicates; and even against the right population it answered with a
+   TOTAL where the question is about a SINGLE key. decide.c now emits Space-Saving's own bound — the most any
+   absent site can have taken — so the question is answered exactly, and a proxy kept beside an exact answer is
+   a second system whose only contribution is to disagree.
+   NEITHER HALF DEFAULTS. Every value is checked as an integer in the range its class allows, every key is
+   classified or the read THROWS — which is what makes the classes a partition rather than an arithmetic
+   identity restating its own definition — and the bound's absence beside rows is refused rather than filled in — that absence is structurally "this census predates this reader", which is the one thing a stale
+   @FORKAT line can be. `{}` is untouched and remains the positive statement that nothing forked, which on a
+   bundle that should have branched on opaque input is the loudest thing in this sentence.
    IT TAKES THE TABLE AND NOT THE LOG for `retiredReading`'s reason: one object is the whole of its input, so
    it can be handed a line off a log and exercised without a build. */
 function forkReading(t) {
   const keys = Object.keys(t);
   if (!keys.length) return `forks: NONE — not one predicate of this document ever split a flow`;
-  const over = forkOverflowKey();
-  const total = keys.reduce((n, k) => n + t[k], 0);
-  const sites = keys.filter((k) => k !== over);
-  const spill = Object.prototype.hasOwnProperty.call(t, over) ? t[over] : 0;
+  const over = forkOverflowKey(), lightest = forkLightestKey();
+  const mech = [], pred = [];
+  let spill = 0, bound = null;
+  for (const k of keys) {
+    const v = t[k];
+    /* A ROW IS AT LEAST ONE AND THE BOUND MAY BE ZERO, which is the one place their shapes differ and is
+       exactly solver/decide.c's `fork_rows_sane`: a row is claimed BY an arrival and only grows, so a count of
+       zero is a state that table cannot be in and a site published as having taken no forks is a site the
+       reader will go and look for. The bound is a different kind of number and zero is its ordinary reading. */
+    if (!Number.isInteger(v) || v < (k.startsWith("_") ? 0 : 1))
+      throw new Error(`[build] the @FORKAT census carries ${JSON.stringify(v)} under ${JSON.stringify(k)} — ` +
+                      `a row of it is a count of forks and is at least 1 (solver/decide.c's fork_rows_sane: a ` +
+                      `row is claimed by an arrival and only grows, so ZERO is not a state that table can be ` +
+                      `in and absence is its only way of saying "not seen"), and its one bound member is a ` +
+                      `non-negative integer. Anything else is that composer having lost the row rather than a ` +
+                      `table with a strange shape, and every percentage taken off it would be a reading of ` +
+                      `that loss.`);
+    if (k === over) { spill = v; continue; }
+    if (k.startsWith("_")) {
+      if (k !== lightest)
+        throw new Error(`[build] the @FORKAT census carries an unknown member ${JSON.stringify(k)} — the ` +
+                        `leading \`_\` is how solver/decide.c marks what is NOT a row, and this reader knows ` +
+                        `exactly one of those. A member it cannot name is either summed into the forks as ` +
+                        `mass no fork produced or silently dropped out of a partition it is supposed to ` +
+                        `close, so it stops here instead.`);
+      bound = v; continue;
+    }
+    if (k.startsWith("(")) { mech.push(k); continue; }
+    if (k[0] >= "0" && k[0] <= "9") { pred.push(k); continue; }
+    throw new Error(`[build] the @FORKAT census carries a row ${JSON.stringify(k)} opening on none of its ` +
+                    `namespaces — solver/decide.c asserts that a constraint key opens on ` +
+                    `concolic_ident_compose's decimal length prefix, a mechanism row on \`(\` and the ` +
+                    `census's own bound on \`_\`, and this object is partitioned by that byte alone. A third ` +
+                    `spelling is read as whichever of the two populations it resembles, which files a ` +
+                    `mechanism's exact count among the predicate floors or a page's predicate among rows a ` +
+                    `document cannot grow.`);
+  }
+  if (bound === null)
+    throw new Error(`[build] the @FORKAT census has ${keys.length} row(s) and no \`${lightest}\` member — ` +
+                    `solver/decide.c emits that bound with every object that has rows at all, precisely so ` +
+                    `its absence cannot be confused with a producer that never wrote it. So this line was ` +
+                    `written by an engine older than this reader, and partitioning it would file that ` +
+                    `engine's differently-named overflow bucket — prose, opening on \`(\` — among the ` +
+                    `mechanism rows and report it as the largest site this tree names.`);
+  if ((bound > 0) !== (spill > 0))
+    throw new Error(`[build] the @FORKAT census bounds an absent site at ${bound} while its overflow row ` +
+                    `holds ${spill} — those are one fact stated twice (a spill is an eviction's residue and ` +
+                    `an eviction is the only way a key leaves that table), so this census contradicts itself ` +
+                    `and neither number separates an EVICTED site from one this document never reached.`);
+  const sum = (a) => a.reduce((n, k) => n + t[k], 0);
+  const mechSum = sum(mech), predSum = sum(pred), total = mechSum + predSum + spill;
+  /* AND A BOUND WITH NOTHING TO BOUND IS NOT A DOCUMENT THAT NEVER FORKED — that is `{}`, handled above.
+     solver/decide.c emits this member only where it counted a fork, and a fork it counted is a row it filed,
+     so the two arrive together. Refused rather than divided by: every percentage below is over this total. */
+  if (total === 0)
+    throw new Error(`[build] the @FORKAT census carries its bound member and not one row — solver/decide.c ` +
+                    `emits that member only where it has counted a fork, and every fork it counts is filed ` +
+                    `into a row, so this object is a composer that counted forks it did not publish. A ` +
+                    `document that never forked is \`{}\` and is a different sentence entirely.`);
+  /* THE PARTITION IS THE CONTRACT AND IT IS ENFORCED BY EXHAUSTIVE CLASSIFICATION, NOT BY AN IDENTITY. The
+     mechanisms' exact counts, the predicates' floors and the errors summed once ARE Space-Saving's counters,
+     so they close over the forks — and solver/decide.c asserts that at the composer, where `g_fork_total` is
+     in hand. Here it is not: this object carries no total of its own, so `mech + pred + spill === total` would
+     be its own definition restated and could not fail. What CAN fail is the classification, and every way it
+     can is refused above — an unknown namespace, an unknown `_` member, a row below 1 — so the denominator
+     below is every fork this census filed and the bound is outside it, which is the half a consumer owns.
+     RESIDUAL: the rows are NOT checked against the engine's own fork total, which solver/result.c publishes as
+     the @COLD census's `forks` from the same emission block (solver/engine.c prints @COLD then @FORKAT with
+     @HEAP and @WFQ between). The next diff pairs the two BY INDEX within that block rather than by last-line —
+     they are printed in order, so a truncated tail leaves one more @COLD than @FORKAT and a last-to-last
+     comparison would false-throw on the artifact rather than on the census. Its absence shows as a dropped or
+     double-counted row surviving into this reading in a RELEASE build, where decide_fork_json's own
+     `sum == g_fork_total` DCHECK is compiled out and nothing else is looking. */
+  const slots = hostDefine("solver/decide.c", "DECIDE_FORK_KEYS",
+                           "the @FORKAT reader checks that a census reporting an eviction is one whose " +
+                           "predicate table is actually full, which is the condition Space-Saving's bound " +
+                           "holds under");
+  if (spill > 0 && pred.length !== slots)
+    throw new Error(`[build] the @FORKAT census reports ${spill} unattributable fork(s) with ${pred.length} ` +
+                    `predicate row(s) in a table of ${slots} — a row is only ever displaced out of a FULL ` +
+                    `table and rows are never released, so this pair cannot both be true. Space-Saving's ` +
+                    `bound on an excluded site holds over a full table and nothing else, and the reading ` +
+                    `below quotes it.`);
   const pct = (v) => Math.round(100 * v / total);
-  const top = sites.length ? sites.reduce((x, k) => (t[k] > t[x] ? k : x), sites[0]) : null;
-  return top === null
-    ? `forks: ${total} and EVERY ONE of them in the row decide.c's table could not hold, so the table named ` +
-      `no predicate at all — solver/decide.h calls this the admission policy excluding exactly the row it ` +
-      `exists to name, and the fix it names is heavy-hitter admission rather than a bigger table`
-    : `forks: ${total} across ${sites.length} named predicate(s)` +
-      (spill === 0
-        ? `, the largest ${pct(t[top])}% at ${JSON.stringify(top)}; decide.c's table did not overflow, so no ` +
-          `site was excluded from it`
-        : spill > t[top]
-          ? `, and the table HAS NOT ANSWERED: ${pct(spill)}% of forks are in rows it could not hold, which ` +
-            `is more than the largest named site (${pct(t[top])}% at ${JSON.stringify(top)}). That one bucket ` +
-            `is an unknown number of sites, so "one hot predicate that fell out of the table" and "a genuine ` +
-            `long tail" read identically here and have opposite fixes — see solver/decide.h for the ` +
-            `admission policy that decides which keys a fixed-size census retains`
-          : `, the largest ${pct(t[top])}% at ${JSON.stringify(top)}, with ${pct(spill)}% of forks in rows ` +
-            `the table could not hold — so that share is an undercount spread over an unknown number of ` +
-            `excluded sites and the named rows are a floor`);
+  const top = (a) => (a.length ? a.reduce((x, k) => (t[k] > t[x] ? k : x), a[0]) : null);
+  const tp = top(pred), tm = top(mech);
+  /* SENTENCE ONE IS THE QUESTION THIS CENSUS EXISTS FOR — which PREDICATE is growing the frontier — and it is
+     answered out of the predicate population alone. */
+  return `forks: ${total} — ` +
+    (tp === null
+      ? `NOT ONE of them asked a predicate this table could name`
+      : `${predSum} (${pct(predSum)}%) at ${pred.length} named predicate(s), the largest ${pct(t[tp])}% at ` +
+        `${JSON.stringify(tp)}, and every named count is a FLOOR: the hits that row can prove are its own`) +
+    /* AND SENTENCE TWO IS THE OTHER POPULATION, NAMED AS WHAT IT IS. These rows are prose this tree writes at
+       its own call sites, so a document cannot add one and none of them is a branch a program took — which is
+       why they are exact, and why the largest of them leading says nothing whatever about a predicate. */
+    `. ` + (tm === null
+      ? `Every fork asked a predicate — no mechanism forked without one`
+      : `${mechSum} (${pct(mechSum)}%) asked NO predicate at all: ${mech.length} mechanism(s), the largest ` +
+        `${pct(t[tm])}% at ${JSON.stringify(tm)}, counted exactly — those rows are this tree's own call sites ` +
+        `and not questions the program asked, so a document cannot add one and the largest of them leading ` +
+        `is not an answer about a predicate`) +
+    /* AND SENTENCE THREE IS WHAT THE CENSUS COULD NOT HOLD, WITH THE ONE NUMBER THAT MAKES THE ARGMAX ABOVE
+       SAFE OR UNSAFE TO QUOTE. `tp` is non-null on every arm that reads it: a spill proves a full table, and
+       the check above proves a full table has its rows. */
+    `. ` + (spill === 0
+      ? `decide.c's table did not overflow, so no site was excluded and a key absent from these rows was ` +
+        `never reached by this document`
+      : `${spill} (${pct(spill)}%) is mass the named rows cannot prove is theirs` + (bound < t[tp]
+        ? `, but no site the table dropped took more than ${bound} fork(s) — below the largest named ` +
+          `predicate's floor (${t[tp]}), so nothing excluded can outrank it and the argmax above is safe to ` +
+          `quote: that mass is a long tail, not one hot predicate that fell out of the table`
+        : `, and a site it dropped may have taken up to ${bound} fork(s) — at least the largest named ` +
+          `predicate's floor (${t[tp]}), so an excluded site may outrank every predicate named here and the ` +
+          `argmax above is NOT worth quoting. solver/decide.h names what decides which keys a fixed census ` +
+          `retains; a bigger table is not it`));
 }
 function probeFlips(out) {
   const rows = [];
@@ -472,28 +583,42 @@ function hostDefine(file, name, why) {
                           `substitute a remembered value for one it cannot find.`);
   return Number(m[1]);
 }
-/* THE SAME RULE FOR A STRING — decide.c's `OVERFLOW_KEY`, which is the name the fork table gives the row it
-   could not hold. The reader that has to tell a bucket from a predicate needs the exact bytes, and a copy of
-   them here would be a second spelling that goes stale in silence: a rename in decide.c would leave this file
-   quietly reporting the bucket as the hot predicate again, which is the defect the reader exists to end and is
-   invisible from either side. So it is read, and an unreadable one throws rather than being guessed past.
+/* THE SAME RULE FOR A STRING — the two members of decide.c's fork census that this file has to recognise BY
+   NAME rather than by shape, because neither is a row and both are spelled in prose that only decide.c owns.
+   A copy of either here would be a second spelling that goes stale in silence: a rename over there would leave
+   this reader quietly reporting the overflow BUCKET as the hot predicate again, or summing the census's own
+   BOUND into the forks as though it were mass — both invisible from either side, and the first is precisely
+   the defect this reader exists to end. So they are read, and an unreadable one throws rather than being
+   guessed past.
    IT REFUSES AN ESCAPED LITERAL RATHER THAN HALF-DECODING ONE. There is no C string unescaper here, and a key
    containing `\n` or `\x41` would be matched against the JSON's decoded bytes as the two characters it is
    written with — a comparison that silently never matches, which is exactly the same silence. decide.c's own
-   note says the row is named "under a name no constraint key can collide with because no key is prose", so a
-   backslash appearing in it is a change of kind and this is where it stops. */
-function forkOverflowKey() {
+   note says the overflow row is named "under a name no constraint key can collide with because no key is
+   prose", so a backslash appearing in either is a change of kind and this is where it stops.
+   ONE READER FOR BOTH, which is the rule `hostDefine` above is written for applied to a second kind of fact: a
+   second copy of this regex and this refusal would be two spellings of one contract, and the day one of them
+   learned something the other would keep not knowing it. */
+function forkCensusName(sym, why) {
   const file = "solver/decide.c";
   const m = readFileSync(join(HOST, file), "utf8")
-    .match(/static\s+const\s+char\s+OVERFLOW_KEY\s*\[\s*\]\s*=\s*"([^"\\]*)"\s*;/);
+    .match(new RegExp(`static\\s+const\\s+char\\s+${sym}\\s*\\[\\s*\\]\\s*=\\s*"([^"\\\\]*)"\\s*;`));
   if (!m)
-    throw new Error(`[build] cannot read \`OVERFLOW_KEY\` from engine/host/${file} as an unescaped literal — ` +
-                    `the @FORKAT reader tells decide.c's overflow BUCKET from a real predicate by that exact ` +
-                    `name, and without it the largest row of that table is reported as the hot predicate even ` +
-                    `when it is the row the table could not hold. It will not substitute a remembered spelling ` +
-                    `for one it cannot find, and it will not half-decode an escaped one.`);
+    throw new Error(`[build] cannot read \`${sym}\` from engine/host/${file} as an unescaped literal — ` +
+                    `${why}. It will not substitute a remembered spelling for one it cannot find, and it will ` +
+                    `not half-decode an escaped one.`);
   return m[1];
 }
+const forkOverflowKey = () =>
+  forkCensusName("OVERFLOW_KEY",
+                 "the @FORKAT reader tells decide.c's overflow BUCKET from a real predicate by that exact " +
+                 "name, and without it the largest row of that table is reported as the hot predicate even " +
+                 "when it is the row the table could not hold");
+const forkLightestKey = () =>
+  forkCensusName("LIGHTEST_KEY",
+                 "the @FORKAT reader tells decide.c's own BOUND — the most any site the table is not holding " +
+                 "can have taken — from the rows by that exact name, and without it that bound is summed into " +
+                 "the forks as mass no fork produced and every percentage is taken against the wrong " +
+                 "denominator");
 /* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. */
 const ageQuantum = () =>
   hostDefine("solver/engine.h", "ENGINE_QUANTUM_MS",
