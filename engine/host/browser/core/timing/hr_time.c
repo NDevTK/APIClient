@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "cutils.h"            /* §4's WALL CLOCK — js__gettimeofday_us, the one real clock this engine reads */
 #include "core/agent_state.h"
 #include "core/frame/agent_cluster.h"
 #include "core/realm.h"
@@ -21,6 +22,45 @@
 #define HR_TIME_RESOLUTION_ISOLATED_MS 0.005
 
 static int g_origin_slot = -1;
+
+/* §4's ESTIMATED MONOTONIC TIME OF THE UNIX EPOCH — "Each group of environment settings objects that could
+ * possibly communicate in any way has an estimated monotonic time of the Unix epoch, a moment on the monotonic
+ * clock". A GROUP, so it is AGENT state and not realm state: CLAUDE.md's §Security makes an instance an
+ * origin-keyed agent cluster, which is exactly the set of settings objects §4's own note gestures at ("needs to
+ * be specified better ... similar to familiar with but includes Workers"), and every realm this agent builds
+ * shares one estimate. Two estimates in one agent would make `performance.timeOrigin` of a document and of its
+ * same-origin child disagree about when 1970 was, which is the only thing this value is FOR.
+ *
+ * IT IS THE ONE PLACE THE WALL CLOCK ENTERS §4, and the flag is the latch rather than a sentinel value in the
+ * double, because a legitimate estimate is a large NEGATIVE number (the monotonic clock starts at zero long
+ * after 1970) and so no value of the double is free to mean "unset". core/agent_state.h has a kind per
+ * PRE-INIT VALUE and none for a `double`; the flag is the state that decides whether the double means anything,
+ * so the flag is what the release owes and what platform_agent_free checks.
+ *
+ * WHY A REAL CLOCK READ IS THE HONEST ANSWER HERE AND NOT ELSEWHERE IN THIS FILE. The MONOTONIC clock is the
+ * event loop's virtual clock and must stay so — hr_time_unsafe_shared_current's residual says why, and a wall
+ * clock there would make every timestamp a per-run disagreement that §Testing's solver differential reports as
+ * a scheduling bug. The WALL clock is a different question: §4 reads it exactly ONCE per agent, to place the
+ * monotonic clock's zero relative to the Unix epoch, and the alternative is not determinism but a FABRICATION —
+ * an engine that answers `performance.timeOrigin` from the monotonic origin alone reports every document as
+ * having been navigated to in January 1970, and `new Date(performance.timeOrigin + performance.now())` renders
+ * it. That is a plausible datum rather than an absence, which is the one thing this tree refuses. This engine
+ * already hands the page the same clock through ECMAScript's `Date.now()` (quickjs's js_Date_now over
+ * js__gettimeofday_us) and through File §4.1's `lastModified`, so the entropy is not new and §9.2 Clock drift's
+ * own comparison — `performance.timeOrigin` against `Date.now() - performance.now()` — is the relationship a
+ * page can already make either way. What WOULD be new is the two disagreeing. */
+static int    g_epoch_known;         /* §4's "whose value is initialized by the following steps", once per agent */
+static double g_epoch_estimate_ms;   /* defined ONLY while g_epoch_known — see above for why no value can latch */
+
+/* §4 STEP 3's FLOOR, run on a number. The one arithmetic in this file, so that the known path and the example
+   of the unknown path cannot drift apart — and so that every call of `coarsen time` this component makes rounds
+   the same way, on either of the two grids §4 step 1 and step 2 name. It is ABOVE the install because the
+   install is now a caller and is the EARLIEST one; it sat below while its only caller was hr_time_coarsen,
+   which nothing runs before a realm has been built. */
+static double hr_floor(double m, double resolution)
+{
+    return floor(m / resolution) * resolution;
+}
 
 /* §4: "Performance measurements report a duration from a moment early in the initialization of a relevant
  * environment settings object. That moment is stored in that settings object's time origin." This runs from
@@ -49,8 +89,59 @@ static int g_origin_slot = -1;
  * is a pure function of the stored moment so no read can disagree with another. */
 static void hr_time_install(JSContext *ctx)
 {
+    JSValue moment = event_loop_now(ctx);
+
+    /* §4's FOUR STEPS THAT INITIALIZE THE GROUP'S ESTIMATED MONOTONIC TIME OF THE UNIX EPOCH, run at the FIRST
+     * realm this agent builds and at no other. §4 states the estimate as a property of the group and gives no
+     * moment for it; the first realm's install is the earliest moment at which both clocks are readable, and
+     * doing it here rather than in hr_time_init is forced — hr_time_init runs in core/platform.c's DECLARE pass,
+     * which is where the event loop's own record is BUILT, so a monotonic read there would ask a clock that
+     * does not exist yet. A LATER moment would be worse than merely late: `event_loop_now` is PER FLOW, so an
+     * estimate initialized on first read would be fixed out of whichever flow happened to touch
+     * `performance.timeOrigin` first and would then be an agent-wide fact minted inside one flow's timeline.
+     * The first realm's install runs before any flow does, which is what makes this a group fact rather than
+     * one flow's. */
+    if (!g_epoch_known) {
+        double monotonic_ms = 0, wall_ms;
+
+        /* §4 step 2: "Let monotonic time be the monotonic clock's unsafe current time." It is the moment read
+           at the top of this function, which is also the one this realm's time origin is stamped with — one
+           read and not two, so the group's estimate and the first environment's origin cannot be placed against
+           each other by a clock that moved in between. The read is therefore BEFORE step 1's below rather than
+           after, and that reordering is unobservable here for the reason hr_time_unsafe_shared_current states:
+           this monotonic clock advances only when a task source becomes due, so it holds one moment for the
+           whole of an install.
+           Before any flow has run, the loop has reached no task source, so this is the agent's starting moment
+           and is KNOWN. The assert is what says so: the day a realm is first built after an unknown timeout has
+           moved the clock (core/timing/event_loop.h's §8.7 `timeout` reaching the map of active timers), the
+           estimate would be a derivation over unknown input and every `performance.timeOrigin` in the agent
+           would fork. */
+        DCHECK(JS_IsNumber(moment),
+               "HR-TIME §4's estimated monotonic time of the Unix epoch was initialized from a monotonic "
+               "moment this run does not KNOW — the estimate is one fact for the whole agent, so a derivation "
+               "here would hand every realm's `performance.timeOrigin` an unknown and fork every branch over "
+               "it. BUILD the group fact where the group is created rather than at the first realm: carry the "
+               "agent's starting moment on the agent (core/agent_state.h) and initialize this from that");
+        JS_ToFloat64(ctx, &monotonic_ms, moment);
+        /* §4 step 1: "Let wall time be the wall clock's unsafe current time." The ONE wall-clock read in this
+           file — see the estimate's declaration above for why it is here and nowhere else. */
+        wall_ms = (double)js__gettimeofday_us() / 1000.0;
+        /* §4 step 3: "Let epoch time be monotonic time - (wall time - Unix epoch)". The Unix epoch is "the
+           moment on the wall clock corresponding to 1 January 1970 00:00:00 UTC", which is the moment this
+           clock reports as zero, so `wall time - Unix epoch` is the reading itself.
+           §4 step 4: "Initialize the estimated monotonic time of the Unix epoch to the result of calling
+           coarsen time with epoch time." NOTE THE ARGUMENT LIST: step 4 passes NO crossOriginIsolatedCapability,
+           so `coarsen time`'s optional second argument takes its declared default of false and that algorithm's
+           OWN step 1 — 100 microseconds — is the grid. It is also the only grid available here: a group has no
+           environment whose capability could be asked, and the first realm's Document does not exist yet. That
+           is why this is hr_floor at the ordinary resolution and NOT hr_time_coarsen, whose whole contract is
+           to ask an environment (and whose non-negative assertion is about moments of THIS clock; §4's epoch
+           time is legitimately far in this clock's past, which is the entire point of it). */
+        g_epoch_estimate_ms = hr_floor(monotonic_ms - wall_ms, HR_TIME_RESOLUTION_MS);
+        g_epoch_known = 1;
+    }
     /* Running twice in one realm is asserted by realm_value_set, which is where the first moment is standing. */
-    realm_value_set(ctx, g_origin_slot, event_loop_now(ctx));
+    realm_value_set(ctx, g_origin_slot, moment);
 }
 
 JSValue hr_time_origin(JSContext *ctx)
@@ -66,13 +157,6 @@ JSValue hr_time_origin(JSContext *ctx)
     coarse = hr_time_coarsen(ctx, v);
     JS_FreeValue(ctx, v);
     return coarse;
-}
-
-/* §4 STEP 3's FLOOR, run on a number. The one arithmetic in this file, so that the known path and the example
-   of the unknown path cannot drift apart. */
-static double hr_floor(double m, double resolution)
-{
-    return floor(m / resolution) * resolution;
 }
 
 /* THE OPERATION'S NAME, one per resolution, because §4 takes the resolution as an argument and two
@@ -177,10 +261,72 @@ static JSValue hr_time_unsafe_shared_current(JSContext *ctx)
     return event_loop_now(ctx);
 }
 
+/* HR-TIME §2.2 Moments and Durations' DURATION FROM ONE MOMENT TO ANOTHER, which is the shape of every value
+ * §4 returns: `relative high resolution coarse time` is "the duration from ... time origin to coarseTime" and
+ * `get time origin timestamp` is "the duration from the estimated monotonic time of the Unix epoch to
+ * timeOrigin". TWO callers, ONE subtraction, because the operand ORDER is the half of this that is easy to get
+ * backwards and a second copy is a second chance to get it backwards independently.
+ *
+ * THE SUBTRACTION IS ECMAScript §13.8.2 The Subtraction Operator ( - ), RUN — which §13.15.3
+ * ApplyStringOrNumericBinaryOperator performs, the same abstract operation `+` reaches. Its result's identity is
+ * composed from the operator and BOTH operands, which is why it goes through the operator rather than through a
+ * derivation named for one clause: two environments subtracting two different origins from one coarsened moment
+ * must not compose one key. The hook's stack effect is the interpreter's — both operands freed, the result
+ * placed in sp[-2] — so both are handed over here. BOTH ARGUMENTS ARE CONSUMED either way. */
+static JSValue hr_duration(JSContext *ctx, JSValue from, JSValue to)
+{
+    JSValue sp[2];
+
+    if (!concolic_is(from) && !concolic_is(to)) {
+        double f = 0, t = 0;
+
+        JS_ToFloat64(ctx, &f, from);
+        JS_ToFloat64(ctx, &t, to);
+        JS_FreeValue(ctx, from);
+        JS_FreeValue(ctx, to);
+        return JS_NewFloat64(ctx, t - f);
+    }
+    sp[0] = to;
+    sp[1] = from;
+    if (!concolic_arith_hook(ctx, sp + 2, JS_CARITH_SUB, 2))
+        DFAIL("§13.8.2 The Subtraction Operator ( - ) declined an operand this component has already "
+              "established is UNKNOWN — the "
+              "concolic value semantics are not installed in this host, so every operator over an unknown "
+              "falls through to the ordinary-object path and the next coercion throws out of an expression "
+              "the page never wrote (solver/concolic.h: concolic_install_hooks)");
+    return sp[0];
+}
+
+/* HR-TIME §4 Time Origin's GET TIME ORIGIN TIMESTAMP. §7.2's `timeOrigin` is its only reader, and this is why
+ * hr_time.h has said since it was written that the day this engine has a `performance` object it becomes §4's
+ * second reader of the origin — it is a DIFFERENT operation over the same stored moment, not the same one.
+ *
+ * IT TAKES THE STORED MOMENT AND NOT hr_time_origin's COARSENING, and the two-line difference is the spec's.
+ * §4 step 1 is "Let timeOrigin be global's relevant settings object's time origin" — the moment as stored, with
+ * no coarsening in this algorithm at all — because the coarsening that protects this value has ALREADY happened
+ * at the other end: step 4 of the estimate's own initialization coarsened it, so the duration is a moment minus
+ * a value on the 100-microsecond grid. hr_time_origin coarsens because ITS reader (`relative high resolution
+ * coarse time`) subtracts the origin from a COARSENED moment and both ends have to be on one grid; that reason
+ * does not exist here and borrowing its answer would be applying one algorithm's step inside another. */
+JSValue hr_time_origin_timestamp(JSContext *ctx)
+{
+    JSValue origin = realm_value_get(ctx, g_origin_slot);
+
+    DCHECK(g_epoch_known,
+           "HR-TIME §7.2's `timeOrigin` was read before §4's estimated monotonic time of the Unix epoch was "
+           "initialized — the estimate is stamped by the FIRST realm this agent builds and this attribute is "
+           "reachable only THROUGH a realm, so the two cannot come apart unless the install stopped running");
+    DCHECK(JS_IsNumber(origin) || concolic_is(origin),
+           "an environment's TIME ORIGIN is neither a moment on the monotonic clock nor a derivation of one — "
+           "HR-TIME §4 stores the clock's moment at this realm's creation, and the install that stamps it is "
+           "the only thing that ever writes this slot");
+    /* §4 step 3: "Return the duration from the estimated monotonic time of the Unix epoch to timeOrigin." */
+    return hr_duration(ctx, JS_NewFloat64(ctx, g_epoch_estimate_ms), origin);
+}
+
 JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
 {
     JSValue coarse, origin;
-    JSValue sp[2];
 
     /* §4's argument is "an unsafe moment FROM THE MONOTONIC CLOCK", and §2.1 Clocks says what a clock reports:
        "the unsafe current time that an algorithm step is executing". A moment this clock has not reached was
@@ -223,31 +369,7 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
            "HR-TIME §4's relative high resolution time is NEGATIVE — this environment was asked about a moment "
            "earlier than its own TIME ORIGIN, which means the origin was stamped when the realm materialized "
            "rather than when HTML §7.4 created the Window");
-    if (!concolic_is(coarse) && !concolic_is(origin)) {
-        double c = 0, o = 0;
-
-        JS_ToFloat64(ctx, &c, coarse);
-        JS_ToFloat64(ctx, &o, origin);
-        JS_FreeValue(ctx, coarse);
-        JS_FreeValue(ctx, origin);
-        return JS_NewFloat64(ctx, c - o);
-    }
-    /* THE SUBTRACTION IS ECMAScript §13.8.2 The Subtraction Operator ( - ), RUN — which §13.15.3
-       ApplyStringOrNumericBinaryOperator performs, the same abstract operation `+` reaches. Its result's
-       identity is composed from the operator
-       and BOTH operands, which is why it goes through the operator rather than through a second derivation
-       named for this clause: two environments subtracting two different origins from one coarsened moment
-       must not compose one key. The hook's stack effect is the interpreter's — both operands freed, the
-       result placed in sp[-2] — so both are handed over here. */
-    sp[0] = coarse;
-    sp[1] = origin;
-    if (!concolic_arith_hook(ctx, sp + 2, JS_CARITH_SUB, 2))
-        DFAIL("§13.8.2 The Subtraction Operator ( - ) declined an operand this component has already "
-              "established is UNKNOWN — the "
-              "concolic value semantics are not installed in this host, so every operator over an unknown "
-              "falls through to the ordinary-object path and the next coercion throws out of an expression "
-              "the page never wrote (solver/concolic.h: concolic_install_hooks)");
-    return sp[0];
+    return hr_duration(ctx, origin, coarse);
 }
 
 JSValue hr_time_current(JSContext *ctx)
@@ -264,8 +386,14 @@ JSValue hr_time_current(JSContext *ctx)
 void hr_time_init(JSContext *ctx)
 {
     DCHECK(g_origin_slot < 0, "hr_time_init ran twice — the TIME ORIGIN's slot is declared once per AGENT");
+    DCHECK(!g_epoch_known, "hr_time_init ran twice — §4's estimated monotonic time of the Unix epoch is the "
+                           "GROUP's, so a second agent starting on the first one's estimate would place its "
+                           "clock's zero against a wall-clock reading taken in a process that is gone");
     g_origin_slot = realm_value_declare(ctx, "HR-TIME §4 the environment settings object's time origin");
     agent_state_id("hr_time", &g_origin_slot, "HR-TIME §4's time-origin realm slot");
+    agent_state_flag("hr_time", &g_epoch_known,
+                     "HR-TIME §4's estimated monotonic time of the Unix epoch, and the latch that says the "
+                     "first realm's install has stamped it");
     realm_declare_intrinsic(hr_time_install);
 }
 
@@ -274,4 +402,9 @@ void hr_time_free(void)
     /* The moments are the REALMS' — each is released with its context. What the agent holds is the slot, and a
        slot id is a class id in a runtime that is going away with it. */
     g_origin_slot = -1;
+    /* §4's estimate is the GROUP's and this group is over. The double goes back with its latch rather than
+       being left to be read under a `g_epoch_known` a later agent has re-raised: it names a moment on a
+       monotonic clock that no longer runs, and the pair is one fact. */
+    g_epoch_known = 0;
+    g_epoch_estimate_ms = 0.0;
 }

@@ -93,6 +93,7 @@
 #include "core/structured_clone.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/hr_time.h"
+#include "core/timing/performance.h"
 #include "core/timing/timer.h"
 #include "core/url/origin.h"
 #include "core/url/url.h"
@@ -188,6 +189,7 @@ static void d_idb_get_all(JSContext *c, const PlatformAgent *a) { (void)a; idb_g
 static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_version_change_event_init(c); }
 static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
+static void d_performance(JSContext *c, const PlatformAgent *a) { (void)a; performance_init(c); }
 static void d_input_device_capabilities(JSContext *c, const PlatformAgent *a)
 { (void)a; input_device_capabilities_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
@@ -244,6 +246,7 @@ static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabiliti
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_css_namespace(JSRuntime *rt) { (void)rt; css_namespace_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
+static void r_performance(JSRuntime *rt) { (void)rt; performance_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
 /* §8.1.3.3's about-to-be-notified rejected promises list is a live Array a C static holds for the agent, so it is
@@ -698,6 +701,13 @@ static const PlatformComponent PLATFORM[] = {
     { "text_stream",         d_text_stream,         i_text_stream },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
     { "event_target",        d_event_target,        NULL,        r_event_target },
+    /* HR-TIME §7's Performance, whose position is fixed from BOTH sides and by nothing else. `interface
+       Performance : EventTarget`, so its per-realm install calls event_target_derived_proto and must follow the
+       row above; and §7.1/§7.2 are the two operations of §4 that `hr_time` owns, which is the FIRST row of this
+       list. It depends on nothing else and nothing else depends on it — §8.1's `performance` goes on the global
+       through this component's own realm intrinsic, so a child navigable gets its own Performance object over
+       its own time origin, which is the whole reason the two members are per realm. */
+    { "performance",         d_performance,         NULL,        r_performance },
     /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
        §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
        which is where every Event subclass including that one is declared. */
@@ -1010,6 +1020,17 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "open",                  "navigable" },
     { "fetch",                 "fetch" },
     { "setTimeout",            "timer" },
+    /* HR-TIME §7's interface object and §8.1's `performance` attribute, and this pair is the sharpest case on
+       the list for the reason Web Storage's two and §8.9.1's three are — with one turn of the screw more.
+       `performance` is on browser/platform_names.h, so solver/absent.c's read hook LEAVES A MISS ON IT ALONE:
+       a name the platform owns is a component this engine owes, and that file declines to mint a concolic for
+       one. `window.performance` therefore answers a CONCRETE `undefined` rather than unknown input, so
+       `if (window.performance && performance.now)` is DECIDED with no fork and every telemetry, budgeting and
+       lazy-hydration path a bundle puts behind that guard is code the forced execution cannot reach — in a
+       browser where the guard is always true. An install that silently stopped happening would restore not a
+       throw one frame away but a whole arm of the program that no run takes, with nothing to say so. */
+    { "Performance",           "performance" },
+    { "performance",           "performance" },
     { "postMessage",           "window_message" },
     { "structuredClone",       "structured_clone" },
     { "requestAnimationFrame", "animation_frame" },

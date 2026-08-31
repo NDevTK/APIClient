@@ -89,9 +89,20 @@ void hr_time_free(void);
    settings object's time origin.") and `coarsen time` picks its resolution from the environment's
    cross-origin isolated capability — a field HTML §7.2.2.6 defines over "window's associated DOCUMENT",
    which does not exist when the realm's install stamps the slot. So the write is the moment and the read is
-   the coarsening; hr_time.c's install says what asking it the other way round cost. Exported because the day
-   this engine has a `performance` object, `get time origin timestamp` is its second reader. */
+   the coarsening; hr_time.c's install says what asking it the other way round cost. `get time origin timestamp`
+   is the stored moment's SECOND reader and it is the operation BELOW, not this one — §4 gives it the moment as
+   STORED, which is why two entry points read one slot rather than one being written in terms of the other. */
 JSValue hr_time_origin(JSContext *ctx);   /* OWNED */
+
+/* §4's GET TIME ORIGIN TIMESTAMP, given this realm as the global — "the duration from the estimated monotonic
+   time of the Unix epoch to timeOrigin". That estimate is the AGENT's (§4 gives one to "each group of
+   environment settings objects that could possibly communicate in any way") and is initialized by the first
+   realm this agent builds. HR-TIME §7.2 timeOrigin attribute is its only reader — core/timing/performance.c.
+   IT IS THE ONE VALUE IN THIS COMPONENT THE REAL WALL CLOCK REACHES, once per agent, and hr_time.c's
+   declaration of the estimate says why that is the honest answer here and would be a fabrication anywhere else
+   in this file: without it every document reports having been navigated to in January 1970, which is a
+   plausible number rather than an absent one. OWNED. */
+JSValue hr_time_origin_timestamp(JSContext *ctx);   /* OWNED */
 
 /* §4's COARSEN TIME, given an unsafe moment on the monotonic clock. §4's second argument is the environment's
    cross-origin isolated capability, and `ctx` IS that environment — a caller passes the realm whose settings
