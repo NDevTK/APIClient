@@ -14,10 +14,16 @@
  * prototype table by node TYPE; an element's interface is keyed by its LOCAL NAME, and that mapping is HTML's,
  * not the DOM's. So node.c asks this file, through one resolver, and stays the ONE place a wrapper is built.
  *
- * WHAT IS DATA AND WHAT IS CODE. The table below is data: a tag, its interface name, and the reflections that
- * interface adds. Every behaviour — how a reflection reads, how a boolean one unsets, how the prototype chain is
- * built — is written once in element.c and here. An interface with no reflections is still an entry, because
- * `instanceof` is observable even when the member list is not.
+ * WHAT IS DATA AND WHAT IS CODE, AND WHICH HALF OF THE DATA IS GENERATED. The rows — a local name, its
+ * interface name, and which of §3.2.2's steps decided the pair — are a fact the STANDARD states and this
+ * codebase does not, so they are GENERATED into core/html/element_interfaces.h by engine/elemgen.mjs and a
+ * hand-edit of them is a second answer that goes wrong the day the standard adds an element. The REFLECTIONS
+ * are not: a reflection is a pair of names AND a type AND a range AND a default, which no two-column index
+ * states, so generating one would be inventing it — they stay here, in IFACE_REFL, joined onto the rows by
+ * interface name at init. An interface with no reflections is still an entry, because `instanceof` is
+ * observable even when the member list is not; most of the seventy-odd interfaces are exactly that. Every
+ * behaviour — how a reflection reads, how a boolean one unsets, how the prototype chain is built — is written
+ * once in element.c and here.
  *
  * WHAT IS HONESTLY ABSENT. CSSOM VIEW §7's `partial interface HTMLElement` has LEFT this list: offsetParent,
  * offsetTop, offsetLeft, offsetWidth and offsetHeight are real members of core/html/html_element_view.c,
@@ -28,8 +34,9 @@
  * Element.prototype (core/dom/element_view.c), and every interface in
  * the table below inherits it. §4.8.11's media elements no longer belong on that list either — HTMLMediaElement
  * is a real state machine over a modelled device (core/html/media_element.c), and this file's table names it as
- * the PARENT of the two interfaces whose IDL inherits from it. A tag whose interface this table does not list
- * gets HTMLUnknownElement, which is what HTML says for an unknown element — not a shrug. */
+ * the PARENT of the two interfaces whose IDL inherits from it. A local name no row names is decided by
+ * §3.2.2's LAST TWO steps and not by this table — HTMLElement if it is a valid custom element name, and
+ * HTMLUnknownElement otherwise, which is what HTML says for an element it does not know rather than a shrug. */
 #include <string.h>
 
 #include <lexbor/html/html.h>   /* <template>'s content fragment — §4.12.3 */
@@ -57,6 +64,7 @@
 #include "core/html/html_dialog.h"
 #include "core/html/media_element.h"
 #include "core/html/html_element.h"
+#include "core/html/element_interfaces.h"   /* §3.2.2's rows, generated — see engine/elemgen.mjs */
 #include "core/css/css_style_declaration.h"
 #include "core/html/form_data_event.h"
 #include "core/html/html_form.h"
@@ -295,82 +303,77 @@ static const ElReflect R_METER[]  = { { "min", "min", REFLECT_STRING }, { "max",
 static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel" };
 
 #define RL(a) (a), (int)(sizeof(a) / sizeof((a)[0]))
-#define RNONE NULL, 0
 
-/* HTML §4's ELEMENT-INTERFACE TABLE. `tag` is the local name; several tags share one interface, which is what
-   the spec says and why the interface is named per row rather than derived from the tag. */
-static const struct { const char *tag; const char *iface; const ElReflect *refl; int nrefl; } HTML_IFACE[] = {
-    { "a",          "HTMLAnchorElement",     RL(R_ANCHOR) },
-    { "area",       "HTMLAreaElement",       RL(R_AREA) },
-    { "link",       "HTMLLinkElement",       RL(R_LINK) },
-    { "script",     "HTMLScriptElement",     RL(R_SCRIPT) },
-    { "img",        "HTMLImageElement",      RL(R_IMG) },
-    { "iframe",     "HTMLIFrameElement",     RL(R_IFRAME) },
-    { "form",       "HTMLFormElement",       RL(R_FORM) },
-    { "input",      "HTMLInputElement",      RL(R_INPUT) },
-    { "button",     "HTMLButtonElement",     RL(R_BUTTON) },
-    { "textarea",   "HTMLTextAreaElement",   RL(R_TEXTAREA) },
-    { "select",     "HTMLSelectElement",     RL(R_SELECT) },
-    { "option",     "HTMLOptionElement",     RL(R_OPTION) },
-    { "optgroup",   "HTMLOptGroupElement",   RL(R_OPTGROUP) },
-    { "label",      "HTMLLabelElement",      RL(R_LABEL) },
-    { "output",     "HTMLOutputElement",     RL(R_OUTPUT) },
-    { "fieldset",   "HTMLFieldSetElement",   RL(R_FIELDSET) },
-    { "legend",     "HTMLLegendElement",     RNONE },
-    { "meta",       "HTMLMetaElement",       RL(R_META) },
-    { "base",       "HTMLBaseElement",       RL(R_BASE) },
-    { "source",     "HTMLSourceElement",     RL(R_SOURCE) },
-    { "track",      "HTMLTrackElement",      RL(R_TRACK) },
-    { "audio",      "HTMLAudioElement",      RNONE },
-    { "video",      "HTMLVideoElement",      RL(R_VIDEO) },
-    { "object",     "HTMLObjectElement",     RL(R_OBJECT) },
-    { "embed",      "HTMLEmbedElement",      RL(R_EMBED) },
-    { "style",      "HTMLStyleElement",      RL(R_STYLE) },
-    { "map",        "HTMLMapElement",        RL(R_MAP) },
-    { "time",       "HTMLTimeElement",       RL(R_TIME) },
-    { "data",       "HTMLDataElement",       RL(R_DATA) },
-    { "meter",      "HTMLMeterElement",      RL(R_METER) },
-    { "blockquote", "HTMLQuoteElement",      RL(R_QUOTE) },
-    { "q",          "HTMLQuoteElement",      RL(R_QUOTE) },
-    { "ins",        "HTMLModElement",        RL(R_MOD) },
-    { "del",        "HTMLModElement",        RL(R_MOD) },
-    { "ol",         "HTMLOListElement",      RL(R_OL) },
-    { "li",         "HTMLLIElement",         RL(R_LI) },
-    { "table",      "HTMLTableElement",      RL(R_TABLE) },
-    { "td",         "HTMLTableCellElement",  RL(R_TD) },
-    { "th",         "HTMLTableCellElement",  RL(R_TD) },
-    { "col",        "HTMLTableColElement",   RL(R_COL) },
-    { "colgroup",   "HTMLTableColElement",   RL(R_COL) },
-    { "canvas",     "HTMLCanvasElement",     RL(R_CANVAS) },
-    { "dialog",     "HTMLDialogElement",     RL(R_DIALOG) },
-    { "details",    "HTMLDetailsElement",    RL(R_DETAILS) },
-    { "slot",       "HTMLSlotElement",       RL(R_SLOT) },
-    { "template",   "HTMLTemplateElement",   RL(R_TEMPLATE) },
-    { "html",       "HTMLHtmlElement",       RNONE },
-    { "head",       "HTMLHeadElement",       RNONE },
-    { "body",       "HTMLBodyElement",       RNONE },
-    { "frameset",   "HTMLFrameSetElement",   RL(R_FRAMESET) },
-    { "title",      "HTMLTitleElement",      RNONE },
-    { "div",        "HTMLDivElement",        RNONE },
-    { "span",       "HTMLSpanElement",       RNONE },
-    { "p",          "HTMLParagraphElement",  RNONE },
-    { "pre",        "HTMLPreElement",        RNONE },
-    { "br",         "HTMLBRElement",         RNONE },
-    { "hr",         "HTMLHRElement",         RNONE },
-    { "ul",         "HTMLUListElement",      RNONE },
-    { "dl",         "HTMLDListElement",      RNONE },
-    { "picture",    "HTMLPictureElement",    RNONE },
-    { "tr",         "HTMLTableRowElement",   RNONE },
-    { "tbody",      "HTMLTableSectionElement", RNONE },
-    { "thead",      "HTMLTableSectionElement", RNONE },
-    { "tfoot",      "HTMLTableSectionElement", RNONE },
-    { "caption",    "HTMLTableCaptionElement", RNONE },
-    { "h1",         "HTMLHeadingElement",    RNONE },
-    { "h2",         "HTMLHeadingElement",    RNONE },
-    { "h3",         "HTMLHeadingElement",    RNONE },
-    { "h4",         "HTMLHeadingElement",    RNONE },
-    { "h5",         "HTMLHeadingElement",    RNONE },
-    { "h6",         "HTMLHeadingElement",    RNONE },
+/* THE REFLECTIONS, BY INTERFACE — the half of the element-interface table that is NOT generated, and the join
+   key is the interface NAME because that is what the IDL declares a member on. An interface with no row here
+   has no reflections of its own, which is most of them: sixty-odd of §4's interfaces add nothing but their
+   identity, and `instanceof` is observable even when the member list is not.
+   engine/elemgen.mjs checks this list in the one direction that can rot silently — a set written for an
+   interface no element-interface row wears installs members on a prototype no element can have, which no
+   compiler and no IDL audit can see. */
+static const struct { const char *iface; const ElReflect *refl; int nrefl; } IFACE_REFL[] = {
+    { "HTMLAnchorElement",     RL(R_ANCHOR) },
+    { "HTMLAreaElement",       RL(R_AREA) },
+    { "HTMLLinkElement",       RL(R_LINK) },
+    { "HTMLScriptElement",     RL(R_SCRIPT) },
+    { "HTMLImageElement",      RL(R_IMG) },
+    { "HTMLIFrameElement",     RL(R_IFRAME) },
+    { "HTMLFormElement",       RL(R_FORM) },
+    { "HTMLInputElement",      RL(R_INPUT) },
+    { "HTMLButtonElement",     RL(R_BUTTON) },
+    { "HTMLTextAreaElement",   RL(R_TEXTAREA) },
+    { "HTMLSelectElement",     RL(R_SELECT) },
+    { "HTMLOptionElement",     RL(R_OPTION) },
+    { "HTMLOptGroupElement",   RL(R_OPTGROUP) },
+    { "HTMLLabelElement",      RL(R_LABEL) },
+    { "HTMLOutputElement",     RL(R_OUTPUT) },
+    { "HTMLFieldSetElement",   RL(R_FIELDSET) },
+    { "HTMLMetaElement",       RL(R_META) },
+    { "HTMLBaseElement",       RL(R_BASE) },
+    { "HTMLSourceElement",     RL(R_SOURCE) },
+    { "HTMLTrackElement",      RL(R_TRACK) },
+    { "HTMLVideoElement",      RL(R_VIDEO) },
+    { "HTMLObjectElement",     RL(R_OBJECT) },
+    { "HTMLEmbedElement",      RL(R_EMBED) },
+    { "HTMLStyleElement",      RL(R_STYLE) },
+    { "HTMLMapElement",        RL(R_MAP) },
+    { "HTMLTimeElement",       RL(R_TIME) },
+    { "HTMLDataElement",       RL(R_DATA) },
+    { "HTMLMeterElement",      RL(R_METER) },
+    { "HTMLQuoteElement",      RL(R_QUOTE) },
+    { "HTMLModElement",        RL(R_MOD) },
+    { "HTMLOListElement",      RL(R_OL) },
+    { "HTMLLIElement",         RL(R_LI) },
+    { "HTMLTableElement",      RL(R_TABLE) },
+    { "HTMLTableCellElement",  RL(R_TD) },
+    { "HTMLTableColElement",   RL(R_COL) },
+    { "HTMLCanvasElement",     RL(R_CANVAS) },
+    { "HTMLDialogElement",     RL(R_DIALOG) },
+    { "HTMLDetailsElement",    RL(R_DETAILS) },
+    { "HTMLSlotElement",       RL(R_SLOT) },
+    { "HTMLTemplateElement",   RL(R_TEMPLATE) },
+    { "HTMLFrameSetElement",   RL(R_FRAMESET) },
+};
+#define IFACE_REFL_N ((int)(sizeof(IFACE_REFL) / sizeof(IFACE_REFL[0])))
+
+/* HTML §3.2.2 Elements in the DOM's ELEMENT INTERFACE, AS ROWS — GENERATED, because they are a fact the
+   STANDARD states and this codebase does not. `tag` is the local name; several tags share one interface, which
+   is what the spec says and why the interface is named per row rather than derived from the tag. `step` is
+   which of §3.2.2's seven steps decided the row, and it is carried rather than dropped because the ORDER of the
+   first four steps is the algorithm: §3.2.2 step 1 answers HTMLUnknownElement for eight names a later step
+   would otherwise decide, and step 3 answers HTMLPreElement for two that are not `pre`.
+   THE TABLE USED TO BE HAND-WRITTEN AND HELD 71 OF THESE 141 ROWS. Every missing one answered
+   HTMLUnknownElement — `<section>`, `<nav>`, `<main>`, `<article>` and thirty-five more where the spec says
+   HTMLElement, and `<progress>`, `<datalist>`, `<menu>` and `<selectedcontent>` where it names an interface of
+   their own — so `x instanceof HTMLElement` answered false for a third of the elements a page builds, and a
+   stack trace named HTMLUnknownElement for a `<section>`. That is not a shortfall a member audit can see:
+   engine/idlgen.mjs asks which MEMBERS an interface installs and has nothing to say about which TAG wears it.
+   engine/elemgen.mjs is the instrument for that axis, and engine/elemgen.mjs --regen is the only writer of
+   the header below. */
+static const struct { const char *tag; const char *iface; int step; } HTML_IFACE[] = {
+#define X(tag, iface, step) { tag, iface, step },
+    HTML_ELEMENT_INTERFACES(X)
+#undef X
 };
 #define HTML_IFACE_N ((int)(sizeof(HTML_IFACE) / sizeof(HTML_IFACE[0])))
 
@@ -379,31 +382,76 @@ static const struct { const char *tag; const char *iface; const ElReflect *refl;
    Rows that share an interface NAME share its class, which is what makes `q instanceof HTMLQuoteElement` and
    `blockquote instanceof HTMLQuoteElement` both true in every realm. */
 static JSClassID g_iface_class[HTML_IFACE_N];
-/* Each row's reflection BASE index — declared once per agent, installed into every realm's prototype. */
+/* Each row's reflection BASE index and the set it was declared from — the JOIN between the generated rows and
+   the hand-written IFACE_REFL above, resolved ONCE per agent by interface name rather than at every install. */
 static int g_iface_refl_base[HTML_IFACE_N];
+static const ElReflect *g_iface_refl[HTML_IFACE_N];
+static int g_iface_nrefl[HTML_IFACE_N];
 static int g_html_refl_base;
 
-/* The interface a TAG wears. Linear over a table this size, and the answer is a borrowed prototype. A tag the
-   table does not list is HTMLUnknownElement, which is HTML's own answer for an element it does not know — the
-   custom-element case (a hyphenated name) is HTMLElement, which is a different answer and is stated here rather
-   than folded in. */
+/* Which of the two BASE interfaces a row names, or 0. Rows naming them are not built by the per-interface loops
+   — HTMLElement.prototype and HTMLUnknownElement.prototype are built and installed explicitly, once each — so
+   every loop over the table asks this before it builds or installs anything. */
+static int iface_is_base(const char *iface)
+{
+    if (!strcmp(iface, "HTMLElement")) return 1;
+    if (!strcmp(iface, "HTMLUnknownElement")) return 2;
+    return 0;
+}
+
+/* HTML §3.2.2 Elements in the DOM — "the element interface for an element with name name in the HTML
+ * namespace", all seven steps. The answer is a BORROWED prototype read out of the realm's own class-proto slot,
+ * so two documents get their own; Web IDL §3.7 Interfaces' per-realm
+ * interface prototype object is why this file holds class ids and never prototypes.
+ *
+ * THE NAMESPACE IS PART OF THE QUESTION, and it used to be missing: node.c hands this resolver EVERY element
+ * node it wraps, whatever namespace it is in, and this function answered out of HTML's table regardless — so
+ * an `<a>` inside an `<svg>` was handed HTMLAnchorElement.prototype and answered `instanceof HTMLAnchorElement`
+ * true, which is how a page tells a link from a shape. DOM §4.5 Interface Document states the default this
+ * falls back to in its own sentence: "The element interface for any name and namespace is Element, unless
+ * stated otherwise."
+ *
+ * NAMED RESIDUAL — SVG AND MATHML. An element in the SVG or MathML namespace is answered with Element, which is
+ * DOM §4.5's default and is what the sentence above says for a namespace no other specification covers; it is
+ * NARROWER than the platform, where SVG defines SVGAElement for that `<a>` and MathML defines MathMLElement.
+ * What the next diff must leave standing is a core/svg/svg_element.c owning SVG's own name-to-interface rows,
+ * and a node.c resolver seam that admits MORE THAN ONE resolver keyed by namespace — node_set_element_resolver
+ * today holds exactly one and asserts it is claimed once, so widening it is part of that diff and not a thing
+ * to reach for. Its absence shows as `document.createElementNS(SVG_NS, "a").constructor.name`
+ * answering "Element" where a browser answers "SVGAElement" — and, before that, as the ReferenceError a page
+ * gets for reading the global `SVGElement`, which is on browser/platform_names.h and is the forcing function
+ * that names the component to write. */
 static JSValue html_proto_for(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t n = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
     int i;
 
-    if (!tag || !n)
-        return JS_GetClassProto(ctx, g_unknown_class);
+    if (lxb_dom_interface_node(el)->ns != LXB_NS_HTML)
+        return element_proto(ctx);   /* DOM §4.5's default, and OWNED like every per-realm prototype read */
+    DCHECK(tag != NULL && n != 0,
+           "an HTML-namespace element carries no local name — DOM §1.4 Name validation's valid element "
+           "local name is one or more code points, so an element with an empty one was built by something "
+           "that is not the parser and not createElement");
+    /* §3.2.2 STEPS 1 THROUGH 4, which are the generated rows. The steps are ORDERED and the rows are emitted in
+       that order, so the first match is the standard's answer; the table's own tags are disjoint across the
+       four steps, which the DCHECK in html_element_init asserts rather than leaves to the reader. */
     for (i = 0; i < HTML_IFACE_N; i++)
         if (strlen(HTML_IFACE[i].tag) == n && memcmp(HTML_IFACE[i].tag, tag, n) == 0)
             return JS_GetClassProto(ctx, g_iface_class[i]);
-    /* §4.13: a VALID CUSTOM ELEMENT NAME (one containing a hyphen) is an HTMLElement, not an unknown one — a
-       page that feature-tests `x instanceof HTMLUnknownElement` to find its own components would get the
-       opposite answer, and this engine executes custom elements. */
-    if (memchr(tag, '-', n))
+    /* §3.2.2 STEP 5 — "If other applicable specifications define an appropriate interface for name, then return
+       the interface they define." No specification this agent implements defines an HTML-NAMESPACE element
+       interface of its own; the ones that define element interfaces at all (SVG, MathML) define them for their
+       own namespaces, which the gate above has already sent elsewhere. A component that adds one adds it here.
+       §3.2.2 STEP 6 — a VALID CUSTOM ELEMENT NAME is HTMLElement and not HTMLUnknownElement, so that a later
+       upgrade moves the element DOWN its prototype chain rather than sideways. The predicate is HTML §4.13.3 Core
+       concepts', asked of the component that owns it: a hyphen is only the fourth of its five requirements, so a `-`
+       search answered HTMLElement for `foo-BAR` (an ASCII upper alpha), for `å-bar` (not a valid element local
+       name) and for `annotation-xml` (one of the eight reserved names) — three answers WPT
+       html/semantics/interfaces.html asserts the other way. */
+    if (custom_elements_name_is_valid((const char *)tag, n))
         return JS_GetClassProto(ctx, g_html_class);
-    return JS_GetClassProto(ctx, g_unknown_class);   /* OWNED, like every per-realm prototype read */
+    return JS_GetClassProto(ctx, g_unknown_class);   /* §3.2.2 STEP 7 */
 }
 
 /* The prototype an interface NAME was built for. A lookup rather than a stored handful, because this table is
@@ -536,10 +584,25 @@ void html_element_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_html_class, &hd);
     JS_NewClassID(JS_GetRuntime(ctx), &g_unknown_class);
     JS_NewClass(JS_GetRuntime(ctx), g_unknown_class, &ud);
+    /* THE TABLE'S OWN INVARIANT, ASSERTED BEFORE ANYTHING IS BUILT FROM IT. §3.2.2's first four steps are
+       ORDERED, and this file collapses them into ONE first-match walk — which is the standard's answer only
+       while no local name is decided twice. The generator refuses to emit a duplicate; this is the same claim
+       made where the walk that depends on it is, because a hand-edit of the generated header (which its own
+       banner forbids and nothing enforces) would otherwise make one row silently unreachable. */
+    for (i = 0; i < HTML_IFACE_N; i++)
+        for (j = 0; j < i; j++)
+            DCHECK(strcmp(HTML_IFACE[j].tag, HTML_IFACE[i].tag) != 0,
+                   "one local name has two rows in the element-interface table, so §3.2.2's ordered steps 1-4 "
+                   "collapse to whichever row comes first and the other is unreachable");
     /* ONE CLASS PER INTERFACE NAME. A row whose interface a previous row already claimed SHARES its class —
        `q` and `blockquote` are both HTMLQuoteElement, and two classes would make one of the two `instanceof`
-       answers false in every realm. */
+       answers false in every realm. The two BASE interfaces are not built here: HTMLElement and
+       HTMLUnknownElement have their classes above, and a row naming one of them (§3.2.2 step 2's twelve
+       obsolete names, and the thirty-nine of §4's elements whose interface IS HTMLElement) takes that class
+       rather than a second one wearing the same name. */
     for (i = 0; i < HTML_IFACE_N; i++) {
+        int base = iface_is_base(HTML_IFACE[i].iface);
+        if (base) { g_iface_class[i] = base == 1 ? g_html_class : g_unknown_class; continue; }
         for (j = 0; j < i; j++)
             if (strcmp(HTML_IFACE[j].iface, HTML_IFACE[i].iface) == 0) break;
         if (j < i) { g_iface_class[i] = g_iface_class[j]; continue; }
@@ -549,14 +612,39 @@ void html_element_init(JSContext *ctx)
             JS_NewClass(JS_GetRuntime(ctx), g_iface_class[i], &d);
         }
     }
+    /* THE JOIN — each row's reflection set, looked up by interface NAME in the hand-written IFACE_REFL. The two
+       halves are separate because only one of them is generated, and this is where they meet: a set naming an
+       interface no row wears would install members on a prototype no element can have, which engine/elemgen.mjs
+       checks and which this DCHECK states at the site that would silently do it. */
+    for (i = 0; i < IFACE_REFL_N; i++) {
+        for (j = 0; j < HTML_IFACE_N; j++)
+            if (strcmp(HTML_IFACE[j].iface, IFACE_REFL[i].iface) == 0) break;
+        DCHECK(j < HTML_IFACE_N,
+               "a reflection set is declared for an interface no element-interface row wears, so its members "
+               "would be installed on a prototype no element can ever have");
+        DCHECK(!iface_is_base(IFACE_REFL[i].iface),
+               "a reflection set is declared for HTMLElement or HTMLUnknownElement under the per-interface "
+               "join — HTMLElement's own reflections are R_HTML, declared once below, and HTMLUnknownElement "
+               "adds none");
+    }
+    for (i = 0; i < HTML_IFACE_N; i++) {
+        g_iface_refl[i] = NULL;
+        g_iface_nrefl[i] = 0;
+        for (j = 0; j < IFACE_REFL_N; j++)
+            if (strcmp(IFACE_REFL[j].iface, HTML_IFACE[i].iface) == 0) {
+                g_iface_refl[i] = IFACE_REFL[j].refl;
+                g_iface_nrefl[i] = IFACE_REFL[j].nrefl;
+                break;
+            }
+    }
     /* EVERY REFLECTION DECLARED ONCE, here, with the base index each row's install names them by. */
     g_html_refl_base = element_declare_reflections(ctx, R_HTML, (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
     for (i = 0; i < HTML_IFACE_N; i++) {
         for (j = 0; j < i; j++)
             if (g_iface_class[j] == g_iface_class[i]) break;
         g_iface_refl_base[i] = (j < i) ? g_iface_refl_base[j]
-                             : (HTML_IFACE[i].nrefl
-                                    ? element_declare_reflections(ctx, HTML_IFACE[i].refl, HTML_IFACE[i].nrefl)
+                             : (g_iface_nrefl[i]
+                                    ? element_declare_reflections(ctx, g_iface_refl[i], g_iface_nrefl[i])
                                     : -1);
     }
     /* THE MIXINS' AND SUB-INTERFACES' DECLARATIONS, once per agent — their installs run per realm below. */
@@ -669,6 +757,11 @@ void html_element_install_protos(JSContext *ctx)
 
     for (i = 0; i < HTML_IFACE_N; i++) {
         JSValue p;
+        /* THE TWO BASE INTERFACES ARE ALREADY BUILT — html_p and unknown_p above are their prototypes, so a row
+           naming one of them must not reach the body below: it would allocate a SECOND object, tag it with the
+           same interface name and JS_SetClassProto it over the one every other prototype in this realm already
+           inherits from. */
+        if (iface_is_base(HTML_IFACE[i].iface)) continue;
         /* A row sharing a previous row's CLASS shares its prototype — it is the same slot. */
         for (j = 0; j < i; j++)
             if (g_iface_class[j] == g_iface_class[i]) break;
@@ -685,8 +778,8 @@ void html_element_install_protos(JSContext *ctx)
         }
         CHECK(!JS_IsException(p), "a per-tag interface prototype could not be allocated");
         idl_interface_tag(ctx, p, HTML_IFACE[i].iface);
-        if (HTML_IFACE[i].nrefl)
-            element_install_reflections(ctx, p, g_iface_refl_base[i], HTML_IFACE[i].nrefl);
+        if (g_iface_nrefl[i])
+            element_install_reflections(ctx, p, g_iface_refl_base[i], g_iface_nrefl[i]);
         /* §4.6.3's HTMLHyperlinkElementUtils, which the IDL says HTMLAnchorElement and HTMLAreaElement
            INCLUDE. Named by interface rather than by tag because that is how the IDL states it, and because
            two tags share one of them. */
@@ -832,6 +925,11 @@ void html_element_install(JSContext *ctx, JSValueConst global)
        vocabulary; the DCHECK below is what keeps the two answers from drifting apart. */
     for (i = 0; i < HTML_IFACE_N; i++) {
         JSValue p;
+        /* THE SECOND FILTER, AND IT REMOVES NO NAME EITHER: `HTMLElement` went up at the [HTMLConstructor]
+           install above and `HTMLUnknownElement` two lines under it, both by their own names, so a row naming
+           one of them has nothing left to do — and letting it through would install `HTMLElement` a second
+           time, OVER the constructor §3.2.3 requires it to carry. */
+        if (iface_is_base(HTML_IFACE[i].iface)) continue;
         for (j = 0; j < i; j++)
             if (strcmp(HTML_IFACE[j].iface, HTML_IFACE[i].iface) == 0) break;
         DCHECK(j >= i || g_iface_class[j] == g_iface_class[i],
@@ -858,8 +956,11 @@ void html_element_install(JSContext *ctx, JSValueConst global)
        per realm against the object itself. Break the dedup — key it on anything else, drop a row for any other
        reason — and this fires naming the interface object the audit would have credited. */
     idl_install_covers_column(ctx, global, IDL_NAME_COLUMN(HTML_IFACE, iface),
-                              "the row filter is a first-occurrence dedup on this same name column, so it "
-                              "removes repeated ROWS and never a NAME");
+                              "the loop's two row filters remove ROWS and no NAME: the first is a "
+                              "first-occurrence dedup on this same name column, and the second skips the rows "
+                              "naming HTMLElement and HTMLUnknownElement, which this same function installs "
+                              "above under those very names because one of them must carry §3.2.3's "
+                              "[HTMLConstructor]");
 }
 
 bool html_element_is(JSValueConst v)

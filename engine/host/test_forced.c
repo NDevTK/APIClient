@@ -811,6 +811,30 @@ static const char *HTML =
     "fetch('/api/iface2?v=' + (ia instanceof HTMLAnchorElement && ia instanceof HTMLElement &&"
     " ia instanceof Element && ia instanceof Node && idv instanceof HTMLDivElement &&"
     " !(idv instanceof HTMLAnchorElement) && ixx instanceof HTMLUnknownElement ? 'isiface2' : 'wrong'));"
+    /* HTML §3.2.2 Elements in the DOM's SEVEN STEPS, each reported by the WEB IDL §3.7.3 class string of the
+       prototype the element actually got — the same question WPT html/semantics/interfaces.html asks with
+       assert_class_string, and the reason this endpoint carries a NAME rather than a boolean: a `?v=wrong`
+       says the mapping is broken and says nothing about how, while this one distinguishes an element mapped
+       CORRECTLY from one mapped to the WRONG interface from one that fell through to HTMLUnknownElement,
+       per name, in the value itself. `section` and `tt` are HTMLElement by steps 4 and 2, `progress` is its
+       own interface by step 4, `listing` is HTMLPreElement by step 3 although it is not `pre`, `applet` is
+       HTMLUnknownElement by step 1 although the name is one the standard knows, and `xxx` is step 7's. */
+    "var ifn = function(n){ return Object.prototype.toString.call(document.createElement(n)).slice(8, -1); };"
+    "fetch('/api/ifacestep?v=' + ifn('section') + '-' + ifn('tt') + '-' + ifn('progress') + '-' +"
+    " ifn('listing') + '-' + ifn('applet') + '-' + ifn('xxx'));"
+    /* §3.2.2 step 6 is a VALID CUSTOM ELEMENT NAME and not a hyphen: `foo-BAR` carries an ASCII upper alpha
+       and `annotation-xml` is one of the eight reserved names, so both are step 7's HTMLUnknownElement. The
+       case-preserving createElementNS is deliberate — DOM §4.5's createElement lowercases in an HTML document,
+       which would hide the uppercase clause entirely. */
+    "var ifns = function(ns, n){ return Object.prototype.toString.call("
+    " document.createElementNS(ns, n)).slice(8, -1); };"
+    "var XHTMLNS = 'http://www.w3.org/1999/xhtml';"
+    "fetch('/api/ifacecename?v=' + ifns(XHTMLNS, 'foo-bar') + '-' + ifns(XHTMLNS, 'foo-BAR') + '-' +"
+    " ifns(XHTMLNS, 'annotation-xml'));"
+    /* §3.2.2 is scoped to the HTML NAMESPACE, and an SVG `<a>` used to be handed HTMLAnchorElement.prototype
+       because this resolver never asked. It is now DOM §4.5's default, `Element` — narrower than the platform,
+       where SVG names SVGAElement, and this endpoint is what says which of the two this engine gives. */
+    "fetch('/api/ifacesvgns?v=' + ifns('http://www.w3.org/2000/svg', 'a'));"
     /* The reflections are on their own interfaces now: a link has href, a div does not, and a div carrying an
        `src` property would be the old flat table answering for an attribute its IDL never declared. */
     "ia.href = '/api/reflected?v=isreflect'; ifo.action = '/api/formaction'; iin.name = 'q';"
@@ -6682,6 +6706,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/handlernull\"", "isnull"  },
         { "\"/api/onglobal\"",    "isglobal"},   /* the mixins land on window and Document too */
         { "\"/api/iface2\"",     "isiface2"},   /* HTML's element-interface table, up the whole chain */
+        /* HTML §3.2.2's steps, read off the class string the element actually carries. Every one of these six
+           answered HTMLUnknownElement while the table held 71 of the standard's 141 rows and the resolver ran
+           steps 4, 6 and 7 only, so the expected string is also the one that names which step is missing. */
+        { "\"/api/ifacestep\"",
+          "HTMLElement-HTMLElement-HTMLProgressElement-HTMLPreElement-HTMLUnknownElement-HTMLUnknownElement" },
+        /* step 6's predicate is §4.13.3's five requirements and not a hyphen search */
+        { "\"/api/ifacecename\"", "HTMLElement-HTMLUnknownElement-HTMLUnknownElement" },
+        /* the namespace gate, and the named residual behind it: DOM §4.5's default, not SVGAElement */
+        { "\"/api/ifacesvgns\"",  "Element" },
         /* §4.6.3: `a.href` is NOT the attribute — it RESOLVES against the document base and re-serialises, so
            `fetch(ia.href)` after `ia.href = '/api/reflected?v=isreflect'` requests the ABSOLUTE URL. This
            expected the relative one, which is what an attribute MIRROR answers and what a browser does not;
