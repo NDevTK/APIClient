@@ -23,14 +23,27 @@ int idl_get_method(JSContext *ctx, JSValueConst method, const char *what)
     return 1;                                                    /* step 4 */
 }
 
-void iter_cursor_init(IterCursor *c)
+/* See idl_iter.h — call this through `iter_cursor_init`, which is what asserts the slot is clear. */
+void iter_cursor_plant(IterCursor *c)
 {
     memset(c, 0, sizeof *c);
     c->iterfn = c->iter = c->next_fn = c->res = c->value = JS_UNDEFINED;
     c->cb[0] = c->cb[1] = JS_UNDEFINED;
 }
 
-/* See idl_iter.h. The one difference from the init above is WHERE the cursor starts: the @@iterator read has
+/* See idl_iter.h. Asked over the SLOTS and not over the phase, because the phase is a proxy for this and the
+   two disagree at the one state that matters: a cursor that has answered `done` rests at IT_CALL_NEXT holding
+   nothing, and a phase test would refuse to re-plant it while a walk that stopped early at IT_GET_VALUE — the
+   one that really is still holding — passes IT_GET_ITERFN's test at no phase at all. */
+bool iter_cursor_empty(const IterCursor *c)
+{
+    return !JS_VALUE_HAS_REF_COUNT(c->iterfn) && !JS_VALUE_HAS_REF_COUNT(c->iter) &&
+           !JS_VALUE_HAS_REF_COUNT(c->next_fn) && !JS_VALUE_HAS_REF_COUNT(c->res) &&
+           !JS_VALUE_HAS_REF_COUNT(c->value) &&
+           !JS_VALUE_HAS_REF_COUNT(c->cb[0]) && !JS_VALUE_HAS_REF_COUNT(c->cb[1]);
+}
+
+/* See idl_iter.h. The one difference from the plant above is WHERE the cursor starts: the @@iterator read has
    already happened, in the union algorithm that chose this arm, so re-running it here would be the page's
    getter called twice for one conversion. */
 void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method)
@@ -39,13 +52,7 @@ void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method)
            "an iterable cursor was planted with an @@iterator that is not callable — ECMAScript's GetMethod "
            "answers undefined for null and undefined and throws a TypeError for anything else, so the caller "
            "has already decided this and there is nothing here to fall back to");
-    /* AND IT HOLDS NOTHING YET. The init below MEMSETS, so a cursor planted mid-walk drops its iterator, its
-       `next` and its last result rather than releasing them — a leak the runtime's GC walk sees and no call
-       site names. IT_GET_ITERFN is the one phase at which nothing has been written, including the park inside
-       the @@iterator read, so the phase alone states the invariant for a zeroed state and an init'd one alike. */
-    DCHECK(c->phase == IT_GET_ITERFN,
-           "an iterable cursor was planted with a method while it was already walking a source of its own");
-    iter_cursor_init(c);
+    iter_cursor_init(c);   /* MEMSETS, and states the empty-slot invariant at this line */
     c->iterfn = method;
     c->phase = IT_CALL_ITERFN;
 }
@@ -71,6 +78,14 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
 {
     int r;
 
+    /* A CURSOR THAT ANSWERED `done` IS FINISHED AND HOLDS NOTHING, so re-running it would call an UNDEFINED
+       `next`. Web IDL §3.2.21.1 Creating a sequence from an iterable step 3.2 RETURNS on done, so no caller has
+       a reason to; this is the assert that says so rather than a phase that lets it through. `done` is 0 at
+       every park (it is written only where the loop either continues or ends), so a resume reaches this. */
+    DCHECK(!c->done,
+           "an iterable cursor was re-run after it answered `done` — Web IDL §3.2.21.1 Creating a sequence from "
+           "an iterable step 3.2 returns there, so the iterator record is dead and this cursor released what it "
+           "held; the caller is looping past the end of its own sequence");
     if (c->phase == IT_GET_ITERFN) {
         r = step_getprop_run(ctx, h, src, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), in, &c->iterfn,
                              out_cb, out_argc);
@@ -131,7 +146,25 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
         in = JS_UNDEFINED;
         c->done = JS_ToBool(ctx, d);
         JS_FreeValue(ctx, d);
-        if (c->done) { c->phase = IT_CALL_NEXT; return 0; }
+        if (c->done) {
+            /* THE WALK IS OVER, SO WHAT DROVE IT IS RELEASED HERE — at the one place `done` is decided, and not
+               left for the owner. Web IDL §3.2.21.1 Creating a sequence from an iterable step 3.2 is "If next
+               is done, then return an IDL sequence value of type sequence<T> of length i", whose tail names
+               the elements already collected: it RETURNS, so from this step on the algorithm cannot observe the
+               iterator record, the `next` method, the last iterator result or the last element pulled, and a
+               cursor that goes on holding them is holding five references nothing will ever ask for.
+               LEAVING THEM FOR THE OWNER WAS THE LEAK, and the reason it was invisible is that the owner is
+               usually right: a step machine's `visit` names the cursor, so a teardown frees it. What no owner
+               survives is being REUSED — a completed argument-position sequence followed by the DICTIONARY at
+               the next declared position, whose §3.2.17 walk plants the same cursor and memsets what was left
+               on it. Released here, there is nothing for any reuse to drop, and the plant's own assert then
+               covers the only remaining loaded state, which is a walk that stopped EARLY.
+               `done` and the phase are not values and survive this — the release names slots only, so the
+               caller's `if (cursor.done)` still reads 1. */
+            iter_cursor_release(ctx, c);
+            c->phase = IT_CALL_NEXT;
+            return 0;
+        }
         c->phase = IT_GET_VALUE;
     }
     DCHECK(c->phase == IT_GET_VALUE, "the iterable cursor was re-entered at a phase it never parks in");

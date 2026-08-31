@@ -1088,7 +1088,10 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 JS_ThrowTypeError(ctx, "a Headers init pair is not a sequence");
                 return -1;
             }
-            iter_cursor_release(ctx, &f->inner);   /* the previous pair's cursor still held its iterator */
+            /* The previous pair's cursor released itself when it answered `done` (idl_iter.c's IT_GET_DONE),
+               and reaching this line at all requires that: the only other way out of the item loop below is
+               the three-or-more break, which throws before it can come back here. So this plants on a clear
+               slot, and the release that used to stand in front of it named a state that cannot arrive. */
             iter_cursor_init(&f->inner);
             JS_FreeValue(ctx, f->item[0]); JS_FreeValue(ctx, f->item[1]);
             f->item[0] = f->item[1] = JS_UNDEFINED;

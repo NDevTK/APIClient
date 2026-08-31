@@ -548,7 +548,9 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         UC_GOTO(hdr, s, UC_DONE);
         return JS_STEP_YIELD;
     }
-    iter_cursor_release(ctx, &s->inner);
+    /* The previous pair's cursor released itself when it answered `done` (idl_iter.c's IT_GET_DONE) and
+       UC_SEQ_ITEM is the only way back here, so this plants on a clear slot; the release that used to stand in
+       front of it named a state this arm cannot be in. */
     iter_cursor_init(&s->inner);
     JS_FreeValue(ctx, s->item[0]); JS_FreeValue(ctx, s->item[1]);
     s->item[0] = s->item[1] = JS_UNDEFINED;

@@ -1819,10 +1819,45 @@ for (const { file: f, kind, variant } of runs) {
        `@WHY` did the same to every always-fatal `@E`, and that is the larger of the two losses because `@E`'s
        sites are the ones a release build still hits — see the kind table above for what it cost here. An abort
        with the name thrown away is the one thing an abort is FOR. `marker` is the SEVERITY and decides the
-       column; `reason` is prose and is only ever DISPLAYED. */
-    const named = out.match(/@(WHY|E) .*"reason":"([^"]*)/) || out.match(/^@(WHY|E) (.+)$/m);
+       column; `reason` is prose and is only ever DISPLAYED.
+
+       AND THE JSON SHAPE IS PARSED AS JSON, WHICH IT WAS NOT. The read here was
+       `/@(WHY|E) .*"reason":"([^"]*)/` — a `[^"]*` over a field check.h ESCAPES, so it stopped at the first
+       `\"` INSIDE the reason and kept the dangling backslash. CLAUDE.md requires a citation to quote the
+       standard's own words, so the asserts that name the most are exactly the ones that carry a quotation
+       earliest, and exactly the ones this cut first: a §15.4 DFAIL whose reason is 1600 characters and states
+       which two rendering rules to build reached the report as 119 of them, ending in a
+       bare `\`. That is check.h's own documented failure — "the ONE field that names what to build was
+       unreadable in exactly the asserts that named it best" — arriving in the READER instead of the emitter.
+       AND `at` WAS NEVER READ AT ALL. check.h writes the assert's own `__FILE__:__LINE__` into the record and
+       this gate printed only the reason, so a run naming hundreds of gaps named the file for none of them —
+       a producer's field with no consumer, which is the defect CLAUDE.md makes greppable. It is reported now.
+       A LINE THAT ANNOUNCES ITSELF AS JSON AND DOES NOT PARSE IS SAID OUT LOUD rather than quietly re-read by
+       the looser pattern: that silent degrade is how the emitter's escaping bug survived on the bridge side,
+       and a `@WHY` this gate cannot decompose is a defect in check.h, not a reason for a softer reader. */
+    const rec = out.match(/@(WHY|E) (\{[^\n]*\})/);
+    let named = null, at = null;
+    if (rec) {
+      try {
+        const o = JSON.parse(rec[2]);
+        named = [rec[0], rec[1], String(o.reason ?? "")];
+        at = o.at ? String(o.at) : null;
+      } catch (e) {
+        named = [rec[0], rec[1],
+                 `check.h emitted a record this gate could not parse (${e.message}), so the capability this ` +
+                 `abort names is in the raw line and nowhere else: ${rec[0]}`];
+      }
+    } else {
+      named = out.match(/^@(WHY|E) (.+)$/m);   /* the ENGINE's plain-text emitter carries its own (file:line) */
+    }
     const marker = named ? named[1] : null;
-    const reason = named ? named[2] : null;
+    /* WHOLE, and it is not unbounded: check.h composes the record into one PIPE_BUF buffer and caps the reason
+       at APICLIENT_REASON_CAP, appending "[reason truncated: N of M bytes]" when it runs out — so the bound is
+       upstream, real, and self-declaring. The `.slice(0, 160)` that used to stand at the two arms below was an
+       author's margin on top of that, and it was cutting the half of the sentence that says WHAT TO BUILD:
+       a property-read @WHY threads the C reader's own file:line through the message and instructs the reader to
+       "FIX IT AT THAT FILE:LINE", and this gate cut the line before the site every time it fired. */
+    const reason = named ? (at ? `[${at}] ${named[2]}` : named[2]) : null;
     /* WHAT *THIS DRIVER* DID, ASKED OF THE RESULT RATHER THAN GUESSED FROM THE SIGNAL. node's `spawnSync` reports
        its own interventions as an errno on `result.error`, and the signal alone cannot tell them apart:
        MEASURED — a `timeout:` kill is `ETIMEDOUT` **with SIGTERM**, and a `maxBuffer` overflow is `ENOBUFS`
@@ -1862,12 +1897,12 @@ for (const { file: f, kind, variant } of runs) {
                 "run is therefore wrong";
       } else if (marker === "WHY") {
         kind = "gap";
-        cause = reason.slice(0, 160);
+        cause = reason;   /* WHOLE — see the read above for the bound and for what the clamp was cutting */
       } else if (marker === "E") {
         /* THE SAME READ, A DIFFERENT COLUMN — see the kind table. `@E` is CHECK/CHECK_FAIL, which is not
            compiled out, so this file's absence is one a release build hits too. */
         kind = "fatal";
-        cause = reason.slice(0, 160);
+        cause = reason;
       } else if (timedOut) {
         kind = "killed";
         /* "LOOK AT THE OTHER END" IS AN INSTRUCTION THIS DRIVER CAN CARRY OUT ITSELF, and the other end is

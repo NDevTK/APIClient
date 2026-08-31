@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_IDL_ITER_H
 #define ENGINE_HOST_BROWSER_CORE_IDL_ITER_H
 #include <stdbool.h>
+#include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 
@@ -41,11 +42,48 @@ typedef struct {
    Returns 1 (callable: the method), 0 (there is no method), or -1 with step 3's TypeError live. */
 int idl_get_method(JSContext *ctx, JSValueConst method, const char *what);
 
-void iter_cursor_init(IterCursor *c);
+/* PLANT A CURSOR ON A CLEAR SLOT — the memset behind `iter_cursor_init`. Call it through the macro, which is
+   what states the invariant at the SITE that plants. */
+void iter_cursor_plant(IterCursor *c);
+/* DOES THIS CURSOR HOLD ANYTHING — side-effect-free, so it is a DCHECK condition. A never-used cursor inside a
+   zeroed state block holds the non-refcounted integer 0 in every slot and a released one holds JS_UNDEFINED, so
+   "empty" is "no slot carries a reference" rather than any one spelling of nothing. */
+bool iter_cursor_empty(const IterCursor *c);
+
+/* A CURSOR IS PLANTED ON A CLEAR SLOT, AND THE MEMSET IS WHY THAT IS AN ASSERTION AND NOT A CONVENTION.
+   `iter_cursor_plant` MEMSETS, so planting over a cursor that still holds its iterator, its `next` and its last
+   result DROPS all three — a leak the runtime's GC teardown reports as a whole realm surviving and that no call
+   site names, because the site that lost the reference is not the site that notices. That is the shape it took:
+   an argument-position `sequence<T>` left its cursor loaded when it finished, the DICTIONARY at the next
+   declared position started its walk on the same cursor, and `Object x N` / `Function x2 refcount N..N` /
+   `Array Iterator x N` came out of the census for N conversions of one document.
+   IT IS A MACRO SO THE ABORT NAMES THE PLANTER. This invariant is over a TRANSITION and it is reachable from
+   every call site of the name below; checked inside the function it would stamp idl_iter.c for all of them and
+   the reader would be handed a remedy with no object. */
+#define iter_cursor_init(cur_)                                                                      \
+    do {                                                                                            \
+        IterCursor *iter_cursor_init_c_ = (cur_);                                                   \
+        DCHECK(iter_cursor_empty(iter_cursor_init_c_),                                              \
+               "a `sequence<T>` cursor was planted over one that still held its iterator — planting "\
+               "MEMSETS, so this line is dropping the iterator, its `next`, the last iterator result "\
+               "and the last element pulled, with nothing left that can free them. A cursor that "   \
+               "answered `done` releases itself (Web IDL §3.2.21.1 Creating a sequence from an "     \
+               "iterable step 3.2 returns and never looks at the record again), so one arriving here "\
+               "loaded was ABANDONED mid-walk: release it at the site that abandoned it");           \
+        iter_cursor_plant(iter_cursor_init_c_);                                                      \
+    } while (0)
+
 void iter_cursor_visit(JSContext *ctx, IterCursor *c, JSStepVisit *v);
 void iter_cursor_release(JSContext *ctx, IterCursor *c);
 /* ONE VALUE per successful return: `c->done` says the iteration ended, otherwise `c->value` holds it (owned by
-   the cursor). Call it again for the next. Returns >0 (the caller returns it), 0, or -1 with a throw live. */
+   the cursor). Call it again for the next. Returns >0 (the caller returns it), 0, or -1 with a throw live.
+   A CURSOR THAT HAS ANSWERED `done` HOLDS NOTHING AND IS NOT RE-RUN. Web IDL §3.2.21.1 Creating a sequence from
+   an iterable step 3.2 — "If next is done, then return an IDL sequence value of type sequence<T> of length i"
+   (its tail names the collected elements) — RETURNS, so the iterator record is dead from that step on
+   and every value the cursor is holding at it is unreachable by the algorithm. Releasing there rather than
+   leaving the owner to do it is what makes the state impossible instead of conventional: the owner's `visit`
+   still covers a cursor abandoned MID-walk (a throw at an element conversion, a machine torn down at a park),
+   which is the only way one can still be loaded, and that is exactly the case the plant above asserts on. */
 int  iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst src,
                      JSValue in, JSValue **out_cb, int *out_argc);
 
@@ -58,7 +96,8 @@ int  iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst s
    therefore starts at the CALL of the method it is planted with.
    `method` is CONSUMED, and it must be callable: that is GetMethod's own answer (undefined and null mean there
    is no method, anything else non-callable is a TypeError), so the caller has already decided it and this
-   asserts the decision rather than repeating it. */
+   asserts the decision rather than repeating it. It plants through `iter_cursor_init`, so the empty-slot
+   invariant above is this entry's too and is stated in exactly one place. */
 void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method);
 
 /* WEB IDL §3.2.23's `record<K, V>` CONVERSION, as the same shape of cursor. It is [[OwnPropertyKeys]] followed
