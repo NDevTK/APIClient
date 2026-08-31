@@ -1513,18 +1513,64 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
              (a) step 3.9's OrdinaryFunctionCreate — sourceText "function <name>(event) {\n<body>\n}" (and the
                  five-parameter form for `onerror` on a Window), thisMode non-lexical-this, and a SCOPE that is
                  realm.[[GlobalEnv]] with NewObjectEnvironment layered on it for the node document, then the
-                 form owner, then the element. quickjs compiles a program or a `Function` body in the GLOBAL
-                 environment and has no entry point that takes a scope chain, so the object-environment layers
-                 are a quickjs-side primitive and not something this file can assemble; compiling without them
-                 is not a narrower answer, it is a wrong one — `<input onchange="value = 1">` resolves `value`
-                 on the element in every browser and would resolve it on the global here;
+                 form owner, then the element.
+                 THIS CLAUSE USED TO SAY quickjs "has no entry point that takes a scope chain, so the
+                 object-environment layers are a quickjs-side primitive". THAT IS WRONG, and it is wrong in the
+                 direction CLAUDE.md warns a next-diff clause is wrong in — it names a mechanism as absent, so
+                 the one person who reads it reads it having already decided to do the work, and builds what is
+                 there. The layers are not a primitive to add; they are `with`. ECMAScript §14.11.2 Runtime
+                 Semantics: Evaluation step 4 is verbatim "Let newEnv be NewObjectEnvironment(obj, true,
+                 oldEnv)" — the SAME abstract operation as §9.1.2.3 NewObjectEnvironment ( obj, isWithEnv,
+                 outerEnv ) with the SAME isWithEnv, which is what §8.1.8.1 step 3.9's scope is built from. So
+                 the scope chain is spelled, not simulated:
+
+                     with (this[0]) with (this[1]) with (this[2]) (function (event) {\n<body>\n});
+
+                 compiled as ONE program with JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE (the flag
+                 JS_FlowNew already uses to get a trampolinable closure back instead of running the body from
+                 C), then CALLED through step_call_run with `this` set to a null-prototype carrier holding the
+                 document, the form owner and the element in that order. Four facts make that exact rather than
+                 close, and each was read in quickjs.c rather than recalled: quickjs compiles `with` to a scope
+                 holding JS_ATOM__with_ (JS_VAR_DEF_WITH) whose reads become OP_with_get_var, which is the
+                 object environment record with @@unscopables; `this` compiles to OP_get_loc of the function's
+                 own this var, so no `with` layer can shadow the carrier the way it could shadow a named
+                 temporary; a program's hidden completion slot is written by OP_put_loc at EVERY expression
+                 statement, the ones inside a `with` body included, and §14.11.2 step 8's UpdateEmpty(C,
+                 undefined) passes a non-empty inner completion straight out — so the program's value IS the
+                 function expression, with no wrapper call to make; and OP_push_this hands a non-strict body the
+                 caller's this_obj unchanged when it is an object. The function expression is ANONYMOUS on
+                 purpose: a NAMED one binds its own name in a declarative environment INSIDE the innermost
+                 with, which §10.2.3 OrdinaryFunctionCreate ( proto, sourceText, paramList, body, thisMode,
+                 envRecord, privateEnv ) creates no binding for, so `<button onclick="onclick = null">` would
+                 assign to an immutable function-name binding instead of to the element. The residual that
+                 leaves is [[SourceText]]: §8.1.8.1's is "function onclick(event) {…}" and an anonymous
+                 expression's is "function (event) {…}", so `String(el.onclick)` omits the name;
              (b) step 5.4's LOCATION, which uncompiled_new does not carry and which step 3.7.2's SyntaxError is
                  "based on";
              (c) a place for step 3 to REST. The compile itself runs none of the page's code, but step 3.7.3
                  REPORTS AN EXCEPTION, which fires an `error` event and therefore runs the page's listeners —
                  and this function is reached both from §2.9's dispatch machine (which can park) and from the
                  plain C accessor js_handler_get (which cannot). The accessor is the one that has to become a
-                 step machine; until it is, `el.onclick` on a markup handler has nowhere to suspend. */
+                 step machine; until it is, `el.onclick` on a markup handler has nowhere to suspend. The
+                 accessor's mint is JS_NewStepClosure (the magic travels as closure data, because a step
+                 machine's own magic is its stepid) and the read opcodes already hand any callable getter to the
+                 tramp, so this is a machine to write and not a routing question to answer.
+           AND A FOURTH THE THREE ABOVE DO NOT COVER, WHICH IS WHERE (a)'s SHAPE STOPS BEING SAFE. HTML
+           §8.1.8.1 "Event handlers" step 3.7 is "if body is not parsable as FunctionBody or if parsing detects
+           an early error" — the emphasis is this comment's, not the standard's — and it is the guard
+           that makes wrapping the body in a synthesized program sound at all: a body of `}); alert(1); ({`
+           closes the wrapper's own brace, and every text after it is then ordinary program source that runs.
+           §20.2.1.1.1 CreateDynamicFunction states the defence for the same wrapper — its bodyParseString is
+           the body ALONE between two LINE FEEDs and its parse is ParseText(bodyParseString, FunctionBody
+           [~Yield, ~Await]), with the standard's own note that "the parameters and body are parsed separately
+           to ensure that each is valid alone". A goal-symbol parse consumes its WHOLE input, so a `}` at the
+           start of a FunctionBody is a SyntaxError rather than the second statement of a program. quickjs has
+           no such entry: reading js_dynfunc_source and js_dynfunc_check_halves, both probes are PROGRAM parses
+           of the same `(function anonymous(\n) {\n…\n})` wrapper, so an escaped body is a well-formed program
+           and neither probe rejects it. THAT is the quickjs-side primitive this algorithm needs — ParseText
+           with the FunctionBody goal — and it is not the one this clause used to name. Building (a) without it
+           does not merely mis-scope a handler: it EXECUTES markup that every browser answers with a
+           SyntaxError, so it goes first. */
         DFAILF("the event handler content attribute `%s` was READ and HTML §8.1.8.1 \"Event handlers\"'s "
                "\"get the current value of the event handler\" step 3 — the compile that turns an internal raw "
                "uncompiled handler into a function — is not built, so the handler this page wrote in markup is "
