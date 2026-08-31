@@ -1564,13 +1564,19 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
            the body ALONE between two LINE FEEDs and its parse is ParseText(bodyParseString, FunctionBody
            [~Yield, ~Await]), with the standard's own note that "the parameters and body are parsed separately
            to ensure that each is valid alone". A goal-symbol parse consumes its WHOLE input, so a `}` at the
-           start of a FunctionBody is a SyntaxError rather than the second statement of a program. quickjs has
-           no such entry: reading js_dynfunc_source and js_dynfunc_check_halves, both probes are PROGRAM parses
-           of the same `(function anonymous(\n) {\n…\n})` wrapper, so an escaped body is a well-formed program
-           and neither probe rejects it. THAT is the quickjs-side primitive this algorithm needs — ParseText
-           with the FunctionBody goal — and it is not the one this clause used to name. Building (a) without it
-           does not merely mis-scope a handler: it EXECUTES markup that every browser answers with a
-           SyntaxError, so it goes first. */
+           start of a FunctionBody is a SyntaxError rather than the second statement of a program.
+             THE DEFENCE IS NOT A SECOND GOAL SYMBOL, IT IS AN END OF INPUT, and that correction was paid for:
+           this clause used to say the quickjs-side primitive needed was ParseText with the FunctionBody goal,
+           and the escape was measured on the shipped engine through `new Function` before anything was built.
+           What let it through was never the goal symbol — it was that the wrapper was parsed as a Script,
+           whose body is a StatementList, so the text after the body's `}` was simply the program's second
+           source element. Pin the wrapper's parse to END OF INPUT as one FunctionExpression and an escaped
+           body has nowhere to put what follows, which is what makes the wrapper sound and is what
+           js_parse_fn_ctor_source performs for JS_EVAL_FLAG_FUNCTION_CTOR. So (a) has a primitive to reach
+           for and it is that pin, asked for by whichever flag this compile ends up carrying — never a plain
+           Script eval of a synthesized wrapper, which is the shape that ran the markup. Building (a) without
+           it does not merely mis-scope a handler: it EXECUTES markup that every browser answers with a
+           SyntaxError, so the pin goes first. */
         DFAILF("the event handler content attribute `%s` was READ and HTML §8.1.8.1 \"Event handlers\"'s "
                "\"get the current value of the event handler\" step 3 — the compile that turns an internal raw "
                "uncompiled handler into a function — is not built, so the handler this page wrote in markup is "
