@@ -1089,24 +1089,38 @@ static bool node_move(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *new_
     return true;
 }
 
-/* §4.5 appendChild / removeChild. DECLARED members, like every other one — they were raw JS_CFUNC_DEF entries,
+/* §4.4 appendChild / removeChild. DECLARED members, like every other one — they were raw JS_CFUNC_DEF entries,
    which is a shape that cannot park at all and, more to the point here, does not pass through the machine every
-   declared member converges on. `Node node` is an interface type, so the IDL converts nothing; the declaration
-   is what puts them on that path. magic 0 = appendChild, 1 = removeChild. */
+   declared member converges on. `Node node` is an INTERFACE type, so the IDL coerces nothing and REFUSES
+   everything that is not a node; the declaration is what puts them on that path. magic 0 = appendChild,
+   1 = removeChild.
+   THE NUMBER WAS §4.5 HERE AND AT THREE MORE SITES IN THIS FILE, and §4.5 is "Interface Document" — these four
+   members are declared AND given their method steps in §4.4 "Interface Node" ("The appendChild(node) method
+   steps are to return the result of appending node to this"), and it is the ALGORITHM they call that lives
+   elsewhere, in §4.2.3 "Mutation algorithms". Two sections, and the wrong one read as authoritative. */
 static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val), *child;
 
-    if (!n || argc < 1) return JS_UNDEFINED;
+    if (!n) return JS_UNDEFINED;
+    /* `[CEReactions] Node appendChild(Node node)` / `[CEReactions] Node removeChild(Node child)`. BOTH
+       POSITIONS ARE NON-NULLABLE INTERFACE TYPES, so §3.6's arity check and §3.2.15's brand are the
+       DECLARATION's and stand in front of this body — the `argc < 1` that answered `undefined` where step 5
+       throws, and the hand-written TypeError that stood where the brand belongs, are what they replaced. */
+    DCHECK(argc == 1, "a §4.4 child operation reached its body without its declared argument — the position is "
+                      "not optional, so §3.6 Overload resolution algorithm's step 5 (\"If S is empty, then "
+                      "throw a TypeError\") is what a zero-argument call gets");
     child = node_of(argv[0]);
-    if (!child)
-        return JS_ThrowTypeError(ctx, magic ? "removeChild requires a Node" : "appendChild requires a Node");
+    DCHECK(child != NULL, "appendChild/removeChild's `Node` argument reached the body as something that is not "
+                          "a node — the declaration's IDL_INTERFACE position and its "
+                          "idl_iface_brand(node_class_id()) are what make that a TypeError before step 1");
     if (magic) {
         if (child->parent != n)
             return JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
         dom_cow_remove_child(child);
     } else {
-        /* §4.5 appendChild IS §4.2.3's pre-insert with a null child — all eleven validity steps, not the one
+        /* §4.4's `appendChild(node)` method steps are `append`, which §4.2.3 Mutation algorithms defines as
+           pre-insert with a null child — all eleven validity steps, not the one
            ancestor check that used to stand here. */
         if (!node_pre_insert(ctx, child, n, NULL)) return JS_EXCEPTION;
     }
@@ -1819,20 +1833,32 @@ static JSValue js_node_facts(JSContext *ctx, JSValueConst this_val, int magic)
 }
 
 /* §4.4 hasChildNodes / isSameNode / contains — three one-line predicates that a page uses constantly and that
-   each had to be re-implemented by the page when they were absent. */
+   each had to be re-implemented by the page when they were absent.
+   THE TWO THAT TAKE AN ARGUMENT ARE DECLARED MEMBERS and hasChildNodes is not, which is the split this body
+   reads as a magic: `Node? otherNode` and `Node? other` are IDL_INTERFACE_NULLABLE positions, so the IDL null
+   and a branded node wrapper are the only two things that can arrive, and `undefined boolean hasChildNodes()`
+   declares nothing to convert. */
 static JSValue js_node_predicates(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val);
-    lxb_dom_node_t *other = argc > 0 ? node_of(argv[0]) : NULL;
+    lxb_dom_node_t *other;
 
     if (!n) return JS_FALSE;
-    switch (magic) {
-    case 0: return JS_NewBool(ctx, n->first_child != NULL);
-    case 1: return JS_NewBool(ctx, other == n);                      /* isSameNode: `Node?`, so null is false */
-    default:
-        DCHECK(magic == 2, "a Node predicate was declared with a magic this table does not name");
-        return JS_NewBool(ctx, other && node_is_inclusive_ancestor(n, other));   /* contains: INCLUSIVE */
-    }
+    if (magic == 0) return JS_NewBool(ctx, n->first_child != NULL);
+    DCHECK(argc == 1, "a §4.4 `Node?` predicate reached its body without its declared argument — the position "
+                      "is not optional, so §3.6 Overload resolution algorithm's step 5 arity TypeError stands "
+                      "in front of this body");
+    /* A THIRD VALUE IS WHAT THIS BODY USED TO ANSWER `false` FOR, and false is not one of §3.2.15's two
+       outcomes: a body reaching for the argument's node and finding none cannot tell "not this node" from "not
+       a Node", so `n.contains(5)` and `n.isSameNode(5)` were false where the standard throws. */
+    DCHECK(JS_IsNull(argv[0]) || node_of(argv[0]) != NULL,
+           "a `Node?` predicate's argument reached the body as neither the IDL null nor a node — Web IDL "
+           "§3.2.20 Nullable types is what makes null and undefined the IDL null and §3.2.15 Interface types "
+           "step 2 is what refuses everything else, both at the declaration");
+    other = node_of(argv[0]);
+    if (magic == 1) return JS_NewBool(ctx, other == n);              /* isSameNode: `Node?`, so null is false */
+    DCHECK(magic == 2, "a Node predicate was declared with a magic this table does not name");
+    return JS_NewBool(ctx, other && node_is_inclusive_ancestor(n, other));       /* contains: INCLUSIVE */
 }
 
 /* §4.4 isEqualNode — STRUCTURAL equality, which is what a page comparing two rendered subtrees means and what
@@ -1917,9 +1943,18 @@ static int js_node_is_equal(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     if (hdr->stage == NODE_EQ_NONNULL) {
         hdr->stage = NODE_EQ_PAIR;
         s->a = node_of(hdr->this_val);
-        s->b = argc > 0 ? node_of(argv[0]) : NULL;
+        DCHECK(argc == 1, "isEqualNode reached its body without its declared argument — `Node? otherNode` is "
+                          "not optional, so §3.6 Overload resolution algorithm's step 5 arity TypeError is "
+                          "what a zero-argument call gets");
+        DCHECK(JS_IsNull(argv[0]) || node_of(argv[0]) != NULL,
+               "isEqualNode's `Node? otherNode` reached the body as neither the IDL null nor a node — this "
+               "body cannot tell that apart from `not equal`, which is why the refusal is the declaration's: "
+               "Web IDL §3.2.15 Interface types step 2 under §3.2.20 Nullable types");
+        s->b = node_of(argv[0]);
         s->ra = s->a; s->rb = s->b;
-        /* `Node? otherNode`: null is never equal. */
+        /* `Node? otherNode`: the IDL null is never equal. A value that is neither is a TypeError the
+           declaration already threw — it used to be this same `false`, which reported "these two subtrees
+           differ" for a call that never named a second subtree. */
         if (!s->a || !s->b) { *presult = JS_FALSE; return JS_STEP_DONE; }
     }
     DCHECK(hdr->stage == NODE_EQ_PAIR, "isEqualNode resumed into a stage §4.4 does not have");
@@ -2003,9 +2038,20 @@ static int js_node_compare_position(JSContext *ctx, JSStepHdr *hdr, void *st, in
     switch (hdr->stage) {
     case NODEPOS_SAME:
         s->a = node_of(hdr->this_val);
-        s->b = argc > 0 ? node_of(argv[0]) : NULL;
-        if (!s->a || !s->b) {
-            JS_ThrowTypeError(ctx, "compareDocumentPosition requires a Node");
+        /* `unsigned short compareDocumentPosition(Node other)` — NON-nullable, so §3.2.15 Interface types
+           refuses null, undefined and every non-node at the declaration. What is left here is the RECEIVER,
+           which §3.7.7 Operations brands before any argument is converted and which this engine still asks
+           for at the body: the two used to share one condition and one message, so a page that called the
+           member on a plain object and a page that passed one got the same sentence. */
+        DCHECK(argc == 1, "compareDocumentPosition reached its body without its declared argument — `Node "
+                          "other` is not optional, so §3.6 Overload resolution algorithm's step 5 arity "
+                          "TypeError is what a zero-argument call gets");
+        s->b = node_of(argv[0]);
+        DCHECK(s->b != NULL, "compareDocumentPosition's `Node other` reached the body as something that is not "
+                             "a node — the declaration's IDL_INTERFACE position and its "
+                             "idl_iface_brand(node_class_id()) are what make that a TypeError before step 1");
+        if (!s->a) {
+            JS_ThrowTypeError(ctx, "compareDocumentPosition called on something that is not a Node");
             return JS_STEP_ABRUPT;
         }
         if (s->a == s->b) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }   /* step 1 */
@@ -2690,24 +2736,37 @@ static const IdlStepDecl NODE_CLONE_STEP = {
     "DOM §4.4 Node.cloneNode (over the `clone a node` concept)", NODE_CLONE_STEPS
 };
 
-/* §4.2.3 insertBefore / replaceChild — the two remaining mutating tree operations, through the same per-flow
-   chokepoints appendChild and removeChild already use. magic 0 = insertBefore, 1 = replaceChild. */
+/* §4.4 insertBefore / replaceChild — the two remaining mutating tree operations, through the same per-flow
+   chokepoints appendChild and removeChild already use. §4.4 is where the members and their method steps are
+   ("The insertBefore(node, child) method steps are to return the result of pre-inserting node into this before
+   child"); §4.2.3 Mutation algorithms is where `pre-insert` and `replace` themselves are written.
+   magic 0 = insertBefore, 1 = replaceChild. */
 static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    lxb_dom_node_t *parent = node_of(this_val);
-    lxb_dom_node_t *node = argc > 0 ? node_of(argv[0]) : NULL;
-    lxb_dom_node_t *child = argc > 1 ? node_of(argv[1]) : NULL;
+    lxb_dom_node_t *parent = node_of(this_val), *node, *child;
 
     if (!parent) return JS_UNDEFINED;
-    if (!node)
-        return JS_ThrowTypeError(ctx, magic ? "replaceChild requires a Node" : "insertBefore requires a Node");
     /* §4.4's IDL is `insertBefore(Node node, Node? child)` and `replaceChild(Node node, Node child)`, so the
        SECOND argument's nullability is the whole of what these two differ in before the algorithms start: an
-       omitted or null reference child means APPEND for one and is a TypeError for the other. Anything that is
-       neither null nor a Node fails the interface conversion in both. */
-    if (!child && !(magic == 0 && (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1]))))
-        return JS_ThrowTypeError(ctx, magic ? "replaceChild requires a Node as its second argument"
-                                            : "insertBefore's reference child must be a Node or null");
+       omitted or null reference child means APPEND for one and is a TypeError for the other. THAT IS THE
+       DECLARATION'S NOW — two type arrays rather than one, because one shared array could state only one of
+       the two rules and the body then re-derived the other from the magic. Anything that is neither the IDL
+       null nor a node fails §3.2.15 Interface types' step 2 in both, in argument order. */
+    DCHECK(argc == 2, "insertBefore/replaceChild reached its body without its two declared arguments — neither "
+                      "position is optional, so §3.6 Overload resolution algorithm's step 5 arity TypeError is "
+                      "what a shorter call gets");
+    node = node_of(argv[0]);
+    DCHECK(node != NULL, "insertBefore/replaceChild's `Node node` reached the body as something that is not a "
+                         "node — the declaration's IDL_INTERFACE position is what makes that a TypeError "
+                         "before step 1");
+    child = node_of(argv[1]);
+    DCHECK(magic == 0 || child != NULL,
+           "replaceChild's `Node child` reached the body as something that is not a node — its second position "
+           "is NOT nullable in §4.4, which is what IDL_INTERFACE there states and IDL_INTERFACE_NULLABLE at "
+           "insertBefore's does not");
+    DCHECK(child != NULL || JS_IsNull(argv[1]),
+           "a reference child reached the body as neither a node nor the IDL null — §3.2.20 Nullable types is "
+           "what turns null and undefined into that null at the declaration");
     if (magic == 0) {
         if (!node_pre_insert(ctx, node, parent, child)) return JS_EXCEPTION;
         return JS_DupValue(ctx, argv[0]);
@@ -3073,22 +3132,56 @@ void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto)
    per-realm mint is caught (idl_declared_before_seal), and a shared "install these members" helper that mints
    inline is exactly that bug: it works for the first realm and aborts on the second, naming the member. */
 static int g_w_equal = -1, g_w_pos = -1, g_w_append = -1, g_w_remove = -1, g_w_insert = -1, g_w_replace = -1,
-           g_w_normalize = -1, g_w_clone = -1;
+           g_w_normalize = -1, g_w_clone = -1, g_w_same = -1, g_w_contains = -1;
 
+/* EVERY ONE OF §4.4's INTERFACE-TYPED POSITIONS, STATED AS THE TYPE IT IS — and the nullability is not a
+   detail these members share, it is what tells them apart. §4.4 "Interface Node" writes
+     boolean isEqualNode(Node? otherNode);          boolean isSameNode(Node? otherNode);
+     unsigned short compareDocumentPosition(Node other);   boolean contains(Node? other);
+     [CEReactions] Node insertBefore(Node node, Node? child);   [CEReactions] Node appendChild(Node node);
+     [CEReactions] Node replaceChild(Node node, Node child);    [CEReactions] Node removeChild(Node child);
+   so `insertBefore`'s reference child is nullable and `replaceChild`'s is NOT, and one shared two-position
+   array could express neither. Web IDL §3.2.15 Interface types is two steps — "If V implements I, then return
+   the IDL interface type value that represents a reference to that platform object", then "Throw a TypeError"
+   — and §3.2.20 Nullable types is what puts null and undefined in front of it for the four that carry a `?`.
+   THESE WERE `IDL_ANY` AND THE REFUSAL WAS EACH BODY'S, which is the consumer-performs-the-type's-refusal
+   split, and here it did not merely move the TypeError — it LOST one: `n.isEqualNode(5)` answered `false`,
+   because a body that reaches for the argument's node and finds none has no way left to tell "not equal" from
+   "not a Node". The type answers that before the algorithm's step 1 and no body can forget it.
+   THE BRAND IS THE NODE WRAPPER CLASS. node_wrap builds EVERY node kind with `g_node_class` and uses the
+   claimed per-type class only to pick the PROTOTYPE, so one class id is exactly the granularity `Node` needs —
+   which is why `idl_iface_brand(node_class_id())` is what §4.2.6's moveBefore, §4.5's adoptNode and §5.5's
+   Range members already brand against. */
 static void node_declare_walkers(JSContext *ctx)
 {
-    static const IdlArgType ONE_ANY[1] = { IDL_ANY };   /* `Node? otherNode` — an interface type crosses as itself */
-    static const IdlArgType TWO_ANY[2] = { IDL_ANY, IDL_ANY };
+    static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
+    static const IdlArgType ONE_NODE_OR_NULL[1] = { IDL_INTERFACE_NULLABLE };
+    static const IdlArgType NODE_THEN_NULLABLE[2] = { IDL_INTERFACE, IDL_INTERFACE_NULLABLE };
+    static const IdlArgType NODE_THEN_NODE[2] = { IDL_INTERFACE, IDL_INTERFACE };
     static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
 
-    g_w_equal = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_EQUAL_STEP, 0);
-    g_w_pos = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &NODE_POS_STEP, 0);
-    /* §4.5's four MUTATING members. `Node node` / `Node? child` are interface types, so there is nothing to
-       coerce — the declaration is not about coercion here, it is about being a declared member at all. */
-    g_w_append = idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 0);
-    g_w_remove = idl_method_id(ctx, ONE_ANY, 1, js_node_child_op, 1);
-    g_w_insert = idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 0);
-    g_w_replace = idl_method_id(ctx, TWO_ANY, 2, js_node_insert, 1);
+    g_w_equal = idl_method_id_step(ctx, ONE_NODE_OR_NULL, 1, NULL, 0, &NODE_EQUAL_STEP, 0);
+    idl_iface_brand(node_class_id());
+    g_w_pos = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &NODE_POS_STEP, 0);
+    idl_iface_brand(node_class_id());
+    /* §4.4's two other `Node?` predicates. They were `JS_CFUNC_MAGIC_DEF` rows on the base table, which is a
+       member with no declaration at all — so `n.contains(5)` and `n.isSameNode(5)` answered `false` where
+       §3.2.15 step 2 throws, the same lost refusal isEqualNode had one row up. hasChildNodes() declares no
+       argument and stays on the table, because a member with nothing to convert has nothing to declare. */
+    g_w_same = idl_method_id(ctx, ONE_NODE_OR_NULL, 1, js_node_predicates, 1);
+    idl_iface_brand(node_class_id());
+    g_w_contains = idl_method_id(ctx, ONE_NODE_OR_NULL, 1, js_node_predicates, 2);
+    idl_iface_brand(node_class_id());
+    /* §4.4's four MUTATING members — the section that DECLARES them and states their method steps; §4.2.3
+       Mutation algorithms is where the algorithms those steps call are written. */
+    g_w_append = idl_method_id(ctx, ONE_NODE, 1, js_node_child_op, 0);
+    idl_iface_brand(node_class_id());
+    g_w_remove = idl_method_id(ctx, ONE_NODE, 1, js_node_child_op, 1);
+    idl_iface_brand(node_class_id());
+    g_w_insert = idl_method_id(ctx, NODE_THEN_NULLABLE, 2, js_node_insert, 0);
+    idl_iface_brand(node_class_id());
+    g_w_replace = idl_method_id(ctx, NODE_THEN_NODE, 2, js_node_insert, 1);
+    idl_iface_brand(node_class_id());
     /* `undefined normalize()` — no arguments to convert and still three loops' worth of the page's tree. */
     g_w_normalize = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0);
     /* `[CEReactions] Node cloneNode(optional boolean subtree = false)`. ToBoolean is total and runs none of the
@@ -3102,6 +3195,8 @@ static void node_declare_walkers(JSContext *ctx)
 static void node_install_walkers(JSContext *ctx, JSValueConst proto)
 {
     idl_install_method(ctx, proto, "isEqualNode", g_w_equal);
+    idl_install_method(ctx, proto, "isSameNode", g_w_same);
+    idl_install_method(ctx, proto, "contains", g_w_contains);
     idl_install_method(ctx, proto, "compareDocumentPosition", g_w_pos);
     idl_install_method(ctx, proto, "appendChild", g_w_append);
     idl_install_method(ctx, proto, "removeChild", g_w_remove);
@@ -3232,8 +3327,6 @@ static void node_declare_mixins(JSContext *ctx)
 
 static const JSCFunctionListEntry js_node_base[] = {
     JS_CFUNC_MAGIC_DEF("hasChildNodes", 0, js_node_predicates, 0),
-    JS_CFUNC_MAGIC_DEF("isSameNode", 1, js_node_predicates, 1),
-    JS_CFUNC_MAGIC_DEF("contains", 1, js_node_predicates, 2),
     JS_CGETSET_DEF("nodeType", js_node_get_type, NULL),
     JS_CGETSET_DEF("nodeName", js_node_get_name, NULL),
     JS_CGETSET_DEF("childNodes", js_node_child_nodes, NULL),

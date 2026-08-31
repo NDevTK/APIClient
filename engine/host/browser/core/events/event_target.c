@@ -124,7 +124,21 @@ void event_target_init(JSContext *ctx)
            function says this declaration happens once per agent — and what it could DO was hand a SECOND agent
            the ids a dead runtime issued, which is core/agent_state.h's fetch defect exactly. The release below
            gives them back and the registry asserts that it did. */
-        static const IdlArgType ADD_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT_OR_BOOL_FIRST };
+        /* `EventListener? callback` IS A CALLBACK INTERFACE, WHICH IS NOT IDL_CALLBACK AND WAS NOT `any`.
+           Web IDL §3.2.16 Callback interface types is two steps — "If V is not an Object, then throw a
+           TypeError", then "Return the IDL callback interface type value that represents a reference to V,
+           with the incumbent settings object as the callback context" — so ANY object crosses (its one
+           operation is looked up by name at invoke time, which is why `{handleEvent(e){…}}` registers) and
+           only a PRIMITIVE is refused. §3.2.19 Callback function types is the other type, the one that brands
+           for callable, and declaring this position as that would reject the ordinary handleEvent object.
+           IT IS THE DECLARATION'S BECAUSE §3.6 CONVERTS FROM LEFT TO RIGHT — "the JavaScript values are
+           converted from left to right" — and the position AFTER it is a dictionary whose members are the
+           PAGE'S reads. Performed in the body, this refusal ran after the whole options bag had been walked:
+           `t.addEventListener("x", 5, {get capture(){ … }})` ran that getter, and over unknown external input
+           it also forked §3.2.25's `(AddEventListenerOptions or boolean)` arm into two worlds that both then
+           threw. Declared, argument 1 refuses first and neither happens. */
+        static const IdlArgType ADD_ARGS[3] = { IDL_DOMSTRING, IDL_CALLBACK_INTERFACE_NULLABLE,
+                                                IDL_DICT_OR_BOOL_FIRST };
         static const IdlDictMember ADD_OPTS[] = {   /* `capture` FIRST: it is what the bare boolean means */
             { "capture", IDL_BOOLEAN }, { "once", IDL_BOOLEAN },
             /* `passive` is IDL_ANY and NOT IDL_BOOLEAN, and that is the declaration doing its job: a boolean
@@ -825,16 +839,22 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         s->once = 0;
         s->passive = -1;
         /* WEB IDL CONVERTS EVERY ARGUMENT, IN ORDER, BEFORE THE ALGORITHM RUNS — so the shape of this machine
-           is "finish the conversions, THEN run §2.7", and the two halves are not interleavable. §2.8's
+           is "finish the conversions, THEN run §2.7", and the two halves are not interleavable. §2.7's
            `callback` is an `EventListener?`, which is a CALLBACK INTERFACE and not a function type: ANY object
            implements it, because its one operation is looked up BY NAME on the object each time it is invoked,
-           so `el.addEventListener("x", {handleEvent(e){…}})` is an ordinary registration and used to be
-           silently dropped here. A PRIMITIVE is Web IDL §3.2.16 Callback interface types step 1's TypeError,
-           and it is raised before the options are read because the callback is the earlier argument. */
-        if (argc > 1 && !JS_IsObject(argv[1]) && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
-            JS_ThrowTypeError(ctx, "the event listener is not an object");
-            return -1;
-        }
+           so `el.addEventListener("x", {handleEvent(e){…}})` is an ordinary registration.
+           THE REFUSAL THAT STOOD HERE IS THE DECLARATION'S, and the claim that stood with it — that it was
+           "raised before the options are read" — was FALSE OF THIS SITE while it was true of the rule: a body
+           runs after EVERY position is converted, and position 2's dictionary walk is the page's own getters.
+           IDL_CALLBACK_INTERFACE_NULLABLE at position 1 is what makes the sentence true. */
+        DCHECK(argc == 3, "add/removeEventListener reached its body without all three declared positions — the "
+                          "first two are required (§3.6 Overload resolution algorithm step 5, \"If S is empty, "
+                          "then throw a TypeError\") and the third is a dictionary the conversion places "
+                          "whether or not the page passed one");
+        DCHECK(JS_IsNull(argv[1]) || JS_IsObject(argv[1]),
+               "§2.7's `EventListener? callback` reached the body as neither the IDL null nor an object — Web "
+               "IDL §3.2.16 Callback interface types step 1 is what refuses a primitive, at the declaration, "
+               "before §3.6's left-to-right conversion reaches the options bag");
         STEP_GOTO(hdr->stage, AEL_CAPTURE, NULL);
     }
 
@@ -943,8 +963,11 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
     DCHECK(hdr->stage == AEL_RUN, "add/removeEventListener resumed into a stage §2.7 does not have");
     /* §2.7 "add an event listener" step 3 / "remove an event listener"'s equivalent: a NULL callback registers
        nothing. It is HERE, after every conversion, because that is where the spec puts it — which is what makes
-       `addEventListener("x", null, {signal: null})` a TypeError about the signal rather than a silent no-op. */
-    if (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1]))
+       `addEventListener("x", null, {signal: null})` a TypeError about the signal rather than a silent no-op.
+       ONE TEST AND NOT THREE: Web IDL §3.2.20 Nullable types makes null AND undefined the IDL null at the
+       declaration, so the value that arrives here IS `null` for both spellings, and the arity is §3.6 step 5's.
+       The two extra clauses were the same absent conversion this member's callback position used to have. */
+    if (JS_IsNull(argv[1]))
         return JS_STEP_DONE;
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
     if (!type) return -1;
