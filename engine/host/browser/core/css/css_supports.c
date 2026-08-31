@@ -173,6 +173,7 @@ static bool sup_block(Sup *p, size_t *pbegin, size_t *pend)
 /* §6's `<supports-in-parens>`, at the cursor. `*matches` is its boolean; false is "this is not one", which
    makes the enclosing `<supports-condition>` fail. */
 static bool sup_in_parens(Sup *p, bool *matches);
+static bool css_supports_declaration(const char *decl, size_t len);
 
 /* §6's `<supports-condition>` over a WHOLE span — the entry, and the recursion's own step for a nested
    `( <supports-condition> )`. */
@@ -266,7 +267,39 @@ bool css_supports_condition(const char *text, size_t len, bool *matches)
     return sup_condition(text, len, matches);
 }
 
-bool css_supports_declaration(const char *decl, size_t len)
+/* §6.1's definition of support over ONE declaration's text — `display: flex`, with no surrounding parentheses
+ * and no trailing `;`. This is `<supports-decl>`'s leaf, and it is what §7.5 "The CSS namespace, and the
+ * supports() function"'s ONE-ARGUMENT `CSS.supports(conditionText)` reaches through `css_supports_condition`
+ * — including that overload's second attempt, which retries the argument "wrapped in parentheses and then
+ * parsed and evaluated as a `<supports-condition>`", so `CSS.supports("display:flex")` arrives here.
+ *
+ * IT IS NOT WHAT THE TWO-ARGUMENT OVERLOAD ASKS, AND THE SENTENCE THAT SAID IT WAS — "what §7.5's
+ * `CSS.supports(property, value)` asks once it has joined its two arguments with a colon" — IS REFUTED BY
+ * §7.5'S OWN TWO NOTES. That is why it is corrected here rather than deleted: a reader who re-derives the
+ * colon-join will re-introduce it, because it is the obvious reading and it is nearly right.
+ *   - "No CSS escape or whitespace processing is performed on the property name, so CSS.supports(" width",
+ *     "5px") will return false, as " width" isn't the name of any property due to the leading space." A join
+ *     makes that ` width: 5px`, whose leading whitespace the tokenizer consumes before the property name, so
+ *     this entry answers TRUE where the spec requires FALSE.
+ *   - "!important flags are not part of property grammars, and will cause value to parse as invalid, just as
+ *     they would in the value argument to element.style.setProperty()." A join makes that
+ *     `width: 5px !important`, which IS one declaration §6.1 supports, so again TRUE for a required FALSE.
+ * §7.5's two-argument steps are a DIFFERENT algorithm and are stated in two halves: "If property is an ASCII
+ * case-insensitive match for any defined CSS property that the UA supports, or is a custom property name
+ * string, and value successfully parses according to that property's grammar, return true." The first half is
+ * CSSOM §2 Terminology's "supported CSS property" set — which core/css/css_style_declaration.c already walks
+ * for §6.6.1's per-property IDL attributes — asked of the argument's LITERAL bytes, which is what makes
+ * `" width"` false at the step rather than at the parse. The second half is CSSOM §6.7.1 "Parsing CSS Values",
+ * whose own Note carries the `!important` rule ("\"!important\" declarations are not part of the property
+ * value space and will therefore cause parse a CSS value to return null") and which
+ * core/css/css_style_declaration.c answers for `setProperty` already. So the member, when it lands, is those
+ * two entries and NOT this one; this entry is the one-argument overload's.
+ *
+ * FALSE FOR ANYTHING THAT IS NOT ONE DECLARATION, which is what keeps `<supports-decl>` and
+ * `<general-enclosed>` from having to be told apart by the caller: a text holding a top-level `;` is two
+ * declarations or one and a fragment, so it is not a `<declaration>` and this answers false — the same answer
+ * `<general-enclosed>` carries, which is why the grammar's two arms need no separate result here. */
+static bool css_supports_declaration(const char *decl, size_t len)
 {
     Sup p = { NULL, NULL, 0 };
     lxb_css_syntax_token_t *t;

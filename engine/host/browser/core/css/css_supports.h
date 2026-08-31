@@ -4,11 +4,20 @@
  * IT IS A COMPONENT AND NOT A HELPER INSIDE css_rule.c, because THREE callers ask this one question and each
  * of them would otherwise answer it for itself: CSS Conditional §7.4's `CSSSupportsRule.matches` ("the
  * evaluation of the CSS feature query represented in conditionText"), the AUTHOR CASCADE (a conditional group
- * rule contributes its children only when its condition holds, which is what `@supports` MEANS), and §7.5's
- * `CSS.supports()` on the `CSS` namespace — a namespace this build does not have, which is exactly why the
- * entry below is declared rather than left static: when that member lands it is THIS call, not a second
- * definition of what "supported" means. `@import ... supports(...)` is the fourth and is the same question
- * again (core/css/css_at_rule_prelude.h parses that function's contents; deciding them is here).
+ * rule contributes its children only when its condition holds, which is what `@supports` MEANS), and §7.5
+ * "The CSS namespace, and the supports() function"'s ONE-ARGUMENT `CSS.supports(conditionText)` on the `CSS`
+ * namespace, which is exactly why the entry below is declared rather than left static: when that member lands
+ * it is THIS call, not a second definition of what "supported" means — and it reaches this entry TWICE, since
+ * §7.5's second step retries the argument "wrapped in parentheses". `@import ... supports(...)` is the fourth
+ * and is the same question again (core/css/css_at_rule_prelude.h parses that function's contents; deciding
+ * them is here).
+ *
+ * §6.1'S DEFINITION OF SUPPORT OVER ONE DECLARATION IS **NOT** ON THIS INTERFACE, and the reason is a
+ * correction rather than a layering choice: it was public for one stated caller — §7.5's TWO-ARGUMENT
+ * `CSS.supports(property, value)`, "once it has joined its two arguments with a colon" — and §7.5's own two
+ * Notes refute that reading, so the caller does not exist and never could. The entry is file-static in
+ * css_supports.c, where the refutation is written out beside it and where the next reader of that algorithm
+ * will be standing.
  *
  * VALIDITY AND TRUTH ARE TWO ANSWERS AND THE GRAMMAR IS WHY. §6 says the production is "purposely very loose
  * for forwards-compatibility reasons, since the <general-enclosed> production allows for substantial future
@@ -74,15 +83,5 @@
  * an `and`/`or` chain has to be parsed for the rule to be valid at all, so `(display:none) or (!!!)` must be
  * refused whatever the first term answered. */
 bool css_supports_condition(const char *text, size_t len, bool *matches);
-
-/* §6.1's definition of support over ONE declaration's text — `display: flex`, with no surrounding parentheses
- * and no trailing `;`. This is `<supports-decl>`'s leaf and it is also what §7.5's `CSS.supports(property,
- * value)` asks once it has joined its two arguments with a colon.
- *
- * FALSE FOR ANYTHING THAT IS NOT ONE DECLARATION, which is what keeps `<supports-decl>` and
- * `<general-enclosed>` from having to be told apart by the caller: a text holding a top-level `;` is two
- * declarations or one and a fragment, so it is not a `<declaration>` and this answers false — the same answer
- * `<general-enclosed>` carries, which is why the grammar's two arms need no separate result here. */
-bool css_supports_declaration(const char *decl, size_t len);
 
 #endif
