@@ -10,7 +10,8 @@
  *
  * WHAT THE ENTRIES THAT DID NOT ASK PRODUCED. The response's own bytes went to a tokenizer that reads UTF-8,
  * so a document served `windows-1252`, or one carrying `<meta charset=shift_jis>`, was replaced with U+FFFD
- * above 0x7F before HTML §13.2.6 saw a token — and its Document kept DOM §4.5 "Interface Document"'s default,
+ * above 0x7F before HTML §13.2.6 "Tree construction" saw a token — and its Document kept DOM §4.5 "Interface
+ * Document"'s default,
  * so `document.characterSet` answered UTF-8. Nothing crashed and nothing logged, which is what makes it the
  * defect shape rather than a gap: the tree is REAL, the string is WRONG, and no reader of either can tell.
  *
@@ -44,7 +45,8 @@ int document_load_decode(char **out, size_t *out_len,
            "HTML §13.2.3.2 Determining the character encoding was asked without a response — the algorithm "
            "takes the out-of-band metadata AND all the bytes available so far, so half of it is an encoding "
            "determined for some other response, and no bytes at all is a caller with no response that is not "
-           "asking this question: HTML §7.4 initial about:blank keeps DOM §4.5 default");
+           "asking this question: HTML §7.4 Navigation and session history's initial about:blank keeps the "
+           "utf-8 default DOM §4.5 Interface Document gives every Document");
     /* §13.2.3.2's OUT-OF-BAND METADATA, IN THE FORM THAT ALGORITHM DEFINES. Fetch §2.2.2 Headers get JOINS
        duplicate values with a comma and a space, and Fetch §3.5 legacy extract an encoding runs over the
        record that joined value extracts to. The UNJOINED last value belongs to MIME Sniffing §5.1 and is read

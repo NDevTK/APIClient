@@ -25,7 +25,8 @@
  * header, each inside the component whose algorithm defines it.
  *
  * `body` IS THE RESPONSE'S BYTES AND IS NEVER NULL. A caller with no response is not asking this question:
- * HTML §7.4's initial `about:blank` has no bytes to sniff and no `Content-Type` to be overruled by, and its
+ * HTML §7.4 "Navigation and session history"'s initial `about:blank` has no bytes to sniff and no
+ * `Content-Type` to be overruled by, and its
  * Document keeps DOM §4.5 "Interface Document"'s default. `body_len` may be zero — an empty response is still
  * a response, and §13.2.3.2 still answers for it.
  *
