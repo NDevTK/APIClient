@@ -706,8 +706,11 @@ class Resolver {
   }
 
   /* A TABLE handed to an install helper — `element_declare_reflections(ctx, R_INPUT, n)` names one directly,
-     `element_declare_reflections(ctx, HTML_IFACE[i].refl, …)` names a COLUMN of tables, one per interface the
-     element-interface table lists. Returns the table names, or null. */
+     and `TBL[i].field` names a COLUMN of tables, one per row of TBL. It does NOT reach a column the C
+     COMPUTES: an array a join fills is a plain subscript with no field, so it answers null here and the site is
+     UNRESOLVED unless loadEnvironment's joinedColumns read the join. That is not a limitation to route around
+     — the honest answer to "which table is this" is nothing, and the JOIN is a different question asked of the
+     two tables it is over. Returns the table names, or null. */
   tableRefs(exprIn, depth = 0) {
     if (depth > 4) return null;
     let e = expand(exprIn, this.macros).trim();
@@ -1362,13 +1365,21 @@ function blankLiterals(text) {
    Returns null when nothing guards the site, otherwise `{ only }` — the names, or null for a guard whose
    subject this cannot read. A guard the ENCLOSING LOOP applies with a `continue` (`if (!(EH_MASK[i] & mask))
    continue;`) is not one of these, and is the coarseness the module header names. */
+/* `TBL[…].field` — one cell of one COLUMN, the shape every per-row attribution in this file turns on. */
+const COLUMN_REF_RE = /^([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*([A-Za-z_]\w*)$/;
+
 const PLAIN = new WeakMap();
 const plainOf = (f) => {
   if (!PLAIN.has(f)) PLAIN.set(f, blankLiterals(f.body));
   return PLAIN.get(f);
 };
 
-function guardAt(body, plain, at) {
+/* THE STATEMENT HEADS AN OFFSET STANDS UNDER, innermost first — walked out block by block, so an assignment
+   inside an `if` inside a `for` reports both. TWO readers ask different questions of the same walk: guardAt
+   asks which interface NAMES a string-compared condition narrows to, and the join derivation below asks which
+   two table COLUMNS a condition equates. Sharing the walk is what keeps them one answer about one C construct
+   rather than two readings that can disagree about where a statement stands. */
+function guardHeadsAt(body, plain, at) {
   const heads = [];
   let i = at;
   for (;;) {
@@ -1389,7 +1400,11 @@ function guardAt(body, plain, at) {
     }
     if (heads.length > 8) break;
   }
-  const guard = heads.find((h) => /\bif\s*\(/.test(h));
+  return heads;
+}
+
+function guardAt(body, plain, at) {
+  const guard = guardHeadsAt(body, plain, at).find((h) => /\bif\s*\(/.test(h));
   if (guard === undefined) return null;
   const only = [];
   let usable = false;
@@ -1660,6 +1675,8 @@ export function loadEnvironment(root) {
   const nonIfaceNodes = new Map(); /* node -> the NON_INTERFACE_FORMS kind the C declares it to be */
   const ifaceObjects = [];        /* {node, ifaces, file, line} — checked back against the tag once solved */
   const interfaceTables = new Map();   /* table -> the field whose cells are interface identifiers */
+  const columnEqualities = [];         /* {a,b} — two [table, field] pairs one strcmp compares */
+  const arrayFills = new Map();        /* file -> name -> every `name[…] = rhs;` written in that file */
 
   /* THE NAMES ONE SLOT GOES BY. A class id is a VALUE, so the name a prototype was written under is not always
      the name it is read back under: element_internals.c copies §4.13.7's three class ids into a local
@@ -1706,6 +1723,30 @@ export function loadEnvironment(root) {
           tagSeeds.push({ node: at(obj, site.at), ifaces: names });
           declares(path, names);
         }
+      /* TWO COLUMNS A `strcmp` EQUATES HOLD ONE KIND OF VALUE, which is the SECOND statement the C makes about
+         which columns name interfaces and the only one that reaches a table no tag is written out of.
+         `strcmp(IFACE_REFL[j].iface, HTML_IFACE[i].iface) == 0` says IFACE_REFL's `iface` column holds what
+         HTML_IFACE's holds, and HTML_IFACE's is already known because html_element.c tags every per-tag
+         prototype out of it. Read rather than listed: a table here naming which columns hold interface
+         identifiers would be a second copy of a fact the C states, and the copy nobody runs against reality is
+         the one that drifts. */
+      for (const site of callSites(f.body, "strcmp")) {
+        const a = COLUMN_REF_RE.exec(stripCast(site.args[0] || "").trim());
+        const b = COLUMN_REF_RE.exec(stripCast(site.args[1] || "").trim());
+        if (a && b) columnEqualities.push({ a: [a[1], a[2]], b: [b[1], b[2]] });
+      }
+      /* EVERY WRITE INTO AN INDEXED SLOT, kept per file and per name — the raw material the JOIN derivation
+         below reads. Matched on the literal-blanked body so a `;` inside a string cannot end a statement, and
+         the text is sliced back out of the real body so the right-hand side is the C's own. */
+      {
+        if (!arrayFills.has(path)) arrayFills.set(path, new Map());
+        const perName = arrayFills.get(path);
+        for (const m of plainOf(f).matchAll(/\b([A-Za-z_]\w*)\s*\[([^\][;{}]*)\]\s*=\s*([^;{}]*);/g)) {
+          const rhsAt = m.index + m[0].length - 1 - m[3].length;
+          if (!perName.has(m[1])) perName.set(m[1], []);
+          perName.get(m[1]).push({ f, at: m.index, rhs: f.body.slice(rhsAt, rhsAt + m[3].length).trim() });
+        }
+      }
       /* The objects the corpus declares are NOT interface prototype objects — see NON_INTERFACE_FORMS. The
          node is exact and local: an object handed somewhere else reaches no such declaration and stays
          UNATTRIBUTED, which is the honest answer rather than a widened claim. */
@@ -1897,6 +1938,79 @@ export function loadEnvironment(root) {
       }
   }
 
+  /* THE EQUALITIES, CLOSED. An interface column reached through any chain of string equalities is an interface
+     column; the walk is to a fixpoint because a join can be two hops (a table keyed against a table keyed
+     against the tagged one) and stopping at one would be a rule that happens to fit today's C. A table that
+     already has a column recorded is left alone — two answers for one table is a fact this cannot decide, and
+     the first is the one a tag made. */
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const { a, b } of columnEqualities)
+      for (const [from, to] of [[a, b], [b, a]])
+        if (interfaceTables.get(from[0]) === from[1] && !interfaceTables.has(to[0])) {
+          interfaceTables.set(to[0], to[1]);
+          moved = true;
+        }
+  }
+
+  /* A COLUMN THE C COMPUTES RATHER THAN WRITES — the JOIN, read as the relational operation it is.
+     html_element.c keeps §4's per-interface reflection sets in a table of their own and joins it onto the
+     element-interface rows once per agent (`g_iface_refl[i] = IFACE_REFL[j].refl` under
+     `strcmp(IFACE_REFL[j].iface, HTML_IFACE[i].iface) == 0`), then hands `g_iface_refl[i]` to the declare. Read
+     as an ordinary subscript that is neither a literal, a table cell nor a plain identifier, that argument
+     resolves to nothing and the whole per-interface HTML reflection surface is UNRESOLVED — every one of those
+     members neither counted nor missed, so each HTML interface's ABSENT row listed reflections it installs.
+     WHAT IS READ IS THE JOIN AND NOT ITS RESULT: the array IS the column `B.F` KEYED BY `B.K`, because the
+     guard says which row of B each cell was taken from. The INDEX side drops out entirely — a cell is filed
+     under the interface its OWN row names — which is the same rule the table's-own-row attribution states, and
+     it is why the two tables being ordered differently cannot matter. The index side is kept for one thing: the
+     set of interfaces some row actually WEARS, so a set declared for an interface no row wears is refused
+     instead of credited, which is the false COMPLETE this file exists to make impossible.
+     Every condition below is a REFUSAL when unmet, so a C rewritten into a shape this cannot read goes back to
+     UNRESOLVED — loud — rather than to a silent credit. */
+  const joinedColumns = new Map();
+  for (const [path, perName] of arrayFills) for (const [name, fills] of perName) {
+    /* A FILE-SCOPE array and not a local: the join is a fact about the program, and a local of the same name in
+       some other function is a different object. The declaration is the one occurrence of `name[` outside
+       every function body in the file. */
+    const src = sources.get(path);
+    if (!src) continue;
+    const fns = fnsOf.get(path) || [];
+    let declared = false;
+    for (const m of src.masked.matchAll(new RegExp(`\\b${name}\\s*\\[`, "g")))
+      if (!fns.some((f) => m.index >= f.start && m.index < f.end)) { declared = true; break; }
+    if (!declared) continue;
+
+    let table = null, field = null, keyField = null, against = null, real = 0, bad = false;
+    for (const fill of fills) {
+      if (/^(NULL|0)$/.test(fill.rhs)) continue;       /* the default the join overwrites */
+      const c = COLUMN_REF_RE.exec(fill.rhs);
+      if (!c) { bad = true; break; }
+      if (table === null) { table = c[1]; field = c[2]; }
+      else if (table !== c[1] || field !== c[2]) { bad = true; break; }
+      /* THE GUARD IS WHAT MAKES IT A JOIN. Without it the assignment says only that some cell of the array is
+         some cell of the column, which is a fact about INDICES and names no key at all. */
+      let keyed = null;
+      for (const head of guardHeadsAt(fill.f.body, plainOf(fill.f), fill.at)) {
+        for (const site of callSites(head, "strcmp")) {
+          const x = COLUMN_REF_RE.exec(stripCast(site.args[0] || "").trim());
+          const y = COLUMN_REF_RE.exec(stripCast(site.args[1] || "").trim());
+          if (!x || !y) continue;
+          for (const [k, other] of [[x, y], [y, x]])
+            if (k[1] === c[1] && interfaceTables.get(k[1]) === k[2]) keyed = { k, other };
+        }
+        if (keyed) break;
+      }
+      if (!keyed) { bad = true; break; }
+      if (keyField !== null && (keyField !== keyed.k[2] || against.table !== keyed.other[1])) { bad = true; break; }
+      keyField = keyed.k[2];
+      against = { table: keyed.other[1], field: keyed.other[2] };
+      real++;
+    }
+    if (bad || !real || !table) continue;
+    joinedColumns.set(`${path}\u0000${name}`, { table, field, key: keyField, against });
+  }
+
   /* THE CHECK BACK. §3.7.1's interface object was built for a NAMED interface; §3.7.3's tag says what the
      prototype behind it IS. They are two statements about one interface, made in two places, so either one can
      catch the other being wrong: a DISAGREEMENT means one of them names the wrong interface, which nothing else
@@ -1914,7 +2028,7 @@ export function loadEnvironment(root) {
 
   return { macros, typedefs, sources, resolver, forms, fnsOf,
            tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables,
-           nonIfaceNodes,
+           joinedColumns, nonIfaceNodes,
            recordContradictions, declaresIface, ints, refusals, refuseUnread };
 }
 
@@ -2261,10 +2375,20 @@ export function installedMembers(paths, env) {
     /* 3. THE TWO-HALVED REGISTRIES: reflections and byte readers. The DECLARE half carries the names and no
        object; the INSTALL half carries the object and a handle. So the interface comes from joining the halves,
        two ways, in this order:
-         (a) THE TABLE'S OWN ROW. `element_declare_reflections(ctx, HTML_IFACE[i].refl, …)` declares one table
-             per row of a table whose `iface` column is what html_element.c tags each prototype with — so row
-             r's reflections are row r's interface, and the sixty element interfaces get exactly their own
-             members instead of all sixty getting all of them.
+         (a) THE TABLE'S OWN ROW. A declare handed `TBL[i].field`, where TBL is a table whose interface column
+             is what a component tags its prototypes out of, declares one member table PER ROW — so row r's
+             members are row r's interface, and the element interfaces get exactly their own instead of all of
+             them getting all of them.
+         (a′) THE SAME ROW, REACHED THROUGH A JOIN. Where the member tables are a table of their OWN, joined
+             onto the interface rows once per agent (`g_iface_refl[i] = IFACE_REFL[j].refl` under
+             `strcmp(IFACE_REFL[j].iface, HTML_IFACE[i].iface) == 0`), the declare is handed `g_iface_refl[i]` —
+             a column the C COMPUTES rather than writes, which is a plain subscript with no field and so names
+             no table at all. loadEnvironment reads the JOIN and answers with the joined table's own rows, which
+             is (a)'s question asked of the table that really holds the pairs. Read as an ordinary subscript
+             instead, the argument resolves to nothing and the ENTIRE per-interface reflection surface is
+             UNRESOLVED — neither counted nor missed — so every one of those interfaces reports the members it
+             installs as ABSENT, which is this file's own false direction arriving through a refactor of the C
+             rather than through a rule.
          (b) THE HANDLE. `g_html_refl_base = element_declare_reflections(ctx, R_HTML, …)` and
              `element_install_reflections(ctx, html_p, g_html_refl_base, …)` are the same registration named by
              the same identifier, so the declaration's members belong to the object the install names. Where
@@ -2278,17 +2402,43 @@ export function installedMembers(paths, env) {
         const f = fnAt(site.at);
         const R = scoped(f);
         const arg = site.args[form.arg] || "";
-        const col = stripCast(arg).match(/^([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*([A-Za-z_]\w*)$/);
-        const ifaceField = col ? env.interfaceTables.get(col[1]) : null;
-        if (ifaceField) {
-          const tables = R.column(col[1], col[2]), ifaces = R.column(col[1], ifaceField);
+        /* (a) the argument IS a cell of a table whose rows are interfaces, or (a′) a cell of a column the C
+           JOINED out of one. Both answer with the same three things — the member table per row, the interface
+           per row, and the interfaces some row of the joined-against table actually WEARS (nothing to check on
+           the direct form, where the row IS the wearer). */
+        const col = stripCast(arg).match(COLUMN_REF_RE);
+        const sub = stripCast(arg).match(/^([A-Za-z_]\w*)\s*\[[^\]]*\]$/);
+        const joined = sub ? env.joinedColumns.get(`${path}\u0000${sub[1]}`) : null;
+        const perRow = col && env.interfaceTables.get(col[1])
+          ? { table: col[1], field: col[2], iface: env.interfaceTables.get(col[1]), against: null }
+          : joined
+            ? { table: joined.table, field: joined.field, iface: joined.key, against: joined.against }
+            : null;
+        if (perRow) {
+          const tables = R.column(perRow.table, perRow.field), ifaces = R.column(perRow.table, perRow.iface);
           if (!tables || !ifaces || tables.length !== ifaces.length) { report(site.at, form.declare, arg); continue; }
+          let worn = null;
+          if (perRow.against) {
+            const cells = R.column(perRow.against.table, perRow.against.field);
+            if (!cells) { report(site.at, form.declare, `${perRow.against.table}.${perRow.against.field}`); continue; }
+            worn = new Set();
+            for (const c of cells) for (const n of R.strings(c, null) || []) worn.add(n);
+          }
           for (let r = 0; r < tables.length; r++) {
             const cell = tables[r].trim();
             if (/^(NULL|0)$/.test(cell)) continue;      /* a row that declares no members */
             const names = membersOfDeclare(R, form, cell);
             const iname = R.strings(ifaces[r], null);
-            if (!names || !iname) { report(site.at, `${form.declare}/${col[1]}[${r}]`, cell); continue; }
+            if (!names || !iname) { report(site.at, `${form.declare}/${perRow.table}[${r}]`, cell); continue; }
+            /* A SET DECLARED FOR AN INTERFACE THE JOIN NEVER MATCHES INSTALLS NOTHING, so crediting it is the
+               false COMPLETE — the one error that never prints. The C DCHECKs the same thing at the join; this
+               is that claim checked from the corpus side, and the two cannot drift while both stand. */
+            const unworn = worn ? iname.filter((n) => !worn.has(n)) : [];
+            if (unworn.length) {
+              report(site.at, `${form.declare}/${perRow.table}[${r}]`,
+                     `declares members for ${unworn.join(", ")}, which no \`${perRow.against.table}\` row wears`);
+              continue;
+            }
             emitWith(names, false, { ifaces: iname, candidates: [], why: null }, site.at, form.declare, null,
                      form.kind);
           }
