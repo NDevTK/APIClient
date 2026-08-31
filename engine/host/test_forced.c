@@ -135,10 +135,11 @@ static JSValue js_url_sink(JSContext *ctx, JSValueConst this_val, int argc, JSVa
    the throw site, and it is therefore this fixture's own token for "which program is this": a regression in
    the DOCUMENT's scripts cannot produce it, which is the whole reason a staged error and a real one can be
    told apart without matching a word of any engine message.
-   `stages_page_error` IS A CLAIM AND NOT A LICENCE. The row does not suppress anything — the two chunks that
-   carry it are asserted to have raised their error by NODE_ALGOS rows over the result document, so a staged
-   error that stops happening still FAILS. What it declares is the other direction, which nothing could state
-   before: an uncaught error from any OTHER program is one this document did not stage. */
+   `stages_page_error` IS A CLAIM AND NOT A LICENCE. The row does not suppress anything — every chunk that
+   carries it is asserted to have raised its error by probe rows over the result document and over the stream
+   this host declared, so a staged error that stops happening still FAILS. What it declares is the other
+   direction, which nothing could state before: an uncaught error from any OTHER program is one this document
+   did not stage. */
 typedef struct { const char *req; const char *at; const char *body; int stages_page_error; } TfChunk;
 static const TfChunk TF_CHUNKS[] = {
     { "/chunk/admin.js",    "https://x.test/chunk/admin.js",
@@ -156,6 +157,63 @@ static const TfChunk TF_CHUNKS[] = {
        document, where the rows that read them back need them. */
     { "/chunk/rejthrow.js", "https://x.test/chunk/rejthrow.js",
       "Promise.reject(new Error('rejNOHANDLER'));", 1 },
+    /* …AND THE FOUR STATES OF A REPORT THAT CAN BE TAKEN BACK. HTML §8.1.6.4 "HostPromiseRejectionTracker(
+       promise, operation)" step 7.4 fires for a promise this global already told the page about, and
+       solver/result.h's console answers it by decrementing ONE occurrence of a (message, throw site) row. Four
+       distinguishable outcomes come out of that arithmetic and nothing exercised any of them:
+         `rejTAKEBACK` reported and then taken back  — the row's last standing occurrence falls to zero, so the
+                       document withdraws the message into `pageErrorsRetracted` and the stream prints its
+                       correction.
+         `rejMUTE`     cancelled and then handled    — §8.1.4.7 step 4.1.3 is gated on notCanceled while step
+                       4.1.4's append is gated on [[PromiseIsHandled]] alone, so preventDefault() means never
+                       REPORTED and still APPENDED, and step 7.4 fires anyway. The retraction has nothing to
+                       take back. That is a ROUTINE spec-mandated state, not a missed report, and the row it
+                       must not mint is what makes it observable: the message is in NEITHER document array.
+         `rejRELAPSE`  reported, taken back, reported again — the pair's latch RISES a second time, because a
+                       correction is the stream's last word on a pair and has stopped being true.
+         `rejTWICE`    two occurrences, ONE handled  — the row stands 2 and falls to 1, so NO correction is
+                       printed and the message never leaves `pageErrors`. This is the one that says the count
+                       is real rather than decorative: before the row counted, the second occurrence was
+                       dropped at insert and a single retraction would have erased the report belonging to the
+                       occurrence nobody handled.
+       THE REASONS ARE ERRORS AND THE PROGRAM IS A CHUNK, for two reasons that are both structural. A value
+       with no backtrace has no §8.1.4.6 "Runtime script errors" throw site, so a string-reason rejection keys
+       on `-` and can never be declared staged — and `rejRELAPSE`/`rejTWICE` STAND at the end of the run, so
+       an undeclared address would report them as unstaged uncaught page errors for ever. An Error also makes
+       the retraction's derivation answer the same pair as the report's, which is the half a value carrying no
+       throw site cannot ask.
+       AND THE RELAPSE RE-REJECTS THE **SAME** Error OBJECT, which is the whole of why it is a relapse: a fresh
+       `new Error` at a different call site carries a different backtrace, so it would be a different (message,
+       throw site) row and the latch under test would never be asked to rise.
+       THE HANDLER IS ATTACHED IN A MICROTASK QUEUED BY THE `unhandledrejection` LISTENER, and that is what
+       makes this fixture deterministic rather than schedule-dependent. §8.1.4.7 step 4.1.3's report runs after
+       the fire RETURNS, inside the same task, and step 4.1.4 then finds [[PromiseIsHandled]] still false — so
+       the promise is reported AND appended before the microtask runs. A `setTimeout` would be a task queued
+       from the SCRIPT, which arrives ahead of the notify task the checkpoint queues after it, and would
+       therefore handle the rejection BEFORE it was ever reported: the same absence `rejHANDLED` already
+       proves, wearing the retraction's name. The one ordering this rests on is the checkpoint's own — a
+       microtask runs before the next task — which this fixture asserts directly elsewhere.
+       EACH LISTENER CATCHES `e.promise` RATHER THAN A NAMED ONE, so which of two identically-reasoned
+       promises the engine notifies about first cannot decide whether the retraction happens at all. */
+    { "/chunk/rejretract.js", "https://x.test/chunk/rejretract.js",
+      "var rrE = new Error('rejRELAPSE'), rtE = new Error('rejTAKEBACK'),"
+      " rmE = new Error('rejMUTE'), rwE = new Error('rejTWICE');"
+      "var rrHooked = 0, rrAgain = 0, rwHooked = 0;"
+      "function rejLater(p){ Promise.resolve().then(function(){ p.catch(function(){}); }); }"
+      "addEventListener('unhandledrejection', function(e){"
+      " var m = e.reason && e.reason.message;"
+      " if (m === 'rejTAKEBACK') { rejLater(e.promise); }"
+      " else if (m === 'rejMUTE') { e.preventDefault(); rejLater(e.promise); }"
+      " else if (m === 'rejRELAPSE' && !rrHooked) { rrHooked = 1; rejLater(e.promise); }"
+      " else if (m === 'rejTWICE' && !rwHooked) { rwHooked = 1; rejLater(e.promise); } });"
+      "addEventListener('rejectionhandled', function(e){"
+      " var m = e.reason && e.reason.message;"
+      " if (m === 'rejMUTE') { fetch('/api/rejmute?v=' + (e.promise instanceof Promise ? 'ismute' : 'wrong')); }"
+      " else if (m === 'rejTWICE') { fetch('/api/rejtwice?v='"
+      " + (e.promise instanceof Promise ? 'istwice' : 'wrong')); }"
+      " else if (m === 'rejRELAPSE' && !rrAgain) { rrAgain = 1; Promise.reject(rrE); } });"
+      "Promise.reject(rtE); Promise.reject(rmE); Promise.reject(rrE);"
+      "Promise.reject(rwE); Promise.reject(rwE);", 1 },
 };
 
 /* the script-load host-edge: a lazy chunk / injected <script> / import(). Forced exec reaches it behind a
@@ -1944,6 +2002,10 @@ static const char *HTML =
     /* …and §8.1.4.7's rejection nobody handles, from a chunk of its own — see TF_CHUNKS for why it is an
        Error from a lazily-loaded program rather than a bare string from this one. */
     "loadScript('/chunk/rejthrow.js');"
+    /* …and §8.1.6.4 step 7.4's half, which is what a report this engine can TAKE BACK is for. Four states come
+       out of one row's arithmetic — see TF_CHUNKS for what each of them is and why they are Errors from a
+       chunk rather than strings from here. */
+    "loadScript('/chunk/rejretract.js');"
     /* HTML §8.1.4.7 Unhandled promise rejections — the two claims that make the two lists necessary, and
        neither can be proved by the other.
        (1) A rejection nobody ever handles IS a page error: an async bundle delivers most of its errors this way
@@ -4996,8 +5058,57 @@ static int g_id_host_read, g_id_append_child;   /* declared once per agent — a
  * the correction is a second line naming the same pair. It is a DISTINCT TOKEN and not a field on the first
  * one, because a reader that has already consumed the report has to be able to match the correction to it by
  * the pair rather than to re-read a line it has passed. */
+/* AND WHAT THE STREAM SAID, AS THIS FIXTURE'S OWN RECORD OF THE ROUTE IT DECLARED — because the DOCUMENT
+ * cannot tell the four retraction states apart and the stream is where they differ. `pageErrors` and
+ * `pageErrorsRetracted` are per MESSAGE and carry no count (solver/result.c says so at the composer: the
+ * document is a console, and a console is a list of what went wrong), so `reported and never taken back`,
+ * `reported twice and taken back once` and `reported, taken back, reported again` are ONE line in it. The two
+ * EDGES are the per-pair half, and this host's output IS those lines — so counting them here is reading the
+ * shipped path's own writes rather than instrumenting a second one.
+ * IT COUNTS ONLY THE PAIRS THIS DOCUMENT STAGES, declared as a table, so a row that reads 0 means the stream
+ * never announced that message at that edge — a measurement — and never that nobody asked. The token is the
+ * fixture's own marker inside a message whose remainder is engine prose plus §8.1.4.6 "Runtime script errors"'
+ * backtrace, so it is matched as a SUBSTRING; the match is on the MESSAGE and not the address because the
+ * address is shared by every rejection this one chunk stages.
+ * THE COUNTS ARE AGGREGATED OVER EVERY FLOW THAT RAN THE STATEMENT, which is what makes a row assert a RATIO
+ * of the two edges rather than a literal 2. Forced multi-path execution runs the chunk in as many flows as
+ * reach it, and how many that is is the scheduler's answer and never the fixture's — so `stands == 2` would be
+ * a row about the frontier's shape, and `stands > retracted` is a row about the latch. */
+typedef struct { const char *tok; int stands; int retracted; } TfErrEdges;
+static TfErrEdges g_tf_err_edges[] = {
+    { "rejNOHANDLER", 0, 0 },   /* never handled — announced, never corrected */
+    { "rejTAKEBACK",  0, 0 },   /* handled a task later — announced, then corrected */
+    { "rejMUTE",      0, 0 },   /* cancelled, then handled — announced at NEITHER edge */
+    { "rejRELAPSE",   0, 0 },   /* corrected and then announced AGAIN — the latch's rising edge */
+    { "rejTWICE",     0, 0 },   /* two occurrences, one taken back — the row still stands, so no correction */
+};
+/* THE ROW FOR ONE TOKEN, ASSERTED PRESENT: a probe that asked about a token no edge is counted for would read
+   0 for ever with nothing to say the question was never wired up, which is the defect the table exists to
+   avoid rather than to reproduce. */
+static const TfErrEdges *tf_err_edges(const char *tok) {
+    for (unsigned i = 0; i < sizeof(g_tf_err_edges) / sizeof(g_tf_err_edges[0]); i++)
+        if (!strcmp(g_tf_err_edges[i].tok, tok)) return &g_tf_err_edges[i];
+    DCHECKF(0, "a probe asked what the page-error stream said about `%s`, which is not a pair this document "
+               "declares — its edges are counted for nobody, so the row would read 0 whatever the engine did",
+            tok);
+    return NULL;
+}
+/* EXHAUSTIVE OVER THE EDGE, like the printer below it and for the same reason: a third edge added to
+   ResultPageErrorEdge is a fact this census has not been told which column to put in, and -Wswitch is what
+   makes that the compiler's problem rather than a silently uncounted announcement. */
+static void tf_err_edge_seen(const char *msg, ResultPageErrorEdge edge) {
+    for (unsigned i = 0; i < sizeof(g_tf_err_edges) / sizeof(g_tf_err_edges[0]); i++) {
+        if (!strstr(msg, g_tf_err_edges[i].tok)) continue;
+        switch (edge) {
+        case RESULT_PAGE_ERROR_STANDS:    g_tf_err_edges[i].stands++;    return;
+        case RESULT_PAGE_ERROR_RETRACTED: g_tf_err_edges[i].retracted++; return;
+        }
+    }
+}
+
 static void tf_page_error(const char *msg, const char *filename, ResultPageErrorEdge edge) {
     const char *at = filename && *filename ? filename : "-";
+    tf_err_edge_seen(msg, edge);
     switch (edge) {
     case RESULT_PAGE_ERROR_STANDS:    printf("@PAGEERR at=%s %s\n", at, msg); break;
     case RESULT_PAGE_ERROR_RETRACTED: printf("@PAGEERR-RETRACTED at=%s %s\n", at, msg); break;
@@ -6052,6 +6163,49 @@ static int param_value_is(const char *js, const char *url, const char *pname, co
                   "against a spelling the emitter never writes");
     while (v && (v = param_value_next(v, &b, &n)) != NULL)
         if (n == m && memcmp(b, val, m) == 0) return 1;
+    return 0;
+}
+
+/* MEMBERSHIP IN ONE OF THE RESULT DOCUMENT'S TWO DISJOINT PAGE-ERROR ARRAYS, SCOPED TO THE ARRAY — because
+   the two carry OPPOSITE claims about the same message and a whole-document `strstr` cannot tell them apart.
+   solver/result.c composes `pageErrors` from the messages with a STANDING occurrence and `pageErrorsRetracted`
+   from the ones with none and at least one retracted, and their disjointness is the whole reason an empty one
+   is readable — so a probe that asked the document rather than the array would read the same 1 for "the page
+   raised this" and "this engine named it and took it back".
+   IT WALKS THE JSON RATHER THAN LOOKING FOR THE CLOSING BRACKET, and that is not fastidiousness: a page-error
+   message is a description plus §8.1.4.6 "Runtime script errors"' first two backtrace frames, which
+   result_error_text appends inside `[` and `]` — so the `]` a naive scan would stop at is INSIDE the first
+   element of the array, and every message after it would read absent. The scan tracks the string state and
+   its escapes and stops at the first `]` outside one, which is the array's own end.
+   THE FIELD'S ABSENCE IS ASSERTED AND NOT RETURNED AS A 0. result_json writes both keys unconditionally, so a
+   missing one is a producer contract that has changed under a reader that would otherwise report every one of
+   these rows as a fact about the page. */
+static int tf_err_listed(const char *js, const char *field, const char *tok) {
+    char pat[64];
+    const char *p;
+    size_t tn = strlen(tok);
+    int instr = 0;
+    int k = snprintf(pat, sizeof pat, "\"%s\":[", field);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "a page-error array's key did not fit this reader's buffer — a truncated pattern matches a PREFIX of "
+          "the key, and `pageErrors` is a prefix of `pageErrorsRetracted`, so the row would read the wrong "
+          "array and report the opposite claim");
+    p = strstr(js, pat);
+    DCHECKF(p != NULL, "the result document carries no `%s` array — solver/result.c writes it unconditionally "
+                       "beside its sibling, so a reader that answered 0 here would be reporting its own "
+                       "absence as a statement about the page", field);
+    if (!p) return 0;
+    for (p += k; *p; p++) {
+        if (!instr) {
+            if (*p == ']') return 0;   /* the array's own end: the token is not in it */
+            if (*p == '"') instr = 1;
+            continue;
+        }
+        if (*p == '\\' && p[1]) { p++; continue; }
+        if (*p == '"') { instr = 0; continue; }
+        if (!strncmp(p, tok, tn)) return 1;
+    }
     return 0;
 }
 
@@ -8247,6 +8401,146 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         fold_row(&nodealgo_tt, &nodealgo_why,
                  emitted_record_has(js, NODE_ALGOS[ai][0], NODE_ALGOS[ai][1]), NODE_ALGOS[ai][0]);
+
+    /* ---- §8.1.6.4 step 7.4: A REPORT THIS ENGINE TAKES BACK -------------------------------------------------
+     *
+     * THE FOUR STATES ARE FOUR ROWS AND NOT ONE, because they take four different actions. `node-algo` above is
+     * one byte for every assertion folded into it, and this file already records what that costs a reader; a
+     * retraction that silently stopped happening, one that fired with nothing to take back and one that erased
+     * a report belonging to an occurrence nobody handled are three different defects on the retraction path,
+     * and a single 0 over them would name none.
+     *
+     * EACH STATE IS ASKED OF BOTH ROUTES, BECAUSE NEITHER ROUTE CAN ANSWER IT ALONE. The DOCUMENT is per
+     * MESSAGE and carries no count, so it separates `stands` from `was taken back` from `never recorded` and
+     * nothing else. The STREAM is per (message, throw site) and carries both EDGES, so it is the only place
+     * `reported twice and corrected once` differs from `reported once and never corrected`. A row that asked
+     * one route would be a row that cannot see half of what it names.
+     *
+     * THE STREAM CLAUSES ARE RATIOS AND NEVER LITERALS. Forced multi-path execution runs the chunk in as many
+     * flows as reach it, so an edge count is FLOW-COUNT × the per-flow figure — which is the scheduler's
+     * answer and not this document's. What is invariant per flow is the RELATION between the two edges, and
+     * that survives the multiplication: `stands == retracted` for a pair every report of which was taken back,
+     * `stands > retracted` for one that was announced again after a correction, `retracted == 0` for one whose
+     * row never fell to zero. A literal 2 would be a row about the frontier's shape wearing the latch's name. */
+    const TfErrEdges *e_take = tf_err_edges("rejTAKEBACK");
+    const TfErrEdges *e_mute = tf_err_edges("rejMUTE");
+    const TfErrEdges *e_lapse = tf_err_edges("rejRELAPSE");
+    const TfErrEdges *e_twice = tf_err_edges("rejTWICE");
+    const TfErrEdges *e_none = tf_err_edges("rejNOHANDLER");
+
+    /* (1) REPORTED AND THEN TAKEN BACK — the state the whole mechanism exists for. */
+    const char *rejtake_why = NULL; int rejtake_tt = 1;
+    fold_row(&rejtake_tt, &rejtake_why, e_take->stands >= 1,
+             "§8.1.4.7 step 4.1.3 never REPORTED the rejection that is handled a task later: the stream "
+             "announced no `rejTAKEBACK` at all, so there was nothing for §8.1.6.4 step 7.4 to take back and "
+             "everything below this row is unconditioned. Either the chunk never ran, or the handler attached "
+             "in the microtask ran BEFORE the notify task — which is `rejHANDLED`'s state and not this one");
+    fold_row(&rejtake_tt, &rejtake_why, e_take->retracted >= 1,
+             "§8.1.6.4 step 7.4 fired no CORRECTION for a pair the stream had announced: the report stands for "
+             "the life of the run, which is the fabricated finding about a page that did nothing wrong that "
+             "the retraction exists to remove");
+    const char *rejtakedoc_why = NULL; int rejtakedoc_tt = 1;
+    fold_row(&rejtakedoc_tt, &rejtakedoc_why, tf_err_listed(js, "pageErrorsRetracted", "rejTAKEBACK"),
+             "the document does not name `rejTAKEBACK` in `pageErrorsRetracted` — `this engine named an error "
+             "and withdrew it` and `the page raised nothing` are back to being the same absence");
+    fold_row(&rejtakedoc_tt, &rejtakedoc_why, !tf_err_listed(js, "pageErrors", "rejTAKEBACK"),
+             "the document still names `rejTAKEBACK` in `pageErrors` after every occurrence of it was taken "
+             "back — the two arrays are DISJOINT by construction, so a message in both renders once under two "
+             "opposite claims and the withdrawal did not reach the composer");
+
+    /* (2) CANCELLED AND THEN HANDLED — the no-op arm, which is ROUTINE and spec-mandated. §8.1.4.7 step 4.1.3
+       is gated on notCanceled while step 4.1.4's append is gated on [[PromiseIsHandled]] alone, so this
+       promise is never reported AND is still appended, and step 7.4 fires for it. The retraction finds no
+       standing occurrence and must mint nothing: a row here would say this engine had named an error it never
+       named. THE EVENT IS THE PREMISE — without it `nothing was announced` is equally satisfied by a step 7.4
+       that never ran, which is the other defect entirely. */
+    const char *rejmute_why = NULL; int rejmute_tt = 1;
+    fold_row(&rejmute_tt, &rejmute_why, param_value_is(js, "/api/rejmute", "v", "ismute"),
+             "§8.1.6.4 step 7.4 did not fire `rejectionhandled` for a rejection the page CANCELLED: there is "
+             "no /api/rejmute record carrying `ismute`. §8.1.4.7 step 4.1.4 appends on [[PromiseIsHandled]] "
+             "alone, so preventDefault() does not exempt a promise from being owed one — an absence here is "
+             "step 4.1.4 having inherited step 4.1.3's cancel gate, and the no-op retraction below is then "
+             "asserting nothing");
+    fold_row(&rejmute_tt, &rejmute_why, e_mute->stands == 0,
+             "the stream ANNOUNCED a rejection whose `unhandledrejection` listener called preventDefault() — "
+             "§8.1.4.7 step 4.1.3 reports only if notCanceled is true, so the page answered for this one and "
+             "this engine must not have named it");
+    fold_row(&rejmute_tt, &rejmute_why, e_mute->retracted == 0,
+             "the stream printed a CORRECTION for a pair it never announced — a retraction that finds no "
+             "standing occurrence is a no-op, and a correction here means solver/result.c minted a row on the "
+             "retraction path and immediately withdrew it, which states that this engine named an error it "
+             "never named");
+    const char *rejmutedoc_why = NULL; int rejmutedoc_tt = 1;
+    fold_row(&rejmutedoc_tt, &rejmutedoc_why, !tf_err_listed(js, "pageErrors", "rejMUTE"),
+             "the document names `rejMUTE` in `pageErrors` — a rejection §8.1.4.7 step 4.1.3 declined to "
+             "report cannot stand in the console");
+    fold_row(&rejmutedoc_tt, &rejmutedoc_why, !tf_err_listed(js, "pageErrorsRetracted", "rejMUTE"),
+             "the document names `rejMUTE` in `pageErrorsRetracted` — the retraction had NOTHING to take back, "
+             "so this row is the engine claiming to have withdrawn a report it never made");
+
+    /* (3) REPORTED, TAKEN BACK, REPORTED AGAIN — the latch's RISING edge, which is required rather than
+       optional: a correction is the stream's last word on a pair, and a pair that stands again has made that
+       last word false. */
+    const char *rejlapse_why = NULL; int rejlapse_tt = 1;
+    fold_row(&rejlapse_tt, &rejlapse_why, e_lapse->retracted >= 1,
+             "§8.1.6.4 step 7.4 never CORRECTED `rejRELAPSE`, so the run never reached the state this row is "
+             "about — the rising edge is only asserted once a falling one has happened");
+    fold_row(&rejlapse_tt, &rejlapse_why, e_lapse->stands > e_lapse->retracted,
+             "the pair's latch did not RE-ANNOUNCE: `rejRELAPSE` was announced no more times than it was "
+             "corrected, so the stream's last word on it is a withdrawal of a report that has since been made "
+             "again. Asked as a RATIO because the flow count is the scheduler's answer — every flow that runs "
+             "the statement announces once more than it corrects, so equality is the latch staying down");
+    const char *rejlapsedoc_why = NULL; int rejlapsedoc_tt = 1;
+    fold_row(&rejlapsedoc_tt, &rejlapsedoc_why, tf_err_listed(js, "pageErrors", "rejRELAPSE"),
+             "the document does not name `rejRELAPSE` in `pageErrors` — the second rejection was never taken "
+             "back, so a message with a STANDING occurrence is missing from the console");
+    fold_row(&rejlapsedoc_tt, &rejlapsedoc_why, !tf_err_listed(js, "pageErrorsRetracted", "rejRELAPSE"),
+             "the document names `rejRELAPSE` in BOTH arrays — `pageErrorsRetracted` carries only messages "
+             "with no standing occurrence anywhere, so this is the disjointness the composer decides per "
+             "MESSAGE having been decided per row instead");
+
+    /* (4) TWO OCCURRENCES, ONE HANDLED — the row that says the COUNT is real rather than decorative. Before
+       the row counted, a second occurrence of one pair was dropped at insert, so a single retraction would
+       have erased the report belonging to the occurrence nobody handled. The retraction here must decrement
+       to ONE and stop: no correction, and the message never leaves `pageErrors`. THE EVENT IS AGAIN THE
+       PREMISE — `no correction was printed` is equally satisfied by a retraction that never ran. */
+    const char *rejcount_why = NULL; int rejcount_tt = 1;
+    fold_row(&rejcount_tt, &rejcount_why, param_value_is(js, "/api/rejtwice", "v", "istwice"),
+             "§8.1.6.4 step 7.4 never fired for one of two identically-reasoned rejections: there is no "
+             "/api/rejtwice record carrying `istwice`, so no retraction ran and the two clauses below are "
+             "about arithmetic nothing performed");
+    fold_row(&rejcount_tt, &rejcount_why, e_twice->stands >= 1,
+             "the stream never announced `rejTWICE` at all, so the pair whose count is under test was never "
+             "recorded");
+    fold_row(&rejcount_tt, &rejcount_why, e_twice->retracted == 0,
+             "a retraction of ONE of two standing occurrences printed a CORRECTION: the row still stands for "
+             "the occurrence nobody handled, so the falling edge fired while the pair was still true. That is "
+             "the report of the second rejection being withdrawn by the first one's handler — the erasure the "
+             "occurrence count exists to make impossible");
+    const char *rejcountdoc_why = NULL; int rejcountdoc_tt = 1;
+    fold_row(&rejcountdoc_tt, &rejcountdoc_why, tf_err_listed(js, "pageErrors", "rejTWICE"),
+             "the document dropped `rejTWICE` out of `pageErrors` after ONE of its two occurrences was taken "
+             "back — the row was treated as a single fact and deleted, so the rejection nobody handled is no "
+             "longer reported anywhere");
+    fold_row(&rejcountdoc_tt, &rejcountdoc_why, !tf_err_listed(js, "pageErrorsRetracted", "rejTWICE"),
+             "the document names `rejTWICE` in `pageErrorsRetracted` while an occurrence of it still stands — "
+             "the two arrays are disjoint per MESSAGE, and a message that still went wrong belongs in the "
+             "console");
+
+    /* (5) AND THE CONTROL: NEVER HANDLED. It shares the stream signature of (4) — announced once, never
+       corrected — and is told apart from it by (4)'s `rejectionhandled` premise. Without this row a
+       retraction path that fired for EVERYTHING would go unseen at the one pair that is owed none. */
+    const char *rejnone_why = NULL; int rejnone_tt = 1;
+    fold_row(&rejnone_tt, &rejnone_why, e_none->stands >= 1,
+             "the stream never announced `rejNOHANDLER` — the rejection nobody handles is the premise of every "
+             "row above and this run did not make it");
+    fold_row(&rejnone_tt, &rejnone_why, e_none->retracted == 0,
+             "the stream CORRECTED a rejection nothing ever handled: §8.1.6.4 step 7.4 runs only for a promise "
+             "whose [[PromiseIsHandled]] became true, so a correction here is the retraction path firing off "
+             "some other pair's edge and taking a real report with it");
+    fold_row(&rejnone_tt, &rejnone_why, !tf_err_listed(js, "pageErrorsRetracted", "rejNOHANDLER"),
+             "the document names `rejNOHANDLER` in `pageErrorsRetracted` — nothing handled that rejection, so "
+             "this engine is reporting that it withdrew a finding that is still true");
     /* THE OUTCOME FORK, both halves. Positive: ONE run reached BOTH completions of `JSON.parse` over unknown
        text, which can only happen by a snapshot fork taken inside the builtin — the throw arm carries the real
        SyntaxError, so `catch` ran with a real Error object rather than a shape. Negative: the same builtin over
@@ -8783,6 +9077,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
         { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE, domidl_why },
         { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
+        /* §8.1.6.4 step 7.4's FOUR STATES, one row per state per ROUTE — see their computation for why the
+           document and the stream each answer half of each state, and why the stream clauses are ratios. Keyed
+           on the chunk that stages them, which is the statement these rows are about; the control below is
+           keyed on its own chunk because a rejection nobody handles is a different statement. */
+        { "rej-retract", rejtake_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejtake_why },
+        { "rej-retract-doc", rejtakedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejtakedoc_why },
+        { "rej-mute", rejmute_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejmute_why },
+        { "rej-mute-doc", rejmutedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejmutedoc_why },
+        { "rej-relapse", rejlapse_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejlapse_why },
+        { "rej-relapse-doc", rejlapsedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejlapsedoc_why },
+        { "rej-count", rejcount_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcount_why },
+        { "rej-count-doc", rejcountdoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcountdoc_why },
+        { "rej-nohandler", rejnone_tt, "/chunk/rejthrow.js", SESS_EXPLORE, rejnone_why },
         { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
         { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
