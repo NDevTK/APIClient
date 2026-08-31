@@ -21,7 +21,7 @@ import { cpus } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
-import { lexborSourceId } from "./lexbor_source.mjs";
+import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { childCpuSeconds, cpuText } from "./gate_cpu.mjs";
 
 /* A RUN THAT NEVER RETURNS IS NOT A VERDICT, AND A WALL CLOCK CANNOT SAY WHY. Every program this file
@@ -2723,14 +2723,25 @@ if (NATIVE) {
   const bin = join(OUT, "qjs-native-" + kind);
   mkdirSync(OUT, { recursive: true });
   
-/* LEXBOR, NATIVELY, exactly as wpt.mjs provisions it — the same vendored source and the same cached archive,
-     because a second copy of that provisioning is a second thing to keep in step with the pinned tag. */
-  const LEXBOR_NATIVE = join(WORK, "lexbor-native", "liblexbor_static.a");
-  if (!existsSync(LEXBOR_NATIVE)) {
-    console.error("[build] the native lexbor archive is not built: " + LEXBOR_NATIVE + "\n" +
-                  "[build] `node engine/wpt.mjs` builds it once (cmake + make) — run that first.");
-    process.exit(1);
-  }
+/* LEXBOR, NATIVELY — the SAME CALL wpt.mjs makes, which is the whole of the fix for what stood here.
+     THIS LINE USED TO BE `if (!existsSync(LEXBOR_NATIVE))` OVER A HARDCODED PATH, and it linked a lie. The
+     paragraph two screens up says why presence is not a cache key for a TRACKED source, engine/wpt.mjs's own
+     comment says the same thing about the same archive, and this arm — added after both — still took whatever
+     `.a` happened to be in `.work/lexbor-native`, beside a `liblexbor_static.srcid` that recorded, in the same
+     directory, that it had been compiled from something else.
+     WHAT THAT LINKED IS THE CASE A LINK ERROR CANNOT CATCH. An ADDED function breaks the link and names itself;
+     an EDITED STRUCT does not. This fork gave `struct lxb_selectors` a host-callback table (a `:defined` that
+     the selector engine has to ask the host language about), so the header the host compiles against said 56
+     bytes while the archive's `lxb_selectors_create` still callocated 40 — and `lxb_selectors_host_cb_set` is
+     `lxb_inline`, so `dom_collect_scripts` wrote `host_ctx` one pointer PAST the allocation, into the following
+     chunk's header. `document_bundle_id` runs on EVERY document, so the native ABI host aborted inside `free()`
+     before writing a single line, three frames from the write, saying `free(): invalid pointer` and naming no
+     cache at all. Every measurement taken with that binary was a measurement of a lexbor no revision contains.
+     SO THE PATH IS NOT A CONSTANT HERE AND THERE IS NOTHING FOR THIS ARM TO CHECK: `lexborNativeArchive`
+     returns an archive that is this source's or it does not return. It also BUILDS one rather than refusing and
+     naming `node engine/wpt.mjs` — a division that put the recipe in one file and this file's correctness in a
+     sentence a person had to read, which is exactly how an archive nobody owned sat stale for two days. */
+  const LEXBOR_NATIVE = lexborNativeArchive(ENGINE, "build");
   /* The quiet list and -Werror=implicit-function-declaration are the SHIPPED build's, taken from the
      same place rather than restated, so the sanitized program is the program. */
   const quiet = QUIET_WARNINGS;
