@@ -599,8 +599,8 @@ typedef struct Flow {
     unsigned char *dyn_type;
     /* AND THE ADDRESS ITS BYTES CAME FROM — HTML §8.1.4.2 "Fetching scripts": "let script be the result of
        creating a classic script given sourceText, settingsObject, RESPONSE'S URL, options, mutedErrors, and
-       url". NULL for an INLINE row, whose base URL §4.12.1.1 states as "el's node document's document base
-       URL" and which the compile therefore reads from the document instead.
+       url". NULL for an INLINE row, whose base URL HTML §4.12.1.1 "Processing model" states as "el's node
+       document's document base URL" and which the compile therefore reads from the document instead.
        IT CANNOT BE THE BODY COLUMN, because that column is where the address LIVED and the reply DESTROYS it: a
        DYN_SCRIPT_SRC row holds its URL in `dyn` only until flow_deliver_one_reply replaces it with the source text.
        Everything the address decides is needed after that moment — a nested `import('./chunk.js')` inside a

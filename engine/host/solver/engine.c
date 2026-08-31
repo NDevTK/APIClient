@@ -445,18 +445,19 @@ static uint32_t g_sess_doc;
    only the template each flow of this document is SEEDED from at the moment it is created. Nothing reads it at
    a compile, at a drain or at a cursor — engine_seed_scripts is its one reader — so the cursor has one address
    space and `- n` has nothing left to subtract.
-   THE ADDRESS IS RESOLVED ONCE, HERE, and that is §4.12.1.1's own sentence: "Let url be the result of
-   encoding-parsing a URL given src, relative to el's node document" is computed once per ELEMENT, and both of
-   the things this engine asks it for — §8.1.4.2's fetch and, for a module, the record's identity — must be the
-   same answer. Resolving it per seed instead would ask the question again mid-session, under whichever flow's
-   delta happened to be applied, so a `<base href>` one timeline wrote would silently re-point another
-   timeline's bundle.
+   THE ADDRESS IS RESOLVED ONCE, HERE, and that is HTML §4.12.1.1 "Processing model"'s own sentence: "Let url
+   be the result of encoding-parsing a URL given src, relative to el's node document" is computed once per
+   ELEMENT, and both of the things this engine asks it for — §8.1.4.2's fetch and, for a module, the record's
+   identity — must be the same answer. Resolving it per seed instead would ask the question again mid-session,
+   under whichever flow's delta happened to be applied, so a `<base href>` one timeline wrote would silently
+   re-point another timeline's bundle.
    `body` AND `url` ARE TWO INDEPENDENT ITEMS OF ONE SCRIPT, NOT TWO SPELLINGS OF ONE. HTML §8.1.4.1 "Scripts"
    says so of the base URL field itself: "Null or a base URL used for resolving module specifiers. When
    non-null, this will either be the URL from which the script was obtained, for external scripts, or the
    document base URL of the containing document, for inline scripts." So `body` answers HAVE I GOT THE SOURCE
    TEXT (NULL until a reply carries it, which is what parks a flow on the row) and `url` answers WHERE DID THE
-   BYTES COME FROM (NULL for a `<script>` with no `src`, whose base URL §4.12.1.1 takes from the document).
+   BYTES COME FROM (NULL for a `<script>` with no `src`, whose base URL HTML §4.12.1.1 "Processing model"
+   takes from the document).
    A row with BOTH is the ordinary end state of an external script — §8.1.4.2 "Fetching scripts": "Let script
    be the result of creating a classic script given sourceText, settingsObject, response's URL, options,
    mutedErrors, and url" — and it is what a host that already holds the response hands over. An exactly-one-of
@@ -4643,7 +4644,8 @@ static StepUnit engine_orphan_unit(int r) {
    reason again: both are facts about the ELEMENT (or about the absence of one), which only the caller has.
    `stype` is SCRIPT_TYPE_CLASSIC for every row that is not an element's — a `setTimeout` string, a
    `javascript:` URL, a lazy chunk, a cross-agent operation's program — and that is §8.1.4.4's answer for those
-   rather than a default. `url` is NULL for an INLINE row, whose base URL §4.12.1.1 states as the document's. */
+   rather than a default. `url` is NULL for an INLINE row, whose base URL HTML §4.12.1.1 "Processing model"
+   states as the document's. */
 /* `el` IS THE `script` ELEMENT THE ROW IS THE PROGRAM OF, or NULL for a row no element caused — see
    solver/flow.h's `dyn_el`, which states why the element is a fact about the ROW rather than something the
    completion could re-derive, and why NULL is a positive statement rather than a hole. */

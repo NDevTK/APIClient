@@ -2334,7 +2334,8 @@ static void wpt_program(char *body, const char *name, const char *address, Scrip
        key the module map by it. */
     DCHECK(address == NULL || address[0] != '<',
            "a program synthesized by this runner was given an ADDRESS — no bytes came from one, so the name "
-           "this host calls it by has been passed as the base URL §8.1.4.1 says a script is obtained from");
+           "this host calls it by has been passed as the base URL HTML §8.1.4.1 Scripts says a script is "
+           "obtained from");
     if (g_prog_n == g_prog_cap) {
         int cap = g_prog_cap ? g_prog_cap * 2 : 8;
         char **b = realloc(g_prog_bodies, (size_t)cap * sizeof *b);

@@ -642,13 +642,14 @@ static const char *loc_value_bytes(JSContext *ctx, JSValueConst val, size_t *len
 }
 
 /* HTML §2.4.2 "Parsing URLs"'s ENCODING-PARSE A URL, "relative to the entry settings object" — the three
- * algorithms in §7.2.4 that take a whole URL rather than one component: the `href` setter, `assign` and
- * `replace`.
+ * algorithms in HTML §7.2.4 "The Location interface" that take a whole URL rather than one component: the
+ * `href` setter, `assign` and `replace`.
  *
  * THE BASE IS THE API BASE URL AND NOT THIS LOCATION'S ADDRESS, and the two are different objects that happen
  * to be the same string until a page ships `<base href>`. §2.4.2 step: "let baseURL be environment's base URL,
- * if environment is a Document object; otherwise environment's API base URL" (§8.1.3.2 "Environment settings
- * objects" is where that field is declared), and HTML §7.2.2.6 "Script settings for Window objects" gives a
+ * if environment is a Document object; otherwise environment's API base URL" (HTML §8.1.3.2 "Environment
+ * settings objects" is where that field is declared), and HTML §7.2.2.6 "Script settings for Window objects"
+ * gives a
  * Window's the answer "return the current base URL of window's associated Document" — which is
  * core/dom/document.h's document_base_url, stated there as §2.4.3's DOCUMENT BASE URL and explicitly NOT the
  * address that document_url answers. Using the address would resolve `location.href = "x"` against the

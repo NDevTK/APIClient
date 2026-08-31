@@ -97,8 +97,9 @@ typedef struct {
     JSValue upload;            /* the XMLHttpRequestUpload object (owned) */
     JSValue method;            /* request method — a JS string, JS_NULL before open() */
     JSValue url;               /* request URL, serialized — a JS string, JS_NULL before open() */
-    /* THE URL AS THE PAGE COMPUTED IT, which the serialization above cannot be. §3.5.1 step 10 sets the request
-       URL to the PARSED url, so `url` is a `url_serialize` result and a plain string has no example behind it.
+    /* THE URL AS THE PAGE COMPUTED IT, which the serialization above cannot be. XHR §3.5.1 The open() method
+       step 11.3 is "Set this's request URL to parsedURL", so `url` is a `url_serialize` result of that record
+       and a plain string has no example behind it.
        `fetch()` keeps both for exactly this reason (core/fetch/fetch.c §5.4: the CONCOLIC goes to the @H
        surface, its SHAPE goes to the network edge), and an address an XMLHttpRequest built out of unknown
        input must reach that surface the same way or the endpoint is a hole with no value in it. JS_NULL where
@@ -1580,13 +1581,14 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
 
         CHECK(u != NULL, "XMLHttpRequest: OOM reading the request URL a reply answered");
         url_record_init(&rec);
-        /* NO BASE: §3.5.1 step 6 parsed this against the settings object's API base URL, so what `url` holds
-           is already absolute. */
+        /* NO BASE: XHR §3.5.1 The open() method step 5 — "Let parsedURL be the result of encoding-parsing a
+           URL url, relative to this's relevant settings object" — already resolved this, so what `url` holds
+           is absolute. */
         ok = url_parse(&rec, u, ulen, NULL);
         JS_FreeCString(ctx, u);
-        DCHECK(ok, "an XMLHttpRequest's own URL is a string the URL parser refuses — §3.5.1 The open() method "
-                   "stores the SERIALIZATION of a record its own parse produced, so a refusal here is that "
-                   "serialization and that parser disagreeing");
+        DCHECK(ok, "an XMLHttpRequest's own URL is a string the URL parser refuses — XHR §3.5.1 The open() "
+                   "method step 11.3 stores the RECORD its step 5 parse produced and this component keeps the "
+                   "SERIALIZATION of it, so a refusal here is that serialization and that parser disagreeing");
         ser = ok ? url_serialize(&rec, /*exclude_fragment*/ true) : NULL;
         url_record_free(&rec);
         xhr_set(ctx, d, &d->response_url, JS_NewString(ctx, ser ? ser : ""));
@@ -1679,7 +1681,8 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     size_t body_len = 0;
 
     DCHECK(!JS_IsNull(d->url), "an XMLHttpRequest reached §3.5.6's request record with no URL — send() runs "
-                               "only on an `opened` object and §3.5.1 step 10 is what opens one");
+                               "only on an `opened` object and XHR §3.5.1 The open() method step 12.1, Set "
+                               "this's state to opened, is what opens one");
     if (JS_IsString(d->method)) {
         mc = JS_ToCString(ctx, d->method);
         if (mc) method = mc;
@@ -1705,7 +1708,8 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
         if (body) { eb.mime = body_ct; eb.bytes = body; eb.len = body_len; ebp = &eb; }
     }
     /* The CONCOLIC where open() was given one, so the surface reports the shape AND the example it carries;
-       the serialization otherwise, which for a plain address is the same string §3.5.1 step 10 parsed. */
+       the serialization otherwise, which for a plain address is the same string XHR §3.5.1 The open() method
+       step 5 parsed. */
     endpoint_record(ctx, method, JS_IsNull(d->url_src) ? d->url : d->url_src, eh, (int)n, ebp);
     if (body) JS_FreeCString(ctx, body);
     free(body_ct);
@@ -1749,11 +1753,13 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
 
     CHECK(u != NULL, "XMLHttpRequest: OOM reading the request URL back to switch on its scheme");
     url_record_init(&rec);
-    /* §3.5.1 step 6 parsed this URL and step 11 stored it SERIALIZED, so the record is absolute and carries a
-       scheme; a re-parse that refuses it is this component having stored something that is not a URL. */
+    /* XHR §3.5.1 The open() method step 5 parsed this URL and step 11.3 stored the record, which this
+       component keeps SERIALIZED, so it is absolute and carries a scheme; a re-parse that refuses it is this
+       component having stored something that is not a URL. */
     parsed = fetch_parse_url(ctx, &rec, u, strlen(u)) && rec.scheme;
-    DCHECK(parsed, "XMLHttpRequest: the URL §3.5.1 stored will not parse back — open() step 6 parses the URL "
-                   "and step 11 stores its SERIALIZATION, and every item of that form is absolute");
+    DCHECK(parsed, "XMLHttpRequest: the URL XHR §3.5.1 The open() method stored will not parse back — its "
+                   "step 5 parses the URL and its step 11.3 sets the request URL to that record, whose "
+                   "serialization is what this component holds, and every item of that form is absolute");
     /* §4.1 MAIN FETCH STEP 7: "If should request be blocked due to a bad port, should fetching request be
        blocked as mixed content, or should request be blocked by Content Security Policy returns blocked, then
        set response to a network error." §3's response IS a network error already, so blocking is nothing
@@ -1777,14 +1783,15 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
     url_record_free(&rec);
 
     /* §4.3 SCHEME FETCH, over §3.5.6's request. The METHOD is on it because §4.3's `blob` arm reads it — "If
-       request's method is not `GET` … return a network error" — and §3.5.1 step 6 normalized it, so this
+       request's method is not `GET` … return a network error" — and XHR §3.5.1 The open() method step 4,
+       Normalize method, normalized it, so this
        component states what it has rather than letting the switch read a field nobody filled. §5.4's captured
        blob URL entry is JS_UNDEFINED: XHR §3.5.1 parses a URL STRING and has no Request object to have
        captured with, so §4.3 reads the entry off the store as the URL's own. */
     m = JS_IsString(d->method) ? JS_ToCString(ctx, d->method) : NULL;
-    CHECK(m != NULL, "XMLHttpRequest: the request reached §4.1 main fetch with no method — §3.5.1 open() step "
-                     "6 normalizes one onto the object before the state is `opened`, and §4.3's `blob` arm "
-                     "reads it");
+    CHECK(m != NULL, "XMLHttpRequest: the request reached §4.1 main fetch with no method — XHR §3.5.1 The "
+                     "open() method step 4 normalizes one and its step 11.2 sets it on the object before the "
+                     "state is `opened`, and §4.3's `blob` arm reads it");
     memset(&req, 0, sizeof req);
     req.method = m;
     req.url = u;   /* the two fields §4.3 Scheme fetch reads; a §4.3 answer never reaches the host, so it owes it nothing */

@@ -1419,7 +1419,8 @@ lxb_dom_node_t *document_root_node(JSContext *ctx)
  *
  * THREE ALGORITHMS, AND THE ENGINE ANSWERED ALL OF THEM WITH THE ADDRESS. §2.4.3 defines a Document's
  * FALLBACK BASE URL (the srcdoc case, the about:blank case, then the address) and its DOCUMENT BASE URL (the
- * first base element's frozen URL, else the fallback); §4.2.3 defines the FREEZE that fills the first. What
+ * first base element's frozen URL, else the fallback); HTML §4.2.3 "The base element" defines the FREEZE that
+ * fills the first. What
  * stood here was the address alone, which is only the fallback's LAST step — so `<base href>` did nothing at
  * all, and a Document at about:blank resolved relative URLs against a URL that cannot be a base.
  *
@@ -1427,9 +1428,9 @@ lxb_dom_node_t *document_root_node(JSContext *ctx)
  * this file owns what a Document HAS. The split is the one core/dom/document.c already makes with §4.12.1's
  * scripts and §4.8.5's iframes: the DOM half stores, the element's own component decides. */
 
-/* §2.4.3's FALLBACK BASE URL of one Document — the URL §4.2.3 freezes a `<base href>` AGAINST, which is why it
-   is a separate answer from the document base URL and not a synonym for it ("thus, the base element isn't
-   affected by itself"). BORROWED. */
+/* §2.4.3's FALLBACK BASE URL of one Document — the URL HTML §4.2.3 "The base element" freezes a `<base href>`
+   AGAINST, which is why it is a separate answer from the document base URL and not a synonym for it ("Thus,
+   the base element isn't affected by itself"). BORROWED. */
 const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
 {
     const Document *d = doc_rec(dom);
