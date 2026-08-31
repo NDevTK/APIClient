@@ -175,6 +175,12 @@ export function declarations(strippedSrc) {
     const inline = expr.match(/\(\s*const\s+IdlArgType\s*\[\s*\]\s*\)\s*\{([\s\S]*)\}/);
     if (inline) return args(inline[1]).map((t) => t.split(/\s+/)[0]);
     const name = expr.trim().replace(/^&/, "");
+    /* `NULL` IS A RESOLVED LIST AND NOT AN UNREADABLE ONE — it is how a member with no arguments spells its
+       type list, which is most of the platform's zero-arity surface. Returned as null it was the single
+       largest reason a consumer could not judge a member at all: 78 of them, every one a member whose ARITY is
+       still perfectly comparable against its IDL. An empty list says "this declares no positions", which is a
+       fact, where null says "this reader could not tell", which was not true. */
+    if (name === "NULL" || name === "0") return [];
     return arrays.get(name) || (enumMembers.has(name) ? [name] : null);
   };
 
