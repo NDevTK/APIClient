@@ -16,8 +16,8 @@
  * Usage:  node engine/wpt.mjs [subdir-or-file]
  */
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, statSync,
-         writeFileSync } from "node:fs";
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, openSync, readFileSync, readSync, rmSync,
+         statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { tmpdir, cpus, loadavg } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
@@ -1188,8 +1188,23 @@ const HARNESS = join(WPT, "resources", "testharness.js");
 const SERVER_LOG = join(dirname(bin), "wptserve.log");
 writeFileSync(SERVER_LOG, "");
 const serverLogFd = openSync(SERVER_LOG, "a");
+/* WPTSERVE'S OWN ACCESS LOG, AND THIS LINE IS WHAT TURNS IT ON. engine/wptserve.py attaches a handler to the
+   root logger when `WPT_ACCESS_LOG` names a file and does nothing when it does not — and NOTHING SET IT, so the
+   instrument was built, landed, described in its own commit message, and inert. That is the mirror of the
+   defaulted-field defect §Offensive-programming names: not a reader with no writer but a READER WITH NO CALLER,
+   and it is the quieter direction, because an unset environment variable produces no diagnostic anywhere.
+   IT IS A SECOND FILE, NOT THIS ONE, and that is a requirement rather than tidiness: SERVER_LOG is the server's
+   stdout AND stderr, and it is the newline-anchored channel the READY promise above parses. A per-request line
+   written into it is a second author of the file this driver polls for one pattern.
+   WHY THE DRIVER WANTS IT AT ALL: a `fetch()` that never settles is THREE bugs wearing one TIMEOUT — the engine
+   never ISSUED the request, it issued one the server did not answer, or the server answered and the reply
+   reached no parked flow. The verdict, the subtest count and the message are identical in all three, so a search
+   cannot be directed at any of them. The server is the only party that knows which, and this is it saying so. */
+const ACCESS_LOG = join(dirname(bin), "wptserve.access.log");
+writeFileSync(ACCESS_LOG, "");
 const server = spawn("python3", [join(ENGINE, "wptserve.py"), WPT, "0"],
-                     { stdio: ["ignore", serverLogFd, serverLogFd] });
+                     { stdio: ["ignore", serverLogFd, serverLogFd],
+                       env: { ...process.env, WPT_ACCESS_LOG: ACCESS_LOG } });
 /* THE READY LINE CARRIES TWO FACTS AND THIS DRIVER RELAYS BOTH. Where a client CONNECTS is a loopback socket;
    what the corpus is SERVED AS is `{{host}}:{{ports[http][0]}}` — the authority every `.sub` document asserts
    its own URLs against, which wptserve substitutes out of its own config. The runner used to compose the second
@@ -1249,6 +1264,143 @@ process.on("exit", () => server.kill());
 function serverEnded() {
   if (!g_serverExit) return "still running";
   return g_serverExit.signal ? `killed by ${g_serverExit.signal}` : `exit code ${g_serverExit.code}`;
+}
+
+/* WHAT THE CORPUS SERVER WAS ASKED FOR WHILE ONE FILE RAN, AND WHAT IT ANSWERED.
+ *
+ * THE WINDOW IS THE CHILD'S OWN LIFETIME AND THAT IS EXACT, NOT APPROXIMATE: the run loop drives one test at a
+ * time through `spawnSync`, which blocks this process until the child is reaped, so the bytes this log gains
+ * between the call's two ends are that child's traffic and nobody else's. The one straggler a reader should know
+ * about is a response line the server's own thread writes after the child has already exited; it lands in the
+ * NEXT file's window, so a slice is a statement about a file's requests and never a proof that it made no other.
+ *
+ * IT IS READ BY BYTE OFFSET rather than by re-reading the file. A whole-corpus run makes millions of requests,
+ * and `readFileSync(...).slice(seen)` per test is quadratic in the log — an instrument whose cost grows with the
+ * thing it measures is one that gets switched off, which is how the last one came to be inert.
+ *
+ * THE TWO LINE SHAPES ARE WPTSERVE'S OWN, from tools/wptserve/wptserve/server.py: a REQUEST logs
+ * `f"{request.method} {request.request_path}"` when it arrives, and a RESPONSE logs
+ * `"%i %s %s (%s) %i" % (status, method, request_path, referer, length)` when it is answered. Both are prefixed
+ * by engine/wptserve.py's `%(asctime)s`, which is two whitespace-separated tokens. The discriminator between
+ * them is the first token after that prefix — a STATUS is digits and a METHOD is not — and never a count of
+ * fields, because a referer with a space in it would move the others.
+ * PARSED, NEVER CLASSIFIED ON. What comes out is a method, a path and a status: facts the server stated. No
+ * verdict below reads the prose of any other line this log carries. */
+const accessFd = openSync(ACCESS_LOG, "r");
+let g_accessSeen = 0;
+function corpusTrafficSince() {
+  const size = statSync(ACCESS_LOG).size;
+  /* A LOG THAT SHRANK IS NOT A LOG THIS DRIVER MAY KEEP READING. It is written by one process this driver
+     started and truncated by nothing, so a smaller size than the offset already consumed means something else
+     is writing it — and continuing would read one file's bytes as another's. It says so and stops measuring
+     traffic rather than reporting a slice it cannot vouch for. */
+  if (size < g_accessSeen) { g_accessSeen = size; return null; }
+  if (size === g_accessSeen) return { asked: [], answered: [] };
+  const buf = Buffer.allocUnsafe(size - g_accessSeen);
+  const got = readSync(accessFd, buf, 0, buf.length, g_accessSeen);
+  g_accessSeen += got;
+  const asked = [], answered = [];
+  for (const line of buf.toString("utf8", 0, got).split("\n")) {
+    const m = /^\S+ \S+ (\S+) (\S+)(?: |$)/.exec(line);
+    if (!m) continue;
+    /* THE PATH MUST BE SERVER-ROOTED, and that clause is doing real work rather than restating the shape. This
+       log carries wptserve's whole DEBUG stream, not only its access lines — `Route pattern: …`, `Found handler
+       FileHandler`, `Starting http server on …` — and an all-caps first word in some future message would
+       otherwise be read as a METHOD and its next word as a path, minting a request nobody made. A request_path
+       always begins with `/`; a log sentence's second word almost never does. */
+    if (/^[0-9]{3}$/.test(m[1])) {
+      const r = /^\S+ \S+ ([0-9]{3}) (\S+) (\/\S*) /.exec(line);
+      if (r) answered.push({ status: Number(r[1]), method: r[2], path: r[3] });
+    } else if (/^[A-Z]+$/.test(m[1]) && m[2].startsWith("/")) {
+      asked.push({ method: m[1], path: m[2] });
+    }
+  }
+  return { asked, answered };
+}
+
+/* DOES THE PINNED CORPUS HAVE THIS PATH — the question that separates "this checkout is short an entry" from
+   "the corpus does not contain it at all", and it has TWO callers now, so it is one function rather than two
+   copies of an `ls-tree` invocation that must agree about which revision they ask at.
+   `ls-tree` walks TREE objects only, so it costs milliseconds and — unlike `cat-file -e` — cannot trip the lazy
+   blob fetch this `--filter=blob:none` clone would otherwise make over the network to answer a question about a
+   path. Its exit status is 0 for present and absent alike, so the answer is the OUTPUT; a non-zero status is git
+   DECLINING to answer and is reported as that third thing, never as a confident "the corpus does not have it".
+   ASKED AT THE REVISION THIS RUN'S NUMBERS BELONG TO — CORPUS_AT_START's head, not the WPT_REV constant: those
+   two agreeing is what the provisioning instructions ask for and not something this may assume. */
+function corpusHas(p) {
+  const revOf = /^[0-9a-f]{40}$/.test(CORPUS_AT_START.head) ? CORPUS_AT_START.head : null;
+  if (revOf === null)
+    return { known: false, at: null,
+             why: `this driver could not ask git whether the corpus HAS it: the corpus identity read as ` +
+                  JSON.stringify(CORPUS_AT_START.head) };
+  const at = revOf.slice(0, 10);
+  const ls = spawnSync("git", ["ls-tree", revOf, "--", p], { cwd: WPT, encoding: "utf8" });
+  if (ls.status !== 0)
+    return { known: false, at, why: `git declined to say whether the corpus has it: ${(ls.stderr || "").trim()}` };
+  return { known: true, at, present: Boolean(ls.stdout.trim()) };
+}
+
+/* THE SENTENCE A TIMEOUT COULD NOT WRITE. A file whose harness never completed is asked here what it actually
+ * put on the wire, and the answer splits the three states that used to share one verdict:
+ *
+ *   NO REQUEST for the thing it awaits  — the ENGINE never issued it. The gap is upstream of the network.
+ *   A REQUEST and no reply line         — the server took it and did not answer; the run is blocked on a socket.
+ *   A REPLY, and the flow still parked  — the bytes came back and reached no parked flow. That is the delivery
+ *                                         seam, and it is the one state a reader would otherwise never suspect,
+ *                                         because everything visible about it says "slow test".
+ *
+ * A NON-2xx IS DIAGNOSED AND NOT MERELY COUNTED, and the diagnosis is git's: a path the pinned corpus HAS is a
+ * checkout this gate can fix and the message names the WPT_PATHS entry, while a path it does not have cannot be
+ * supplied by any entry. That is the same split the META-script report makes, through the same `corpusHas`.
+ * IT IS EVIDENCE ON A VERDICT ALREADY REACHED, NEVER A VERDICT OF ITS OWN. Plenty of WPT tests ask for a 404 on
+ * purpose — a status handler's whole job is to return one — so a non-2xx is not by itself a defect and this is
+ * never consulted for a file that finished. Printed only under a file that already failed to complete, it costs
+ * no false positive and it is exactly where the reader is standing when they need it. */
+function trafficEvidence(traffic) {
+  if (!traffic)
+    return "\n         corpus traffic: NOT MEASURED for this file — the access log moved under this driver, so " +
+           "the slice could not be vouched for (this is an absent measurement, not an absence of requests)";
+  if (!traffic.asked.length && !traffic.answered.length)
+    return "\n         corpus traffic: the server logged NO request at all while this file ran, so whatever it " +
+           "awaits was never ISSUED — the gap is upstream of the network, not in the reply path";
+  const answeredFor = new Map();
+  for (const a of traffic.answered) {
+    if (!answeredFor.has(a.path)) answeredFor.set(a.path, []);
+    answeredFor.get(a.path).push(a.status);
+  }
+  const parts = [`\n         corpus traffic: ${traffic.asked.length} request(s), ${traffic.answered.length} ` +
+                 "answered — see below for the ones that are not an ordinary 200"];
+  const unanswered = [...new Set(traffic.asked.map((a) => a.path))].filter((p) => !answeredFor.has(p));
+  for (const p of unanswered.slice(0, 8))
+    parts.push(`         ASKED AND NEVER ANSWERED: ${p} — the server took the request and wrote no reply line, ` +
+               "so this run is blocked on that socket");
+  const bad = [...answeredFor.entries()].filter(([, ss]) => ss.every((s) => s < 200 || s >= 300));
+  for (const [p, ss] of bad.slice(0, 8)) {
+    /* THE PATH AS THE CORPUS FILES IT. A request path is server-rooted and may carry a query, which is a
+       HANDLER'S argument and never part of a filename — asking git about `status.py?code=404` would answer
+       "absent" about a file that is present and turn a test's own subject into a checkout gap. */
+    const file = p.split("?")[0].replace(/^\/+/, "");
+    /* ON DISK IS ASKED FIRST, AND SKIPPING IT WOULD MAKE THIS LINE CONFIDENTLY WRONG. `corpusHas` answers
+       whether the PINNED REVISION contains the path, which is not the same question as whether this checkout is
+       missing it — and a `.py` handler is the case that separates them: `fetch/api/resources/status.py?code=404`
+       is CHECKED OUT and answers 404 because returning one is its entire job. Measured against the live server
+       while writing this. Reporting that as "WPT_PATHS is short of fetch/api/resources" would take a test's own
+       subject and file it as this gate's checkout gap — a confident wrong diagnosis, which is worse than the
+       silence it replaces. Present on disk means the status is the SERVER'S OWN ANSWER and nothing here. */
+    const onDisk = existsSync(join(WPT, file));
+    const has = onDisk ? null : corpusHas(file);
+    parts.push(`         ${ss.join(",")} for ${p} — ` +
+               (onDisk
+                  ? `${file} IS in this checkout, so this status is the server's own answer to that request ` +
+                    "(a handler's, very likely) and not a fixture this gate is failing to supply"
+                : !has.known ? has.why
+                : has.present
+                  ? `${file} EXISTS at ${has.at} and this checkout does not have it: WPT_PATHS is short of ` +
+                    `${dirname(file)}, and THIS IS A FIXTURE THE TEST NEEDS, not a result about the engine`
+                  : `${file} does NOT EXIST at ${has.at}, so this status may well be what the test is asking ` +
+                    "for and no WPT_PATHS entry can change it"));
+  }
+  return parts.join("\n");
 }
 
 /* WHY A `fetch` DID NOT HAPPEN, IN THE MOST SPECIFIC TERMS THE ERROR CARRIES. node's fetch rejects with a bare
@@ -1569,28 +1721,16 @@ for (const { file: f, kind, variant } of runs) {
          bf4714d and no sparse-checkout entry can supply it. One message for both would have been true of neither.
          ASKED OF GIT, WHICH IS WHERE THE ANSWER LIVES — the corpus is a checkout of a PINNED revision, so
          "checked out" and "exists at all" are two different questions, and the second is a fact about the TREE
-         that this driver can simply look up. `ls-tree` is what asks it: it walks TREE objects only, so it costs
-         four milliseconds and — unlike `cat-file -e` — cannot trip the lazy blob fetch this `--filter=blob:none`
-         clone would otherwise make over the network to answer a question about a path. Its exit status is 0 for
-         present and absent alike, so the answer is the OUTPUT; a non-zero status is git declining to answer and is
-         reported as that third thing, never as a confident "the corpus does not have it".
-         AT THE REVISION THIS RUN'S NUMBERS BELONG TO, which is CORPUS_AT_START's head and not the WPT_REV
-         constant: those two agreeing is what the provisioning instructions ask for and not something this line may
-         assume, and an answer quoted against a revision the corpus is not at is the stale-measurement defect. */
-      const revOf = /^[0-9a-f]{40}$/.test(CORPUS_AT_START.head) ? CORPUS_AT_START.head : null;
+         that this driver can simply look up. `corpusHas` is that lookup, shared with the fixture diagnosis on
+         the run's own traffic below so the two cannot come to disagree about which revision they ask at. */
       const said = missing.map((d) => {
         const p = relative(WPT, d).split(sep).join("/");
-        if (revOf === null)
-          return `${p} — and this driver could not ask git whether the corpus HAS it: the corpus identity read ` +
-                 `as ${JSON.stringify(CORPUS_AT_START.head)}`;
-        const at = revOf.slice(0, 10);
-        const ls = spawnSync("git", ["ls-tree", revOf, "--", p], { cwd: WPT, encoding: "utf8" });
-        if (ls.status !== 0)
-          return `${p} — and git declined to say whether the corpus has it: ${(ls.stderr || "").trim()}`;
-        return ls.stdout.trim()
-          ? `${p} — it EXISTS at ${at} and this checkout does not have it, so WPT_PATHS is short of ` +
+        const has = corpusHas(p);
+        if (!has.known) return `${p} — and ${has.why}`;
+        return has.present
+          ? `${p} — it EXISTS at ${has.at} and this checkout does not have it, so WPT_PATHS is short of ` +
             `${dirname(p)}: add that entry and the file runs`
-          : `${p} — it does NOT EXIST at ${at} at all, so no WPT_PATHS entry can supply it. The test names a ` +
+          : `${p} — it does NOT EXIST at ${has.at} at all, so no WPT_PATHS entry can supply it. The test names a ` +
             "helper the pinned corpus does not contain and cannot run as written at this revision";
       });
       abortRun(area, "corpus", rel, "a META script this driver could not hand over:\n         " +
@@ -1636,6 +1776,12 @@ for (const { file: f, kind, variant } of runs) {
        be true, the second drawn from the one that contradicts the kernel. engine/gate_cpu.mjs holds the meter,
        names the fields by proc(5)'s own numbers so the comment and the code cannot disagree again, and answers
        `null` where a host cannot measure rather than a 0.0 that reads as a measurement. */
+    /* DRAINED FIRST, SO THE WINDOW HOLDS THE CHILD'S TRAFFIC AND NOT THIS DRIVER'S. Everything logged up to this
+       point belongs to somebody else: the `.sub` substitution fetch this driver makes on the test's behalf, a
+       `serverGone` probe from the previous file, and the previous child's own straggler reply lines. Leaving
+       them in would make "the server logged NO request while this file ran" — the sentence that says the ENGINE
+       never issued one — unwritable, because the window would never be empty. */
+    corpusTrafficSince();
     const cpu0 = childCpuSeconds();
     const r = spawnSync("/bin/sh",
                         ["-c", `ulimit -H -t ${CPU_BUDGET_S + 10} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; exec "$@"`, "sh", bin,
@@ -1651,6 +1797,12 @@ for (const { file: f, kind, variant } of runs) {
                                     keeps that assert at full strength across both schemes. */
                                  WPT_TOP_ORIGIN: hosted.origin } });
     const cpuUsed = childCpuDelta(cpu0, childCpuSeconds());
+    /* THE TRAFFIC THIS FILE GENERATED, taken here because `spawnSync` has just reaped the only process that
+       could have generated any. See `corpusTrafficSince` for why the window is exact and what its one straggler
+       is. `null` is the log saying it cannot vouch for the slice, and every reader below treats that as "no
+       evidence" rather than as "no requests" — an absent measurement and a zero measurement are different facts
+       and §Testing forbids averaging them. */
+    const traffic = corpusTrafficSince();
     const out = (r.stdout || "") + (r.stderr || "");
     /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
        does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
@@ -1726,10 +1878,16 @@ for (const { file: f, kind, variant } of runs) {
            promoted into a verdict the meter did not support. */
         const blocked = cpuUsed !== null && cpuUsed < 1;
         const gone = cpuUsed === null || cpuUsed < 1 ? await serverGone(rel) : null;
-        const otherEnd = gone ? `AND ${gone.said} — that is the other end, and THIS RUN IS TRUNCATED HERE`
-                              : "The corpus server ANSWERED this driver's probe, so the other end is not " +
-                                "wptserve being gone: attach to it (gdb -p, /proc/PID/syscall) and look at " +
-                                "what it is waiting on";
+        /* AND WHAT WENT OVER THAT SOCKET, which turns the instruction below into an answer this driver already
+           holds. "Look at what it is waiting on" is the right next step and it used to require a debugger and a
+           process that no longer exists; the access log names the request the run was blocked on — or says
+           there was none, which moves the whole diagnosis upstream of the network. Appended to the two arms
+           where the wire can be the cause and NOT to the starved arm, whose verdict is the load average and
+           whom no amount of traffic would inform. */
+        const otherEnd = (gone ? `AND ${gone.said} — that is the other end, and THIS RUN IS TRUNCATED HERE`
+                               : "The corpus server ANSWERED this driver's probe, so the other end is not " +
+                                 "wptserve being gone: attach to it (gdb -p, /proc/PID/syscall) and look at " +
+                                 "what it is waiting on") + trafficEvidence(traffic);
         cause = cpuUsed === null
           /* THE THIRD STATE, SAID OUT LOUD. Block and starvation are told apart by ONE number, so a host that
              cannot produce it cannot produce either verdict — and the failure of the old meter was exactly
@@ -1901,6 +2059,9 @@ for (const { file: f, kind, variant } of runs) {
        subtest that computed the wrong string were the same row and the reader had to infer which from the
        message — and a NOTRUN carries no message at all, so it inferred as a silent wrong answer. */
     const ST = { 0: "PASS", 1: "FAIL", 2: "TIMEOUT", 3: "NOTRUN", 4: "PRECONDITION_FAILED" };
+    /* WHERE THIS FILE'S OWN LINE GOES. It is written below, once every count is final, and SPLICED in here so a
+       reader meets the file before its subtests rather than after them. */
+    const lineMark = failures.length;
     let filePass = 0, fileFail = 0, fileNotrun = 0;
     for (const t of settled.values()) {
       const kind = ST[t.status];
@@ -1964,7 +2125,11 @@ for (const { file: f, kind, variant } of runs) {
           : ["nodone",
              "it registered no subtest and never completed — testharness.js itself never ran, or the report hook " +
              "is not installed in this run's programs"];
-      abortRun(area, kind, rel, `the harness never completed — no @WPTDONE. ${cause}`);
+      /* AND WHAT IT PUT ON THE WIRE, which is the half of this diagnosis the driver used to have no way to ask.
+         `hanging` names the subtests that never settled; `trafficEvidence` names what the corpus server was
+         asked for and answered while they hung, so "awaiting something that never settled" stops being the end
+         of the sentence and becomes a request that was never issued, never answered, or answered and dropped. */
+      abortRun(area, kind, rel, `the harness never completed — no @WPTDONE. ${cause}` + trafficEvidence(traffic));
       continue;
     }
     /* THE FILE-LEVEL VERDICT, WHICH THIS DRIVER USED TO PARSE AND THROW AWAY. @WPTDONE carries testharness's own
@@ -1975,10 +2140,12 @@ for (const { file: f, kind, variant } of runs) {
        so it is a FAIL rather than an abort, and it is counted.
        ASKED OF THE LINE, NOT OF `abortedHere`: a file can abort AFTER the harness completed — a teardown leak is
        the usual one — and that file's harness status is as real as any other's. */
+    /* PARSED ONCE, READ TWICE — by the verdict below and by the file's own subtest line after it. Two matches of
+       one marker is two places for this file to disagree with itself about what the harness reported. */
+    const d = out.match(/^@WPTDONE (\{.*\})$/m);
+    let h = null;
+    if (d) { try { h = JSON.parse(d[1]); } catch { h = null; } }
     {
-      const d = out.match(/^@WPTDONE (\{.*\})$/m);
-      let h = null;
-      if (d) { try { h = JSON.parse(d[1]); } catch { h = null; } }
       if (d && !h) {
         /* THE RUNNER'S OWN REPORT LINE, MALFORMED — a break in the contract between this driver and the program
            it built, so it is this gate's work and never the engine's. */
@@ -1989,7 +2156,17 @@ for (const { file: f, kind, variant } of runs) {
       if (h && h.status !== 0) {
         fileFail++;
         failures.push(`  FAIL    ${rel} :: <harness>\n         testharness status ` +
-                      `${NAME[h.status] || h.status}${harnessCause(h, started, settled)}`);
+                      `${NAME[h.status] || h.status}${harnessCause(h, started, settled)}` +
+                      /* AND THE WIRE EVIDENCE, ON *THIS* LINE TOO — because a harness TIMEOUT is the shape the
+                         `nodone` branch above never sees. A file that awaits a fetch which never settles does
+                         NOT usually vanish: testharness's own timer fires, `done()` runs, and the file reports
+                         `@WPTDONE` with status TIMEOUT and whatever subtests it had. So it takes this path, not
+                         that one, and attaching the traffic only to the missing-@WPTDONE case would have left
+                         the instrument silent in precisely the case it was built for — the idlharness family,
+                         every member of which reports a floor of two subtests and a TIMEOUT while awaiting
+                         `/interfaces/<spec>.idl`. Asked only for TIMEOUT: an ERROR is an uncaught exception and
+                         a PRECONDITION_FAILED is the test declining, and neither is a question about the wire. */
+                      (h.status === 2 ? trafficEvidence(traffic) : ""));
       }
       /* `count` IS HOW MANY SUBTESTS THE HARNESS HOLDS, cross-checked because losing a line is the one failure
          mode a streamed report adds and it would make every number above wrong. Not asked of a file that
@@ -2000,6 +2177,43 @@ for (const { file: f, kind, variant } of runs) {
         failures.push(`  FAIL    ${rel} :: <harness>\n         the harness holds ${h.count} subtest(s) and ` +
                       `${settled.size} reached this driver — the report and the run disagree about the file`);
       }
+    }
+    /* THE FILE'S OWN SUBTEST COUNT, BESIDE ITS VERDICT, FOR EVERY FILE THAT RAN — INCLUDING THE ONES THAT PASSED.
+     *
+     * §Testing asks for exactly this line and names the reason: a test that is collected, runs, and reports is
+     * still not a test that MEASURED anything, because its own fixtures can be unreachable — and then it returns
+     * a SMALL HONEST NUMBER that reads as a small honest result. The whole idlharness family sat at exactly two
+     * subtests apiece, one for `idl_test setup` and one for `<harness>`, having never executed a single IDL
+     * assertion; each of the twenty-three contributed its two to a different area's total, where two is
+     * unremarkable, and nothing anywhere printed the per-file figure that makes twenty-three identical floors
+     * look like the one fact they are.
+     *
+     * IT IS PRINTED FOR CLEAN FILES OR IT DOES NOT CATCH THIS AT ALL. Every other line this gate emits is a
+     * failure, an abort or an unread file, so a file that reports two passing subtests and stops emits NOTHING —
+     * which is indistinguishable from a component with nothing to answer for. That silence was the whole of the
+     * concealment, and a report that only speaks up about failures cannot break it.
+     *
+     * ITS COST IS ONE LINE PER FILE against a stream that already carries one per failing SUBTEST — `encoding`
+     * alone answers three quarters of a million of those — so this is the small column in the report, not a new
+     * expense. It is buffered into the AREA's lines like every other, so it arrives with the row it belongs to
+     * and a truncated run still prints what it measured.
+     *
+     * NO FLOOR IS HARDCODED AND NONE SHOULD BE. What counts as suspiciously few subtests is a fact about a test,
+     * not about this driver, and a threshold here would be a bound that goes stale the first time a family's
+     * floor is three. The count is REPORTED; the reader is who notices that a family shares one. */
+    {
+      const total = filePass + fileFail + fileNotrun;
+      /* THE HARNESS'S OWN VERDICT, from the one parse above. A status this table does not name is printed as its
+         NUMBER rather than folded into a word — testharness owns that enum and may add to it, and a status
+         reported as something it is not is the defaulted-field defect on the line built to expose one. */
+      const hstat = h ? ({ 0: "OK", 1: "ERROR", 2: "TIMEOUT", 3: "PRECONDITION_FAILED" }[h.status] ?? `status ${h.status}`)
+                      : "none";
+      failures.splice(lineMark, 0,
+        `  RAN     ${rel}  subtests ${String(total).padStart(5)}` +
+        `  [pass ${filePass}  fail ${fileFail}  notrun ${fileNotrun}]  harness ${hstat}` +
+        /* SAID ON THE LINE ITSELF, because a count from a file that stopped early is not the file's surface and
+           a reader scanning this column must not have to cross-reference the ABORT line to learn that. */
+        (abortedHere ? "  — THE FILE ABORTED, so this is what it reached and not what it holds" : ""));
     }
     pass += filePass;
     fail += fileFail;
