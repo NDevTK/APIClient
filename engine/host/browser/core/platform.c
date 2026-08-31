@@ -61,6 +61,7 @@
 #include "core/html/simple_dialogs.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/html/xml_serializer.h"
+#include "core/idl_args.h"
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_cursor.h"
 #include "core/indexeddb/idb_database.h"
@@ -954,16 +955,42 @@ static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
    one that works. This is the disagreement — the NAME a component puts on a realm's global, asserted present
    once the whole list has run.
  *
- * It is two-sided in the same way core/idl_args.h's conditional-member exclusion is. A name that is absent
- * fires with the component that owed it, which is exactly the report the original defect never produced
- * (`navigator` was missing from the WPT gate's realm and the gate reported numbers for four standards rooted
- * there). And a row whose component is renamed or removed leaves a name nobody installs, which fires the same
- * assert from the other direction — so a witness cannot outlive its component the way a comment does.
+ * A name that is absent fires with the component that owed it, which is exactly the report the original defect
+ * never produced (`navigator` was missing from the WPT gate's realm and the gate reported numbers for four
+ * standards rooted there). And a row whose component is renamed or removed leaves a name nobody installs, which
+ * fires from the other direction — so a witness cannot outlive its component the way a comment does.
+ *
+ * THE THIRD COLUMN IS WEB IDL §3.3.7 [Exposed]'s CONDITION, AND WITHOUT IT THIS LIST ASSERTED A FALSEHOOD.
+ * A row used to say only "this name is on the global", which is true of a name whose IDL carries no exposure
+ * condition and FALSE of one that does: §3.3.13 [SecureContext]'s own example is verbatim "In such a context,
+ * there will be no \"HeartbeatSensor\" property on Window", so a `[SecureContext]` interface object is a name
+ * the platform owes in a SECURE realm and owes NOWHERE ELSE. The list asserted it unconditionally, and the day
+ * §14's interface object was correctly gated behind that attribute every realm reached over plain `http:`
+ * aborted here — a correct spec fix falsifying the one site where the retired argument had been written down.
+ * So the row states the condition its IDL states, and the probe is two-sided against it: exposed ⇒ present,
+ * NOT exposed ⇒ ABSENT.
+ *
+ * THE ABSENT DIRECTION IS THE HALF THAT EARNS THE COLUMN. "Present when it should be" was already checked;
+ * "absent when it must be" is what would have caught the gap from the other side — an interface object whose
+ * IDL carries [SecureContext] and whose install forgot it answers `'SubtleCrypto' in window` true over plain
+ * http, which is what a page branches on and what no other check in this engine asks.
+ *
+ * THE CONDITION IS STATED HERE AND NOT READ BACK FROM THE INSTALL, deliberately. This list is an ORACLE: its
+ * whole value is that it says what the realm MUST look like without consulting what the realm DID, exactly as
+ * the `component` column names an owner without consulting the PLATFORM list (platform_check_table is what
+ * crosses those two). An expectation derived from the gate it is checking asserts nothing — a gate silently
+ * removed would leave record and realm agreeing, and the absent direction could never fire.
+ *
+ * ZERO IS A STATEMENT AND NOT A HOLE. `IDL_EXPOSED` is 0 and means "this name's IDL carries no exposure
+ * condition", which is what the overwhelming majority of these rows are and what a two-field initialiser
+ * therefore says correctly. A row that omits the column is asserting the unconditional case, not leaving a
+ * field unwritten — the same reading IdlDictMember::iface's zero has, and the reason it is safe is the same:
+ * there is no producer that could have written something else here.
  *
  * The four Window members come from realm intrinsics rather than from an install in this file, and asserting
  * them HERE is deliberate: this is the point at which the realm is finished, and whether the intrinsic list
  * and this list agree is precisely the question. */
-static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
+static const struct { const char *name, *component; IdlExposure exposure; } PLATFORM_WITNESS[] = {
     { "console",               "console" },
     { "window",                "window" },
     { "onload",                "event_target" },
@@ -1042,7 +1069,20 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
        an install that silently stopped happening would restore exactly the silent defect these witnesses
        exist to refuse. */
     { "Crypto",                "crypto" },
-    { "SubtleCrypto",          "crypto" },
+    /* `[SecureContext,Exposed=(Window,Worker)] interface SubtleCrypto` — the ONE row of this list whose IDL
+       carries an exposure condition. Its two neighbours carry none and that is the IDL's own asymmetry rather
+       than an oversight: Web Cryptography's `interface Crypto` is `[Exposed=(Window,Worker)]` with no
+       [SecureContext], and the Window member is `[SameObject] readonly attribute Crypto crypto` on the
+       WindowOrWorkerGlobalScope partial mixin, also unconditional — only `subtle`, `randomUUID` and this
+       interface object are gated. So over plain http a page still finds `Crypto`, still finds `crypto`, and
+       finds NEITHER `crypto.subtle` NOR `SubtleCrypto`, which is what a bundle's `crypto && crypto.subtle`
+       guard is written to discover. */
+    { "SubtleCrypto",          "crypto", IDL_SECURE_CONTEXT },
+    /* §13's interface object, gated by the same attribute and witnessed for the same reason. Its component
+       column is `crypto` because that is the PLATFORM row this family is declared under — core/crypto's
+       subtle_crypto declares it and core/realm.h runs its per-realm install as an intrinsic — which is the
+       same answer the row above it gives, and `platform_check_table` is what holds that column honest. */
+    { "CryptoKey",             "crypto", IDL_SECURE_CONTEXT },
     { "crypto",                "crypto" },
     { "DOMStringList",         "dom_string_list" },
     { "IDBKeyRange",           "idb_key_range" },
@@ -1056,6 +1096,16 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "IDBVersionChangeEvent", "idb_version_change_event" },
     { "Observable",            "observable" },
     { "DOMParser",             "domparser" },
+    /* FILE SYSTEM ACCESS §3's three factories, whose whole partial interface is `[SecureContext]`. They are
+       the other end of the column from every interface object above: a Window MEMBER rather than an interface
+       object, gated by the same attribute and therefore witnessed by the same two directions — and the reason
+       they are worth a row at all is that a bundle feature-detects them (`'showOpenFilePicker' in window`),
+       so an install that stopped gating would put three names on a plain-http global that a real browser
+       does not have there. Their component installs from core/realm.h's intrinsic list rather than from this
+       file's install column, which is the same route the four Window members above take. */
+    { "showOpenFilePicker",    "file_picker", IDL_SECURE_CONTEXT },
+    { "showSaveFilePicker",    "file_picker", IDL_SECURE_CONTEXT },
+    { "showDirectoryPicker",   "file_picker", IDL_SECURE_CONTEXT },
 };
 static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);
 
@@ -1410,14 +1460,38 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
 #if APICLIENT_DEV
     for (i = 0; i < PLATFORM_WITNESS_N; i++) {
         JSAtom a = JS_NewAtom(ctx, PLATFORM_WITNESS[i].name);
+        /* WHAT THIS REALM OWES, decided by Web IDL §3.3.7 [Exposed]'s own "is exposed in realm" and by nothing
+           written here. core/idl_args.h states why an oracle may ask that predicate where an install may not:
+           spelling step 2 out at this line — `exposure == IDL_EXPOSED || secure_context_is(ctx)` — would be a
+           second copy of the algorithm, and the copy that drifts is the one nobody runs against reality. */
+        bool owed = idl_exposed(ctx, PLATFORM_WITNESS[i].exposure);
         int has;
         CHECK(a != JS_ATOM_NULL, "a platform witness name could not be interned");
         has = JS_HasProperty(ctx, global, a);
         JS_FreeAtom(ctx, a);
         CHECK(has >= 0, "a platform witness probe threw — [[HasProperty]] over the global runs no page code");
         /* The message is the NAME the component owed: a `@WHY` reading `navigator` is a reader standing at the
-           realm that has none, which is the whole report the three copies of this list never produced. */
-        DCHECK(has == 1, PLATFORM_WITNESS[i].name);
+           realm that has none, which is the whole report the three copies of this list never produced.
+           AND IT SAYS WHICH SIDE FAILED, because the two are opposite repairs and the bare name cannot tell
+           them apart. An absent name that is owed is a component whose install stopped happening — OR a name
+           whose IDL carries an exposure condition this row does not state, which is how a correct
+           [SecureContext] gate first showed up here: as this assert, naming an interface, over a realm that
+           was right to lack it. */
+        DCHECKF(!owed || has == 1,
+                "the platform owes this realm the global `%s` and it is not there — `%s` did not install it, "
+                "or its IDL carries a Web IDL §3.3.7 [Exposed] condition (§3.3.13 [SecureContext] is the one "
+                "this engine models) that this witness row does not state. If the component gates the install, "
+                "the row states the same condition and this probe then requires the name to be ABSENT here",
+                PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].component);
+        /* §3.3.13's own example, verbatim: "In such a context, there will be no \"HeartbeatSensor\" property
+           on Window." A page reads that as `'X' in window` answering false, and it can tell that apart from a
+           property that exists and answers undefined — which is the branch this direction protects. */
+        DCHECKF(owed || has == 0,
+                "the global `%s` is on a realm whose Web IDL §3.3.7 [Exposed] condition excludes it — §3.3.13 "
+                "[SecureContext] REMOVES the construct rather than making it throw, so `'%s' in window` must "
+                "answer false here and answers true. `%s` installs it unconditionally; the install states its "
+                "exposure as data (the `_exposed` installers' IdlExposure parameter), never as an `if`",
+                PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].component);
     }
 #endif
 }

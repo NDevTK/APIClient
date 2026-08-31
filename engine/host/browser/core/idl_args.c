@@ -5109,12 +5109,27 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
    The algorithm is defined under that heading and its steps are numbered there: step 1 is the exposure set,
    step 2 is "If realm's settings object is not a secure context, and construct is conditionally exposed on
    [SecureContext], then return false", step 3 is [CrossOriginIsolated], step 4 returns true.
-   IT IS `static` DELIBERATELY. A public predicate is an invitation to write `if (idl_exposed(ctx, ...))` at a
-   call site, which is the per-member conditional the parameter exists to remove; the only way to reach this is
-   to hand an installer the attribute the IDL states. When a [SecureContext] member of a shape that has no
-   exposed-form installer yet arrives (an operation — HTML's registerProtocolHandler is the one waiting), that
-   installer gets the same parameter and the same one line, rather than this becoming reachable from outside. */
-static bool idl_exposed(JSContext *ctx, IdlExposure exposure)
+   NO INSTALL SITE MAY CALL IT, AND IT IS NO LONGER `static` — those two are not in tension, and the reason the
+   second changed is worth more than the first. This used to be `static` on the argument that "a public
+   predicate is an invitation to write `if (idl_exposed(ctx, ...))` at a call site, which is the per-member
+   conditional the parameter exists to remove". That argument is unchanged and still binding FOR INSTALLS: the
+   only way an install reaches this is to hand an installer the attribute the IDL states, and when a
+   [SecureContext] member of a shape that has no exposed-form installer yet arrives (an operation — HTML's
+   registerProtocolHandler is the one waiting), that installer gets the same parameter and the same one line.
+   What the argument did not cover is a caller that INSTALLS NOTHING. core/platform.c's witness list is an
+   ORACLE over the finished realm: it states, independently of any install, which names this realm's global
+   must and must not carry, and then disagrees with reality. To do that it must decide the same §3.3.7 step 2
+   the installs decided — and a witness that spelled the step itself (`exposure == IDL_EXPOSED ||
+   secure_context_is(ctx)`) would be a SECOND STATEMENT of the algorithm, which is the restated rule an auditor
+   must never contain. So the audit is a legitimate caller and an install is not, and the line between them is
+   not visibility: it is whether the caller PUTS SOMETHING ON A REALM. A site that does may only declare its
+   exposure; a site that merely asks what the realm should look like has nowhere else to ask.
+   THE ORACLE'S OWN DATUM IS DELIBERATELY NOT DERIVED FROM THE INSTALL. The witness states each name's exposure
+   itself rather than reading back what the gate did, because an oracle that takes its expectation from the
+   thing it is checking asserts nothing: derived, a gate silently REMOVED would leave the record and the realm
+   agreeing, and the direction that catches it — a [SecureContext] name PRESENT on a non-secure global — could
+   not fire at all. */
+bool idl_exposed(JSContext *ctx, IdlExposure exposure)
 {
     switch (exposure) {
     case IDL_EXPOSED:        return true;

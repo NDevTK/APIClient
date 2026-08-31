@@ -1613,6 +1613,20 @@ typedef enum {
     IDL_SECURE_CONTEXT,     /* [SecureContext] — ABSENT, not throwing, in a non-secure realm */
 } IdlExposure;
 
+/* WEB IDL §3.3.7 [Exposed]'s "is exposed in realm", ASKED — the one statement of that algorithm's conditions,
+ * and the reason it is declared here is narrow enough to state as a rule: A CALLER THAT PUTS SOMETHING ON A
+ * REALM MAY NOT ASK IT. An install states its IDL's exposure as DATA (the `_exposed` installers' parameter) and
+ * the gate is asked once, inside this file, for every member alike — an `if (idl_exposed(...))` at an install
+ * site is the per-member conditional that parameter exists to remove, and every such site re-derives what
+ * [SecureContext] MEANS with nothing keeping the derivations equal.
+ * WHAT MAY ASK IT IS A CALLER THAT INSTALLS NOTHING: core/platform.c's witness list, which is an ORACLE over
+ * the finished realm rather than a builder of one. It states independently which names a realm's global must
+ * and must not carry and then disagrees with reality, so it has to decide the same condition — and a witness
+ * that spelled the condition itself would be a second statement of §3.3.7 step 2, which is the restated rule an
+ * auditor must never contain. See idl_args.c for the full argument, including why the oracle states each name's
+ * exposure itself instead of reading back what the gate did. */
+bool idl_exposed(JSContext *ctx, IdlExposure exposure);
+
 /* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — "Let name be the string \"get \"
  * prepended to attribute's identifier" for create an attribute getter, and "Let name be the string \"set \"
  * prepended to id" for create an attribute setter. The installers below perform it themselves and no caller of
