@@ -116,7 +116,8 @@ typedef struct FlowAcct {
        being denied. That is §scheduler's razor's STARVES: not a deprioritisation, a debt whose only currency is
        the dispatch it forecloses.
        MEASURED, on the build smoke fixture, over the run's 71 censuses: `unrun` — the count of members standing
-       at `cpu == 0` — was ZERO at every one of them, on a frontier that reached 3480 members; `neverPicked`
+       at `cpu == 0` — was ZERO at 69 of them, nonzero only at censuses 8 and 9 while the frontier was under a
+       thousand members and never again after it passed one; `neverPicked`
        reached 943 with the best of them 0.011 from the front of the order, and sat pinned at ~819 across a
        dozen consecutive censuses in which the frontier grew by 437 and every one of those newcomers was
        dispatched. Because `unrun` is also the population flow_pick's two ordering guards are gated on, both of
@@ -2799,10 +2800,11 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->val > 0.0) out->self_emit++;
         /* HOW MANY MEMBERS STAND AT ZERO OF THE AGING'S OWN HALF — read through flow_own_silence, which is the
            quantity the order is made of, and NOT off `Flow.cpu`, which is that quantity only while its window
-           mark is current. Reading the raw field was not a cosmetic difference: it reported ZERO at every one
-           of the 71 censuses of the run this row was last measured on, on a frontier that reached 3480 members
-           — because after a fork every member carries a nonzero inherited burn and nothing but a dispatch ever
-           clears it, which is exactly the defect FlowAcct's `emit_gen` removes. */
+           mark is current. Reading the raw field was not a cosmetic difference: over the 71 censuses of the
+           run this row was last measured on it was nonzero exactly TWICE, both while the frontier was under a
+           thousand members, and ZERO for every census after it passed one — because past the first forks every
+           member carries a nonzero inherited burn and nothing but a dispatch ever clears it, which is exactly
+           the defect FlowAcct's `emit_gen` removes. */
         if (flow_own_silence(f) == 0) out->unrun++;
         /* …AND THE POPULATION THE ROW ABOVE CANNOT NAME, for the reason its own comment gives: zero own silence
            is also what an emission by ANY arm of this member's family produces, so a member that has run and

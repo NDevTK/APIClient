@@ -1049,8 +1049,9 @@ typedef struct {
     long unrun;        /* members standing at ZERO OWN SILENCE (flow.c's flow_own_silence) — never charged for
                           the thread since their fork family last emitted. It is that reading and NOT the raw
                           `Flow.cpu`, and the difference is what this row was measured being wrong about: read
-                          off the field it was ZERO at every one of 71 censuses on a frontier that reached 3480
-                          members, because a fork copies the parent's burn and nothing but a dispatch ever
+                          off the field it was nonzero at exactly TWO of 71 censuses — both while the frontier
+                          was under a thousand members — and ZERO for every one after that, on a run reaching
+                          3480, because a fork copies the parent's burn and nothing but a dispatch ever
                           cleared it. It counts a member of a family that has just PRODUCED as one that has
                           never run, which is why `never_picked` below exists.
                           IT IS NOT flow_pick'S OWN DEFINITION, which is what this row used to claim: the
