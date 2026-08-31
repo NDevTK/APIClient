@@ -205,7 +205,14 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                      "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendKiB",
                      "miscKiB", "perFlowKiB",
                      "segKiB", "domSegKiB", "pinSegs", "pinSegEntries", "pinSegKiB",
-                     "decSegs", "decSegEntries", "decSegKiB", "dynBodies", "dynKiB", "sharedKiB"];
+                     "decSegs", "decSegEntries", "decSegKiB", "dynBodies", "dynKiB", "sharedKiB",
+                     /* `steps` IS TO `stepUnitRuns` WHAT `live` IS TO `stepUnits` — the total its arms are a
+                        partition of, and therefore the ONLY thing that can tell a MISSING arm from an arm
+                        that read 0. It is listed here rather than left to the histogram reader for the same
+                        reason `resumed` is: without it beside them, a lifetime histogram that lost a row
+                        renders as a plausible one. The two histograms themselves are NOT in this list — they
+                        are objects and this list's contract is that every name in it is a number. */
+                     "steps"];
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
    `stepUnitReading` checks its histogram against `live`: two rows that are supposed to be the whole of a third
    are two numbers that can drift, and drifted they are WORSE than the one number they replaced, because each
@@ -1063,29 +1070,45 @@ function wfqReading(out) {
    plausible rendering: the sum falls short and this throws, naming the composer. A row that reads 0 is a
    MEASUREMENT — that frontier had nobody in that arm — and is reported as one. Neither is ever defaulted into
    the other, which is the defect this whole instrument exists to end. */
-function stepUnitReading(b) {
-  const u = b.stepUnits;
+/* THE VALIDATION BOTH HISTOGRAMS NEED, WRITTEN ONCE — the same split `censusFields` makes one screen up, and
+   for the same reason: the two rows differ ONLY in the total they must sum to, and a second copy of the shape
+   check is the third place a renamed field has to be renamed. `name` and `totalName` are parameters because
+   they are the whole of the difference AND because a reader who hits one of these throws has to know WHICH
+   histogram broke — a shared checker whose message names neither is a throw nobody can act on. */
+function stepUnitRows(b, name, totalName) {
+  const u = b[name];
   if (u === null || typeof u !== "object" || Array.isArray(u))
-    throw new Error("[build] the @COLD census carries no `stepUnits` object — solver/result.c composes it " +
+    throw new Error(`[build] the @COLD census carries no \`${name}\` object — solver/result.c composes it ` +
                     "from solver/step_unit.h's list on every census, so its absence is that composer having " +
                     "changed rather than a frontier with nothing in any arm. An absent histogram and an " +
                     "all-zero one are different facts and this reader will not average them.");
   const rows = Object.entries(u);
   if (!rows.length)
-    throw new Error("[build] the @COLD census's `stepUnits` is empty — the histogram is emitted with EVERY " +
+    throw new Error(`[build] the @COLD census's \`${name}\` is empty — the histogram is emitted with EVERY ` +
                     "row including the zeroes, so an empty object is a composer that stopped listing them.");
   for (const [k, v] of rows)
     if (typeof v !== "number")
-      throw new Error(`[build] the @COLD census's \`stepUnits.${k}\` is not a number — the histogram is a ` +
-                      `count per arm and a non-numeric row cannot be summed against \`live\`.`);
+      throw new Error(`[build] the @COLD census's \`${name}.${k}\` is not a number — the histogram is a ` +
+                      `count per arm and a non-numeric row cannot be summed against \`${totalName}\`.`);
+  if (typeof b[totalName] !== "number")
+    throw new Error(`[build] the @COLD census carries no numeric \`${totalName}\` for \`${name}\` to be ` +
+                    `checked against — the sum is the only thing that makes a MISSING arm different from an ` +
+                    `arm that read 0, so without it this reader would be rendering a histogram it cannot ` +
+                    `establish is whole.`);
   const total = rows.reduce((t, r) => t + r[1], 0);
-  if (total !== b.live)
-    throw new Error(`[build] the @COLD census's \`stepUnits\` sums to ${total} over ${rows.length} arms ` +
-                    `against \`live\` ${b.live} — every member carries exactly one arm, so the two sides ` +
-                    `disagree about who is standing and no reading composed from this row is about the ` +
-                    `frontier that was there. The engine asserts the same identity at the walk ` +
-                    `(solver/cold.c); a difference visible HERE and not there is a row lost between the ` +
+  if (total !== b[totalName])
+    throw new Error(`[build] the @COLD census's \`${name}\` sums to ${total} over ${rows.length} arms ` +
+                    `against \`${totalName}\` ${b[totalName]} — the arms are a PARTITION of that total, so ` +
+                    `the two sides disagree and no reading composed from this row is about the run that ` +
+                    `happened. The engine asserts the same identity where both halves are in one hand ` +
+                    `(solver/cold.c's walk for \`stepUnits\`, solver/engine.c's convergence point for ` +
+                    `\`stepUnitRuns\`); a difference visible HERE and not there is a row lost between the ` +
                     `census and this document.`);
+  return rows;
+}
+
+function stepUnitReading(b) {
+  const rows = stepUnitRows(b, "stepUnits", "live");
   const live = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
   const zero = rows.length - live.length;
   /* AN EMPTY FRONTIER IS A SENTENCE AND NOT AN EMPTY LIST, for the same reason wfqReading has an arm for
@@ -1095,6 +1118,38 @@ function stepUnitReading(b) {
     ? `step units at the last census: no member was standing, so all ${rows.length} arms read 0`
     : `step units at the last census: ` + live.map((r) => `${r[1]} ${r[0]}`).join(", ") +
       ` (${zero} of the ${rows.length} arms read 0, which is a measurement and not an absence)`;
+}
+
+/* AND THE OTHER HALF OF THE PAIR — WHICH RUNGS THE LADDER HAS EVER RUN, over the whole life of the instance.
+   THIS IS THE ONE READING THE CENSUS ABOVE STRUCTURALLY CANNOT GIVE, and it is why both are rendered. The row
+   above is a GAUGE: it says where the members are standing at the instant the last census was taken, so an arm
+   reading 0 there is one nobody is resting on — which is equally true of an arm the ladder NEVER REACHES and
+   of an arm every step passes straight through. Those are opposite diagnoses. The first is a rung whose
+   predecessors never run out, and the fix is upstream of it; the second is a rung that runs constantly and
+   retires nothing, and the fix is at it. `stepUnitRuns` is a lifetime count, so a 0 in it is the first of
+   those and a large number in it beside a 0 in the gauge is the second — and nothing in this stream could tell
+   them apart before it existed.
+   IT IS REPORTED AND NEVER USED TO DECIDE (§NO BOUNDS). No arm of the verdict below reads it, no discriminator
+   branches on it, and it is not a no-progress detector: it is rendered beside the gauge because a reader
+   needs both to name a rung, and that is the whole of its job here. */
+function stepUnitRunReading(b) {
+  const rows = stepUnitRows(b, "stepUnitRuns", "steps");
+  const ran = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
+  const never = rows.filter((r) => r[1] === 0).map((r) => r[0]);
+  /* A RUN THAT TOOK NO STEP AT ALL IS A SENTENCE, for stepUnitReading's reason exactly: an all-zero histogram
+     over zero steps is a census taken before the scheduler ran, and rendering it as a list of zeroes reads as
+     a ladder that was climbed and reached nothing. */
+  if (b.steps === 0)
+    return `step units over the whole run: no step has been taken yet, so all ${rows.length} arms read 0`;
+  return `step units over the whole run (${b.steps} steps): ` +
+         ran.map((r) => `${r[1]} ${r[0]}`).join(", ") +
+         (never.length
+           ? ` — and ${never.length} of the ${rows.length} arms have NEVER run (${never.join(" ")}), which is ` +
+             `a rung the ladder has not reached rather than a rung nobody is resting on. ONE OF THEM IS ` +
+             `ALWAYS IN THAT LIST and is not a finding: the value flow_step resets to at its entry is in the ` +
+             `same list as the arms, and the scheduler asserts a RECORDED step is never it ` +
+             `(solver/step_unit.h), so its zero here is that assert restated`
+           : ` — every arm has run at least once`);
 }
 
 /* THE COLD ROUND TRIP, PER RECORD KIND — @COLDPARK from session ONE against @COLDRESUME from session TWO, and
@@ -1739,8 +1794,12 @@ function hungCauseCensus(out) {
                /* AND WHAT THE MEMBERS THAT DID NOT RETIRE WERE DOING, on EVERY arm rather than on the one that
                   happens to name a cause. `span` is where it goes for that reason: the arms below disagree
                   about why the run ended and none of them disagrees about this, so putting it in one of them
-                  would make the answer depend on the verdict it is supposed to inform. */
-               stepUnitReading(b);
+                  would make the answer depend on the verdict it is supposed to inform.
+                  BOTH HISTOGRAMS, because one of them is a gauge and one is a lifetime count and a rung is
+                  named by the PAIR. `stepUnitReading` says where the frontier is standing at the last census;
+                  `stepUnitRunReading` says which rungs the ladder has ever run at all. An arm reading 0 in the
+                  first is either of two opposite things and the second is what says which. */
+               stepUnitReading(b) + "; " + stepUnitRunReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while
@@ -2124,11 +2183,51 @@ function consoleSeverityText(out) {
          (n ? `, first severe: ${JSON.stringify(first)}` : ``);
 }
 
+/* WHAT THE PAGE ASKED A PERSON — the `@DIALOG` stream, which HTML §8.9.1 Simple dialogs' show step writes for
+   every `alert()`, `confirm()` and `prompt()` a run reaches (browser/core/html/simple_dialogs.c). It is
+   reported beside the page's own console for the reason that one is: it is a fact about the PAGE and never a
+   verdict on this engine.
+   IT IS WORTH A LINE BECAUSE TWO OF THE THREE RETURN A VALUE THIS ENGINE DOES NOT KNOW. A `confirm` answers a
+   concolic boolean and a `prompt` a concolic string, so each one a run reaches is a place the frontier FORKED
+   on what a person would have said — which is exactly the reach a headless browser does not have, since a
+   headless browser takes §8.9.1's optional "we cannot show simple dialogs" arm and answers false/null. A run
+   with dialogs in it is a run whose later findings sit behind a question somebody was asked, and the count is
+   how a reader sees that without reading the log.
+   NEITHER FIELD IS DEFAULTED, for the reason the @LOG reader above states about `level`: simple_dialogs.c
+   writes `kind` and `message` on every line it prints, so a line missing either is that emitter and this
+   reader having come apart — and a dropped line is indistinguishable from a dialog that never happened once
+   the answer is a number. An UNKNOWN `kind` throws for the same reason the @FORKAT census throws on an
+   unknown member: §8.9.1 has exactly three, they are the three strings the algorithm hands to WebDriver BiDi
+   user prompt opened, and a fourth is a producer this reader has not been told about. */
+function dialogText(out) {
+  const n = { alert: 0, confirm: 0, prompt: 0 };
+  let first = "";
+  for (const m of out.matchAll(/^@DIALOG (\{.*\})$/gm)) {
+    let v;
+    try { v = JSON.parse(m[1]); } catch { continue; }   /* a truncated tail is not a finding about the page */
+    if (typeof v.kind !== "string" || typeof v.message !== "string")
+      throw new Error("[build] an @DIALOG line carries no string `kind` or no string `message` — " +
+                      "browser/core/html/simple_dialogs.c writes both on every line it prints (HTML §8.9.1's " +
+                      "own name for the dialog, and the message after normalize newlines), so a line without " +
+                      "one is that emitter having changed under this reader.");
+    if (!(v.kind in n))
+      throw new Error(`[build] an @DIALOG line carries the kind ${JSON.stringify(v.kind)} — HTML §8.9.1 ` +
+                      `Simple dialogs defines three (alert, confirm, prompt) and simple_dialogs.c writes ` +
+                      `those three literals, so a fourth is a producer this reader has not been told about.`);
+    n[v.kind]++;
+    if (!first) first = m[1].slice(0, 160);
+  }
+  const total = n.alert + n.confirm + n.prompt;
+  if (!total) return "";
+  return ` — the page opened ${total} modal dialog(s): ${n.alert} alert, ${n.confirm} confirm, ` +
+         `${n.prompt} prompt, first: ${JSON.stringify(first)}`;
+}
+
 function runOutcome(label, t, hint) {
   /* APPENDED TO EVERY VERDICT THIS FUNCTION PRODUCES, which is why it is computed once here and folded into
      `bad` rather than added at each arm — an arm added later would otherwise be the one that drops it, and
      the arm most likely to be added later is another failure arm. */
-  const pe = pageErrorText(t.captured) + consoleSeverityText(t.captured);
+  const pe = pageErrorText(t.captured) + consoleSeverityText(t.captured) + dialogText(t.captured);
   /* AND WHERE THE RUN GOT TO, ON THE SAME RULE AND FOR THE SAME REASON — computed once and folded into `bad`,
      because three arms below already asked probeStanding for the FRACTION and exactly ONE of them printed the
      ROWS behind it, so the two arms that drop it are the two that KILL the child.
@@ -2633,6 +2732,9 @@ if (NATIVE) {
   ], { stdio: "inherit" });
   if (cc.status !== 0) { console.error("[build] native build FAILED rc=" + cc.status); process.exit(cc.status || 1); }
   console.log("[build] OK -> " + bin + " (both entries: the fixture, and `--abi` over the shipped qjs_* ABI)");
+  /* EVERY STAGE THIS TARGET RUNS, IN ONE LIST, because `report()` exits and a stage that reports alone is a
+     stage that ends the run. This is the whole reason `cold` could not fall through to the native run. */
+  const stages = [];
   /* THE CROSS-SESSION ROUND TRIP: TWO INVOCATIONS OVER ONE SHELF.
    *
    * §Time-travel-resume's whole claim is that the frontier persists as suspended snapshots ACROSS SESSIONS, and
@@ -2681,12 +2783,24 @@ if (NATIVE) {
        nothing at all and `orphansUnmet`, the round trip's own verdict, has never been read by anything. */
     if (!v1.code && !v2.code) console.log("[build] cold round trip (" + kind + ") — " +
                                           coldRoundTrip(v1, v2, store) + " — residue at " + store);
-    report([v1, v2]);
+    /* COLLECTED, NOT REPORTED, and the difference is a whole stage. `report()` ALWAYS exits — both arms end in
+       `process.exit` — so reporting here ended the run, and the native run below was UNREACHABLE FROM `cold`.
+       Not merely on a red cold round trip: on every invocation of it, green included. So `node engine/build.mjs
+       native cold` has never once run the fixture, and the paragraph immediately below is the one that says why
+       that is the defect — "a target that is only built is the excluded test one layer down". The two stages
+       were written months apart and the second never noticed the first could not fall through to it.
+       IT COST A REAL MEASUREMENT: a lane converted 45 probe rows to record-scoped clauses and asked for a run
+       of the fixture to confirm none of them had become a term that can only ever read 0 — the defect that
+       fixture records having had three times — and `native cold` answered with a cold verdict and no fixture at
+       all. The two are INDEPENDENT questions about one binary, so they are two stages of one report, and a red
+       cold round trip must not decide whether the fixture is exercised. */
+    stages.push(v1, v2);
   }
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
-  report([runChild("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", bin, MIN ? ["--min"] : [],
-                   "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault")]);
+  stages.push(runChild("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", bin, MIN ? ["--min"] : [],
+                       "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault"));
+  report(stages);
 }
 
 /* THE WASM LEXBOR, AND IT SITS BELOW `native` FOR THE REASON THE HEADER TWO SCREENS UP ALREADY GIVES.

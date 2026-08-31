@@ -14,6 +14,7 @@
 
 #include "core/fetch/fetch.h"
 #include "core/loader/script_type.h"   /* which of §8.1.4.4's two algorithms runs entry i — see `types` below */
+#include "solver/step_unit.h"          /* the arms of flow_step — EngineStepUnitRuns is one count per arm */
 #include "quickjs.h"
 
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
@@ -998,6 +999,37 @@ long engine_jobs_run(void);
    thousands of reactions and ran none says nothing about whether the pump had nothing to do or was never
    eligible. See the declaration in engine.c for the measurement that made the pair necessary. */
 long engine_units_done(void);
+
+/* ---- THE LADDER'S OWN TRAFFIC — HOW MANY STEPS EACH ARM OF flow_step HAS RUN --------------------------------
+ *
+ * IT IS NOT THE `@COLD` HISTOGRAM AND THE TWO ARE NOT REFINEMENTS OF EACH OTHER. solver/cold.h's `step_units`
+ * is a census of the MEMBERS STANDING at the instant it is taken — one bucket per arm, summing to the frontier
+ * — so its `run-a-task: 0` says nobody is sitting in that arm right now. This is a count of STEPS over the
+ * instance's life, so its `run-a-task: 0` says the ladder has never once reached that arm. Those two zeroes
+ * are the OPPOSITE diagnoses of one symptom — an arm that is never entered against an arm that is entered
+ * constantly and left again before any census — and they take opposite work. A gauge cannot answer the second
+ * question and a lifetime total cannot answer the first, which is why both rows are emitted and neither is
+ * derived from the other.
+ *
+ * IT IS A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing in the engine reads it to decide anything: no
+ * fixpoint over an arm that stopped moving, no no-progress detector, no cap on how often an arm may run, no
+ * seen-set over arms. The counters live in engine.c and say the same thing at the site; it is repeated here
+ * because a header is where the next reader meets the numbers and a lifetime per-arm total is exactly the
+ * shape someone reaches for to build a bound out of.
+ *
+ * A FILLED STRUCT for EngineFrontierCensus's reason and for one more: the array's extent is
+ * solver/step_unit.h's own list, so a caller cannot size it from a second copy of that list and cannot get the
+ * size wrong — there is no length argument to be right about. */
+typedef struct {
+    long steps;              /* scheduler steps: every entry into flow_step, counted at its own entry */
+    long arms[STEP_UNIT_N];  /* …and how many of them ran each arm, in solver/step_unit.h's order. The two sides
+                                are counted at DIFFERENT points on purpose (the entry, and the scheduler's
+                                convergence point after the step returns), so `sum(arms) == steps` is an
+                                assertion about routing rather than an arithmetic identity — engine.c asserts it
+                                at the convergence point, where it is exact and where the offending step is
+                                still in hand. */
+} EngineStepUnitRuns;
+void engine_step_unit_runs(EngineStepUnitRuns *out);
 
 /* ---- THE FRONTIER'S OWN NUMBERS, AS ONE READING ----------------------------------------------------------
  *

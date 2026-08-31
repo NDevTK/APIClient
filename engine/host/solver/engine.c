@@ -5810,6 +5810,54 @@ static int flow_checkpoint_due(const Flow *f) {
    set by the branch that is about to run, so a step with no seam names itself. */
 static StepUnit g_step_unit = STEP_UNIT_NONE;
 
+/* HOW MANY TIMES EACH ARM HAS RUN, over this instance's whole life — and it answers the OPPOSITE question to
+   the row `Flow.step_unit` carries, which is why both exist and neither replaces the other.
+   `Flow.step_unit` is WHERE A MEMBER IS STANDING, so solver/cold.c's histogram over it is a census of the
+   frontier AT THE INSTANT it is taken: `run-a-task: 0` there says nobody is sitting in that arm right now.
+   This is a count of STEPS, so `run-a-task: 0` here says the ladder has never once reached that arm at all.
+   The two zeroes are the two diagnoses a reader has to choose between — "the arm is never entered" against
+   "it is entered constantly and the flow has left it again before every census" — and they take OPPOSITE
+   work: the first is a ladder whose rungs above this one never run out, the second is a member that reaches
+   this rung and cannot get past it. One number could not say which, and the per-member census is the number
+   that could not: it is a gauge, and a gauge read between two steps says nothing about the traffic through a
+   rung a flow does not rest on. That is the axis this file had no instrument for.
+   IT IS A COUNTER FOR REPORTING AND IT IS NEVER A GATE — §NO BOUNDS, said where the counter is because a
+   lifetime per-arm total is exactly the shape the next reader reaches for to build one. Nothing may branch
+   on it: not a fixpoint over "this arm stopped moving", not a no-progress detector, not a cap on how often an
+   arm may run, not a seen-set over arms, not an abandon rule for a member that keeps taking one. Its only
+   consumers are solver/result.c's census and the diagnostics; a consumer that DECIDES on it is the violation,
+   and it is a violation whatever the decision is, because a scheduler that reads this has stopped ordering by
+   value-of-information and started ordering by how often something has already happened.
+   NOT RESET AT A SESSION BOUNDARY, for `g_finished`'s and `g_switches`'s reason exactly: neither is on
+   engine_session_close's path, the host wants the INSTANCE's total, and a counter cleared under
+   engine_sched_begin would report the last session's ladder as the document's. */
+static long g_step_unit_runs[STEP_UNIT_N];
+/* …AND THE STEPS THEMSELVES, COUNTED WHERE THE HISTOGRAM ABOVE IS NOT, which is the whole of what makes the
+   identity between the two an assertion rather than an arithmetic tautology. This is incremented where
+   flow_step RESETS the name — its entry — and the histogram is incremented where the scheduler RECORDS the
+   name, at the convergence point after flow_step has returned. So `sum(g_step_unit_runs) == g_steps` states
+   that every entry into flow_step reached the one point that records its arm. That is true by inspection
+   while there is one call site and one record, and it is exactly what a second call site, a step driven from
+   somewhere else, or an early return added between the two would break — the §AN-ASSERT-THAT-NAMES-A-REMEDY
+   lesson made checkable rather than restated. A total incremented on the line beside the bucket would be
+   equal by construction and would assert nothing at all. */
+static long g_steps;
+/* THE HISTOGRAM'S SUM, for the one assertion that uses it — side-effect-free, as a DCHECK condition must be.
+   NOT WRAPPED IN `#if APICLIENT_DEV`, and the reason is a trap worth stating rather than a preference: a
+   release DCHECKF does not delete its condition, it makes it UNEVALUATED (`(void)sizeof(cond)`, and
+   `APICLIENT_FMT_UNUSED` does the same to the arguments) — which is what keeps `-Wformat` checking an assert's
+   message and keeps a variable used only in one from reading as unused. sizeof still needs the identifier to
+   EXIST, so a dev-only definition would fail to compile in exactly the build where nothing calls it. `static
+   inline` is what makes that cost nothing: no code is emitted where it is never called, and an unused one is
+   not a `-Wunused-function`. */
+static inline long step_unit_runs_total(void)
+{
+    long t = 0;
+    int i;
+    for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_runs[i];
+    return t;
+}
+
 /* NO COMPLETION CROSSES A SCHEDULER BOUNDARY — ONE STATEMENT, ASKED AT EVERY BOUNDARY THERE IS.
  *
  * `rt->current_exception` is per-RUNTIME while a completion is per-EVALUATION (ECMA-262 §6.2.4 The Completion
@@ -5950,6 +5998,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
        reset per step and not per flow because the question is about this step, and a flow that is stepped
        twice through two different arms must read as the second. */
     g_step_unit = STEP_UNIT_NONE;
+    /* AND THE STEP IS COUNTED AT THE SAME LINE THE NAME IS CLEARED, because the two are one statement: an
+       ENTRY has happened and no arm has been named for it yet. The lifetime histogram is counted at the other
+       end (the scheduler's convergence point), so the identity between them is between an entry and a record
+       and can therefore fail; counted together they could not. It is a report and never a bound — nothing
+       reads it to decide anything (see g_step_unit_runs). */
+    g_steps++;
     for (;;) {
         /* ONE ARM PER DISTINCT ANSWER, BEFORE ANYTHING ELSE THIS FLOW COULD DO — because everything else it
            could do consumes the very thing the arm is made of. A peer document's state IS its flows, so a
@@ -6813,6 +6867,25 @@ static int flow_step(JSContext *ctx, Flow *f) {
    life of this engine — one wasm instance is one document, so that is the document's count. */
 static int g_switches = 0;
 int engine_switch_count(void) { return g_switches; }
+
+/* THE LADDER'S OWN TRAFFIC, COPIED OUT WHOLE — see solver/engine.h for what the pair means and why it is not
+   the `@COLD` histogram beside it.
+   COPIED AND NOT POINTED AT, for the reason EngineFrontierCensus is a filled struct: every consumer of this is
+   composing a READING OF AN INSTANT, and a caller holding the array itself would be reading counters that move
+   under it between one row and the next.
+   THE CONSERVATION IS NOT ASSERTED HERE and its absence is deliberate. It is exact only BETWEEN steps, and this
+   is a public entry a host may call wherever its own thread is; asserting it here would fire on a caller that
+   is correct. It is asserted where it IS exact and where the step that broke it is the step that just returned
+   — engine_sched_slice's convergence point. */
+void engine_step_unit_runs(EngineStepUnitRuns *out)
+{
+    int i;
+
+    DCHECK(out != NULL, "the lifetime step histogram was asked for into nothing — a reading that lands nowhere "
+                        "is a reading whose caller cannot have taken it");
+    out->steps = g_steps;
+    for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
+}
 
 /* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY
  * INFERENCE from numbers that do not mean what they were read as.
@@ -7901,6 +7974,33 @@ static int engine_sched_slice(void) {
                    "entry and every exit declares itself, so this is an exit added without a name and the "
                    "member's step-unit row would report whatever the PREVIOUS step did");
             cur->step_unit = g_step_unit;
+            /* AND THE ARM'S LIFETIME COUNT, AT THIS SAME ONE POINT AND FOR THIS SAME REASON. A per-arm
+               increment written into each of the two dozen exits is two dozen places to forget one, and a
+               forgotten one is a silent undercount rather than a crash; here there is nothing per-arm to
+               remember, so an arm added later is counted by the fact that it returned. The line above is
+               WHERE THIS MEMBER IS STANDING and is overwritten at its next step; this is HOW MANY TIMES THE
+               SCHEDULER HAS RUN THIS ARM and is never overwritten. That pair is what separates "the ladder
+               never reaches this rung" from "it reaches it constantly and no member happens to be sitting
+               there when a census is taken" — two readings of one zero that take opposite work.
+               IT DECIDES NOTHING, exactly like the record above it: §NO BOUNDS, and see the declaration. */
+            g_step_unit_runs[g_step_unit]++;
+            /* THE CONSERVATION, ASSERTED AT THE ONE INSTANT IT IS EXACT. flow_step has returned, so every
+               entry counted at its reset has now been recorded here — and the two are counted at DIFFERENT
+               places precisely so that this can fail. It is asked HERE and not at the accessor that publishes
+               the numbers for the ordinary reason a bad state is caught where it is born: a reader composing
+               the census would learn only that the totals disagree, with the step that broke them long gone,
+               while here the step that failed to record itself is the step that has just returned and the
+               flow it ran is in hand. It is also the one place the identity is exact — the accessor is a
+               public entry a host may call at any point, and between the entry and the record it is off by
+               one BY DESIGN. */
+            DCHECKF(step_unit_runs_total() == g_steps,
+                    "the lifetime step histogram does not account for every scheduler step (%ld arm counts "
+                    "against %ld entries into flow_step) — the entry is counted where flow_step resets the "
+                    "arm name and the arm is counted here, so a difference is a step that entered and did NOT "
+                    "reach this line: a second caller of flow_step, a return added between the call and this "
+                    "record, or a step driven from outside engine_sched_slice. Every reading composed from "
+                    "the histogram is then about a ladder that is not the one this document climbed",
+                    step_unit_runs_total(), g_steps);
             engine_reclaim_set(prev_reclaim);
             ENGINE_NO_STRAY(ctx, "post-step: the arm flow_step just ran", r);
             /* HTML §8.1.7.3's END OF A MICROTASK CHECKPOINT. The flow has run a unit of work — a script, a

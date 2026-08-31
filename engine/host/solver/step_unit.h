@@ -24,6 +24,14 @@
  * assertion at the scheduler's convergence point able to fire: an arm that returns without naming itself
  * leaves `none` standing where a step just happened, and that crashes by name instead of silently attributing
  * the step to whatever the PREVIOUS one did.
+ * SO ITS ROW READS DIFFERENTLY IN THE TWO HISTOGRAMS KEYED ON THIS LIST, and a reader who does not know that
+ * will chase it. In the PER-MEMBER census (solver/cold.h's `step_units`) `none` is a real population: the
+ * members that have never been handed the thread. In the LIFETIME one (solver/engine.h's EngineStepUnitRuns,
+ * emitted as `stepUnitRuns`) it is ZERO for the whole life of every instance, because that census counts
+ * RECORDED steps and the convergence point asserts a recorded step is never `none`. That zero is the assert
+ * restated rather than a measurement, and the row is emitted anyway: both histograms are expansions of THIS
+ * list, and a row dropped from one of them for being structurally zero would make the two key sets differ,
+ * which is a difference every reader of either would then have to know about.
  *
  * THE PARTITION IS COMPLETE ON PURPOSE — every exit of flow_step is one of these, including the three that
  * return OWED without doing any work (`host-blocked`, `await-owed-reply`, `await-peer-operation`) and the one

@@ -500,6 +500,20 @@ char *result_swap_json(void) {
    NO `orphans` ROW: the count of drives this session STARTED is `_orphansDriven` on the document already, and
    two spellings of one number in one document is the drift the record-field contract exists to catch.
 
+   `steps` AND `stepUnitRuns` ARE NOT A SECOND SPELLING OF `stepUnits`, WHICH IS THE ONE THING A READER MUST NOT
+   TAKE THEM FOR. `stepUnits` is a GAUGE — the members standing in each arm at the instant this document is
+   composed — so its zero says nobody is sitting there now. `stepUnitRuns` is a LIFETIME COUNT of the steps this
+   instance has run through each arm, so its zero says the ladder has never once reached that arm, and `steps`
+   is the total those arms partition. The pair is the axis the census had no instrument for: with the gauge
+   alone, "the ladder is never entered below rung N" and "it is entered constantly and no member is resting
+   there when a census happens to be taken" are ONE zero, and they are opposite diagnoses with opposite fixes.
+   Both rows are therefore emitted and neither is derived from the other — a derived half is a half that cannot
+   fail, which is the same argument `coldPartition` makes about `finished - finishedCands` in engine/build.mjs.
+   THEY ARE A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing in the engine reads them to decide anything, and
+   the counters say so at their declaration in solver/engine.c; it is worth saying here too, because the census
+   is where a reader MEETS the numbers and a lifetime per-arm total is exactly the shape someone reaches for
+   when they want a no-progress detector.
+
    `hostAnswersExtra` IS BESIDE `hostAnswered` AND IS NOT PART OF IT. One rendezvous has one answer per peer
    TIMELINE and every one of them is true, but only the FIRST settles the ask; the rest each fork an arm and
    unblock nothing. They were being added into `hostAnswered`, which made a peer holding four timelines read as
@@ -524,54 +538,101 @@ char *result_swap_json(void) {
    the worst case, so the widest possible census fills the buffer exactly and any miscount at all is a
    truncation rather than a near miss. That is the intent. RE-DO THE COUNTS WHEN YOU ADD A ROW: they are three
    integers and there is no way to be nearly right. */
+/* ONE ROW-COMPOSER FOR THE TWO PER-ARM HISTOGRAMS THIS CENSUS CARRIES. They differ in exactly one thing — the
+   POPULATION they are counts of — and not at all in how a row is spelled, so a second copy of the loop would be
+   a second speller of solver/step_unit.h's row format, which is the drift that file's own "THE ONE LIST"
+   paragraph exists to prevent one level down.
+   `what` NAMES THE HISTOGRAM IN THE WIDTH ASSERT, and it is a parameter rather than a sentence because a
+   DCHECK stamps the line it is WRITTEN at: a shared helper's message reports this function for both callers, so
+   "the histogram did not fit" would name an action with no object (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY).
+   With two callers that is cheap to fix and it is fixed rather than deferred, because the third caller is the
+   one who would have paid for it.
+   IT RETURNS THE SUM AND ASSERTS NOTHING ABOUT IT. The two callers' identities are DIFFERENT — one sums to the
+   frontier's live members, the other to the scheduler's step count — so the comparison belongs at each caller
+   where its own other side is in hand, and a shared assert would have to be given the answer it is checking. */
+static long cold_hist_json(char *buf, size_t cap, const long *counts, const char *what) {
+    int hi = 0, k;
+    long seen = 0;
+
+    DCHECK(buf != NULL && counts != NULL, "a step-unit histogram was composed from nothing or into nothing");
+    buf[hi++] = '{';
+    for (k = 0; k < STEP_UNIT_N; k++) {
+        int w = snprintf(buf + hi, cap - (size_t)hi, "%s\"%s\":%ld",
+                         k ? "," : "", step_unit_name((StepUnit)k), counts[k]);
+        DCHECKF(w > 0 && (size_t)w < cap - (size_t)hi,
+                "the `%s` step-unit histogram did not fit the width its own list derives — "
+                "STEP_UNITS_JSON_MAX is computed from solver/step_unit.h's names, so a row that does not fit "
+                "means a count wider than a `long`'s 20 digits or a name that reached this buffer from "
+                "somewhere else", what);
+        hi += w;
+        seen += counts[k];
+    }
+    buf[hi++] = '}';
+    buf[hi] = 0;
+    return seen;
+}
+
 char *result_cold_json(void) {
     /* The format string's widest expansion, as terms rather than as a sum somebody typed. `COLD_LITERAL` is the
        string with every conversion specifier removed. */
-    enum { COLD_LITERAL = 712, COLD_LONGS = 48, COLD_INTS = 4 };
+    enum { COLD_LITERAL = 737, COLD_LONGS = 49, COLD_INTS = 4 };
     ColdCensus c;
-    /* THE PER-ARM HISTOGRAM, COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Its width is
-       STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens this
+    /* THE TWO PER-ARM HISTOGRAMS, EACH COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Their width is
+       STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens both
        automatically — which is the one thing the hand-counted terms above must not be asked to do.
+       THEY ARE TWO ROWS BECAUSE THEY ARE TWO QUESTIONS, and this is the whole reason the second exists.
+       `hist` is a census of the MEMBERS STANDING at this instant, so a zero there says nobody is sitting in
+       that arm right now; `runs` is a count of the STEPS this instance has run, so a zero there says the
+       ladder has never once reached that arm. A reader holding only the first cannot tell "the arm is never
+       entered" from "it is entered constantly and left again before every census" — opposite diagnoses with
+       opposite fixes — and a reader holding only the second cannot tell where the frontier is parked. Neither
+       is derivable from the other and neither may be defaulted into the other.
        EVERY ROW IS EMITTED, INCLUDING THE ZEROES, and that is the contract rather than a courtesy: an ABSENT
        row and a ZERO row are different facts (this composer changed, against this frontier had nobody in that
        arm), and a reader that cannot tell them apart is the defect that made `@RESUMED` read 0 for every
        session there has ever been. The consumer asserts the row's presence and reads its value; neither side
        may default the other's hole. */
     char hist[STEP_UNITS_JSON_MAX];
+    char runs[STEP_UNITS_JSON_MAX];
     ColdResumed resumed;
     EngineFrontierCensus e;
-    /* …plus the histogram's own width, which is the ONE term here that is not a hand count: it is an
+    EngineStepUnitRuns r;
+    /* …plus the two histograms' own width, which is the ONE term here that is not a hand count: it is an
        expansion of solver/step_unit.h's list, so adding an arm cannot silently truncate this document. */
-    size_t n = COLD_LITERAL + COLD_LONGS * 20 + COLD_INTS * 11 + STEP_UNITS_JSON_MAX + 1;
+    size_t n = COLD_LITERAL + COLD_LONGS * 20 + COLD_INTS * 11 + 2 * STEP_UNITS_JSON_MAX + 1;
     char *out;
     int ran;
     int m;
 
     cold_census(&c);
+    engine_step_unit_runs(&r);
     {
-        int hi = 0, k;
-        long seen = 0;
-        hist[hi++] = '{';
-        for (k = 0; k < STEP_UNIT_N; k++) {
-            int w = snprintf(hist + hi, sizeof hist - (size_t)hi, "%s\"%s\":%ld",
-                             k ? "," : "", step_unit_name((StepUnit)k), c.step_units[k]);
-            DCHECK(w > 0 && (size_t)w < sizeof hist - (size_t)hi,
-                   "the step-unit histogram did not fit the width its own list derives — STEP_UNITS_JSON_MAX "
-                   "is computed from solver/step_unit.h's names, so a row that does not fit means a count "
-                   "wider than a `long`'s 20 digits or a name that reached this buffer from somewhere else");
-            hi += w;
-            seen += c.step_units[k];
-        }
-        hist[hi++] = '}';
-        hist[hi] = 0;
+        /* THE SUMS ARE TAKEN OUTSIDE THE ASSERTS AND NOT INSIDE THEM, because the composition is the WORK and a
+           DCHECK's condition is compiled out in release: a `DCHECK(cold_hist_json(...) == x)` would leave both
+           buffers unwritten in exactly the build that ships, and the document would carry whatever the stack
+           held. A DCHECK condition must be side-effect-free, so the effect happens here and only the
+           comparison is asserted. */
+        long standing = cold_hist_json(hist, sizeof hist, c.step_units, "stepUnits");
+        long stepped  = cold_hist_json(runs, sizeof runs, r.arms, "stepUnitRuns");
         /* THE PARTITION IS THE POINT, SO IT IS ASSERTED. Every live member carries exactly one arm, so these
            counts SUM to the frontier — an inequality is the walk having missed a member or a member having
            been counted twice, and either makes every reading composed from this row a statement about a
            frontier that is not the one standing. */
-        DCHECK(seen == c.flows,
+        DCHECK(standing == c.flows,
                "the step-unit histogram does not account for every member of the frontier — each live flow "
                "carries exactly one arm, so a total that is not `flows` means the census walk and the "
                "histogram disagree about who is standing");
+        /* AND THE LIFETIME HISTOGRAM'S OWN IDENTITY, WHICH IS A DIFFERENT ONE AND IS ASKED TWICE ON PURPOSE.
+           engine.c asserts it at the scheduler's convergence point, where it is exact and where the step that
+           broke it has just returned; this is the other side of the same contract, at the boundary the number
+           CROSSES — the census composer. A difference visible here and not there is a row lost between the
+           accessor and this document rather than a step that failed to record itself, and those are two
+           different files to open. */
+        DCHECK(stepped == r.steps,
+               "the lifetime step histogram does not account for every scheduler step — the arms are counted "
+               "at the convergence point and the steps at flow_step's entry, so a total that is not `steps` "
+               "means one of the two stopped being written, and every reading of which rung the ladder stops "
+               "at is then about a ladder this document did not climb");
     }
     cold_resumed(&resumed);
     engine_frontier_census(&e);
@@ -618,6 +679,7 @@ char *result_cold_json(void) {
                  "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                  "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
+                 "\"steps\":%ld,\"stepUnitRuns\":%s,"
                  "\"stepUnits\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
@@ -637,6 +699,7 @@ char *result_cold_json(void) {
                  c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
+                 r.steps, runs,
                  hist);
     DCHECK(m > 0 && (size_t)m < n,
            "the cold/frontier census did not fit its buffer — a truncation here loses the closing brace, so "

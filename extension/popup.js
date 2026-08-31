@@ -1399,8 +1399,20 @@ function renderEngineRuns() {
              "an engine run record reached the popup with no `" + k + "` census — solver/result.c composes " +
              "it into every document it builds and bridge.js asserts its shape before relaying it whole, so " +
              "a record that has an @RESULT document and no `" + k + "` is that relay broken");
+      /* A ROW IS A NUMBER OR A HISTOGRAM, AND `String()` IS WRONG FOR THE SECOND — it renders `[object
+         Object]`, which is a measurement made unreadable rather than a measurement missing, so nothing in the
+         view says the row broke. `_cold` carries per-arm tables of the scheduler ladder (solver/step_unit.h):
+         `stepUnits` is where the frontier's members are STANDING and `stepUnitRuns` is how many steps this
+         instance has RUN through each arm — the pair a reader needs to tell "the ladder never reaches that
+         rung" from "it reaches it constantly and nobody is resting there". Rendered as its own buckets, still
+         with no name list here: the keys are the census's own, exactly as the flat rows are, so an arm added
+         to solver/step_unit.h reaches this reader unedited. bridge.js asserts the shape before relaying it, so
+         this view renders rather than re-checking. */
+      const cell = (v) => (v !== null && typeof v === "object"
+        ? Object.keys(v).map((a) => esc(a) + " " + esc(String(v[a]))).join(", ")
+        : esc(String(v)));
       return `<span class="deep-label">${esc(label)}: `
-           + Object.keys(m[k]).map((f) => esc(f) + " " + esc(String(m[k][f]))).join(" · ") + `</span>`;
+           + Object.keys(m[k]).map((f) => esc(f) + " " + cell(m[k][f])).join(" · ") + `</span>`;
     });
     DCHECK(m.forkAt && typeof m.forkAt === "object",
            "an engine run record reached the popup with no `forkAt` table — solver/decide.c composes it into " +

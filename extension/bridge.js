@@ -283,11 +283,40 @@ function assertResultDocument(r) {
            "(extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed " +
            "under this seam. NEVER SOFTEN IT INTO A DEFAULT — these are the only readings this zone has ever " +
            "been handed of what the pager, the heap and the delta chains are doing on a real page");
-    for (const f of Object.keys(r[k]))
-      DCHECK(typeof r[k][f] === "number" && Number.isFinite(r[k][f]),
-             "the engine's " + k + " census carries a non-finite `" + f + "` — every row of it is a count, a " +
-             "byte figure or a per-switch mean, and a NaN reaching a reader makes every comparison against " +
-             "it false, which is the same silent failure asserted for the WFQ census one block up");
+    /* A ROW IS A NUMBER OR A HISTOGRAM, AND THE SECOND SHAPE IS NOT A RELAXATION — it is a shape the engine
+       already emits and this check did not know about. `_cold` carries per-arm histograms of solver/step_unit.h's
+       ladder (`stepUnits`, the members standing in each arm; `stepUnitRuns`, the steps this instance has run
+       through each), and a histogram is exactly what a bucket-per-arm reading has to be: a flat number could
+       only carry one arm, and one row per arm would put solver/step_unit.h's list into this file, which is the
+       second copy the "ONE LOOP AND NO NAME LIST" paragraph above refuses. So the contract is stated for both
+       shapes and NEITHER is defaulted: a histogram's own values are asserted finite one level down, so a NaN
+       inside one is caught exactly as a NaN beside one is.
+       IT IS ASSERTED AND NOT WAIVED because the failure it prevents already happened in the other direction:
+       the engine gained the first of these rows and this loop, which knew only about numbers, would have
+       aborted the trusted zone on EVERY document the moment a build shipped it — a cross-boundary diff whose
+       JS half is live on write and whose C half is live only after a build (CLAUDE.md §A-CROSS-BOUNDARY-DIFF).
+       An empty histogram is refused for the census's own reason: every arm is emitted including the zeroes, so
+       `{}` is the composer having stopped listing them and not a ladder nobody climbed. */
+    for (const f of Object.keys(r[k])) {
+      const v = r[k][f];
+      const hist = v !== null && typeof v === "object" && !Array.isArray(v);
+      DCHECK(hist || (typeof v === "number" && Number.isFinite(v)),
+             "the engine's " + k + " census carries a `" + f + "` that is neither a finite number nor a " +
+             "per-arm histogram — every row of it is a count, a byte figure, a per-switch mean or a bucket " +
+             "table keyed on solver/step_unit.h's arms, and a NaN reaching a reader makes every comparison " +
+             "against it false, which is the same silent failure asserted for the WFQ census one block up");
+      if (!hist) continue;
+      DCHECK(Object.keys(v).length > 0,
+             "the engine's " + k + " census carries an EMPTY `" + f + "` histogram — solver/result.c emits " +
+             "every arm of solver/step_unit.h's list on every census, zeroes included, so an empty table is " +
+             "that composer having stopped listing them rather than a run in which no arm was ever taken. An " +
+             "absent bucket and a bucket that reads 0 are different facts and this zone will not average them");
+      for (const a of Object.keys(v))
+        DCHECK(typeof v[a] === "number" && Number.isFinite(v[a]),
+               "the engine's " + k + " census carries a non-finite `" + f + "." + a + "` — a histogram row is " +
+               "a count of members or of steps, and a NaN in one makes every sum taken over the table false " +
+               "while each other row still looks like a measurement");
+    }
   }
   for (const k of ["_cold", "_heap", "_swap"])
     DCHECK(Object.keys(r[k]).length > 0,
