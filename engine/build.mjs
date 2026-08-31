@@ -582,8 +582,9 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        outranked at all. Those two take opposite work and read identically without each other.
                        `visZero` is the count `visMin` cannot give: how many members have completed NO unit of
                        work, which is the population whose optimism bonus is at its undecayed maximum. It is
-                       NOT `unrun` — that row is `cpu == 0`, which flow_credit_emit RESETS, so a member that
-                       has run and emitted is in `unrun` with visits to its name. */
+                       NOT `unrun` — that row is ZERO OWN SILENCE, which an emission by any arm of a member's
+                       fork family RESETS for the whole family at once, so a member that
+                       has run and whose account emitted is in `unrun` with visits to its name. */
                     "visZero", "jobsReady", "jobsFramed", "jobsOwed", "jobWGap",
                     /* AND THE ONE WORD OF §scheduler'S RAZOR THIS READER COULD NOT SPEAK. It forbids a resume
                        that "drops, starves, skips, reorders, or forgets ANY flow", and STARVES had no row: the
@@ -824,7 +825,8 @@ function wfqReading(out) {
      how much of the frontier sits at the top of it; `visZero` is that population, and where it is the WHOLE
      frontier the bonus is one flat maximum and orders nothing — which is the same arithmetic as `rangeUcb: 0`
      and the reading a range alone leaves the reader to guess at. It is not `unrun`: flow.h says that row is
-     `cpu == 0` and flow_credit_emit RESETS it, so a member that has run and emitted is counted there with
+     ZERO OWN SILENCE and an emission by any arm of a member's fork family RESETS it for the whole family, so a
+     member that has run and whose account emitted is counted there with
      visits to its name, and taking the two for one population reads a busy frontier as an idle one. */
   const ucb = w.visZero === w.members
     ? `every member has completed no unit of work, so all carry the same undecayed maximum bonus and the ` +
@@ -897,7 +899,7 @@ function wfqReading(out) {
     })(),
     text: `@WFQ: ${w.members} members, account reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ` +
           `${w.valZero} on accounts at 0, ${w.selfEmit} emitted something themselves, ` +
-          `${w.unrun} never charged for the thread; ` +
+          `${w.unrun} at zero own silence (never charged since their family last emitted); ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
           `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate; ` +
           `${cand}; ${jobs}; ` + terms,

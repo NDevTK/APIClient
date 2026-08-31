@@ -253,7 +253,8 @@ static char *errs_json_array(void) {
    AND `neverPicked`/`neverPickedGap` ARE THE SAME PAIR ASKED OF THE ONE WORD IN §scheduler'S RAZOR THAT NO
    OTHER ROW HERE CAN ANSWER. The razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY
    flow"; every row above that looks like it names the starved population is a TERM OF THE WEIGHT, and
-   flow_credit_emit resets all of them — `unrun` is `cpu == 0` and an emission writes that zero, `visZero` is
+   flow_credit_emit resets all of them — `unrun` is zero own silence and an emission by ANY arm of the
+   member's family writes that zero for the whole family at once, `visZero` is
    `visits == 0` and an emission writes that too, and flow_pick's own `unrun` needs all three at zero, which
    its own comment says is non-empty only within one quantum of an emission. So each of them counts a member
    that has just PRODUCED something as one that has never run, and on a frontier that has gone quiet none of

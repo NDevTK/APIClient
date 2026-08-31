@@ -112,7 +112,7 @@ typedef struct Flow {
        it is a rank again, and a rank a fork copies is the defect above. */
     double val;
     /* THE AGING TERM, AND ITS UNIT IS THE WHOLE OF WHETHER THE TERM WORKS. Thread time in MICROSECONDS burned
-       since this flow's last emit — never a step/opcode/visit count. A count is not commensurate with `val`
+       since this flow's FORK FAMILY last emitted — never a step/opcode/visit count. A count is not commensurate with `val`
        above: a step used to be a whole drain and became one unit of work, so the same charge billed a flow the
        same amount for twelve milliseconds of execution as for advancing a script index, and §scheduler's
        sentence ("a monopolizer that burns CPU without emitting sinks below productive AND unrun flows") could
@@ -135,8 +135,20 @@ typedef struct Flow {
        FLOW_AGE_QUANTUM), so a flow tied with an unrun sibling on reward and bonus hands over after ONE quantum
        — which is the queue rotating — and a flow that has emitted V findings holds the thread for V seconds of
        silence before that sibling reaches it, which is the rate doing what it is priced for. `visits` below is the optimism term's quantity now; this
-       one is the aging's own half, and the family's is the other. Both reset at flow_credit_emit, which is what
-       makes them AGING (silence) rather than lifetime service.
+       one is the aging's own half, and the family's is the other. Both are reset by an emission credited to
+       this flow's ACCOUNT, which is what makes them AGING (silence) rather than lifetime service.
+       IT IS A QUANTITY ONLY BESIDE `cpu_gen`, AND THAT IS THE CORRECTION THIS FIELD CARRIES. It used to be the
+       burn since THIS FLOW's own last emission — a strictly longer window than the family's, since a flow's own
+       emission is one of its family's — and the two halves were summed into one notch and weighed against a
+       reward credited over the family's window. That is a unit error rather than a policy, and it had a
+       population: this field is written only for the flow HOLDING THE THREAD, so a member the scheduler has
+       never dispatched carried whatever its parent had burned at the fork for the life of the frontier, while
+       the parent's was forgiven at the parent's next emission. The arm's deficit was then repayable only by the
+       dispatch the deficit itself was foreclosing — §scheduler's razor's STARVES, and not a deprioritisation.
+       READ IT THROUGH flow.c's flow_own_silence AND NEVER RAW. The field is a reading only while `cpu_gen`
+       matches the account's `emit_gen`; past an emission it holds a previous window's arithmetic. Every reader
+       in the tree goes through that function — the weight, both notches, the census rows, flow_pick's guard,
+       the arrival rule — so the field and its mark cannot be separated by an edit that touches one of them.
        WHY BOTH HALVES AND NOT ONE. The family charge alone cannot order anything WITHIN a family, because every
        arm reads the identical number — and a real page's whole frontier is one family (every flow descends from
        the boot flow through flow_fork_inherit), so §scheduler's "a monopolizer that burns CPU without emitting
@@ -145,6 +157,20 @@ typedef struct Flow {
        chain one accounting unit against OTHER families (see `family` below, and the 8910-against-1124 reading
        that put it there). Neither replaces the other. */
     int64_t cpu;
+    /* WHICH SILENCE WINDOW `cpu` ABOVE IS A READING OF — this flow's copy of its account's `emit_gen`, and the
+       half of that quantity without which the other half is a number rather than a measurement.
+       IT IS INHERITED AT A FORK exactly as `cpu` is, and for the identical reason: an arm is its parent's path
+       with one more arm on it, so it stands at the parent's silence in the parent's window. Copying the burn
+       and not the mark would make an arm of a just-emitted parent read that parent's PREVIOUS window's burn as
+       its own — a fork carrying a debt the parent had already been forgiven — and flow_fork_inherit's
+       rank-neutrality equality is what fires on it.
+       WHY A GENERATION AND NOT A WALK. An emission forgives the whole account's window, so every member of the
+       family must read zero own-silence from that instant; a frontier reaches thousands of members and
+       flow_weight is O(1) by construction (it is evaluated inside DCHECK conditions, where a walk that
+       compresses is forbidden), so the forgiveness is one increment on the account and a comparison at each
+       read. The normalisation of the stale field happens where the flow is CHARGED (flow.c's
+       flow_age_running), which is a write site already and where the write is observationally a no-op. */
+    uint64_t cpu_gen;
     /* §scheduler'S "visits", WHICH IS A COUNT OF COMPLETED UNITS OF WORK AND NOT A CLOCK — the optimism term's
        whole quantity. A flow is credited a visit when a scheduler step leaves it BETWEEN units: not inside a
        program and holding no parked continuation, which is HTML §8.1.4.4 "Calling scripts"'s "if the JavaScript
@@ -163,18 +189,28 @@ typedef struct Flow {
        the reactions run. It is not a job priority and there is no job in it: the term counts units of work, and
        a program is one.
        INHERITED AT A FORK for the same reason `val` and `cpu` are — an arm has, by construction, completed every
-       unit its parent completed before the branch — and RESET BY AN EMISSION for the same reason `cpu` is: a
-       flow that just produced something is not one the frontier needs protecting from. flow_fork_inherit's
-       rank-neutrality DCHECK is what forces both, and it fires the moment either is forgotten. */
+       unit its parent completed before the branch — and RESET BY AN EMISSION on the reasoning that a flow that
+       just produced something is not one the frontier needs protecting from. flow_fork_inherit's
+       rank-neutrality DCHECK is what forces the inheritance, and it fires the moment it is forgotten.
+       THE RESET IS PER MEMBER AND IT IS THE ONE TERM OF THE WEIGHT THAT IS STILL SCOPED THAT WAY, which is
+       worth stating beside `cpu` rather than left to be re-derived, because the two used to be reset together
+       and no longer are. `cpu` above is now forgiven for the whole ACCOUNT at an emission (FlowAcct's
+       `emit_gen`) because it is weighed against a reward the account earns; this one is written to zero on the
+       EMITTER alone, so within a family an arm frozen at a count of V stands `1 - 1/(1+V)` behind the flow that
+       forked it, repayable at FLOW_AGE_RATE by that flow's own silence — a priced deficit, and not the
+       unrepayable one the own-silence half used to be. Whether an emission should move this term at all is a
+       question about what a UCB count MEANS and is not settled by this sentence; what is settled is that the
+       two scopes are different on purpose and that a reader may not infer one from the other. */
     int64_t visits;
     /* HOW MANY TIMES THE SCHEDULER HAS HANDED THIS MEMBER THE THREAD — a CENSUS quantity and never a rank, in
        the same class as `val` beside it: it is not read by flow_weight, it is not inherited at a fork, and it
        is not reset by anything. It exists because §scheduler's word for the state the razor forbids is
        STARVES, and no other field in this struct can name the population that sentence is about.
-       EVERY CANDIDATE FOR THAT ROLE IS A TERM OF THE WEIGHT, AND flow_credit_emit RESETS ALL OF THEM. `cpu`
-       goes to 0 on an emission, so the census row built on it counts a flow that has just produced something
-       (build.mjs's reader says so in as many words); `visits` goes to 0 on an emission, so "completed no unit
-       of work" counts it too; the family notch goes to 0 on any arm's emission, so flow_pick's own `unrun`
+       EVERY CANDIDATE FOR THAT ROLE IS A TERM OF THE WEIGHT, AND flow_credit_emit RESETS ALL OF THEM. The
+       own-silence half goes to 0 for every member of the emitting family, so the census row built on it counts
+       a flow that has just produced something AND every arm standing beside it (build.mjs's reader says so in
+       as many words); `visits` goes to 0 on the emitter, so "completed no unit of work" counts it too; the
+       family notch goes to 0 on any arm's emission, so flow_pick's own `unrun`
        population — every non-reward term at zero — is documented at its site as non-empty only within one
        quantum of an emission, which is why all three of its §ONE-WFQ guards short-circuit to vacuity on
        exactly the frontier where a member is being starved. A count of DISPATCHES is the one statement none of
@@ -1010,8 +1046,14 @@ typedef struct {
                           account an ancestor filled. Zero here while `finished` climbs is work that advances no
                           statement. It is a plain test and no longer a subtraction, because nothing is
                           inherited to subtract. */
-    long unrun;        /* members with cpu == 0 — never charged for the thread, or emitted since they last
-                          were. IT IS NOT flow_pick'S OWN DEFINITION, which is what this row used to claim: the
+    long unrun;        /* members standing at ZERO OWN SILENCE (flow.c's flow_own_silence) — never charged for
+                          the thread since their fork family last emitted. It is that reading and NOT the raw
+                          `Flow.cpu`, and the difference is what this row was measured being wrong about: read
+                          off the field it was ZERO at every one of 71 censuses on a frontier that reached 3480
+                          members, because a fork copies the parent's burn and nothing but a dispatch ever
+                          cleared it. It counts a member of a family that has just PRODUCED as one that has
+                          never run, which is why `never_picked` below exists.
+                          IT IS NOT flow_pick'S OWN DEFINITION, which is what this row used to claim: the
                           pick's `unrun` is the population whose weight is at least 1.0, and that needs every
                           term of the weight at zero (visit count, own service, family service), not one of
                           them. This is the broader set on purpose — read against `vis_max` below it separates

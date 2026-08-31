@@ -100,6 +100,36 @@ typedef struct FlowAcct {
        passed. Neither scope can do the other's job, which is the same sentence flow_silence_notch already
        makes about the two halves of the aging. */
     double val;
+    /* WHICH SILENCE WINDOW THIS ACCOUNT IS CURRENTLY IN — bumped by every emission credited here, and read by
+       nothing except `Flow.cpu_gen` beside it. It is the OTHER half of the reset `fam_us` above performs, and
+       it exists because the aging term has two halves that were measured over TWO DIFFERENT WINDOWS while being
+       SUMMED into one notch and weighed against ONE reward.
+       WHY THAT IS A UNIT ERROR AND NOT A POLICY. `fam_us` is the family's burn since ANY arm of it last emitted;
+       `Flow.cpu` was this flow's burn since ITS OWN last emission, which is a strictly LONGER window, because a
+       flow's own emission is also one of its family's. The reward those two are subtracted from is the FAMILY's
+       (`val` above), credited over the family's window — so the own half was a debt denominated in a window the
+       income could not cover, and for one population it could never be retired at all: `Flow.cpu` is written
+       only for the flow HOLDING THE THREAD, so a member the scheduler has never dispatched carries whatever its
+       parent had burned at the fork, forever, while the parent's is forgiven at the parent's next emission.
+       The arm is then permanently behind its own parent by `floor(parent_cpu_at_fork / S) * FLOW_AGE_QUANTUM`,
+       for thread time the arm never consumed, repayable only by being dispatched — which is the thing it is
+       being denied. That is §scheduler's razor's STARVES: not a deprioritisation, a debt whose only currency is
+       the dispatch it forecloses.
+       MEASURED, on the build smoke fixture, over the run's 71 censuses: `unrun` — the count of members standing
+       at `cpu == 0` — was ZERO at every one of them, on a frontier that reached 3480 members; `neverPicked`
+       reached 943 with the best of them 0.011 from the front of the order, and sat pinned at ~819 across a
+       dozen consecutive censuses in which the frontier grew by 437 and every one of those newcomers was
+       dispatched. Because `unrun` is also the population flow_pick's two ordering guards are gated on, both of
+       them short-circuited to vacuity at every pick of the entire run.
+       SO THE OWN HALF IS READ OVER THE FAMILY'S WINDOW TOO, which is what this generation makes O(1). A member
+       whose `cpu_gen` does not match this counter has burned nothing since the window opened, so its own
+       silence IS zero and no walk of the family is needed to say so. The two halves are then one quantity read
+       at two scopes — which is what flow_silence_notch already claimed of them — rather than two clocks with
+       two epochs.
+       uint64 and never wrapped: one increment per emitted finding cannot reach 2^64 in any session, and a wrap
+       would alias a stale mark onto the live generation, which reads a frozen silence as a current one and
+       restores the exact defect this field removes. */
+    uint64_t emit_gen;
     /* THE CENSUS'S MARK, AND IT IS HERE BECAUSE A FAMILY HAS NO MEMBER OF ITS OWN TO BE COUNTED THROUGH. The
        census reaches families only via their arms, so counting DISTINCT ones out of one walk of the frontier
        is a set problem, and the set's identity is this NODE'S ADDRESS rather than any value it holds — two
@@ -175,6 +205,25 @@ static void acct_depart(Flow *f) {
    assertion in this file mutate the structure it is asking about. */
 static int64_t acct_family_us(const Flow *f) {
     return f->family ? f->family->fam_us : 0;   /* departed: its node is gone and so is its rank */
+}
+
+/* …AND THIS ONE FLOW'S OWN SHARE OF THAT SAME WINDOW — the aging term's other half, read over the family's
+   silence window rather than over the flow's own, for the reason FlowAcct's `emit_gen` gives. `Flow.cpu` is a
+   reading only while `cpu_gen` matches the account's generation; past an emission the field holds a stale
+   window's arithmetic and the answer is ZERO, because a flow that has not been charged since the window opened
+   has burned nothing in it.
+   IT IS THE ONE PLACE `Flow.cpu` MAY BE READ AS A QUANTITY. Every other site — the weight, both notches, the
+   census rows, flow_pick's guard, the arrival rule — goes through here, so the field and its generation cannot
+   be separated by an edit that touches only one of them. Reading the raw field instead is exactly the defect:
+   it charges a member for thread time it never consumed and that no emission of its family can forgive.
+   READ-ONLY, with no lazy normalisation, because flow_weight calls this once per member per pick and
+   flow_weight is evaluated inside DCHECK conditions — a write here would make every assertion in this file
+   mutate the structure it is asking about. The normalisation happens where the flow is CHARGED
+   (flow_age_running), which is a write site already, and it is observationally a no-op: it writes the field to
+   the value this function was already returning for it. */
+static int64_t flow_own_silence(const Flow *f) {
+    if (!f->family) return 0;                   /* departed: its node is gone and so is its rank */
+    return f->cpu_gen == f->family->emit_gen ? f->cpu : 0;
 }
 
 /* …AND THE REWARD THAT SILENCE IS SUBTRACTED FROM, read through the SAME pointer for the same reason — see
@@ -278,8 +327,7 @@ void flow_credit_emit(double v) {
        ancestor's findings. It is never copied, never inherited and never read by flow_weight, which is what
        keeps it a measurement rather than a rank. */
     g_running->val += v;
-    g_running->cpu = 0;   /* emitted -> this flow's own half of the aging is forgiven with the family's below */
-    /* …AND THE OPTIMISM TERM'S OWN QUANTITY, which is what the line above used to be doing under a comment that
+    /* …AND THE OPTIMISM TERM'S OWN QUANTITY, which is what a per-flow `cpu = 0` here used to be doing under a comment that
        said so ("a fresh visit count") while `cpu` was a clock. A flow that has just produced something is not
        one the frontier needs protecting from, so it is restored to the full bonus exactly as a never-run flow
        carries it — and it then leads by its REWARD, which is the term that is supposed to decide between two
@@ -287,6 +335,26 @@ void flow_credit_emit(double v) {
        decays monotonically for the whole session and the only thing keeping it in front is `val`, so the moment
        it stops emitting it falls behind every arm it forked while it was working. */
     g_running->visits = 0;
+    /* …AND THE AGING, BOTH HALVES OF IT, IN ONE STATEMENT ABOUT THE ACCOUNT. This used to be two: `fam_us = 0`
+       here and `g_running->cpu = 0` above it, and the pair was described as "deliberately no ordering between
+       the resets — a sibling's emission forgives the family while this flow's own `cpu` stands, and that is the
+       policy rather than a drift". THAT ARGUMENT IS RETIRED, and FlowAcct's `emit_gen` carries the refutation:
+       the two halves are SUMMED into one notch and weighed against ONE reward, and that reward is the FAMILY's,
+       so a debt measured over a window the family's income does not cover is a unit error rather than a policy.
+       Its consequence was a population, not a rounding difference: `Flow.cpu` is written only for the flow
+       holding the thread, so a member the scheduler has never dispatched could never reach either reset, and it
+       carried its parent's fork-instant burn as a permanent deficit against every arm that did emit.
+       ONE EMISSION, ONE ACCOUNT, ONE FORGIVENESS. The generation bump is what makes the own half readable as
+       zero for every member of this family at once, in O(1) and with no walk of a frontier that reaches
+       thousands; `fam_us` is the family half of the same window and is zeroed beside it. Neither is a second
+       policy — they are the two scopes flow_silence_notch already sums, now sharing the epoch it always claimed
+       they shared.
+       WHAT IT DOES NOT DO IS FLATTEN THE ORDER. Every member reads zero own-silence only until the thread is
+       handed to one of them: the flow that then holds it is charged (flow_age_running) while its siblings are
+       not, so it sinks at FLOW_AGE_QUANTUM per quantum against every arm of its own family — which is exactly
+       the within-family comparison the own half exists to make, and now it is a comparison the losing side can
+       win back by waiting rather than a debt only a dispatch could clear. */
+    g_running->family->emit_gen++;
     /* …AND THE FAMILY'S AGING WITH IT, which is the forgiveness that actually moves a rank now. The reward this
        emission raises is the FAMILY's — it is credited to the family's own account above — so the aging it is
        weighed against has to be forgiven at the same granularity, or an arm that emits carries the silence of
@@ -420,8 +488,11 @@ int flow_path_forced(const Flow *f) {
 
 /* Age the running flow by the MICROSECONDS of thread time its step just burned. A monopolizer that runs without
    emitting sinks below productive + unrun flows — see FLOW_AGE_RATE for the exchange that makes that true.
-   IT IS NOT THE ONLY CHARGE ON `cpu`: a DEPARTING flow hands what it burned to the flow that forked it (see
-   FlowAcct), because the monopolizer this term is priced against is the fork CHAIN and not one of its N names.
+   IT IS THE ONLY CHARGE ON `cpu`, AND THAT SENTENCE IS A CORRECTION. What stood here said a DEPARTING flow
+   hands what it burned to the flow that forked it — a mechanism acct_depart's own comment records as DELETED,
+   because `fam_us` counts every microsecond the family burns AS IT BURNS IT and a hand-up at departure would
+   bill it twice. The monopolizer this term is priced against is still the fork CHAIN rather than one of its N
+   names; what charges the chain is the family half below, not a residual moved at a departure.
    NO `if (g_running)` GUARD. There is exactly one caller and it charges between a switch-in and a finish, so a
    charge with nothing running would mean the scheduler lost track of which flow burned the time — and silently
    discarding it is how a monopolizer stops aging altogether. It crashes instead. */
@@ -435,21 +506,43 @@ void flow_age_running(int64_t us) {
        way to get one is a non-monotonic (or wrapping) clock at the call site. */
     DCHECK(us >= 0, "a NEGATIVE thread-time charge reached the WFQ — the aging clock ran backwards, which does "
                     "not slow a monopolizer down, it promotes it");
-    g_running->cpu += us;
-    /* …AND THE SAME MICROSECONDS ON THE FAMILY. Both are the AGING term's — it is their SUM — and they are not
-       two copies of one number, because they have two reset points: `cpu` is what THIS FLOW has burned since
-       its OWN last emission, while `fam_us` is what the whole fork family has burned since ANY of its arms last
-       emitted. The first is what orders a family's members against each other and the second is what orders one
-       family against another, and a term with only the second has nothing to say on a frontier that is a single
-       family — which a real page's is. There is deliberately no ordering between the resets: a sibling's
-       emission forgives the family while this flow's own `cpu` stands, and that is the policy rather than a
-       drift. Neither of them is the OPTIMISM term's quantity; that one is a count of completed units of work
-       and is charged by flow_credit_visit, which is why it is a separate call from this one. */
+    /* THE ACCOUNT BOTH HALVES OF THIS CHARGE LAND ON, ASSERTED BEFORE EITHER OF THEM READS IT. It stood below
+       the `cpu` charge while that charge touched only the flow; the own half is now read over the ACCOUNT's
+       silence window (FlowAcct's `emit_gen`), so the family pointer is dereferenced by the very first
+       statement and the assertion has to precede it or it is checking a pointer already used. */
     DCHECK(g_running->family != NULL && g_running->family->up == NULL,
            "the running flow's family tag is not the ROOT of a fork tree — an arm whose tag points at its own "
            "node has FOUNDED a family instead of joining its parent's, which is precisely the reset by "
            "splitting the whole of this accounting exists to forbid: it would carry its parent's reward with "
            "none of its parent's aging and outrank the entire backlog for free");
+    /* THE WINDOW THIS CHARGE BELONGS TO, NORMALISED BEFORE IT IS ADDED TO. `Flow.cpu` is a reading only while
+       `cpu_gen` matches the account's generation (flow_own_silence); past an emission the field holds a
+       previous window's arithmetic that every reader is already answering ZERO for, so adding to it here would
+       resurrect a quantity nothing was reading and charge this flow for thread time it burned before its
+       family's last finding. Writing the field to what its readers already return is observationally a no-op —
+       which is what makes it safe at a site the preempt hook's seam assertion straddles — and it is done HERE
+       because this is a write site already; flow_own_silence stays read-only for the reason it states.
+       NO `if` PAST A BROKEN INVARIANT: a stale generation is the ORDINARY state of every member of a family
+       that has just emitted, so this is the normal path and not a repair. */
+    if (g_running->cpu_gen != g_running->family->emit_gen) {
+        g_running->cpu = 0;
+        g_running->cpu_gen = g_running->family->emit_gen;
+    }
+    g_running->cpu += us;
+    /* …AND THE SAME MICROSECONDS ON THE FAMILY. Both are the AGING term's — it is their SUM — and they are not
+       two copies of one number, because they answer two different comparisons over ONE window: `cpu` is what
+       THIS FLOW has burned since the family last emitted, while `fam_us` is what the WHOLE family has burned
+       over that same window. The first is what orders a family's members against each other and the second is
+       what orders one family against another, and a term with only the second has nothing to say on a frontier
+       that is a single family — which a real page's is.
+       ONE WINDOW AND NOT TWO, WHICH IS THE CORRECTION THIS BLOCK CARRIES. The own half used to be measured
+       since this flow's OWN last emission — a strictly longer window than the family's, since a flow's own
+       emission is one of its family's — so the two were summed into one notch and weighed against a reward
+       credited over the shorter one. See FlowAcct's `emit_gen` for what that cost and for the population it
+       could never reach: a member the scheduler has never dispatched is never charged here and so could never
+       be forgiven here either.
+       Neither of them is the OPTIMISM term's quantity; that one is a count of completed units of work and is
+       charged by flow_credit_visit, which is why it is a separate call from this one. */
     g_running->family->fam_us += us;
     /* THE RESOLUTION THIS CHARGE MUST HAVE — that a slice of the thread MOVES the rank it is charged to — is
        asserted at the seam where the charge meets the pick, in engine.c's scheduler loop, because that is the
@@ -592,21 +685,34 @@ void flow_credit_pick(Flow *f) {
  * (FlowAcct's `val`) the two are one account: every member of a family reads the SAME reward, so "members of
  * EQUAL reward" stops being the exception and becomes what a family IS, and §scheduler's guarantee holds
  * within one by construction — an arm's silence is frozen at the instant it was forked while the flow that
- * forked it goes on burning, so an unrun arm ranks at or above the flow that made it FOR AS LONG AS THAT FLOW
- * NEITHER EMITS NOR ADVANCES ITS SEARCH, and the queue drains oldest-arm-first. Between families the reward
- * orders exactly what it is for, charged once against a silence charged once.
+ * forked it goes on burning, so an unrun arm ranks at or above the flow that made it, and the queue drains
+ * oldest-arm-first. AN EMISSION NO LONGER BREAKS THAT on the aging axis: it forgives the whole account's
+ * window at once (FlowAcct's `emit_gen`), so the emitter and every arm of it stand level and the emitter sinks
+ * again from the first quantum it burns. What an emission still moves within a family is the OPTIMISM term —
+ * the emitter's `visits` goes to zero and an arm's frozen count does not — so the clause the sentence above
+ * needs is "for as long as that flow neither emits nor advances its search", read as a statement about that
+ * ONE term rather than about the silence. Between families the reward orders exactly what it is for, charged
+ * once against a silence charged once.
  * THAT CLAUSE IS A CORRECTION AND IT IS RECORDED RATHER THAN QUIETLY TIGHTENED, because the sentence it
  * replaces said "always" and was carried forward into a hand-off as an IDENTITY to derive a new ordering
  * guard from — which would have made the guard fire on healthy runs. The premise is true and the conclusion
- * does not follow from it: a fork does freeze the arm's `cpu`, `visits` and rungs at the parent's readings,
- * but TWO writers move the parent's the other way afterwards. flow_credit_emit sets the emitter's `cpu` and
- * `visits` to zero AND the family's `fam_us` to zero, so an arm holding a frozen `cpu` of C and a frozen visit
- * count of V is left worth `1/(1+V) − Q*floor(C/S)` against a parent worth a full `1.0` on the same reward —
- * strictly less whenever V > 0 or C reaches one quantum. And flow_observe_survival/flow_observe_rung raise the
- * parent's fitness monotonically while the arm's stays where it was born. Neither is a defect: a flow that has
- * just produced something, or just carried its payload one rung further, is exactly the flow the frontier
- * should be running. What is wrong is only the word "always", and it is worth keeping the refutation here
- * because a reader who re-derives the freezing argument will re-derive the missing quantifier with it.
+ * does not follow from it: a fork does freeze the arm's `visits` and rungs at the parent's readings, but TWO
+ * writers move the parent's the other way afterwards. flow_credit_emit sets the emitter's `visits` to zero, so
+ * an arm holding a frozen visit count of V is left worth `1/(1+V)` against a parent worth a full `1.0` on the
+ * same reward — strictly less whenever V > 0. And flow_observe_survival/flow_observe_rung raise the parent's
+ * fitness monotonically while the arm's stays where it was born. Neither is a defect: a flow that has just
+ * produced something, or just carried its payload one rung further, is exactly the flow the frontier should be
+ * running. What is wrong is only the word "always", and it is worth keeping the refutation here because a
+ * reader who re-derives the freezing argument will re-derive the missing quantifier with it.
+ * `cpu` IS NO LONGER ONE OF THOSE TWO, AND THAT IS THE CORRECTION THIS BLOCK CARRIES RATHER THAN A SHORTER
+ * LIST. It used to be, and being one was not a bounded demotion like the visit count's — it was UNREPAYABLE.
+ * The freeze is written by nothing but a dispatch, so a member the scheduler has never chosen kept its
+ * parent's fork-instant burn for the life of the frontier while the parent's was forgiven at the parent's next
+ * emission, and the only currency that could clear it was the dispatch the deficit itself was foreclosing.
+ * The own half is now read over the ACCOUNT's silence window (FlowAcct's `emit_gen`), so a family's emission
+ * forgives every arm of it at once and what the arm owes afterwards is only what the arm itself burns. The
+ * FREEZE is unchanged and still correct — the arm is still worth exactly what its parent was worth at the
+ * branch — and what changed is that the quantity it is a freeze OF is now one the frontier can move.
  * WHICH STATE A RUN IS IN IS STILL A MEASUREMENT rather than any sentence here: flow_wfq_census reports the
  * reward spread over the frontier and how many members have emitted anything themselves, and engine.c emits it
  * as @WFQ beside @PROGRESS and @COLD. A spread above 1.0 there is now a statement about SEVERAL FAMILIES, which
@@ -625,9 +731,10 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     /* NOTHING MAY HAVE BEEN CREDITED OR CHARGED FIRST, because the inheritance ASSIGNS both terms. A caller
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
-    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->visits == 0 && sib->picks == 0 &&
+    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
-           sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->val == 0.0,
+           sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
+           sib->family->val == 0.0,
            "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
            "account — it was ranked, and possibly run, at a weight that belongs to no flow, and this "
            "assignment throws that away. `path_forced` is in the same list for the same reason one field over: "
@@ -650,6 +757,15 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        what ONE member has emitted, it is never inherited, and it ranks nothing — which is why the precondition
        above requires it to still be zero rather than assigning it. */
     sib->cpu = parent->cpu;
+    /* …AND THE WINDOW THAT READING BELONGS TO, WITHOUT WHICH THE LINE ABOVE COPIES A NUMBER AND NOT A QUANTITY.
+       `Flow.cpu` is the flow's burn since its ACCOUNT last emitted and is read only while `cpu_gen` matches
+       that account's generation (flow_own_silence); the arm joins the parent's family below, so copying the
+       mark verbatim makes the arm read EXACTLY what the parent reads — a current window if the parent's is
+       current, and zero if the parent has not been charged since its family's last finding. Copying `cpu`
+       alone would make an arm of a just-emitted parent read the parent's PREVIOUS window's burn as its own,
+       which is the fork carrying a debt the parent had already been forgiven, and the equality at the end of
+       this function is what fires on it. */
+    sib->cpu_gen = parent->cpu_gen;
     /* …AND THE COMPLETED UNITS, which is the optimism term's coordinate and the same sentence a third time: an
        arm has, by construction, finished every program, job, delivery and lifecycle stage its parent finished
        before the branch, because it IS that execution with one more arm on it. Zeroing it would hand a flow
@@ -713,11 +829,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
        instead of six minutes later in a progress line that says `finished 0`.
        RE-DERIVED FOR EVERY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
-       `fam_val + (cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must
-       carry SIX things for this to hold and it carries exactly six through FIVE assignments: `cand_surv` and
-       `cand_rung` (copied above — the fitness comparator's two rung quantities), `visits` (copied above — the
-       optimism term's), `cpu` (copied above — the aging's own half), and the family tag (joined above), which
-       carries BOTH the reward and the aging's other half. Each addition to the formula has arrived through this
+       `fam_val + (cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (own_silence + fam_us)*RATE`, so a fork
+       must carry SEVEN things for this to hold and it carries exactly seven through SIX assignments:
+       `cand_surv` and `cand_rung` (copied above — the fitness comparator's two rung quantities), `visits`
+       (copied above — the optimism term's), `cpu` AND `cpu_gen` (copied above — the aging's own half is a
+       reading and the mark that says which window it is a reading OF, and neither is that half without the
+       other), and the family tag (joined above), which carries BOTH the reward and the aging's other half. Each addition to the formula has arrived through this
        line firing, which is the whole reason it is written as an equality over flow_weight rather than as a
        list of fields. This assertion is what FORCES the join, and it now forces it twice over: had the arm kept
        the fresh root flow_new minted it, its `fam_us` would be 0 against a parent family that has burned AND
@@ -1056,7 +1173,11 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     /* …and the register's own context, named HERE because this is the one point every flow passes through.
        Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
     pending_set_ctx(ctx);
-    f->val = 0.0; f->cpu = 0; f->visits = 0;
+    /* `cpu_gen` beside `cpu` because the two are ONE quantity (flow_own_silence): the burn, and the account
+       generation that says which silence window it is a burn in. Zero here matches the fresh account minted
+       below, whose `emit_gen` is also zero, so a flow that is never charged reads a current window holding
+       nothing rather than a stale mark holding whatever the field last contained. */
+    f->val = 0.0; f->cpu = 0; f->cpu_gen = 0; f->visits = 0;
     /* …AND THE DISPATCH COUNT, WHICH NOTHING ELSE EVER WRITES TO ZERO. Every other quantity on this line has a
        second writer that resets it (flow_credit_emit), which is exactly why `picks` exists and exactly why its
        only zero has to be here: a member arrives never-chosen, and from then on the number only rises. */
@@ -1166,8 +1287,9 @@ static double flow_queue_weight(const Flow *f);
  * "Inheritance closes that for `f(){g()}` and left it open for `open()`." The join is the closure at the fork;
  * this is the closure at the other three doors. */
 static void flow_arrive_at_virtual_time(Flow *f) {
-    DCHECK(f->val == 0.0 && f->cpu == 0 && f->visits == 0 &&
-           f->family == f->acct && f->family->fam_us == 0 && f->family->val == 0.0,
+    DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 &&
+           f->family == f->acct && f->family->fam_us == 0 && f->family->emit_gen == 0 &&
+           f->family->val == 0.0,
            "a from-baseline flow was charged or handed an account before it arrived — the arrival rule ASSIGNS "
            "every term, so a caller that wrote one first has ranked this flow at a virtual time nobody chose "
            "and this assignment throws that away");
@@ -1184,7 +1306,15 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        productive on the strength of the flow that was running when they arrived. */
     f->family->val = acct_family_val(g_running);
     f->visits = g_running->visits;                        /* the optimism term's coordinate */
-    f->cpu = g_running->cpu;                              /* …and the aging term's own half */
+    /* …AND THE AGING TERM'S OWN HALF, WHICH IS THE READING AND NOT THE FIELD. A newcomer FOUNDS its own family
+       (the precondition above says so), so its `cpu_gen` is a mark in a generation space that is not the
+       running flow's and copying `g_running->cpu` verbatim would place the newcomer at a raw number rather
+       than at a virtual time — nonzero own-silence against a runner that reads zero, whenever the runner has
+       not been charged since its family last emitted. What is copied is the QUANTITY flow_own_silence returns,
+       tagged with the newcomer's OWN account generation so it reads as a current window; the equality below is
+       what would fire on either half being left out. */
+    f->cpu     = flow_own_silence(g_running);
+    f->cpu_gen = f->family->emit_gen;
     f->family->fam_us = acct_family_us(g_running);        /* …and its family half */
     /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED, AND IT IS AN EQUALITY. A newcomer enters AT the system's
        virtual time — not at or below it — and flow_pick's STRICT comparison is what then leaves the thread with
@@ -1196,9 +1326,10 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        distance is a fraction OF A PAYLOAD, and a newcomer's payload is not the payload the flow in service
        holds — there is no position for it to arrive at, which is why flow_queue_weight excludes it and why a
        second per-item reading added to flow_weight would fire flow_fork_inherit's assert instead of this one.
-       EXACT WITH NO EPSILON: all four tags are copied verbatim — the reward onto the newcomer's own family
-       node, the other three onto the flow — and the silence notch is an integer division of copied integers,
-       so the two sides are the same float expression over the same values. */
+       EXACT WITH NO EPSILON: every tag is copied as the QUANTITY its reader returns — the reward onto the
+       newcomer's own family node, the family silence as a value, the visit count and the own silence onto the
+       flow — and the notch is an integer division of equal integers, so the two sides are the same float
+       expression over the same values. */
     DCHECK(flow_queue_weight(f) == flow_queue_weight(g_running),
            "a flow arriving from the baseline did not enter at the frontier's virtual time — it was placed "
            "above the flow in service (a page promoting the documents and candidate sessions it creates over "
@@ -1941,7 +2072,7 @@ typedef char flow_quantum_costs_at_most_one_finding[(FLOW_SILENCE_US >= FLOW_SER
  * a CENSUS quantity: it says who is consuming the thread, at the granularity the thread is handed out in. It is
  * no longer a term of the weight, which is the correction this comment carries: it used to be the OPTIMISM
  * term's "visits", and a microsecond is not a visit (see flow_weight). */
-int64_t flow_service_notch(const Flow *f) { return f->cpu / FLOW_SERVICE_US; }
+int64_t flow_service_notch(const Flow *f) { return flow_own_silence(f) / FLOW_SERVICE_US; }
 
 /* …AND THE SAME READING OF THE FORK FAMILY'S: how many whole quanta this flow's family has burned since any of
  * its arms last emitted. Two functions because they are two quantities with two reset points (flow_age_running
@@ -1957,8 +2088,11 @@ int64_t flow_family_notch(const Flow *f) { return acct_family_us(f) / FLOW_SERVI
    pick following it cannot see (FLOW_SILENCE_US says what that cost, in jobs never run). The PRICE is applied
    where the term is summed, at FLOW_AGE_QUANTUM, so this stays an exact integer and nothing quantises a rank
    on the FPU.
-   THE SUM IS THE SILENCE. `cpu` is what THIS FLOW has burned since its own last emission and `fam_us` is what
-   its whole fork family has burned since ANY of its arms last emitted, and the aging is both because each
+   THE SUM IS THE SILENCE AND BOTH HALVES ARE OVER ONE WINDOW. `flow_own_silence` is what THIS FLOW has burned
+   since its family last emitted and `fam_us` is what its whole fork family has burned over that same window —
+   one epoch, kept by FlowAcct's `emit_gen`, which is what lets these be summed into one notch and weighed
+   against one reward. The own half used to be measured since this FLOW's own last emission, a strictly longer
+   window, and see `emit_gen` for the population that mismatch made unreachable. The aging is both because each
    answers a comparison the other cannot: the family half orders one fork chain against another (without it a
    family that emitted V and wears N names pays for V once and presents it N times), and the own half orders a
    family's members against each other (without it every arm reads the identical number, so on a frontier that
@@ -1967,7 +2101,7 @@ int64_t flow_family_notch(const Flow *f) { return acct_family_us(f) / FLOW_SERVI
    `int64_t` throughout: at 12 ms a quantum this counts quanta of silence, so it cannot overflow anything a
    session can reach, and it is exact — the price is applied to it, never inside it. */
 int64_t flow_silence_notch(const Flow *f) {
-    return (f->cpu + acct_family_us(f)) / FLOW_SERVICE_US;
+    return (flow_own_silence(f) + acct_family_us(f)) / FLOW_SERVICE_US;
 }
 
 /* THE FLOW'S PLACE IN THE QUEUE — every term of the weight that is a TAG rather than a reading, which is
@@ -2291,8 +2425,11 @@ double flow_weight(const Flow *f) {
    quantum (FLOW_AGE_QUANTUM): `val + D + 1/(1+v) − A*Q >= 1`, and since `1/(1+v) <= 1` it forces
    `A*Q <= val + D`. `D` is a FRACTION — `(cand_surv + cand_rung) / FLOW_RUNGS_N` with the survival rung
    asserted in [0,1] and the rung count asserted at most FLOW_RUNGS_N - 1 — so `A*Q <= val + 1` and hence
-   `A <= (val + 1) / Q`. `A` is a FLOOR of `(cpu + fam_us) / S` with `S` the cooperative quantum, so
-   `cpu + fam_us < (A + 1) * S = (val + 1) * FLOW_SILENCE_US + S`. That is this expression.
+   `A <= (val + 1) / Q`. `A` is a FLOOR of `(own_silence + fam_us) / S` with `S` the cooperative quantum, so
+   `own_silence + fam_us < (A + 1) * S = (val + 1) * FLOW_SILENCE_US + S`. That is this expression, and the
+   caller reads the own half through flow_own_silence for the reason that function gives — the raw `Flow.cpu`
+   is that quantity only while its window mark is current, and comparing a stale field against a bound derived
+   from the weight is comparing two things the order never puts side by side.
    THE TWO TERMS ARE EARNED SEPARATELY AND THE SECOND ONE JUST SHRANK BY A FACTOR OF 83, which is the whole
    visible consequence of the aging's step becoming the quantum. The `(val + 1)` second is the ENTIRE RANGE of
    the fitness comparator on top of the reward: a candidate whose bytes arrive intact ranks a full point above
@@ -2446,11 +2583,13 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        cooperative quantum since any of its arms last emitted, `acct_family_us` alone exceeds FLOW_SERVICE_US
        and NO member of it can answer this, whatever its own `cpu` is. On a real page the whole frontier is one
        family, so `unrun` is NULL for all of it. NOR CAN A BIRTH REFILL IT: both doors copy the incumbent's
-       coordinates verbatim — a fork takes `parent->cpu` and joins its family (flow_fork_inherit), an arrival
-       takes `g_running->cpu` and its family's `fam_us` as a value (flow_arrive_at_virtual_time) — so a
+       coordinates verbatim — a fork takes the parent's own silence and its window mark and joins its family
+       (flow_fork_inherit), an arrival takes `flow_own_silence(g_running)` and its family's `fam_us` as values
+       (flow_arrive_at_virtual_time) — so a
        newborn's notch and visit count are EXACTLY the incumbent's, and on a quiet frontier the incumbent is
        not in this population either. The only writer that puts anything back is flow_credit_emit, which zeroes
-       the emitter's `cpu` and `visits` and the family's `fam_us` at once. So this population is non-empty only
+       the emitter's `visits` and, through the account's generation, the own AND family silence of every member
+       of that family at once. So this population is non-empty only
        within one quantum of an emission, and the two guards below — each of which short-circuits on it —
        assert NOTHING on a frontier that has gone quiet, which is precisely the frontier §scheduler's sentence
        is about. That is the §Testing empty-denominator defect standing in the guard written to catch it. */
@@ -2492,7 +2631,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        the thrash this quantum handles would take, and each would let the walk this rate was priced against be
        re-picked for 227 seconds with unrun siblings waiting, which is what it did on the tree this replaced. */
     DCHECK(worst || !best || !unrun ||
-           best->cpu + acct_family_us(best) < flow_silence_us_to_sink(best),   /* see the derivation there */
+           flow_own_silence(best) + acct_family_us(best) < flow_silence_us_to_sink(best),  /* derivation there */
            "the WFQ re-picked a flow that has burned more thread time since its last emit — its own plus its "
            "fork chain's — than its entire accumulated reward is worth, while a never-run flow was waiting — "
            "the aging term is no longer commensurate with the reward it is subtracted from, so a monopolizer "
@@ -2560,7 +2699,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
    max−min directly — the distance's floor is 0 by the type (flow.h), so its maximum IS its range. The optimism
    term is 1/(1+visits), decreasing, so its range is taken at the visit count's two ends in that order. The
    aging enters negatively at FLOW_AGE_QUANTUM per notch, and its notch is flow_silence_notch's floor of the
-   SUM `(cpu + fam_us)` while the census floors the two halves separately: floor(a+b) <= floor(a)+floor(b)+1,
+   SUM `(own_silence + fam_us)` while the census floors the two halves separately: floor(a+b) <= floor(a)+floor(b)+1,
    so the two reported spreads plus ONE notch bound it exactly. That +1 is the only slack in this function. */
 static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
@@ -2658,9 +2797,16 @@ void flow_wfq_census(WfqCensus *out) {
            reason `Flow.val` exists at all. It is not a subtraction any more: nothing is inherited, so a
            member's own ledger IS what it emitted since it was born. */
         if (f->val > 0.0) out->self_emit++;
-        if (f->cpu == 0) out->unrun++;
-        /* …AND THE POPULATION THE ROW ABOVE CANNOT NAME, for the reason its own comment gives: `cpu == 0` is
-           also what flow_credit_emit writes, so a member that has run and PRODUCED is counted there. A member
+        /* HOW MANY MEMBERS STAND AT ZERO OF THE AGING'S OWN HALF — read through flow_own_silence, which is the
+           quantity the order is made of, and NOT off `Flow.cpu`, which is that quantity only while its window
+           mark is current. Reading the raw field was not a cosmetic difference: it reported ZERO at every one
+           of the 71 censuses of the run this row was last measured on, on a frontier that reached 3480 members
+           — because after a fork every member carries a nonzero inherited burn and nothing but a dispatch ever
+           clears it, which is exactly the defect FlowAcct's `emit_gen` removes. */
+        if (flow_own_silence(f) == 0) out->unrun++;
+        /* …AND THE POPULATION THE ROW ABOVE CANNOT NAME, for the reason its own comment gives: zero own silence
+           is also what an emission by ANY arm of this member's family produces, so a member that has run and
+           whose account has PRODUCED is counted there. A member
            that has never been handed the thread is the population §scheduler's razor says the ordering may
            never create, and `picks` is the only field in this struct nothing resets. The best weight among
            them is carried out to the gap below rather than reported raw: how far the most-favoured starved
@@ -2753,7 +2899,7 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->cand_src) {
             if (!out->cand_members || w > out->cand_w_max) out->cand_w_max = w;
             out->cand_members++;
-            if (f->cpu == 0) out->cand_unrun++;
+            if (flow_own_silence(f) == 0) out->cand_unrun++;   /* the order's quantity, as the row above */
             if (s > out->cand_svc_max) out->cand_svc_max = s;
             if (dec > out->cand_dec_max) out->cand_dec_max = dec;
         }

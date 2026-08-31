@@ -4575,13 +4575,15 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
        Asserted because the two are reached through different functions and only this site knows they must
        meet. */
     /* EVERY COORDINATE, because the virtual time a flow enters at has as many as the weight has terms: the
-       completed-unit count (the optimism term's), its own service and its FAMILY's (the aging term's two
+       completed-unit count (the optimism term's), its own service WITH THE WINDOW MARK THAT SAYS WHICH SILENCE
+       THAT SERVICE IS A READING OF, and its FAMILY's (the aging term's two
        halves). `born` used to be the second half of this assert and it was the same quantity as the first; it
        is gone with the per-arm charge. An orphan drive that founded a family of its own would carry the
        discovering flow's reward with none of its aging, and one entering at zero units would carry the full
        optimism bonus — either is the promotion this line exists to forbid, and a bundle ships thousands of
        uncalled functions to do it with. */
-    DCHECK(sib->cpu == f->cpu && sib->visits == f->visits && sib->family == f->family,
+    DCHECK(sib->cpu == f->cpu && sib->cpu_gen == f->cpu_gen &&
+           sib->visits == f->visits && sib->family == f->family,
            "a driven orphan entered the frontier at a virtual time that is not the running flow's — it was "
            "ranked against a clock nobody chose, and a page with many uncalled functions can then promote the "
            "work it manufactures above every flow already waiting");
@@ -5319,7 +5321,8 @@ static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census belo
    assert its way past. The sentence that stood here was: "only the RUNNING flow's weight moves between
    generation bumps — a parked flow burns no CPU, and an emit both changes `val` and bumps the generation — so
    the RIVAL's weight is constant across the cache's key." The premise is FALSE, and it became false the moment
-   the aging term acquired a FAMILY half. `flow_silence_notch` reads `f->cpu + fam_us`, and `flow_age_running`
+   the aging term acquired a FAMILY half. `flow_silence_notch` reads this flow's own silence plus `fam_us`, and
+   `flow_age_running`
    writes `family->fam_us` after EVERY step without raising the generation — so a parked flow burns no CPU OF
    ITS OWN and its weight moves anyway, because the quantity is shared with whichever arm holds the thread. On
    a real page the whole frontier is ONE family (flow.c: every flow descends from the boot flow), so this is
