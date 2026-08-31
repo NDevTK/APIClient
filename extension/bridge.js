@@ -6096,7 +6096,8 @@ self.astDispatch = async function astDispatch(msg) {
     }
     self.onNavigationOutcome(msg.documentId, { state: "delivered" });
     /* AND THE DOCUMENT IS AT THE ADDRESS THE RESPONSE CAME FROM. HTML §7.4.5 determines the loaded Document's
-       URL — and therefore its origin, its §4.4 API base URL and the frontier key its residue parks under —
+       URL — and therefore its origin, its §8.1.3.2 "Environment settings objects" API base URL (§4.4 stood
+       here and is "Grouping content") and the frontier key its residue parks under —
        over the RESPONSE's URL, not over the address that was merely requested. This is the same rule
        `fetchedDocument` has always applied to a child navigable; the root document being the one exception
        was the second-path defect one level down. It also deletes a hybrid no browser produces: the old
