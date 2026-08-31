@@ -153,27 +153,11 @@ static JSAtom st_key_atom(JSContext *ctx, JSValueConst key)
     return JS_ValueToAtom(ctx, key);
 }
 
-/* HOW MANY BYTES ONE STORED STRING COSTS AGAINST Storage §4.1's QUOTA. Its UTF-8 length, which is what "a
-   number representing a recommended quota (in bytes)" measures. Unknown external input has no bytes, so its
-   shape's length is what it costs — the same substitution the key name makes, for the same reason. */
-static size_t st_bytes(JSContext *ctx, JSValueConst v)
-{
-    size_t n = 0;
-    const char *s;
-
-    if (concolic_is(v)) {
-        const char *shape = concolic_shape_c(v);
-        return shape ? strlen(shape) : 0;
-    }
-    DCHECK(JS_IsString(v), "a Storage entry that is neither a string nor unknown external input was measured — "
-                           "every value in the map arrives through a DOMString conversion");
-    s = JS_ToCStringLen(ctx, &n, v);
-    CHECK(s != NULL, "a stored Storage value could not be measured against its bottle's quota — the value is "
-                     "already a string, so the only way this fails is an allocation, and a quota computed "
-                     "without it would silently admit a write the spec refuses");
-    JS_FreeCString(ctx, s);
-    return n;
-}
+/* HOW MANY BYTES ONE STORED STRING COSTS is the MODEL's measure and not this interface's — Storage §4.1's
+   per-bottle quota and §6's storage usage are the same number counted for two purposes, so
+   core/storage/storage_shed.h owns it and step 4 below reads it. It used to be a static here, and the second
+   reader (§6's usage, which sums it over a shelf's bottles) would have been a second copy of "what a stored
+   string costs" to disagree with the first the day either changed. */
 
 /* §12.2.1's "get the keys on this's map", as the own enumerable string keys of the backing map. Storage §4.7's
    own note licenses whatever order this is: "To reorder a Storage object storage, reorder storage's map's
@@ -363,15 +347,25 @@ static JSValue js_st_get_item(JSContext *ctx, JSValueConst this_val, int argc, J
 static JSValue js_st_set_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue slots = st_brand(ctx, this_val), map, pm, old = JS_NULL;
-    JSPropertyEnum *tab = NULL;
     JSAtom a;
-    uint32_t n = 0, i;
     bool exists, reorder = true;
     double quota, total = 0, after;
 
     (void)magic;
     if (JS_IsUndefined(slots)) return JS_EXCEPTION;
     DCHECK(argc >= 2, "Storage.setItem() ran without both of its required arguments");
+    /* WHAT ENTERS THE MAP IS A STRING OR UNKNOWN EXTERNAL INPUT, asserted at the ORIGIN of that invariant —
+       here, where the two values arrive — rather than at the several places that later MEASURE them. §12.2.1
+       declares `DOMString key, DOMString value`, so the member's own declaration converts both, and unknown
+       external input crosses that conversion as itself; a value of any other kind means the declaration this
+       member was installed with does not list the two DOMStrings its IDL does. */
+    DCHECK(JS_IsString(argv[0]) || concolic_is(argv[0]),
+           "Storage.setItem()'s `key` reached its body as neither a string nor unknown external input — its IDL "
+           "declares `DOMString key`, so core/idl_args.h's declaration for this member is what converts it");
+    DCHECK(JS_IsString(argv[1]) || concolic_is(argv[1]),
+           "Storage.setItem()'s `value` reached its body as neither a string nor unknown external input — its "
+           "IDL declares `DOMString value`, so core/idl_args.h's declaration for this member is what converts "
+           "it");
     a = st_key_atom(ctx, argv[0]);
     map = st_map(ctx, slots);
     if (a == JS_ATOM_NULL) goto fail;
@@ -393,21 +387,12 @@ static JSValue js_st_set_item(JSContext *ctx, JSValueConst this_val, int argc, J
     quota = storage_shed_quota(ctx, (pm = JS_GetPropertyStr(ctx, slots, "proxyMap")));
     JS_FreeValue(ctx, pm);
     if (quota >= 0) {
-        if (st_keys(ctx, map, &tab, &n) < 0) goto fail_atom;
-        for (i = 0; i < n; i++) {
-            JSValue kv = JS_AtomToValue(ctx, tab[i].atom), vv;
-
-            total += (double)st_bytes(ctx, kv);
-            JS_FreeValue(ctx, kv);
-            if (JS_GetOwnSlot(ctx, &vv, map, tab[i].atom) > 0) {
-                total += (double)st_bytes(ctx, vv);
-                JS_FreeValue(ctx, vv);
-            }
-        }
-        st_keys_free(ctx, tab, n);
-        after = total + (double)st_bytes(ctx, argv[1]);
-        if (exists) after -= (double)st_bytes(ctx, old);
-        else        after += (double)st_bytes(ctx, argv[0]);
+        /* WHAT THE BOTTLE ALREADY HOLDS is the model's own sum (Storage §6 reads the identical one over every
+           bottle of a shelf), so the walk is asked for rather than repeated here. */
+        total = storage_shed_map_usage(ctx, map);
+        after = total + (double)storage_shed_string_bytes(ctx, argv[1]);
+        if (exists) after -= (double)storage_shed_string_bytes(ctx, old);
+        else        after += (double)storage_shed_string_bytes(ctx, argv[0]);
         if (after > quota) {
             JS_ThrowDOMException(ctx, "QuotaExceededError",
                                  "storing that value would take this origin's storage past its quota");

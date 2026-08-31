@@ -42,6 +42,7 @@
 #include "core/idl_slots.h"
 #include "core/storage/storage_shed.h"
 #include "core/url/origin.h"
+#include "solver/concolic.h"
 
 /* §4.3: "A user agent holds a storage shed ... A user agent's storage shed holds all local storage data." */
 static JSValue g_local_shed = JS_UNDEFINED;
@@ -70,6 +71,30 @@ static const StorageEndpoint ENDPOINTS[] = {
     { "sessionStorage",             STORAGE_TYPE_SESSION, 5.0 * 1024 * 1024 },
 };
 #define ENDPOINTS_N ((int)(sizeof(ENDPOINTS) / sizeof(ENDPOINTS[0])))
+
+/* §4.5's TWO MODES, in the StorageBucketMode enum's own order — the one place either string is spelled. The
+   value is stored as the STRING the standard names rather than as the integer, for the reason every other
+   record in this file holds spec vocabulary: the graph is JS objects so that it time-travels, and an integer
+   would be a second encoding to agree with at the cold tier. */
+static const char *const BUCKET_MODE[] = { "best-effort", "persistent" };
+#define BUCKET_MODE_N ((int)(sizeof(BUCKET_MODE) / sizeof(BUCKET_MODE[0])))
+
+/* §6 Usage and quota's STORAGE QUOTA of a storage shelf — "an implementation-defined conservative estimate of
+ * the total amount of bytes it can hold."
+ *
+ * IT IS A CONSTANT, AND THAT IS THE SPEC'S OWN ANSWER RATHER THAN A SHRUG. §6 states two requirements and both
+ * point away from measuring anything: "This amount SHOULD be LESS THAN the total storage space on the device"
+ * and "It MUST NOT be a function of the available storage space on the device" — the second because, as §6's
+ * own note says, "Directly or indirectly revealing available storage space can lead to fingerprinting and
+ * leaking information outside the scope of the origin involved". So a user agent that derived this number from
+ * a disk would be violating the standard in the direction of a fingerprinting surface, and a headless one has
+ * no disk to derive it from anyway. What is left is a choice, which is what "implementation-defined" means.
+ *
+ * ONE GIBIBYTE. It is comfortably less than the storage space of any device this runs on (§6's SHOULD), it is
+ * far above the 5 MiB §4.1 gives the two Web Storage endpoints, and it is a number a bundle's own arithmetic
+ * can act on: `quota - usage` is what an offline cache checks before it writes, and an engine answering 0 there
+ * would route every such bundle into its out-of-space branch and lose the branch that stores. */
+#define SHELF_QUOTA_BYTES (1024.0 * 1024.0 * 1024.0)
 
 /* A field of one of the records below. They are all null-prototype objects (core/idl_slots.h), so a read
    cannot reach the page and a write cannot be swallowed by an inherited accessor. */
@@ -121,7 +146,7 @@ static JSValue bucket_new(JSContext *ctx, StorageType type)
             rec_set(ctx, bottles, ENDPOINTS[i].identifier, bottle_new(ctx, ENDPOINTS[i].quota));
     rec_set(ctx, bucket, "bottleMap", bottles);
     if (type == STORAGE_TYPE_LOCAL)
-        rec_set(ctx, bucket, "mode", JS_NewString(ctx, "best-effort"));
+        rec_set(ctx, bucket, "mode", JS_NewString(ctx, BUCKET_MODE[STORAGE_BUCKET_BEST_EFFORT]));
     return bucket;
 }
 
@@ -179,8 +204,13 @@ static JSValue session_shed(JSContext *ctx)
     return JS_DupValue(ctx, g_session_shed);
 }
 
-/* §4.6 steps 5-7: the bottle for `identifier` in the shelf's "default" bucket, then a NEW proxy map over its
-   map, appended to the bottle's proxy map reference set. */
+/* §4.6 Storage bottles' obtain-a-storage-bottle-map STEPS 8-9: "Let proxyMap be a new storage proxy map whose
+   backing map is bottle's map" and "Append proxyMap to bottle's proxy map reference set".
+   THE NUMBERS IN THIS ALGORITHM'S CITATIONS WERE EACH ONE LOW FROM STEP 6 ONWARD, and the drift begins where
+   the shed is chosen: selecting it is steps 1-3 (`Let shed be null`, the `local` arm, and the `Otherwise:`
+   whose own two sub-items are 3.1 and 3.2), not steps 1-2. Everything at or before that read correctly, which
+   is why sampling the top of the list would not have caught it — the count is verified from the LAST step
+   backwards. Ten top-level steps, ending at "Return proxyMap". */
 static JSValue proxy_map_new(JSContext *ctx, JSValueConst bottle)
 {
     JSValue pm = idl_slots_new(ctx);
@@ -194,7 +224,7 @@ static JSValue proxy_map_new(JSContext *ctx, JSValueConst bottle)
        are about the BOTTLE rather than the map — its §4.1 quota (setItem step 4) and its §4.6 proxy map
        reference set (broadcast step 3) — so the link travels with the map that stands in for it. */
     rec_set(ctx, pm, "bottle", JS_DupValue(ctx, bottle));
-    /* THE Storage THIS MAP STANDS FOR IS NOT SET HERE, and cannot be: §4.6 step 7 appends the map to the
+    /* THE Storage THIS MAP STANDS FOR IS NOT SET HERE, and cannot be: §4.6 step 9 appends the map to the
        reference set and HTML §12.2.2/§12.2.3 step 4 mints the Storage AFTER the obtain returns. The mint binds
        it (storage_shed_proxy_map_bind) with nothing between the two that can fail, and the walk over the
        reference set asserts every member is bound. */
@@ -211,10 +241,44 @@ static JSValue proxy_map_new(JSContext *ctx, JSValueConst bottle)
     return pm;
 }
 
+/* §4.4 Storage shelves' OBTAIN A STORAGE SHELF, given a shed (which `type` selects, exactly as §4.6's steps
+   1-3 do), THIS realm's environment settings object, and that type. It has TWO doors — §4.6's
+   obtain-a-storage-bottle-map reaches it at that algorithm's step 4, and §4.4's own obtain-a-LOCAL-storage-
+   shelf is it with the type fixed at "local" — so the four steps are written here once rather than at each.
+   §4.4 STATES THREE ALGORITHMS (obtain a storage shelf, obtain a local storage shelf, create a storage shelf)
+   and each numbers its steps from 1, so a bare "§4.4 step N" would name three different steps; every citation
+   below therefore names the algorithm it counts. JS_UNDEFINED is obtain-a-storage-shelf step 2's FAILURE.
+   OWNED. */
+static JSValue obtain_shelf(JSContext *ctx, StorageType type)
+{
+    const char *key = obtain_storage_key(ctx);   /* obtain-a-storage-shelf step 1 */
+    JSValue shed, shelf;
+
+    DCHECK(g_ready, "a storage shelf was obtained before storage_shed_init built the shed");
+    if (!key) return JS_UNDEFINED;               /* obtain-a-storage-shelf step 2 */
+
+    shed = (type == STORAGE_TYPE_LOCAL) ? JS_DupValue(ctx, g_local_shed) : session_shed(ctx);
+    shelf = rec_get(ctx, shed, key);
+    JS_FreeValue(ctx, shed);
+    /* OBTAIN-A-STORAGE-SHELF STEP 3 creates a missing shelf. §4.4 holds THREE algorithms and each numbers its
+       own steps from 1, so every citation of this section names which one it is counting. It CANNOT be
+       missing: the one storage key this instance can have is the agent's, the shelf for it is built at the
+       baseline, and obtain_storage_key above asserts no second key reaches here — so a miss means the key
+       changed under a shelf that was built for another. */
+    DCHECK(JS_IsObject(shelf),
+           "the storage shelf for this instance's storage key does not exist — it is created at the pre-boot "
+           "baseline for the agent's origin, so an absent one means the environment's key is not the agent's");
+    return shelf;                                /* obtain-a-storage-shelf step 4 */
+}
+
+JSValue storage_shed_obtain_local_shelf(JSContext *ctx)
+{
+    return obtain_shelf(ctx, STORAGE_TYPE_LOCAL);
+}
+
 JSValue storage_shed_obtain_bottle_map(JSContext *ctx, StorageType type, const char *identifier)
 {
-    const char *key;
-    JSValue shed, shelf, buckets, bucket, bottles, bottle, pm;
+    JSValue shelf, buckets, bucket, bottles, bottle, pm;
     int i, known = 0;
 
     DCHECK(g_ready, "a storage bottle map was obtained before storage_shed_init built the shed");
@@ -227,28 +291,19 @@ JSValue storage_shed_obtain_bottle_map(JSContext *ctx, StorageType type, const c
                "§3's \"fileSystem\") adds its row to ENDPOINTS here rather than obtaining a bottle nothing "
                "created", identifier);
 
-    key = obtain_storage_key(ctx);          /* §4.6 step 3 via §4.4 step 1 */
-    if (!key) return JS_UNDEFINED;          /* §4.4 step 2: shelf is failure */
-
-    /* §4.6 steps 1-2: which shed. */
-    shed = (type == STORAGE_TYPE_LOCAL) ? JS_DupValue(ctx, g_local_shed) : session_shed(ctx);
-    shelf = rec_get(ctx, shed, key);
-    JS_FreeValue(ctx, shed);
-    /* §4.4 step 3 creates a missing shelf. It CANNOT be missing: the one storage key this instance can have is
-       the agent's, the shelf for it is built at the baseline, and obtain_storage_key above asserts no second
-       key reaches here — so a miss means the key changed under a shelf that was built for another. */
-    DCHECK(JS_IsObject(shelf),
-           "the storage shelf for this instance's storage key does not exist — it is created at the pre-boot "
-           "baseline for the agent's origin, so an absent one means the environment's key is not the agent's");
+    /* §4.6 steps 1-3 choose the shed and step 4 obtains the shelf; obtain_shelf performs both, because which
+       shed a type names is the same fact §4.4's own algorithm needs. */
+    shelf = obtain_shelf(ctx, type);                      /* §4.6 steps 1-4 */
+    if (JS_IsUndefined(shelf)) return JS_UNDEFINED;       /* §4.6 step 5: "If shelf is failure, return failure" */
 
     buckets = rec_get(ctx, shelf, "bucketMap");
-    bucket = rec_get(ctx, buckets, "default");           /* §4.6 step 5 */
+    bucket = rec_get(ctx, buckets, "default");            /* §4.6 step 6 */
     bottles = rec_get(ctx, bucket, "bottleMap");
-    bottle = rec_get(ctx, bottles, identifier);           /* §4.6 step 6 */
+    bottle = rec_get(ctx, bottles, identifier);           /* §4.6 step 7 */
     DCHECK(JS_IsObject(bottle),
            "a §4.5 storage bucket has no bottle for a registered endpoint of its own type — create-a-storage-"
            "bucket makes one per endpoint, so an absent bottle means the bucket was built for the other type");
-    pm = proxy_map_new(ctx, bottle);                      /* §4.6 steps 7-8 */
+    pm = proxy_map_new(ctx, bottle);                      /* §4.6 steps 8-9 */
 
     JS_FreeValue(ctx, bottle);
     JS_FreeValue(ctx, bottles);
@@ -279,6 +334,199 @@ double storage_shed_quota(JSContext *ctx, JSValueConst proxy_map)
     JS_FreeValue(ctx, q);
     JS_FreeValue(ctx, bottle);
     return d;
+}
+
+/* ---- §4.5's MODE, and §6's USAGE AND QUOTA — the facts a SHELF answers ------------------------------------
+ *
+ * They are here and not in the interface over them for the reason this component exists at all: a shelf's mode
+ * and a shelf's usage are the MODEL's facts, and the STANDARD gives them more than one reader — Storage §8
+ * API's three members, Storage §5 Persistence permission's permission revocation algorithm, and HTML §12.2.1
+ * The Storage interface's setItem step 4, which charges the same byte measure against §4.1's per-bottle quota.
+ * A fact with several readers belongs to the model rather than to whichever interface asked first. */
+
+/* §4.4 Storage shelves: "A storage shelf ... holds a bucket map ... For now "default" is the only key that
+   exists in a bucket map." OWNED. */
+static JSValue bucket_default(JSContext *ctx, JSValueConst shelf)
+{
+    JSValue buckets = rec_get(ctx, shelf, "bucketMap");
+    JSValue bucket;
+
+    DCHECK(JS_IsObject(buckets), "a §4.4 storage shelf has no bucket map — create-a-storage-shelf gives every "
+                                 "shelf one before it returns, so a shelf without one was not created by it");
+    bucket = rec_get(ctx, buckets, "default");
+    JS_FreeValue(ctx, buckets);
+    DCHECK(JS_IsObject(bucket),
+           "a §4.4 storage shelf's bucket map has no \"default\" — §4.4's CREATE-A-STORAGE-SHELF step 2 sets it "
+           "and §4.4's own note says that is the only key a bucket map has, so an absent one means this object "
+           "is not a storage shelf");
+    return bucket;
+}
+
+StorageBucketMode storage_shed_bucket_mode(JSContext *ctx, JSValueConst shelf)
+{
+    JSValue bucket = bucket_default(ctx, shelf);
+    JSValue m = rec_get(ctx, bucket, "mode");
+    const char *s;
+    int i, found = -1;
+
+    /* §4.5 GIVES THE MODE TO A LOCAL STORAGE BUCKET AND NOT TO A SESSION ONE, so an absent field here is a
+       SESSION shelf reaching a question only a local shelf can answer — and answering "best-effort" for it
+       would be reporting the absence of the member as one of its two values. */
+    DCHECK(JS_IsString(m),
+           "a §4.5 storage bucket has no mode — only a LOCAL storage bucket has one, and Storage §8's "
+           "persisted() and persist() both reach this through obtain-a-LOCAL-storage-shelf, so a bucket "
+           "without one is a SESSION bucket that arrived through a caller that did not obtain a local shelf");
+    s = JS_ToCString(ctx, m);
+    CHECK(s != NULL, "storage: a §4.5 bucket mode could not be read");
+    for (i = 0; i < BUCKET_MODE_N; i++)
+        if (strcmp(s, BUCKET_MODE[i]) == 0) found = i;
+    DCHECKF(found >= 0, "a §4.5 storage bucket's mode is `%s`, which is neither of the two values §4.5 gives it "
+                        "(\"best-effort\" and \"persistent\") — the two spellings live in this file alone, so a "
+                        "third one was written by something that does not go through storage_shed_bucket_set_mode",
+            s);
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, m);
+    JS_FreeValue(ctx, bucket);
+    return (StorageBucketMode)found;
+}
+
+void storage_shed_bucket_set_mode(JSContext *ctx, JSValueConst shelf, StorageBucketMode mode)
+{
+    JSValue bucket = bucket_default(ctx, shelf);
+    JSValue prev = rec_get(ctx, bucket, "mode");
+
+    DCHECK(JS_IsString(prev),
+           "a §4.5 storage bucket that has no mode was given one — only a LOCAL storage bucket has the member "
+           "at all, so this write would CREATE it on a session bucket rather than change it");
+    JS_FreeValue(ctx, prev);
+    DCHECK(mode >= 0 && (int)mode < BUCKET_MODE_N,
+           "a §4.5 storage bucket was set to a mode that is neither of the two values §4.5 gives it");
+    /* AN ORDINARY PROPERTY WRITE ON A BASELINE OBJECT, which is what makes the mode time-travel: the flow that
+       calls §8's persist() has its own persisted world and a sibling that did not still sees "best-effort". */
+    rec_set(ctx, bucket, "mode", JS_NewString(ctx, BUCKET_MODE[mode]));
+    JS_FreeValue(ctx, bucket);
+}
+
+size_t storage_shed_string_bytes(JSContext *ctx, JSValueConst v)
+{
+    size_t n = 0;
+    const char *s;
+
+    if (concolic_is(v)) {
+        const char *shape = concolic_shape_c(v);
+
+        DCHECK(shape != NULL, "unknown external input stored in a storage bottle has no shape — concolic_is "
+                              "said it is one, and every concolic carries the expression the run built");
+        return shape ? strlen(shape) : 0;
+    }
+    s = JS_ToCStringLen(ctx, &n, v);
+    CHECK(s != NULL, "storage: a stored value could not be measured — the value is already a string, so the "
+                     "only way this fails is an allocation, and a usage computed without it would silently "
+                     "admit a write the spec refuses and under-report §6's usage");
+    JS_FreeCString(ctx, s);
+    return n;
+}
+
+double storage_shed_map_usage(JSContext *ctx, JSValueConst map)
+{
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+    double total = 0;
+
+    DCHECK(JS_IsObject(map), "the bytes of a §4.6 storage bottle's map were asked for something that is not a "
+                             "map — every bottle is created with one and nothing removes it");
+    /* §4.7's own note licenses whatever order this walk is in; a SUM does not depend on one either way. */
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, map, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0,
+          "storage: a storage bottle's map could not be enumerated to measure what it holds");
+    for (i = 0; i < n; i++) {
+        JSValue kv = JS_AtomToValue(ctx, tab[i].atom), vv = JS_UNDEFINED;
+        int got;
+
+        CHECK(!JS_IsException(kv), "storage: a bottle map key could not be read back to measure it");
+        total += (double)storage_shed_string_bytes(ctx, kv);
+        JS_FreeValue(ctx, kv);
+        /* EVERY ENUMERATED NAME HAS A VALUE. The map is a null-prototype record this component created and only
+           an endpoint's own store writes it, so a name with no own DATA slot means something defined an
+           ACCESSOR on a bottle's map — which JS_GetOwnSlot refuses by design and which no endpoint does. The
+           read is performed ONCE into `got`, because a DCHECK's condition must be side-effect-free and this one
+           takes a reference. */
+        got = JS_GetOwnSlot(ctx, &vv, map, tab[i].atom);
+        DCHECK(got > 0,
+               "a §4.6 storage bottle's map enumerated a name that is not an own data property of it — the map "
+               "is written only by its endpoint's store, so an accessor or a hole there was put on it by "
+               "something that is not one");
+        if (got > 0) {
+            /* §12.2.1's keys and values are DOMStrings by the IDL, and unknown external input crosses that
+               conversion as itself — anything else in the map came from a writer that did not convert. */
+            DCHECK(JS_IsString(vv) || concolic_is(vv),
+                   "a §4.6 storage bottle's map holds a value that is neither a string nor unknown external "
+                   "input — HTML §12.2.1 declares its keys and values `DOMString`, so a value of any other "
+                   "kind was written by a path that skipped the member's own declared conversion");
+            total += (double)storage_shed_string_bytes(ctx, vv);
+            JS_FreeValue(ctx, vv);
+        }
+    }
+    for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);
+    js_free(ctx, tab);
+    return total;
+}
+
+/* NAMED RESIDUAL — the BUCKET FILE SYSTEM's bytes are not in this sum, and the code is right rather than
+ * unfinished, so there is nothing here to crash on.
+ *   NOT COVERED: File System §3 Accessing the Bucket File System's data. That standard registers its own
+ *     storage endpoint under the identifier "fileSystem", and this component has no ENDPOINTS row for it — so
+ *     the entries live in core/file/file_system.c behind FS_ROOT_BUCKET, reached directly by
+ *     core/file/storage_manager.c's getDirectory(), and no bottle of this shelf holds them. The sum below is
+ *     therefore complete over every endpoint the shelf HAS, which is what makes it a narrowing rather than a
+ *     wrong answer.
+ *   WHAT THE NEXT DIFF BUILDS: a "fileSystem" row in this file's ENDPOINTS table with the entries stored in
+ *     that bottle's map — which is exactly what obtain-a-storage-bottle-map's own DFAILF above already
+ *     demands of any standard registering an endpoint ("adds its row to ENDPOINTS here rather than obtaining a
+ *     bottle nothing created"). The sum then reaches it with no change to this walk, because the walk asks the
+ *     bucket what bottles it has.
+ *   HOW ITS ABSENCE WOULD SHOW: a page that writes N bytes through a FileSystemWritableFileStream and then
+ *     reads `navigator.storage.estimate()` sees `usage` UNCHANGED by the write. */
+double storage_shed_shelf_usage(JSContext *ctx, JSValueConst shelf)
+{
+    JSValue bucket = bucket_default(ctx, shelf);
+    JSValue bottles = rec_get(ctx, bucket, "bottleMap");
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+    double total = 0;
+
+    DCHECK(JS_IsObject(bottles), "a §4.5 storage bucket has no bottle map — create-a-storage-bucket gives every "
+                                 "bucket one before it returns");
+    /* THE BUCKET IS ASKED WHAT IT HOLDS rather than the ENDPOINTS table being re-read: §4.5's create-a-storage-
+       bucket is what filled this map, so enumerating it is reading the model's own statement of its bottles,
+       and a table read here would be a second copy of that statement to disagree with. */
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, bottles, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0,
+          "storage: a §4.5 bucket's bottle map could not be enumerated to measure §6's usage");
+    for (i = 0; i < n; i++) {
+        JSValue bottle = JS_UNDEFINED, map;
+        int got = JS_GetOwnSlot(ctx, &bottle, bottles, tab[i].atom);
+
+        DCHECK(got > 0, "a §4.5 storage bucket's bottle map enumerated a name it holds no bottle for — "
+                        "create-a-storage-bucket writes one bottle per endpoint and nothing removes one");
+        if (got > 0) {
+            map = rec_get(ctx, bottle, "map");
+            DCHECK(JS_IsObject(map), "a §4.6 storage bottle has no map — it is created with an empty one");
+            total += storage_shed_map_usage(ctx, map);
+            JS_FreeValue(ctx, map);
+            JS_FreeValue(ctx, bottle);
+        }
+    }
+    for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);
+    js_free(ctx, tab);
+    JS_FreeValue(ctx, bottles);
+    JS_FreeValue(ctx, bucket);
+    return total;
+}
+
+double storage_shed_shelf_quota(JSContext *ctx, JSValueConst shelf)
+{
+    DCHECK(JS_IsObject(shelf), "§6's storage quota was asked of something that is not a §4.4 storage shelf");
+    (void)ctx; (void)shelf;
+    return SHELF_QUOTA_BYTES;
 }
 
 void storage_shed_proxy_map_bind(JSContext *ctx, JSValueConst proxy_map, JSValueConst storage)

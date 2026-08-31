@@ -1,11 +1,14 @@
 /* THE STORAGE STANDARD'S MODEL — §4.2 "Storage keys", §4.3 "Storage sheds", §4.4 "Storage shelves",
- * §4.5 "Storage buckets", §4.6 "Storage bottles" and §4.7 "Storage proxy maps". See storage_shed.c.
+ * §4.5 "Storage buckets", §4.6 "Storage bottles" and §4.7 "Storage proxy maps", plus §6 "Usage and quota",
+ * which is a fact about a SHELF and therefore this component's rather than any endpoint's. See storage_shed.c.
  *
  * IT IS A SEPARATE COMPONENT FROM THE INTERFACE OVER IT because it is a separate STANDARD: HTML §12.2.1's
  * `Storage` is one endpoint of this model, Indexed Database §2.1 is another, File System §3's bucket file
  * system is a third. What they share is where the data lives, and that is what this file is. */
 #ifndef ENGINE_HOST_BROWSER_CORE_STORAGE_STORAGE_SHED_H
 #define ENGINE_HOST_BROWSER_CORE_STORAGE_STORAGE_SHED_H
+
+#include <stddef.h>
 
 #include "quickjs.h"
 
@@ -14,6 +17,18 @@ typedef enum {
     STORAGE_TYPE_LOCAL = 0,
     STORAGE_TYPE_SESSION,
 } StorageType;
+
+/* Storage §4.5 Storage buckets: "A LOCAL storage bucket has a mode, which is "best-effort" or "persistent". It
+   is initially "best-effort"." A SESSION storage bucket has none — §4.5 gives the member to the local kind
+   alone — so the accessors below are over a LOCAL shelf's default bucket and assert that they were handed one.
+   THE TWO SPELLINGS LIVE IN storage_shed.c AND NOWHERE ELSE, and the reason is that the standard names more
+   than one writer of this field: §8's persist() sets it to "persistent", and §5 Persistence permission's
+   permission revocation algorithm sets it back to "best-effort". A caller holding the strings would be a
+   second statement of the model's own vocabulary, so callers hold this enum and the strings stay inside. */
+typedef enum {
+    STORAGE_BUCKET_BEST_EFFORT = 0,
+    STORAGE_BUCKET_PERSISTENT,
+} StorageBucketMode;
 
 void storage_shed_init(JSContext *ctx);
 void storage_shed_free(JSRuntime *rt);
@@ -55,5 +70,43 @@ void storage_shed_proxy_map_bind(JSContext *ctx, JSValueConst proxy_map, JSValue
  * array is the ordinary case — one document, one holder, one proxy map — and step 4 over it is a step with
  * nothing to do rather than an absence to guard against. OWNED. */
 JSValue storage_shed_other_storages(JSContext *ctx, JSValueConst proxy_map);
+
+/* Storage §4.4 Storage shelves' OBTAIN A LOCAL STORAGE SHELF — "given an environment settings object
+ * environment, return the result of running obtain a storage shelf with the user agent's storage shed,
+ * environment, and "local"". The environment is THIS realm's, for the reason the obtain above states.
+ *
+ * JS_UNDEFINED IS §4.4 STEP 2's FAILURE — the same real answer, from the same §4.2 step 2, that the bottle-map
+ * obtain gives for an opaque origin. Storage §8's three members turn it into a rejection with a TypeError,
+ * which is a DIFFERENT error from the "SecurityError" HTML §12.2.2 raises out of the same failure, because the
+ * two standards each state their own. OWNED. */
+JSValue storage_shed_obtain_local_shelf(JSContext *ctx);
+
+/* §4.5's MODE of `shelf`'s bucket map["default"] — the read Storage §8's persisted() performs and the write its
+   persist() performs. Both assert the bucket is a LOCAL one, because a session storage bucket has no mode at
+   all and a read that answered "best-effort" for one would be reporting the absence of the field as a value. */
+StorageBucketMode storage_shed_bucket_mode(JSContext *ctx, JSValueConst shelf);
+void              storage_shed_bucket_set_mode(JSContext *ctx, JSValueConst shelf, StorageBucketMode mode);
+
+/* §6 Usage and quota's STORAGE USAGE of `shelf`, in bytes: "an implementation-defined ROUGH ESTIMATE of the
+   amount of bytes used by it". The estimate is a real sum over what the shelf's default bucket's bottles hold —
+   the SAME measure HTML §12.2.1's setItem step 4 charges against §4.1's per-bottle quota, so a page that fills
+   localStorage and then reads `navigator.storage.estimate()` sees the bytes it just spent. */
+double storage_shed_shelf_usage(JSContext *ctx, JSValueConst shelf);
+
+/* §6's STORAGE QUOTA of `shelf`, in bytes: "an implementation-defined CONSERVATIVE ESTIMATE of the total amount
+   of bytes it can hold." §6 states two constraints on it and this component obeys both — see the constant in
+   storage_shed.c, which is where the choice and its reasoning live. */
+double storage_shed_shelf_quota(JSContext *ctx, JSValueConst shelf);
+
+/* HOW MANY BYTES ONE STORED STRING COSTS — the unit BOTH §4.1's per-bottle quota and §6's usage are measured
+   in, so there is one of it. Its UTF-8 length, which is what "a number representing a recommended quota (in
+   bytes)" measures. Unknown external input has no bytes, so its SHAPE's length is what it costs — the same
+   substitution HTML §12.2.1's map makes for a concolic KEY, for the same reason. */
+size_t storage_shed_string_bytes(JSContext *ctx, JSValueConst v);
+
+/* THE BYTES ONE §4.6 STORAGE BOTTLE'S MAP HOLDS — every key plus every value, through the measure above. It is
+   here rather than at HTML §12.2.1's setItem step 4 because §6's usage sums exactly this over a bucket's
+   bottles, and a second walk would be a second answer to "how full is this bottle". */
+double storage_shed_map_usage(JSContext *ctx, JSValueConst map);
 
 #endif
