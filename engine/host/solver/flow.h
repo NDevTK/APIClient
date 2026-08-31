@@ -916,8 +916,23 @@ void flow_credit_visit(Flow *f);
  * where the progress stream asks it. It decides NOTHING; every member keeps its weight and its place. */
 typedef struct {
     long members;      /* live members of the frontier — the denominator for every count below */
-    double val_min;    /* the reward term's range over the frontier. A spread above 1.0 is the statement that */
-    double val_max;    /* the optimism bonus can no longer reorder its ends: only aging reaches the bottom. */
+    /* THE REWARD TERM'S RANGE OVER THE FRONTIER. A spread above 1.0 is the statement that the optimism bonus
+       can no longer reorder its ends — its entire range is one emission, and it must stay that way or a
+       PROMISE outweighs a FINDING (flow.c's flow_distance says the same of the fitness comparator).
+       AND AGING DOES NOT "REACH THE BOTTOM", WHICH IS WHAT THIS ROW USED TO SAY. The aging is a charge for
+       thread time CONSUMED, so it is subtracted from the flow being SERVED and from the family serving it: it
+       cannot lift a member that consumes nothing, and the bottom of a frontier is made of exactly those. The
+       ends therefore meet only by the TOP coming down, which is a derived quantity and not a property of the
+       term — `(val_top - val_min + 1) / FLOW_AGE_QUANTUM` quanta of silence, counted as the top's own service
+       plus its FAMILY's since any arm of that family last emitted (flow_silence_notch), and reset to zero by
+       every one of those emissions (flow_credit_emit). So on a frontier whose leading family is still
+       emitting there is no spread at which the two ends converge, and reading this row as "aging will get
+       there eventually" is reading a term that only ever pushes the tail further away. WHAT THE ORDER IS
+       ACTUALLY MADE OF is then this spread against `self_emit`: flow.c's flow_pick asserts that the reward gap
+       is the ONLY quantity that can put a never-run member behind the flow it picks, and `self_emit` says
+       whether that gap is something the members earned or something they were handed. */
+    double val_min;
+    double val_max;
     double val_top;    /* …and flow_best's own reward, so the top of the order is named rather than inferred */
     long val_zero;     /* members that inherited nothing and have emitted nothing — ceiling 1.0 (see above) */
     long self_emit;    /* members with val > val_born: they emitted something THEMSELVES rather than inheriting

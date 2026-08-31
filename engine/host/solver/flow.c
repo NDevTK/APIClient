@@ -1915,9 +1915,17 @@ static double flow_queue_weight(const Flow *f) {
        than a full finding. Measured: `jobsRun` 14, 14, 14 across three runs of one login page whose
        `jobsQueued` was 373, 401, 417.
        THE PRICE IS UNTOUCHED AND IT IS APPLIED HERE. One second of unproductive thread time still costs ONE
-       EMITTED FINDING (FLOW_AGE_RATE), and an emission is still worth exactly 1.0 (flow_credit_emit asserts
-       it); what moved is the STEP, from a point to a quantum, which is 0.012 of a point. The two are separate
-       constants now precisely because one number could not be both without one of them being wrong.
+       EMITTED FINDING (FLOW_AGE_RATE); what moved is the STEP, from a point to a quantum, which is 0.012 of a
+       point. The two are separate constants now precisely because one number could not be both without one of
+       them being wrong.
+       AN EMISSION IS WORTH AT MOST 1.0 AND NOT EXACTLY 1.0, WHICH THIS BLOCK USED TO CLAIM AND CITE AN ASSERT
+       FOR. flow_credit_emit asserts `v > 0.0` and nothing more, and the @S filter-survival RATCHET credits an
+       improvement in a ratio — the increment between two fractions in [0,1], which is what keeps that rung
+       worth at most one point over a search's whole life. The PRICE is unaffected, because it is priced
+       against the ceiling; what the wrong claim would license is an ARITHMETIC one, and it nearly did: a
+       reader deriving an exactness argument from "`val` is integral" gets a bound that is off by an ulp on the
+       one comparison it is tight in (flow_pick's third guard says where, and takes an FPU epsilon for exactly
+       this reason). A claim about a value's SHAPE is checked at the writer or it is not a claim.
        WHAT THAT BUYS, TERM BY TERM. A flow that finishes its unit of work inside its quantum keeps the thread
        to the end of it and hands over on its VISIT — which is the optimism term doing the fairness. A flow
        inside a unit that never ends completes no visit, so the optimism term can never demote it, and this is
@@ -2146,8 +2154,16 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        a flow at `cpu == 0` inside a family a SIBLING has since burned is worth `val + 1.0 − aging`, which can
        be deeply negative — so the guard would have started firing on healthy runs. Reading the notch rather
        than its summands is what makes this survive the next such change: the population named here is the one
-       the derivation is about, however many quantities the notch is built from. */
-    int unrun = 0;
+       the derivation is about, however many quantities the notch is built from.
+       AND IT IS THE BEST MEMBER OF THAT POPULATION RATHER THAN A BOOLEAN OVER IT, which is the difference
+       between naming §scheduler's guarantee and stating it. "A never-run flow is never starved" is a claim
+       about a DISTANCE — how far the best untouched member stands behind the flow the pick returns — and a
+       bit can only say that such a member exists. The census makes the same distinction one level up and
+       makes it deliberately: `jobs_ready` is a count and `job_w_gap` is the reading the count cannot make,
+       "denominated in the order's own unit" (flow.h). The population §scheduler's sentence is actually about
+       had the count and not the reading, so the guard below it could only ever restate a floor. */
+    const Flow *unrun = NULL;   /* the best-weighted member with EVERY non-reward term of flow_weight at zero */
+    double unrun_w = 0.0;
     DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
                              "keeps the THREAD, and the flow the pager gives up is not a question about that");
     /* THE SEED IS ELIGIBLE ON THE SAME TERMS AS EVERY CANDIDATE — a member of the frontier, and not one that
@@ -2155,7 +2171,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        incumbent must NOT keep the thread: keeping it is the spin the mark exists to end. */
     if (seed && flow_is_member(seed) && !(runnable_only && flow_host_owed(seed))) {
         best = (Flow *)seed; bw = flow_weight(seed);
-        if (seed->visits == 0 && flow_silence_notch(seed) == 0) unrun = 1;
+        if (seed->visits == 0 && flow_silence_notch(seed) == 0) { unrun = seed; unrun_w = bw; }
     }
     for (int i = 0; i < g_flows_n; i++) {
         double w;
@@ -2164,7 +2180,9 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            holds, and it is picked again the moment anything could have answered it (flow_clear_host_owed). */
         if (runnable_only && flow_host_owed(g_flows[i])) continue;
         w = flow_weight(g_flows[i]);
-        if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0) unrun = 1;
+        if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
+            unrun = g_flows[i]; unrun_w = w;
+        }
         /* THE TAIL IS THIS SCAN READ THE OTHER WAY, which is the whole of why the pager has no ranking of its
            own. The flow the cold tier gives up first must be the flow the WFQ would have run last, or the
            engine would page out a member the scheduler still wanted and keep one it was starving; a size
@@ -2204,6 +2222,56 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            "the WFQ picked a flow worth less than an untouched member of its own frontier — a never-run flow "
            "carries the whole optimism bonus and no aging, so nothing may be picked ahead of it below that "
            "floor; the optimism term is no longer the one §scheduler prices a never-starved flow against");
+    /* …AND THE DISTANCE ITSELF, WHICH IS WHAT MAKES "NEVER STARVED" A STATEMENT ABOUT A PAIR OF FLOWS RATHER
+       THAN A FLOOR UNDER ONE. The guard above is a floor on `best` alone: any member of a frontier whose
+       reward has grown satisfies `flow_weight(best) >= 1.0` however far the untouched member behind it has
+       been buried, so it passes with the whole backlog unreachable. This is the same claim asked of the two
+       flows it is actually about, and it says exactly ONE thing: everything the weight is made of EXCEPT the
+       reward spans at most one emission, so THE REWARD GAP IS THE ONLY QUANTITY THAT CAN PUT A NEVER-RUN
+       MEMBER BEHIND.
+
+       THE DERIVATION, redone here rather than carried over, because that is what keeps this a check instead
+       of a number somebody believed. `unrun` has EVERY non-reward term at zero, so its weight is exactly
+       `u->val + 1.0 + D_u` with `D_u` its fitness distance. Write `best`'s out with `v` its visit count, `A`
+       its silence notch and `Q` the price of a quantum:
+
+           w(best) − w(unrun) = (best->val − u->val) + 1/(1+v) − A*Q + D_best − 1.0 − D_u
+
+       and since `1/(1+v) <= 1`, `A*Q >= 0`, `D_best <= 1` (flow_distance is a fraction of FLOW_RUNGS_N) and
+       `D_u >= 0`, every one of the four non-reward differences is at most `+1.0 − 1.0 + 1.0 − 0` = 1.0. That
+       is this expression, and its slack is `(1 − 1/(1+v)) + A*Q + (1 − D_best) + D_u`.
+
+       THE EPSILON IS THE FPU AND NOTHING ELSE, AND THE CORNER IS WHY THERE HAS TO BE ONE. The slack is
+       EXACTLY zero in real arithmetic only when `best` is itself untouched (v = 0, A = 0) and carries the
+       comparator's full range against an unrun member carrying none, and the two sides then group the same
+       rewards differently: this side subtracts two composed weights, the other subtracts two raw rewards. That
+       is exact for INTEGRAL rewards and `val` is NOT integral — flow_credit_emit asserts only `v > 0.0`, and
+       @S's filter-survival ratchet credits the increment between two ratios (see FLOW_SILENCE_US above, which
+       used to claim otherwise). One ulp of a fractional reward is then the whole difference between the two
+       groupings at that corner, so the epsilon covers rounding and is not a tolerance on the CLAIM: away from
+       the corner the smallest step any of the four terms can take is a quantum of aging, 0.012, which is
+       eleven orders above it, so no real violation can hide under it. A larger slack would be a tolerance,
+       and a tolerance is where the next unranged term would hide.
+
+       WHAT IT CATCHES, AND IT IS THREE RANGE FACTS IN ONE INEQUALITY rather than a fourth restatement of one:
+       an optimism term whose ceiling stops being 1, a fitness comparator that stops being a fraction of
+       FLOW_RUNGS_N, and an aging term allowed to go NEGATIVE (a "freshness" bonus, a credit for waiting, a
+       rank-lifting term for the tail — the shape every fix for a buried backlog reaches for first). Each of
+       those makes "never starved" mean something else while the two guards above still pass, because neither
+       of them reads the untouched member at all.
+
+       AND IT IS WHERE THE READER LEARNS WHICH TERM BURIED THE BACKLOG. The inequality is tight in the reward
+       and slack in everything else, so a frontier whose untouched members are unreachable is one whose reward
+       GAP is unreachable — never an aging or optimism question. The two census rows that then say whether
+       that gap was earned or inherited are `self_emit` beside `val_max - val_min` (flow.h: "a frontier where
+       that is zero for every member is one whose whole reward ordering was decided before any of them
+       existed"), and flow_fork_inherit states the consequence: §scheduler's "never starved" is true among
+       members of EQUAL reward and among no others. */
+    DCHECK(worst || !best || !unrun ||
+           bw - unrun_w <= (best->val - unrun->val) + 1.0 + 1e-9,
+           "the WFQ put a never-run member further behind the flow it picked than the two flows' REWARD gap "
+           "plus one emission — so some term other than the reward has a range wider than a finding, and "
+           "§scheduler's 'a never-run flow is never starved' is now a claim about a term nobody bounded");
     return best;
 }
 
