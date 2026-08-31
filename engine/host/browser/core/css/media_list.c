@@ -16,6 +16,7 @@
 #include "core/idl_args.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
+#include "solver/concolic.h"   /* §4.4's `item` takes an index unknown external input crosses AS ITSELF */
 
 static JSClassID g_list_class;
 static JSValue   g_queries_key = JS_UNDEFINED;
@@ -208,9 +209,9 @@ static JSValue js_ml_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewUint32(ctx, ml_length(ctx, this_val));
 }
 
-/* "The item(index) method must return a serialization of the media query in the collection given by index, or
-   null, if index is greater than or equal to the number of media queries in the collection." That null is the
-   whole difference from the indexed getter, which is why both exist. */
+/* "The item(index) method must return a serialization of the media query in the collection of media queries
+   given by index, or null, if index is greater than or equal to the number of media queries in the collection
+   of media queries." That null is the whole difference from the indexed getter, which is why both exist. */
 static JSValue js_ml_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     uint32_t i = 0;
@@ -220,7 +221,22 @@ static JSValue js_ml_item(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     if (!ml_here(ctx, this_val, "item")) return JS_EXCEPTION;
     DCHECK(argc >= 1, "§4.4's `item` reached its body with no argument — its IDL argument is required, so the "
                       "declaration's own argument-count check is what should have refused the call");
-    JS_ToUint32(ctx, &i, argv[0]);
+    if (concolic_is(argv[0])) {
+        /* AN UNKNOWN INDEX, and it reaches the body unconverted because a Web IDL §3.2 conversion is a boundary
+           unknown external input crosses AS ITSELF (idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES
+           for every integer type, IDL_UNSIGNED_LONG among them). The EMPTY collection is the one length at
+           which that has an answer rather than a fork: §4.4 returns null for every index greater than or equal
+           to the number of media queries, and at zero that is every index there is.
+           RUNNING `JS_ToUint32` OVER IT INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
+           NAME: a concolic is a real JSObject, so ToNumber reaches ToPrimitive and runs a getter from a plain
+           C frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
+        DCHECK(ml_length(ctx, this_val) == 0,
+               "§4.4's `item` was given an UNKNOWN index into a NON-EMPTY MediaList — every media query in it "
+               "is a distinct answer, so the read must FORK one flow per supported index (plus the null arm "
+               "for an index past the end) instead of deciding it here");
+        return JS_NULL;
+    }
+    JS_ToUint32(ctx, &i, argv[0]);   /* the declaration ran Web IDL §3.2.4.6 unsigned long: already [0, 2**32-1] */
     q = ml_item(ctx, this_val, i);
     return JS_IsUndefined(q) ? JS_NULL : q;
 }

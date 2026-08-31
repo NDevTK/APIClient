@@ -4420,7 +4420,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     tree_walker_install(ctx, global);       /* §6.2 TreeWalker */
     range_install(ctx, global);             /* §5.3 AbstractRange, §5.4 StaticRange, §5.5 Range */
     selection_install(ctx, global);         /* Selection API §3 Selection — its interface object */
-    collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
+    collections_install(ctx, global);       /* §4.2.10.1 Interface NodeList, §4.2.10.2 Interface HTMLCollection */
     mutation_observer_install(ctx, global); /* §4.3.1 MutationObserver, §4.3.3 MutationRecord */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
     document_fragment_install(ctx, global); /* §4.7 DocumentFragment, which IS constructible */

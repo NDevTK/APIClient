@@ -88,6 +88,7 @@
 #include "quickjs.h"
 #include "core/idl_slots.h"
 #include "core/idl_args.h"
+#include "core/idl_indexed.h"   /* §6.6.1's `getter CSSOMString item(unsigned long index)` — the getter half */
 #include "core/realm.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"
@@ -2775,17 +2776,30 @@ static void cssd_declared_decls(JSContext *ctx, JSValueConst block, CssDecls *ou
    is minted UNSIGNED because the IDL says the type is, not because a block could hold 2**31 declarations: a
    `long` spelling of an `unsigned long` is the same disagreement between a declaration and its member that
    `item` carried below, and it is worth nothing to leave one of the pair right and the other wrong. */
+/* THE NUMBER OF CSS DECLARATIONS, over a block already resolved — ONE implementation of it, because §6.6.1's
+   `length`, its indexed getter's supported property indices and its `item`'s unknown-index assert all ask the
+   SAME question. Three walks would be three chances for the size a member reports, the size a lookup is
+   bounded by and the size a should-never-happen tests against to disagree, which is the one way that assert
+   could be right about a block nobody has. The same reason dom_token_list.c has one set_size. */
+static unsigned cssd_count(JSContext *ctx, JSValueConst block)
+{
+    CssDecls d = { 0 };
+    unsigned n;
+
+    cssd_declared_decls(ctx, block, &d);
+    n = d.n;
+    cssd_decls_free(&d);
+    return n;
+}
+
 static JSValue js_cssd_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue block = cssd_block(ctx, this_val);
-    CssDecls d = { 0 };
     unsigned n;
 
     (void)magic;
     if (JS_IsException(block)) return block;
-    cssd_declared_decls(ctx, block, &d);
-    n = d.n;
-    cssd_decls_free(&d);
+    n = cssd_count(ctx, block);
     JS_FreeValue(ctx, block);
     return JS_NewUint32(ctx, n);
 }
@@ -2856,6 +2870,80 @@ static JSValue js_cssd_parent_rule(JSContext *ctx, JSValueConst this_val, int ma
     return r;
 }
 
+/* ---- CSSOM §6.6.1 The CSSStyleDeclaration Interface's INDEXED PROPERTY GETTER ------------------------------
+ *
+ * §6.6.1 writes `getter CSSOMString item(unsigned long index)`. THE `getter` KEYWORD IS THE HALF THAT WAS
+ * MISSING: an operation declared `getter` is BOTH a named method and Web IDL §3.9 Legacy platform objects'
+ * indexed property getter, so `el.style.item(0)` and `el.style[0]` are two spellings of one algorithm — and
+ * only the first of them existed here. `el.style[0]` fell through to an ordinary property lookup, walked the
+ * three hundred per-property accessors on CSSStyleProperties.prototype without matching one, and answered
+ * `undefined` for a block whose first declaration a browser names. It is the shape §NO STUBS is about from the
+ * other side: not a member returning opaque, a member that is not installed at all while the object LOOKS
+ * complete, because the operation half of the same line is there.
+ *
+ * THE SUPPORTED PROPERTY INDICES ARE §6.6.1'S OWN, quoted: "The object's supported property indices are the
+ * numbers in the range zero to one less than the number of CSS declarations in the declarations. If there are
+ * no such CSS declarations, then there are no supported property indices." That is idl_indexed.c's contract
+ * exactly — JS_UNDEFINED past the end means the property is NOT THERE, so `el.style[0]` on an empty block is
+ * undefined and `0 in el.style` is false, which is the whole difference from the OPERATION, whose §6.6.1 text
+ * ("If there is no indexth object in the collection, then the method must return the empty string") makes
+ * `el.style.item(0)` the empty STRING on that same block.
+ *
+ * AND THE UNKNOWN-INDEX QUESTION THE OPERATION ASKS DOES NOT ARISE HERE, which is a statement about the two
+ * paths and not an omission. js_cssd_item can be handed a concolic because a Web IDL §3.2 conversion crosses
+ * unknown external input AS ITSELF (idl_args.h's IDL_CONCOLIC_CROSSES). A property LOOKUP cannot: the key
+ * reaching idl_indexed_own_property is a JSAtom, so whatever produced it has already been through ToPropertyKey
+ * and what arrives is a real string. The two therefore do not disagree about one question — they are asked
+ * different ones, and the fork js_cssd_item's DCHECK names is owed by the member alone. The same split
+ * dom_token_list.c records between its tl_item and js_tl_item. */
+static uint32_t cssd_indexed_length(JSContext *ctx, JSValueConst self)
+{
+    JSValue block = cssd_block(ctx, self);
+    uint32_t n;
+
+    /* THE BRAND CANNOT FAIL HERE and that is why it is asserted rather than returned past: this decl is
+       attached by cssd_new and by nothing else, in the same function that hangs the §6.6 record off the
+       object, so an object carrying CSSD_INDEXED carries the record. cssd_block THROWS for a stranger, and a
+       throw from inside a [[GetOwnProperty]] the class declares free of the page's code is a pending exception
+       nobody is standing there to take. */
+    DCHECK(!JS_IsException(block),
+           "§6.6.1's indexed getter was resolved against an object with no CSS declaration block — the decl is "
+           "installed only by cssd_new, which writes the record in the same call");
+    n = cssd_count(ctx, block);
+    JS_FreeValue(ctx, block);
+    return n;
+}
+
+/* §6.6.1's `item` steps, reached as a LOOKUP: the property NAME of the CSS declaration at position index.
+   JS_UNDEFINED past the end is idl_indexed.c's "not a supported property index" and is NOT the operation's
+   empty string — see the banner. The bound is one unsigned comparison against `d.n` for the reason js_cssd_item
+   records: Web IDL §3.2.4.6 unsigned long converts to [0, 2**32−1] and `d.n` is an `unsigned`, so a negative
+   index is unreachable BY TYPE — and idl_indexed.c's own array-index-property-name parse has already refused
+   `"-1"`, `"01"` and `"1.0"` before this is reached, so there is nothing left for a second test to catch. */
+static JSValue cssd_indexed_item(JSContext *ctx, JSValueConst self, uint32_t i)
+{
+    JSValue block = cssd_block(ctx, self), r;
+    CssDecls d = { 0 };
+
+    DCHECK(!JS_IsException(block),
+           "§6.6.1's indexed getter was asked for an item of an object with no CSS declaration block — the "
+           "decl is installed only by cssd_new, which writes the record in the same call");
+    cssd_declared_decls(ctx, block, &d);
+    r = i < d.n ? JS_NewString(ctx, d.v[i].name) : JS_UNDEFINED;
+    cssd_decls_free(&d);
+    JS_FreeValue(ctx, block);
+    return r;
+}
+
+/* NO NAMED PROPERTY GETTER and NO INDEX CACHE, both stated rather than left blank. §6.6.1 declares one getter
+   and it is the indexed one — the per-property attributes (`style.color`) are ATTRIBUTES on the prototype, not
+   named properties, which is why `style.nosuch` is undefined and not a lookup this decl answers. The cache is
+   0 because the two callbacks above are not an O(i) walk of a live child list, which is what idl_indexed.h's
+   scratch exists for: each is one parse of the block's declarations, the same parse js_cssd_length and
+   js_cssd_item already pay per call. */
+static const IdlIndexedDecl CSSD_INDEXED = { "CSSStyleDeclaration", cssd_indexed_length, cssd_indexed_item,
+                                             NULL, 0 };
+
 /* §6.6.1's CSSStyleProperties.prototype FOR THIS REALM — which is the prototype every block gets, because
    every one of them is a CSSStyleProperties. OWNED. */
 static JSValue cssd_proto(JSContext *ctx)
@@ -2892,7 +2980,13 @@ static JSValue cssd_new(JSContext *ctx, JSValueConst proto, JSValueConst owner_n
            "computed "
            "flag and it sets the readonly flag in the same breath — a writable one would take §6.6.1's set-a-"
            "CSS-declaration path into a block whose declarations are computed per read and stored nowhere");
-    obj = JS_NewObjectProto(ctx, proto);
+    /* AN INDEXED-PROPERTY OBJECT, because §6.6.1's `getter CSSOMString item(unsigned long index)` is what a
+       CSSStyleDeclaration IS — see CSSD_INDEXED above. It was `JS_NewObjectProto`, a plain object, so every
+       block this engine has ever minted answered `el.style[0]` with undefined. THIS IS THE ONE PLACE A BLOCK
+       IS MADE (the assert directly above says so and is why it is the one place), which is what makes the
+       getter reach all four prototypes — CSSStyleProperties, CSSFontFaceDescriptors, CSSPageDescriptors and
+       the base — with no per-creator line to forget. */
+    obj = idl_indexed_new(ctx, proto, &CSSD_INDEXED);
     if (JS_IsException(obj)) return obj;
     slots = idl_slots_new(ctx);
     k = JS_ValueToAtom(ctx, g_decl_key);
@@ -3153,6 +3247,22 @@ void cssom_install_proto(JSContext *ctx)
     idl_install_method(ctx, base, "getPropertyPriority", g_get_priority_id);
     idl_install_method(ctx, base, "setProperty", g_set_prop_id);
     idl_install_method(ctx, base, "item", g_item_id);
+    /* Web IDL §3.7.9 Iterable declarations' define the iteration methods, step 1: "If definition has an indexed
+       property getter, then: Perform DefineMethodProperty(target, %Symbol.iterator%, %Array.prototype.values%,
+       false)." §6.6.1 has one, and an integer `length` beside it, so `[...el.style]` and `for (const p of
+       el.style)` are ordinary code — which is how a bundle enumerates the properties it set.
+       THE NUMBER IS §3.7.9 AND NOT THE §3.7.10 EVERY OTHER CALLER OF THIS FUNCTION WRITES, verified against
+       the fetched Web IDL text rather than against them: §3.7.10 is "Asynchronous iterable declarations", the
+       clause that owns `async_iterable<>` and that idl_async_iter.c cites CORRECTLY, and the indexed-getter
+       @@iterator sentence quoted above is under §3.7.9. Nothing mechanical says so — citegen resolves a number
+       that EXISTS, and none of those sites states the title that would have made the mismatch visible.
+       IT IS ON THE BASE and not on CSSStyleProperties.prototype because §3.7.9 defines the iteration methods
+       on the interface prototype object of the interface that DECLARES the getter, which is
+       CSSStyleDeclaration; the other three prototypes inherit from this one.
+       §6.6.1 declares NO `iterable<>`, so `entries`, `keys`, `values` and `forEach` are honestly absent — the
+       same split HTMLCollection and FileList are on, and the reason idl_indexed.h keeps the two installs
+       apart. */
+    idl_indexed_install_iterable(ctx, base);
 
     proto = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(proto), "CSSStyleProperties.prototype could not be allocated");

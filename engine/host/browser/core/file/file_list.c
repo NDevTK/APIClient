@@ -31,6 +31,7 @@
 #include "core/idl_args.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
+#include "solver/concolic.h"   /* §5.2's `item` takes an index unknown external input crosses AS ITSELF */
 
 static JSClassID g_fl_class;
 static JSValue   g_files_key = JS_UNDEFINED;   /* the Symbol the Array hangs off — minted once per AGENT */
@@ -100,12 +101,19 @@ JSValue file_list_item(JSContext *ctx, JSValueConst v, uint32_t i)
     return r;
 }
 
-/* ---- §3.9's indexed property getter ------------------------------------------------------------------------
+/* ---- Web IDL §3.9 Legacy platform objects' indexed property getter ------------------------------------------
  *
- * "Supported property indices are the numbers in the range zero to one less than the number of File objects
- * represented by the FileList object. If there are no such File objects, then there are no supported property
- * indices" — which is idl_indexed.c's contract exactly: JS_UNDEFINED past the end means the property is not
- * there, so `fl[0]` on an empty list is undefined and `0 in fl` is false. */
+ * THE NUMBER HERE WAS A BARE `§3.9`, AND EVERY OTHER BARE `§N` IN THIS FILE IS THE FILE API — which has no
+ * §3.9 at all (§3 is The Blob Interface and Binary Data and ends at §3.3.6 The textStream() method). It read
+ * as a File API section for as long as nobody opened it. The STANDARD is now named, because a bare number is
+ * only checkable against the standard the file's own convention picks.
+ *
+ * WHICH SECTION THE QUOTE IS FROM IS THE OTHER HALF, and it is File API §5.2 Methods and Parameters — the same
+ * section that defines `item(index)`, not a section of Web IDL: "Supported property indices are the numbers in
+ * the range zero to one less than the number of File objects represented by the FileList object. If there are
+ * no such File objects, then there are no supported property indices." That is idl_indexed.c's contract
+ * exactly: JS_UNDEFINED past the end means the property is not there, so `fl[0]` on an empty list is undefined
+ * and `0 in fl` is false. */
 static uint32_t fl_indexed_length(JSContext *ctx, JSValueConst self) { return file_list_length(ctx, self); }
 static JSValue  fl_indexed_item(JSContext *ctx, JSValueConst self, uint32_t i)
 {
@@ -139,8 +147,24 @@ static JSValue js_fl_item(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     if (!file_list_is(ctx, this_val)) return JS_ThrowTypeError(ctx, "not a FileList");
     DCHECK(argc >= 1, "§5.2's item(index) reached its body with no argument — `index` is REQUIRED, so the "
                       "argument-count check the declaration performs has already thrown for a bare item()");
-    /* A REAL NUMBER BY NOW: the declaration converted it as `unsigned long`, which is §3.2's modulo and not a
-       clamp — `fl.item(2**32)` is item 0. */
+    if (concolic_is(argv[0])) {
+        /* AN UNKNOWN INDEX, and it is NOT "a real number by now" — the sentence that stood here said the
+           declaration had converted it, and idl_args.h says the opposite BY NAME: idl_concolic_rule answers
+           IDL_CONCOLIC_CROSSES for every integer type, IDL_UNSIGNED_LONG included, so a Web IDL §3.2 conversion is a
+           BOUNDARY unknown external input crosses AS ITSELF and the body is handed the concolic. The EMPTY
+           list is the one length at which that has an answer rather than a fork: §5.2 returns null when there
+           is no indexth File object, and at zero files that is every index there is.
+           RUNNING `JS_ToUint32` OVER IT INSTEAD IS THE SHAPE idl_args.h BANS: a concolic is a real JSObject,
+           so ToNumber reaches ToPrimitive and runs a getter from a plain C frame, which this engine aborts on
+           somewhere inside the coercion rather than here at the member. */
+        DCHECK(file_list_length(ctx, this_val) == 0,
+               "§5.2's item(index) was given an UNKNOWN index into a NON-EMPTY FileList — every File in it is a "
+               "distinct answer, so the read must FORK one flow per supported index (plus the null arm for an "
+               "index past the end) instead of deciding it here");
+        return JS_NULL;
+    }
+    /* The declaration ran Web IDL §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned"), which is Web IDL
+       §3.2.4.9 Abstract operations' modulo and not a clamp — `fl.item(2**32)` is item 0. */
     JS_ToUint32(ctx, &i, argv[0]);
     r = file_list_item(ctx, this_val, i);
     return JS_IsUndefined(r) ? JS_NULL : r;

@@ -1,4 +1,6 @@
-/* NodeList and HTMLCollection — DOM §4.2.10 and §4.2.11. See collections.c. */
+/* NodeList and HTMLCollection — DOM §4.2.10 Old-style collections: NodeList and HTMLCollection, whose two
+ * subsections are §4.2.10.1 Interface NodeList and §4.2.10.2 Interface HTMLCollection. See collections.c for
+ * why the number §4.2.11 that stood here names nothing: §4.2 ends at §4.2.10 and §4.3 is Mutation observers. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_COLLECTIONS_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_COLLECTIONS_H
 #include <lexbor/dom/dom.h>
