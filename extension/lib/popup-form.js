@@ -941,7 +941,17 @@ function formFieldsToMap(rootFields) {
 
 function formValuesToInitialData(formValues) {
   if (!formValues) return null;
-  const data = { ...formValues.params };
+  /* EVERY BUCKET collectFormValues FILLS IS A VALUE THE OPERATOR TYPED, so re-rendering the form must offer
+     all of them back. `headerParams` is carried here because it was carried before it had a bucket — a
+     header parameter used to land in `params` and repopulate from there, and splitting it out without this
+     line would have emptied that input on every re-render while nothing said why. Asserted rather than
+     spread through: `{...undefined}` is `{}`, so a bucket this function stopped being handed would empty
+     those inputs on every re-render and look exactly like an operator who typed nothing. */
+  DCHECK(!!formValues.params && !!formValues.headerParams && Array.isArray(formValues.fields),
+         "a form-values record reached formValuesToInitialData without one of the buckets " +
+         "collectFormValues fills (params/headerParams/fields) — it is the only producer, so this is that " +
+         "function changed shape and the missing bucket's inputs would silently re-render empty");
+  const data = { ...formValues.params, ...formValues.headerParams };
   const fieldMap = formFieldsToMap(formValues.fields);
   Object.assign(data, fieldMap);
   return data;
@@ -950,6 +960,7 @@ function formValuesToInitialData(formValues) {
 function collectFormValues() {
   const params = {};
   const pathParams = {};
+  const headerParams = {};
   const fields = [];
   const topFields = document.querySelectorAll(
     "#send-form-fields > .form-section > .form-field",
@@ -960,19 +971,47 @@ function collectFormValues() {
     if (!result) continue;
     if (wrapper.dataset.category === "param") {
       if (result.value !== "" && result.value != null) {
-        // Path-template params (e.g. /{owner}/{repo}/…) substitute INTO the
-        // URL path; everything else is a query param. Separating them is what
-        // makes the learned template's editable owner/repo actually target the
-        // right resource instead of being appended as ?owner=…&repo=….
-        if (wrapper.dataset.location === "path") pathParams[result.name] = result.value;
-        else params[result.name] = result.value;
+        /* WHERE A PARAMETER GOES IS THE PARAMETER'S OWN `location`, AND THIS ASKED ONE BIT OF IT. It read
+           `=== "path"` and swept EVERYTHING ELSE into the query string, which was true of the one producer
+           it was written against (endpoint.c mints query/path/body) and false of the vocabulary that
+           actually arrives — lib/field-def.js's PARAM_LOCATIONS, which openapi-import.js fills from a spec's
+           own `in`. So an imported `X-Api-Key` header parameter was SENT AS ?X-Api-Key=…, and an imported
+           form-POST's body fields were sent in the URL: the panel rendered the location it was told and then
+           delivered the value somewhere else, which no operator reading the form could see. */
+        const loc = wrapper.dataset.location;
+        if (loc === "path") pathParams[result.name] = result.value;
+        else if (loc === "query") params[result.name] = result.value;
+        else if (loc === "header") headerParams[result.name] = result.value;
+        // A Swagger 2.0 `body`/`formData` parameter IS a body field — it is carried in the request body
+        // beside the ones the schema declared, which is what that location means.
+        else if (loc === "body" || loc === "formData") fields.push(result);
+        else if (loc === "cookie") {
+          /* NOT DELIVERABLE ON THIS PATH, AND NOT SILENTLY PUT SOMEWHERE ELSE. `Cookie` is a forbidden
+             request-header per WHATWG Fetch §forbidden request-header ("These are forbidden so the user
+             agent remains in full control over them"), so a cookie parameter cannot be delivered by setting
+             a header — the browser drops it. Delivering one means writing the cookie into the store the
+             request will read, which is a credential decision SECURITY.md assigns to the trusted zone, and
+             it is the capability to build here. Until it exists this crashes rather than sending the value
+             as a query parameter the server will not read as a cookie. */
+          DFAIL("a cookie parameter reached the Send panel's collection and there is nowhere on this path to " +
+                "put it — WHATWG Fetch §forbidden request-header forbids setting `Cookie`, so delivering " +
+                "one means writing it to the cookie store the request reads, which nothing here does yet");
+        } else {
+          /* The record guarantees a stated location for every parameter (lib/send.js writes one onto every
+             projected parameter), so an absent or unknown one is OUR producer broken, not a document being
+             silent — and the old `else` is exactly what made that unfalsifiable. */
+          DFAIL("a form parameter carries the location `" + loc + "`, which is not one of " +
+                "lib/field-def.js's PARAM_LOCATIONS — lib/send.js states a location on every parameter it " +
+                "projects, so this is that producer broken and the value would be delivered by whichever " +
+                "branch happened to catch it");
+        }
       }
     } else {
       fields.push(result);
     }
   }
 
-  return { params, pathParams, fields };
+  return { params, pathParams, headerParams, fields };
 }
 
 // Substitute editable path-template holes — /{owner}/{repo}/… — with the

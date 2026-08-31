@@ -553,11 +553,25 @@ document.addEventListener("DOMContentLoaded", async () => {
       for (const [k, v] of Object.entries(params)) urlObj.searchParams.set(k, String(v));
       return urlObj.toString();
     }
+    /* A HEADER PARAMETER IS DELIVERED AS A HEADER. `collectFormValues` buckets by the parameter's own
+       `location` (lib/field-def.js PARAM_LOCATIONS); before it did, everything that was not a path
+       parameter went into the QUERY STRING, so an imported spec's `X-Api-Key` header parameter was sent as
+       `?X-Api-Key=…` — the panel rendered `header` beside the input and the request carried it somewhere
+       else. The explicitly typed header rows are applied AFTER, so an operator who names a header in the
+       headers UI overrides the form's value for it rather than being silently overridden by it. */
+    function _applyHeaderParams(hp) {
+      const merged = {};
+      for (const [k, v] of Object.entries(hp)) merged[k] = String(v);
+      return Object.assign(merged, headers);
+    }
+
     let body;
+    let headerParams = {};
     if (httpMethod === "GET" || httpMethod === "DELETE") {
       // Collect URL params from form fields even for GET/DELETE
       if (bodyMode === "form") {
         const formValues = collectFormValues();
+        headerParams = formValues.headerParams;
         if (Object.keys(formValues.params).length > 0) {
           url = _applyFormParamsToUrl(url, formValues.params);
         }
@@ -565,6 +579,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       body = null;
     } else if (bodyMode === "form") {
       const formValues = collectFormValues();
+      headerParams = formValues.headerParams;
       if (Object.keys(formValues.params).length > 0) {
         url = _applyFormParamsToUrl(url, formValues.params);
       }
@@ -604,7 +619,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         url,
         httpMethod,
         contentType,
-        headers,
+        headers: _applyHeaderParams(headerParams),
         body,
         apiKeyOverride: currentKeyOverride,
       });
