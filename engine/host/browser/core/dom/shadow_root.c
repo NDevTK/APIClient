@@ -578,8 +578,8 @@ void shadow_root_mark_declarative(JSContext *ctx, JSValueConst sr_wrap)
 /* §4.9 `attachShadow(init)`. `init` is a dictionary, so the READ of each member is the page's code and the
    declaration is what performs it — by the time this body runs every member is a real value. */
 static const IdlArgType ATTACH_ARGS[1] = { IDL_DICT };
-static const char *const SR_MODE_VALUES[] = { "open", "closed", NULL };
-static const char *const SR_SLOT_VALUES[] = { "manual", "named", NULL };
+IDL_ENUM_VALUES(SR_MODE_VALUES, "open", "closed");
+IDL_ENUM_VALUES(SR_SLOT_VALUES, "manual", "named");
 /* ShadowRootInit. Web IDL §3.2.17 reads a dictionary's members LEXICOGRAPHICALLY, not in declaration order —
    which for this dictionary is a different order in every position, and is observable the moment a page passes
    an object whose members are getters or a Proxy. `mode` being required does not move it to the front. */

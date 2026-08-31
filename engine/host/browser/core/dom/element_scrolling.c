@@ -30,7 +30,7 @@
 #define ES_X 0
 #define ES_Y 1
 
-const char *const SCROLL_LOGICAL_POSITIONS[5] = { "start", "center", "end", "nearest", NULL };
+IDL_ENUM_VALUES_EXTERN(SCROLL_LOGICAL_POSITIONS, "start", "center", "end", "nearest");
 
 ScrollLogicalPosition element_scrolling_logical_position(const char *keyword)
 {

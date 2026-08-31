@@ -66,7 +66,7 @@ static int g_id_go = -1, g_id_back = -1, g_id_forward = -1;
 
 /* §7.2.5's `enum ScrollRestoration { "auto", "manual" }` — the TYPE of the `scrollRestoration` attribute, so
    the list is what the declaration carries and not something the setter's body re-states. */
-static const char *const SCROLL_RESTORATION[] = { "auto", "manual", NULL };
+IDL_ENUM_VALUES(SCROLL_RESTORATION, "auto", "manual");
 
 /* THE READ-ONLY MEMBERS, in the order §7.2.5's IDL declares them — the getter's magic is an index into this. */
 typedef enum { HIST_LENGTH, HIST_SCROLL_RESTORATION, HIST_STATE, HIST_N } HistMember;

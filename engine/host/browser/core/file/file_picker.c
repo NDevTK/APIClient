@@ -74,7 +74,7 @@ static const char *const WELL_KNOWN_DIRECTORY[] = {
 };
 
 /* §2.2's `FileSystemPermissionMode`, which DirectoryPickerOptions also takes. */
-static const char *const FS_MODE_VALUES[] = { "read", "readwrite", NULL };
+IDL_ENUM_VALUES(FS_MODE_VALUES, "read", "readwrite");
 
 static int g_id_open = -1, g_id_save = -1, g_id_directory = -1;
 /* §3.2.2's RECENTLY PICKED DIRECTORY MAP — "a map of origins to path id maps". An instance is ONE origin

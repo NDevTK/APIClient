@@ -67,7 +67,7 @@ static int g_id_query = -1, g_id_request = -1;
 /* §2.2's `enum FileSystemPermissionMode { "read", "readwrite" }` — the values of the descriptor type's aspect
    member, in the IDL's own order, which is also the order permission_store.c's registry row states them in.
    The two lists are the SAME FACT in two files and the assert at the bottom of this one is what checks it. */
-static const char *const FS_MODE_VALUES[] = { "read", "readwrite", NULL };
+IDL_ENUM_VALUES(FS_MODE_VALUES, "read", "readwrite");
 #define FS_MODE_READWRITE 1
 
 /* ---- the feature's own algorithms, declared into §4's registry ---------------------------------------------- */

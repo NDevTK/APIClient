@@ -58,8 +58,15 @@ typedef enum {
 } ScrollLogicalPosition;
 
 /* The four keywords, in this enum's order — exported so the ONE list is the declaration's `values` array AND
-   the mapping below, rather than two lists that can disagree about an order nothing else states. */
-extern const char *const SCROLL_LOGICAL_POSITIONS[5];
+   the mapping below, rather than two lists that can disagree about an order nothing else states.
+   THE EXTENT IS DELIBERATELY UNWRITTEN, and it used to say `[5]`. A hand-written extent on an `extern` array is
+   a SECOND COPY of the list's length, and the direction it drifts in is the silent one: a definition supplying
+   MORE entries than the extern declares is TRUNCATED to the declared size with only a warning, and the entry
+   truncation drops is the LAST one — which for a sentinel-terminated list is the TERMINATOR. The bound written
+   to make the scan safe is then exactly what makes it run off the end. Nothing outside this component needs the
+   extent (the mapping below scans for the terminator, and the IDL declaration takes a pointer), so leaving the
+   type incomplete means no second copy of the length exists to go stale. */
+extern const char *const SCROLL_LOGICAL_POSITIONS[];
 ScrollLogicalPosition element_scrolling_logical_position(const char *keyword);
 
 /* §6.1's "To SCROLL AN ELEMENT (or pseudo-element) element to x,y optionally with a scroll behavior behavior".

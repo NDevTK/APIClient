@@ -263,8 +263,8 @@ void idb_connection_transaction_finished(JSContext *ctx, JSValueConst connection
  * The value lists ARE the types (Web IDL §3.2.19), so they are declared beside the member and the conversion
  * refuses anything else before a body runs. The ORDER is not free: the index into each list is the enumerator
  * idb_transaction.h declares, which is what lets one lookup serve both the declaration and the body. */
-static const char *const TX_MODES[] = { "readonly", "readwrite", "versionchange", NULL };
-static const char *const TX_DURABILITY[] = { "default", "strict", "relaxed", NULL };
+IDL_ENUM_VALUES(TX_MODES, "readonly", "readwrite", "versionchange");
+IDL_ENUM_VALUES(TX_DURABILITY, "default", "strict", "relaxed");
 
 /* WHICH VALUE OF THE ENUMERATION THIS IS. It runs none of the page's code — §3.2.19's membership check is part
    of the TYPE and has already run, so what arrives is one of the strings this file wrote. */

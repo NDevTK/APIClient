@@ -316,4 +316,49 @@ static inline int apiclient_assert_fmt_check(const char *fmt, ...) { (void) fmt;
 #define DFAILF(...)        APICLIENT_FMT_UNUSED(__VA_ARGS__)
 #endif
 
+/* COUNTOF(a) — THE EXTENT OF AN ARRAY, AND A COMPILE ERROR ON A POINTER.
+ *
+ * `sizeof(a) / sizeof((a)[0])` is the remedy this project prescribes for an unbounded scan, and written bare it
+ * is a TRAP RATHER THAN A BOUND: handed a POINTER it does not fail, it ANSWERS — 1, on any target whose element
+ * is as wide as an address, which is every table of `const char *`. So the bound added to stop a scan running
+ * off the end silently becomes a bound of one element, and a loop that was too long becomes a loop that is too
+ * short. Both are wrong and only one of them looks wrong, which is why the naked idiom must not be the thing a
+ * reader reaches for. The guard turns the pointer case into a DIAGNOSTIC: an array decays to a pointer only in
+ * a VALUE context and `__typeof__` is not one, so `__builtin_types_compatible_p` still tells `T[N]` from `T *`,
+ * and the pointer arm asks for `char[-1]` — the translation unit does not compile.
+ *
+ * IT IS A COMPILE-TIME CHECK AND THEREFORE NOT A DCHECK: it costs nothing at runtime, it reads identically in
+ * dev and release, and there is no build in which it is compiled out. That distinction matters more here than
+ * it usually would, for the reason the pointer-invariant note at the head of this file gives — the state it
+ * refuses is one this engine's shipping target does not trap on. A read past the end of a static table in
+ * WebAssembly linear memory returns whatever the link left after it, so a scan that overruns does not fault; it
+ * keeps reading. And an overrun the compiler is entitled to assume cannot happen licenses the compiler to
+ * conclude the loop containing it cannot exit, which is a HANG rather than a crash and presents as a
+ * performance problem rather than as a defect. */
+#if defined(__GNUC__) || defined(__clang__)
+#define APICLIENT_MUST_BE_ARRAY(a) \
+  (0 * (int) sizeof(char[1 - 2 * __builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0]))]))
+#else
+#define APICLIENT_MUST_BE_ARRAY(a) 0
+#endif
+#define COUNTOF(a) (sizeof(a) / sizeof((a)[0]) + (size_t) APICLIENT_MUST_BE_ARRAY(a))
+
+/* DCHECK_SENTINEL(a) — A SENTINEL-TERMINATED TABLE ENDS IN THE TERMINATOR ITS READERS SCAN FOR.
+ *
+ * A table read by `for (i = 0; a[i]; i++)` states its own length in exactly ONE place — its last element — and
+ * nothing about writing the declaration makes that element mandatory. What makes the omission expensive is not
+ * that the entry is missing but WHERE it is found: the scan discovers it by reading past the end, which is
+ * undefined, so the diagnosis surfaces as a hang or as garbage somewhere downstream instead of as a fault at
+ * the declaration that is actually wrong.
+ * ASSERTED HERE the table is checked where its EXTENT IS STILL VISIBLE, which is why this is a macro and not a
+ * function: a function receives the pointer, and the extent is precisely what a pointer has already lost. It is
+ * also why the assert must expand AT the declaring site — a shared checker would stamp its own file and line
+ * for every table in the tree, naming a remedy with no object. Expanded here it names the table to fix.
+ * IT DOES NOT REPLACE SUPPLYING THE TERMINATOR FROM A DEFINITION MACRO, which removes the possibility instead
+ * of reporting it; this is for the tables a macro does not declare. */
+#define DCHECK_SENTINEL(a) \
+  DCHECK((a)[COUNTOF(a) - 1] == NULL, \
+         "a sentinel-terminated table does not end in its terminator — every reader scans for one, so the scan " \
+         "runs past the end of the array and reads whatever the link happened to place after it")
+
 #endif

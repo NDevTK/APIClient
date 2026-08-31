@@ -1313,7 +1313,7 @@ static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
    value is §3.1 Scrolling's perform-a-scroll behavior argument, which is inside the crash
    `ev_scroll_the_element_or_terminate` names — so the member arrives with the algorithm that reads it, and
    until then the type is the entire member. */
-static const char *const EV_SCROLL_BEHAVIOR[] = { "auto", "instant", "smooth", NULL };
+IDL_ENUM_VALUES(EV_SCROLL_BEHAVIOR, "auto", "instant", "smooth");
 static const IdlDictMember EV_SCROLL_TO_OPTIONS[] = {
     { "behavior", IDL_ENUM, false, EV_SCROLL_BEHAVIOR, 0, NULL, IDL_DEFAULT_STRING, "auto" },
     { "left",     IDL_UNRESTRICTED_DOUBLE, false, NULL, 1 },
@@ -1342,7 +1342,7 @@ static const IdlArgType EV_SCROLL_ARGS[2] = { IDL_UNRESTRICTED_DOUBLE_OR_DICT, I
    order, so a second array would be one enumeration with two definitions — free to disagree about an order
    nothing else states, which is exactly how a keyword the declaration accepts becomes one the algorithm maps
    to the wrong arm. */
-static const char *const EV_SCROLL_INTO_VIEW_CONTAINER[] = { "all", "nearest", NULL };
+IDL_ENUM_VALUES(EV_SCROLL_INTO_VIEW_CONTAINER, "all", "nearest");
 static const IdlDictMember EV_SCROLL_INTO_VIEW_OPTIONS[] = {
     { "behavior",  IDL_ENUM, false, EV_SCROLL_BEHAVIOR,            0, NULL, IDL_DEFAULT_STRING, "auto" },
     { "block",     IDL_ENUM, false, SCROLL_LOGICAL_POSITIONS,      1, NULL, IDL_DEFAULT_STRING, "start" },

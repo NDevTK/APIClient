@@ -73,9 +73,8 @@ static int       g_id_ctor = -1, g_id_parse = -1;
    not one of these five is a TypeError thrown by the CONVERSION, before step 1, which is what
    DOMParser-parseFromString-html.html's "throws on an invalid enum value" asserts and what makes this file's
    own switch total. */
-static const char *const DOM_PARSER_SUPPORTED_TYPE[] = {
-    "text/html", "text/xml", "application/xml", "application/xhtml+xml", "image/svg+xml", NULL
-};
+IDL_ENUM_VALUES(DOM_PARSER_SUPPORTED_TYPE,
+    "text/html", "text/xml", "application/xml", "application/xhtml+xml", "image/svg+xml");
 
 /* THE OBJECT'S WHOLE STATE — see the head comment. */
 typedef struct { JSValue document; } DomParser;

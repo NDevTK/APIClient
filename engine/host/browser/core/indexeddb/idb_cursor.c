@@ -78,7 +78,7 @@
    `direction` answers with and what the IDL converted, and it is stored rather than the enum for that reason.
    The enum that indexes this list and the decode that produces it are in the header, because §6.2's and
    §6.3's retrieve-multiple branch on the same four and two enums over one list is one fact answered twice. */
-const char *const IDB_CURSOR_DIRECTIONS[] = { "next", "nextunique", "prev", "prevunique", NULL };
+IDL_ENUM_VALUES_EXTERN(IDB_CURSOR_DIRECTIONS, "next", "nextunique", "prev", "prevunique");
 
 static JSValue g_key;
 static int     g_ready;

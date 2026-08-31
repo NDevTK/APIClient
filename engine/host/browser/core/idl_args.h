@@ -1076,6 +1076,30 @@ void idl_this_iface(bool (*is)(JSValueConst v), const char *iface);
    idl_optional_from do; `values` must outlive the declaration, so every caller passes a static. */
 void idl_enum_values(const char *const *values);
 
+/* DEFINE A §3.2.18 VALUE LIST — AND SUPPLY ITS TERMINATOR, so it cannot be left off.
+ *
+ * Both readers of a value list scan it for a NULL: the positional conversion behind idl_enum_values and the
+ * dictionary member that names the list in an IdlDictMember row. Neither can bound the scan, because both
+ * receive a POINTER and a pointer has already lost the extent — so the list's length lives entirely in its own
+ * last element, and until now nothing about writing one made that element mandatory. A list missing it is not
+ * a list that reads short; it is a scan that walks off the end of the array into whatever the link placed
+ * after it, which is undefined, and which on this engine's shipping target does not fault (see check.h's
+ * pointer-invariant note). The compiler is then entitled to assume the walk cannot happen and to conclude the
+ * loop cannot exit, so the symptom is a HANG that presents as slowness rather than a fault at the wrong
+ * declaration.
+ * SUPPLYING THE TERMINATOR REMOVES THE POSSIBILITY RATHER THAN REPORTING IT, which is why this is the primary
+ * mechanism and check.h's DCHECK_SENTINEL is only for a list some other macro did not declare. It also means
+ * the value lists say what the IDL says and nothing else — the terminator is this engine's own bookkeeping and
+ * never part of the enumeration §3.2.18 defines.
+ * THE EXTENT IS DELIBERATELY LEFT UNWRITTEN (`[]`). A hand-written extent is a second copy of the list's length
+ * and the two go out of sync in the one direction that is silent: an `extern T x[N]` whose definition supplies
+ * MORE than N entries is truncated to N with only a warning, and the entry truncation drops is the LAST one —
+ * the terminator. Writing the bound by hand to make a scan safe is therefore how the terminator goes missing.
+ * A list shared across translation units uses the EXTERN form and declares `extern const char *const name[];`
+ * in its header, incomplete, so no second copy of the length can exist to drift. */
+#define IDL_ENUM_VALUES(name, ...)        static const char *const name[] = { __VA_ARGS__, NULL }
+#define IDL_ENUM_VALUES_EXTERN(name, ...)        const char *const name[] = { __VA_ARGS__, NULL }
+
 /* DECLARE WHICH OF §3.2.26 Buffer source types' TWELVE TYPED ARRAYS AN IDL_TYPED_ARRAY POSITION IS, and which
    of §3.3's two buffer extended attributes the IDL writes on it.
    §3.2.26 step 1 is "let T be the IDL type V is being converted to" and step 2 tests [[TypedArrayName]]
