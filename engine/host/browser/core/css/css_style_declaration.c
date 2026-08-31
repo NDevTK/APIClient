@@ -3092,10 +3092,16 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
     lxb_dom_node_t *n;
 
     (void)magic; (void)this_val;
-    if (argc < 1) return JS_ThrowTypeError(ctx, "getComputedStyle requires an element");
+    /* `elt` is required and its type is `Element`, and BOTH are the declaration's: §3.6 step 5 throws for a
+       call with no argument before any body is entered, and §3.2.15's brand test — the node class narrowed to
+       an element — throws for anything that is not one. The body's copies of both were the brand written out
+       by hand that a declared type exists to replace. */
+    DCHECK(argc >= 1, "getComputedStyle's body ran with no `elt` — §3.6 step 5's required-argument check is the "
+                      "declaration's and it did not run");
     n = node_of(argv[0]);
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT)
-        return JS_ThrowTypeError(ctx, "getComputedStyle requires an element");
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "getComputedStyle's `elt` reached its body as something that is not an element — the declaration "
+           "brands it against the node class and narrows it with element_is, so §3.2.15 owes the TypeError");
     if (argc > 1 && JS_IsString(argv[1])) {
         const char *p = JS_ToCString(ctx, argv[1]);
         bool named = p && *p;
@@ -3187,9 +3193,16 @@ void cssom_init(JSContext *ctx)
                declaration is the agent's. The number here was CSSOM §7.1, which is The ElementCSSInlineStyle
                Mixin: the sentence beside it already said WINDOW, and every other getComputedStyle citation in
                this file already said CSSOM §7.2. */
-            static const IdlArgType TWO[2] = { IDL_ANY, IDL_DOMSTRING };
+            /* `Element elt` IS A DECLARED TYPE and it was IDL_ANY, so §3.2.15's brand test was the body's
+               own `node_of` plus a node-type test. Every DOM node wrapper is one class, so the class says
+               only "a Node" and idl_iface_narrow(element_is) is what says which kind — the pairing
+               core/dom/shadow_root.h states and slot.c, element_internals.c and intersection_observer.c
+               already use. */
+            static const IdlArgType TWO[2] = { IDL_INTERFACE, IDL_DOMSTRING };
             g_id_gcs = idl_method_id(ctx, TWO, 2, js_get_computed_style, 0);
             idl_optional_from(1);
+            idl_iface_brand(node_class_id());
+            idl_iface_narrow(element_is);
         }
     }
     /* §6.6.1 declares all three per-property spellings `[CEReactions] attribute [LegacyNullToEmptyString]

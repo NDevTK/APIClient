@@ -1000,7 +1000,12 @@ static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int 
         lxb_dom_node_t *added, *ref, *into;
         if (magic == 1) {
             added = node_of(argv[1]);
-            if (!added) return JS_ThrowTypeError(ctx, "insertAdjacentElement requires an Element");
+            /* §4.9 declares this position `Element`, and the declaration brands it against the node class and
+               narrows it with element_is — so §3.2.15's TypeError has already been thrown for anything else
+               and this body cannot be reached with one. The test that stood here answered for every NODE. */
+            DCHECK(added != NULL && added->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                   "insertAdjacentElement's `element` reached its body as something that is not an element — "
+                   "the declaration brands it, so §3.2.15 owes the TypeError before step 1");
         } else {
             const char *s;
             size_t slen = 0;
@@ -2771,7 +2776,13 @@ static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_close
 
 void element_init(JSContext *ctx)
 {
-    static const IdlArgType ADJ_ANY[2] = { IDL_DOMSTRING, IDL_ANY };
+    /* DOM §4.9 Interface Element: `[CEReactions] Element? insertAdjacentElement(DOMString where, Element
+       element)`. The second position IS an interface type and was IDL_ANY, so §3.2.15's brand test was the
+       body's own `node_of` — which answers for EVERY node, so
+       `el.insertAdjacentElement("beforebegin", document.createTextNode("x"))` inserted a Text node where the
+       IDL says Element and a browser throws. Every node wrapper is one class, so the class says only "a Node"
+       and idl_iface_narrow(element_is) says which kind. */
+    static const IdlArgType ADJ_ELEMENT[2] = { IDL_DOMSTRING, IDL_INTERFACE };
     /* §4.9's `boolean toggleAttribute(DOMString qualifiedName, optional boolean force)`. The second position
        was declared IDL_ANY on the ground that "ToBoolean is total and runs nothing, so the body can coerce it"
        — TRUE of every value the page determines and FALSE of unknown external input, which §7.1.2 ToBoolean's
@@ -2824,9 +2835,11 @@ void element_init(JSContext *ctx)
     g_id_set_html_unsafe = element_declare_set_html_unsafe(ctx, ELEMENT_SET_HTML_UNSAFE);
     g_id_set_html = element_declare_set_html(ctx, ELEMENT_SET_HTML);
     /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and a
-       value the IDL leaves alone (a Node, or a DOMString this stringifies into a Text node). */
+       value the IDL leaves alone (a DOMString this stringifies into a Text node). */
     g_id_adj_html = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
-    g_id_adj_el = idl_method_id(ctx, ADJ_ANY, 2, js_el_insert_adjacent, 1);
+    g_id_adj_el = idl_method_id(ctx, ADJ_ELEMENT, 2, js_el_insert_adjacent, 1);
+    idl_iface_brand(node_class_id());
+    idl_iface_narrow(element_is);
     g_id_adj_text = idl_method_id(ctx, IDL_2STR, 2, js_el_insert_adjacent, 2);
     g_id_has_attrs = idl_method_id(ctx, NULL, 0, js_el_attr_list, 0);
     g_id_attr_names = idl_method_id(ctx, NULL, 0, js_el_attr_list, 1);

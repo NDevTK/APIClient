@@ -246,18 +246,13 @@ static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, in
         JS_FreeCString(ctx, qname);
     }
     if (doctype) {                                       /* step 4 */
-        /* THE BRAND IS `node_class_id()` AND THE IDL TYPE IS `DocumentType?`, WHICH ARE NOT THE SAME SET — every
-           DOM node wrapper is one class, so `createDocument(null, "x", document.createElement("div"))` passes
-           §3.2.15's class test and arrives here, where the spec owes a TypeError. This assert names what closes
-           it: a `bool document_type_is(JSValueConst)` in core/dom/document_type.{c,h} and an
-           `idl_iface_narrow(document_type_is)` beside the brand in dom_implementation_init — the same pairing
-           core/dom/shadow_root.h states and core/dom/slot.c, element_internals.c and intersection_observer.c
-           already declare. Until it exists this fires on ordinary page input rather than throwing, which is
-           what the message must say instead of claiming the case cannot arise. */
+        /* The declaration brands this position against the node class AND narrows it with document_type_is, so
+           §3.2.15's TypeError has already been thrown for a node of any other kind — which is what the class
+           test alone could not do, since every DOM node wrapper is one class. */
         DCHECK(doctype->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
                "createDocument was handed a Node that is not a DocumentType — §4.5.1 declares the position "
-               "`DocumentType?` and this declaration brands it only against the NODE class, so §3.2.15's "
-               "refusal never ran. Declare idl_iface_narrow(document_type_is) beside idl_iface_brand here");
+               "`DocumentType?` and the declaration narrows the node-class brand with document_type_is, so "
+               "§3.2.15 owes the TypeError before step 1 and this cannot be reached");
         dom_cow_append_child(node_of(doc), doctype);
     }
     if (!JS_IsUndefined(element)) {                      /* step 5 */
@@ -322,6 +317,10 @@ void dom_implementation_init(JSContext *ctx)
                                                   IDL_INTERFACE_NULLABLE };
         g_id_document = idl_method_id(ctx, CREATE_DOC, 3, js_impl_create_document, 0);
         idl_iface_brand(node_class_id());
+        /* AND `DocumentType` IS NARROWER THAN "A NODE", which a class id cannot say: every node wrapper is one
+           class, so the brand above crossed `createDocument(null, "x", document.createElement("div"))` as
+           itself and step 4 met a Node §4.5.1 does not admit. §4.6's own predicate is what says which kind. */
+        idl_iface_narrow(document_type_is);
         idl_optional_from(2);
     }
     {

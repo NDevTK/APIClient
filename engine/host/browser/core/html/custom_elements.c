@@ -2370,7 +2370,14 @@ static void ce_when_defined_resolve(JSContext *ctx, JSValueConst registry, const
    before this runs — it was a hand-rolled machine here only because the dictionary conversion could not yet
    express a typed member, and a second implementation of a request the machine already makes is exactly the
    duplication that machine exists to remove. */
-static const IdlArgType CE_DEFINE_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT };
+/* `CustomElementConstructor constructor` IS A CALLBACK FUNCTION TYPE — HTML §4.13.4 The CustomElementRegistry
+   interface declares `callback CustomElementConstructor = HTMLElement ();` — and it was IDL_ANY. Web IDL
+   §3.2.19 Callback function types is "If the result of calling IsCallable(V) is false … then throw a
+   TypeError", which needs no brand and no class at all, and its ORDER is what the declaration buys: conversions
+   run left to right, so `customElements.define("x-y", 42, {get extends(){…}})` must throw at argument 2 BEFORE
+   §3.2.17 reads the dictionary's getter. Undeclared, the dictionary was converted first and the throw came from
+   the body, which is the same wrong order this file's own §4.13.4 stage comment describes one member down. */
+static const IdlArgType CE_DEFINE_ARGS[3] = { IDL_DOMSTRING, IDL_CALLBACK, IDL_DICT };
 static const IdlDictMember CE_DEFINE_OPTS[] = { { "extends", IDL_DOMSTRING } };   /* ElementDefinitionOptions */
 
 /* §4.13.4 step 14.5.1 reads `constructor.observedAttributes` and 14.5.2 converts it to a sequence<DOMString>
@@ -2513,8 +2520,13 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
     CeNameVerdict verdict;
     JSValue prev;
 
-    /* step 1: IsConstructor(constructor). */
-    if (!JS_IsFunction(ctx, argv[1])) {
+    /* step 1: "If IsConstructor(constructor) is false, then throw a TypeError." IT IS NOT THE DECLARATION'S
+       AND IT IS NOT §3.2.19's: the callback function type's conversion is IsCallable, which an arrow function
+       and a method shorthand both pass and IsConstructor refuses, so `customElements.define("x-y", () => {})`
+       is a TypeError this step owes and the type does not. The two run in the spec's order — §3.2.19 at the
+       argument boundary, then this — and the test that stood here was JS_IsFunction, which is §3.2.19's
+       question asked a second time and step 1's question not asked at all. */
+    if (!JS_IsConstructor(ctx, argv[1])) {
         JS_ThrowTypeError(ctx, "customElements.define requires a constructor");
         return -1;
     }

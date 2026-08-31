@@ -52,6 +52,16 @@ static JSValue js_doctype_get(JSContext *ctx, JSValueConst this_val, int magic)
     return s ? JS_NewStringLen(ctx, (const char *)s, len) : JS_NewString(ctx, "");
 }
 
+/* §3.2.15's type test — see document_type.h. `node_of` answers NULL for anything that is not a node wrapper,
+   which is the same shape shadow_root_is_value has and for the same reason: the declaration hands this whatever
+   the page passed. */
+bool document_type_is(JSValueConst v)
+{
+    const lxb_dom_node_t *n = node_of(v);
+
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE;
+}
+
 void document_type_init(JSContext *ctx)
 {
     JSClassDef d = { "DocumentType" };

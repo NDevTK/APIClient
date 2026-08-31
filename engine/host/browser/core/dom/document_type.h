@@ -1,6 +1,8 @@
 /* THE DocumentType INTERFACE — DOM §4.6. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_DOCUMENT_TYPE_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_DOCUMENT_TYPE_H
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 
@@ -12,6 +14,16 @@ void document_type_install_proto(JSContext *ctx);
 void document_type_install(JSContext *ctx, JSValueConst global);
 /* Reached from document_agent_free — §4.6 is declared by document_init, so it is released by its declarer. */
 void document_type_free(void);
+
+/* WEB IDL §3.2.15 Interface types' "If V implements I" OVER THIS INTERFACE, so an IDL position declared
+   `DocumentType` can state its brand in its DECLARATION. Every node wrapper shares one class, so
+   `idl_iface_brand(node_class_id())` says only "a Node" and `idl_iface_narrow(document_type_is)` is what says
+   which kind — the same pairing core/dom/shadow_root.h states and slot.c, element_internals.c and
+   intersection_observer.c already declare. DOM §4.5.1 Interface DOMImplementation's
+   `optional DocumentType? doctype = null` is what needed it: the class test alone crossed
+   `createDocument(null, "x", document.createElement("div"))` as itself, where §3.2.15 owes a TypeError.
+   Side-effect-free; answers false for anything that is not a node. */
+bool document_type_is(JSValueConst v);
 
 /* §4.6'S TWO IDS ARE FREED OUT OF THE ARENA THEY WERE ALLOCATED FROM, WHICH IS NOT THE ONE LEXBOR FREES THEM
  * INTO. `lxb_html_token_doctype_parse` takes `doc_type->node.owner_document->mraw` and calls
