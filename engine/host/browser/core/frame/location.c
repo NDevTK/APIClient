@@ -1218,7 +1218,7 @@ static void loc_assert_cross_origin_surface(JSContext *ctx, JSValueConst loc)
     int i;
 
     for (i = 0; i < LOCATION_XO_N; i++) {
-        JSAtom a = JS_NewAtom(ctx, LOCATION_CROSS_ORIGIN[i]);
+        JSAtom a = JS_NewAtom(ctx, LOCATION_CROSS_ORIGIN[i].name);
         int has;
 
         DCHECK(a != JS_ATOM_NULL, "a §7.2.1.3.1 cross-origin property name could not be interned");

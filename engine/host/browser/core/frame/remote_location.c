@@ -70,7 +70,14 @@
    [[NeedsGetter]]: false, [[NeedsSetter]]: true }, { [[Property]]: "replace" } ». Declared in this component's
    header rather than beside §7.2.4's member table, because this is the object the list DESCRIBES; see there
    for who else reads it. The ORDER is the standard's and it is what §7.2.1.3.7's key list reports. */
-const char *const LOCATION_CROSS_ORIGIN[LOCATION_XO_N] = { "href", "replace" };
+/* §7.2.1.3.1's Location arm VERBATIM, records and all — see remote_location.h for why the flags are on the
+   one list and not a second one beside it. `replace` is written `{ [[Property]]: "replace" }` in the standard,
+   which is an entry with NEITHER flag: an operation, and the shape §7.2.1.1's "type is method and e has
+   neither [[NeedsGetter]] nor [[NeedsSetter]]" lets through. */
+const CrossOriginProperty LOCATION_CROSS_ORIGIN[LOCATION_XO_N] = {
+    { "href",    /* [[NeedsGetter]] */ false, /* [[NeedsSetter]] */ true  },
+    { "replace", /* [[NeedsGetter]] */ false, /* [[NeedsSetter]] */ false },
+};
 
 /* §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s FOUR NAMES — `then` (so a cross-origin Location is not
    mistaken for a thenable and awaited) and the three well-known symbols an engine touches while doing
@@ -113,6 +120,24 @@ static void *rl_opaque(JSValueConst obj)
     JSClassID cid = 0;
 
     return JS_GetAnyOpaque(obj, &cid);
+}
+
+/* §7.2.1.1 Integration with IDL's step 1, THE LOCATION HALF — see remote_location.h for why only the
+   cross-origin arm needs a brand at all. It is asked of EVERY receiver of EVERY declared member, so it reads
+   two words and allocates nothing.
+   THE DCHECK IS core/frame/window_proxy.c's window_proxy_is VERBATIM AND FOR ITS REASON: a `g_rl_class != 0 &&`
+   here would make "this component is not declared" and "that object is not a cross-origin Location" ONE value,
+   and after remote_location_free gives the id back every live object of this class would report itself as
+   something else — silently, at the one site that decides whether a cross-origin access is refused. This
+   component is a row on core/platform.c's declare column, so every agent has run it before any member can be
+   called. */
+bool remote_location_is(JSValueConst v)
+{
+    DCHECK(g_rl_class != 0,
+           "§7.2.1.1 Integration with IDL's step 1 asked whether an object is a cross-origin Location before "
+           "remote_location_init declared the class or after remote_location_free gave it back — with no class "
+           "there is no answer, and returning `not a Location` would say the access is PERMITTED");
+    return JS_GetOpaque(v, g_rl_class) != NULL;
 }
 
 /* Web IDL §3.7.6 "Attributes"' and §3.7.7 "Operations"' brand check for this object, answered as the record or
@@ -234,7 +259,13 @@ static int rl_member_desc(JSContext *ctx, JSPropertyDescriptor *desc, JSAtom pro
        [[NeedsGetter]]/[[NeedsSetter]] is an ACCESSOR and one with neither is the property itself, so a `href`
        that arrived as a data property (or a `replace` that arrived as an accessor) would be answered under
        the wrong branch of §7.2.1.3.4 with nothing to say so. */
-    DCHECK((member == LOCATION_XO_HREF) == ((d.flags & JS_PROP_GETSET) != 0),
+    /* AND THE BRANCH IS READ OFF THE ENTRY'S OWN FLAGS, not off its index. `member == LOCATION_XO_HREF` was
+       the same claim written as a constant, which is true only while the list has exactly these two rows in
+       exactly this order — and the list is §7.2.1.3.1's, not this file's. The flags say it directly: an entry
+       with either [[NeedsGetter]] or [[NeedsSetter]] IS an accessor, one with neither is the property itself,
+       which is also the split §7.2.1.1 Integration with IDL decides `type` against. */
+    DCHECK((LOCATION_CROSS_ORIGIN[member].needs_get || LOCATION_CROSS_ORIGIN[member].needs_set) ==
+           ((d.flags & JS_PROP_GETSET) != 0),
            "a member of §7.2.1.3.1's CrossOriginProperties(Location) is installed with the wrong SHAPE — "
            "`href` is the entry with [[NeedsSetter]] and must be an accessor, `replace` has neither getter nor "
            "setter and must be the operation's own property");
@@ -462,9 +493,9 @@ static void remote_location_install_realm(JSContext *ctx)
        so `Object.prototype.toString.call(otherW.location)` is "[object Object]", which is what a browser
        reports for a cross-origin Location. */
     idl_interface_tag(ctx, proto, "Location");
-    idl_install_accessor(ctx, proto, LOCATION_CROSS_ORIGIN[LOCATION_XO_HREF], rl_href_get, LOCATION_XO_HREF,
+    idl_install_accessor(ctx, proto, LOCATION_CROSS_ORIGIN[LOCATION_XO_HREF].name, rl_href_get, LOCATION_XO_HREF,
                          g_rl_href_setter);
-    idl_install_method(ctx, proto, LOCATION_CROSS_ORIGIN[LOCATION_XO_REPLACE], g_rl_replace);
+    idl_install_method(ctx, proto, LOCATION_CROSS_ORIGIN[LOCATION_XO_REPLACE].name, g_rl_replace);
     JS_SetClassProto(ctx, g_rl_class, proto);
 }
 
@@ -489,7 +520,7 @@ void remote_location_init(JSContext *ctx)
           "the cross-origin Location's class could not be declared");
 
     for (i = 0; i < LOCATION_XO_N; i++) {
-        g_member_atom[i] = JS_NewAtom(ctx, LOCATION_CROSS_ORIGIN[i]);
+        g_member_atom[i] = JS_NewAtom(ctx, LOCATION_CROSS_ORIGIN[i].name);
         CHECK(g_member_atom[i] != JS_ATOM_NULL,
               "remote location: §7.2.1.3.1's CrossOriginProperties(Location) names could not be interned — "
               "without them every read is decided by comparing against nothing");

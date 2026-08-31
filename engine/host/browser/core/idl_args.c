@@ -346,7 +346,20 @@ typedef struct {
        every member with no such position, which is nearly all of them. */
     const char *const *enum_values;
     const char *name;       /* what to call this member in a diagnostic; set when it is installed */
+    /* WEB IDL §3.5 Security's THIRD INPUT for this member — "method", "getter" or "setter" — plus the one
+       value §3.5 has no name for, because the member is not one of the three: a CONSTRUCTOR. It is stated at
+       the MINT and not at the call, which is the whole point of it: `idl_step_function` mints an operation,
+       `idl_mint_accessor` mints an attribute's getter or its setter, and `idl_step_constructor` mints
+       something §3.7.7 Operations' create an operation function never runs at all. Asking the question at the
+       call site instead would be a per-member `if` over a receiver, which is exactly what HTML §7.2.1's own
+       failure mode is — see window_proxy.c's §7.2.1.1 Integration with IDL. */
+    uint8_t    sec_kind;
 } IdlMember;
+
+/* The four values of that field. IDL_SEC_NONE is FIRST so a zeroed pool entry is "not one of §3.5's three",
+   which is the only value that is safe to have by accident: it asks no security check at all, and a member
+   that reached its step without going through a mint is already a DCHECK at the top of the step. */
+enum { IDL_SEC_NONE = 0, IDL_SEC_METHOD, IDL_SEC_GETTER, IDL_SEC_SETTER };
 
 /* THE TWO STAGES EVERY DECLARED MEMBER PASSES THROUGH BEFORE ITS OWN ALGORITHM STARTS, and they are stages
    rather than bookkeeping because a flow RESTS at both: the second one is where a page's `toString` or a
@@ -2294,6 +2307,57 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         DCHECK(!g_tree || !g_tree->recorded(),
                "a DOM mutation recorded tree steps outside any declared member — declare that member so it "
                "converges on this machine, which is the only thing that drains them");
+        /* WEB IDL §3.7.7 Operations' create an operation function, THE TRY-LIST'S SECURITY CHECK, and §3.7.6
+         * Attributes' identical step in create an attribute getter and create an attribute setter. The
+         * sentence is one line in all three: "If jsValue is a platform object, then perform a security check,
+         * passing jsValue, id, and "method"" — with "getter" and "setter" in the other two.
+         *
+         * IT IS ASKED HERE BECAUSE HERE IS WHERE EVERY DECLARED MEMBER CONVERGES, and that is the whole
+         * mechanism. §7.2.1's own failure mode is SILENCE: a check written per member is a check the next
+         * member added does not have, and nothing says so. There is exactly one opening block every step
+         * member passes through — this one — so the member that forgets cannot exist, and the only thing a
+         * member states is WHAT IT IS (`sec_kind`, at its mint) rather than what to do about it.
+         *
+         * AND IT IS BEFORE §3.6 Overload resolution algorithm's ARITY TypeError, WHICH IS OBSERVABLE.
+         * §3.7.7's try-list performs the check at its step 2's sub-list and only reaches "compute the
+         * effective overload set" afterwards — so
+         * `setTimeout.call(crossOriginFrame)` with NO arguments is a "SecurityError" and not
+         * "1 argument required, but only 0 present". A page reads the difference: the first says "you may not
+         * look at that window", the second says "you called it wrong", and only one of them is true.
+         *
+         * A PROMISE-RETURNING MEMBER REJECTS RATHER THAN THROWS, and that needs no line here: the `Try` this
+         * abrupt returns into is closed by js_idl_args_step above, whose last two steps turn any abrupt from a
+         * promise-typed operation into %Promise.reject%. That is what a browser does with
+         * `fetch.call(crossOriginFrame, "/")`, and it is why this check must be INSIDE the try rather than at
+         * whatever minted the function.
+         *
+         * THE RESIDUAL IS THE PLAIN-C GETTER, AND IT IS NAMED HERE BECAUSE THIS IS THE SITE IT WOULD REACH.
+         * idl_install_accessor takes an `IdlGetter` — a raw JS_CFUNC_getter_magic with NO pool entry — so an
+         * attribute whose read runs none of the page's code never arrives at this machine and its "getter"
+         * check is not performed. The §7.2.2 The Window object attributes core/frame/window.c installs are
+         * every one of them that shape (`name`, `opener`, `status`, `closed`, `frameElement`,
+         * `isSecureContext` — grep idl_install_accessor there), so
+         * `Object.getOwnPropertyDescriptor(window, "status").get.call(crossOriginFrame)` answers instead of
+         * throwing a "SecurityError". WHAT THE NEXT DIFF BUILDS: route idl_define_accessor's getter through a
+         * pool entry the way its setter already goes through idl_mint_accessor, so the getter has a member to
+         * carry IDL_SEC_GETTER and reaches this block. HOW ITS ABSENCE SHOWS: WPT
+         * html/browsers/origin/cross-origin-objects/cross-origin-objects.html's "Cross-origin access to
+         * methods and getters/setters" fails every `desc.get.bind(otherObj)` assertion for a name outside
+         * windowAllowlists.getters while passing every method assertion beside it. */
+        if (m->sec_kind != IDL_SEC_NONE) {
+            static const WindowProxySecurityType SEC[] = {
+                WP_SEC_METHOD,   /* IDL_SEC_METHOD */
+                WP_SEC_GETTER,   /* IDL_SEC_GETTER */
+                WP_SEC_SETTER,   /* IDL_SEC_SETTER */
+            };
+            DCHECK(m->sec_kind - 1 < (int)(sizeof SEC / sizeof SEC[0]),
+                   "a pool entry carries a Web IDL §3.5 Security type this machine has no row for — the four "
+                   "values are declared beside IdlMember and every one of them is set at a mint");
+            if (window_proxy_security_check(ctx, s->hdr.this_val, m->name, SEC[m->sec_kind - 1]) < 0) {
+                JS_FreeValue(ctx, cb_result);
+                return JS_STEP_ABRUPT;
+            }
+        }
         /* A NON-VARIADIC member's arguments ARE its declared ones: a position the IDL does not list is not
            part of the member, so there is nothing past `nargs` to convert, to store, or to hand the body. A
            VARIADIC one takes every argument the page passed, however many that is. */
@@ -4724,7 +4788,8 @@ JSValue idl_callback_interface_object(JSContext *ctx, const char *name)
 
 /* THE ONE MINT, and the one place §3.7.7 Operations' `length` is stated — see idl_member_length_of. A caller
    names the member and the pool answers how long it is; there is no argument for a caller to get wrong. */
-static JSValue idl_mint_step(JSContext *ctx, const char *name, int stepid, JSCFunctionEnum cproto)
+static JSValue idl_mint_step(JSContext *ctx, const char *name, int stepid, JSCFunctionEnum cproto,
+                             uint8_t sec_kind)
 {
     int idx = idl_member_of_step(stepid);
     /* NAMING THE OFFENDER IS THE POINT. "some member was never declared" sends whoever hits it grepping every
@@ -4734,6 +4799,16 @@ static JSValue idl_mint_step(JSContext *ctx, const char *name, int stepid, JSCFu
                "not an args-machine member installs through idl_install_step_method", name ? name : "?");
     DCHECK(name != NULL && *name, "a step function was minted with no name — the pool has nothing to call it");
     idl_member(idx)->name = name;
+    /* THE KIND IS SET ON EVERY MINT AND MUST NOT DIFFER BETWEEN THEM. A member is minted once per REALM (each
+       realm installs its own function object over one pool entry), so this runs many times for one member and
+       writes the same value — and a stepid reaching here as an operation in one realm and as an attribute's
+       setter in another would be one entry answering §7.2.1.1 Integration with IDL's `type` two ways. */
+    DCHECK(idl_member(idx)->sec_kind == IDL_SEC_NONE || idl_member(idx)->sec_kind == sec_kind,
+           "one pool entry was minted under two different Web IDL §3.5 Security types — the type is what "
+           "HTML §7.2.1.1 Integration with IDL matches against CrossOriginProperties's [[NeedsGetter]] and "
+           "[[NeedsSetter]], so a member that is an operation here and an attribute's accessor there decides "
+           "a cross-origin access two ways");
+    idl_member(idx)->sec_kind = sec_kind;
     return JS_NewCFunction2(ctx, NULL, name, idl_member_length_of(idl_member(idx)), cproto, stepid);
 }
 
@@ -4754,7 +4829,7 @@ static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, i
             "exactly one, so a declaration that says otherwise is describing an operation and not an attribute",
             expect ? "setter" : "getter", name ? name : "?",
             idl_member_length_of(idl_member(idx)), expect);
-    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step);
+    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step, expect ? IDL_SEC_SETTER : IDL_SEC_GETTER);
 }
 
 /* MINT WITHOUT INSTALLING — for an internal door a C caller holds and calls rather than a property a page
@@ -4763,7 +4838,7 @@ static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, i
    is the same member: a page that reaches one of these objects reads the same `length` off it. */
 JSValue idl_step_function(JSContext *ctx, const char *name, int stepid)
 {
-    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step);
+    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD);
 }
 
 /* The same mint for a member reached with `new` — Web IDL §3.7.1 Interface object's `length`, which is the
@@ -4774,7 +4849,12 @@ JSValue idl_step_constructor(JSContext *ctx, const char *name, int stepid)
     DCHECK(idl_member_of_step(stepid) >= 0, "a step constructor was minted for a member this pool never "
                                             "declared");
     DCHECK(name != NULL && *name, "a step constructor was minted with no name");
-    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step_ctor);
+    /* WEB IDL §3.5 Security HAS NO TYPE FOR A CONSTRUCTOR, and that is not an omission to paper over: §3.7.7
+       Operations' create an operation function is what performs a security check, and §3.7.1 Interface
+       object's construct steps are a different algorithm with no such step. The receiver slot of a
+       JS_CFUNC_step_ctor call carries NEW.TARGET rather than a `this` value, so asking §7.2.1.1 Integration
+       with IDL about it would be asking about the wrong object entirely. */
+    return idl_mint_step(ctx, name, stepid, JS_CFUNC_step_ctor, IDL_SEC_NONE);
 }
 
 void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int stepid,
@@ -4792,7 +4872,8 @@ void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, i
 {
     DCHECK(idl_declared_before_seal(stepid), name);
     DCHECK(stepid >= 0, "an IDL member was installed before it was declared");
-    JS_SetPropertyStr(ctx, (JSValue)target, name, idl_mint_step(ctx, name, stepid, JS_CFUNC_step));
+    JS_SetPropertyStr(ctx, (JSValue)target, name,
+                      idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD));
 }
 
 /* §3.7.7 "Operations"'s UNFORGEABLE HALF, which is the operation twin of idl_install_accessor_unforgeable and
@@ -4812,7 +4893,8 @@ void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const c
 {
     DCHECK(idl_declared_before_seal(stepid), name);
     DCHECK(stepid >= 0, "an unforgeable IDL operation was installed before it was declared");
-    JS_DefinePropertyValueStr(ctx, (JSValue)target, name, idl_mint_step(ctx, name, stepid, JS_CFUNC_step),
+    JS_DefinePropertyValueStr(ctx, (JSValue)target, name,
+                              idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD),
                               JS_PROP_ENUMERABLE);
 }
 

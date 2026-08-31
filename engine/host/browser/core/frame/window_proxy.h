@@ -360,6 +360,50 @@ JSValue window_proxy_this_object(JSContext *ctx, JSValueConst this_val);
    WindowProxy, which §7.2.3.5 step 3 hands the accessor as its receiver. Side-effect-free. */
 bool window_proxy_implements_window(JSValueConst js_value);
 
+/* WEB IDL §3.5 Security's `perform a security check`, WHOSE STEPS HTML §7.2.1.1 Integration with IDL DEFINES —
+ * "Note: The HTML Standard defines how a security check is performed", in §3.5's own words. `type` is §3.5's
+ * third input verbatim: "the type of the function object – "method" (when it corresponds to an IDL operation),
+ * or "getter" or "setter" (when it corresponds to the getter or setter function of an IDL attribute)".
+ *
+ * IT IS THE OTHER HALF OF §7.2.1, AND THE HALF WITH NO PROPERTY LOOKUP UNDER IT. §7.2.3.5 [[GetOwnProperty]]
+ * filters what a cross-origin WindowProxy HANDS OUT, and that is the whole of what this component used to have
+ * — which is exactly right for `otherW.setTimeout` and says nothing at all about
+ * `setTimeout.call(otherW, f)`, where the function came from the READER's own window and the receiver was
+ * carried past the lookup. Web IDL puts the check inside the function rather than beside the property for that
+ * reason: create an operation function's try-list performs it BEFORE the brand TypeError and before the
+ * overload resolution, so a cross-origin receiver is refused whatever the call spelling was, and a page tells
+ * that SecurityError apart from a TypeError and from an answer.
+ *
+ * THE LIST IS DECLARED BESIDE THE MEMBERS AND IS NOT ASKED AT THE READ — §7.2.1.3.1 CrossOriginProperties's
+ * thirteen records live at CROSS_ORIGIN in window_proxy.c, each carrying the [[NeedsGetter]] and
+ * [[NeedsSetter]] the standard writes beside its [[Property]], and both halves are load-bearing: a filter that
+ * refused everything would pass a test that only checks the throw, and `close`, `focus`, `blur` and
+ * `postMessage` must go THROUGH with a cross-origin receiver while `location`'s getter and setter both do and
+ * a Location `href` GETTER does not.
+ *
+ * Returns 0 when §7.2.1.1 RETURNS (the call proceeds) and -1 with its "SecurityError" DOMException pending.
+ * `identifier` is the member's IDL identifier and must be a live string for the length of the call. */
+typedef enum {
+    WP_SEC_METHOD,   /* §3.5's "method" — an IDL operation */
+    WP_SEC_GETTER,   /* §3.5's "getter" — an IDL attribute's getter function */
+    WP_SEC_SETTER    /* §3.5's "setter" — an IDL attribute's setter function */
+} WindowProxySecurityType;
+
+/* ONE ENTRY OF §7.2.1.3.1 CrossOriginProperties ( O )'s return value, which the standard writes as a RECORD
+   and not as a name: « { [[Property]]: "location", [[NeedsGetter]]: true, [[NeedsSetter]]: true }, … ». The
+   type is declared with the check rather than beside either list because BOTH arms return one — the Window
+   arm's thirteen live in window_proxy.c and the Location arm's two in core/frame/remote_location.h — and the
+   §7.2.1.1 loop below reads them through the same three fields. An entry with neither flag is an OPERATION,
+   which is precisely the shape §7.2.1.1's "type is method and e has neither [[NeedsGetter]] nor
+   [[NeedsSetter]]" tests for; `{ [[Property]]: "replace" }` is the standard's own spelling of it. */
+typedef struct {
+    const char *name;      /* §7.2.1.3.1's [[Property]] */
+    bool        needs_get; /* [[NeedsGetter]] — absent in the standard's record means false */
+    bool        needs_set; /* [[NeedsSetter]] */
+} CrossOriginProperty;
+int window_proxy_security_check(JSContext *ctx, JSValueConst platform_object, const char *identifier,
+                                WindowProxySecurityType type);
+
 /* AND WHETHER THAT RECEIVER IS THE ONE THE MEMBER'S OWN REALM ANSWERS FOR. An attribute whose value the realm
    ALREADY HOLDS is correct exactly while §3.7.6's idlObject is this realm's Window — normally true, because
    each realm installs its own getter over its own value and js_call_c_function sets ctx to the member's realm.

@@ -1710,11 +1710,33 @@ static bool proxy_read_permitted(const ProxyData *p, int magic)
  * IT IS DECLARED HERE AND ASKED ONCE, at the object's own [[GetOwnProperty]], because that is where §7.2.3.5
  * puts it — before the prototype walk, so a name outside the list never reaches a member at all. Asking it
  * per-member is what produced the silence above. */
-static const char *const CROSS_ORIGIN_NAME[] = {
-    "window", "self", "location", "close", "closed", "focus", "blur", "frames",
-    "length", "top", "opener", "parent", "postMessage"
+/* AND EACH ENTRY IS A RECORD, NOT A NAME — §7.2.1.3.1 returns « { [[Property]]: "window", [[NeedsGetter]]:
+ * true, [[NeedsSetter]]: false }, … » and the two flags are half of what each entry says. A name-only list
+ * answers §7.2.3.5's question (does this name reach a member at all) and CANNOT answer §7.2.1.1's (is this
+ * ACCESS to that name permitted), which is decided by `type` against those very flags: `location` is on the
+ * list with BOTH flags so its getter and its setter both go through, while Location's `href` is on the list
+ * with [[NeedsGetter]] FALSE so its SETTER goes through and its getter is a SecurityError. Two lists — one of
+ * names here and one of flags wherever the second question was asked — is the second copy this file's own
+ * capture-time loop exists to make impossible, so the flags live on the one list. */
+/* §7.2.1.3.1's Window arm VERBATIM, in the standard's own order. An entry written with neither flag is one
+   the standard writes as `{ [[Property]]: "close" }` — an OPERATION, which §7.2.1.1's "type is method and e
+   has neither [[NeedsGetter]] nor [[NeedsSetter]]" is exactly the test for. */
+static const CrossOriginProperty CROSS_ORIGIN[] = {
+    { "window",      true,  false },
+    { "self",        true,  false },
+    { "location",    true,  true  },
+    { "close",       false, false },
+    { "closed",      true,  false },
+    { "focus",       false, false },
+    { "blur",        false, false },
+    { "frames",      true,  false },
+    { "length",      true,  false },
+    { "top",         true,  false },
+    { "opener",      true,  false },
+    { "parent",      true,  false },
+    { "postMessage", false, false },
 };
-#define CROSS_ORIGIN_NAME_N ((int)(sizeof CROSS_ORIGIN_NAME / sizeof CROSS_ORIGIN_NAME[0]))
+#define CROSS_ORIGIN_NAME_N ((int)(sizeof CROSS_ORIGIN / sizeof CROSS_ORIGIN[0]))
 static JSAtom g_xo_atom[CROSS_ORIGIN_NAME_N];
 /* §7.2.1.3.2 step 1's FOUR NAMES, which are the exception to the throw: `then` (so a cross-origin WindowProxy
    is not mistaken for a thenable and awaited), and the three well-known symbols an engine touches while doing
@@ -1735,7 +1757,7 @@ static void proxy_capture_names(JSContext *ctx)
     int i;
 
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) {
-        g_xo_atom[i] = JS_NewAtom(ctx, CROSS_ORIGIN_NAME[i]);
+        g_xo_atom[i] = JS_NewAtom(ctx, CROSS_ORIGIN[i].name);
         CHECK(g_xo_atom[i] != JS_ATOM_NULL,
               "window proxy: §7.2.1.3.1's cross-origin property names could not be interned — without them "
               "every cross-origin read is decided by comparing against nothing");
@@ -1769,15 +1791,143 @@ static void proxy_capture_names(JSContext *ctx)
     for (i = 0; i < WP_MEMBER_N; i++) {
         bool listed = false;
         int k;
+        int listed_at = -1;
         for (k = 0; k < CROSS_ORIGIN_NAME_N; k++)
-            if (!strcmp(PROXY_MEMBER[i], CROSS_ORIGIN_NAME[k])) { listed = true; break; }
+            if (!strcmp(PROXY_MEMBER[i], CROSS_ORIGIN[k].name)) { listed = true; listed_at = k; break; }
         DCHECK(listed == PROXY_CROSS_ORIGIN[i],
                "a WindowProxy member's own cross-origin flag disagrees with §7.2.1.3.1's list of cross-origin "
                "accessible window property names. The list decides whether the read reaches a member at all "
                "(§7.2.3.5 throws before the prototype walk) and the flag decides what the member then answers, "
                "so a disagreement is either a member that can never be read across origins however it is "
                "marked, or one that is reached and then refuses — both of them silent");
+        /* AND THE ENTRY'S [[NeedsGetter]] AGREES WITH HOW THIS SURFACE SHIPS THE MEMBER. Every member of
+           the table above is a §7.2.2 ATTRIBUTE, installed here as an accessor, so a listed one whose
+           record says [[NeedsGetter]] false would be a name §7.2.3.5 steps 4-6 hand out and §7.2.1.1
+           Integration with IDL then refuses the getter of — a descriptor a page can read and an accessor
+           it cannot call, which is neither of the two answers the standard has. Location's `href` is the
+           entry that shape is real for, and it is real THERE because §7.2.4 The Location interface writes its
+           `href` for the SETTER alone; nothing on this surface is.
+           IT IS THE HALF THE LOOP ABOVE CANNOT SEE: that one pairs a NAME against the list, and the flags
+           are what the list says about the name once it is found. */
+        DCHECKF(!listed || CROSS_ORIGIN[listed_at].needs_get,
+                "HTML §7.2.1.3.1 CrossOriginProperties lists `%s` with [[NeedsGetter]] FALSE while §7.2.3 The "
+                "WindowProxy exotic object's own surface installs it as an ACCESSOR — so §7.2.3.5 "
+                "[[GetOwnProperty]] answers the descriptor for a cross-origin read and §7.2.1.1 Integration "
+                "with IDL then throws a "
+                "SecurityError out of the getter that descriptor names. Either the record is mistyped or "
+                "the member is not an attribute of this surface", PROXY_MEMBER[i]);
     }
+}
+
+/* HTML §7.2.1.1 "Integration with IDL", WHOLE — "When perform a security check is invoked, with a
+ * platformObject, identifier, and type, run these steps". Three steps, and each one is below in order.
+ *
+ * IT IS THE OTHER HALF OF §7.2.1 AND IT WAS THE MISSING ONE. Everything else in this file filters a PROPERTY
+ * LOOKUP: §7.2.3.5 [[GetOwnProperty]] decides what a cross-origin WindowProxy hands out, and CROSS_ORIGIN is
+ * the list it decides with. That is exactly right for `otherW.setTimeout`, which never reaches a member — and
+ * it says nothing whatever about `setTimeout.call(otherW, f)`, where the function came from the READER's own
+ * window and the receiver was carried past the lookup on the call. Web IDL puts the check INSIDE the function
+ * for that reason: create an operation function's try-list performs it before the brand TypeError and before
+ * §3.6 Overload resolution algorithm, so a cross-origin receiver is refused whatever the spelling was.
+ *
+ * THE SPELLINGS THAT REACH IT ARE THE ONES §C-stack MAKES ORDINARY. `.call`, `.apply`, `Reflect.apply`, a
+ * bound callee and the spread are call-site-resolved onto the ultimate target with the receiver INTACT, so
+ * every one of them delivers a foreign `this` to the member's body. That is not a corner of the language: it
+ * is how `Object.getOwnPropertyDescriptor(self, "opener").get.call(popup)` is written, which is a WPT
+ * assertion this engine already runs, and how a bundle probes a frame it cannot read.
+ *
+ * WHAT WAS THERE INSTEAD WAS ONE MEMBER'S ACCIDENT. core/timing/timer.c's §8.7 Timers receiver resolution
+ * reaches proxy_realm for a cross-origin navigable, and proxy_realm's hosted-document DCHECK fires — a crash
+ * naming a missing capability, not a check: it is one member, it is dev-only, and it says nothing about
+ * `close`, `focus`, `blur` and `postMessage`, which must go THROUGH.
+ *
+ * BOTH HALVES ARE THE ASSERTION, AND THAT IS WHY THE LIST CARRIES FLAGS. A filter that refused every
+ * cross-origin receiver would pass a test that only checks the throw, and it would be wrong four times over on
+ * the Window (the four operations §7.2.1.3.1 lists with neither flag), twice on `location` (both its getter
+ * and its setter go through) and once on a Location (`href`'s SETTER goes through while its GETTER does not).
+ * Step 2 below is those flags and nothing else.
+ *
+ * `platform_object` IS THE RAW `this` VALUE AND NOT §3.7.7's RESOLVED `jsValue`, and that is an equivalence
+ * rather than a shortcut. The resolution's only effect is on a MISSING receiver — "or realm's global object
+ * otherwise" — and that global is a Window of THIS heap, which the Window arm below answers same-origin for
+ * unconditionally, so resolving it would reach step 3's return by a longer road. It is also the arm that costs:
+ * window_proxy_this_object ANSWERS OWNED, and this runs on every declared member of the platform.
+ *
+ * STEP 1's TWO ARMS ARE ASKED AS THREE BRANDS, and the third is absent on purpose — see remote_location.h.
+ * A Window (any realm's global; §7.1.1 Origins' same origin is a constant across an ORIGIN-KEYED AGENT
+ * CLUSTER) and a WindowProxy (whose origin is per-flow, read where §7.2.1.3.3 reads it) are the Window arm;
+ * a CROSS-ORIGIN Location is the Location arm. A Location this agent holds takes step 1's return and step 3's
+ * pass to the same place, so there is no observation that separates them and no brand to ask.
+ *
+ * Returns 0 where §7.2.1.1 RETURNS, -1 with its "SecurityError" DOMException pending. */
+int window_proxy_security_check(JSContext *ctx, JSValueConst platform_object, const char *identifier,
+                                WindowProxySecurityType type)
+{
+    const CrossOriginProperty *xo;
+    int n, i;
+    bool same_origin;
+
+    DCHECK(identifier != NULL,
+           "§7.2.1.1 Integration with IDL was invoked with no `identifier` — its step 2 is a SameValue against "
+           "each entry's [[Property]], so a member reaching here unnamed would match nothing on the list and "
+           "every cross-origin access to it would be refused, the four operations included");
+
+    /* STEP 1 — "If platformObject is not a Window or Location object, then return." */
+    if (window_proxy_is(platform_object)) {
+        xo = CROSS_ORIGIN;  n = CROSS_ORIGIN_NAME_N;
+        /* §7.2.1.3.3 IsPlatformObjectSameOrigin, read here rather than at step 3, because reading it is what
+           captures the proxy's record into the running flow's delta and the branch below must not decide
+           whether that happens: the answer is per-flow either way. */
+        same_origin = window_proxy_same_origin_of(platform_object);
+    } else if (window_is(platform_object)) {
+        xo = CROSS_ORIGIN;  n = CROSS_ORIGIN_NAME_N;
+        /* EVERY Window OBJECT IN THIS HEAP IS SAME ORIGIN WITH THE ASKER, and that is SECURITY.md's own
+           keying rather than an assumption: an instance is `(browsing context group, origin)`, so a foreign
+           realm's global reached through a same-origin document is same origin by construction and a
+           cross-origin document's Window is not in this heap at all — it is a WindowProxy, taken above. */
+        same_origin = true;
+    } else if (remote_location_is(platform_object)) {
+        /* §7.2.1.3.3 answers FALSE for this object by construction — it exists only for a Document another
+           instance holds (remote_location.h), which is the same condition. */
+        xo = LOCATION_CROSS_ORIGIN;  n = LOCATION_XO_N;
+        same_origin = false;
+    } else {
+        return 0;
+    }
+
+    /* STEP 2 — "For each e of CrossOriginProperties(platformObject): if SameValue(e.[[Property]], identifier)
+       is true", and then its three sub-steps in the standard's order. SameValue over two strings is `strcmp`
+       here: `identifier` is the member's IDL identifier, a static string the declaration owns. */
+    for (i = 0; i < n; i++) {
+        if (strcmp(xo[i].name, identifier) != 0) continue;
+        switch (type) {
+        /* 2.1.1 — "If type is "method" and e has neither [[NeedsGetter]] nor [[NeedsSetter]], then return."
+           NEITHER, not either: `location` is on the list with both flags and is an ATTRIBUTE, so a page that
+           pulled some operation named "location" out of another interface and applied it to a cross-origin
+           WindowProxy is refused rather than let through on a name match. */
+        case WP_SEC_METHOD: if (!xo[i].needs_get && !xo[i].needs_set) return 0; break;
+        /* 2.1.2 — "Otherwise, if type is "getter" and e.[[NeedsGetter]] is true, then return." */
+        case WP_SEC_GETTER: if (xo[i].needs_get) return 0; break;
+        /* 2.1.3 — "Otherwise, if type is "setter" and e.[[NeedsSetter]] is true, then return." */
+        case WP_SEC_SETTER: if (xo[i].needs_set) return 0; break;
+        default:
+            DFAILF("§7.2.1.1 Integration with IDL was invoked with a `type` Web IDL §3.5 Security does not "
+                   "define — its three inputs are the platform object, the identifier, and one of \"method\", "
+                   "\"getter\" and \"setter\", and a fourth kind of function object is a fourth sub-step to "
+                   "write here rather than a value to fall past (%d)", (int)type);
+        }
+        /* AND THE LOOP DOES NOT STOP HERE. §7.2.1.3.1's lists have no duplicate [[Property]], so a match that
+           did not return can only fall to step 3 — but the standard's `for each` is what is written, and a
+           `break` would be this file deciding that. */
+    }
+
+    /* STEP 3 — "If IsPlatformObjectSameOrigin(platformObject) is false, then throw a "SecurityError"
+       DOMException." A SecurityError and not `undefined` and not a TypeError: a page tells all three apart,
+       and `try { f.call(otherW) } catch (e) { e.name }` is how it does. */
+    if (same_origin) return 0;
+    JS_ThrowDOMException(ctx, "SecurityError",
+                         "the origins do not permit `%s` to be invoked on that object", identifier);
+    return -1;
 }
 
 /* ECMA-262 6.1.7's ARRAY INDEX, spelled out rather than parsed: a canonical numeric string for an integer in
@@ -2215,7 +2365,7 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
                     "runs OrdinaryGetOwnProperty on the Window, so the member exists and only this surface is "
                     "missing it: install it from the component that owns the member onto the object "
                     "window_proxy_install_proto builds, the way `close`, `postMessage` and §6.6.6's `focus` and "
-                    "`blur` are", CROSS_ORIGIN_NAME[i]);
+                    "`blur` are", CROSS_ORIGIN[i].name);
             return 0;
         }
 
@@ -2956,22 +3106,23 @@ JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val)
     return JS_UNINITIALIZED;
 }
 
-/* §7.2.1's WRITE SIDE of `name` — the origin check, which is the whole of what this member adds over the
-   write itself: `name` is not a cross-origin property, so setting it across origins is a SecurityError rather
-   than a silent no-op. The rename is window_proxy_name_assign's, because a Window and its proxy write the one
-   navigable's one name. */
+/* §7.2.2's `name` SETTER. THE ORIGIN CHECK IS NO LONGER HERE, and its removal is the point of the mechanism
+   above: `name` is not on §7.2.1.3.1's list, so §7.2.1.1 Integration with IDL refuses this setter for a
+   cross-origin receiver BEFORE its body runs, at the one place every declared member converges on. The line
+   that stood here asked the SAME question off a SECOND table — proxy_read_permitted reads PROXY_CROSS_ORIGIN,
+   which is indexed by this component's member magic, while §7.2.1.1 reads the standard's own CROSS_ORIGIN — so
+   keeping it would be two tables deciding one member's one question, and the day they disagreed the answer
+   would depend on which spelling a page used. The rename is window_proxy_name_assign's, because a Window and
+   its proxy write the one navigable's one name. */
 static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueConst v, int magic)
 {
     JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
-    ProxyData *p;
 
     (void)magic;
     if (JS_IsUninitialized(nav)) return JS_EXCEPTION;   /* §3.7.6's TypeError, already thrown */
-    p = proxy_of(nav);
-    DCHECK(p != NULL, "§3.7.6's receiver resolved to something that is not a WindowProxy");
-    if (!proxy_read_permitted(p, WP_NAME))
-        return JS_ThrowDOMException(ctx, "SecurityError",
-                                    "the origins do not permit setting the name of that Window");
+    /* The record lookup and its capture went with the check: window_proxy_name_assign does its own proxy_of,
+       which is what puts this write in the running flow's delta, and a second one here read a record only the
+       deleted branch had anything to ask. */
     return window_proxy_name_assign(ctx, nav, v);
 }
 
@@ -2993,21 +3144,18 @@ static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueCons
 static JSValue proxy_opener_set(JSContext *ctx, JSValueConst this_val, JSValueConst v, int magic)
 {
     JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
-    ProxyData *p;
     JSValue js;
     int r;
 
     (void)magic;
     if (JS_IsUninitialized(nav)) return JS_EXCEPTION;   /* §3.7.6's TypeError, already thrown */
-    p = proxy_of(nav);
-    DCHECK(p != NULL, "§3.7.6's receiver resolved to something that is not a WindowProxy");
     /* §7.2.1.3.1 lists `opener` with [[NeedsSetter]] FALSE, so a cross-origin write of it is not a member of
        the cross-origin surface at all — §7.2.1.3.6 CrossOriginSet ( O, P, V, Receiver ) calls the setter only
-       when the descriptor §7.2.1.3.4 built HAS one, and its last step throws a SecurityError. proxy_read_permitted
-       answers the read side's list, which for `opener` is `true`; the WRITE side is this line. */
-    if (!proxy_same_origin(p))
-        return JS_ThrowDOMException(ctx, "SecurityError",
-                                    "the origins do not permit setting the opener of that Window");
+       when the descriptor §7.2.1.3.4 built HAS one, and its last step throws a SecurityError.
+       THAT REFUSAL IS NOT WRITTEN HERE ANY MORE. It was `!proxy_same_origin(p)` — §7.2.1.1 Integration with
+       IDL's step 3 with this member's half of step 2 folded into the choice of function, which is the shape
+       that goes wrong silently the next time a setter is added and nobody remembers. §7.2.1.1 now reads the
+       [[NeedsSetter]] FALSE off the list itself, for every setter at once, before any body runs. */
     if (JS_IsNull(v)) {
         window_proxy_disown_opener(ctx, nav);
         return JS_UNDEFINED;
