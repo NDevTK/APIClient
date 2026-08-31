@@ -65,8 +65,11 @@ JSValueConst form_data_entry_value(JSValueConst fd, int i);
    element submits. OWNED. */
 JSValue form_data_clone(JSContext *ctx, JSValueConst src);
 
-/* Fetch §5.1's `multipart/form-data` SERIALIZER — the other direction of the parser above, and the body a
-   `new Response(formData)` carries. `*out_n` is the length; the BOUNDARY it chose is written to `boundary`,
+/* HTML §4.10.22.8 "Multipart form data"'s `multipart/form-data` encoding algorithm — the SERIALIZER, the other
+   direction of the parser above, and the body a `new Response(formData)` carries. It is HTML's and not
+   Fetch's: Fetch §5.2 "BodyInit unions"'s extract REACHES it for the FormData arm and lists it among the terms
+   it defines by reference, and "Fetch §5.1's" stood here, which is "Headers class".
+   `*out_n` is the length; the BOUNDARY it chose is written to `boundary`,
    which must hold at least FORM_DATA_BOUNDARY_MAX bytes, because the Content-Type has to name it. */
 #define FORM_DATA_BOUNDARY_MAX 64
 char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *boundary, size_t *out_n);

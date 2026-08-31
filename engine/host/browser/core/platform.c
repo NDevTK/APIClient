@@ -660,11 +660,15 @@ static void i_xml_serializer(JSContext *c, JSValueConst g, const PlatformDocumen
    one row: a declaration that has to precede another's (EventTarget before Window, because Window.prototype
    chains to EventTarget.prototype and core/realm.h builds the per-realm prototypes in declaration order) and
    an install that has to follow it (§7.2.2's event handlers, which sit on the global once the chain is made)
-   would otherwise be two orders and therefore two lists. They are not: §8.1.7.2's handlers are Window's own
-   mixins and window.c installs them, which is where the spec puts them anyway.
+   would otherwise be two orders and therefore two lists. They are not: §8.1.8.2 "Event handlers on elements,
+   Document objects, and Window objects"'s handlers are Window's own mixins — `GlobalEventHandlers` and
+   `WindowEventHandlers`, declared in §8.1.8.2.1 "IDL definitions" and the two §7.2.2 `includes` above — and
+   window.c installs them, which is where the spec puts them anyway. (§8.1.7.2 stood here and is "Queuing
+   tasks", which has nothing to do with a handler; the term itself is §8.1.8.1 "Event handlers".)
    §4.8.5 is why `document` is last: installing it runs the insertion steps for every <iframe> in the markup,
-   which CREATES a child navigable — so the browsing context, the WindowProxy class and §7.4's create must all
-   already be here. */
+   which CREATES a child navigable — so the browsing context, the WindowProxy class and §7.3.1.3 "Child
+   navigables"'s "create a new child navigable" must all already be here (§7.4 stood on that create and is
+   "Navigation and session history"). */
 static const PlatformComponent PLATFORM[] = {
     /* HR-TIME §4's TIME ORIGIN IS THE FIRST FIELD A REALM GETS, and the position is the argument. §4 puts the
        field on the ENVIRONMENT SETTINGS OBJECT and says it holds "a moment early in the initialization" of it;
@@ -1385,8 +1389,9 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
     DCHECK(JS_IsObject(global), "a document was installed on something that is not the global object");
     DCHECK(doc->dom != NULL, "a document was installed with no parsed tree — `document` is a wrapper over one");
     DCHECK(doc->url != NULL && *doc->url,
-           "a document was installed with no ADDRESS — a document is loaded FROM somewhere, and §4.4's API "
-           "base URL is what every relative URL the page builds resolves against");
+           "a document was installed with no ADDRESS — a document is loaded FROM somewhere, and HTML §8.1.3.2 "
+           "Environment settings objects' API base URL is what every relative URL the page builds resolves "
+           "against (§4.4 stood here and is Grouping content)");
     DCHECK(doc->origin != NULL && *doc->origin,
            "a document was installed with no PRINCIPAL — every same-origin check compares it");
     /* THE TWO FACTS ARE TWO ARGUMENTS, which is the whole of the fix for them: a host with one of them passed

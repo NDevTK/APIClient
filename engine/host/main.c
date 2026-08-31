@@ -167,8 +167,10 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
     result_page_errors_ride_the_document();
 
     /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's and `opener_policy` is §7.1.3's,
-       both decided by the browser component that reads the response (§7.4.6's navigation params, which
-       `qjs_init` and `qjs_join` run over the header list the zone hands them) and merely CARRIED through here.
+       both decided by the browser component that reads the response (§7.4.2.1 "Supporting concepts"'s
+       navigation params struct, which §7.4.5 "Populating a session history entry" creates BY FETCHING and
+       which `qjs_init` and `qjs_join` run over the header list the zone hands them — §7.4.6 stood here and is
+       "Applying the history step", which never mentions navigation params) and merely CARRIED through here.
        They used to be assignments into a struct this function DECLARED UNINITIALIZED and filled field by
        field, as did the two other hosts — see core/platform.h for why a fact added to that struct was garbage
        in whichever host the adder was not editing, and why there is no such struct outside that file now. */
@@ -177,7 +179,8 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
 
 /* ONE DOCUMENT — the per-realm half, run once per document including the first.
    `url` IS THE DOCUMENT'S ADDRESS AND `origin` IS ITS PRINCIPAL, and they are two different facts. This host
-   passed the ORIGIN for both, so every document's §4.4 API BASE URL was `https://site` where the page was at
+   passed the ORIGIN for both, so every document's §8.1.3.2 "Environment settings objects" API BASE URL (§4.4
+   stood here and is "Grouping content") was `https://site` where the page was at
    `https://site/app/dashboard` — and the base URL is what `fetch("api/users")` resolves against, so the tool's
    own headline output named `https://site/api/users` for a request the page makes to
    `https://site/app/api/users`. They are two ARGUMENTS of the one document install now, which is what makes
@@ -209,8 +212,10 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
 /* THE REALM, BEFORE ITS DOCUMENT — the half every realm this host builds after the agent's first one shares,
    and the ONE place the per-realm intrinsic list is run for one. It is a step of its own rather than folded
    into the builder below because its TWO callers differ in exactly one thing, and that thing has to happen
-   BETWEEN these two lines: WHOSE WindowProxy the document is installed with. §7.4's child navigable already
-   has one — the creator minted it when it created the navigable, so the proxy precedes the realm — while a
+   BETWEEN these two lines: WHOSE WindowProxy the document is installed with. §7.3.1.3 "Child navigables"'s
+   child navigable already has one — its "create a new child navigable" minted it, so the proxy precedes the
+   realm (§7.4 stood here and is "Navigation and session history", which navigates a navigable rather than
+   creating one) — while a
    document the host JOINS is its navigable's first, so the proxy is minted ON this realm
    (window_proxy_new_self reads §8.1.3.1's fields off it and adopts it) and cannot exist before it.
    §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a realm
@@ -402,7 +407,8 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
  * source of truth the next reader will wire up; it is gone from the ABI instead. */
 /* `url` IS THE DOCUMENT'S ADDRESS, not its origin, and the ORIGIN IS DERIVED FROM IT HERE. The host used to
  * send the origin it had computed itself with `new URL(u).origin`, which is one fact arriving from two places
- * and the address arriving from none: §4.4's API base URL, `location.pathname` and `document.baseURI` were all
+ * and the address arriving from none: §8.1.3.2 "Environment settings objects"'s API base URL (§4.4 stood here
+ * and is "Grouping content"), `location.pathname` and `document.baseURI` were all
  * the bare origin. Deriving it here also makes it §4.7's real serialization, which url.c already implements. */
 /* `top_level_url` IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, and only the trusted zone can state it. One
  * WASM instance is one DOCUMENT regardless of origin, so this instance's document may itself be NESTED in a
@@ -644,14 +650,20 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
           "that answer, so the platform surface this bundle runs against would be a guess. A top-level document "
           "passes its own address; a nested one passes its embedder's, which only the trusted zone knows");
 
-    /* THE RESPONSE, READ ONCE, BEFORE ANYTHING IS BUILT OUT OF IT. §7.4.6's navigation params are what §7.5.1
-       creates a Document from, and they are decided at the RESPONSE and carried — never read back off the
+    /* THE RESPONSE, READ ONCE, BEFORE ANYTHING IS BUILT OUT OF IT. §7.4.2.1 "Supporting concepts"'s navigation
+       params — created from the response by §7.4.5 "Populating a session history entry"'s "create navigation
+       params by fetching" — are what §7.5.1 "Shared document creation infrastructure" creates a Document from,
+       and they are decided at the RESPONSE and carried (§7.4.6 stood here and is "Applying the history step",
+       which never mentions navigation params at all) — never read back off the
        Document later, which is CLAUDE.md's rule about an operation taking its inputs with it and is why the
        standard splits these into two algorithms.
        THE SECURE-CONTEXT ANSWER IS §8.1.3.5's OVER THE TOP-LEVEL CREATION URL, asked here rather than of a
        realm because §7.1.3's and §7.1.4's obtains and §7.5.1's `requestsOAC` all run BEFORE the realm whose
        environment it is exists — the standard calls that environment the RESERVED one for exactly this reason.
-       §7.4.2.1's TARGET SNAPSHOT SANDBOXING FLAGS ARE THE CALLER'S ANSWER AND NOT A ZERO THIS ENTRY WRITES.
+       §7.4.2.1 "Supporting concepts"'s TARGET SNAPSHOT PARAMS' SANDBOXING FLAGS ARE THE CALLER'S ANSWER AND
+       NOT A ZERO THIS ENTRY WRITES. (Spelt as the struct's member rather than as "target snapshot sandboxing
+       flags", which §7.4.2.3.4 "Non-fetch schemes and external software" defines as a row of its OWN struct,
+       taken FROM this one — two names one word apart for a value and a copy of it.)
        A ZERO STOOD HERE with the spec sentence that makes it right for ONE of the two navigables this entry
        roots — "a top-level traversable has no embedder element, so §7.1.5 answers its creation flags from the
        POPUP sandboxing flag set, which begins empty and which only §7.3.1.7's rules for choosing a navigable
@@ -967,7 +979,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "name, and every flow of this document mints its worlds under it, so an unnamed document can take "
            "no part in cross-document time travel");
 
-    /* §7.4.2.1's TARGET SNAPSHOT SANDBOXING FLAGS FOR THE JOINED NAVIGABLE, WHICH THE ZONE STATES. A ZERO
+    /* §7.4.2.1 "Supporting concepts"'s TARGET SNAPSHOT PARAMS' SANDBOXING FLAGS FOR THE JOINED NAVIGABLE,
+       WHICH THE ZONE STATES — the struct's own member, not §7.4.2.3.4's like-named row taken from it. A ZERO
        STOOD HERE under an argument that is HALF right, and the half it got right is worth keeping as an
        assert rather than as a reason not to carry the value: a Document carrying §7.1.5's SANDBOXED ORIGIN
        flag is forced into a fresh OPAQUE origin, which is same origin with NOTHING, so it could not have
@@ -1665,7 +1678,9 @@ QJS_EXPORT const char *qjs_host_requests(void)
 }
 
 /* WHAT THE ENGINE TELLS THE TRUSTED ZONE, one-way, as `op` lines — DRAINED by the read. A document created
-   here (§4.8.5's child navigable, §7.4's popup) is announced rather than negotiated: the name is minted in this
+   here (§4.8.5 "The iframe element"'s child navigable, §7.2.2.1 "Opening and closing windows"'s popup — §7.4
+   stood on the second and is "Navigation and session history", which navigates one rather than opening it) is
+   announced rather than negotiated: the name is minted in this
    instance, so there is nothing to ask and nothing to wait for, and the host's job is to provision an instance
    under that name and route to it. Pulled every step beside qjs_host_requests; a notice the host drops is a
    document nothing runs, and every read through it parks its flow forever. */
