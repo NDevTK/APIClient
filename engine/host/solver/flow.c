@@ -232,6 +232,37 @@ static int64_t flow_own_silence(const Flow *f) {
     return f->cpu_gen == f->family->emit_gen ? f->cpu : 0;
 }
 
+/* THE ONE RELATION THE AGING'S TWO HALVES OWE EACH OTHER, AND THE ONLY THING THAT MAKES THEM SUMMABLE: a
+   flow's own burn over the window is part of its FAMILY's burn over that same window, so the own half can
+   never exceed the family half. The notch adds them and weighs the sum against ONE reward (the family's), and
+   that addition is only meaningful while both readings are over one epoch — which is a claim about the two
+   fields' WINDOWS, not about their magnitudes, and it is a claim nothing else in this file states.
+   IT IS THE EXACT SHAPE OF THE DEFECT IT EXISTS TO FORBID, which is why it earns a check rather than a
+   comment. The own half used to be measured since this FLOW's own last emission and the family half since ANY
+   arm's — a strictly longer window against a strictly shorter one — and the observable of that mismatch is
+   precisely this inequality inverting: a sibling forked BEFORE its family emitted kept the raw burn it had
+   inherited, while the emission zeroed the family's, so the arm stood at `own > 0 == fam` and paid a debt no
+   emission of its family could forgive and no dispatch would ever be offered to clear. Measured, on the
+   artifact built one commit before the repair and on this reproduction: a document whose gate forks a sibling
+   and then forks an unbounded generator emitted ONE of its two worlds, and putting a longer busy loop between
+   the two — which raises the `cpu` every newborn rival copies at its fork, and nothing else — brought the lost
+   world back. An ordering that a rival's idle burn can restore is not one any resume seam can be blamed for.
+   ASSERTED AT EVERY TRANSITION THAT CAN MOVE EITHER HALF AND NOWHERE ELSE — a MACRO expanded at each of them,
+   never a function they call, so the abort stamps the transition that broke the relation instead of naming one
+   forwarding line for all four. It is deliberately NOT placed in flow_own_silence: that reader is called once
+   per member per pick and from inside other DCHECK conditions, so a check there would report the same line for
+   every caller and would name no site to fix, which is the assert-with-a-remedy-and-no-address shape.
+   The condition is READ-ONLY on both sides (both readers say so at their own definitions), so it is a legal
+   DCHECK condition and evaluating it cannot move the structure it asks about. */
+#define DCHECK_AGING_ONE_WINDOW(f, what)                                                                     \
+    DCHECK(flow_own_silence(f) <= acct_family_us(f),                                                          \
+           "a flow's OWN silence exceeds its FAMILY's over the same window, after " what " — the aging term "  \
+           "SUMS the two and weighs them against the family's single reward, so this says they are being "     \
+           "read over two different epochs and the sum is a unit error. The arm now carries a debt its "       \
+           "family's next emission cannot forgive, repayable only by the dispatch the deficit itself "         \
+           "forecloses, which is §scheduler's razor's STARVES: fix the transition this abort names so both "   \
+           "halves move over the epoch FlowAcct's `emit_gen` keeps")
+
 /* …AND THE REWARD THAT SILENCE IS SUBTRACTED FROM, read through the SAME pointer for the same reason — see
    FlowAcct's `val`. It is the WFQ's reward term and the only reading of it the order makes: `Flow.val` beside
    it is what ONE member emitted and is a census quantity, never a rank. Exported as flow_reward (flow.h)
@@ -397,6 +428,10 @@ void flow_credit_emit(double v) {
        the frontier re-rank on it, and it is why the value yield's own assertion snapshots the family notch
        (engine.c) rather than this flow's alone. */
     g_running->family->fam_us = 0;
+    /* BOTH HALVES ARE NOW ZERO FOR EVERY ARM OF THIS FAMILY, which is the strongest form the relation takes and
+       the transition the old code broke: the family half was zeroed here while a sibling's own half was left
+       holding a previous window's burn, because `cpu` is written only for the flow that holds the thread. */
+    DCHECK_AGING_ONE_WINDOW(g_running, "an emission forgave this family's window");
     frontier_rank_changed();   /* rank changed: re-rank at this flow's next opcode */
 }
 
@@ -576,6 +611,11 @@ void flow_age_running(int64_t us) {
        Neither of them is the OPTIMISM term's quantity; that one is a count of completed units of work and is
        charged by flow_credit_visit, which is why it is a separate call from this one. */
     g_running->family->fam_us += us;
+    /* THE SAME MICROSECONDS WENT TO BOTH HALVES, WHICH IS WHAT KEEPS THEM ONE READING AT TWO SCOPES. This is
+       the only site that ADDS to either, so it is the only one that could add to one and not the other — a
+       charge that reached `cpu` and missed `fam_us` would make an arm's own silence outgrow its family's and
+       put the sum back in two epochs. */
+    DCHECK_AGING_ONE_WINDOW(g_running, "a slice of the thread was charged to this flow and its family");
     /* THE RESOLUTION THIS CHARGE MUST HAVE — that a slice of the thread MOVES the rank it is charged to — is
        asserted at the seam where the charge meets the pick, in engine.c's scheduler loop, because that is the
        one place both are visible and the claim is about their ORDER. See §scheduler's monopolizer sentence
@@ -888,6 +928,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        field: a term read through the shared root is equal across every arm at every instant, so the equality
        this line can check and the equality it cannot are the same equality. Any FUTURE term whose value can
        move between two forks of one parent is under that rule and belongs on the account, not on the flow. */
+    /* …AND THE AGING'S TWO HALVES ARE STILL ONE READING FOR THE ARM, which the equality below cannot say. That
+       equality compares a SUM against the parent's identical sum, so it passes whichever way the two halves
+       are split — including the split the arm is born into if `cpu` is carried without `cpu_gen`, since the
+       arm then reads its own half over a window that is not the family's. This is the site that mints the
+       population the whole defect lived in, so the relation is asserted on the NEWBORN specifically. */
+    DCHECK_AGING_ONE_WINDOW(sib, "a fork handed this arm its parent's account");
     DCHECK(flow_weight(sib) == flow_weight(parent),
            "a fork changed the ranking — the sibling is the parent's path with one arm appended, so the two "
            "must be worth the same at the instant of the branch; a weight term the fork does not carry lets a "
@@ -1355,6 +1401,11 @@ static void flow_arrive_at_virtual_time(Flow *f) {
     f->cpu     = flow_own_silence(g_running);
     f->cpu_gen = f->family->emit_gen;
     f->family->fam_us = acct_family_us(g_running);        /* …and its family half */
+    /* AND THE NEWCOMER'S TWO HALVES CAME FROM ONE FLOW'S, so they are still one reading. This site COPIES the
+       pair across an account boundary — out of the running flow's family and into a fresh one whose generation
+       space is its own — which is the one transition where the two halves are read through different pointers,
+       and therefore the one where they could be taken from different windows without anything else noticing. */
+    DCHECK_AGING_ONE_WINDOW(f, "a newcomer entered at the running flow's virtual time");
     /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED, AND IT IS AN EQUALITY. A newcomer enters AT the system's
        virtual time — not at or below it — and flow_pick's STRICT comparison is what then leaves the thread with
        the incumbent, so a tie is the whole of what "arrives" means and there is nothing left for a `<=` to
