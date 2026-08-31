@@ -264,17 +264,41 @@ static JSValue js_nnm_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewUint32(ctx, nnm_length(ctx, this_val));
 }
 
-/* §4.9.1 item(index) / getNamedItem(name) — null past the end or for a name that is not there, which is what
-   makes them different from the two getters above. magic 0 = item, 1 = getNamedItem. */
+/* §4.9.1 Interface NamedNodeMap's item(index) / getNamedItem(name) — null past the end or for a name that is
+   not there, which is what makes them different from the two getters above. §4.9.1's item(index) method steps
+   begin "If index is equal to or greater than this's attribute list's size, then return null", and that step is
+   the whole of the bounds logic: the index is `unsigned long`, so "less than zero" is not a state it has.
+
+   THE DECLARATION USED TO SAY `long`, AND THIS BODY CARRIED THE DIFFERENCE. Web IDL §3.2.4.5 long is
+   ConvertToInt(V, 32, "signed"), whose last step subtracts 2^32 from anything at or above 2^31, so
+   `attributes.item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long denotes 2147483648 — and
+   `i < 0 ? JS_UNDEFINED : …` is what folded that back onto §4.9.1 step 1's answer. That compensation is
+   precisely why the wrong type was invisible: an element cannot carry 2^31 attributes, so both signs land past
+   the end and the member answered null either way. The sign belongs to the TYPE, so it is declared, and the
+   branch that re-derived it is gone. magic 0 = item, 1 = getNamedItem. */
 static JSValue js_nnm_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue r;
 
-    if (argc < 1) return JS_NULL;
+    DCHECK(argc >= 1, "§4.9.1's `item`/`getNamedItem` reached its body with no argument — the IDL argument is "
+                      "required, so the declaration's own argument-count check is what should have refused the "
+                      "call");
     if (magic == 0) {
-        int64_t i = 0;
-        JS_ToInt64(ctx, &i, argv[0]);   /* a real number by now: the declaration converted it */
-        r = i < 0 ? JS_UNDEFINED : nnm_item(ctx, this_val, (uint32_t)i);
+        uint32_t i = 0;
+        if (concolic_is(argv[0])) {
+            /* AN UNKNOWN INDEX, unconverted because §3.2's conversion is a boundary unknown external input
+               crosses AS ITSELF. The empty map is the one size at which that has an answer rather than a fork:
+               §4.9.1 step 1 returns null for every index at or past the attribute list's size.
+               `JS_ToInt64` HERE — which is what stood in this line — IS THE READ idl_args.h BANS BY NAME: a
+               concolic is an object, so ToNumber reaches ToPrimitive and runs a getter from a plain C frame. */
+            DCHECK(nnm_length(ctx, this_val) == 0,
+                   "§4.9.1's `item` was given an UNKNOWN index into a NON-EMPTY NamedNodeMap — every Attr in it "
+                   "is a distinct answer, so the read must FORK one flow per supported index (plus the null arm "
+                   "for an index past the end) instead of deciding it here");
+            return JS_NULL;
+        }
+        JS_ToUint32(ctx, &i, argv[0]);   /* the declaration's §3.2.4.6 conversion already produced [0, 2**32-1] */
+        r = nnm_item(ctx, this_val, i);
     } else {
         const char *name = JS_ToCString(ctx, argv[0]);   /* a real string by now */
         if (!name) return JS_EXCEPTION;
@@ -553,7 +577,10 @@ JSValue attr_named_node_map_new(JSContext *ctx, JSValueConst owner)
 
 void attr_init(JSContext *ctx)
 {
-    static const IdlArgType ONE_LONG[1] = { IDL_LONG };
+    /* §4.9.1 writes `getter Attr? item(unsigned long index)` and carries NO [EnforceRange], so §3.2.4.9's
+       modulo IS the specified behaviour and there is nothing here to throw — the type states the SIGN, which is
+       the whole of what it decides. */
+    static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
     /* `(DOMString? namespace, DOMString localName)` — §4.9's namespace-keyed argument list. The namespace is
        declared NULLABLE rather than tested in the body: Web IDL turns null AND undefined into the IDL null
@@ -574,7 +601,7 @@ void attr_init(JSContext *ctx)
        hands an attribute THIS from now on instead of the bare Node it was giving. */
     node_claim_type(LXB_DOM_NODE_TYPE_ATTRIBUTE, g_attr_class);
     g_set_value_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_attr_set_value, 0);
-    g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_nnm_get, 0);
+    g_item_id = idl_method_id(ctx, ONE_ULONG, 1, js_nnm_get, 0);
     g_get_named_id = idl_method_id(ctx, ONE_STR, 1, js_nnm_get, 1);
     g_remove_named_id = idl_method_id(ctx, ONE_STR, 1, js_nnm_remove, 0);
     g_get_named_ns_id = idl_method_id(ctx, NS_LOCAL, 2, js_nnm_ns, 0);

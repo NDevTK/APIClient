@@ -1,4 +1,10 @@
-/* NodeList and HTMLCollection — DOM §4.2.10 and §4.2.11.
+/* NodeList and HTMLCollection — DOM §4.2.10 Old-style collections: NodeList and HTMLCollection, whose two
+ * subsections are §4.2.10.1 Interface NodeList and §4.2.10.2 Interface HTMLCollection.
+ *
+ * THE NUMBER §4.2.11 STOOD HERE AND IN TWO COMMENTS BELOW, AND THERE IS NO §4.2.11 — §4.2 ends at §4.2.10 and
+ * §4.3 is Mutation observers. It read as authoritative for as long as nobody opened it, which is the whole
+ * failure mode: a named-but-unnumbered claim can be checked, and a plausible wrong number sends the reader to a
+ * section that does not exist and cannot say so.
  *
  * `childNodes`, `children` and `querySelectorAll` all answered with a plain JS ARRAY, and two of the three were
  * wrong in the way that matters: they are LIVE in the spec. A page that reads `el.children`, appends a row and
@@ -32,6 +38,7 @@
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/collections.h"
+#include "solver/concolic.h"
 #include "solver/dom_cow.h"
 
 /* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it, so one shared
@@ -443,9 +450,9 @@ static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
     return JS_UNDEFINED;
 }
 
-/* §4.2.11's NAMED getter: the first element whose `id` is `name`, or — for the elements whose content
-   attribute the spec lists — whose `name` is. Only HTMLCollection has one; a NodeList's IDL declares none, so
-   `nodes.foo` is honestly undefined rather than a search that finds nothing. */
+/* §4.2.10.2 Interface HTMLCollection's NAMED getter: the first element whose `id` is `name`, or — for the
+   elements whose content attribute the spec lists — whose `name` is. Only HTMLCollection has one; a NodeList's
+   IDL declares none, so `nodes.foo` is honestly undefined rather than a search that finds nothing. */
 static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
 {
     JSValue owner;
@@ -455,7 +462,7 @@ static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
 
     n = node_of(owner);
     JS_FreeValue(ctx, owner);
-    /* §4.2.11's named getter belongs to HTMLCollection, which is every kind here except the two NodeLists. */
+    /* §4.2.10.2's named getter belongs to HTMLCollection, which is every kind here except the two NodeLists. */
     if (!n || (kind != COLL_CHILDREN && !coll_is_descendant(kind))) return JS_UNDEFINED;
     for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
         const lxb_char_t *v;
@@ -483,17 +490,44 @@ static JSValue js_coll_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewUint32(ctx, coll_length(ctx, this_val));
 }
 
-/* §4.2.10 item(index) — null past the end, which is what makes it different from the indexed getter. */
+/* §4.2.10.1 Interface NodeList's item(index) — "The item(index) method must return the indexth node in the
+   collection. If there is no indexth node in the collection, then the method must return null." That null past
+   the end is what makes it different from the indexed getter, whose supported property indices stop at the
+   length. §4.2.10.2 Interface HTMLCollection states the same operation over elements.
+
+   THE INDEX IS `unsigned long`, AND THE BODY NO LONGER RE-STATES THAT. This read used to be `JS_ToInt64` plus
+   `if (i < 0) return JS_NULL`, under a declaration of `long` — a signed type Web IDL §3.2.4.5 long converts
+   with ConvertToInt(V, 32, "signed"), whose final step is "If signedness is 'signed' and x ≥ 2^(bitLength−1),
+   then return x − 2^bitLength". So `item(2**31)` denoted −2147483648 where §3.2.4.6 unsigned long's
+   ConvertToInt(V, 32, "unsigned") denotes 2147483648, and the body's negative branch is what turned that back
+   into the null a browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: it made the declaration's
+   error unobservable through this member (a collection cannot hold 2^31 nodes, so every value ≥ 2^31 is past
+   the end under either sign), so nothing ever fired. The declaration is the spec of the conversion; a body
+   re-deriving the sign is the second copy of §3.2.4.9's arithmetic that idl_args.c exists to prevent. */
 static JSValue js_coll_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    int64_t i = 0;
+    uint32_t i = 0;
     JSValue r;
 
     (void)magic;
-    if (argc < 1) return JS_NULL;
-    JS_ToInt64(ctx, &i, argv[0]);   /* a real number by now: the declaration converted it */
-    if (i < 0) return JS_NULL;
-    r = coll_item(ctx, this_val, (uint32_t)i);
+    DCHECK(argc >= 1, "§4.2.10's `item` reached its body with no argument — its IDL argument is required, so "
+                      "the declaration's own argument-count check is what should have refused the call");
+    if (concolic_is(argv[0])) {
+        /* AN UNKNOWN INDEX, and it reaches the body unconverted because §3.2's conversion is a boundary unknown
+           external input crosses AS ITSELF (idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every integer
+           type). The empty collection is the one length at which that has an answer rather than a fork:
+           §4.2.10.1 returns null for every index at or past the length.
+           READING IT WITH `JS_ToInt64` INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
+           NAME: a concolic is an object, so ToNumber reaches ToPrimitive and runs a getter from a plain C
+           frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
+        DCHECK(coll_length(ctx, this_val) == 0,
+               "§4.2.10's `item` was given an UNKNOWN index into a NON-EMPTY NodeList or HTMLCollection — every "
+               "node in it is a distinct answer, so the read must FORK one flow per supported index (plus the "
+               "null arm for an index past the end) instead of deciding it here");
+        return JS_NULL;
+    }
+    JS_ToUint32(ctx, &i, argv[0]);   /* the declaration's §3.2.4.6 conversion already produced [0, 2**32-1] */
+    r = coll_item(ctx, this_val, i);
     return JS_IsUndefined(r) ? JS_NULL : r;
 }
 
@@ -633,7 +667,10 @@ JSValue collections_static(JSContext *ctx, JSValue nodes)
 
 void collections_init(JSContext *ctx)
 {
-    static const IdlArgType ONE_LONG[1] = { IDL_LONG };
+    /* §4.2.10.1 and §4.2.10.2 both write `getter Node? item(unsigned long index)` — NEITHER carries
+       [EnforceRange], so §3.2.4.9 Abstract operations' ConvertToInt modulo IS the specified behaviour and there
+       is nothing here to throw. The type states the SIGN, which is the whole of what it decides. */
+    static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
     JSClassDef nl = { "NodeList" }, hc = { "HTMLCollection" };
 
@@ -648,7 +685,7 @@ void collections_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_htmlcoll_class, &hc);
     /* ONE declaration for `item`, installed on BOTH prototypes — it is the same operation with the same
        conversion in both IDLs, and two pool entries would be two copies of one fact. */
-    g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_coll_item, 0);
+    g_item_id = idl_method_id(ctx, ONE_ULONG, 1, js_coll_item, 0);
     g_named_item_id = idl_method_id(ctx, ONE_STR, 1, js_coll_named_item, 0);
     g_ready = 1;
     realm_declare_intrinsic(collections_install_protos);
