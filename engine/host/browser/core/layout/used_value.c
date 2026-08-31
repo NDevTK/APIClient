@@ -122,6 +122,36 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
     return kind;
 }
 
+/* WHETHER THIS BOX'S HORIZONTAL MARGINS ARE STATED OVER ITS USED `width` — one question, asked of the box type
+ * and answered in one place, because three sites used to ask it and one of them asked a DIFFERENT one.
+ * CSS 2.2 §10.3 "Calculating widths and margins" splits its ten sections into two kinds, and the split is not
+ * about the width at all — it is about whether the section SOLVES AN EQUATION containing it:
+ *   · §10.3.1 "Inline, non-replaced elements" states both facts in two sentences and neither is an equation —
+ *     "The 'width' property does not apply. A computed value of 'auto' for 'margin-left' or 'margin-right'
+ *     becomes a used value of '0'." §10.3.5 "Floating, non-replaced elements" opens with the same rule ("If
+ *     'margin-left', or 'margin-right' are computed as 'auto', their used value is '0'") and §10.3.9
+ *     "'Inline-block', non-replaced elements in normal flow" closes with it. A non-`auto` margin on any of the
+ *     three is its computed value, because none of them has an equation to be over-constrained BY.
+ *   · §10.3.3 "Block-level, non-replaced elements in normal flow" and §10.3.7 "Absolutely positioned,
+ *     non-replaced elements" each state a CONSTRAINT among the used values with 'width' as a term, so every
+ *     one of their margin rules — §10.3.3's rules 2, 4, 5 and 6 and its over-constrained case, §10.3.7's
+ *     equal-margins and solve-for-that-value rules — reads it. So do the two box types §10 does not own,
+ *     over a width their own algorithm produces (CSS 2.2 §17.5.2 "Table width algorithms: the 'table-layout'
+ *     property"; css-flexbox-1 §9.5 "Main-Axis Alignment" over the container's free space).
+ * THE REPLACED PAIRS FALL ON THE SAME SIDES AS THEIR NON-REPLACED TWINS, which is why this asks the box type
+ * and not `replaced_element_of`: §10.3.2, §10.3.6 and §10.3.10 repeat the 0-outright sentence (§10.3.10
+ * "Exactly as inline replaced elements"), while §10.3.4 sends a block-level replaced box to "the rules for
+ * non-replaced block-level elements … to determine the margins" and §10.3.8 keeps §10.3.7's equation.
+ * IT IS A `false` HERE THAT MAKES §10.3.1's FIRST SENTENCE TRUE. An inline non-replaced box HAS no used width
+ * — asking for one runs §10.3.3's constraint equation on a box whose section says the property does not apply,
+ * which is a question with no answer rather than an answer this engine has not built. For a float and an
+ * inline-block it also declines to run §10.3.5's shrink-to-fit, an intrinsic measurement over the box's whole
+ * content, to produce a number the margin rules never look at. */
+static bool uv_margin_reads_width(UvBox box)
+{
+    return box != UV_BOX_INLINE && box != UV_BOX_FLOAT && box != UV_BOX_INLINE_BLOCK;
+}
+
 /* `auto` is the answer three of §10.3's rules and two of §10.6's branch on, and it is also what CSS 2.1
    §10.4/§10.7 SUBSTITUTE AWAY — so the question is asked of the length a pass is RUNNING WITH and never of the
    property, which is why it takes a `CssLength` and not a name. */
@@ -899,21 +929,38 @@ static CssPx uv_block_auto_margin(lxb_dom_element_t *el, const char *name, const
    `size_len` IS THE `width` §10.3.3's RULES ARE BEING RUN WITH, which on the horizontal axis is §10.4's
    substituted value whenever the clamp bound. Every branch below that asks "is `width` auto" asks it of THIS
    length and never of the property, because after §10.4 substitutes they are different answers and the rules
-   are stated over the substituted one. IT IS NULL ON THE VERTICAL AXIS, and that is a POSITIVE statement
+   are stated over the substituted one. IT IS NULL WHERE NO SECTION READS IT, and that is a POSITIVE statement
    rather than a hole css_length.h would warn about: §10.6.3 gives a vertical `auto` margin the used value 0
    outright, with no reference to the height at all, so there is no size for this axis to be run with and
    passing a plausible one — the margin's own length, the raw computed height — would make an unread parameter
-   look like a read one and would cost §10.6.3's whole subtree walk to produce it. */
+   look like a read one and would cost §10.6.3's whole subtree walk to produce it.
+   THE HORIZONTAL AXIS SAYS THE SAME OF THREE BOX TYPES and used not to, which is the defect this parameter's
+   own contract was hiding. §10.3.1, §10.3.5 and §10.3.9 state a horizontal `auto` margin as 0 outright and
+   have no equation for a non-`auto` one to be over-constrained by, so they read no width either — and
+   §10.3.1's box HAS none, because its first sentence is "The 'width' property does not apply." Resolving one
+   anyway to fill this parameter ran §10.3.3's constraint equation on exactly that box. `uv_margin_reads_width`
+   is the one place that question is answered; this parameter is present exactly when it says yes. */
 static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *opposite, CssLength len, UvBox box,
                        const CssLength *size_len)
 {
     bool vertical = opposite == NULL;
 
-    DCHECK((name == NULL) == (opposite == NULL) && (name == NULL) == (size_len == NULL),
-           "a margin was resolved with an incomplete horizontal triple. The two property names and the pass's "
-           "`width` go together — all three NULL is the vertical axis, all three present is the horizontal one "
-           "— because §10.3.3's rules are a statement about those three values TOGETHER, so a caller that "
-           "filled in some of them has an axis it has not decided");
+    DCHECK((name == NULL) == (opposite == NULL),
+           "a margin was resolved with half a horizontal PAIR. The two property names go together — both NULL "
+           "is the vertical axis, both present is the horizontal one — because §10.3.3's over-constrained case "
+           "is a statement about those two values TOGETHER, so a caller that filled in one of them has an axis "
+           "it has not decided");
+    /* AND THE WIDTH IS PRESENT EXACTLY WHERE A SECTION READS IT, which is the half of this contract that used
+       to be stated as "all three go together" and was therefore satisfied by a caller resolving a used width
+       for a box that has none. Two-sided on purpose: a NULL where a section reads it is a dereference this
+       function would make, and a value where none does is §10.3.3's equation run to produce a number nothing
+       looks at — which for an inline box is not merely wasted, it is unanswerable. */
+    DCHECK((size_len != NULL) == (!vertical && uv_margin_reads_width(box)),
+           "a margin was resolved with the pass's `width` present where no section reads it, or absent where "
+           "one does. §10.3.3's and §10.3.7's margin rules are stated over a constraint equation with 'width' "
+           "in it and the two box types §10 does not own solve one of their own; §10.3.1, §10.3.5 and §10.3.9 "
+           "state a horizontal `auto` margin as 0 outright and §10.6.3 does the same on the vertical axis, so "
+           "neither has a width to be run with — and §10.3.1's box does not have one at all");
     if (len.kind == CSS_LENGTH_ABSOLUTE) {
         /* §10.3.3's OVER-CONSTRAINED case is the one configuration in CSS 2.1 in which a non-auto margin's
            used value differs from its computed value: a block-level non-replaced box in normal flow whose
@@ -997,12 +1044,16 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
               "names — uv_box_kind above says which it is");
         return css_px(0.0);
     }
-    /* THREE SECTIONS SAY THE SAME SENTENCE and one solves an equation instead, which is why the box type is
-       what this arm branches on. §10.3.1 (inline), §10.3.5 (floating) and §10.3.9 (inline-block) each state
+    /* THREE SECTIONS SAY THE SAME SENTENCE and the rest solve an equation instead, which is why the box type
+       is what this arm branches on. §10.3.1 (inline), §10.3.5 (floating) and §10.3.9 (inline-block) each state
        outright that "a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of
        '0'"; §10.3.3 says it too, but only in its rule 5, "if 'width' is set to 'auto', any other 'auto' values
-       become '0'" — with a non-auto `width` its `auto` margins take the slack instead. */
-    if (box == UV_BOX_INLINE || box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK) return css_px(0.0);
+       become '0'" — with a non-auto `width` its `auto` margins take the slack instead.
+       IT IS `uv_margin_reads_width`'S OWN LIST, negated, and it is spelled that way rather than repeated
+       because it IS the same question: a section that states the margin outright is exactly a section with no
+       equation to read a width from, so a box type added to one list and not the other would take this arm's
+       0 while the caller resolved a width for it, or the reverse. */
+    if (!uv_margin_reads_width(box)) return css_px(0.0);
     if (box == UV_BOX_BLOCK_FLOW) {
         /* Rule 5's condition is asked of the PASS's width, so `margin: 0 auto` under a `max-width` that bound
            reaches rules 4 and 6 and centres the box — with the raw computed `auto` it would take rule 5 and
@@ -1634,12 +1685,27 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
        `uv_sized` for the pass's length before resolving — that is what makes `margin: 0 auto` under a
        `max-width` centre the box. A VERTICAL margin reads no size at all (§10.6.3 gives its `auto` the used
        value 0 outright), so the height is not resolved for it: doing so would run §10.6.3's whole subtree walk
-       to answer a question that does not consult it. */
-    if (group == 0 && vertical) out = uv_margin(el, NULL, NULL, len, box, NULL);
-    else if (group == 0) {
-        CssLength width = uv_sized(el, box, false).len;
+       to answer a question that does not consult it.
+       AND THE SAME SENTENCE DECIDES THE HORIZONTAL AXIS PER BOX TYPE — `uv_margin_reads_width` — which this
+       arm used not to ask, and the cost was not a wasted walk. §10.3.1's first sentence is "The 'width'
+       property does not apply", so an inline non-replaced box has NO used width, and resolving one to hand to
+       rules that never read it ran §10.3.3's constraint equation on exactly the box §10.3.3 is not about. Two
+       call sites reached it that way — CSSOM VIEW §6's fragment rects and §9.4.2's line-extent test, both
+       asking an inline box for the margins §10.3.1 answers with 0. */
+    if (group == 0) {
+        /* The two property names are the AXIS and are present together on the horizontal one whatever the box
+           type is — §10.3.1's box still HAS a `margin-left` and a `margin-right`, and its section still has a
+           rule for them. What varies is only whether that rule reads a width. */
+        const char *self = vertical ? NULL : MARGINS[side];
+        const char *opposite = vertical ? NULL : MARGINS[(side + 2) % 4];
 
-        out = uv_margin(el, MARGINS[side], MARGINS[(side + 2) % 4], len, box, &width);
+        if (!vertical && uv_margin_reads_width(box)) {
+            CssLength width = uv_sized(el, box, false).len;
+
+            out = uv_margin(el, self, opposite, len, box, &width);
+        } else {
+            out = uv_margin(el, self, opposite, len, box, NULL);
+        }
     }
     else if (group == 1) out = uv_padding(el, len);
     else                 out = uv_sized(el, box, vertical).used;
