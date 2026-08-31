@@ -6152,7 +6152,33 @@ static int s_poc(const char *js, const char *sink, const char *src, const char *
 /* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
    the mid-run report and the final one are the same function of the same bytes. */
 static int probes_eval(const char *js, Probe *out, int cap) {
-    int has_uid_param = strstr(js, "\"/api/u\"") && strstr(js, "\"uid\"") && strstr(js, "{state}.id");
+    /* THE HEADLINE @H CLAIM, WHICH THREE UNSCOPED CLAUSES WERE ASSERTING AS THREE UNRELATED EXISTENCES. The
+       statement is `fetch('/api/u?uid=' + state.id)`, so what this row is about is ONE param of ONE endpoint
+       carrying ONE value: `uid` on `/api/u` is `{state}.id`. What it ASKED was whether `/api/u` appears, and
+       whether the six bytes `"uid"` appear ANYWHERE, and whether `{state}.id` appears ANYWHERE — three
+       questions no clause of which is about the other two.
+       THE JOIN IS THE WHOLE ASSERTION AND IT WAS THE ONE PART NOT BEING MADE. `"uid"` is satisfied by a param
+       NAME as readily as by a value — it IS this endpoint's own param name, emitted whatever the value turned
+       out to be — so the middle clause is true on every run that reaches the statement at all, whatever
+       happened to the source. That leaves the row resting on `{state}.id` appearing SOMEWHERE, which is a
+       claim about the document and not about this param: the day a second statement carries that shape, a
+       `state.id` that had collapsed to a bare concrete here — the exact loss this row exists to catch, since a
+       concolic root losing its shape is what makes a gated endpoint unreachable — would still read green.
+       `param_value_is` asks the join directly and matches the value WHOLE, so neither a longer shape derived
+       from this source (`{state}.id.toString()`, composed by solver/concolic.c over its operand) nor a
+       same-named param on another endpoint can answer it.
+       AND THE EXISTENCE CLAUSE IS SPLIT OFF because the two failures take opposite actions: no record at all is
+       the SCHEDULE not having reached the statement, and a record whose `uid` carries something else is the
+       CONCOLIC having been lost between the source and the param. A single 0 named both. */
+    const char *uid_why = NULL; int has_uid_param = 1;
+    fold_row(&has_uid_param, &uid_why, strstr(js, "\"/api/u\"") != NULL,
+             "NOT REACHED: there is no /api/u record at all, so this run never answered the statement "
+             "`fetch('/api/u?uid=' + state.id)`. That is the SCHEDULE and says nothing about whether a "
+             "concolic source survives into an @H param");
+    fold_row(&has_uid_param, &uid_why, param_value_is(js, "/api/u", "uid", "{state}.id"),
+             "the statement RAN and /api/u's `uid` does not carry `{state}.id` as a whole value: the record "
+             "EXISTS and the SOURCE was lost between `state.id` and the param — a collapse to the bare "
+             "example, or a shape derived from it where the row asks for the source itself");
     /* THE PATH AND THE BODY, which this surface could not name at all. The address is RE-SPELLED so its hole
        is one the popup's `/\{([^}\/]+)\}/` substitution can find — `{state}.id` has its braces around the root
        source and the member path OUTSIDE them, so the segment becomes `{state.id}` — and the param is that
@@ -6851,9 +6877,39 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        THE SECOND FACT WAS NOT BEING ASSERTED. It read `strstr(js, "\"n\"")`, which is TRUE of every run that
        emits this endpoint at all — the statement always builds `?n=`, so the term could not fail, and the row
        reported the forked walk while checking only that the walk had happened once. The count is what the claim
-       is about, so the count is what is read; the endpoint's own presence is subsumed by asking for it. */
-    int optiter_tt = (param_value_count(js, "/api/optiter", "n") > 1 &&
-                      strstr(js, "{state}.items.0") && strstr(js, "{state}.items.1"));
+       is about, so the count is what is read; the endpoint's own presence is subsumed by asking for it.
+       AND THE FIRST FACT IS A CLAIM ABOUT WHICH PARAM CARRIED WHICH POSITION, WHICH AN UNSCOPED PAIR CANNOT
+       MAKE. The statement is `?n=' + _af.length + '&a=' + _af[0] + '&b=' + _af[1]`, so the per-POSITION key
+       this row exists to guarantee is exactly that `a` carries position 0's source and `b` carries position
+       1's. Two whole-document `strstr`s assert only that both shapes exist SOMEWHERE, which is satisfied by a
+       seam that answered one source twice and let the other shape reach the document from any other value on
+       any other statement — and by a seam that SWAPPED them, which is the per-position key being wrong in the
+       one way this row is named for. Scoped, each clause is about one param and is false when that param
+       carries the other position's source.
+       THE MATCH IS WHOLE, WHICH IS THE HALF THE SCAN CANNOT SEE. `{state}.items.1` is a PREFIX of
+       `{state}.items.10`, and this is the one statement in the fixture whose sources are indexed by a walk
+       with no length — §NO BOUNDS makes the per-position chain unbounded, so the tenth position is a shape
+       this statement's own machinery can mint. probegate names that blind spot in its own footer ("a value
+       built from a loop counter"), so no static scan of this file will ever report it: a containment test here
+       is a row that a longer index answers, and whole-value equality is what removes the axis rather than
+       out-running it. Today no arm emits `{state}.items.10` into the document, so the collision is REACHABLE
+       IN PRINCIPLE and not reachable at this revision — the conversion is made for the per-param join above,
+       and the prefix hazard is closed as a consequence rather than as the reason. */
+    const char *optiter_why = NULL; int optiter_tt = 1;
+    fold_row(&optiter_tt, &optiter_why, strstr(js, "\"/api/optiter\"") != NULL,
+             "NOT REACHED: there is no /api/optiter record at all, so this run never walked `state.items`. "
+             "That is the SCHEDULE and says nothing about whether an opaque iteration forks per position");
+    fold_row(&optiter_tt, &optiter_why, param_value_count(js, "/api/optiter", "n") > 1,
+             "the statement RAN and /api/optiter's `n` carries ONE length: the walk DECIDED a bound instead "
+             "of forking it, so LengthOfArrayLike answered a question that has no answer");
+    fold_row(&optiter_tt, &optiter_why, param_value_is(js, "/api/optiter", "a", "{state}.items.0"),
+             "the statement RAN and /api/optiter's `a` does not carry `{state}.items.0` as a whole value: "
+             "position 0's read is not an independent source on its own param — the per-POSITION key in the "
+             "outcome seam answered some other position here, or answered one source twice");
+    fold_row(&optiter_tt, &optiter_why, param_value_is(js, "/api/optiter", "b", "{state}.items.1"),
+             "the statement RAN and /api/optiter's `b` does not carry `{state}.items.1` as a whole value: "
+             "position 1's read is not an independent source on its own param — the per-POSITION key in the "
+             "outcome seam answered some other position here, or answered one source twice");
     /* THE SYNCHRONOUS HOST READ resumed at its own call site, three times in a loop, each answer landing in
        the call that asked for it — hr0hr1hr2 in order, never interleaved or reused. */
     int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
@@ -7425,8 +7481,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* §4.10: submit() derived the GET; the named field carries its SOURCE rather than an invented value; a
        DISABLED control contributed nothing and an UNCHECKED box contributed nothing, both of which only an
        absence can prove; and the second submit AFTER checking it does include it. */
-    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"/api/search\"") && strstr(js, "{state}.q"),
-             "§4.10 submit() derived the GET carrying the field's source");
+    /* SCOPED TO THE FIELD'S OWN NAME, because "the named field carries its SOURCE" is a claim about the JOIN.
+       The input is `fi.name = 'q'; fi.value = state.q`, so what §4.10's entry-list construction has to get
+       right is that `q` — and not some other field, and not the address — carries `{state}.q`. Two unscoped
+       clauses asserted only that the action was derived and that the shape reached the document; a submission
+       that lost the value while any other statement carried that shape read green. Split in two so the
+       absent-record reading and the wrong-value reading are not one 0. */
+    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"/api/search\"") != NULL,
+             "§4.10 submit() derived the GET at all — NO /api/search record exists, so the form was never "
+             "submitted and nothing below this is about the entry list");
+    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "/api/search", "q", "{state}.q"),
+             "§4.10 the record EXISTS and its `q` does not carry `{state}.q` as a whole value — the named "
+             "field lost its SOURCE in the entry list, or an invented value stands where the source belongs");
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "\"off\""),
              "§4.10 a DISABLED control contributed nothing");
     fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"agree\""),
@@ -7816,7 +7882,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
-        { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE },
+        { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE, uid_why },
         { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
         { "path-param", path_param, "/v1/users/", SESS_EXPLORE },
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
@@ -7964,7 +8030,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idb-range-order", idbrange_order_tt, "/api/idbcount", SESS_EXPLORE },
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
         { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
-        { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
+        { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE, optiter_why },
         { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE, cssprop_why },
         { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE, csspropText_why },
         { "css-webkit-keyframes", csswkkf_tt, "/api/csswkkf?", SESS_EXPLORE },
