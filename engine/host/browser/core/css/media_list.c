@@ -16,7 +16,7 @@
 #include "core/idl_args.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
-#include "solver/concolic.h"   /* §4.4's `item` takes an index unknown external input crosses AS ITSELF */
+#include "solver/concolic.h"   /* CSSOM §4.4's `item` takes an index unknown input crosses AS ITSELF */
 
 static JSClassID g_list_class;
 static JSValue   g_queries_key = JS_UNDEFINED;
@@ -58,8 +58,14 @@ static uint32_t ml_length(JSContext *ctx, JSValueConst self)
     return n;
 }
 
-/* THE INDEXED PROPERTY GETTER — JS_UNDEFINED past the end, which is what a lookup outside §4.4's supported
-   property indices is. `item()` below turns that into the null its IDL declares. */
+/* Web IDL §3.9 Legacy platform objects' INDEXED PROPERTY GETTER — JS_UNDEFINED past the end, which is what a
+   lookup outside CSSOM §4.4 The MediaList Interface's supported property indices is ("the numbers in the range
+   zero to one less than the number of media queries in the collection of media queries represented by the
+   collection"). `item()` below turns that into the null its IDL declares.
+   BOTH STANDARDS ARE NAMED HERE and neither used to be, which is what made every bare `§4.4` in this file
+   unattributable: `supported property indices` is a Web IDL term, so this site read as naming Web IDL §4.4 —
+   which is DOMException — and citegen then inferred Web IDL for the whole file's bare numbers off it. A file
+   whose convention is one standard still has to say so at any site where a term belongs to another. */
 static JSValue ml_item(JSContext *ctx, JSValueConst self, uint32_t i)
 {
     JSValue arr = ml_queries(ctx, self), q;
@@ -225,15 +231,16 @@ static JSValue js_ml_item(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         /* AN UNKNOWN INDEX, and it reaches the body unconverted because a Web IDL §3.2 conversion is a boundary
            unknown external input crosses AS ITSELF (idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES
            for every integer type, IDL_UNSIGNED_LONG among them). The EMPTY collection is the one length at
-           which that has an answer rather than a fork: §4.4 returns null for every index greater than or equal
-           to the number of media queries, and at zero that is every index there is.
+           which that has an answer rather than a fork: CSSOM §4.4 The MediaList Interface returns null for
+           every index greater than or equal to the number of media queries, and at zero that is every index
+           there is.
            RUNNING `JS_ToUint32` OVER IT INSTEAD — which is what stood here — IS THE SHAPE idl_args.h BANS BY
            NAME: a concolic is a real JSObject, so ToNumber reaches ToPrimitive and runs a getter from a plain
            C frame, which this engine aborts on somewhere inside the coercion rather than here at the member. */
         DCHECK(ml_length(ctx, this_val) == 0,
-               "§4.4's `item` was given an UNKNOWN index into a NON-EMPTY MediaList — every media query in it "
-               "is a distinct answer, so the read must FORK one flow per supported index (plus the null arm "
-               "for an index past the end) instead of deciding it here");
+               "CSSOM §4.4 The MediaList Interface's `item` was given an UNKNOWN index into a NON-EMPTY "
+               "MediaList — every media query in it is a distinct answer, so the read must FORK one flow per "
+               "supported index (plus the null arm for an index past the end) instead of deciding it here");
         return JS_NULL;
     }
     JS_ToUint32(ctx, &i, argv[0]);   /* the declaration ran Web IDL §3.2.4.6 unsigned long: already [0, 2**32-1] */

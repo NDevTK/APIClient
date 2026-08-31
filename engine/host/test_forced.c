@@ -1104,6 +1104,49 @@ static const char *HTML =
     " && cs.style === cs.style ? 'isset' : 'wrong'));"
     "cs.style.removeProperty('color');"
     "fetch('/api/cssdel?v=' + (cs.style.color === '' && cs.style.length >= 1 ? 'isdel' : 'wrong'));"
+    /* CSSOM §6.6.1 The CSSStyleDeclaration Interface's INDEXED PROPERTY GETTER — `getter CSSOMString
+       item(unsigned long index)`. Only the OPERATION half existed, so `el.style[0]` was undefined for a block
+       whose first declaration a browser names, and this probe is written to tell a WIRED-AND-CORRECT getter
+       from a WIRED-BUT-WRONG-INDICES one rather than merely from an absent one — "it does not throw" is what
+       an absent getter also does.
+       A FRESH ELEMENT, because the expected index set has to be STATED and not inferred: three longhands (none
+       of them a shorthand that §6.6.1's setProperty would expand into several) set in a known order, so the
+       supported property indices are exactly 0, 1, 2.
+         · POSITION — [0]/[1]/[2] are the property names in insertion order, which is what an off-by-one or a
+           permutation fails and what a set-equality check would pass.
+         · THE BOUNDARY IS THE GETTER'S AND NOT THE OPERATION'S — §6.6.1's supported property indices run to
+           "one less than the number of CSS declarations", so `[3]` is UNDEFINED and `3 in style` is FALSE,
+           while `item(3)` is the empty STRING. An implementation that forwards the lookup to `item` passes
+           every positional check above and fails exactly here, which is why both halves are read.
+         · THE INDEX PARSE — `'01'` and `'-1'` are not array index property names, so they are ordinary absent
+           properties rather than aliases of 1.
+         · ENUMERATION — Object.keys is the indices, in order, and Web IDL §3.7.9 Iterable declarations' step 1
+           gives an interface with an indexed getter %Array.prototype.values% as its @@iterator, so spread and
+           for..of read the same three names.
+         · LIVE — after removeProperty the lookup answers against the block AS IT IS NOW: [0] shifts and index
+           2 stops being supported. A snapshot taken at mint passes everything above and fails this. */
+    "var ix = document.createElement('div'); document.body.appendChild(ix);"
+    "ix.style.setProperty('color', 'red');"
+    "ix.style.setProperty('padding-left', '2px');"
+    "ix.style.setProperty('margin-top', '3px');"
+    "var ixspread = [].concat.apply([], [[...ix.style]]).join(',');"
+    "var ixfor = []; for (var ixt of ix.style) ixfor.push(ixt);"
+    "fetch('/api/cssidx?v=' + ("
+    "   ix.style.length === 3"
+    " && ix.style[0] === 'color' && ix.style[1] === 'padding-left' && ix.style[2] === 'margin-top'"
+    " && ix.style[0] === ix.style.item(0) && ix.style[2] === ix.style.item(2)"
+    " && ix.style[3] === undefined && ix.style.item(3) === ''"
+    " && (2 in ix.style) && !(3 in ix.style)"
+    " && ix.style['01'] === undefined && ix.style['-1'] === undefined"
+    " && Object.keys(ix.style).join(',') === '0,1,2'"
+    " && ixspread === 'color,padding-left,margin-top'"
+    " && ixfor.join(',') === 'color,padding-left,margin-top'"
+    " ? 'isidx' : 'wrong'));"
+    "ix.style.removeProperty('color');"
+    "fetch('/api/cssidxlive?v=' + ("
+    "   ix.style.length === 2 && ix.style[0] === 'padding-left' && ix.style[1] === 'margin-top'"
+    " && ix.style[2] === undefined && !(2 in ix.style)"
+    " ? 'islive' : 'wrong'));"
     /* A computed declaration is READ-ONLY, which the spec makes an error rather than a silent no-op. */
     "var csro = 'nothrow'; try { csc.setProperty('color', 'blue'); } catch (e) { csro = 'isro'; }"
     "fetch('/api/cssro?v=' + csro);"
@@ -1195,7 +1238,7 @@ static const char *HTML =
     "fetch('/api/mixin2?v=' + encodeURIComponent(mx.innerHTML));"
     "mx.replaceChildren(document.createElement('span'));"
     "fetch('/api/mixin3?v=' + encodeURIComponent(mx.innerHTML));"
-    /* §4.2.10/§4.2.11: childNodes and children are LIVE, which is the difference a static array cannot express
+    /* §4.2.10.1/§4.2.10.2: childNodes and children are LIVE, which is the difference a static array cannot express
        — read the length, append, read it again. querySelectorAll is the one that is genuinely STATIC, and all
        three are real interfaces now rather than Arrays, so `.map` is honestly absent as the spec has it. */
     "var lv = document.createElement('div'); document.body.appendChild(lv);"
@@ -1553,7 +1596,9 @@ static const char *HTML =
     "fetch('/api/textwalk?v=' + tcx.textContent"
     " + '&deep=' + gbn.textContent"
     " + '&big=' + bigHost.textContent.length);"
-    /* §4.2.11's NAMED getter: `children.foo` is how a great deal of older code reaches its own markup. */
+    /* §4.2.10.2 Interface HTMLCollection's NAMED getter — `getter Element? namedItem(DOMString name)`, whose
+       method steps are "If key is the empty string, return null" and then the first element matching the
+       supported property names. `children.foo` is how a great deal of older code reaches its own markup. */
     "var nb = document.createElement('u'); nb.setAttribute('id', 'namedkid'); lv.appendChild(nb);"
     "fetch('/api/named?v=' + (lv.children.namedItem('namedkid') === nb && lv.children.namedkid === nb"
     " && lv.children.nosuch === undefined ? 'isnamed' : 'wrong'));"
@@ -6427,6 +6472,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/fontrem\"",    "isrem"   },
         { "\"/api/cssset\"",     "isset"   },   /* writes land in the style attribute, [SameObject] holds */
         { "\"/api/cssdel\"",     "isdel"   },
+        /* §6.6.1's `getter CSSOMString item(unsigned long index)` — the GETTER half, which is a lookup and not
+           the method. Both entries have to hold: /api/cssidx reads the positions, the supported-property-index
+           boundary (undefined and `!(3 in style)` where item(3) is the empty string), the array-index-property
+           -name parse and Web IDL §3.7.9's @@iterator; /api/cssidxlive is what a snapshot taken at mint fails,
+           because the indices shift when a declaration is removed. */
+        { "\"/api/cssidx\"",     "isidx"   },
+        { "\"/api/cssidxlive\"", "islive"  },
         { "\"/api/cssro\"",      "isro"    },   /* a computed declaration throws rather than silently ignoring */
         { "\"/api/bubble\"",     "isbubble"},   /* §2.9's path: target fixed, currentTarget and phase moving */
         { "\"/api/nobubble\"",   "isnobub" },   /* a non-bubbling event, and stopPropagation */
