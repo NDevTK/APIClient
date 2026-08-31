@@ -178,8 +178,13 @@ double viewport_scroll_y(JSContext *ctx);
 double viewport_window_scroll(JSContext *ctx, bool vertical);
 
 /* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the margin edges of all of the
-   viewport's descendants' boxes, which is the ICB itself while no box in the model has geometry (see
-   core/dom/element_view.h). Exported because THREE algorithms read it and none of them may state it for itself:
+   viewport's descendants' boxes. IT ANSWERS THE ICB ALONE, AND THE EXTENSION IS UNBUILT RATHER THAN EMPTY:
+   every in-flow box in the document is placed (core/layout/flow_position.h) and §2's ELEMENT column is already
+   computed from those placements (core/layout/scrolling_area.h), so what is missing is the VIEWPORT row of that
+   one table. viewport.c states it at the derivation above `viewport_scroll_x` — what it makes wrong
+   (`document.documentElement.scrollHeight` answers 720 for a 1400-pixel-tall page, through the third reader
+   below), and the second public entry beside `scrolling_area_extent_px` that closes it.
+   Exported because THREE algorithms read it and none of them may state it for itself:
    §4's `scroll()` clamps against it, `scrollX`/`scrollY`'s single valid position is derived from it, and §6's
    `scrollWidth`/`scrollHeight` answer max(it, the viewport) for the root element. */
 double viewport_scrolling_area_width(JSContext *ctx);
