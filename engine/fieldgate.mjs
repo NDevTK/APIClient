@@ -37,6 +37,12 @@
  *                    platform is its producer and idlgen.mjs is its auditor, so it is out of THIS gate's
  *                    subject. Printed in full with the interface that decided it: a decided negative nobody
  *                    can see is the concealment this file exists to report, performed on its own output.
+ *   DECIDED FOREIGN  a receiver a module OUTSIDE this corpus hands to a callback — the callee is a binding this
+ *                    file imported from a BARE specifier, so the party that supplies the record is a package or
+ *                    a `node:` builtin. Same sentence as DECIDED PLATFORM with the module system as the
+ *                    authority instead of the IDL: it says WHERE the producer is, which is all a specifier can
+ *                    say, and it claims no interface. Without it those receivers reach the SHAPE anchor and are
+ *                    decided by name collision — Node's `IncomingMessage` reads `url`, `headers` and `method`.
  *   OFF-INTERFACE    that same object, read for a name the spec does not declare on it AND that no producer in
  *                    the corpus writes either. The interface's member list is the whole member list, so this
  *                    is READ-NO-WRITER landing on a platform object — the one defect the decided negative
@@ -1917,6 +1923,24 @@ function scanJS(file, src) {
     }
   }
 
+  /* --- the names this file imports from a module OUTSIDE the corpus --------------------------------------- */
+  /* AN IMPORT SPECIFIER IS SYNTAX, AND A BARE ONE NAMES A MODULE THIS GATE DOES NOT READ. A relative specifier
+     resolves inside the corpus and its records are on the seam like any other; a BARE one is a package or a
+     `node:` builtin, whose records this corpus never produces and whose shape no authority here declares. That
+     distinction is a construct — `./x.mjs` versus `node:http` is a character in the source, not an inference —
+     and it is the same kind of fact the platform arm reads off a declaration. */
+  const foreignImports = new Set();
+  const IMPORT = /\bimport\s+([^;]*?)\bfrom\s*(["'])([^"'\n]+)\2/g;
+  while ((m = IMPORT.exec(code))) {
+    if (struct[m.index + m[0].length - 1] !== m[2]) continue;
+    if (/^[./]/.test(m[3])) continue;                       /* a module in this corpus, read like any other */
+    for (const part of m[1].replace(/[{}*]/g, " ").split(",")) {
+      const as = /\bas\s+([A-Za-z_$][\w$]*)/.exec(part);
+      const id = as || /([A-Za-z_$][\w$]*)\s*$/.exec(part.trim());
+      if (id && id[1] !== "from") foreignImports.add(id[1]);
+    }
+  }
+
   /* --- markers: a literal naming an @TAG is a reference to the stream contract ----------------------------- */
   /* A DRIVER PRINTS MARKERS TOO, and reading every JS literal as a MATCH made solvergate's own `@EMIT` and
      `@GATEFAIL` — which it writes with console.log and then greps out of a child's stdout — report as markers
@@ -1959,7 +1983,7 @@ function scanJS(file, src) {
   collectAbiJS(file, src, code, struct);
 
   return { file, src, localReads, localWrites, wholeDefaults, site, initOf, binderOf, paramSlot,
-           localParamSlot, callArgsOf, guardedBy };
+           localParamSlot, callArgsOf, guardedBy, foreignImports };
 }
 
 /* ---- the RETURN-DOMAIN namespace: the one place a plausible datum is a VALUE rather than a NAME ------------ */
@@ -2850,6 +2874,31 @@ GLOBAL_IFACE.set("window", "Window");
 GLOBAL_IFACE.set("globalThis", "Window");
 
 const platformDecided = [];   // {file,line,recv,iface,names} — a receiver a construct says is a platform object
+
+/* ---- the FOREIGN receiver: a decided negative from an IMPORT SPECIFIER rather than from an interface ------- */
+
+/* THE PLATFORM ARM ANSWERS FOR WEB IDL AND THE CORPUS IS NOT ONLY A BROWSER. `@webref/idl` declares URL,
+ * Response and Element; it declares nothing about Node's `http.IncomingMessage`, a `chrome.*` extension record,
+ * a CDP `Profiler.CallFrame` or an npm package's own parse tree — so a receiver that is one of those reaches the
+ * SHAPE anchor, and the shape anchor decides it by NAME COLLISION. That is the failure the platform arm's own
+ * comment warns about ("a platform object whose members happen to collide with two of an emitted record's names
+ * is exactly the receiver the shape rule anchors CONFIDENTLY and wrongly"), arriving through the door that
+ * comment does not cover. Measured: `createServer((req, res) => …)` reads `req.url`, `req.headers` and
+ * `req.method`, three names this engine also emits, so `String(req.url || '')` — correct Node code over an
+ * object no producer in this corpus writes — was reported as a consumer DEFAULTING an engine field.
+ *
+ * WHAT DECIDES IT IS THE SPECIFIER, NOT THE NAMES. A callback parameter is typed by the call it is an argument
+ * of; §paramSlot already reads that construct to let Web IDL type one. When the callee is a binding this file
+ * imported from a BARE specifier, the party that calls the callback is a module outside the corpus, so the
+ * record it hands over is not on the seam this gate audits — the same sentence DECIDED PLATFORM makes, with the
+ * module system supplying the authority instead of the IDL. It states no interface and claims none: it says
+ * where the producer is, which is the only thing an import specifier can say.
+ *
+ * THE UNDER-CREDITING DIRECTION, STATED: a bare-specifier helper that is handed a CORPUS record and calls back
+ * with it (`someLib.each(records, (r) => r.url)`) loses that read. Its absence shows as the field's producer
+ * appearing in WRITE-WITH-NO-READER with its file and line — a row a person can open — rather than as a silent
+ * pass, which is the direction this file takes everywhere. */
+const foreignDecided = [];    // {file,line,recv,callee,names} — a callback parameter of an imported callee
 const offInterface = [];      // {file,line,recv,iface,missing} — that object, read for a member the spec denies
 
 /* The interface a receiver EXPRESSION evaluates to, or null. Every arm is a construct that names a type; the
@@ -3067,6 +3116,23 @@ for (const s of jsScans) {
         const site = { ...s.site(rs[0].off), recv, iface: narrowed.iface, base, names: [...names] };
         if (narrowed.missing) offInterface.push({ ...site, missing: narrowed.missing });
         else platformDecided.push(site);
+        continue;
+      }
+    }
+    /* ASKED AFTER THE IDL AND BEFORE THE SHAPE, in that order for one reason each: a receiver Web IDL can name
+       is named by it, and a receiver it cannot must not be handed to an anchor that decides by name collision. */
+    {
+      const ps = rs.map((r) => s.paramSlot(recv, r.off)).find(Boolean);
+      /* THE CALLEE MUST BE THE IMPORTED BINDING ITSELF, or a member path rooted at one — never a name that
+         merely BEGINS the callee text. `readdirSync(d, …).sort((a, b) => …)` is rooted at an import and the
+         party calling that callback is `Array.prototype.sort`, so taking the leading identifier answered
+         "foreign" for a receiver whose producer is decided by something else entirely. It happened to be right
+         about those two (`Dirent` is `node:fs`'s) and right for a reason that is not a reason, which is the one
+         outcome worse than no answer. A callee holding a `(` or a `[` is a call or an index, and the thing it
+         returns is not the binding this file imported. */
+      const callee = ps && /^([A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)*$/.exec(ps.callee);
+      if (callee && s.foreignImports.has(callee[1])) {
+        foreignDecided.push({ ...s.site(rs[0].off), recv, callee: ps.callee, names: [...names] });
         continue;
       }
     }
@@ -3385,6 +3451,16 @@ if (ambiguous.length) {
 /* PRINTED IN FULL, AND NOT A DEFECT — a decided negative nobody can see is the concealment this file reports.
    Every row is a claim about the tree made on @webref/idl's authority, so every row is somewhere a reader can
    disagree with it; the alternative is a count that shrank for reasons nobody can check. */
+if (foreignDecided.length) {
+  const byCallee = new Map();
+  for (const f of foreignDecided) byCallee.set(f.callee, (byCallee.get(f.callee) || 0) + 1);
+  log(`── DECIDED FOREIGN — ${foreignDecided.length} receiver(s) a module OUTSIDE this corpus hands to a ` +
+      `callback. The specifier says where the producer is; this gate's subject is the serialized seam, so they ` +
+      `are out of it — decided, not passed ──`);
+  for (const f of foreignDecided) log(`  ${place(f)}  \`${f.recv}\` is a callback argument of \`${f.callee}\` — ` +
+                                      f.names.map((n) => `\`${n}\``).join(", "));
+  log(`  by callee: ` + [...byCallee].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c}×${n}`).join(", "));
+}
 if (platformDecided.length) {
   const byIface = new Map();
   for (const p of platformDecided) byIface.set(p.iface, (byIface.get(p.iface) || 0) + 1);
