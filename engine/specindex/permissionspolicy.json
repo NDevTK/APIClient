@@ -3,7 +3,7 @@
  "key": "permissionspolicy",
  "base": "https://w3c.github.io/webappsec-permissions-policy/",
  "specUpdated": "18 June 2026",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -408,6 +408,53 @@
   ],
   "the special value": [
    "4.7"
+  ]
+ },
+ "ops": {
+  "check permissions policy": [
+   "9.9"
+  ],
+  "check potential violation of permissions policy in container": [
+   "9.12"
+  ],
+  "construct policy from dictionary and origin": [
+   "9.2"
+  ],
+  "create a permissions policy for a navigable": [
+   "9.5"
+  ],
+  "create a permissions policy for a navigable from response": [
+   "9.6"
+  ],
+  "define an inherited policy for feature in container at origin": [
+   "9.7"
+  ],
+  "generate report for potential violation of permissions policy on settings": [
+   "9.14"
+  ],
+  "generate report for violation of permissions policy on settings": [
+   "9.13"
+  ],
+  "get feature value for origin": [
+   "9.8"
+  ],
+  "get the reporting endpoint for a feature": [
+   "9.11"
+  ],
+  "is feature enabled in document for origin": [
+   "9.10"
+  ],
+  "parse policy directive": [
+   "9.3"
+  ],
+  "process permissions policy attributes": [
+   "9.4"
+  ],
+  "process response policy": [
+   "9.1"
+  ],
+  "should request be allowed to use feature": [
+   "9.15"
   ]
  },
  "uses": {

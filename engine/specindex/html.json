@@ -2,8 +2,8 @@
  "spec": "HTML Living Standard",
  "key": "html",
  "base": "https://html.spec.whatwg.org/multipage/",
- "specUpdated": "28 August 2026",
- "fetched": "2026-08-29",
+ "specUpdated": "30 August 2026",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -13706,6 +13706,7 @@
    "2.3.5.3"
   ]
  },
+ "ops": {},
  "uses": {
   "a label": {
    "4.8.11.11.2": 2,

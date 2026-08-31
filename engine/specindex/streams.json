@@ -3,7 +3,7 @@
  "key": "streams",
  "base": "https://streams.spec.whatwg.org/",
  "specUpdated": "18 August 2026",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -1500,14 +1500,495 @@
    "9.2.2"
   ]
  },
+ "ops": {
+  "[[abortsteps]]": [
+   "5.4.4",
+   "5.5.2"
+  ],
+  "[[cancelsteps]]": [
+   "4.6.4",
+   "4.7.4",
+   "4.9.2"
+  ],
+  "[[errorsteps]]": [
+   "5.4.4",
+   "5.5.2"
+  ],
+  "[[pullsteps]]": [
+   "4.6.4",
+   "4.7.4",
+   "4.9.2"
+  ],
+  "[[releasesteps]]": [
+   "4.6.4",
+   "4.7.4",
+   "4.9.2"
+  ],
+  "acquirereadablestreambyobreader": [
+   "4.9.1"
+  ],
+  "acquirereadablestreamdefaultreader": [
+   "4.9.1"
+  ],
+  "acquirewritablestreamdefaultwriter": [
+   "5.5.1"
+  ],
+  "cancopydatablockbytes": [
+   "8.3"
+  ],
+  "cantransferarraybuffer": [
+   "8.3"
+  ],
+  "cloneasuint8array": [
+   "8.3"
+  ],
+  "createreadablebytestream": [
+   "4.9.1"
+  ],
+  "createreadablestream": [
+   "4.9.1"
+  ],
+  "createwritablestream": [
+   "5.5.1"
+  ],
+  "crossrealmtransformsenderror": [
+   "8.2"
+  ],
+  "dequeuevalue": [
+   "8.1"
+  ],
+  "enqueuevaluewithsize": [
+   "8.1"
+  ],
+  "extracthighwatermark": [
+   "7.4"
+  ],
+  "extractsizealgorithm": [
+   "7.4"
+  ],
+  "initializereadablestream": [
+   "4.9.1"
+  ],
+  "initializetransformstream": [
+   "6.4.1"
+  ],
+  "initializewritablestream": [
+   "5.5.1"
+  ],
+  "isnonnegativenumber": [
+   "8.3"
+  ],
+  "isreadablestreamlocked": [
+   "4.9.1"
+  ],
+  "iswritablestreamlocked": [
+   "5.5.1"
+  ],
+  "packandpostmessage": [
+   "8.2"
+  ],
+  "packandpostmessagehandlingerror": [
+   "8.2"
+  ],
+  "peekqueuevalue": [
+   "8.1"
+  ],
+  "readablebytestreamcontrollercallpullifneeded": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerclearalgorithms": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerclearpendingpullintos": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerclose": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollercommitpullintodescriptor": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerconvertpullintodescriptor": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerenqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerenqueuechunktoqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerenqueueclonedchunktoqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerenqueuedetachedpullintotoqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollererror": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerfillheadpullintodescriptor": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerfillpullintodescriptorfromqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerfillreadrequestfromqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollergetbyobrequest": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollergetdesiredsize": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerhandlequeuedrain": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerinvalidatebyobrequest": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerprocesspullintodescriptorsusingqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerprocessreadrequestsusingqueue": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerpullinto": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespond": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespondinclosedstate": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespondinreadablestate": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespondinternal": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespondwithnewview": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollershiftpendingpullinto": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollershouldcallpull": [
+   "4.9.5"
+  ],
+  "readablebytestreamtee": [
+   "4.9.1"
+  ],
+  "readablestreamaddreadintorequest": [
+   "4.9.2"
+  ],
+  "readablestreamaddreadrequest": [
+   "4.9.2"
+  ],
+  "readablestreambyobreadererrorreadintorequests": [
+   "4.9.3"
+  ],
+  "readablestreambyobreaderread": [
+   "4.9.3"
+  ],
+  "readablestreambyobreaderrelease": [
+   "4.9.3"
+  ],
+  "readablestreamcancel": [
+   "4.9.2"
+  ],
+  "readablestreamclose": [
+   "4.9.2"
+  ],
+  "readablestreamdefaultcontrollercallpullifneeded": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollercancloseorenqueue": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerclearalgorithms": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerclose": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerenqueue": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollererror": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollergetdesiredsize": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerhasbackpressure": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollershouldcallpull": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultreadererrorreadrequests": [
+   "4.9.3"
+  ],
+  "readablestreamdefaultreaderread": [
+   "4.9.3"
+  ],
+  "readablestreamdefaultreaderrelease": [
+   "4.9.3"
+  ],
+  "readablestreamdefaulttee": [
+   "4.9.1"
+  ],
+  "readablestreamerror": [
+   "4.9.2"
+  ],
+  "readablestreamfromiterable": [
+   "4.9.1"
+  ],
+  "readablestreamfulfillreadintorequest": [
+   "4.9.2"
+  ],
+  "readablestreamfulfillreadrequest": [
+   "4.9.2"
+  ],
+  "readablestreamgetnumreadintorequests": [
+   "4.9.2"
+  ],
+  "readablestreamgetnumreadrequests": [
+   "4.9.2"
+  ],
+  "readablestreamhasbyobreader": [
+   "4.9.2"
+  ],
+  "readablestreamhasdefaultreader": [
+   "4.9.2"
+  ],
+  "readablestreampipeto": [
+   "4.9.1"
+  ],
+  "readablestreamreadergenericcancel": [
+   "4.9.3"
+  ],
+  "readablestreamreadergenericinitialize": [
+   "4.9.3"
+  ],
+  "readablestreamreadergenericrelease": [
+   "4.9.3"
+  ],
+  "readablestreamtee": [
+   "4.9.1"
+  ],
+  "resetqueue": [
+   "8.1"
+  ],
+  "setupcrossrealmtransformreadable": [
+   "8.2"
+  ],
+  "setupcrossrealmtransformwritable": [
+   "8.2"
+  ],
+  "setupreadablebytestreamcontroller": [
+   "4.9.5"
+  ],
+  "setupreadablebytestreamcontrollerfromunderlyingsource": [
+   "4.9.5"
+  ],
+  "setupreadablestreambyobreader": [
+   "4.9.3"
+  ],
+  "setupreadablestreamdefaultcontroller": [
+   "4.9.4"
+  ],
+  "setupreadablestreamdefaultcontrollerfromunderlyingsource": [
+   "4.9.4"
+  ],
+  "setupreadablestreamdefaultreader": [
+   "4.9.3"
+  ],
+  "setuptransformstreamdefaultcontroller": [
+   "6.4.2"
+  ],
+  "setuptransformstreamdefaultcontrollerfromtransformer": [
+   "6.4.2"
+  ],
+  "setupwritablestreamdefaultcontroller": [
+   "5.5.4"
+  ],
+  "setupwritablestreamdefaultcontrollerfromunderlyingsink": [
+   "5.5.4"
+  ],
+  "setupwritablestreamdefaultwriter": [
+   "5.5.1"
+  ],
+  "structuredclone": [
+   "8.3"
+  ],
+  "transferarraybuffer": [
+   "8.3"
+  ],
+  "transformstreamdefaultcontrollerclearalgorithms": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollerenqueue": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollererror": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollerperformtransform": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollerterminate": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultsinkabortalgorithm": [
+   "6.4.3"
+  ],
+  "transformstreamdefaultsinkclosealgorithm": [
+   "6.4.3"
+  ],
+  "transformstreamdefaultsinkwritealgorithm": [
+   "6.4.3"
+  ],
+  "transformstreamdefaultsourcecancelalgorithm": [
+   "6.4.4"
+  ],
+  "transformstreamdefaultsourcepullalgorithm": [
+   "6.4.4"
+  ],
+  "transformstreamerror": [
+   "6.4.1"
+  ],
+  "transformstreamerrorwritableandunblockwrite": [
+   "6.4.1"
+  ],
+  "transformstreamsetbackpressure": [
+   "6.4.1"
+  ],
+  "transformstreamunblockwrite": [
+   "6.4.1"
+  ],
+  "writablestreamabort": [
+   "5.5.1"
+  ],
+  "writablestreamaddwriterequest": [
+   "5.5.2"
+  ],
+  "writablestreamclose": [
+   "5.5.1"
+  ],
+  "writablestreamclosequeuedorinflight": [
+   "5.5.2"
+  ],
+  "writablestreamdealwithrejection": [
+   "5.5.2"
+  ],
+  "writablestreamdefaultcontrolleradvancequeueifneeded": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerclearalgorithms": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerclose": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollererror": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollererrorifneeded": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollergetbackpressure": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollergetchunksize": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollergetdesiredsize": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerprocessclose": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerprocesswrite": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerwrite": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultwriterabort": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterclose": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterclosewitherrorpropagation": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterensureclosedpromiserejected": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterensurereadypromiserejected": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwritergetdesiredsize": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterrelease": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterwrite": [
+   "5.5.3"
+  ],
+  "writablestreamfinisherroring": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightclose": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightclosewitherror": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightwrite": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightwritewitherror": [
+   "5.5.2"
+  ],
+  "writablestreamhasoperationmarkedinflight": [
+   "5.5.2"
+  ],
+  "writablestreammarkcloserequestinflight": [
+   "5.5.2"
+  ],
+  "writablestreammarkfirstwriterequestinflight": [
+   "5.5.2"
+  ],
+  "writablestreamrejectcloseandclosedpromiseifneeded": [
+   "5.5.2"
+  ],
+  "writablestreamstarterroring": [
+   "5.5.2"
+  ],
+  "writablestreamupdatebackpressure": [
+   "5.5.2"
+  ]
+ },
  "uses": {
-  "[[abortsteps]]( reason )": {
+  "[[abortsteps]]": {
    "10.11": 2
   },
-  "[[cancelsteps]]( reason )": {
+  "[[cancelsteps]]": {
    "10.11": 3
   },
-  "[[pullsteps]]( readrequest )": {
+  "[[errorsteps]]": {
+   "10.11": 2
+  },
+  "[[pullsteps]]": {
+   "10.11": 3
+  },
+  "[[releasesteps]]": {
    "10.11": 3
   },
   "abort a writable stream": {
@@ -1559,7 +2040,7 @@
    "4.9.5": 2,
    "10.11": 2
   },
-  "cloneasuint8array( o )": {
+  "cloneasuint8array": {
    "4.9.1": 2
   },
   "close sentinel": {
@@ -1582,7 +2063,7 @@
   "default readers": {
    "10.5": 2
   },
-  "dequeuevalue( container )": {
+  "dequeuevalue": {
    "5.5.4": 2
   },
   "desired size to fill the stream queue": {
@@ -1596,7 +2077,7 @@
    "6.2.3": 3,
    "10.11": 8
   },
-  "enqueuevaluewithsize( container value size )": {
+  "enqueuevaluewithsize": {
    "5.5.4": 2
   },
   "error steps": {
@@ -1608,11 +2089,11 @@
   "error( e )": {
    "10.11": 13
   },
-  "extracthighwatermark( strategy defaulthwm )": {
+  "extracthighwatermark": {
    "4.2.4": 2,
    "6.2.4": 2
   },
-  "extractsizealgorithm( strategy )": {
+  "extractsizealgorithm": {
    "6.2.4": 2
   },
   "flush( controller )": {
@@ -1640,19 +2121,19 @@
   "identity transform stream": {
    "10.11": 3
   },
-  "initializereadablestream( stream )": {
+  "initializereadablestream": {
    "9.1.1": 2
   },
   "internal queues": {
    "10.3": 2
   },
-  "isreadablestreamlocked( stream )": {
+  "isreadablestreamlocked": {
    "4.2.4": 4,
    "4.9.3": 2,
    "4.9.4": 2,
    "9.5": 2
   },
-  "iswritablestreamlocked( stream )": {
+  "iswritablestreamlocked": {
    "4.2.4": 2,
    "5.2.4": 3,
    "9.5": 2
@@ -1758,87 +2239,87 @@
    "4.7.2": 2,
    "10.11": 2
   },
-  "readablebytestreamcontrollerclose( controller )": {
+  "readablebytestreamcontrollerclose": {
    "4.9.1": 4
   },
-  "readablebytestreamcontrollerenqueue( controller chunk )": {
+  "readablebytestreamcontrollerenqueue": {
    "4.9.1": 3,
    "9.1.1": 2
   },
-  "readablebytestreamcontrollererror( controller e )": {
+  "readablebytestreamcontrollererror": {
    "4.9.1": 6
   },
-  "readablebytestreamcontrollergetbyobrequest( controller )": {
+  "readablebytestreamcontrollergetbyobrequest": {
    "4.9.1": 2
   },
-  "readablebytestreamcontrollerrespond( controller byteswritten )": {
+  "readablebytestreamcontrollerrespond": {
    "4.9.1": 3,
    "9.1.1": 3
   },
-  "readablebytestreamcontrollerrespondwithnewview( controller view )": {
+  "readablebytestreamcontrollerrespondwithnewview": {
    "4.9.1": 3
   },
-  "readablestreamaddreadintorequest( stream readrequest )": {
+  "readablestreamaddreadintorequest": {
    "4.9.5": 2
   },
-  "readablestreambyobreaderrelease( reader )": {
+  "readablestreambyobreaderrelease": {
    "4.9.1": 2
   },
-  "readablestreamcancel( stream reason )": {
+  "readablestreamcancel": {
    "4.9.1": 10
   },
-  "readablestreamclose( stream )": {
+  "readablestreamclose": {
    "4.9.5": 2
   },
-  "readablestreamdefaultcontrollercallpullifneeded( controller )": {
+  "readablestreamdefaultcontrollercallpullifneeded": {
    "4.6.4": 2
   },
-  "readablestreamdefaultcontrollercancloseorenqueue( controller )": {
+  "readablestreamdefaultcontrollercancloseorenqueue": {
    "4.6.3": 2
   },
-  "readablestreamdefaultcontrollerclearalgorithms( controller )": {
+  "readablestreamdefaultcontrollerclearalgorithms": {
    "4.6.4": 2
   },
-  "readablestreamdefaultcontrollerclose( controller )": {
+  "readablestreamdefaultcontrollerclose": {
    "4.9.1": 3
   },
-  "readablestreamdefaultcontrollerenqueue( controller chunk )": {
+  "readablestreamdefaultcontrollerenqueue": {
    "4.9.1": 3
   },
-  "readablestreamdefaultcontrollererror( controller e )": {
+  "readablestreamdefaultcontrollererror": {
    "4.9.1": 5,
    "6.4.3": 3,
    "8.2": 2
   },
-  "readablestreamdefaultreaderread( reader readrequest )": {
+  "readablestreamdefaultreaderread": {
    "4.9.1": 2,
    "9.1.2": 2
   },
-  "readablestreamdefaultreaderrelease( reader )": {
+  "readablestreamdefaultreaderrelease": {
    "4.2.5": 4,
    "4.9.1": 2
   },
-  "readablestreamfulfillreadrequest( stream chunk done )": {
+  "readablestreamfulfillreadrequest": {
    "4.9.5": 2
   },
-  "readablestreamgetnumreadintorequests( stream )": {
+  "readablestreamgetnumreadintorequests": {
    "4.9.5": 2
   },
-  "readablestreamgetnumreadrequests( stream )": {
+  "readablestreamgetnumreadrequests": {
    "4.9.4": 2,
    "4.9.5": 2
   },
-  "readablestreamhasbyobreader( stream )": {
+  "readablestreamhasbyobreader": {
    "4.9.5": 3
   },
-  "readablestreamhasdefaultreader( stream )": {
+  "readablestreamhasdefaultreader": {
    "4.9.5": 2
   },
-  "readablestreampipeto( source dest preventclose preventabort preventcancel [ signal ])": {
+  "readablestreampipeto": {
    "4.2.4": 2,
    "9.5": 2
   },
-  "readablestreamtee( stream cloneforbranch2 )": {
+  "readablestreamtee": {
    "9.1.2": 2
   },
   "reader type": {
@@ -1851,7 +2332,7 @@
    "5.3.3": 4,
    "10.11": 3
   },
-  "resetqueue( container )": {
+  "resetqueue": {
    "4.9.4": 2,
    "4.9.5": 2
   },
@@ -1875,7 +2356,7 @@
    "6.2.4": 2,
    "10.11": 6
   },
-  "transferarraybuffer( o )": {
+  "transferarraybuffer": {
    "4.8.3": 3,
    "4.9.5": 6
   },
@@ -1883,22 +2364,22 @@
    "6.4.2": 2,
    "10.11": 2
   },
-  "transformstreamdefaultcontrollerclearalgorithms( controller )": {
+  "transformstreamdefaultcontrollerclearalgorithms": {
    "6.4.3": 2
   },
-  "transformstreamdefaultcontrollerperformtransform( controller chunk )": {
+  "transformstreamdefaultcontrollerperformtransform": {
    "6.4.3": 2
   },
-  "transformstreamdefaultsinkwritealgorithm( stream chunk )": {
+  "transformstreamdefaultsinkwritealgorithm": {
    "6.4.1": 2
   },
-  "transformstreamerror( stream e )": {
+  "transformstreamerror": {
    "6.4.2": 2
   },
-  "transformstreamerrorwritableandunblockwrite( stream e )": {
+  "transformstreamerrorwritableandunblockwrite": {
    "6.4.2": 2
   },
-  "transformstreamunblockwrite( stream )": {
+  "transformstreamunblockwrite": {
    "6.4.4": 2
   },
   "underlying byte source": {
@@ -1938,24 +2419,24 @@
    "5.1": 2,
    "10.11": 2
   },
-  "writablestreamabort( stream reason )": {
+  "writablestreamabort": {
    "4.9.1": 2,
    "5.2.2": 3
   },
-  "writablestreamclosequeuedorinflight( stream )": {
+  "writablestreamclosequeuedorinflight": {
    "4.9.1": 3,
    "5.5.1": 2,
    "5.5.3": 2,
    "5.5.4": 2
   },
-  "writablestreamdefaultcontrollererrorifneeded( controller error )": {
+  "writablestreamdefaultcontrollererrorifneeded": {
    "6.4.4": 2,
    "8.2": 2
   },
-  "writablestreamdefaultwritergetdesiredsize( writer )": {
+  "writablestreamdefaultwritergetdesiredsize": {
    "4.9.1": 2
   },
-  "writablestreamupdatebackpressure( stream backpressure )": {
+  "writablestreamupdatebackpressure": {
    "5.5.4": 3
   },
   "write a chunk": {

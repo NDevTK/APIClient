@@ -3,7 +3,7 @@
  "key": "idl",
  "base": "https://webidl.spec.whatwg.org/",
  "specUpdated": "21 August 2026",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -2092,6 +2092,17 @@
   ],
   "wrong document err": [
    "2.8.1"
+  ]
+ },
+ "ops": {
+  "converttoint": [
+   "3.2.4.9"
+  ],
+  "integerpart": [
+   "3.2.4.9"
+  ],
+  "legacyplatformobjectgetownproperty": [
+   "3.9.7"
   ]
  },
  "uses": {

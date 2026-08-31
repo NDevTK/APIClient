@@ -3,7 +3,7 @@
  "key": "csp",
  "base": "https://w3c.github.io/webappsec-csp/",
  "specUpdated": "13 August 2026",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -1123,6 +1123,14 @@
   ],
   "worker src": [
    "6.2.2"
+  ]
+ },
+ "ops": {
+  "parse a response content security policies": [
+   "2.2.2"
+  ],
+  "parse a serialized csp": [
+   "2.2.1"
   ]
  },
  "uses": {

@@ -3,7 +3,7 @@
  "key": "ecmascript",
  "base": "https://tc39.es/ecma262/multipage/",
  "specUpdated": "Draft ECMA-262 / August 28, 2026",
- "fetched": "2026-08-29",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Scope",
@@ -22336,6 +22336,7 @@
    "27.8.3.7"
   ]
  },
+ "ops": {},
  "uses": {
   "[[call]]": {
    "15": 2,

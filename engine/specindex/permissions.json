@@ -3,7 +3,7 @@
  "key": "permissions",
  "base": "https://w3c.github.io/permissions/",
  "specUpdated": "06 October 2025",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -413,6 +413,7 @@
    "C.3"
   ]
  },
+ "ops": {},
  "uses": {
   "default state": {
    "4": 2

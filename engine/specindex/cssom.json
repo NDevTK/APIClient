@@ -3,7 +3,7 @@
  "key": "cssom",
  "base": "https://drafts.csswg.org/cssom/",
  "specUpdated": "10 June 2026",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -710,6 +710,7 @@
    "6.6.1"
   ]
  },
+ "ops": {},
  "uses": {
   "addrule( selector block optionalindex )": {
    "14": 6

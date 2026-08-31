@@ -3,7 +3,7 @@
  "key": "hrtime",
  "base": "https://w3c.github.io/hr-time/",
  "specUpdated": "24 March 2026",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -181,6 +181,7 @@
    "2.1"
   ]
  },
+ "ops": {},
  "uses": {
   "coarsen time": {
    "3": 3

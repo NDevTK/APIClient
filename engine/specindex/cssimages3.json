@@ -3,7 +3,7 @@
  "key": "cssimages3",
  "base": "https://drafts.csswg.org/css-images-3/",
  "specUpdated": "15 December 2025",
- "fetched": "2026-08-30",
+ "fetched": "2026-08-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -357,6 +357,7 @@
    "2"
   ]
  },
+ "ops": {},
  "uses": {
   "color stop list": {
    "7": 3,

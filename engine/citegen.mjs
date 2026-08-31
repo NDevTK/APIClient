@@ -390,6 +390,59 @@ function addDef(defs, term, sec) {
   defs.set(term, list);
 }
 
+/* AN ABSTRACT OPERATION'S DEFINITION CARRIES ITS SIGNATURE AND EVERY CITATION OF IT CARRIES ONLY ITS NAME, AND
+ * THAT MISMATCH WAS A WHOLE STANDARD'S WORTH OF SILENCE. A bikeshed dfn is indexed by the text inside it, and
+ * Streams writes each operation as `<dfn …>WritableStreamAbort(<var>stream</var>, <var>reason</var>)</dfn>` — so
+ * the key is `writablestreamabort( stream reason )` while the phrase this tree writes, `§5.2 WritableStreamAbort
+ * step 2`, matches NOTHING. 175 of Streams' 271 terms are keyed that way. Measured on the file that prompted
+ * this: 28 wrong section numbers, hand-found, of which the audit reported ZERO — not because it judged them and
+ * was wrong, but because no term was ever found to judge them against. Web IDL, IndexedDB, File API and the
+ * File System Standard are keyed identically.
+ *
+ * SO THE NAME IS INDEXED BESIDE THE SIGNATURE — AT INDEX TIME, GATED BY THE STANDARD'S OWN DECLARATION, AND
+ * THAT CHOICE IS THE WHOLE OF THE PRECISION. The obvious cheaper fix is to strip the argument list at MATCH
+ * time, needing no refetch, gating the resulting one-word name on the tree's own CASING — an internal
+ * lower-to-upper transition, which is what `nameIsIdentifier` already tests and why ECMAScript is allowed
+ * one-word terms. IT WAS BUILT AND MEASURED AND IT IS WRONG, in precisely the shape ES_CALLABLE's own comment
+ * records: stripping every parenthesised key admits IDL members and type names as operation names, and the
+ * casing test cannot tell them apart because they are spelled identically. It raised `TypeError` and
+ * `ReferenceError` against ECMAScript clauses that merely THROW them — the exact false attribution ES_CALLABLE
+ * exists to prevent, re-manufactured one layer down — plus `attachShadow`, `appendChild`, `insertBefore`,
+ * `postMessage`, `insertAdjacentHTML` and the `ReadableStream` interface itself, every one of them vocabulary a
+ * correct comment names while citing a section that is about something else.
+ * THE STANDARD ALREADY DRAWS THE LINE: bikeshed stamps `data-dfn-type` on every dfn, and Streams carries 163
+ * `abstract-op` against 30 `method`, 20 `attribute`, 15 `interface`, 11 `dictionary` and 8 `constructor`. So
+ * this reads the declaration rather than re-deriving it from a spelling — the same argument ES_CALLABLE makes,
+ * applied to the readers that had no such gate. Every one of the false positives above is a `method` or an
+ * `interface`; not one is an `abstract-op`.
+ * THE CASING GATE STAYS, AT THE MATCH, AND IS NOT REDUNDANT WITH THIS ONE — the two guard different questions.
+ * This gate asks whether the STANDARD calls the thing an operation. The casing gate asks whether the AUTHOR
+ * wrote a name rather than an English word, and it is load-bearing the day a standard declares a lowercase
+ * one-word abstract-op: the File System Standard's scoped `take` and `release` are exactly that shape, and
+ * `release` in running prose must never resolve to one.
+ * A BARE NAME IS ALSO WHAT THE USE SCAN COUNTS. `uses` is keyed by whatever spelling `idToTerm` maps the dfn's
+ * id to, and an operation's uses filed under a signature nothing ever writes are uses nothing can read — so an
+ * abstract-op's id maps to its BARE name, and the confirmation-by-prominent-use channel follows the citation. */
+function addOp(ops, bare, sec) {
+  if (!bare || bare.length > 90) return null;
+  const list = ops.get(bare) || [];
+  if (!list.includes(sec)) list.push(sec);
+  ops.set(bare, list);
+  return bare;
+}
+
+/* The name a dfn declares, with its argument list removed. Bikeshed writes the arguments as <var> children, so
+ * the tag strip that normTerm already performs leaves them inside the parentheses; everything before the first
+ * one is the name. A `data-lt` spelling is the same name written out (`[[CancelSteps]]`), so it is read too. */
+function opNames(content, lt) {
+  const out = [];
+  for (const raw of [content, ...(lt ? decodeEntities(lt).split("|") : [])]) {
+    const t = normTerm(String(raw).split("(")[0]);
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
 function secAt(marks, at) {
   let lo = 0, hi = marks.length - 1, sec = null;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (marks[mid].at < at) { sec = marks[mid].no; lo = mid + 1; } else hi = mid - 1; }
@@ -432,6 +485,7 @@ function writeIndex(spec, out) {
   mkdirSync(INDEX_DIR, { recursive: true });
   writeFileSync(indexFileOf(spec.key), JSON.stringify(out, null, 1) + "\n");
   console.log(`\n${spec.key}: ${Object.keys(out.sections).length} sections, ${Object.keys(out.dfns).length} terms, ` +
+    `${Object.keys(out.ops).length} declared abstract operations, ` +
     `${Object.keys(out.uses).length} terms with a prominent use site — updated ${out.specUpdated}`);
   if (!prev) return;
   /* THE RENUMBERING REPORT — the hazard §Browser half names, made visible. A section whose TITLE stayed and
@@ -447,7 +501,7 @@ function writeIndex(spec, out) {
   console.log(`  ${moved} section(s) renumbered since the committed index (fetched ${prev.fetched})`);
 }
 
-function finish(spec, sections, defs, uses, specUpdated) {
+function finish(spec, sections, defs, uses, specUpdated, ops = new Map()) {
   /* The use map keeps the COUNT, not a boolean, because two different questions are asked of it and merging
    * them would answer both badly: USE_FLOOR links make a section the term's SUBJECT, so a citation landing
    * there is CONFIRMED; a section that links it merely twice is worth NAMING IN THE FINDING, so the reader
@@ -457,8 +511,9 @@ function finish(spec, sections, defs, uses, specUpdated) {
     if (n < 2) continue;
     const i = k.indexOf("\u0000");
     const term = k.slice(0, i), sec = k.slice(i + 1);
-    if (!defs.has(term)) continue;                 /* a use of something this index does not define is noise */
-    if (defs.get(term).includes(sec)) continue;    /* the definition site is already the answer */
+    const at = defs.get(term) || ops.get(term);
+    if (!at) continue;                             /* a use of something this index does not define is noise */
+    if (at.includes(sec)) continue;                /* the definition site is already the answer */
     (kept[term] = kept[term] || {})[sec] = n;
   }
   return {
@@ -466,6 +521,11 @@ function finish(spec, sections, defs, uses, specUpdated) {
     fetched: new Date().toISOString().slice(0, 10),
     sections: Object.fromEntries([...sections].sort((a, b) => cmpNo(a[0], b[0]))),
     dfns: Object.fromEntries([...defs].sort((a, b) => (a[0] < b[0] ? -1 : 1))),
+    /* THE OPERATION NAMES THE STANDARD ITSELF DECLARES — see addOp. A reader whose standard declares none
+     * writes an empty object rather than omitting the field: an absent field would make an index written by an
+     * older reader indistinguishable from a standard that has no abstract operations, and the audit asserts
+     * this field's presence precisely so those two cannot be confused. */
+    ops: Object.fromEntries([...ops].sort((a, b) => (a[0] < b[0] ? -1 : 1))),
     uses: Object.fromEntries(Object.entries(kept).sort((a, b) => (a[0] < b[0] ? -1 : 1))),
   };
 }
@@ -550,7 +610,7 @@ function regenBikeshed(spec) {
   if (parsed !== levels) throw new Error(`${spec.key}: the page has ${levels} data-level headings and the parse read ${parsed} — the parse is wrong`);
   marks.sort((a, b) => a.at - b.at);
 
-  const defs = new Map(), uses = new Map(), idToTerm = new Map();
+  const defs = new Map(), uses = new Map(), idToTerm = new Map(), ops = new Map();
   const dfnRe = /<dfn\b([^>]*)>([\s\S]{0,400}?)<\/dfn>/g;
   for (let m; (m = dfnRe.exec(body)); ) {
     const sec = secAt(marks, m.index);
@@ -574,12 +634,18 @@ function regenBikeshed(spec) {
     if (lt) for (const alt of lt.split("|")) spellings.push(normTerm(alt));
     let primary = null;
     for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
+    /* THE STANDARD'S OWN DECLARATION, READ RATHER THAN GUESSED — see addOp. Only `abstract-op` earns a bare
+     * name; `method`, `attribute`, `interface`, `constructor` and `dict-member` are vocabulary a correct
+     * comment names while citing a section about something else, and admitting them was measured wrong. */
+    let op = null;
+    if (attrOf(m[1], "data-dfn-type") === "abstract-op")
+      for (const b of opNames(m[2], lt)) { const k = addOp(ops, b, sec); if (k && !op) op = k; }
     const id = attrOf(m[1], "id");
-    if (id && primary) idToTerm.set(id, primary);
+    if (id && (op || primary)) idToTerm.set(id, op || primary);
   }
   scanUses(body, marks, idToTerm, uses);
-  console.error(`  ${spec.key}: ${marks.length} headings on one page`);
-  writeIndex(spec, finish(spec, sections, defs, uses, updated));
+  console.error(`  ${spec.key}: ${marks.length} headings on one page, ${ops.size} declared abstract operations`);
+  writeIndex(spec, finish(spec, sections, defs, uses, updated, ops));
 }
 
 /* ---- reader: ReSpec single page (Permissions) ------------------------------------------------------------ */
@@ -613,7 +679,7 @@ function regenRespec(spec) {
   if (parsed !== opens) throw new Error(`${spec.key}: the page has ${opens} numbered heading openings and the parse read ${parsed} — the parse is wrong`);
   marks.sort((a, b) => a.at - b.at);
 
-  const defs = new Map(), uses = new Map(), idToTerm = new Map();
+  const defs = new Map(), uses = new Map(), idToTerm = new Map(), ops = new Map();
   const dfnRe = /<dfn\b([^>]*)>([\s\S]{0,400}?)<\/dfn>/g;
   for (let m; (m = dfnRe.exec(body)); ) {
     const sec = secAt(marks, m.index);
@@ -628,12 +694,16 @@ function regenRespec(spec) {
     }
     let primary = null;
     for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
+    /* ReSpec stamps the same `data-dfn-type` bikeshed does, so the same declaration answers here — see addOp. */
+    let op = null;
+    if (attrOf(m[1], "data-dfn-type") === "abstract-op")
+      for (const b of opNames(m[2], attrOf(m[1], "data-lt"))) { const k = addOp(ops, b, sec); if (k && !op) op = k; }
     const id = attrOf(m[1], "id");
-    if (id && primary) idToTerm.set(id, primary);
+    if (id && (op || primary)) idToTerm.set(id, op || primary);
   }
   scanUses(body, marks, idToTerm, uses);
-  console.error(`  ${spec.key}: ${marks.length} numbered headings on one page`);
-  writeIndex(spec, finish(spec, sections, defs, uses, updated));
+  console.error(`  ${spec.key}: ${marks.length} numbered headings on one page, ${ops.size} declared abstract operations`);
+  writeIndex(spec, finish(spec, sections, defs, uses, updated, ops));
 }
 
 /* ---- reader: xmlspec (XML 1.0) --------------------------------------------------------------------------- */
@@ -701,9 +771,16 @@ function normSecnum(raw) {
  * citation. The spec draws that line already, so this reads it rather than re-deriving it.
  *
  * The spelling test still runs UNDER that gate, because a typed clause can still be titled with a common
- * word — §7.3.2 is `Get ( O, P )` and `get` would match half the comments in this tree. */
+ * word — §7.3.2 is `Get ( O, P )` and `get` would match half the comments in this tree.
+ *
+ * THE SPELLING TEST BELOW IS SHARED WITH THE AUDIT AND IS NOT ECMAScript'S ALONE, which is why it is named for
+ * what it asks rather than for the reader that first needed it. Every bikeshed standard writes an abstract
+ * operation's dfn WITH its argument list, so `WritableStreamAbort` in a comment is not the index's
+ * `writablestreamabort( stream reason )` and matches nothing — see `addOp` above, which indexes the bare name
+ * the standard declares, and the audit's `probe`, where this predicate is asked of the TREE'S OWN spelling to
+ * decide whether the author wrote a NAME or an English word. */
 const ES_CALLABLE = /^(abstract operation|internal method|built-in function|numeric method|host-defined abstract operation|implementation-defined abstract operation|syntax-directed operation)$/;
-function esNameIsIdentifier(raw) {
+function nameIsIdentifier(raw) {
   if (/^\[\[/.test(raw) || raw.includes("%")) return true;
   if (/^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z0-9_$]+)+$/.test(raw)) return true;
   return /^[A-Za-z][A-Za-z0-9]*$/.test(raw) && /[a-z][A-Z]/.test(raw);
@@ -781,7 +858,7 @@ function regenTc39(spec) {
       if (sect) for (const t of [sect.title, ...esAliases(sect.title)]) names.push(t.split("(")[0].trim());
       for (const raw of names) {
         const t = normTerm(raw);
-        if (!t || !(keepTerm(t) || esNameIsIdentifier(raw))) continue;
+        if (!t || !(keepTerm(t) || nameIsIdentifier(raw))) continue;
         addDef(defs, t, sec);
         if (!idToTerm.has(id)) idToTerm.set(id, t);
       }
@@ -1060,7 +1137,7 @@ function audit(argv, opts = {}) {
      * READS, and CLAUDE.md's rule for that is an assert rather than a default: `ix.uses || {}` would turn
      * "this index predates the use-site scan" into the plausible datum "no section is about any term", and
      * every citation confirmed by a use would silently become a finding. */
-    for (const need of ["sections", "dfns", "uses", "specUpdated", "fetched"]) {
+    for (const need of ["sections", "dfns", "ops", "uses", "specUpdated", "fetched"]) {
       if (!ix[need]) throw new Error(`${relative(ROOT, f)} has no "${need}" — it was written by an older reader; re-run: node engine/citegen.mjs --regen ${s.key}`);
     }
     /* A LOOKUP TABLE MUST NOT ANSWER FOR A KEY IT DOES NOT HOLD. JSON.parse hands back objects that inherit
@@ -1068,7 +1145,7 @@ function audit(argv, opts = {}) {
      * reach members nothing indexed — the table saying yes to a term the standard never defined. It crashed
      * here rather than answering wrongly only by luck (`.includes` is not a function on that value); the fix
      * is that the table has no prototype to inherit an answer from. */
-    for (const t of ["sections", "dfns", "uses"]) Object.setPrototypeOf(ix[t], null);
+    for (const t of ["sections", "dfns", "ops", "uses"]) Object.setPrototypeOf(ix[t], null);
     idx.set(s.key, ix);
   }
   if (!idx.size) {
@@ -1078,9 +1155,12 @@ function audit(argv, opts = {}) {
   /* Longest-first matching needs to know how far a phrase can run before it stops being a term, and the
    * shortest a term can be, because ECMAScript's operation names are one word and nothing else's are. */
   let maxWords = 2, minWords = 2;
+  /* The stripped operation names are part of the vocabulary the lookup walks, so they set these bounds too —
+   * a one-word bare with minWords still 2 would be a key the loop below can never ask for. */
+  let maxTitleWords = 2;
   const titleToNo = new Map();
   for (const [key, ix] of idx) {
-    for (const t of Object.keys(ix.dfns)) {
+    for (const t of [...Object.keys(ix.dfns), ...Object.keys(ix.ops)]) {
       const n = t.split(" ").length;
       if (n > maxWords) maxWords = n;
       if (n < minWords) minWords = n;
@@ -1088,6 +1168,9 @@ function audit(argv, opts = {}) {
     const tt = new Map();
     for (const [no, s] of Object.entries(ix.sections)) {
       const k = normTerm(s.title);
+      if (!k) continue;
+      const n = k.split(" ").length;
+      if (n > maxTitleWords) maxTitleWords = n;
       if (!tt.has(k)) tt.set(k, []);
       tt.get(k).push(no);
     }
@@ -1154,23 +1237,76 @@ function audit(argv, opts = {}) {
    * (§7.4.5 for a term defined at §7.4.1.2) is a different matter and stays a finding. */
   const contains = (ancestor, sec) => sec.length > ancestor.length && sec.startsWith(ancestor + ".");
 
-  const probe = (phrase, no, only) => {
+  /* WHAT MAKES AN UNQUOTED PHRASE A TITLE CLAIM RATHER THAN THE START OF A SENTENCE: THE AUTHOR ENDED IT THERE.
+   * Quoting a title states its extent explicitly, and that is the whole reason check (4) could trust a quote
+   * without further evidence. The unquoted form has to establish the same fact, and the only thing at the site
+   * that can is where the phrase STOPS — so the matched title must run to the end of the prose or to a mark
+   * that closes a phrase, never into another word.
+   * IT WAS MEASURED THE OTHER WAY FIRST AND THE OTHER WAY IS UNUSABLE. Accepting any leading phrase that titles
+   * a section raised twelve findings tree-wide of which nine were prose whose FIRST WORDS happen to title
+   * something: `constraint-validation clause` (the title is `Constraint validation`, the author wrote an
+   * adjective), `THE DOCUMENT'S ELEMENT SHORTCUTS` (`The document element`), `the window object's location
+   * getter steps` (`The Window object`), `the navigate event intercept commit handler steps` (`The navigate
+   * event`), `data model ----` as a banner, and two quoted SPEC SENTENCES whose opening words are a heading
+   * somewhere. Every one names a specific replacement number for a citation that is right, which this file's
+   * own comment calls the worst finding it can emit. The delimiter is what all nine lack and what the three
+   * survivors have.
+   * The scan runs on the RAW prose because normTerm has already turned every delimiter into a space; the words
+   * are joined by "any run of non-alphanumerics" so a hyphenated or backticked spelling still matches, which is
+   * the same normalization normTerm performs and must not be a second, disagreeing one.
+   * WHAT COUNTS AS ENDING THE NAME WAS READ OFF THE TREE, NOT CHOSEN. The population whose recall this gate
+   * spends is the CORRECT citations of this shape: the unquoted sites whose leading phrase EXACTLY titles the
+   * section they cite, 1743 of them at the revision this was measured. What follows them, most often: a
+   * possessive `'s` (`§4.8.5 The iframe element's …` — the name is complete and the sentence then talks about
+   * the thing), then `step`/`steps` (`§7.4.5 Populating a session history entry step 3`), a comma, a string
+   * literal's `\` continuation or its closing `"`, an em dash, a period, a comment close, an open paren. Each
+   * is a way of ENDING A NAME, and admitting exactly those admits 873 of the 1743 — where punctuation alone
+   * admits 251. What is refused is the shape all nine false positives had: ANOTHER WORD, which continues the
+   * noun phrase and means the title was only its beginning. A colon is refused too, on the same evidence — it
+   * delimits 50 correct sites and it is also what stands inside the quoted IDL `interface Document : Node`,
+   * which produced two of the nine.
+   * RESIDUAL — AN UNQUOTED TITLE RUNNING STRAIGHT INTO A VERB IS NOT JUDGED, and it is half of this shape:
+   * 870 of the 1743 end in a word rather than a mark, so `§7.3.1 Creating browsing contexts is what this
+   * claims` is declined while `§7.3.1 Creating browsing contexts, …` is caught. The code is right about what
+   * it does and narrower than the promise. WHAT THE NEXT DIFF BUILDS: the thing the delimiter stands in for —
+   * whether the words AFTER the title continue the noun phrase — asked of the index rather than of grammar, by
+   * testing whether the LONGER phrase is itself something some standard names (a term, an operation, a title),
+   * and declining only then; `the document element` + `shortcuts` and `the navigate event` + `intercept commit
+   * handler steps` are exactly the cases a longer-phrase test can see and a delimiter cannot. HOW ITS ABSENCE
+   * SHOWS: a citation with a wrong number and a right title followed by a verb is reported as carrying "no
+   * title and no term any index knows" — filed as undecided, indistinguishable in the report from a citation
+   * that states nothing at all, which is the very silence this check was widened to end. */
+  const RE_ESC = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ENDS_A_NAME = /^\s*(?:$|\*\/|['’]s\b|steps?\b|[.,;)\]("”»—–\\])/;
+  const delimited = (raw, words) => {
+    /* CASE-INSENSITIVE, because normTerm lowercased the words and the tree writes a banner in capitals — the
+     * first spelling of this had no flag and matched NOTHING, which reads exactly like a clean result. */
+    const m = new RegExp("^[^A-Za-z0-9]*" + words.map(RE_ESC).join("[^A-Za-z0-9]+"), "i").exec(raw);
+    return !!m && ENDS_A_NAME.test(raw.slice(m[0].length));
+  };
+
+  /* `opOK` says the phrase's RAW spelling at the citation is identifier-shaped, which is the one thing that
+   * makes a one-word declared operation name safe to look up — see addOp. A dfn always wins over a stripped
+   * name: the standard's own spelling of a term is better evidence than a signature with its arguments cut. */
+  const probe = (phrase, no, only, opOK) => {
     const hits = [];
     for (const [key, ix] of idx) {
       if (only && key !== only) continue;
-      if (!ix.dfns[phrase]) continue;
+      let where = ix.dfns[phrase] || null;
+      if (!where && (opOK || phrase.includes(" "))) where = ix.ops[phrase] || null;
+      if (!where) continue;
       const u = ix.uses[phrase] || null;
       const n2 = u && Object.hasOwn(u, no) ? u[no] : 0;
-      hits.push({ key, where: ix.dfns[phrase],
-        defAt: ix.dfns[phrase].includes(no),
-        underAt: ix.dfns[phrase].some((d) => contains(no, d)),
+      hits.push({ key, where,
+        defAt: where.includes(no),
+        underAt: where.some((d) => contains(no, d)),
         useAt: n2 >= USE_FLOOR, mentions: n2 });
     }
     return hits.length ? { phrase, hits } : null;
   };
-  const lookup = (words, no, only) => {
+  const lookup = (words, no, only, opHead) => {
     for (let n = Math.min(maxWords, words.length); n >= minWords; n--) {
-      const r = probe(words.slice(0, n).join(" "), no, only);
+      const r = probe(words.slice(0, n).join(" "), no, only, n === 1 && opHead);
       if (r) return r;
     }
     return null;
@@ -1241,8 +1377,22 @@ function audit(argv, opts = {}) {
     }
     for (const c of cites) {
       const after = src.slice(c.at + c.len, c.at + c.len + 220).replace(/\n\s*\*?\s*/g, " ");
-      c.quoted = (/^['"’“]?s?['"’“]?\s*["“]([^"”]{2,90})["”]/.exec(after) || [])[1] || null;
+      /* A QUOTE INTRODUCED BY A COLON IS STILL A QUOTE, and missing that made the tool judge a quoted SPEC
+       * SENTENCE as if it were bare prose. `location.c` writes `§7.2.4: "The Window object's location getter
+       * steps are to return this's Location object."` — the author quoted the standard verbatim, and with the
+       * colon unrecognized the site fell to the running-prose path, whose leading three words happen to title
+       * HTML §7.2.2 "The Window object". On the quoted path the WHOLE quotation is compared, matches no title,
+       * and nothing is asserted — which is the correct answer and the one the quoting was meant to produce. */
+      c.quoted = (/^['"’“]?s?['"’“]?\s*:?\s*["“]([^"”]{2,90})["”]/.exec(after) || [])[1] || null;
       c.words = normTerm(after.replace(/^'s\b/, " ")).split(" ").filter(Boolean);
+      c.after = after;                       /* the raw prose, for the delimiter test in check (4) */
+      /* THE FIRST TOKEN AS THE AUTHOR SPELLED IT, kept because normTerm has already destroyed the one signal
+       * that separates an operation name from an English word — see addOp. It is accepted only where it
+       * normalizes to exactly the first word the lookup will ask for, so a token this scan reads differently
+       * from normTerm can never license a lookup normTerm did not produce. */
+      const rawHead = (/^\s*(?:['’]s\b)?[\s"“'’(:,—–-]*(\[\[[A-Za-z]+\]\]|%[A-Za-z.]+%|[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)*)/
+        .exec(after) || [])[1] || "";
+      c.opHead = !!rawHead && c.words.length > 0 && nameIsIdentifier(rawHead) && normTerm(rawHead) === c.words[0];
       const only = c.anchor && !c.anchor.startsWith("other:") ? c.anchor : null;
       if (c.anchor && c.anchor.startsWith("other:")) { c.foreign = true; continue; }
       /* A QUOTE IS THE AUTHOR'S OWN STATEMENT OF WHAT THE CITATION IS ABOUT, so it is matched WHOLE and the
@@ -1251,7 +1401,9 @@ function audit(argv, opts = {}) {
        * correctly and quotes one of its STEPS, and a prefix match turned that into a misattribution of
        * §2.10 "Firing events". If the quoted phrase is not a term and not a title, there is nothing here to
        * check — which is UNDECIDED, not a finding. */
-      c.ev = c.quoted ? probe(normTerm(c.quoted), c.no, only) : lookup(c.words, c.no, only);
+      c.ev = c.quoted
+        ? probe(normTerm(c.quoted), c.no, only, nameIsIdentifier(c.quoted.trim()))
+        : lookup(c.words, c.no, only, c.opHead);
     }
 
     /* PASS 3 — GROUP EVIDENCE admits the bare numbers. A bare dotted number is a citation when some other
@@ -1432,20 +1584,66 @@ function audit(argv, opts = {}) {
           }
         }
 
-        /* (4) A quoted phrase that titles a DIFFERENT section of the same standard — the renumbering tell.
+        /* (4) A phrase that titles a DIFFERENT section of the same standard — the renumbering tell.
          * ASKED ONLY WHERE THE STANDARD IS THE CITATION'S OWN EVIDENCE, for the reason check (1) is: both
          * sides of the sentence this raises — "X titles <spec> §A; §B is Y" — are statements about the
          * RESOLVED standard, so on a file-voted resolution both are statements about a document the citation
          * never named. A false one of these is the worst finding this tool can emit: it reads as the
          * renumbering tell CLAUDE.md asks authors to write titles to catch, it names a specific replacement
          * number, and obeying it edits a CORRECT citation into a wrong one. The refusals are counted rather
-         * than dropped — a check that silently declines to run is the silent zero again. */
-        if (!verdict && c.quoted && how === "file") stat.titleRefused++;
-        else if (!verdict && c.quoted) {
-          const q = normTerm(c.quoted);
-          if (titleToNo.get(spec).has(q)) {
+         * than dropped — a check that silently declines to run is the silent zero again.
+         *
+         * AND THE PHRASE IS READ UNQUOTED AS WELL AS QUOTED, WHICH IS THE HOLE THIS CHECK HAD AND THE ONE THAT
+         * MATTERED MOST, BECAUSE IT WAS EXACTLY THE MANDATED SPELLING THAT WENT UNJUDGED. CLAUDE.md §Browser
+         * half writes its own worked example WITHOUT quotes — `HTML §13.2.5.43 comment start state` — and
+         * promises, in capitals, that "a mismatch between the two is then visible instead of silent". This
+         * check was gated on `c.quoted`, so it never asked. PROBED, not assumed: `HTML §7.3.1 "Creating
+         * browsing contexts"` raised TITLE-MISMATCH and the identical citation without the quotes was reported
+         * as carrying "no title and no term any index knows" — undecided, unjudged, indistinguishable in the
+         * report from a citation that states nothing at all. Worse, check (2) above ALREADY reads the unquoted
+         * form to CONFIRM a title, so the confirmation channel was generous exactly where the falsification
+         * channel was narrow: the safe-looking construction was the unchecked one, and every author who wrote a
+         * title on the strength of that promise got silence for it.
+         *
+         * IT STAYS ONE CATEGORY AND DOES NOT EARN A NEW NAME. Three states have to stay apart — a number the
+         * standard does not have (UNKNOWN-SECTION), a title belonging to a different number (this), and a
+         * citation the tool cannot judge (undecided) — and a quoted and an unquoted title are not a fourth
+         * state: they are one claim in two spellings, both stating that the section is titled that. Splitting
+         * them would make the CATEGORY report on PUNCTUATION rather than on the defect, and a reader triaging
+         * "TITLE-MISMATCH-UNQUOTED" would have to learn that it means the same thing before acting on it.
+         * The message names the phrase it read either way, so the site is checkable from the report alone.
+         *
+         * TWO THINGS KEEP THE UNQUOTED FORM FROM CRYING WOLF, and both are the file's own existing rules rather
+         * than new thresholds. (a) A ONE-WORD TITLE IS REFUSED — `Introduction`, `Scope`, `Navigables`,
+         * `Terminology` title a section of nearly every standard and appear in running prose constantly; that
+         * is exactly the coincidence generator `keepTerm` refuses a one-word TERM for, and the same floor
+         * applies for the same reason. A quoted one-word title is still read, because quoting it IS the
+         * author's statement that it is a title. (b) THE LONGEST LEADING PHRASE WINS, so a short title nested
+         * inside the prose of a longer one cannot fire ahead of it — the same longest-match rule `lookup` uses,
+         * and the same reason: a prefix match inside a longer phrase reads a claim out of a sentence that
+         * merely contains one. */
+        /* THE REFUSAL IS COUNTED WHERE IT SUPPRESSES A FINDING, NOT WHERE IT SUPPRESSES A QUESTION, and that is
+         * a change from the counter this replaces. It used to tick for every file-voted site carrying a quote,
+         * whether or not the quote titled anything — a number that mixes "declined to look" with "declined to
+         * report" and reads as the second. The claim is computed first and the vote is asked afterwards, so the
+         * count is exactly the findings a guessed standard cost. */
+        if (!verdict) {
+          const tt = titleToNo.get(spec);
+          let claim = null;
+          if (c.quoted) { const q = normTerm(c.quoted); if (tt.has(q)) claim = q; }
+          else for (let n = Math.min(maxTitleWords, c.words.length); n >= 2; n--) {
+            const p = c.words.slice(0, n).join(" ");
+            if (tt.has(p) && delimited(c.after, c.words.slice(0, n))) { claim = p; break; }
+          }
+          /* A SECTION CONTAINS ITS OWN SUBSECTIONS, so citing §4.9.5 in prose that names §4.9's title is less
+           * precise and not wrong — the identical rule check (3) applies to a term, applied to a title for the
+           * identical reason. `readable_byte_stream.c` cites Streams §4.9.5 "Byte stream controllers" and says
+           * `abstract operations`, which titles §4.9 above it. */
+          if (claim && tt.get(claim).some((t) => contains(t, no) || contains(no, t))) claim = null;
+          if (claim && how === "file") stat.titleRefused++;
+          else if (claim) {
             verdict = { kind: "TITLE-MISMATCH",
-              msg: `"${c.quoted}" titles ${spec} §${titleToNo.get(spec).get(q).join(", §")}; §${no} is "${sections[no].title}"` };
+              msg: `"${c.quoted || claim}" titles ${spec} §${tt.get(claim).join(", §")}; §${no} is "${sections[no].title}"` };
           }
         }
       }
