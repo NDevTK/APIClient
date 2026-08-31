@@ -2527,8 +2527,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   // NO `code` ARGUMENT: identity and the script inventory are the engine's own Lexbor <script> scan of `html`,
   // because a concatenation of a page's scripts cannot represent per-script scope and shifts with an inline
   // script the page did not ship. It used to be passed and cast away on the other side.
-  // THE DOCUMENT'S ADDRESS, NOT ITS ORIGIN. This used to hand over originOf(sourceUrl), so the engine's §4.4
-  // API base URL was the bare origin and every relative URL a bundle built resolved against the site root:
+  // THE DOCUMENT'S ADDRESS, NOT ITS ORIGIN. This used to hand over originOf(sourceUrl), so the engine's
+  // HTML §8.1.3.2 "Environment settings objects" API base URL (§4.4 stood here and is "Grouping content")
+  // was the bare origin and every relative URL a bundle built resolved against the site root:
   // a page at /app/dashboard calling fetch("api/users") was reported as /api/users. The engine derives the
   // origin from the address itself (§4.7's serialization, which its own url.c implements), so the principal
   // and the address are one fact from one place instead of two that can disagree.
