@@ -2438,7 +2438,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      zone holds cannot — a repeat has already been combined by the browser's own `Headers` iteration, which is
      exactly Fetch's `get`, so what the engine receives is one line per name carrying the combined value and
      its ITEM parse reaches the same verdict a browser's does. The engine parses it back into Fetch's header
-     list (core/fetch/headers.c) and reads it ONCE, into §7.4.6's navigation params. */
+     list (core/fetch/headers.c) and reads it ONCE, into §7.4.2.1 "Supporting concepts"' navigation params,
+     which §7.4.5 "Populating a session history entry" creates from the response (§7.4.6 stood here and is
+     "Applying the history step", which never mentions them). */
   const _headers = responseFieldLines(msg && msg.responseHeaders);
   // THE DOCUMENT ID — the ROOT one, because an instance is an agent CLUSTER and holds one realm per same-origin
   // document. A flow that scripts a CROSS-ORIGIN iframe or popup writes state in a PEER instance (a same-origin

@@ -20,8 +20,9 @@ JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t qu
    the list. */
 void    usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query_len);
 
-/* THE LIST one holds, or NULL when the value is not a URLSearchParams. The brand test Fetch §5.1's BodyInit
-   union performs, and what it serialises the body from. */
+/* THE LIST one holds, or NULL when the value is not a URLSearchParams. The brand test Fetch §5.2 "BodyInit
+   unions" performs — URLSearchParams is an arm of `XMLHttpRequestBodyInit` — and what it serialises the body
+   from. (§5.1 stood here and is "Headers class", which declares no union.) */
 const UrlEncodedList *usp_list_of(JSValueConst v);
 
 #endif

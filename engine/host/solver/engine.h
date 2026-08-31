@@ -141,7 +141,8 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    runs IN ORDER (§13.2.7) — so the entry occupies that position with only its URL, the flow WAITS there, and the
    host's reply becomes the program in the slot. Without it a document's external scripts could only park on
    their replies and run in ARRIVAL order, which is why an inline script after a `<script src>` used to abort.
-   `url` is already resolved: §4.4's API base URL belongs to the document whose element it is, so only the
+   `url` is already resolved: §8.1.3.2 "Environment settings objects"' API base URL belongs to the document
+   whose element it is (§4.4 stood here and is "Grouping content"), so only the
    caller can resolve it. The ASAP SET does not come here — it has no position, so it parks with
    engine_pending_script_url and runs when its reply drains.
    `stype` IS THE ELEMENT'S, and it survives the reply: §8.1.4.2 "Fetching scripts" decodes a module's bytes as
@@ -439,7 +440,9 @@ void engine_sched_end(void);
  *
  * An instance is an ORIGIN-KEYED AGENT CLUSTER, so several documents are one instance's — and a document the
  * HOST hands over (`qjs_join`) is not one any flow of this agent created. That is the whole difference from
- * §7.4's child navigable and it decides everything about this entry: a flow-created Document is built INSIDE
+ * §7.3.1.3 "Child navigables"' child navigable (§7.4 stood here and is "Navigation and session history",
+ * which navigates one rather than creating it) and it decides everything about this entry: a flow-created
+ * Document is built INSIDE
  * the creating flow, so its scripts are that flow's next programs (core/frame/navigable.c seeds them there);
  * a joined Document is built at the BASELINE like the root's, before any flow of it exists, so its scripts are
  * the programs of a flow that has to be MINTED for them. There is no flow to queue into, which is why this is

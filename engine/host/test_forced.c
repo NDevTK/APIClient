@@ -2382,7 +2382,8 @@ static const char *HTML =
        rather than an argument that was passed — and the C side reads the NOTICE the same run emitted and
        checks the ADDRESS it carries and the PROVENANCE it states (see `g_seed_route_derived`).
        AND IT PUTS THE ADDRESS BACK, with §7.2.5's other caller of the same steps. That is not tidying: this
-       document's §4.4 API base URL is its address, so a route left in place would resolve every later
+       document's §8.1.3.2 "Environment settings objects" API base URL is its address (§4.4 stood here and
+       is "Grouping content"), so a route left in place would resolve every later
        reference in this flow against `/routes/us-west-2/`, and a probe that failed for that reason would be
        reporting this statement's side effect as its own defect. The replace declares the original address in
        its turn, which is correct and costs nothing — that address is the document the frontier is already
@@ -5035,7 +5036,8 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
        the next fact anybody added, because nothing made the adder come here. It is an argument list now: a
        fact added to core/platform.h stops this fixture compiling until it says which of the two answers above
        applies to it. That matters most HERE, of the three hosts: the two that root an agent at a real response
-       get their answers from §7.4.6's navigation params in one line, and this one has to think. */
+       get their answers from §7.4.2.1 "Supporting concepts"' navigation params in one line (§7.4.6 stood here
+       and is "Applying the history step", which never mentions them), and this one has to think. */
     platform_agent_init(ctx, origin, top_level_url, false, OPENER_POLICY_UNSAFE_NONE);
 }
 

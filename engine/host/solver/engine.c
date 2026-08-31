@@ -23,7 +23,8 @@
 #include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
 #include "core/dom/document_current_script.h"   /* §4.12.1.1's bracket around the classic arm of a row */
 #include "core/dom/node.h"       /* the ELEMENT a row is the program of, crossing a park as its wrapper */
-#include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src` against §4.4's API base URL — the ONE
+#include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src` against §8.1.3.2's API base URL (§4.4
+                                        stood here and is "Grouping content") — the ONE
                                         statement of it, and the only thing this file needed core/url/url.h for */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
@@ -5141,7 +5142,8 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
 }
 
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
-   caller resolved the URL because §4.4's API base URL belongs to the document whose element it is.
+   caller resolved the URL because §8.1.3.2 "Environment settings objects"' API base URL belongs to the
+   document whose element it is (§4.4 stood here and is "Grouping content").
    APPEND, and that is §4.12.1's own answer rather than a default: this entry is the `list of scripts that will
    execute in order as soon as possible`, whose elements hold their places against one another, so a new one
    goes behind the ones already there. */
@@ -7650,7 +7652,8 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
        is a fork of it, exactly as every timeline of the root is a fork of the flow engine_sched_begin adds. */
     f = flow_add_unseeded(g_sess_ctx, JS_UNDEFINED, WORLD_NONE);
     /* THE SAME TABLE SHAPE THE ROOT DOCUMENT'S SEED HAS, built here because §4.12.1.1's encoding-parse belongs
-       to THIS document: §4.4's API base URL is the joined document's, so `<script src=app.js>` in a document at
+       to THIS document: §8.1.3.2 "Environment settings objects"' API base URL is the joined document's (§4.4
+       stood here and is "Grouping content"), so `<script src=app.js>` in a document at
        `/app/child.html` is `/app/app.js`, and asking the realm the session happens to be rooted at is how a
        joined document's own bundle comes to be fetched from another document's directory. `cctx` — the joined
        document's realm — is therefore what the parse is asked of. One row shape, one seeding function, one set

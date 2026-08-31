@@ -121,7 +121,8 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
  *
  * `dom` is the parsed tree this realm's `document` is a wrapper over.
  * `url` IS THE DOCUMENT'S ADDRESS AND `origin` IS ITS PRINCIPAL, and they are two different facts: the address
- * is what §4.4's API base URL resolves `fetch("api/users")` against, the principal is what a same-origin check
+ * is what §8.1.3.2 "Environment settings objects"' API base URL resolves `fetch("api/users")` against (§4.4
+ * stood here and is "Grouping content"), the principal is what a same-origin check
  * compares. A host that had one of them passed whichever it had, and every document's base URL was the origin
  * root — so the tool's own headline output named `https://site/api/users` for a request the page makes to
  * `https://site/app/api/users`.

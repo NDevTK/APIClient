@@ -2639,7 +2639,9 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        fetched — a WPT test document IS fetched from the corpus's own wptserver, so it has a response, and
        `html/browsers/origin/origin-keyed-agent-clusters/` delivers this header through `?pipe=header(...)` and
        `.headers` sidecars and nothing else. `opener_policy` is §7.1.3's, which §7.3.2.3's group is created
-       with. This host reads neither header itself: the list goes through §7.4.6's navigation params like the
+       with. This host reads neither header itself: the list goes through §7.4.2.1 "Supporting concepts"'
+       navigation params — created from the response by §7.4.5 "Populating a session history entry", and NOT
+       §7.4.6, which is "Applying the history step" — like the
        product host's. They used to be assignments into a struct this function DECLARED UNINITIALIZED and
        filled field by field, as did the two other hosts — see core/platform.h for why there is no such struct
        outside that file now. */
@@ -2854,7 +2856,9 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
             response = &response_headers;
         }
     }
-    /* §7.4.2.1's TARGET SNAPSHOT SANDBOXING FLAGS ARE THE CALLER'S ANSWER, NOT A ZERO THIS FUNCTION WRITES.
+    /* §7.4.2.1 "Supporting concepts"'s TARGET SNAPSHOT PARAMS' SANDBOXING FLAGS ARE THE CALLER'S ANSWER, NOT
+       A ZERO THIS FUNCTION WRITES — the struct's own member, not §7.4.2.3.4 "Non-fetch schemes and external
+       software"'s like-named row taken from it.
        A ZERO STOOD HERE with the sentence that makes it right for a TOP-LEVEL traversable — no embedder
        element, so §7.1.5 answers from the POPUP sandboxing flag set, which begins empty and which only
        §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever fill, and nothing chose this

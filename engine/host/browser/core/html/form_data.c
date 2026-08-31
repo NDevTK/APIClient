@@ -424,7 +424,8 @@ static char *fd_escape_field(const char *s, size_t n, size_t *out_n)
     return out;
 }
 
-/* Fetch §5.1's `multipart/form-data` SERIALIZER — the parser above, run backwards, and what a
+/* HTML §4.10.22.8 "Multipart form data"'s `multipart/form-data` encoding algorithm — the SERIALIZER, the
+ * parser above run backwards, and what a
  * `new Response(formData)` carries. RFC 7578's shape: `--boundary CRLF` then each part's Content-Disposition,
  * a blank line, its bytes, and a closing `--boundary--`. A FILE entry additionally carries `filename=` and its
  * own Content-Type, which is the whole reason a form's file control arrives as a file rather than as text.

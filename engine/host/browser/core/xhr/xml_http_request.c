@@ -298,11 +298,12 @@ static void xhr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
         JS_MarkValue(rt, *(JSValue *)((char *)d + XHR_VALS[i]), mark_func);
 }
 
-/* ---- §5.1's header list, as a JS Array of [name, value] ---------------------------------------------------
+/* ---- Fetch §2.2.2 "Headers"'s header list, as a JS Array of [name, value] ---------------------------------
  *
- * Fetch §5.1's operations over the shape §COW requires. The NAME is stored as the page wrote it (§3.5.2 sends
- * what it was given) and every comparison is ASCII case-insensitive, which is what "a header list contains a
- * name" means. */
+ * §2.2.2's operations over the shape §COW requires — the header list and its `contains` are defined THERE, not
+ * in §5.1 "Headers class", which stood on both sentences and is the IDL object that CALLS them. The NAME is
+ * stored as the page wrote it (§3.5.2 sends what it was given) and every comparison is ASCII case-insensitive,
+ * which is what "a header list list contains a header name name" means. */
 
 static uint32_t hl_len(JSContext *ctx, JSValueConst arr)
 {

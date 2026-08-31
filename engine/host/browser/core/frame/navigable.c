@@ -1962,7 +1962,8 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
  * load; the document arrives later, which is what the spec says from both ends — `open()` hands back a
  * WindowProxy at its own call site, and the navigable it names is still showing what it was showing.
  *
- * THE ADDRESS IS RESOLVED AGAINST THE NAVIGATING DOCUMENT, not against the target's — §4.4's API base URL
+ * THE ADDRESS IS RESOLVED AGAINST THE NAVIGATING DOCUMENT, not against the target's — §8.1.3.2 "Environment
+ * settings objects"' API base URL (§4.4 stood here and is "Grouping content")
  * belongs to the document whose script ran, which for `open("/x", "_self")` happens to be the same document
  * and for `open("/x", "someFrame")` is not. Resolving it HERE and not in the job is that sentence: by the time
  * the job runs, the only document it could resolve against is the one being replaced. */
