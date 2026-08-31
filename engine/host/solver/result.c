@@ -250,17 +250,33 @@ static char *errs_json_array(void) {
    `visMin` cannot give: how many members have completed NO unit of work, which is both the population
    `jobsFramed` belongs to and the population whose optimism bonus can never decay.
 
+   AND `neverPicked`/`neverPickedGap` ARE THE SAME PAIR ASKED OF THE ONE WORD IN §scheduler'S RAZOR THAT NO
+   OTHER ROW HERE CAN ANSWER. The razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY
+   flow"; every row above that looks like it names the starved population is a TERM OF THE WEIGHT, and
+   flow_credit_emit resets all of them — `unrun` is `cpu == 0` and an emission writes that zero, `visZero` is
+   `visits == 0` and an emission writes that too, and flow_pick's own `unrun` needs all three at zero, which
+   its own comment says is non-empty only within one quantum of an emission. So each of them counts a member
+   that has just PRODUCED something as one that has never run, and on a frontier that has gone quiet none of
+   them can name anybody. `neverPicked` counts members the scheduler has never handed the thread — the one
+   quantity nothing resets, because the member did nothing to reset it — and `neverPickedGap` is how far the
+   best of them stands behind the weight the pick actually returned, in the order's own points. Read them the
+   way `jobsReady`/`jobWGap` are read: a large gap is the ordering WORKING (those members are outranked, and
+   the aging term is what reaches them), while a gap at or near ZERO with a non-zero count is a member standing
+   at the front of the order that the pick is not returning — which is starvation rather than ordering, and is
+   a defect in the dispatch rather than in the weight. Neither half is a reading alone.
+
    THE ARITHMETIC, DONE RATHER THAN ESTIMATED, and it is the reason the buffer is this size: the format's fixed
-   bytes are 312 without its conversion specifiers, and the twenty-eight numbers' widest forms are 2906
-   (thirteen longs and seven int64s at 20, three `%.1f` doubles at 312 and five `%.3f` at 314 — a double's
+   bytes are 345 without its conversion specifiers, and the thirty numbers' widest forms are 3240
+   (fourteen longs and seven int64s at 20, three `%.1f` doubles at 312 and six `%.3f` at 314 — a double's
    widest decimal form is 309 integer digits plus sign, point and fraction, which is what makes this buffer two
-   orders larger than the counter documents in this file). 312 + 2906 + 1 = 3219 against this 3328. RE-DO IT
+   orders larger than the counter documents in this file). 345 + 3240 + 1 = 3586 against this 3712. RE-DO IT
    WHEN YOU ADD A ROW; the DCHECK below catches the arithmetic being re-done wrong, and is not a substitute for
-   doing it. */
+   doing it. The starvation pair added 33 fixed bytes (`,"neverPicked":` at 15 and `,"neverPickedGap":` at 18)
+   and 334 of conversion (one more long, one more `%.3f`), which is where 312/2906/3328 became these. */
 char *result_wfq_json(void) {
     WfqCensus w;
     char *out;
-    size_t n = 3328;
+    size_t n = 3712;
     int m;
 
     flow_wfq_census(&w);
@@ -275,6 +291,7 @@ char *result_wfq_json(void) {
         m = snprintf(out, n,
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
                      "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
+                     "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
                      "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
@@ -282,6 +299,7 @@ char *result_wfq_json(void) {
                      "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f}",
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
+                     w.never_picked, w.never_picked_gap,
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
                      (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,

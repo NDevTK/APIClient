@@ -7668,6 +7668,16 @@ static int engine_sched_slice(void) {
             if (cur) flow_switch_out(ctx, cur);
             flow_switch_in(ctx, best);
             solve_flow_begin(best);   /* the substitution is live only while its own flow runs */
+            /* AND THE MEMBER'S OWN RECORD THAT IT WAS EVER CHOSEN — the counter below says how many switches
+               this DOCUMENT performed, which is a fact about the scheduler; this says whether a given member
+               was ever on the receiving end of one, which is a fact about that member and is the only thing
+               that can tell a flow the ordering never reached from a flow the ordering reached and that made
+               no progress. Those two take opposite work (flow.h's `picks`), and until this line the census
+               could not distinguish them: every other candidate row is a term of the weight, and
+               flow_credit_emit resets all of them. Credited HERE and not inside flow_switch_in because that
+               function's job is to make the flow's state live — its delta, its decision cursor, its pins —
+               and a census entry among those would be a second thing it does under one name. */
+            flow_credit_pick(best);
             cur = best;
             /* COUNTED, and it leaves in the result document. A scheduler that interleaves and one that runs
                its flows FIFO produce the same endpoints on an easy page and diverge on every hard one, so

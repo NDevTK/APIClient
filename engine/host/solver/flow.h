@@ -167,6 +167,32 @@ typedef struct Flow {
        flow that just produced something is not one the frontier needs protecting from. flow_fork_inherit's
        rank-neutrality DCHECK is what forces both, and it fires the moment either is forgotten. */
     int64_t visits;
+    /* HOW MANY TIMES THE SCHEDULER HAS HANDED THIS MEMBER THE THREAD — a CENSUS quantity and never a rank, in
+       the same class as `val` beside it: it is not read by flow_weight, it is not inherited at a fork, and it
+       is not reset by anything. It exists because §scheduler's word for the state the razor forbids is
+       STARVES, and no other field in this struct can name the population that sentence is about.
+       EVERY CANDIDATE FOR THAT ROLE IS A TERM OF THE WEIGHT, AND flow_credit_emit RESETS ALL OF THEM. `cpu`
+       goes to 0 on an emission, so the census row built on it counts a flow that has just produced something
+       (build.mjs's reader says so in as many words); `visits` goes to 0 on an emission, so "completed no unit
+       of work" counts it too; the family notch goes to 0 on any arm's emission, so flow_pick's own `unrun`
+       population — every non-reward term at zero — is documented at its site as non-empty only within one
+       quantum of an emission, which is why all three of its §ONE-WFQ guards short-circuit to vacuity on
+       exactly the frontier where a member is being starved. A count of DISPATCHES is the one statement none of
+       that can move: a member that was never switched in was never given the chance to emit, so nothing it
+       could have done can erase the fact.
+       IT IS WHAT SEPARATES TWO DIAGNOSES THAT TAKE OPPOSITE WORK, and until it existed a run could not tell
+       them apart at all: a world missing from the emitted surface because its flow was never picked is an
+       ORDERING defect, and one missing because its flow was picked and made no forward progress is a defect in
+       the resume seam. Measured, on the shipped artifact, with a four-line document — a gate whose taken world
+       emits and then enters an opaque-length walk loses the other world's endpoint entirely under `direct`,
+       `preempt` and `eager` alike — and the census could name neither cause.
+       NOT INHERITED AT A FORK, and that is what keeps it a measurement rather than a rank: an arm is its
+       parent's path with one more arm on it for every term the ORDER reads, and it is a brand-new work item
+       for the question "has the scheduler ever chosen this". flow_fork_inherit asserts it is still zero when
+       the account is handed over, for the same reason it asserts `cpu` and `visits` are: a sibling that had
+       already been dispatched was run at a weight nobody chose. Because a fork does not carry it, its
+       rank-neutrality DCHECK is also what forbids this field from ever entering flow_weight. */
+    int64_t picks;
     /* THE OTHER HALF OF WHAT THE AGING TERM READS — the root of this flow's fork family, shared by every arm of it, holding
        the thread time the whole family has burned since any of its arms last emitted. A from-baseline flow founds
        one (it points at its own `acct`); a FORK joins its parent's (flow_fork_inherit), which is what makes "a
@@ -885,6 +911,13 @@ void flow_restore_reward(Flow *f, double val);
  * term is a unit count is that thread time inside a program is exactly what it must NOT measure. */
 void flow_credit_visit(Flow *f);
 
+/* THE SCHEDULER HANDED THIS MEMBER THE THREAD — the one writer of `picks` (see the field for why a DISPATCH
+ * count is the only statement about a member that an emission cannot erase). It is credited at the single
+ * point every dispatch converges on, the context switch itself, so a new call shape cannot forget to route:
+ * there is no route to remember. A member that keeps the thread across consecutive steps is credited ONCE,
+ * which is what the row is about — `picks == 0` is "never chosen", not "not chosen lately". */
+void flow_credit_pick(Flow *f);
+
 /* WHAT THE ORDERING IS MADE OF — the census that turns "the WFQ's value ordering" from a claim into a number.
  *
  * The engine already reports how much work is happening (@PROGRESS's switches/forks) and how much of it
@@ -985,6 +1018,26 @@ typedef struct {
                           "nothing has been charged yet" from "nothing has FINISHED anything", which is the
                           distinction the pair exists to make — but a reader taking it for the assert's
                           population would be reading a superset. */
+    /* MEMBERS THE SCHEDULER HAS NEVER HANDED THE THREAD, AND HOW FAR THE BEST OF THEM STANDS BEHIND THE FRONT.
+       §scheduler's razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY flow", and
+       STARVES is the only one of the five with no row anywhere in this struct — every other candidate (`unrun`,
+       `vis_zero`, `svc_min`, flow_pick's own `unrun`) is a term of the weight that flow_credit_emit resets, so
+       each of them counts a member that has just PRODUCED something as one that has never run. `picks == 0` is
+       the population, and it cannot be moved by anything the member did, because it did nothing.
+       THE PAIR IS THE READING AND NEITHER HALF IS ONE ALONE, which is the same shape `jobs_ready`/`job_w_gap`
+       already takes one row down. The COUNT says such members exist; only the GAP — in the order's own points,
+       against the weight flow_pick actually returned — says whether the ordering is what is keeping them out.
+       A large gap with a large count is the WFQ working: those members are genuinely outranked and the aging
+       term is the thing that will reach them. A gap at or near ZERO with a non-zero count is the razor's own
+       state: members standing at the front of the order that the pick is nonetheless not returning, which is
+       starvation rather than ordering and is a defect in the dispatch rather than in the weight.
+       IT IS NOT ASSERTED HERE AND THAT IS DELIBERATE. A census is one instant, and one instant of a zero gap is
+       exactly what a tie looks like — flow_pick seeds the incumbent and compares STRICTLY, so a member tied
+       with the flow in service correctly waits a quantum. What makes it a finding is the gap staying there
+       across a run, which is a statement about a time series and belongs to whoever reads the stream. Left at
+       0.0 when the population is empty, so a reader takes the two together (build.mjs does). */
+    long never_picked;
+    double never_picked_gap;
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
     /* …AND THE OTHER END OF IT, WHICH IS THE ONLY NUMBER IN THIS STRUCT THAT CAN ANSWER "IS THE AGING TERM
        MEASURING THIS FLOW OR THE WHOLE FRONTIER". `svc_max` alone reads identically for a single monopolizer on

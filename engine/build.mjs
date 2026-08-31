@@ -584,7 +584,19 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        work, which is the population whose optimism bonus is at its undecayed maximum. It is
                        NOT `unrun` — that row is `cpu == 0`, which flow_credit_emit RESETS, so a member that
                        has run and emitted is in `unrun` with visits to its name. */
-                    "visZero", "jobsReady", "jobsFramed", "jobsOwed", "jobWGap"];
+                    "visZero", "jobsReady", "jobsFramed", "jobsOwed", "jobWGap",
+                    /* AND THE ONE WORD OF §scheduler'S RAZOR THIS READER COULD NOT SPEAK. It forbids a resume
+                       that "drops, starves, skips, reorders, or forgets ANY flow", and STARVES had no row: the
+                       three fields that look like the starved population are all TERMS OF THE WEIGHT and
+                       flow_credit_emit resets every one of them, which is why this file already has to warn,
+                       twice, that `unrun` counts a member that has run and emitted. `visZero` carries the same
+                       flaw one field over. So a reader asking "is some member never being chosen" had only
+                       rows that answer "…or chose to emit recently", and the two states take opposite work.
+                       `neverPicked` is the dispatch count's zero — nothing resets it, because a member that
+                       was never handed the thread did nothing that could — and `neverPickedGap` is how far the
+                       best of that population stands behind the weight the pick returned, which is the same
+                       count/distance pair as `jobsReady`/`jobWGap` and is read the same way. */
+                    "neverPicked", "neverPickedGap"];
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -699,6 +711,22 @@ function wfqReading(out) {
                     `gap is measured to the best READY holder, so with none there is nothing to measure to ` +
                     `and solver/result.c states the row is 0 by construction. A distance to a holder the ` +
                     `census did not count is the pick and the census disagreeing about who is waiting.`);
+  /* THE SAME TWO CHECKS FOR THE STARVATION PAIR, which is the same shape one row over and is worth stating
+     separately for the reason the job pair is: the C DCHECK on the sign is compiled out of a release build and
+     this reader still runs, and the population check spans two rows that no assert anywhere covers. The
+     implication is again ONE-directional — with nobody starved there is no member to measure a distance to, so
+     the gap is 0 by construction; a gap of 0 WITH a non-zero count is the state the row exists to report and
+     must not be refused, because it is precisely the razor's STARVES. */
+  if (!(w.neverPickedGap >= 0))
+    throw new Error(`[build] the @WFQ census reports neverPickedGap ${w.neverPickedGap} — it is \`wTop\` ` +
+                    `minus the best NEVER-DISPATCHED member's weight, and the front of the order cannot be ` +
+                    `behind a member of it, so a negative gap is the pick and the census reading two ` +
+                    `different comparators.`);
+  if (w.neverPicked < 0 || w.neverPicked > w.members || (w.neverPicked === 0 && w.neverPickedGap !== 0))
+    throw new Error(`[build] the @WFQ census reports neverPicked ${w.neverPicked} of ${w.members} members ` +
+                    `with a gap of ${w.neverPickedGap} — the population is counted over the members this ` +
+                    `walk visits and the gap is measured to the best of it, so with none there is nothing to ` +
+                    `measure to and solver/result.c states the row is 0 by construction.`);
   if (w.visZero < 0 || w.visZero > w.members || (w.visZero === w.members) !== (w.visMax === 0))
     throw new Error(`[build] the @WFQ census reports visZero ${w.visZero} of ${w.members} members with ` +
                     `visMax ${w.visMax} — those are one walk's two answers about the same visit counts, so ` +
@@ -802,10 +830,28 @@ function wfqReading(out) {
     ? `every member has completed no unit of work, so all carry the same undecayed maximum bonus and the ` +
       `optimism term orders nothing here`
     : `${w.visZero} of ${w.members} members have completed no unit of work and carry the bonus undecayed`;
+  /* AND WHETHER ANY MEMBER IS BEING STARVED — §scheduler's razor names five ways a schedule may be a cap and
+     this reader could speak four of them. The distinction the pair makes is the one that decides what to fix:
+     OUTRANKED is the ordering working (the aging term is what reaches those members, and the gap says how much
+     silence it has to buy), while AT THE FRONT AND STILL NOT CHOSEN is the dispatch failing, which no amount
+     of re-pricing a weight term will touch. The gap is quoted against the optimism term's whole range, because
+     1.0 is the most any single emission can be worth and therefore the natural unit for "can this be closed by
+     something happening" — a starved member within one bonus of the front is one turn away, and one many
+     bonuses behind is genuinely last in a queue that is ordering it. */
+  const starved = w.neverPicked === 0
+    ? `every member has been handed the thread at least once`
+    : `${w.neverPicked} of ${w.members} members have NEVER been handed the thread, the best of them standing ` +
+      `${w.neverPickedGap.toFixed(3)} points behind the front` +
+      (w.neverPickedGap <= 1
+        ? ` — within one emission's worth of it, so they are not being outranked and this is the razor's ` +
+          `STARVES rather than an ordering that has not reached them yet`
+        : ` — more than one emission's worth, so they are genuinely outranked and the aging term is what ` +
+          `reaches them`);
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
-                `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}; ${ucb}`;
+                `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}; ` +
+                `${ucb}; ${starved}`;
   /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
      one the verdict's own sentence makes a claim about. `selfEmit` counts members that have emitted something
      THEMSELVES, so the difference is how many stand on an account some other arm of their fork family filled.

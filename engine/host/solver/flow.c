@@ -505,6 +505,23 @@ void flow_credit_visit(Flow *f) {
     f->visits++;
 }
 
+/* THE SCHEDULER CHOSE THIS MEMBER — see flow.h's `picks` for why a DISPATCH count is the only statement about
+ * a member that an emission cannot erase, and flow.h's `never_picked` for the reading it makes possible.
+ * IT DECIDES NOTHING AND IT MOVES NO RANK. flow_weight does not read it, no fork carries it and nothing resets
+ * it, so this entry cannot reorder the frontier it is counting — which is the whole property that makes it a
+ * measurement rather than a second clock. It is a `++` with an assert in front of it on purpose: the moment
+ * this quantity acquires a consumer inside the ordering it stops being able to answer the question it exists
+ * for, and flow_fork_inherit's rank-neutrality equality is what would fire if it ever did. */
+void flow_credit_pick(Flow *f) {
+    DCHECK(f != NULL, "the scheduler credited a dispatch to no flow — this is the one point every context "
+                      "switch converges on, so a NULL here is a switch that ran with nothing switched in");
+    DCHECK(flow_is_member(f),
+           "the scheduler credited a dispatch to a flow that is not a member of the frontier — the census row "
+           "this feeds is taken over the members, so a departed flow's dispatch would be counted nowhere and "
+           "the starvation reading would be a fraction of the wrong population");
+    f->picks++;
+}
+
 /* A FORKED SIBLING IS A CONTINUATION, NOT A NEWCOMER — so it inherits EVERY term of its parent's account, and
  * this is the one place that says so.
  *
@@ -608,13 +625,17 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     /* NOTHING MAY HAVE BEEN CREDITED OR CHARGED FIRST, because the inheritance ASSIGNS both terms. A caller
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
-    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->visits == 0 &&
+    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->visits == 0 && sib->picks == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->val == 0.0,
-           "a forked sibling was credited, charged or DECIDED before it inherited its parent's account — it "
-           "was ranked, and possibly run, at a weight that belongs to no flow, and this assignment throws that "
-           "away. `path_forced` is in the same list for the same reason one field over: a sibling that had "
-           "already recorded a contradicted arm would have recorded it on a path it had not yet been given");
+           "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
+           "account — it was ranked, and possibly run, at a weight that belongs to no flow, and this "
+           "assignment throws that away. `path_forced` is in the same list for the same reason one field over: "
+           "a sibling that had already recorded a contradicted arm would have recorded it on a path it had not "
+           "yet been given. `picks` is in it for the OPPOSITE reason and that is why it is worth stating: it is "
+           "the one field here the assignments below deliberately do NOT carry — a dispatch is a fact about "
+           "this member and never about its parent's path — so its zero is not a precondition for an "
+           "inheritance but the claim that no dispatch has happened that the census would have to explain");
     /* AND IT MAY NOT ALREADY STAND UNDER A FLOW IN THE FORK TREE. flow_new mints a root node, so a non-NULL
        `up` here is a second inheritance on one sibling: the first parent's node would be leaked and every arm
        this flow later sheds would be charged to the wrong chain. */
@@ -1036,6 +1057,10 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
     pending_set_ctx(ctx);
     f->val = 0.0; f->cpu = 0; f->visits = 0;
+    /* …AND THE DISPATCH COUNT, WHICH NOTHING ELSE EVER WRITES TO ZERO. Every other quantity on this line has a
+       second writer that resets it (flow_credit_emit), which is exactly why `picks` exists and exactly why its
+       only zero has to be here: a member arrives never-chosen, and from then on the number only rises. */
+    f->picks = 0;
     /* …AND ITS PLACE IN THE FORK TREE, minted HERE because this is the one point every flow passes through, so
        no flow can exist without a node for its arms to be charged to. A from-baseline flow's node is a ROOT
        (`up` NULL); flow_fork_inherit is the only thing that ever attaches one under another. */
@@ -2568,11 +2593,18 @@ void flow_wfq_census(WfqCensus *out) {
        holder" must not be spelled the same way as "a ready holder at weight zero". */
     double job_w_max = 0.0;
     int have_job_holder = 0;
+    /* THE BEST WEIGHT ANY NEVER-DISPATCHED MEMBER OFFERS, held the same way and for the same reason as the job
+       holder's: `never_picked_gap` is a DIFFERENCE against a top this scan does not know until flow_best runs
+       below, and "no such member" must not be spelled the same way as "one standing at weight zero". */
+    double never_w = 0.0;
+    int have_never = 0;
 
     DCHECK(out != NULL, "the WFQ was asked to report its ordering into nothing");
     out->members = g_flows_n;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
+    out->never_picked = 0;
+    out->never_picked_gap = 0.0;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
     out->families = 0;
     /* A FRESH MARK FOR THIS SCAN, PAST ZERO, so a node minted since the last census (calloc'd to 0) reads as
@@ -2627,6 +2659,17 @@ void flow_wfq_census(WfqCensus *out) {
            member's own ledger IS what it emitted since it was born. */
         if (f->val > 0.0) out->self_emit++;
         if (f->cpu == 0) out->unrun++;
+        /* …AND THE POPULATION THE ROW ABOVE CANNOT NAME, for the reason its own comment gives: `cpu == 0` is
+           also what flow_credit_emit writes, so a member that has run and PRODUCED is counted there. A member
+           that has never been handed the thread is the population §scheduler's razor says the ordering may
+           never create, and `picks` is the only field in this struct nothing resets. The best weight among
+           them is carried out to the gap below rather than reported raw: how far the most-favoured starved
+           member stands behind the flow the pick actually returned is the reading, and the count alone cannot
+           make it (flow.h). */
+        if (f->picks == 0) {
+            out->never_picked++;
+            if (!have_never || w > never_w) { never_w = w; have_never = 1; }
+        }
         /* THE OPTIMISM TERM'S OWN COORDINATE — completed units of work, which no service row can stand in for
            (flow.h). `vis_max == 0` on a frontier of thousands is the statement that not one member has reached
            the end of a program, and therefore that not one queued job can have run, whatever the switch and
@@ -2726,6 +2769,22 @@ void flow_wfq_census(WfqCensus *out) {
        waiting on rank because there is then no gap to state; `jobs_ready` beside it is what tells the two
        apart, which is exactly why neither row is worth emitting without the other. */
     if (have_job_holder && top) out->job_w_gap = out->w_top - job_w_max;
+
+    /* …AND THE SAME DIFFERENCE FOR THE MEMBERS THE SCHEDULER HAS NEVER CHOSEN — taken here for the identical
+       reason and left at 0.0 when there are none, so `never_picked` beside it is what tells "nobody is
+       starved" from "the most-starved member is standing at the front". See flow.h for the pair's reading. */
+    if (have_never && top) out->never_picked_gap = out->w_top - never_w;
+
+    /* AND IT IS NON-NEGATIVE BY THE SAME CONSTRUCTION, ASSERTED FOR THE SAME REASON — `w_top` is flow_best's
+       maximum over every member and a never-dispatched member is one of those members, read through the same
+       flow_weight in the same scan. A negative deficit here would say the pick and this census have stopped
+       ordering by one comparator, and this row's whole purpose is to answer whether a starved member is
+       OUTRANKED or merely UNCHOSEN — which is precisely the reading a wrong sign inverts. */
+    DCHECK(out->never_picked_gap >= 0.0,
+           "the WFQ census reports a never-dispatched member standing ABOVE the front of its own queue — "
+           "flow_best's maximum is taken over the same members this scan walks, so a negative deficit means "
+           "the pick and the census are no longer reading one comparator, and the starvation row would be "
+           "reporting a property of the instrument rather than of the ordering");
 
     /* AND IT IS NON-NEGATIVE BY CONSTRUCTION, WHICH IS WHY THIS IS AN ASSERTION AND NOT A CLAMP. `w_top` is
        flow_best's maximum over EVERY member (flow_pick with no seed, no exclusion and `runnable_only` off) and
