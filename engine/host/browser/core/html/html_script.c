@@ -569,7 +569,20 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        it reaches the @H surface as the shape it is, rather than disappearing. */
     t = dom_cow_attr_taint(el, "src");
     if (!JS_IsUndefined(t)) {
-        endpoint_record(ctx, "GET", t, NULL, 0, NULL);
+        /* AND IT IS A REQUEST RUNNING CODE BUILT, WHICH IS ASSERTED RATHER THAN ASSUMED. `observed` — the one
+           grade `engine_prov_of_running_path` cannot answer — is "a real load of this document makes exactly
+           this request", and its first conjunct is §4.12.1's parser-inserted flag, which IS in hand here as a
+           parameter. It is structurally never the answer on this arm: the taint shadow map holds an entry for
+           (el, "src") only where a script ASSIGNED the attribute a concolic value (solver/attr_shadow.h), and
+           a parser-inserted element's attributes come out of the tokenizer, never through that write. So the
+           two facts cannot both hold, and a day they do is a day this element's provenance is being composed
+           from the wrong one of them rather than a day the grade is merely coarse. */
+        DCHECK(!parser_inserted,
+               "a PARSER-INSERTED `<script>` reached §4.12.1 with a TAINTED `src` — the taint shadow map is "
+               "written only by a script assigning the attribute, so either the parser has started routing "
+               "attribute values through it (and this request's provenance is `observed`, which the running "
+               "path cannot say) or an element's shadow entry is being read for the wrong element");
+        endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path());
         return;
     }
     /* §4.12.1's `src` BRANCH IS ENTERED ON THE ATTRIBUTE, which is the same correction the document scan needed

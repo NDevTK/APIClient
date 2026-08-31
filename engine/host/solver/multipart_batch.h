@@ -58,7 +58,10 @@
  *
  * A body that is not multipart, or whose parts carry no HTTP request messages, records nothing and is not an
  * error — most request bodies are neither. That is why there is no return value to test. */
+/* `prov` is what the OUTER request is evidence of (solver/pending.h's PROV_*), handed down rather than read
+ * here: a sub-request written inside a body is evidence of exactly what the request carrying it is, and the
+ * caller has already asked the running path once for the act they are both part of (core/fetch/fetch.c). */
 void multipart_batch_learn(JSContext *ctx, const HeaderList *hdrs, JSValueConst body_mime,
-                           const char *body, size_t body_n);
+                           const char *body, size_t body_n, int prov);
 
 #endif

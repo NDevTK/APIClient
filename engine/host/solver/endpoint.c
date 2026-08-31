@@ -3,7 +3,9 @@
 #include "core/json_buf.h"
 #include "core/mime/mime_type.h"
 #include "solver/concolic.h"
+#include "solver/engine.h"    /* the provenance's ONE wire spelling — this surface prints the same three words */
 #include "solver/flow.h"
+#include "solver/pending.h"   /* …and PROV_*, the vocabulary those words spell */
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -52,8 +54,12 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    state (a request a policy refuses is still a request the bundle can make). So the two facts are learned at
    two times and the flag is the join between them; there is no request-time test that could stand in for it
    without either guessing from a suffix or losing every blocked request. */
+/* `prov` IS WHAT THIS RECORD IS EVIDENCE OF and it is part of the record's IDENTITY rather than a label on it
+   — see endpoint.h for why the pending line's most-observed fold is right there and wrong here. The one
+   consequence to keep in view while reading the merges below: every value, exclusion, bound and predicate on
+   a record was observed at ONE grade, because a sighting at another grade cannot reach it. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
-                 EpHeader *hdrs; int nh, hcap; int is_asset; } Endpoint;
+                 EpHeader *hdrs; int nh, hcap; int is_asset; int prov; } Endpoint;
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
    real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
@@ -606,18 +612,34 @@ static void param_add_val(Param *p, const char *v) {   /* merge a validValue (de
    credentials it holds and this engine does not, so nothing here asks it. They are deleted rather than kept:
    a pair of functions computing an answer nobody reads is indistinguishable from a live capability. */
 
-/* an endpoint's IDENTITY is (method, path, param-set) — same identity merges param values. A param's LOCATION
-   is part of it: an `id` the code puts in the path and an `id` it puts in the body are two different things to
-   send, so two requests that agree only on the names are not one endpoint. */
-static int same_identity(Endpoint *e, const char *method, const char *path, const KvBuf *kv) {
-    if (strcmp(e->method, method) || strcmp(e->path, path) || e->np != kv->n) return 0;
+/* an endpoint's IDENTITY is (method, path, provenance, param-set) — same identity merges param values. A
+   param's LOCATION is part of it: an `id` the code puts in the path and an `id` it puts in the body are two
+   different things to send, so two requests that agree only on the names are not one endpoint.
+   AND THE PROVENANCE IS PART OF IT, which is what makes CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's "never
+   merged into the observed pool" a property of this structure rather than a rule somebody has to keep. A
+   FORCED sighting cannot reach a record built from derived ones, so no value learned only because a gate was
+   forced can be published under the claim that the app's own code computes it. The alternative — one record
+   whose grade folds — is the same defect a `||` is: nothing crashes, the row looks ordinary, and the reviewer
+   reads a fabricated example as a measured one. See endpoint.h for why the pending line folds and this does
+   not. */
+static int same_identity(Endpoint *e, const char *method, const char *path, int prov, const KvBuf *kv) {
+    if (e->prov != prov || strcmp(e->method, method) || strcmp(e->path, path) || e->np != kv->n) return 0;
     for (int i = 0; i < kv->n; i++)
         if (e->params[i].loc != kv->e[i].loc || strcmp(e->params[i].name, kv->e[i].name)) return 0;
     return 1;
 }
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
-                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body) {
+                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov) {
+    /* WHAT THIS SIGHTING IS EVIDENCE OF, ASSERTED AT THE MINT for `kv_add`'s reason exactly: every site that
+       records an endpoint passes through here, so there is no way to add one without answering, and the
+       answer cannot be defaulted later by a consumer. The value outside the vocabulary is the dangerous one
+       and not the missing one — `0` is `observed`, so an uninitialised grade reads as the strongest claim
+       this surface makes. */
+    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
+            "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h "
+            "defines — the grade is part of this record's identity and is emitted on it, so an unrecognised "
+            "one both merges with nothing and publishes a word no consumer can read. method=%s", prov, method);
     if (g_suppress) return;   /* candidate/verify run -> not a real @H endpoint */
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);
@@ -635,7 +657,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     free(disp); free(ex); free(expath); free(shape_path);
 
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
-        if (same_identity(&g_eps[i], method, path, &kvb)) {
+        if (same_identity(&g_eps[i], method, path, prov, &kvb)) {
             for (int j = 0; j < kvb.n; j++) {
                 param_add_val(&g_eps[i].params[j], kvb.e[j].val);
                 param_intersect_excl(&g_eps[i].params[j], kvb.e[j].excl, kvb.e[j].nexcl);
@@ -666,7 +688,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     if (g_eps_n >= g_eps_cap) { g_eps_cap = g_eps_cap ? g_eps_cap * 2 : 16; g_eps = realloc(g_eps, (size_t)g_eps_cap * sizeof(Endpoint)); CHECK(g_eps, "endpoint: OOM surface"); }
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
-    e->method = strdup(method); e->path = strdup(path);
+    e->method = strdup(method); e->path = strdup(path); e->prov = prov;
     if (kvb.n) { e->params = calloc((size_t)kvb.n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
     for (int j = 0; j < kvb.n; j++) {
         e->params[e->np].name = strdup(kvb.e[j].name);
@@ -743,6 +765,16 @@ char *endpoint_json_array(void) {
         wrote_one = 1;
         json_buf_raw(&b, "{"); json_buf_key(&b, "method"); json_buf_str(&b, e->method);
         json_buf_raw(&b, ","); json_buf_key(&b, "url"); json_buf_str(&b, e->path);
+        /* …AND WHAT THIS RECORD IS EVIDENCE OF, ALWAYS, in the same three words the pending line spells and
+           through the same mapping (solver/engine.h's `engine_provenance_token`), so the zone that reads both
+           about one app cannot be shown two vocabularies. There is NO absence-is-the-statement here, which is
+           the opposite of `excludes` and `bounds` one field down and is the difference between a fact that
+           may legitimately have gone unobserved and one that is exhaustive: the three words cover every way
+           this engine can come to know an address, so a silent grade is not "unconstrained", it is a record
+           whose strongest reading — `observed` — a consumer would take by default. That is the fabrication
+           CLAUDE.md §@H forbids, performed by omission. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
+        json_buf_str(&b, engine_provenance_token(e->prov));
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");

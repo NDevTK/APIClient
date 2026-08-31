@@ -56,7 +56,20 @@
    SENTENCE HAS TWO CLAUSES AND THIS FILE USED TO ACT ON THE SECOND ONLY: it returned without learning, which
    is right, and told nobody, so the address stayed on the @H surface that the first clause is a rule about.
    It calls solver/endpoint.c's `endpoint_mark_asset` now, which is what makes the classification a mechanism
-   rather than a computation with no reader. */
-void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply);
+   rather than a computation with no reader.
+   `prov` IS WHAT THIS REPLY IS EVIDENCE OF — one of solver/pending.h's PROV_* — and it is the fact that makes
+   everything below reportable at all. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE: "a forced reply's values
+   are learned and CARRIED AS FORCED, never merged into the observed pool", and the reason it gives is that
+   the danger is not uselessness but PLAUSIBILITY — "a 401 body parses as JSON and yields fields that exist
+   nowhere, an error envelope becomes a config, and the fabrication then PROPAGATES, since one invented field
+   is the example that shapes the next endpoint". A chunk address mined out of a route reached only on a
+   forced arm has bytes indistinguishable from one the document's own parser fetched, so an address emitted
+   with its grade silent is read as the second, which is the fabrication performed on the @H surface.
+   IT IS A PARAMETER AND NEVER READ HERE. This file runs on the reply-delivery path, OUTSIDE any flow, so
+   `engine_prov_of_running_path` would answer about a path that is not standing — the grade belongs to the
+   REQUEST and travels with the operation (§scheduler: "an operation that becomes a work item takes its inputs
+   with it — anything it reads back off the object it acts on is read at the wrong TIME"). solver/engine.c's
+   `engine_provide` composes it by joining the records the reply answers; see the fold there for the rule. */
+void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov);
 
 #endif

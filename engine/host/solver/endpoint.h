@@ -46,17 +46,52 @@ typedef struct { const char *mime, *bytes; size_t len; } EndpointBody;
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
    MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen
    only as a shape, which is the rule the param values already follow. `body` is NULL where the request has
-   none — which is a STATEMENT (this request sends no body), never an unknown. */
+   none — which is a STATEMENT (this request sends no body), never an unknown.
+
+   `prov` IS WHAT THIS SIGHTING IS EVIDENCE OF — one of solver/pending.h's PROV_* — AND IT IS PART OF THE
+   ENDPOINT'S IDENTITY. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE: "a forced reply's values are learned and
+   CARRIED AS FORCED, never merged into the observed pool", and the choice between two pools and one pool with
+   a grade every reader must consult is settled by which one makes the wrong answer IMPOSSIBLE rather than
+   discouraged. A folded grade does not: a FORCED sighting merging into a record whose grade folds to
+   `observed` publishes, under the strongest claim this surface can make, a value that exists only because a
+   gate was forced — the same fabrication as inventing `6` for `x > 5`, arriving through a merge rule instead
+   of through a solver. Putting the grade in `same_identity` means the merge cannot happen: a forced sighting
+   and a derived one are two records, each carrying only the values observed at its own grade, and no
+   consumer has to remember anything. It is the rule `loc` already follows one field down — "two params of
+   the same name in two places are two params".
+   AND IT IS DELIBERATELY *NOT* THE PENDING LINE'S RULE, which folds a deduped set to its MOST OBSERVED
+   member. That fold is right there and wrong here, and the difference is not a preference: the pending set is
+   ONE REQUEST that ONE reply answers, so the line has to state the single fact that survives every member or
+   the host cannot fire it at all. This surface is a set of SIGHTINGS, and nothing forces two of them into one
+   row but a dedup convenience — so two rows for one address, one graded `derived` and one `forced`, are two
+   TRUE statements, and the second is precisely the row a reviewer needs in order to distrust it.
+
+   EVERY PRODUCER STATES IT AND NOTHING HERE DERIVES IT. A request this engine builds by RUNNING the page's
+   code states `engine_prov_of_running_path()` (solver/engine.h), read at the act because that is when the
+   path it is about is standing; a reply-learned address states the grade of the reply that named it
+   (solver/reply_decode.h), which no flow can answer because that path runs outside every flow. A default
+   here would be `observed` by the numbering, on a record nobody graded. */
 void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
-                        const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body);
+                        const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov);
 
 /* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
    JS-object round-trip.
-   `[ {"method":..,"url":..,"params":[{"name":..,"location":..,"validValues":[..],"excludes":[..],
+   `[ {"method":..,"url":..,"provenance":"observed"|"derived"|"forced",
+      "params":[{"name":..,"location":..,"validValues":[..],"excludes":[..],
       "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
       "predicates":[{"method":..,"arguments":[..],"holds":true|false}]}]}, ... ]`.
    Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
    it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
+   AND EVERY RECORD STATES WHAT IT IS EVIDENCE OF. `provenance` is one of solver/engine.h's three words and it
+   is ALWAYS PRESENT — there is no absence to read as a statement here, because the three words are exhaustive
+   over the ways this engine can come to know an address and a silent grade is read as the strongest of them.
+   It is the record's, not a param's: a sighting is graded as a whole (the path it was built on, or the reply
+   that named it), and every value on it was observed at that grade because the grade is part of the record's
+   identity — see `endpoint_record`. WHAT THE READER DOES WITH IT: `derived` is the tool's headline claim (the
+   app's own code computes this request and no session sent it); `observed` is a real load of the document;
+   `forced` is an address that exists only because a gate was forced, whose reply CLAUDE.md §@H forbids ever
+   being reported as the other two, and which extension/lib/popup-send.js renders as its own tag rather than
+   letting it wear `[UNUSED]`.
    AND EVERY PARAM STATES BOTH OF THE TWO FACTS A SHAPE IS MADE OF. `validValues` is PROVENANCE-and-example —
    who must supply the value, and what the code computed for it where it computed one. `excludes` is DOMAIN —
    what this endpoint's own equality gates PROVED the value is not, on every observed path to the request.

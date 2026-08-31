@@ -69,6 +69,7 @@
 #include "core/url/url.h"
 #include "solver/concolic.h"
 #include "solver/endpoint.h"
+#include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 
 /* Fetch §4.6 "HTTP-network-or-cache fetch": "If the sum of contentLength and inflightKeepaliveBytes is greater
    than 64 kibibytes, then return a network error." Beacon §3 step 6.2 is that same limit reported as a `false`
@@ -295,7 +296,8 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
            "record holding one of the two is what solver/endpoint.h refuses to represent");
 
     /* ---- §3 step 7's REQUEST, derived and recorded. See the file comment for why it is not fetched. ------- */
-    endpoint_record(ctx, "POST", url_value, nhdrs ? hdrs : NULL, nhdrs, ebp);
+    endpoint_record(ctx, "POST", url_value, nhdrs ? hdrs : NULL, nhdrs, ebp,
+                    engine_prov_of_running_path());
 
     ret = beacon_queue_result(ctx, url_text);
 

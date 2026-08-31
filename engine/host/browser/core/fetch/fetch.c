@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
+#include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 #include "solver/multipart_batch.h"
 #include "core/agent_state.h"
 #include "core/fetch/fetch.h"
@@ -902,7 +903,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     JSFetchState *s = st;
     JSValueConst input = step_arg(&s->hdr, 0), init = step_arg(&s->hdr, 1);
     const char *method = "GET", *mc = NULL;
-    int r;
+    int r, prov;
 
     if (s->hdr.stage == FETCH_INIT_DICT) {
         /* THE ONE-TIME WORK LIVES IN A STAGE THAT HOLDS NO REQUEST, and that is the only reason this stage
@@ -1114,6 +1115,12 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         mc = JS_ToCString(ctx, s->method);
         if (mc) method = mc;
     }
+    /* WHAT THIS REQUEST IS EVIDENCE OF, READ ONCE FOR THE WHOLE ACT. The outer endpoint below and the
+       sub-requests its body names are the same `fetch()` call being composed by the same running code, so
+       they are one act and take one answer — asking the flow twice would let two records of one act disagree
+       if the path forked between the two reads. §scheduler's "an operation takes its inputs with it", read at
+       the smallest scale there is. */
+    prov = engine_prov_of_running_path();
     {
         /* The surface's own header shape, built from the list — two fields either way, so this is a projection
            and not a second representation. The solver must not learn what a HeaderList is. */
@@ -1145,21 +1152,24 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             eb.len = s->body.len;
             ebp = &eb;
         }
-        endpoint_record(ctx, method, s->url, eh, s->hdrs.n, ebp);
+        endpoint_record(ctx, method, s->url, eh, s->hdrs.n, ebp, prov);
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
         free(body_ct);
         js_free(ctx, eh);
     }
     /* AND THE SUB-REQUESTS THE BODY ITSELF NAMES. A batch API takes N calls in ONE request — `POST /batch`
        whose `multipart/mixed` body holds `GET /v1/animals/pony HTTP/1.1`, `POST /v1/farms HTTP/1.1`, … — and
-       those N addresses were composed by the page's own code, which is the strongest provenance an endpoint
-       can have. The line above recorded exactly one of them and the other N were discarded.
+       those N addresses were composed by the page's own code, so each is evidence about the app exactly as
+       the request carrying them is. The line above recorded exactly one of them and the other N were discarded.
        HERE rather than in a reply path, because this is the point that holds the request's header list, the
        extracted body and §5.2's body Content-Type together (solver/multipart_batch.h), and because what is
        being read is what the page SENDS — solver/reply_decode.c is what a reply TEACHES, a different fact
        about a different record even though both end at `endpoint_record`. Nothing is fired: a sub-request is
-       recorded exactly as the outer one is. */
-    multipart_batch_learn(ctx, &s->hdrs, s->body_mime, s->body.bytes, s->body.len);
+       recorded exactly as the outer one is.
+       AND AT THE OUTER REQUEST'S OWN GRADE, handed down rather than re-read: a sub-request is written inside
+       a body this same running code composed, so it is evidence of exactly what the request carrying it is
+       evidence of. */
+    multipart_batch_learn(ctx, &s->hdrs, s->body_mime, s->body.bytes, s->body.len, prov);
     if (mc) JS_FreeCString(ctx, mc);
     return JS_STEP_DONE;
 }

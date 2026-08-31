@@ -892,6 +892,22 @@ void engine_unload_document(uint32_t doc);
  * its callers', by construction. */
 const char *engine_provenance_of_running_path(void);
 
+/* …AND THE SAME ANSWER AS A NUMBER, for the one consumer that STORES a grade instead of writing it onto a
+ * wire: solver/endpoint.c keys an @H record by it and compares two of them, which a string cannot do without
+ * that file learning the vocabulary. It is the composition and the function above is `engine_provenance_token`
+ * of it — one rule, two spellings, in that order, so a caller cannot reach a fourth answer.
+ * EVERYTHING THE PARAGRAPH ABOVE SAYS APPLIES UNCHANGED, the flow-less answer included. */
+int engine_prov_of_running_path(void);
+
+/* THE PROVENANCE'S WIRE SPELLING, AND IT IS EXPORTED BECAUSE TWO SURFACES PRINT IT. The pending line states
+ * what a request IS and the @H record states what a LEARNED ENDPOINT is, and a trusted zone reads both about
+ * the same app — so the three words have to be one vocabulary rather than two files' agreement. A second
+ * mapping in solver/endpoint.c would be free to drift, and the direction it would drift in is the one that
+ * costs: a record spelled `derived` by one file and `observed` by the other is read as the stronger of the
+ * two by whichever consumer sees it. Fatal, never a DCHECK, for the reason the pending line's own spelling is
+ * (a release build falling through would print whatever the compiler left in the register). */
+const char *engine_provenance_token(int prov);
+
 /* WHAT THE BYTES ARE FOR, WHICH IS A DIFFERENT QUESTION FROM WHO ASKED — Fetch §2.2.5 "Requests"' DESTINATION,
  * stated verbatim off the request record the park carried (core/fetch/fetch.h) and never derived here.
  * THE TWO FIELDS ARE NOT TWO SPELLINGS OF ONE FACT, and reading them as one is what left a live hole. The

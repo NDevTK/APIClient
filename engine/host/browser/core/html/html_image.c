@@ -13,6 +13,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"      /* every request host-edge funnels one endpoint into the @H surface */
+#include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/url/url.h"
@@ -523,7 +524,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         if (!cand) continue;   /* HTML §2.4.2's failure: an address that is not one names no endpoint */
         uv = JS_NewString(ctx, cand);
         CHECK(!JS_IsException(uv), "§4.8.4.3.7: OOM naming an image candidate for the endpoint surface");
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path());
         JS_FreeValue(ctx, uv);
         free(cand);
     }
@@ -535,7 +536,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        nothing may claim to have been, and no event is fired for a decision that was never taken. */
     if (ss.undecided) {
         if (!JS_IsUndefined(ss.undecided_url))
-            endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL);
+            endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL, engine_prov_of_running_path());
         image_source_set_release(ctx, &ss);
         JS_FreeValue(ctx, st);
         return JS_UNDEFINED;
@@ -618,7 +619,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     {
         JSValue uv = JS_NewString(ctx, abs);
         CHECK(!JS_IsException(uv), "§4.8.4.3.5: OOM naming an image request for the endpoint surface");
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path());
         JS_FreeValue(ctx, uv);
     }
 

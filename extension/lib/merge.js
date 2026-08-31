@@ -62,7 +62,7 @@ function mergeASTResultsIntoVDD(tab, results) {
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
       /* THE CALL-SITE CONTRACT, ASSERTED WHERE IT ARRIVES. endpoint.c's `endpoint_json_array` writes exactly
-         four keys per record — method, url,
+         five keys per record — method, url, provenance,
          params[{name,location,validValues[],excludes[] and bounds{} when observed}],
          and headers ONLY when it observed
          one — so those are the fields this loop and learnFromAstCallSite may read, and each one is guaranteed
@@ -76,6 +76,20 @@ function mergeASTResultsIntoVDD(tab, results) {
       DCHECK(callSite && typeof callSite === "object", "a fetchCallSites entry is not an object — endpoint.c emits one JSON object per deduped endpoint");
       DCHECK(typeof callSite.method === "string" && callSite.method, "a fetchCallSites entry carries no method — endpoint_record takes it as a required argument, so an absent one is the @H serializer broken");
       DCHECK(Array.isArray(callSite.params), "a fetchCallSites entry carries no params array — endpoint.c writes \"params\":[…] for every endpoint (empty when the request carried no templated path segment, no query and no readable body), so its absence is the whole parameter surface arriving as nothing");
+      /* AND WHAT THIS CALL SITE IS EVIDENCE OF, CHECKED IN BOTH DIRECTIONS OF THE SKEW: that the engine wrote
+         a word, and that the word is one this zone knows. It is NOT an optional key like `excludes` and
+         `bounds` — endpoint.c writes it on EVERY record, because the three words are exhaustive over the ways
+         the engine can come to know an address and there is therefore no absence for a reader to interpret.
+         WHAT A DEFAULT HERE WOULD COST is the whole point of the field: `callSite.provenance || "derived"`
+         renders an address that exists only because a gate was forced with bytes identical to one the app's
+         own code computes, and the reviewer reads the fabrication as a measurement — CLAUDE.md §@H's "one
+         invented field is the example that shapes the next endpoint", arriving as silence rather than as a
+         value. So it crashes here instead. */
+      DCHECK(isCallSiteProvenance(callSite.provenance),
+             "a fetchCallSites entry carries the provenance " + JSON.stringify(callSite.provenance) +
+             ", which is none of " + CALLSITE_PROVENANCE.join("/") + " — endpoint.c writes one on every " +
+             "record through solver/engine.h's one mapping, so this is that emission and lib/endpoint-record" +
+             ".js's vocabulary having parted, and every learned address would be read at the wrong grade");
       // Structural @T candidate (url:null — unreached site, value
       // unresolved): surfaced via focusedView/structuralCandidates, not
       // a learnable endpoint. Skip before new URL(null) fabricates a

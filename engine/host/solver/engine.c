@@ -2541,8 +2541,9 @@ static void join_set_field(char **join, size_t *n_out, size_t *cap, size_t off, 
 }
 
 /* THE PROVENANCE'S WIRE SPELLING — the one place the record's number becomes the token the line carries, so
-   the vocabulary engine.h declares and the values pending.h numbers cannot drift apart in two files. */
-static const char *prov_token(int prov) {
+   the vocabulary engine.h declares and the values pending.h numbers cannot drift apart in two files.
+   EXPORTED, because the @H surface prints the same three words about the same app — see engine.h. */
+const char *engine_provenance_token(int prov) {
     switch (prov) {
     case PROV_OBSERVED: return PENDING_PROVENANCE_OBSERVED;
     case PROV_DERIVED:  return PENDING_PROVENANCE_DERIVED;
@@ -2562,11 +2563,16 @@ static const char *prov_token(int prov) {
    (solver/flow.h), so this answers about the path as it is at the moment the act is performed — which is
    §scheduler's "an operation that becomes a work item takes its inputs with it" read from the producing end:
    the ANSWER travels with the operation, never the lookup. */
-const char *engine_provenance_of_running_path(void)
+int engine_prov_of_running_path(void)
 {
     const Flow *f = flow_running();
 
-    return prov_token(f != NULL && flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED);
+    return f != NULL && flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED;
+}
+
+const char *engine_provenance_of_running_path(void)
+{
+    return engine_provenance_token(engine_prov_of_running_path());
 }
 
 /* …AND THE SAME TRIP BACK, for a token already written into the join. Length-delimited because the caller
@@ -2631,7 +2637,7 @@ const char *engine_pending_fetches(void) {
                taken a contradicted arm since, and asking `flow_path_forced(f)` here would file every request
                a flow ever made under the path it reached last. */
             int prov_v = (int)pending_get_int(pe, PEND_PROV);
-            const char *prov = prov_token(prov_v);
+            const char *prov = engine_provenance_token(prov_v);
             size_t il = strlen(ini), pl = strlen(prov);
             int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
             if (!skip) {
@@ -2766,7 +2772,7 @@ const char *engine_pending_fetches(void) {
                         int widen_dst = destination_is_script_like(d, dl) &&
                                         !destination_is_script_like(join + d_at, d_len);
                         if (prov_v < mo_prov) mo_prov = prov_v;
-                        join_set_field(&join, &n_out, &cap, p_at, p_len, prov_token(mo_prov));
+                        join_set_field(&join, &n_out, &cap, p_at, p_len, engine_provenance_token(mo_prov));
                         join_set_field(&join, &n_out, &cap, i_at, i_len,
                                        mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
                         if (widen_dst) join_set_field(&join, &n_out, &cap, d_at, d_len, d);
@@ -2943,6 +2949,9 @@ int engine_host_owes(void) {
 int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value) {
     PendIndexNode *node;
     int n = 0, matched = 0, i, m;
+    /* THE REPLY'S OWN GRADE, JOINED FROM THE RECORDS IT ANSWERS — see the fold in the fill loop. `-1` is "no
+       record has been read yet", which is a state the tail below refuses to hand on rather than a default. */
+    int reply_prov = -1;
     DCHECK(url != NULL, "a body was provided for no URL");
     /* WHAT THE HOST SENDS BACK IS WHAT THE JOIN EMITTED, and the shape is asserted rather than assumed: an
        absent method is a host that has not been converted to the pair (the JS bridge's `Provide` carries one),
@@ -3012,6 +3021,32 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
             JS_FreeValue(ctx, ul);
         }
 #endif
+        /* AND WHAT THIS REPLY IS EVIDENCE OF — THE JOIN OF THE RECORDS IT ANSWERS, TAKEN OVER THE SAME SET AND
+           BY THE SAME RULE AS THE LINE THAT ASKED FOR IT. §A-REQUEST-CARRIES-THE-PROVENANCE's two halves are
+           one fact: a reply INHERITS the grade of the request that produced it, and the request the host
+           actually issued is the deduped line `engine_pending_fetches` wrote — whose grade is the MOST
+           OBSERVED of the records parked on the pair, for the argument spelled out at that join (the set is
+           ONE request, so if any member's path stood on no contradicted arm then a real client makes exactly
+           this request and the server's answer to it is evidence about the app). Reading it a second way here
+           would be two answers to one question about one exchange, and they would disagree exactly where it
+           matters: the host fired the joined line and the engine would grade the reply by whichever record it
+           happened to walk first.
+           THE SET IS THE SAME ONE BY CONSTRUCTION, not by agreement. The join lists a record exactly when it
+           carries an address and no value yet, which is the index's own membership predicate, which is the
+           set this loop walks — so the members folded here are the members folded there.
+           MOST OBSERVED IS `min`, because PROV_OBSERVED < PROV_DERIVED < PROV_FORCED is the order pending.h
+           numbers them in and states is the join's (it is why they are numbered rather than named-only). */
+        {
+            int rp = (int)pending_get_int(p, PEND_PROV);
+
+            /* THE RANGE, ASKED THROUGH THE MAPPING THAT ALREADY OWNS IT rather than re-spelled as a
+               three-way test this file would then have two copies of. It is fatal in release for that
+               function's own reason, and here the stake is the same one hop further on: a grade outside the
+               vocabulary would reach the @H surface, where it decides whether a learned value is reported as
+               something a real client's request produced. */
+            (void)engine_provenance_token(rp);
+            if (reply_prov < 0 || rp < reply_prov) reply_prov = rp;
+        }
         pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
         pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
         n++;
@@ -3048,7 +3083,16 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
        this register and the host performs a GET through safeFetch. A reader on this side would file whatever
        rejection a GET happened to provoke under the identity of an endpoint nobody probed. It is
        extension/lib/req2proto.js, which issues the probe as the page. */
-    if (n) reply_decode_learn(ctx, method, url, value);
+    /* …AND IT IS TOLD WHAT THIS REPLY IS EVIDENCE OF, because everything it learns is carried at that grade
+       (solver/reply_decode.h). A GRADE THAT CANNOT BE ESTABLISHED CRASHES HERE RATHER THAN BEING FILLED IN:
+       the fold above runs once per filled record and `n` counts exactly those fills, so `n` non-zero with no
+       grade is the fold having been skipped for a record this loop wrote — and the value that would stand in
+       is `observed`, the strongest of the three, on a reply nothing graded. */
+    DCHECKF(!n || reply_prov >= 0,
+            "a reply filled %d parked record(s) and none of them yielded a provenance — the fold runs on every "
+            "record this call writes, so a fill with no grade is a record that reached the write without "
+            "passing it. request=%s %s", n, method, url);
+    if (n) reply_decode_learn(ctx, method, url, value, reply_prov);
     /* A REQUEST ANSWERED TWICE, TOLD APART FROM ONE ANSWERED FOR NOBODY. Every entry naming this request already
        carries a reply, so this call wrote none — and the two numbers are what make that a different failure
        from `n == 0` with nothing matched at all, which is the host's pairing being off and is the CALLER's

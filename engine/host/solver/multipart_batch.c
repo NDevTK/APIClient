@@ -109,7 +109,7 @@ static bool is_http_version(const char *s, size_t n)
    `application/http; msgtype=request`, `message/http`, and absent) and an allowlist of spellings is the
    recognizer shape §RUN, DON'T MATCH names — one format answering differently depending on how it was
    written. */
-static void learn_request_message(JSContext *ctx, const char *p, const char *end)
+static void learn_request_message(JSContext *ctx, const char *p, const char *end, int prov)
 {
     const char *nl = memchr(p, '\n', (size_t)(end - p));
     const char *le = nl ? nl : end;
@@ -176,7 +176,9 @@ static void learn_request_message(JSContext *ctx, const char *p, const char *end
     memcpy(target, tgt, t_n); target[t_n] = 0;
 
     uv = JS_NewString(ctx, target);
-    endpoint_record(ctx, method, uv, hb.n ? hb.e : NULL, hb.n, NULL);
+    /* AT THE OUTER REQUEST'S GRADE, handed down from the `fetch()` that composed this body — a sub-request
+       written inside a body is evidence of exactly what the request carrying it is evidence of. */
+    endpoint_record(ctx, method, uv, hb.n ? hb.e : NULL, hb.n, NULL, prov);
     JS_FreeValue(ctx, uv);
 
     free(method);
@@ -187,7 +189,7 @@ static void learn_request_message(JSContext *ctx, const char *p, const char *end
 /* ONE BODY PART: RFC 2046 §5.1's part headers, an empty line, then the part's content. The part headers are
    the ENVELOPE's (`Content-ID`, the part's own `Content-Type`) and belong to no endpoint — the sub-request's
    headers are inside the message, after its request line. */
-static void learn_part(JSContext *ctx, const char *p, const char *end)
+static void learn_part(JSContext *ctx, const char *p, const char *end, int prov)
 {
     DCHECK(p <= end, "a multipart body part was framed with its end before its start — the two pointers come "
                      "from one delimiter walk over one buffer, so an inverted span means the CRLF trim before "
@@ -197,7 +199,7 @@ static void learn_part(JSContext *ctx, const char *p, const char *end)
         const char *le = nl ? nl : end;
 
         if (le > p && le[-1] == '\r') le--;
-        if (le == p) { learn_request_message(ctx, nl ? nl + 1 : end, end); return; }
+        if (le == p) { learn_request_message(ctx, nl ? nl + 1 : end, end, prov); return; }
         if (!nl) return;   /* part headers that no empty line ever closed: the part carries no content */
         p = nl + 1;
     }
@@ -206,7 +208,7 @@ static void learn_part(JSContext *ctx, const char *p, const char *end)
 /* ── the entry ───────────────────────────────────────────────────────────────────────────────────────────── */
 
 void multipart_batch_learn(JSContext *ctx, const HeaderList *hdrs, JSValueConst body_mime,
-                           const char *body, size_t body_n)
+                           const char *body, size_t body_n, int prov)
 {
     MimeType ct_rec;
     char *ct;
@@ -283,7 +285,7 @@ void multipart_batch_learn(JSContext *ctx, const HeaderList *hdrs, JSValueConst 
         part_end = next;
         if (part_end > p && part_end[-1] == '\n') part_end--;
         if (part_end > p && part_end[-1] == '\r') part_end--;
-        learn_part(ctx, p, part_end);
+        learn_part(ctx, p, part_end, prov);
 
         /* RFC 2046's close-delimiter is the delimiter followed by "--". */
         if ((size_t)(body_end - next) >= db_n + 2 && next[db_n] == '-' && next[db_n + 1] == '-') break;

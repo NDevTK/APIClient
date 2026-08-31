@@ -68,6 +68,47 @@ const _ENDPOINT_STATED = ["url", "method", "host", "path", "service", "source", 
    below silently render as neither. */
 const _ENDPOINT_SOURCES = ["ast_analysis", "ast_shape_origin"];
 
+/* WHAT A LEARNED ADDRESS IS EVIDENCE OF — a DIFFERENT question from `source` above, which says which ARM of
+   lib/callsite-url.js resolved the address. This says whether a real client's request ever produced it.
+   CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE names the three and the engine emits one on every @H record
+   (engine/host/solver/endpoint.h's `provenance`); this is the SAME vocabulary in the same order, and the order
+   is the whole content — engine/host/solver/pending.h numbers them OBSERVED < DERIVED < FORCED and states that
+   the numbering IS the join's, so INDEX IN THIS ARRAY IS RANK and "most observed" is the lower index.
+     observed — a real load of the document makes exactly this request.
+     derived  — the page's own code computed it from real inputs. No session sent it; it is still a fact about
+                the app, and it is the surface forced execution exists to find.
+     forced   — a value in it exists only because a gate was forced. A reply to it is evidence about what a
+                server says to a request no client makes, and §@H forbids it ever being reported as the other
+                two: "a 401 body parses as JSON and yields fields that exist nowhere, an error envelope becomes
+                a config, and the fabrication then PROPAGATES".
+   IT IS DECLARED HERE BECAUSE TWO ZONES READ IT AND NEITHER MAY SPELL IT FOR ITSELF: this file is loaded by
+   ast-worker.html (before lib/learn.js and lib/merge.js, which fold it onto the method record) and by
+   popup.html (before lib/popup-send.js, which renders it). A second copy of the three words is two
+   vocabularies free to drift, and the drift is silent — a comparison against a word the producer stopped
+   emitting is simply never true, and a `forced` endpoint then renders as one the bundle can reach. */
+const CALLSITE_PROVENANCE = Object.freeze(["observed", "derived", "forced"]);
+
+function isCallSiteProvenance(p) { return CALLSITE_PROVENANCE.indexOf(p) >= 0; }
+
+/* THE FOLD, WHERE TWO SIGHTINGS OF ONE ADDRESS MEET — the MOST OBSERVED of them, which is the rule the
+   engine's own pending-line join uses and for the same argument: the two sightings are one ADDRESS, so if
+   either was reached without standing on a contradicted arm then a real client's code computes it and the
+   record must say so. Labelling that pair `forced` would state "no client makes this request" of a request
+   one does.
+   THE ENGINE DOES *NOT* FOLD, AND THAT IS NOT A DISAGREEMENT — engine/host/solver/endpoint.h explains it: the
+   grade is part of the @H record's IDENTITY there, so a forced sighting's VALUES can never merge into a
+   derived record's. Two @H rows arrive here, and what folds is this record's one-line CLAIM ABOUT THE
+   ADDRESS. The values behind it are still merged by the method record below, which is the residual named at
+   lib/learn.js's fold. */
+function mostObservedProvenance(a, b) {
+  DCHECK(isCallSiteProvenance(a) && isCallSiteProvenance(b),
+         "a call-site provenance fold was handed `" + a + "` and `" + b + "` — the engine emits one of " +
+         CALLSITE_PROVENANCE.join("/") + " on every @H record, so a word outside that set is the engine's " +
+         "serializer and this vocabulary having parted, and the fold would answer with whichever argument " +
+         "happened to be first");
+  return CALLSITE_PROVENANCE.indexOf(a) <= CALLSITE_PROVENANCE.indexOf(b) ? a : b;
+}
+
 /* THE KEY — THE NAME THIS RECORD IS FILED UNDER — MINTED HERE AND SPELLED NOWHERE ELSE.
 
    THE RECORD HAD ONE DESCRIPTION AND ITS NAME HAD NONE, and the two halves fail the same way for the same

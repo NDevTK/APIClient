@@ -56,6 +56,7 @@
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 #include "solver/endpoint.h"
+#include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 #include "solver/solve.h"
 
 static lxb_dom_element_t *form_elem_of(JSValueConst v)
@@ -1174,9 +1175,9 @@ static void form_record_request(JSContext *ctx, UrlRecord *action, int method, i
     if (method == FORM_METHOD_POST) {
         ct.name = "Content-Type";
         ct.value = form_enctype_mime(enctype);
-        endpoint_record(ctx, "POST", url, &ct, 1, NULL);
+        endpoint_record(ctx, "POST", url, &ct, 1, NULL, engine_prov_of_running_path());
     } else {
-        endpoint_record(ctx, "GET", url, NULL, 0, NULL);
+        endpoint_record(ctx, "GET", url, NULL, 0, NULL, engine_prov_of_running_path());
     }
     JS_FreeValue(ctx, url);
     free(serialized);

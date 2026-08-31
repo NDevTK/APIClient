@@ -330,6 +330,33 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   m._astInferred = true;
   if (!m._astSourceScript) m._astSourceScript = scriptUrl || null;
 
+  /* AND WHAT THE BUNDLE ORIGIN IS EVIDENCE OF — `_astInferred` says the engine found this address, and this
+     says whether a real client's code computes it. They are written together because the second is worthless
+     without the first and misleading without the second: a method the engine reached only by FORCING a gate
+     carries `_astInferred` exactly like one the app's own code composes, so with the grade silent both wear
+     lib/popup-send.js's `[UNUSED]` tag — which is the tool's headline claim about what the bundle CAN do —
+     and one of them is a claim about a request no client makes.
+     MOST OBSERVED ACROSS SIGHTINGS (lib/endpoint-record.js's fold): this method record is keyed by verb and
+     path, so the engine's two @H rows for one address (which it deliberately does NOT merge, because the
+     grade is part of the record's identity there) meet here, and the record's ONE claim about the address is
+     the strongest that any path to it supports.
+     NAMED RESIDUAL — THE FOLD IS THE RECORD'S CLAIM AND NOT EACH VALUE'S. WHAT IS NOT COVERED: `m.parameters`
+     below merges `validValues` from every sighting into one set, so a value the engine computed on a FORCED
+     arm sits beside one from a derived arm under a record this line may have folded to `derived`. The engine
+     keeps them apart (the grade is part of the @H record's identity), and this merge is where they meet
+     again. WHAT IS STILL OWED: a grade PER VALUE — `_mergeAstValues` taking the sighting's word and the Send
+     panel rendering a forced example as one, which is §@H's "a shape states TWO facts" applied one level
+     below the record. HOW ITS ABSENCE SHOWS: a Send-panel example that a server will reject, offered under a
+     method the tool says the app's own code computes.
+     THE FIRST SIGHTING FOLDS AGAINST ITSELF rather than being assigned past the fold, so the vocabulary is
+     asserted on EVERY path through this line and not only on the second call site to reach a method. A record
+     restored from a store an older build wrote carries no `_astProvenance` at all, and taking the new word
+     for it is the right answer to that: an old record makes no claim, so there is nothing to fold with. */
+  {
+    const _prev = m._astProvenance === undefined ? callSite.provenance : m._astProvenance;
+    m._astProvenance = mostObservedProvenance(_prev, callSite.provenance);
+  }
+
   /* `_astCallSites` IS GONE, AND SO IS THE SOURCE LOCATION IT WAS MADE OF. It recorded one entry per call
      site as {script, line, column, enclosingFunction}, keyed and deduped on `line:column`, and its comment
      said the reviewer clicks through to the JS location. endpoint.c emits `method`, `url`, `params` and

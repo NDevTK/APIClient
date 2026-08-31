@@ -89,11 +89,18 @@ function _renderServiceGrouping() {
   // listed first.
   if (svcData.doc) {
     const n = { unused: 0, "unused+fired": 0, fired: 0, declared: 0, asset: 0 };
-    let total = 0;
+    let total = 0, forced = 0;
     for (const bucket of Object.values(svcData.doc.resources || {})) {
       for (const m of Object.values(bucket.methods || {})) {
         total++;
         n[_methodOrigin(m)]++;
+        /* AND HOW MANY OF THEM EXIST ONLY BECAUSE A GATE WAS FORCED — counted BESIDE the buckets rather than
+           as one of them, because it is an orthogonal fact and folding it in would have to pick which of
+           "unused" and "forced" a method is. `_methodOrigin` says whether the wire ever carried this request;
+           this says whether a real client's code composes it at all. A forced-only method inflating the UNUSED
+           headline is the fabrication at the level of the COUNT: "N things the bundle can do but didn't", of
+           which some are requests no client makes. */
+        if (_methodProvenance(m) === "forced") forced++;
       }
     }
     if (total > 0) {
@@ -103,6 +110,7 @@ function _renderServiceGrouping() {
       if (n.fired) parts.push(n.fired + " fired only (no bundle origin)");
       if (n.declared) parts.push(n.declared + " declared by a discovery doc, never fired");
       if (n.asset) parts.push(n.asset + " asset");
+      if (forced) parts.push(forced + " of them reached only by FORCING a gate");
       html += '<div class="grouping-first">methods: ' + esc(parts.join(", ")) + '  (' + total + ' total)</div>';
     }
   }
@@ -121,6 +129,24 @@ function _renderServiceGrouping() {
 // ENGINE/STORE GAP: this class is a FACT about the record and should be stamped ON it where the record is
 // built (the offscreen store, from the engine's @H surface plus the request log), not re-derived by the view
 // every render. The view then paints a field instead of classifying.
+// WHAT THE ENGINE'S PATH TO THIS METHOD WAS WORTH — the second fact `_methodOrigin` deliberately does not
+// carry, asked in ONE place for the same reason that one is. `null` is a POSITIVE STATEMENT and not a hole:
+// a method with no bundle sighting (a probed discovery document's) was never graded by the engine, so there
+// is no grade to state, which is exactly what `_astInferred` being false means.
+// THE DCHECK IS THE HALF THAT MATTERS. `m._astProvenance` is written by lib/learn.js on the same line as
+// `_astInferred` — the two are one write — so a record carrying the first and not the second is that pairing
+// broken, or a store an older build wrote being read by this one. Both must crash rather than render, because
+// what a missing grade renders as is nothing, and nothing reads as "not forced".
+function _methodProvenance(m) {
+  if (!m._astInferred) return null;
+  DCHECK(isCallSiteProvenance(m._astProvenance),
+         "a bundle-inferred method carries the provenance " + JSON.stringify(m._astProvenance) + ", which is " +
+         "none of " + CALLSITE_PROVENANCE.join("/") + " — lib/learn.js writes it beside `_astInferred` on " +
+         "every call site it registers, so this record has one half of that write and not the other and the " +
+         "row would render with no grade, which a reviewer reads as `not forced`");
+  return m._astProvenance;
+}
+
 function _methodOrigin(m) {
   if (m._responseKind === "asset") return "asset";
   const inBundle = !!m._astInferred;
@@ -176,6 +202,19 @@ function renderMethodDropdown() {
             else if (origin === "unused+fired") tag = " [in bundle + fired]";
             else if (origin === "fired") tag = " [fired only]";
             else tag = " [declared, never fired]";
+            /* …AND THE SECOND FACT, ALWAYS, FOR A METHOD THE BUNDLE NAMED. The tag above says whether the
+               WIRE ever carried this request; this says what the ENGINE's own path to it was worth, which is
+               CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three words verbatim — no synonym, because a
+               second vocabulary for one field is two spellings free to drift.
+               THE TWO WORDS THAT LOOK LIKE THEY COLLIDE DO NOT. `[fired only]` is network traffic this
+               session observed; `[observed]` is the engine's grade and means a real LOAD of the document
+               makes exactly this request (its parser fetched it), which a page nobody interacted with can be
+               true of. They are different questions and both are on the row.
+               IT IS STATED RATHER THAN SHOWN-ONLY-WHEN-FORCED: with `derived` and `observed` silent, a
+               reviewer reads the absence of a grade as "fine", which is a consumer defaulting a producer's
+               field with a rendering instead of a `||`. */
+            const prov = _methodProvenance(m);
+            if (prov !== null) tag += " [" + prov + "]";
             /* THE METHOD ID AS THE STORE HOLDS IT. A rewrite stood here that substituted a declared name
                recovered from the page's source map into each `{hole}` of the displayed id (`{e}` → `{owner}`)
                — reading `p._sourceMapName` and `p.location === "path"`. Neither name has a producer: nothing

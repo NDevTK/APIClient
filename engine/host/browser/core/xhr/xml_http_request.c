@@ -1731,7 +1731,8 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     /* The CONCOLIC where open() was given one, so the surface reports the shape AND the example it carries;
        the serialization otherwise, which for a plain address is the same string XHR §3.5.1 The open() method
        step 5 parsed. */
-    endpoint_record(ctx, method, JS_IsNull(d->url_src) ? d->url : d->url_src, eh, (int)n, ebp);
+    endpoint_record(ctx, method, JS_IsNull(d->url_src) ? d->url : d->url_src, eh, (int)n, ebp,
+                    engine_prov_of_running_path());
     if (body) JS_FreeCString(ctx, body);
     free(body_ct);
     if (owned) {

@@ -1,7 +1,11 @@
 /* What a reply body teaches — see reply_decode.h. Stateless: every endpoint it learns goes to solver/endpoint.c. */
 #include "solver/reply_decode.h"
 #include "solver/endpoint.h"
-#include "core/mime/mime_type.h"     /* Fetch §4's extract a MIME type — the PARSE, which is the renderer's */
+#include "solver/pending.h"          /* PROV_* — the vocabulary the grade this file is handed belongs to */
+#include "core/mime/mime_type.h"     /* Fetch §3.5 `Content-Type` header's extract a MIME type — the PARSE,
+                                        which is the renderer's. §4 Fetching stood here and is where the bytes
+                                        are OBTAINED; the algorithm is defined one section up, and a number
+                                        that reads as authoritative sends the next reader to the wrong text. */
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode: what a `text/x-component` stream's bytes are read as */
 #include "core/fetch/fetch.h"
 #include "core/url/url.h"
@@ -19,8 +23,8 @@
    page could never have obtained, reported as a finding about the page. That is the same rule CLAUDE.md states
    for active discovery ("CORS-bounded both ways") arriving from the other direction.
    AND IT IS NOT THE RAW HEADER EITHER, WHICH IS THE CHANGE THIS PARAGRAPH USED TO ARGUE AGAINST ITSELF. What
-   stood here read `Content-Type` off the record's header list and ran Fetch §4's extract-a-MIME-type on it,
-   and defended that as "the server's own STATEMENT, which the renderer legitimately parses". The parse is
+   stood here read `Content-Type` off the record's header list and ran Fetch §3.5 `Content-Type` header's
+   extract-a-MIME-type on it, and defended that as "the server's own STATEMENT, which the renderer legitimately parses". The parse is
    legitimate; deciding FROM IT WHAT THE RESOURCE IS is the thing that was already decided, by the zone that
    held the bytes, one hop earlier — so two zones were answering one question about one response with nothing
    to make them agree, and the one that could see the body was not the one being believed. `computedType` is
@@ -60,14 +64,17 @@ static bool is_asset(const MimeType *m)
  * NAMED RESIDUAL — REDIRECT-TO-LOGIN, the third denial CLAUDE.md's own sentence lists and the one not covered
  * here. WHAT IS NOT COVERED: a server that answers an unauthenticated request with 302 to a sign-in page
  * delivers that page's bytes under status 200, so this predicate is silent and the login document is read as
- * the resource. WHAT THE NEXT DIFF BUILDS: the test over §2.2.6's URL LIST rather than over the status — the
- * record carries it (`urlList`), the reply is `redirected` exactly when it has more than one entry, and the
- * denial is the narrower fact that the FINAL address is not the one that was requested AND the request was
- * not OBSERVED, which needs the request's provenance to reach this file (see reply_decode_learn). It is not
- * "any redirect", which would refuse the http→https and trailing-slash hops every site performs and would be
- * the bound this paragraph just declined to write one line up. HOW ITS ABSENCE WOULD SHOW: an @H surface on a
- * logged-out SPA in which every learned address resolves under the sign-in route's own bundle rather than
- * under the route that was fetched. */
+ * the resource. WHAT IS STILL MISSING: the test over Fetch §2.2.6 Responses' URL LIST rather than over the
+ * status — the record carries it (`urlList`), the reply is `redirected` exactly when it has more than one
+ * entry, and the denial is the narrower fact that the FINAL address is not the one that was requested AND the
+ * request was not OBSERVED. THE SECOND CONJUNCT IS AVAILABLE NOW and was the reason this stood unbuilt:
+ * `reply_decode_learn` is handed the reply's grade. What is still owed is the URL-list comparison itself,
+ * which is a SEPARATE RULE from the grade — a denial is not a provenance, and building it inside the diff
+ * that gave the file its second conjunct would put two questions behind one answer. It is not "any redirect",
+ * which would refuse the http→https and trailing-slash hops every site performs and would be the bound this
+ * paragraph just declined to write one line up. HOW ITS ABSENCE WOULD SHOW: an @H surface on a logged-out SPA
+ * in which every learned address resolves under the sign-in route's own bundle rather than under the route
+ * that was fetched. */
 static bool status_denies(int status)
 {
     return status == 401 || status == 403;
@@ -100,7 +107,7 @@ static bool status_denies(int status)
    would produce an address that parses, looks plausible and was never served — §RUN, DON'T MATCH's "COMPUTE OR
    SHAPE, NEVER INVENT", where inventing is the worse half. So a bare chunk is skipped and nothing is recorded
    for it. */
-static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chunk)
+static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chunk, int prov)
 {
     UrlRecord u;
     char *abs;
@@ -113,8 +120,12 @@ static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chun
     uv = JS_NewString(ctx, abs);
     /* GET, because a chunk is a script the page LOADS — the verb is a fact about what a Flight client
        reference IS, not a default. There is no method parameter anywhere in this file because no caller has a
-       second answer to give it. */
-    endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
+       second answer to give it.
+       THE GRADE IS THE REPLY'S AND IT IS THREADED, NOT DECIDED HERE. This address was named by a server, in
+       an answer to a request whose grade solver/engine.c joined; a chunk the page will fetch is worth exactly
+       what the reply that named it is worth, and no less — a route reached only because a gate was forced
+       names its chunks to nobody but this run. */
+    endpoint_record(ctx, "GET", uv, NULL, 0, NULL, prov);
     JS_FreeValue(ctx, uv);
     free(abs);
     url_record_free(&u);
@@ -201,7 +212,7 @@ static FlightRow *flight_row_of(FlightRows *rs, const char *id, size_t id_n)
  * EVERY STRING UNDER THE CHUNK LIST IS A CHUNK NAME OR A REFERENCE TO ONE, which is what the field IS; the
  * numbers beside them are sizes and are not walked because a number is not an address. record_chunk decides
  * what is addressable, and a bare (asset-prefix-relative) name is refused there for the reason stated at it. */
-static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, JSValue root)
+static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, JSValue root, int prov)
 {
     JSValue *work = NULL;
     size_t n = 0, cap = 0, i;
@@ -236,7 +247,7 @@ static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, J
                     else { r->walking = 1; FLIGHT_PUSH(rv); }
                 }
             } else {
-                record_chunk(ctx, base, s);
+                record_chunk(ctx, base, s, prov);
             }
             JS_FreeCString(ctx, s);
         } else if (JS_IsArray(v)) {
@@ -259,7 +270,7 @@ static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, J
    about a stream half of whose rows are not. Element 1 is the chunk list and is handed to the walk WHOLE,
    because it may itself be a reference rather than an array. */
 static void learn_client_reference(JSContext *ctx, const UrlRecord *base, FlightRows *rs,
-                                   const char *payload, size_t n)
+                                   const char *payload, size_t n, int prov)
 {
     JSValue arr, chunks;
 
@@ -273,14 +284,14 @@ static void learn_client_reference(JSContext *ctx, const UrlRecord *base, Flight
 
     chunks = JS_GetPropertyUint32(ctx, arr, 1);
     if (JS_IsException(chunks)) { JS_FreeValue(ctx, JS_GetException(ctx)); JS_FreeValue(ctx, arr); return; }
-    walk_chunks(ctx, base, rs, chunks);   /* consumes `chunks` */
+    walk_chunks(ctx, base, rs, chunks, prov);   /* consumes `chunks` */
     JS_FreeValue(ctx, arr);
 }
 
 /* OVER A LENGTH AND NOT A NUL, because what arrives is a BYTE SEQUENCE decoded to text: §6's UTF-8 decode
    preserves a U+0000, and a `strchr` walk would have read the rest of a stream that contains one as absent.
    TWO PASSES, because a reference may name a row that has not been seen yet — see the row table above. */
-static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body, size_t body_n)
+static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body, size_t body_n, int prov)
 {
     FlightRows rows = { 0 };
     const char *p, *body_end = body + body_n;
@@ -302,14 +313,14 @@ static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body
 
     for (i = 0; i < rows.n; i++)
         if (rows.v[i].payload_n >= 2 && rows.v[i].payload[0] == 'I' && rows.v[i].payload[1] == '[')
-            learn_client_reference(ctx, base, &rows, rows.v[i].payload, rows.v[i].payload_n);
+            learn_client_reference(ctx, base, &rows, rows.v[i].payload, rows.v[i].payload_n, prov);
 
     free(rows.v);
 }
 
 /* ── the entry ───────────────────────────────────────────────────────────────────────────────────────────── */
 
-void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply)
+void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov)
 {
     MimeType computed;
     UrlRecord base;
@@ -326,26 +337,24 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
            "a reply was read for its content while naming no address — every relative address inside a body "
            "resolves against the URL that was fetched, and a reply with none would resolve them against "
            "nothing and file the result under an endpoint nobody requested");
+    /* AND WHAT THIS REPLY IS EVIDENCE OF, ASSERTED WHERE IT ARRIVES AND NEVER FILLED IN. The grade is joined
+       one frame up from the records this reply answers (solver/engine.c's engine_provide), so a value outside
+       the vocabulary is a caller that composed it somewhere else — and the value that would stand in for a
+       missing one is `observed`, the strongest of the three, which is exactly the fabrication
+       §A-REQUEST-CARRIES-THE-PROVENANCE forbids. It is asked before the shape test below because a network
+       error's grade is as much a fact as a body's. */
+    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
+            "a reply arrived carrying the provenance %d, which is none of the three solver/pending.h defines — "
+            "everything this file learns is filed under it, so an unrecognised grade would file a forced "
+            "route's chunk addresses beside a real load's. request=%s %s", prov, method, url);
     /* A NETWORK ERROR IS AN ANSWER, and it carries no record at all. This is a shape test on what the host
        delivered rather than an `if` past a broken invariant. */
     if (!JS_IsObject(reply)) return;
 
     /* DID THE SERVER REFUSE THIS REQUEST — asked BEFORE the body is looked at, because the answer decides
        whether these bytes describe the RESOURCE or the REFUSAL, and every read below is written on the
-       assumption that they describe the resource. See `status_denies`.
-       NAMED RESIDUAL — THE REQUEST'S OWN PROVENANCE DOES NOT REACH THIS FILE. WHAT IS NOT COVERED:
-       CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE requires that "a forced reply's values are learned and
-       CARRIED AS FORCED, never merged into the observed pool", and this entry is handed (method, url, reply)
-       only — solver/pending.h stamps `PROV_OBSERVED`/`_DERIVED`/`_FORCED` on the parked record and
-       engine_provide holds those records at the very call that reaches here, so the fact exists and is
-       dropped one frame up. Everything learned below therefore enters solver/endpoint.c's surface at one
-       grade. WHAT THE NEXT DIFF BUILDS: `engine_provide` joins the `PEND_PROV` of the records it fills (the
-       MOST OBSERVED of them, which is the rule its own pending-line join already uses) and passes it here as
-       a parameter, this file carries it into `record_chunk`, and `endpoint_record` takes it and emits it on
-       the @H record so a consumer can tell an address a real load fetches from one that exists only because
-       a gate was forced. HOW ITS ABSENCE WOULD SHOW: a Flight client reference mined out of a route reached
-       only on a forced arm publishes its chunk addresses in `@H` with bytes identical to a chunk the
-       document's own parser fetched, and `netdiff --unused` counts both as surface the bundle can reach. */
+       assumption that they describe the resource. See `status_denies`, whose own residual names the one
+       denial this test cannot see and what is still owed for it. */
     if (status_denies(fetch_reply_status(ctx, reply))) return;
 
     /* THE BYTES, AS BYTES. This read the record's `body` as a STRING, which §2.2.5 says a body is not; the
@@ -393,7 +402,7 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
         char *text = encoding_utf8_decode((const char *)body, body_n, &text_n);
         CHECK(text, "reply_decode: OOM decoding a Flight stream's bytes");
         if (url_parse(&base, url, strlen(url), NULL))
-            learn_flight(ctx, &base, text, text_n);
+            learn_flight(ctx, &base, text, text_n, prov);
         else
             DFAIL("a reply arrived naming an address the URL parser rejects — every address this engine parks "
                   "on was built by a component that parsed it first, so a failure here is a park recorded from "

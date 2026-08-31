@@ -620,7 +620,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         /* BORROWED, never freed — solver/dom_cow.h states the contract at the declaration and
            core/html/html_script.c reads it the same way at the same kind of site. */
         JSValueConst t = dom_cow_attr_taint(el, "href");
-        if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL); return; }
+        if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path()); return; }
     }
 
     /* "Assert: options's href is not the empty string, or options's source set is not null." With no source
@@ -655,7 +655,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         CHECK(!JS_IsException(uv), "§4.6.8.20: OOM naming a preload for the endpoint surface");
         /* §4.2.4.3's create-a-link-request sets no method, so it is Fetch §2.2.5 "Requests"' `GET`. STATED,
            because the reply seam is keyed on the (method, url) pair. */
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path());
         JS_FreeValue(ctx, uv);
     }
 
