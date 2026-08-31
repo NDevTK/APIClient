@@ -5506,6 +5506,28 @@ static int param_value_has(const char *js, const char *url, const char *pname, c
     return 0;
 }
 
+/* ONE PARAM OF ONE ENDPOINT CARRIES `val` AS ONE OF ITS VALUES, MATCHED WHOLE — the primitive a MERGED param
+   needs and the one this file did not have. `_only` is the wrong instrument wherever the fixture SAYS the
+   param carries several values (a fork's two arms merging into one record is the headline claim of this
+   document, not a finding against it), and `_has` is the wrong instrument for the same claim because it is a
+   substring test: `_has(…, "admin")` is satisfied by an arm that emitted `adminX`, and by a value some later
+   statement of this document puts on the same param. Whole-entry equality is what "this arm emitted" means.
+   The escape check is `param_value_only`'s and is here for the same reason — a `val` needing a JSON escape is
+   being compared against a spelling json_buf_str never writes, which reads as a row stuck at 0. */
+static int param_value_is(const char *js, const char *url, const char *pname, const char *val) {
+    const char *v = param_values_span(js, url, pname), *b, *c;
+    size_t n, m = strlen(val);
+    int plain = 1;
+
+    for (c = val; *c; c++)
+        if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) plain = 0;
+    DCHECK(plain, "a probe's expected param value carries a byte json_buf_str escapes, so it is being compared "
+                  "against a spelling the emitter never writes");
+    while (v && (v = param_value_next(v, &b, &n)) != NULL)
+        if (n == m && memcmp(b, val, m) == 0) return 1;
+    return 0;
+}
+
 /* ONE PARAM OF ONE ENDPOINT CARRIES EXACTLY ONE VALUE AND IT IS `val` — the claim the three rows above were
    trying to make, and the one an `strstr` up to a literal `]` was standing in for. Exactly-one is the whole
    assertion for a statement whose value the code DETERMINED: a second entry means the flow forked where the
@@ -5750,10 +5772,45 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int path_example = strstr(js, "\"/v1/vis/{hidden|visible}/reports\"") &&
                        strstr(js, "\"name\":\"hidden|visible\"") && strstr(js, "\"visible\"") &&
                        strstr(js, "\"name\":\"deep\"");
-    int role_admin = strstr(js, "admin") != NULL;
-    int role_public = strstr(js, "public") != NULL;
+    /* ─── THE `if (cfg.admin)` FAMILY, AND THE RUNG IT NEVER HAD ────────────────────────────────────────────
+       SEVEN rows hang off ONE statement — the fork and the three read-backs immediately after it — and every
+       one of them was a CONJUNCTION OVER BOTH ARMS with nothing underneath it. So all seven read 0 for a
+       public arm that was never SCHEDULED exactly as they read 0 for a public arm whose DOM delta was lost,
+       and 0 for a read-back statement that never ran at all. §@S names that as the defect in its own words —
+       "a candidate killed by a gate must be distinguishable from one a filter ate and from one that was never
+       scheduled … three states behind one answer" — and this file already answers it EVERYWHERE ELSE:
+       `td_reach` separates "the arm answered wrongly" from "the statement never began", `base_fork` is the
+       control that makes the accessor ladder mean the accessor, `con_threw` keeps a green consequence from
+       being what a statement that never ran produces. This family is the oldest in the document and is the
+       one that never got the rung, and the cost was paid rather than imagined: a reading of the census took
+       `dom-attr`/`dom-node`/`accessor` at 0 beside a `role-public` it read as 1 to mean the public arm had
+       "reached its fetch and not survived the three writes beside it" — a per-flow DOM-isolation finding,
+       inferred from rows that cannot state one. AND THE READING'S OWN PREMISE DID NOT REPRODUCE, which is the
+       sharper half: across the two smoke logs on disk when this was checked, `role-public` was 0 in ALL 513
+       samples that carried a census — so the 1 the inference rested on is not a number those runs produce,
+       and nothing in the census said which state any given sample was in.
+
+       AND THE ROW THAT MADE THAT READING POSSIBLE WAS NOT MEASURING THIS STATEMENT AT ALL. `role_admin` and
+       `role_public` were `strstr(js, "admin")` and `strstr(js, "public")` — unanchored bare words over the
+       whole result document, which is precisely the term param_values_span's own banner was written against.
+       `admin` is a substring of `/api/orphan/admin-only`, of `/api/admin/audit-log` and of
+       `/routes/us-west-2/admin`, so `role-admin` was 1 WHENEVER `orphan-gate` WAS — ENTAILED by a row about a
+       different capability, and the entailment is not a worry about what could happen: one of those two logs
+       carried `role-admin=1` in all 343 of its samples beside `merged=0` AND `lazy=0`, which together say
+       NEITHER ARM of this statement emitted anything in that run, and `orphan-gate=1` in the same 343.
+       `public` happens to be unique in this document, so the pair was ASYMMETRIC — one half could not fail
+       and the other could — and the two together read as "the admin arm ran, the public one did not" on
+       evidence for neither. That is the plausible-datum defect with a probe's name on it, and the fix is the
+       one the helpers above already exist for: scope the claim to the RECORD and the PARAM it is about. */
+    int role_admin  = param_value_is(js, "/api/data", "role", "admin");
+    int role_public = param_value_is(js, "/api/data", "role", "public");
     int data_count = 0; for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
-    int merged = (data_count == 1);   /* /api/data appears ONCE with role=[admin,public] merged across flows */
+    /* AND THE MERGE, WHICH ONE RECORD ALONE DOES NOT PROVE. `data_count == 1` is what a merge across two flows
+       produces AND what a SINGLE arm produces, so the row whose whole claim is the merge was satisfied by
+       exactly the state that refutes it — measured, in 170 of one log's 171 samples: `merged=1` beside
+       `role-public=0`, one record carrying one arm, reported as the merge of two. The merge is ONE record
+       carrying BOTH values; anything weaker is the two rows above, which say it better. */
+    int merged = (data_count == 1 && role_admin && role_public);
 
     int pinned = strstr(js, "/api/region/us-east-1") != NULL;   /* EQ gate concretized region to the REAL value */
     int lazy = strstr(js, "/api/admin/audit-log") != NULL;   /* endpoint reachable ONLY via the admin-arm lazy chunk */
@@ -5761,18 +5818,76 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* DOM TIME-TRAVEL: the two flows forked at if(cfg.admin) wrote 'data-tt' on the SHARED <body> to DIFFERENT
        values, then AFTER the fork each read it BACK into /api/whoami?tt=. Both ttADMIN and ttPUBLIC present ⇒
        each flow saw ITS OWN document (per-flow DOM delta swapped on context-switch). If DOM isolation were
-       broken, one flow would read the other's write and only ONE value would survive. */
-    int dom_admin  = strstr(js, "ttADMIN") != NULL;
-    int dom_public = strstr(js, "ttPUBLIC") != NULL;
-    int dom_attr = (strstr(js, "\"/api/whoami\"") && dom_admin && dom_public);
+       broken, one flow would read the other's write and only ONE value would survive.
+       EACH OF THE THREE IS A LADDER NOW, and the order of its clauses is the whole point: the read-back
+       statement's own record FIRST (it ran at all), then the ARM (this arm emitted, so its write happened),
+       and only then the VALUE (the write reached its own read-back). A 0 at clause 1 is about the fixture, a 0
+       at clause 2 is about the SCHEDULE — a sibling still parked on a frontier that has not drained is the
+       ordinary state of a live sample, not a defect — and a 0 at clause 3 is the per-flow DOM finding, which
+       is the only one of the three that is one. `fold_row` keeps the FIRST failing clause, so the row now
+       prints WHICH.
+
+       RESIDUAL, and it is the value clause of all three ladders. WHAT IS NOT COVERED: clause 2 reads the arm's
+       own `fetch`, which this statement runs AFTER its three writes and BEFORE the read-back on the next line,
+       so between those two emissions the arm has satisfied clause 2 and cannot yet satisfy clause 3 — and a
+       sample taken in that window prints the clause-3 text, which asserts a DOM defect, for a flow that is
+       merely preempted mid-statement. The rows are RIGHT at drain and ambiguous only while the frontier is
+       live, which is why this is named rather than crashed: there is nothing wrong to abort on. WHAT THE NEXT
+       DIFF BUILDS: a clause between 2 and 3 that reads the arm's own PROGRESS PAST the read-back rather than
+       up to it — the read-back endpoint carrying an entry FROM THIS ARM, which needs the emitted record to
+       distinguish which flow wrote which value and today it does not; that is an engine-side field and not a
+       spelling available here. HOW ITS ABSENCE WOULD SHOW: a `dom-attr` sample printing the clause-3 text
+       while a LATER sample of the same run prints nothing at all — a per-flow DOM delta that is lost does not
+       repair itself, so a clause-3 message that stops appearing without the row going 1 was this window and
+       never a finding. Read the LAST sample of a drained run; a clause-3 message from a mid-run sample of an
+       undrained one states less than it says. */
+    const char *domattr_why = NULL, *domnode_why = NULL, *accessor_why = NULL;
+    int dom_attr = 1, dom_node = 1, accessor_tt = 1;
+
+    fold_row(&dom_attr, &domattr_why, !!strstr(js, "\"/api/whoami\""),
+             "the read-back statement never ran: there is no /api/whoami record at all, so the arm and value "
+             "clauses below are about this fixture and not about the DOM delta");
+    fold_row(&dom_attr, &domattr_why, role_admin,
+             "the admin arm of if(cfg.admin) has not emitted, so there is no ttADMIN write to read back — a "
+             "sibling still parked on an undrained frontier reads exactly like this, and neither is a DOM "
+             "finding");
+    fold_row(&dom_attr, &domattr_why, role_public,
+             "the public arm of if(cfg.admin) has not emitted, so there is no ttPUBLIC write to read back — "
+             "the SCHEDULE, not per-flow DOM isolation");
+    fold_row(&dom_attr, &domattr_why, param_value_is(js, "/api/whoami", "tt", "ttADMIN"),
+             "the admin arm ran and its setBodyAttr('data-tt','ttADMIN') did not reach its OWN read-back: the "
+             "flow's DOM delta was unapplied before getBodyAttr, or the read went to the baseline document");
+    fold_row(&dom_attr, &domattr_why, param_value_is(js, "/api/whoami", "tt", "ttPUBLIC"),
+             "the public arm ran and its setBodyAttr('data-tt','ttPUBLIC') did not reach its OWN read-back: "
+             "the flow's DOM delta was unapplied before getBodyAttr, or the read went to the baseline "
+             "document");
     /* NODE-INSERT time-travel: each flow appended its OWN child; both marks present ⇒ neither flow's inserted
        node leaked into the other's tree (the kind-1 insert delta reverts per-flow). */
-    int dom_node = (strstr(js, "\"/api/kid\"") && strstr(js, "kidADMIN") && strstr(js, "kidPUBLIC"));
-    int dom_tt = dom_attr && dom_node;
+    fold_row(&dom_node, &domnode_why, !!strstr(js, "\"/api/kid\""),
+             "the read-back statement never ran: there is no /api/kid record at all");
+    fold_row(&dom_node, &domnode_why, role_admin && role_public,
+             "one arm of if(cfg.admin) has not emitted, so one appendChild never happened — the schedule, not "
+             "the insert delta");
+    fold_row(&dom_node, &domnode_why, param_value_is(js, "/api/kid", "mark", "kidADMIN"),
+             "the admin arm's appended child is not its own last child: its kind-1 insert delta did not "
+             "survive to lastChildMark()");
+    fold_row(&dom_node, &domnode_why, param_value_is(js, "/api/kid", "mark", "kidPUBLIC"),
+             "the public arm's appended child is not its own last child: its kind-1 insert delta did not "
+             "survive to lastChildMark()");
     /* ACCESSOR time-travel: each flow assigned rx.flag (an accessor) -> its setter wrote rx._f, isolated per
        flow; reading rx.flag back gives its OWN value. Both flagADMIN and flagPUBLIC present ⇒ the accessor is
        skipped by capture (only the backing _f slot reverts) — no setter re-invocation corruption. */
-    int accessor_tt = (strstr(js, "\"/api/flag\"") && strstr(js, "flagADMIN") && strstr(js, "flagPUBLIC"));
+    fold_row(&accessor_tt, &accessor_why, !!strstr(js, "\"/api/flag\""),
+             "the read-back statement never ran: there is no /api/flag record at all");
+    fold_row(&accessor_tt, &accessor_why, role_admin && role_public,
+             "one arm of if(cfg.admin) has not emitted, so one rx.flag assignment never happened — the "
+             "schedule, not the accessor-skip in cow_unapply");
+    fold_row(&accessor_tt, &accessor_why, param_value_is(js, "/api/flag", "v", "flagADMIN"),
+             "the admin arm assigned rx.flag and read back something else — cow_unapply re-invoked the setter "
+             "instead of reverting the backing _f slot, or the arms shared one _f");
+    fold_row(&accessor_tt, &accessor_why, param_value_is(js, "/api/flag", "v", "flagPUBLIC"),
+             "the public arm assigned rx.flag and read back something else — cow_unapply re-invoked the "
+             "setter instead of reverting the backing _f slot, or the arms shared one _f");
     /* ASYNC-AS-FLOW: each flow's promise .then reaction fired under its OWN COW -> both thenADMIN and thenPUBLIC
        present ⇒ microtask reactions run as first-class per-flow flows (not a dropped/global-drained job). */
     int async_tt = (strstr(js, "\"/api/then\"") && strstr(js, "thenADMIN") && strstr(js, "thenPUBLIC"));
@@ -6803,10 +6918,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            what the document has is the `loadScript` behind the admin arm. A key is a substring of the PROGRAM,
            never of the answer. */
         { "lazy", lazy, "/chunk/admin.js", SESS_EXPLORE },
-        { "dom-attr", dom_attr, "/api/whoami", SESS_EXPLORE },
-        { "dom-node", dom_node, "/api/kid", SESS_EXPLORE },
-        { "dom-tt", dom_tt, "/api/whoami", SESS_EXPLORE },
-        { "accessor", accessor_tt, "/api/flag", SESS_EXPLORE },
+        /* EACH CARRIES ITS OWN `why` NOW — a 0 on any of the three names the clause it stopped at, so a reader
+           can tell an unscheduled sibling from a lost DOM delta without inferring one from the other.
+           `dom-tt` IS GONE and is not replaced: it was `dom_attr && dom_node`, the AND of the two rows either
+           side of it, so it was a THIRD zero for two facts and could never carry information they did not.
+           A census row that is the conjunction of its neighbours is the same conflation this family was just
+           split to end, one level up. */
+        { "dom-attr", dom_attr, "/api/whoami", SESS_EXPLORE, domattr_why },
+        { "dom-node", dom_node, "/api/kid", SESS_EXPLORE, domnode_why },
+        { "accessor", accessor_tt, "/api/flag", SESS_EXPLORE, accessor_why },
         /* (2d)'s four. THE KEY IS A SUBSTRING OF THE PROGRAM, so it is the statement's own spelling rather
            than the endpoint it reaches — `asyncDispose` is what a reader greps for to find the statement
            these rows are about. `td-reach` first, because it is the row that says whether the other three
