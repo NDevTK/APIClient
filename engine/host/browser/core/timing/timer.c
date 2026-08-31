@@ -176,6 +176,73 @@ static JSValue timer_map(JSContext *ctx)
     return q;
 }
 
+/* HTML §8.7 Timers's `global`, WHICH IS `this` AND NOT THE REALM THE MEMBER WAS INSTALLED IN.
+ *
+ * §8.7 states all four page-facing members over the RECEIVER and over nothing else. "The setTimeout(handler,
+ * timeout, ...arguments) method steps are to return the result of running the timer initialization steps given
+ * THIS, handler, timeout, arguments, and false"; the same sentence with `true` for setInterval; and "The
+ * clearTimeout(id) and clearInterval(id) method steps are to remove THIS's map of setTimeout and setInterval
+ * IDs[id]". The timer initialization steps then take that value as their `global` parameter, and every
+ * per-global fact in this file is about it: step 2's identifier ("does not already exist in GLOBAL's map of
+ * setTimeout and setInterval IDs"), step 14's write into that map, step 12's "queues a global task on the timer
+ * task source GIVEN GLOBAL", `run steps after a timeout` step 3's "Set GLOBAL's map of active timers[timerKey]",
+ * step 1's "the WindowProxy that corresponds to GLOBAL", and step 9's task substep 4, which takes GLOBAL's
+ * relevant settings object and hands it to substep 9.8.7's creating a classic script.
+ *
+ * WHAT STOOD HERE WAS `ctx`, AND IT COINCIDES FOR EXACTLY THE SPELLINGS NOBODY WRITES A BUG WITH — which is
+ * why it survived and why "they coincide" is not an answer. Each realm installs its OWN function object on its
+ * OWN global (timer_install runs per document) and js_call_c_function switches to the CALLEE's realm
+ * (`ctx = p->u.cfunc.realm`, which step_realm carries to a machine), so `setTimeout(f, 0)`,
+ * `window.setTimeout(f, 0)` and even `frames[0].setTimeout(f, 0)` all arrive with a `ctx` that IS the
+ * receiver's realm — the last because §7.2.3.5 step 3 performs the same-origin case's [[GetOwnProperty]] on W,
+ * so the function the page reached is the CHILD's. §3.7.7 Operations' missing-receiver arm agrees for the same
+ * reason: "Let jsValue be the this value, if it is not null or undefined, or REALM's global object otherwise",
+ * where realm is the realm the operation function was created in, which is that same `ctx` — so
+ * `const f = frames[0].setTimeout; f(cb, 0)` is the child's global and not the caller's.
+ *
+ * THE SPELLINGS THAT SEPARATE THEM ARE THE ONES THAT CARRY A RECEIVER PAST A FUNCTION, and this engine
+ * delivers every one of them to the same body with the receiver intact (§C-stack: `.call`, `.apply`, a bound
+ * callee, `Reflect.apply` and the spread are call-site-resolved onto the ultimate target). So
+ * `setTimeout.call(frames[0], f, 0)` reached here with `ctx` the PARENT's realm and `this` the child's
+ * WindowProxy, and every one of the facts above was answered about the parent. That is not a corner case with
+ * a harmless answer: both globals hand out identifiers from 1 (timer_next_handle is per global by
+ * construction), so `clearTimeout.call(frames[0], id)` REMOVED WHATEVER TIMER THE PARENT HELD UNDER THAT
+ * NUMBER and left the child's armed — a wrong timer cancelled, with no throw, and nothing in either map to say
+ * so. `setTimeout.call(frames[0], f)` made a PARENT timer whose callback received the PARENT's WindowProxy as
+ * step 1's `thisArg`, and whose string form compiled into the PARENT's document.
+ *
+ * IT IS A RESOLUTION AND NOT A `?:`, because §3.7.7's sentence has three arms and this engine already writes
+ * them once for the whole platform: window_proxy_this_navigable answers a WindowProxy receiver with itself,
+ * this realm's Window global with this realm's navigable, a missing receiver with `ctx`'s, and anything else
+ * with §3.7.7's TypeError — which a page distinguishes from an answer about the wrong window.
+ * Returns the receiver's realm, or NULL with that TypeError already thrown. `pnav` may be NULL; when it is
+ * not, it is filled with the navigable BORROWED, which is step 1's `thisArg`. */
+static JSContext *timer_global(JSContext *ctx, const JSStepHdr *hdr, JSValueConst *pnav)
+{
+    JSValueConst nav = window_proxy_this_navigable(ctx, hdr->this_val);
+    JSContext *gctx;
+
+    if (JS_IsUninitialized(nav))
+        return NULL;   /* §3.7.7 Operations' TypeError, already thrown */
+    /* A CROSS-ORIGIN RECEIVER NEVER REACHES THE REALM, and the crash that says so is window_proxy.c's own:
+       §3.7.7 performs a security check on a platform-object receiver before the method steps run, so a
+       `setTimeout.call(someCrossOriginFrame, f)` is a SecurityError and not a timer, and proxy_realm's
+       hosted-document DCHECK names exactly that. Restating it here would be a second copy of one invariant. */
+    gctx = window_proxy_realm(ctx, nav);
+    /* THE ROUND TRIP, which is what makes the resolution above falsifiable rather than merely different from
+       what it replaced: the realm was asked for as the ACTIVE DOCUMENT's realm OF THIS NAVIGABLE, and a realm
+       holds exactly one WindowProxy for its own navigable (core/dom/document.h), so the two must be the one
+       object. It is the same identity window_proxy_receiver_is_own_realm compares, asked from the other end. */
+    DCHECK(JS_VALUE_GET_PTR(document_window_proxy(gctx)) == JS_VALUE_GET_PTR(nav),
+           "§8.7 Timers's `global` resolved to a realm whose own navigable is a DIFFERENT one — the realm was "
+           "asked for as the active document's realm of this very navigable, so a disagreement means the map "
+           "this timer is about to be filed in, the identifier it is about to be given and the document its "
+           "handler would be compiled in all belong to a window the page never named");
+    if (pnav)
+        *pnav = nav;
+    return gctx;
+}
+
 /* The length of a JS Array — the map, the entry, or the walk's list of navigables. */
 static uint32_t arr_len(JSContext *ctx, JSValueConst q)
 {
@@ -668,6 +735,18 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                one another on this flow's timeline — which the driver's own ladder forbids by resuming a
                parked continuation ahead of any job — and restoring it instead of asserting would make that
                state survive silently as a level nobody can account for. */
+            /* AND THE REALM THIS TASK IS RUNNING IN IS `global`'s, WHICH IS WHAT SUBSTEPS 9.2, 9.3, 9.9, 9.10
+               AND 9.12 READ THEIR MAP OUT OF. timer_run_due mints this callee in the realm whose map held the
+               entry, and a C function answers out of the realm that DEFINED it — so `ctx` here IS §8.7's
+               `global`. That was prose and is now a check: step 1's `thisArg` rode the entry from the SET, so
+               the task holds `global`'s own WindowProxy and the two statements of one fact can be compared.
+               A task minted anywhere else would file substep 9.12's removal in another window's map. */
+            DCHECK(JS_IsUndefined(step_arg(&s->hdr, TT_ARG_THIS))
+                       || window_proxy_receiver_is_own_realm(ctx, step_arg(&s->hdr, TT_ARG_THIS)),
+                   "§8.7 Timers's step 9 task is running in a realm that is not the `global` its entry was "
+                   "set on — the task is minted in the realm whose map of setTimeout and setInterval IDs "
+                   "holds it, so substeps 9.9-9.12 read that map out of this realm; a disagreement means the "
+                   "re-arm and the removal are about a different window than the fire was");
             DCHECK(event_loop_timer_nesting(ctx) == 0,
                    "§8.7 Timers's step 9 task began while the event loop already had a timer task as its "
                    "currently running task — §8.1.7.3 Processing model step 2.7 sets that back to null "
@@ -753,10 +832,24 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                 rargv[0] = handler;
                 rargv[1] = step_arg(&s->hdr, TT_ARG_TIMEOUT);
                 rargv[2] = step_arg(&s->hdr, TT_ARG_ID);
+                /* SUBSTEP 9.11's FIRST ARGUMENT IS `global`, AND IT TRAVELS AS THE RECEIVER. "perform the
+                   timer initialization steps again, given GLOBAL, handler, timeout, arguments, true, and id"
+                   — the same global the task is running for, which is step 1's `thisArg` this task already
+                   carries (TE_THIS to TT_ARG_THIS). Passing JS_UNDEFINED instead left the re-performance to
+                   §3.7.7 Operations' missing-receiver arm, which resolves to the DOOR's realm; that door is
+                   minted in the realm whose map held the entry, so the two agreed — but only by an equality
+                   nothing states, and §scheduler's rule for a work item is that it takes its INPUTS with it
+                   rather than re-deriving one from whatever it is standing in. */
+                DCHECK(window_proxy_is(step_arg(&s->hdr, TT_ARG_THIS)),
+                       "§8.7 Timers's substep 9.11 is re-performing the timer initialization steps for a task "
+                       "whose step 1 `thisArg` is not a WindowProxy — `run steps after a timeout` leaves that "
+                       "slot `undefined` and states no this value, and its entries never repeat, so a repeat "
+                       "standing here means an entry reached the map without going through the timer "
+                       "initialization steps and 9.11 has no `global` to hand back");
                 /* step_call_run DUPS the callee into the request buffer, which is what holds it across the
                    suspension — so this realm's door is released here and the parked call still owns one. */
-                r = step_call_run(ctx, &s->rphase, STEP_CB(s->rcb), door, JS_UNDEFINED, 3, rargv, cb_result,
-                                  &out, out_cb, out_argc);
+                r = step_call_run(ctx, &s->rphase, STEP_CB(s->rcb), door, step_arg(&s->hdr, TT_ARG_THIS),
+                                  3, rargv, cb_result, &out, out_cb, out_argc);
                 JS_FreeValue(ctx, door);
             } else {
                 r = step_call_run(ctx, &s->rphase, STEP_CB(s->rcb), JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
@@ -1135,6 +1228,15 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        global, handler, timeout, arguments, TRUE, and ID" and declares the third position for it. */
     int repeat = (magic != TI_MAGIC_TIMEOUT);
     uint32_t prev_id = 0;
+    /* §8.7's `global` — the FIRST argument of the timer initialization steps, which the two page-facing
+       members give as `this` and substep 9.11's re-performance gives as the same global the task is running
+       for. Resolved on every entry rather than held across the stages: what it is derived FROM is the
+       receiver, which the header owns and the teardown releases, and no stage between step 1 and step 12 runs
+       a line of the page's code (the argument conversions are the prologue's, above this body, and
+       step_fork_run only clones and re-enters), so re-deriving it cannot answer differently. Holding the
+       JSContext* instead would put a raw realm pointer on a state that PARKS. */
+    JSValueConst nav = JS_UNDEFINED;
+    JSContext *gctx;
 
     (void)out_cb; (void)out_argc;
     /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
@@ -1162,6 +1264,9 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                "step 2 hands out identifiers \"greater than zero\", so 0 is the handle that names nothing and "
                "cannot be an id the task was queued with");
     }
+    gctx = timer_global(ctx, hdr, &nav);
+    if (!gctx)
+        return JS_STEP_ABRUPT;   /* §3.7.7 Operations' TypeError on a receiver that does not implement Window */
 
     STEP_DISPATCH(TI_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
@@ -1174,20 +1279,23 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        given, and answered `undefined` where a browser answers the WindowProxy.
        IT IS THE WindowProxy AND NOT THE GLOBAL, which is the half of step 1 that is easy to get wrong: `this`
        inside a timer callback is the object HTML §7.2.3 The WindowProxy exotic object defines and that `window`
-       evaluates to, never the Window the realm's [[GlobalObject]] is. document_window_proxy answers exactly
-       that for this realm and is BORROWED, so the reference this state keeps is its own.
+       evaluates to, never the Window the realm's [[GlobalObject]] is.
+       AND IT IS `global`'s PROXY AND NOT THIS REALM'S, which is the other half and is the same correction
+       timer_global carries: step 1 says "the WindowProxy that corresponds to GLOBAL", and `global` is the
+       receiver. `document_window_proxy(ctx)` stood here, so `setTimeout.call(frames[0], function () { "use
+       strict"; return this; })` handed the callback the PARENT's WindowProxy for a timer §8.7 says is the
+       child's. The navigable timer_global resolved IS that proxy — §3.7.7's `jsValue` mapped onto the
+       navigable is what window_proxy_this_navigable answers — and it is BORROWED, so the reference this state
+       keeps is its own.
        THE WORKER ARM IS ABSENT AND SAYS SO. §8.7's members are installed from core/platform.c's per-document
        column and this engine has no WorkerGlobalScope, so step 1's first clause is unreachable; the day a
        worker global gets them, the assert below is what fires. */
     {
-        JSValueConst proxy = document_window_proxy(ctx);
-
-        DCHECK(window_proxy_is(proxy),
-               "§8.7's step 1 asked this realm for the WindowProxy that corresponds to its global and got "
-               "something that is not one — every realm §8.7's members are installed on is a Window's, and a "
-               "WorkerGlobalScope (step 1's other arm, which would be `thisArg` itself) is a global this "
-               "engine does not build");
-        s->this_arg = JS_DupValue(ctx, proxy);
+        DCHECK(window_proxy_is(nav),
+               "§8.7's step 1 resolved its `global` to something whose WindowProxy is not one — every global "
+               "§8.7's members are installed on is a Window's, and a WorkerGlobalScope (step 1's other arm, "
+               "which would be `thisArg` itself) is a global this engine does not build");
+        s->this_arg = JS_DupValue(ctx, nav);
         s->has_this = 1;
     }
     STEP_GOTO(hdr->stage, TI_NESTING, NULL);
@@ -1200,7 +1308,12 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        of this algorithm's — see core/timing/event_loop.h on why 0 is the positive statement and not a default.
        IT IS ITS OWN STAGE BECAUSE IT IS ITS OWN STEP. Nothing here can fork or suspend, so the rest point it
        offers is declined at once; what it buys is that a parked machine can SAY it is standing at step 3, and
-       that the arm below cannot quietly become "steps 3 and 4" the next time either of them grows. */
+       that the arm below cannot quietly become "steps 3 and 4" the next time either of them grows.
+       AND IT IS THE ONE STEP OF THIS ALGORITHM THAT IS NOT ABOUT `global`, which is why `ctx` and not `gctx`
+       stands here: step 3 names "the surrounding agent's event loop", and §8.1.7.1 Definitions gives each
+       AGENT one event loop unique to it — a similar-origin window agent's being its window event loop — so
+       every global of this agent shares the one level, a receiver from another realm of it does not move the
+       level, and reaching for the level through `global` would suggest it could. */
     s->nest = event_loop_timer_nesting(ctx);
     s->nested = 1;
     STEP_GOTO(hdr->stage, TI_TIMEOUT, NULL);
@@ -1441,7 +1554,7 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
            or the absence of one. */
         text = solve_eval_sink_source(ctx, argv[0]);
         if (JS_IsUninitialized(text)) {
-            *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(ctx));
+            *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(gctx));
             return JS_STEP_DONE;
         }
         src = JS_ToCString(ctx, text);
@@ -1457,13 +1570,17 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         DCHECK(g_script_sink != NULL,
                "setTimeout was given a STRING handler and this host registered no way to evaluate one — HTML "
                "§8.7 Timers evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
-        /* IN THIS REALM'S DOCUMENT — §8.7 Timers compiles the string with the entry global object's settings, which
-           is the Window whose `setTimeout` was called and not the agent's root. */
-        g_script_sink(document_doc(ctx), src);
+        /* IN `global`'s DOCUMENT — step 9's task substep 4 takes GLOBAL's relevant settings object, and
+           substep 9.8.7 creates the classic script with that one, so the program belongs to the Window the
+           member was invoked on and not to the realm the member was installed in nor to the agent's root.
+           This named the ENTRY GLOBAL OBJECT's, which no edition of §8.7 says: the algorithm never mentions
+           the entry global at all, and reading it that way is what let `setTimeout.call(frames[0], "x = 1")`
+           define `x` on the PARENT. */
+        g_script_sink(document_doc(gctx), src);
         JS_FreeCString(ctx, src);
-        /* §8.7 Timers still hands back a handle from THIS global's identifier, and it still names no entry — the
+        /* §8.7 Timers still hands back a handle from `global`'s identifier, and it still names no entry — the
            script is queued, and there is nothing left for `clearTimeout` to find. */
-        *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(ctx));   /* §8.7's return type is a `long` */
+        *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(gctx));   /* §8.7's return type is a `long` */
         return JS_STEP_DONE;
     }
 
@@ -1487,7 +1604,7 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        §8.7 STEP 15 IS THE RETURN AND IT IS WHAT SUBSTEP 9.11 RELIES ON: "Return id", which for the re-arm is
        step 2's `previousId` back again, so the identifier the page is holding keeps naming this timer. The
        task's own DCHECK reads that from the other end. */
-    *presult = JS_NewInt32(ctx, timer_set(ctx, s->timeout, repeat, s->nest + 1, prev_id, s->this_arg,
+    *presult = JS_NewInt32(ctx, timer_set(gctx, s->timeout, repeat, s->nest + 1, prev_id, s->this_arg,
                                           argv[0], 0, NULL));
     return JS_STEP_DONE;
     /* nothing is queued: the driver asks when the clock may move */
@@ -1685,6 +1802,12 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
     ClearTimerState *s = state;
     double id = 0;
     int have;
+    /* §8.7's `this`, WHOSE MAP OF setTimeout AND setInterval IDs THIS STEP REMOVES FROM — see timer_global.
+       The two clearers are the sharpest case it corrects, because their wrong answer is DESTRUCTIVE and
+       silent: identifiers are per global and every global starts at 1, so `clearTimeout.call(frames[0], 1)`
+       resolved `1` against the CALLER's map and removed whatever unrelated timer stood there, while the
+       child's went on firing. */
+    JSContext *gctx;
 
     (void)out_cb; (void)out_argc;
     /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
@@ -1706,6 +1829,9 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
            "§8.7's `clearTimeout`/`clearInterval` reached its body with an argument count its declaration does "
            "not produce — its one position is optional and carries the IDL's `= 0`, so §3.6 step 14.2 places a "
            "value at it on every call");
+    gctx = timer_global(ctx, hdr, NULL);
+    if (!gctx)
+        return JS_STEP_ABRUPT;   /* §3.7.7 Operations' TypeError on a receiver that does not implement Window */
 
     /* THE EXAMPLE IS READ ONCE PER ENTRY AND ABOVE THE CHAIN, so that every question this activation asks is
        decided against ONE reading of it — taking it again inside the loop would be two reads of one example
@@ -1733,12 +1859,12 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
                "§3.2.4.5's `long` conversion answered something that is not a long — its result is the integer "
                "part taken modulo 2**32 and folded into range, so a value outside it, or one with a fraction, "
                "means this position was never converted by anything");
-        timer_clear(ctx, (uint32_t)(int32_t)id);
+        timer_clear(gctx, (uint32_t)(int32_t)id);
         return JS_STEP_DONE;
     }
 
     for (;;) {
-        uint32_t h = timer_id_from(ctx, s->next);
+        uint32_t h = timer_id_from(gctx, s->next);
         int arm = 0, real, rc, wrote;
 
         /* EVERY IDENTIFIER ELIMINATED. §8.7's removal of a key the map does not have is a no-op, so this world
@@ -1790,12 +1916,12 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
                found in the map by the walk at the top of this same iteration and nothing has run in between —
                step_fork_run runs none of the page's code and the driver only clones and re-enters — so a miss
                here is the map answering differently to two reads inside one link. */
-            DCHECK(timer_entry_index(ctx, h) >= 0,
+            DCHECK(timer_entry_index(gctx, h) >= 0,
                    "§8.7's clearTimeout resolved `id` to an identifier this global's map of setTimeout and "
                    "setInterval IDs no longer holds — the identifier was read out of that map one line above "
                    "the fork, so the map has been mutated by something that ran while this flow was inside a "
                    "single link of its own elimination chain");
-            timer_clear(ctx, h);
+            timer_clear(gctx, h);
             return JS_STEP_DONE;
         }
         /* ELIMINATED: `id` is not this identifier, so the next question is about the next one this global

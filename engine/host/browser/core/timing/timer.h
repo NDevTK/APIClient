@@ -41,11 +41,16 @@ int timer_due_before(JSContext *ctx, JSValueConst moment);
    naming that register here would make the browser half depend on the scheduler, and through it on the whole
    solver, exactly as fetch.h says of its own provider. A host that registers none has not built the capability,
    and a page that uses one crashes naming it rather than silently dropping the handler.
-   `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS — the realm the string is compiled in, which §8.7 Timers says is the
-   entry global object's: a `setTimeout("x = 1")` scheduled by an iframe's script defines `x` on THAT
-   document's Window. The queue is the scheduler's and it keys the realm off the document (solver/flow.h), so
-   the fact travels with the source instead of being re-derived from whichever realm the scheduler is rooted
-   in — which is the parent's for every child navigable in the agent. */
+   `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS — the realm the string is compiled in, which §8.7 Timers states
+   as `global`'s: step 9's task substep 4 takes GLOBAL's relevant settings object and substep 9.8.7 creates
+   the classic script with that one, and `global` is the timer initialization steps' first argument, which the
+   members give as `this`. So `frames[0].setTimeout("x = 1")` defines `x` on the CHILD's Window, and so does
+   `setTimeout.call(frames[0], "x = 1")`. THIS USED TO SAY THE ENTRY GLOBAL OBJECT'S, which §8.7 never
+   mentions; the two answers coincide for every spelling that reads the member off the window it is about, and
+   part company the moment a receiver is carried past the function. The queue is the scheduler's and
+   it keys the realm off the document (solver/flow.h), so the fact travels with the source instead of being
+   re-derived from whichever realm the scheduler is rooted in — which is the parent's for every child
+   navigable in the agent. */
 void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src));
 
 /* FIRE THE EARLIEST DUE TIMER — the event loop's step, asked by whoever DRIVES the loop and only when it has
