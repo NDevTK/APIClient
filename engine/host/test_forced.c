@@ -8438,6 +8438,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int cold_resumed_any   = g_sess == SESS_RESUME && (g_cr.flows + g_cr.cands) > 0;
     int cold_resumed_segs  = g_sess == SESS_RESUME && g_cr.segs > 0;
     int cold_resumed_cand  = g_sess == SESS_RESUME && g_cr.cands > 0;
+    /* AND THE 'w' ARM AT BOTH ENDS, WHICH THE PASS SENTENCE HAS BEEN CLAIMING WITHOUT A ROW BEHIND IT. That
+       sentence says the residue is "every record kind this document can produce", and solver/cold.h declares
+       'w' A KIND for a reason it states outright — "there are as many as this instance answered peers, and zero
+       is a real and different answer" — so the claim was true of four kinds and asserted of five. The columns
+       for it were ADDED to @COLDPARK/@COLDRESUME with the note that a kind written and never reported is a kind
+       "whose absence and whose zero read alike", and then nothing read them: `g_cp.worlds` and `g_cr.worlds`
+       were printed and joined to no row, which is the write-with-no-reader half of the same defect the probe
+       table exists to close. TWO ROWS AND NOT ONE, because the ends fail differently and independently: a park
+       that carried no peer segment is a fixture that never materialized one, and a resume that re-materialized
+       none out of a residue that carried one is cold_resume's 'w' arm — and those were the same absent number
+       until these columns existed. */
+    int cold_park_world    = g_sess == SESS_PARK && g_cp.worlds > 0;
+    int cold_resumed_world = g_sess == SESS_RESUME && g_cr.worlds > 0;
     /* AND THE ARM THAT CARRIES CODE THE PAGE NEVER RAN. `park-orphan` says the residue names a FUNCTION and not
        only paths; `resumed-orphan` says the rebuild turned that name back into a drive waiting for its body;
        `resumed-orphan-met` says a take in this session actually handed one over, which is the only one of the
@@ -8948,6 +8961,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            is asked by the host and no document contains it — but what makes the hand-back a mechanism rather
            than a single free() is that ONE question is held by MANY timelines, and this is the line that makes
            this document have many. */
+        /* THE 'w' ARM AT BOTH ENDS. Keyed on the fork for the reason the two rows below it are: a peer's
+           segment is carried by the TIMELINES of this document, so the line that makes this document have more
+           than one is the statement these rows are about. */
+        { "park-world", cold_park_world, "cfg.admin", SESS_PARK },
+        { "resumed-world", cold_resumed_world, "cfg.admin", SESS_RESUME },
         /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
         { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK },
         { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK },
