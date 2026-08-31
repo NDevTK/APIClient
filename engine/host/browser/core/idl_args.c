@@ -4613,6 +4613,70 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr)
    every other minting form lives; declared here because the accessor installs reach them first. */
 static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, int expect);
 
+/* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — the step every mint in this file used to
+ * skip, and the reason it went unseen for as long as it did.
+ *
+ * §3.7.6 states it twice, once per algorithm, and the two sentences are the whole rule. The attribute getter
+ * is created with "Let name be the string \"get \" prepended to attribute's identifier." followed by "Let F be
+ * CreateBuiltinFunction(steps, 0, name, « », realm)"; the attribute setter ends "Let name be the string
+ * \"set \" prepended to id." and "Let F be CreateBuiltinFunction(steps, 1, name, « », realm)". So an
+ * attribute's PROPERTY is keyed by the identifier and the FUNCTIONS behind it are not: a browser answers
+ * `Object.getOwnPropertyDescriptor(HTMLElement.prototype, "style").get.name` with "get style", never "style".
+ *
+ * WHY EVERY MINT GOT IT WRONG THE SAME WAY. The identifier is already in the installer's hand and it is
+ * already the right string for four other things — the property key, the pool entry, §3.7.6's TypeError, and
+ * [Replaceable]'s CreateDataPropertyOrThrow — so passing it on to the mint reads as obviously correct at every
+ * site. Nothing in this engine could disagree: the length beside it was derived and asserted, and the name was
+ * the one field of the descriptor no local instrument asks about. It took WPT's idlharness.js, which reads
+ * `.name` off every member and diffs it against the published IDL, and the assertion it makes is this section
+ * quoted back: `assert_equals(desc.get.name, "get " + member.name)`.
+ *
+ * THE PREFIX GOES ON THE FUNCTION OBJECT AND NOWHERE ELSE, WHICH IS WHAT MAKES THIS ONE COMPOSER RATHER THAN A
+ * REWRITE OF THE ARGUMENT. The pool entry keeps the bare identifier because HTML §7.2.1.1 Integration with IDL
+ * matches THAT against CrossOriginProperties's [[NeedsGetter]] and [[NeedsSetter]] rows — prefix it and every
+ * cross-origin member silently stops matching, which is a security answer changed by a naming fix. The
+ * [Replaceable] setter's own data keeps it for the same kind of reason: its steps end in
+ * CreateDataPropertyOrThrow(jsValue, id, V), so `window.self = 1` must define `self` and not `set self`.
+ * Composing HERE, into a buffer that reaches only the mint, is what keeps those four readers on the identifier
+ * while the one reader §3.7.6 is about gets the composed string.
+ *
+ * `buf` is the CALLER'S, because JS_NewCFunction2 and JS_NewCFunctionData2 both intern the name into an atom
+ * (js_new_c_function_data / JS_NewCFunction3 do `JS_NewAtom(ctx, name)`) and retain no pointer — so a stack
+ * buffer that outlives the call is all this needs, and the composed string must NEVER be what a caller stores. */
+#define IDL_ACCESSOR_NAME_MAX 96
+
+typedef enum { IDL_ACCESSOR_GET, IDL_ACCESSOR_SET } IdlAccessorKind;
+
+static const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessorKind kind)
+{
+    int n;
+
+    DCHECK(id != NULL && *id, "a Web IDL §3.7.6 Attributes accessor was named from an empty IDL identifier — "
+                              "the composed name is the identifier with a prefix, so there is nothing to "
+                              "prepend to");
+    /* THE IDENTIFIER ARRIVES BARE, AND THAT IS AN INVARIANT WITH TWO EDGES. Compose twice and the member
+       reports "get get style"; hand a prefixed identifier to the pool and HTML §7.2.1.1's cross-origin match
+       is asked about a name no CrossOriginProperties row carries. The engine already contains four accessors
+       spelled with the prefix BY HAND at raw JS_DefinePropertyGetSet sites, so the day one of those is routed
+       through an installer this is the difference between a named abort and a wrong name nobody reads.
+       The offender is NAMED because this composer is reached from every accessor install in the engine, and a
+       crash reporting only this line would send its reader to read all of them. */
+    DCHECKF(strncmp(id, "get ", 4) != 0 && strncmp(id, "set ", 4) != 0,
+            "the IDL identifier '%s' already carries a Web IDL §3.7.6 Attributes accessor prefix — §3.7.6's "
+            "prepend is performed HERE and only here, so an install hands this the bare identifier and the "
+            "pool, the property key and the TypeError all keep it bare", id);
+    n = snprintf(buf, cap, "%s%s", kind == IDL_ACCESSOR_SET ? "set " : "get ", id);
+    /* A TRUNCATED NAME IS THIS DEFECT ARRIVING FROM THE OTHER SIDE — a member reporting a name no reading of
+       the IDL produces — so the ceiling CRASHES rather than clamping. It is this engine's longest declared
+       member plus a prefix, not a limit Web IDL §2 Lexical analysis imposes, so a longer identifier is a
+       number to raise here and never a name to shorten. */
+    DCHECKF(n > 0 && (size_t)n < cap,
+            "the Web IDL §3.7.6 Attributes name for '%s' needs %d bytes and IDL_ACCESSOR_NAME_MAX is %d — "
+            "raise it; a truncated accessor name is exactly the wrong name this composer exists to end",
+            id, n + 1, (int)cap);
+    return buf;
+}
+
 void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
                                int getter_stepid, int setter_stepid)
 {
@@ -4682,13 +4746,18 @@ static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char 
     DCHECK(setter_stepid < 0 || idl_declared_before_seal(setter_stepid), name);
     JSAtom a = JS_NewAtom(ctx, name);
     JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
+    char nb[IDL_ACCESSOR_NAME_MAX];
 
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
     DCHECK(getter != NULL || !no_user_code,
            "a no-user-code declaration was made for an attribute that has no getter — the claim is about what a "
            "GETTER'S BODY reaches, and a write-only member has no body to make it about");
     if (getter) {
-        g = JS_NewCFunction2(ctx, (JSCFunction *)getter, name, 0, JS_CFUNC_getter_magic, getter_magic);
+        /* §3.7.6's create an attribute getter: the property is keyed by `a` (the identifier) and the FUNCTION
+           carries the composed name. The two differ, and only this line knows it. */
+        g = JS_NewCFunction2(ctx, (JSCFunction *)getter,
+                             idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_GET), 0,
+                             JS_CFUNC_getter_magic, getter_magic);
         /* THE DECLARATION RIDES THE MINTED OBJECT, which is what makes it PER MEMBER. A shared C body reached
            through several magics (js_rule_get is one) is several function objects, so one arm of it saying this
            says nothing about the others — the granularity a per-function-pointer exemption would not have. */
@@ -4880,12 +4949,19 @@ static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const ch
 {
     JSAtom a = JS_NewAtom(ctx, name);
     JSValue nm, setter;
+    char nb[IDL_ACCESSOR_NAME_MAX];
 
     IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "[Replaceable]");
     DCHECK(a != JS_ATOM_NULL, "a replaceable attribute name could not be interned");
+    /* THE DATA IS THE IDENTIFIER AND THE NAME IS §3.7.6'S — the one place in this file where the distinction
+       is load-bearing for something other than a reported name. `nm` reaches idl_replaceable_set, whose steps
+       end in CreateDataPropertyOrThrow(jsValue, id, V), so composing it would make `window.self = 1` define a
+       property called "set self" and leave the accessor in place. */
     nm = JS_NewString(ctx, name);
     CHECK(!JS_IsException(nm), "a replaceable attribute's name could not be allocated");
-    setter = JS_NewCFunctionData2(ctx, idl_replaceable_set, name, 1, 0, 1, (JSValueConst *)&nm);
+    setter = JS_NewCFunctionData2(ctx, idl_replaceable_set,
+                                  idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_SET), 1, 0, 1,
+                                  (JSValueConst *)&nm);
     CHECK(!JS_IsException(setter), "a replaceable attribute's setter could not be allocated");
     JS_FreeValue(ctx, nm);
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, getter, setter,
@@ -4897,9 +4973,12 @@ void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *na
                              IdlGetter getter, int getter_magic)
 {
     JSValue g;
+    char nb[IDL_ACCESSOR_NAME_MAX];
 
     DCHECK(getter != NULL, "a replaceable attribute with no getter — it is READONLY, so the read is all it has");
-    g = JS_NewCFunction2(ctx, (JSCFunction *)getter, name, 0, JS_CFUNC_getter_magic, getter_magic);
+    g = JS_NewCFunction2(ctx, (JSCFunction *)getter,
+                         idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_GET), 0,
+                         JS_CFUNC_getter_magic, getter_magic);
     CHECK(!JS_IsException(g), "a replaceable attribute's getter could not be allocated");
     idl_define_replaceable(ctx, target, name, g);
 }
@@ -4910,11 +4989,16 @@ void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *na
 static JSValue idl_held_value_getter(JSContext *ctx, const char *name, JSValue value)
 {
     JSValue d[2], g;
+    char nb[IDL_ACCESSOR_NAME_MAX];
 
     d[0] = value;
+    /* d[1] IS THE IDENTIFIER, not §3.7.6's composed name: it is what the getter's TypeError names the member
+       with, and "get document does not implement interface Window" names a member no IDL declares. */
     d[1] = JS_NewString(ctx, name);
     CHECK(!JS_IsException(d[1]), "a held-value attribute's name could not be allocated");
-    g = JS_NewCFunctionData2(ctx, idl_held_value_get, name, 0, 0, 2, (JSValueConst *)d);
+    g = JS_NewCFunctionData2(ctx, idl_held_value_get,
+                             idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_GET), 0, 0, 2,
+                             (JSValueConst *)d);
     CHECK(!JS_IsException(g), "a held-value attribute's getter could not be allocated");
     JS_FreeValue(ctx, d[0]);   /* the getter holds its own reference to both */
     JS_FreeValue(ctx, d[1]);
@@ -5033,7 +5117,22 @@ static JSValue idl_mint_step(JSContext *ctx, const char *name, int stepid, JSCFu
            "[[NeedsSetter]], so a member that is an operation here and an attribute's accessor there decides "
            "a cross-origin access two ways");
     idl_member(idx)->sec_kind = sec_kind;
-    return JS_NewCFunction2(ctx, NULL, name, idl_member_length_of(idl_member(idx)), cproto, stepid);
+    /* WEB IDL §3.7.6 Attributes' NAME STEP, ASKED FROM THE KIND THE MINT ALREADY STATES rather than from a
+       second list of which members are accessors. `sec_kind` is set one line above and is the same fact
+       §3.5 Security asks about, so the day a member is minted as an accessor it is named as one — there is no
+       parallel table to keep in step, which is what the §3.5 kind being declared at the mint buys twice.
+       §3.7.7 Operations and §3.7.1 Interface object both mint with the bare `id`, so a method and a
+       constructor fall through unprefixed, which is the whole of their rule. And the POOL entry above keeps
+       `name` BARE — see idl_accessor_name for why HTML §7.2.1.1's cross-origin match depends on that. */
+    {
+        char nb[IDL_ACCESSOR_NAME_MAX];
+        const char *fn = name;
+
+        if (sec_kind == IDL_SEC_GETTER || sec_kind == IDL_SEC_SETTER)
+            fn = idl_accessor_name(nb, sizeof nb, name,
+                                   sec_kind == IDL_SEC_SETTER ? IDL_ACCESSOR_SET : IDL_ACCESSOR_GET);
+        return JS_NewCFunction2(ctx, NULL, fn, idl_member_length_of(idl_member(idx)), cproto, stepid);
+    }
 }
 
 /* AN ATTRIBUTE'S ACCESSOR, whose length is WEB IDL §3.7.6 Attributes' OWN number and not §3.7.7 Operations':
@@ -5042,7 +5141,12 @@ static JSValue idl_mint_step(JSContext *ctx, const char *name, int stepid, JSCFu
    attribute getter is 0 and every setter is 1, whatever it is an attribute of — so this states them, and the
    derivation is asserted to agree rather than being trusted to: a getter is declared with no argument position
    and a setter with exactly one, so the two numbers coincide today, and the day a declaration stops agreeing
-   is the day one of the two is wrong. Which one is then visible instead of silent. */
+   is the day one of the two is wrong. Which one is then visible instead of silent.
+   THE `name` IN THAT QUOTED LINE IS NOT THE IDENTIFIER, and reading it as one is how every mint in this file
+   came to report an attribute's accessor under the member's own name. It is the value §3.7.6 binds one step
+   EARLIER — "Let name be the string \"get \" prepended to attribute's identifier", and the setter's "Let name
+   be the string \"set \" prepended to id" — so the length and the name are BOTH constants of this section and
+   only the length was being read off it. idl_accessor_name performs the prepend, at the mint below. */
 static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, int expect)
 {
     int idx = idl_member_of_step(stepid);
