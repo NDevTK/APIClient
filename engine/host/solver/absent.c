@@ -46,9 +46,12 @@
  * a second namespace's identically-named field would be indistinguishable from.
  *
  * AND THE ENGINE'S RULE IS WORTH STATING HERE, BECAUSE IT IS THE ONE THING THIS FILE MAY NOT SECOND-GUESS AND
- * THE ONE THING THAT HAS BEEN WRONG TWICE. A record is on this channel iff THE DOCUMENT'S OWN BYTES WROTE ITS
- * EXTENT — an object literal or a `JSON.parse` in an inline `<script>`, granted at the operation that writes
- * the member list (js_document_record_grant), never inferred from how or when the object was allocated. The
+ * THE ONE THING THAT HAS BEEN WRONG TWICE. A container is on this channel iff THE DOCUMENT'S OWN BYTES WROTE
+ * ITS EXTENT — an object or array literal, or a `JSON.parse` in an inline `<script>`, granted at the operation
+ * that writes the member list (js_document_container_grant), never inferred from how or when the object was
+ * allocated. A LIST is such a container for the purpose of being DESCENDED THROUGH and is never a record whose
+ * miss is the server's silence (§10.4.2 Array Exotic Objects: the list states its own length), so this file
+ * sees a list only as a path component — `__STATE__.users[0]` — and never as a base it is asked about. The
  * two halves of that are what keep the channel honest in the two directions it can fail. A record wrongly ON
  * it answers a member that HAS a real answer with an unknown, and nothing throws: a PLATFORM OBJECT is the
  * case, because Web IDL §3.8 "Platform objects implementing interfaces" makes its member list the INTERFACE'S
@@ -185,6 +188,41 @@ static const char *ns_key_str(JSContext *ctx, JSAtom name)
     return s;
 }
 
+/* HOW A KEY EXTENDS THE PATH IT IS READ AT — the ONE join, because a path composed two ways is two names for
+   one unknown the moment either spelling drifts, and every predicate over either would then decide only half
+   of them. Both halves of this file compose a path (the publication files one, the two read hooks spell a
+   member's provenance out of one) and both went through `%s.%s`.
+   AN INDEX IS NOT JOINED WITH A DOT, and that is not cosmetic. A provenance is the EXPRESSION THE RUN BUILT
+   (CLAUDE.md §@H), which is what makes it a thing a person can paste and a thing the next candidate can be
+   composed onto: `__STATE__.users[0].role` is that expression and `__STATE__.users.0.role` is a syntax error
+   wearing a path. It used to be nearly unreachable — an index key arrived only where a server literally wrote
+   `{"0":…}` — and it is now the ordinary case, because the engine's walk descends through the LISTS a state
+   tree is made of and reaches every element by its index.
+   THE ROOT SPELLS `window[0]` AND A BARE NAME. A member of the global namespace is read as `__FLAGS`, which is
+   the expression, and `window` is what the same read needs the moment the key is an index: `0` alone names
+   nothing, and the run that produced it evaluated `window[0]`.
+   The atom decides, never the spelling: ECMAScript §6.1.7 The Object Type makes an array index a canonical
+   numeric string, so `x["01"]` is a NAME and a digit test over the key's characters would join it as `x[01]` —
+   one path for two different keys. JS_AtomIsIndexName is the engine's own already-made decision.
+   The result is the caller's to free. */
+static char *ns_join(const char *base, JSAtom name, const char *key)
+{
+    static const char *const root = "window";
+    size_t len = (base ? strlen(base) : strlen(root)) + strlen(key) + 3;
+    char *out = (char *)malloc(len);
+
+    CHECK(out != NULL, "absent: OOM composing a path in the document's injected-state namespace — the "
+                       "alternative to failing here is a member reported under a name no document published, "
+                       "or an injected read answered concretely, which decides its gate for the whole program");
+    if (JS_AtomIsIndexName(name))
+        snprintf(out, len, "%s[%s]", base ? base : root, key);
+    else if (base)
+        snprintf(out, len, "%s.%s", base, key);
+    else
+        snprintf(out, len, "%s", key);
+    return out;
+}
+
 void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value)
 {
     JSValue g = JS_GetGlobalObject(ctx);
@@ -192,7 +230,6 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
     const char *base = is_root ? NULL : ns_path_of(parent);
     const char *n = ns_key_str(ctx, name);
     char *path;
-    size_t len;
 
     JS_FreeValue(ctx, g);
     /* A CHILD ARRIVING BEFORE ITS PARENT IS THE ENGINE AND THIS FILE DISAGREEING, not a case to default past.
@@ -205,13 +242,7 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
            "parent before descending into it, so a missing parent path means the two disagree about what the "
            "published graph is, and every member read off this record would be reported under a name the "
            "document never published it at");
-    len = (base ? strlen(base) + 1 : 0) + strlen(n) + 1;
-    path = (char *)malloc(len);
-    CHECK(path != NULL, "absent: OOM composing the path a document published a record at");
-    if (base)
-        snprintf(path, len, "%s.%s", base, n);
-    else
-        snprintf(path, len, "%s", n);
+    path = ns_join(base, name, n);
     JS_FreeCString(ctx, n);
 
     if (g_ns_n == g_ns_cap) {
@@ -232,22 +263,18 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
    fixed buffer: a truncated provenance is not a shorter name for one unknown, it is one name for every unknown
    that shares a prefix, and every predicate over any of them would then decide all of them. A server's state
    tree is as deep and as verbosely named as the server chose.
-   `base` is the record's published path, or NULL for a member of the global namespace itself. Both outputs are
-   the caller's to free. */
-static void ns_member_spell(const char *base, const char *name, char **shape, char **src)
+   `base` is the record's published path, or NULL for a member of the global namespace itself; the join is
+   ns_join's, which is the same one the publication files a path with. Both outputs are the caller's to
+   free. */
+static void ns_member_spell(const char *base, JSAtom name, const char *key, char **shape, char **src)
 {
-    size_t n = (base ? strlen(base) + 1 : 0) + strlen(name) + 3;
+    char *path = ns_join(base, name, key);
+    size_t n = strlen(path) + 3;
 
     *shape = (char *)malloc(n);
-    *src   = (char *)malloc(n);
-    CHECK(*shape != NULL && *src != NULL, "absent: OOM spelling the provenance of an injected member");
-    if (base) {
-        snprintf(*shape, n, "{%s.%s}", base, name);
-        snprintf(*src,   n, "%s.%s", base, name);
-    } else {
-        snprintf(*shape, n, "{%s}", name);
-        snprintf(*src,   n, "%s", name);
-    }
+    CHECK(*shape != NULL, "absent: OOM spelling the provenance of an injected member");
+    snprintf(*shape, n, "{%s}", path);
+    *src = path;
 }
 
 /* A MEMBER THE PUBLISHED RECORD HOLDS — see this file's header for why that is the same unknown as one it does
@@ -277,7 +304,7 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
            "namespace's identically-named field is indistinguishable from");
     if (!base)
         goto done;
-    ns_member_spell(base, s, &shape, &src);
+    ns_member_spell(base, name, s, &shape, &src);
     r = concolic_new(ctx, shape, src, JS_DupValue(ctx, value));
 done:
     free(shape);
@@ -319,7 +346,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
     /* Example-free, and that is the ONE way this half differs from the present half: nothing here knows what a
        logged-in visitor's flags WOULD hold, and inventing one fabricates an observation. The provenance is
        spelled by the same speller either way — see ns_member_spell. */
-    ns_member_spell(base, s, &shape, &src);
+    ns_member_spell(base, name, s, &shape, &src);
     r = concolic_new(ctx, shape, src, JS_UNDEFINED);
 done:
     free(shape);
