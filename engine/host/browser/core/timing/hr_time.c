@@ -108,9 +108,14 @@ static void hr_time_install(JSContext *ctx)
            at the top of this function, which is also the one this realm's time origin is stamped with — one
            read and not two, so the group's estimate and the first environment's origin cannot be placed against
            each other by a clock that moved in between. The read is therefore BEFORE step 1's below rather than
-           after, and that reordering is unobservable here for the reason hr_time_unsafe_shared_current states:
-           this monotonic clock advances only when a task source becomes due, so it holds one moment for the
-           whole of an install.
+           after, and that reordering is unobservable STRUCTURALLY rather than by a property of the clock. It
+           used to be argued from one — "this monotonic clock advances only when a task source becomes due, so
+           it holds one moment for the whole of an install" — and that argument DIED when the clock got its
+           second mover (core/timing/event_loop.h: work the running flow retired). What holds instead is
+           stronger and does not depend on which movers the clock has: there is only ONE read here, at the top
+           of this function, and everything between it and the wall-clock read below is C. No opcode is
+           dispatched across that span, so no work is banked across it, so there is no moment for the two steps
+           to be placed against each other by — whatever moves the clock.
            Before any flow has run, the loop has reached no task source, so this is the agent's starting moment
            and is KNOWN. The assert is what says so: the day a realm is first built after an unknown timeout has
            moved the clock (core/timing/event_loop.h's §8.7 `timeout` reaching the map of active timers), the
@@ -237,25 +242,39 @@ JSValue hr_time_coarsen(JSContext *ctx, JSValueConst unsafe_moment)
  * clock ("The monotonic clock's unsafe current time never decreases"), asserted at its own origin by
  * event_loop_advance_to.
  *
- * NAMED RESIDUAL — THE CLOCK DOES NOT COUNT WHILE A TASK RUNS.
- * WHAT IS NOT COVERED: §2.1's other sentence — "All clocks on the web platform attempt to count 1 millisecond
- *   of clock time per 1 millisecond of real-world time" — is narrower here than in a real UA. This clock moves
- *   only when a task source becomes due (a timer's expiry, a rendering opportunity), so every moment read
- *   inside ONE task is the SAME moment and every duration between two of them is exactly zero. That is CORRECT
- *   for everything this engine currently orders by time, which is why this is a residual and not a crash: a
- *   task's timestamps genuinely all belong to the moment the task ran, the value is a real duration from a real
- *   time origin, and §4's coarsening below is performed rather than skipped.
- * WHAT THE NEXT DIFF BUILDS: the clock advances as a function of WORK THE RUNNING FLOW PERFORMED, in
- *   core/timing/event_loop.c, driven from the per-opcode attention check that is already the one thing counting
- *   a flow's own progress. It must NOT be a wall clock: a real clock is not a function of the flow's path, so
- *   every timestamp becomes a disagreement §Testing's solver differential reports as a scheduling bug, and a
- *   resume stops being byte-identical. Work-derived it stays deterministic, per-flow and COW-captured, which is
- *   the only shape both halves of this project accept.
- * HOW ITS ABSENCE SHOWS: a page that waits for time to pass inside one task never leaves the loop —
- *   `do { e2 = new MouseEvent('t'); } while (e2.timeStamp - e1.timeStamp === 0)` has no exit, and
- *   wpt dom/events/Event-timestamp-safe-resolution.html is that loop written out. The flow is preemptible
- *   bytecode, so the scheduler is not violated and nothing is capped; the flow simply never emits again and the
- *   harness's CPU backstop is what reports it, which is a signal about the harness rather than about the page. */
+ * IT COUNTS WHILE A TASK RUNS, AND WHAT IT COUNTS IS WORK. §2.1's other sentence — "All clocks on the web
+ * platform attempt to count 1 millisecond of clock time per 1 millisecond of real-world time, but they differ
+ * in how they handle cases where they can't be exactly correct" — is answered here by the clock's SECOND
+ * MOVER: the opcodes the running flow retired, divided once by core/timing/event_loop.h's rate. §2.1 states
+ * that as an ATTEMPT and names the differing as the interesting part, and an engine with no real time to
+ * attempt it against is such a case; what §2.1 makes a REQUIREMENT of the monotonic clock is only that its
+ * unsafe current time never decreases and that it exists within one execution of the user agent, and both hold
+ * (event_loop_advance_to asserts the first at its origin; a virtual clock is the second by construction).
+ *
+ * THIS PARAGRAPH USED TO BE A NAMED RESIDUAL SAYING THE OPPOSITE, and deleting it is the point of the diff
+ * that deleted it rather than tidying after one. It said the clock moves only when a task source becomes due,
+ * that every duration inside one task is exactly zero, and that the work-derived mover is what THE NEXT DIFF
+ * BUILDS in core/timing/event_loop.c. That diff landed, in that file, and this text did not go with it — so
+ * for the interval it stood it was the stale-DFAIL failure in its purest form: accurate about the SPEC,
+ * authoritative in tone, and wrong about THIS TREE, telling the next reader to build what was already
+ * standing. The cost was paid rather than hypothesised: a lane was dispatched to BUILD the second mover, and
+ * its whole assignment was to re-derive a design that was already landed in the file this text named. When a
+ * mechanism lands, the prose that described its absence is part of the mechanism's diff.
+ *
+ * WHAT A READ ACTUALLY OBSERVES, stated precisely enough to be falsifiable, because "the clock advances" is
+ * not the same claim as "the clock advances at this opcode". Retired work is BANKED at the interpreter's yield
+ * poll (quickjs.h's JSFlowControlHooks `work`, relayed to event_loop_work_advance), and the poll runs where a
+ * yield request is standing — a loop back-edge, a call, a fork, a host request. So a read answers the base
+ * plus the work banked at the LAST poll, not the work retired up to this instruction. The lag is bounded by
+ * the span to the next raise, and a read of this clock through §7.1's now() is ITSELF a call, so two reads
+ * always have a poll between them: consecutive reads inside one task differ, and differ by the work the flow
+ * did between the two polls that bracket them. That is what makes `while (performance.now() - t0 < 8)` a loop
+ * with an exit — the spin's own iterations are what move its deadline closer.
+ *
+ * THE REMAINING NARROWNESS IS THE BASELINE, AND IT IS NAMED WHERE THE MOVER IS (core/timing/event_loop.h's
+ * residual on event_loop_work_advance), not restated here: work retired with no flow running is discarded,
+ * because banking it would write the SHARED baseline and move every sibling's clock by an amount none of their
+ * paths produced. Nothing inside a task is affected by it. */
 static JSValue hr_time_unsafe_shared_current(JSContext *ctx)
 {
     return event_loop_now(ctx);

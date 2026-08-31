@@ -122,10 +122,14 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment);
 /* §4's CURRENT HIGH RESOLUTION TIME given a global object — the relative high resolution time of the unsafe
    shared current time, which in this engine is the event loop's virtual clock (core/timing/event_loop.h).
    WHAT IT RESOLVES TO: §4's grid, 0.1 ms for an ordinary environment and 0.005 ms for a cross-origin isolated
-   one — but the clock UNDERNEATH it moves only when a task source becomes due, so two calls inside one task
-   answer the SAME number however much work runs between them. hr_time.c's named residual at the unsafe shared
-   current time states what that costs and what the next diff builds; a caller measuring elapsed work must not
-   read it as a wall clock. */
+   one. THE CLOCK UNDERNEATH IT MOVES WITHIN ONE TASK, by the work the running flow retired — this line used to
+   say the opposite ("two calls inside one task answer the SAME number however much work runs between them"),
+   which was true until the clock got its second mover and was then a header telling its callers to expect a
+   value the engine had stopped producing. Two calls inside one task differ by the work between the polls that
+   bracket them; hr_time.c states at the unsafe shared current time exactly what a read observes and why the
+   answer lags the current instruction by at most one yield poll. What has NOT changed is the other half: this
+   is not a wall clock and a caller must not read it as one — the quantity is the flow's own path, which is
+   what makes it identical on every schedule and across a park. */
 JSValue hr_time_current(JSContext *ctx);   /* OWNED */
 
 #endif

@@ -75,20 +75,30 @@ static JSValue js_perf_time_origin(JSContext *ctx, JSValueConst this_val, int ma
  * chronologically recorded time values ... MUST never be negative" (event_loop_advance_to asserts the clock
  * never decreases, and §4's floor is monotone, so the duration cannot).
  *
- * WHAT A PAGE MEASURES WITH IT IS ZERO INSIDE ONE TASK, and this member makes that residual REACHABLE where it
- * was nearly theoretical. hr_time.c names it at `unsafe shared current time` and gives one way to hit it — a
- * `do { … } while (e2.timeStamp - e1.timeStamp === 0)` loop, which is one WPT file. `performance.now()` is the
- * spelling every bundle actually uses: a frame budgeter (`while (performance.now() - start < 8) …`), a
- * requestIdleCallback polyfill, a spin that waits for a deadline. Each of those becomes a flow that never leaves
- * its loop, because the virtual clock advances only when a task source becomes due and no task can become due
- * while one is running. THAT IS THE FORCING FUNCTION AND NOT A REASON TO SOFTEN THIS MEMBER: the flow is
- * preemptible bytecode, so nothing is capped and every sibling still runs; what the loop reports is that the
- * clock does not yet advance with WORK PERFORMED, which is the diff hr_time.c names at the site that owns it
- * (core/timing/event_loop.c, driven from the per-opcode attention check that already counts a flow's progress).
- * A wall-clock read HERE is the wrong repair twice over — it would make this member disagree with every other
- * timestamp in the engine, and it would make a resume stop being byte-identical, which §Testing's solver
- * differential reports as a scheduling bug. See hr_time.c's declaration of the epoch estimate for the one place
- * the wall clock legitimately enters this component and why it is only that one. */
+ * WHAT A PAGE MEASURES WITH IT IS NOT ZERO, AND THIS BLOCK SAID IT WAS FOR LONGER THAN IT WAS TRUE. It read
+ * "WHAT A PAGE MEASURES WITH IT IS ZERO INSIDE ONE TASK", named the spin every bundle writes
+ * (`while (performance.now() - start < 8) …`, a rAF budgeter, a requestIdleCallback polyfill), and said each
+ * became a flow that never leaves its loop because the virtual clock advances only when a task source becomes
+ * due. The clock's SECOND MOVER — the opcodes the running flow retired — had already landed in
+ * core/timing/event_loop.c, so the sentence was false about this tree on the day it was written here, and it
+ * was worse than merely wrong: it named a diff to build, in a file that already contained it, and a lane was
+ * dispatched on it. A member's comment is the most-read description of the mechanism under it, so it is the
+ * worst place for a claim about the mechanism's absence to go stale.
+ *
+ * WHAT THE SPIN DOES NOW, which is the whole reason this member is worth having: the loop's own iterations
+ * retire opcodes, the interpreter banks them at its yield poll — and a back-edge raises a request, so a spin
+ * polls every iteration — and the deadline the loop is waiting for is reached by the loop DOING THE WORK.
+ * `while (performance.now() - start < 8)` exits. It is still preemptible bytecode throughout, so siblings run,
+ * nothing is capped, and the flow parks and resumes at any depth inside it; the clock is a pure function of
+ * the flow's own path, so the moment it resumes into is the moment it suspended in.
+ *
+ * A WALL-CLOCK READ HERE WOULD STILL BE THE WRONG REPAIR TWICE OVER, and that has not changed with the mover
+ * arriving — it would make this member disagree with every other timestamp in the engine, and it would make a
+ * resume stop being byte-identical, which §Testing's solver differential reports as a scheduling bug. That is
+ * also why the mover's unit is opcodes retired and not CPU consumed: a CPU clock buys attribution and NOT
+ * reproducibility, so the same flow on two machines would answer two moments. See hr_time.c's declaration of
+ * the epoch estimate for the one place the wall clock legitimately enters this component — which is §7.2's
+ * timeOrigin above, and only that. */
 static JSValue js_perf_now(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)argc; (void)argv; (void)magic;

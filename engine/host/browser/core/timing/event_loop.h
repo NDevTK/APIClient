@@ -193,11 +193,19 @@ void event_loop_work_advance(JSContext *ctx, uint64_t units);
  *   WHAT THE NEXT DIFF BUILDS: a baseline arm for that one span — the same accumulate-exactly hand-over,
  *     admitted only while the frontier holds no flow at all, and asserted unreachable the instant one exists,
  *     so the narrow window cannot silently widen into the case the assert exists for.
- *   HOW ITS ABSENCE SHOWS: every duration whose two ends bracket tree construction is exactly 0 — the agent's
- *     first realm's HIGH RESOLUTION TIME Level 3 §4 Time Origin is 0 by construction rather than by
- *     measurement, and a `PerformanceNavigationTiming`'s `domInteractive`/`domComplete`, which are moments on
- *     this clock, are 0 for a one-line document and 0 for a ten-megabyte one alike. Two agents whose documents
- *     differ by megabytes of parsing stamp the same numbers. */
+ *   HOW ITS ABSENCE SHOWS: every duration whose two ends bracket tree construction is exactly 0 — a
+ *     `PerformanceNavigationTiming`'s `domInteractive`/`domComplete`, which are moments on this clock, are 0
+ *     for a one-line document and 0 for a ten-megabyte one alike, and the moment the boot flow starts at is 0
+ *     rather than "after this document was parsed". Two agents whose documents differ by megabytes of parsing
+ *     stamp the same numbers.
+ *     NOT THE FIRST REALM'S TIME ORIGIN, which this used to name first and which the baseline arm would not
+ *     move. That origin is 0 for an ORDERING reason and not for this one: core/platform.c installs `document`
+ *     LAST, and every host installs its document before it opens a session, so the agent's first realm — and
+ *     hr_time_install's stamp on it — is built BEFORE the tree walk this residual is about runs at all. A
+ *     falsifiable observable that survives the fix it is offered as a reason for is not evidence for it, and
+ *     naming it here would send the next reader to build this arm and then measure no change. A CHILD realm's
+ *     origin is a different matter and is already work-derived: it is stamped inside the flow that created the
+ *     navigable, on a clock that flow has been moving. */
 
 /* MAY THE CLOCK BE MOVED TO A MOMENT IT HAS NOT REACHED — THE JUMP'S OWN PREMISE, ASKED RATHER THAN ASSUMED.
  *
