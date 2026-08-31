@@ -8,6 +8,7 @@
  *   node engine/citegen.mjs --titles      the numbers cited most often that carry no title and no known term
  *   node engine/citegen.mjs --unanchored  the citations naming no standard that only a file vote placed — the
  *                                         ones inside a DCHECK/DFAIL/CHECK message first, since a crash prints them
+ *   node engine/citegen.mjs --quotes      do the WORDS a citation puts in quotes occur in the section it names
  *   node engine/citegen.mjs --regen [key] fetch the standard(s), rewrite engine/specindex/<key>.json
  *
  * WHY THIS EXISTS. CLAUDE.md §Browser half: a named spec with no number cannot be looked up, so it cannot
@@ -160,6 +161,31 @@
  *     check caught the tc39 reader dropping §13.9.2 (a `>` inside a quoted title attribute ends an unquoted
  *     attribute scan) and every Annex (`<span class=secnum>Annex A <span class=annex-kind>…`).
  *
+ * AND THE NUMBER IS THE CHEAP HALF. Everything above judges a NUMBER — does the standard have it, does the
+ * term live there, does the title match — and a citation can pass all three while the SENTENCE beside it was
+ * never written by anybody. That is the axis --quotes asks about, and it is the one a reader trusts most and
+ * verifies least: a quoted sentence appears to remove the need to open the spec at all, so a wrong number
+ * sends a reader to the wrong place where they find out, and a fabricated quotation tells them not to go.
+ * Two were measured before this existed and both had been standing, trusted: a CSSOM §6.1.1 citation beside
+ * "whether the style sheet is applied", which appears nowhere in CSSOM, and a Web IDL §3.6 step quoted as
+ * "if the argument is optional and it has a default value, set the value to that default", which appears
+ * nowhere in Web IDL. Every check above passed both: the numbers resolve, the sections are real, the terms
+ * are the standards' own.
+ * IT NEEDS THE SPEC'S TEXT AND THE INDEX ABOVE DOES NOT HOLD ANY, so --regen writes a SECOND artifact,
+ * engine/specindex/text/<key>.json, holding each section's own words as the token stream the check compares —
+ * see tokenText for why storing the comparison form rather than the prose is what makes the committed file
+ * mean what the checker means. It costs about eight megabytes across the nineteen standards, which is the
+ * honest price of the only evidence that can answer this question, and it is kept OUT of the resolver index
+ * so that the default audit parses none of it and so that a standard with no corpus is a NOT-CHECKED state
+ * the filesystem can represent rather than a silence.
+ * WHAT IT CANNOT SEE, stated because a checker trusted past its evidence is worse than none: it reads a
+ * quotation the way this tree writes one, between double quotes, so a paraphrase with no quotation marks
+ * makes no claim it can falsify; it cannot tell a quotation of a STANDARD from a quotation of this tree's own
+ * prose, so a comment quoting a DFAIL message under a citation lands in the same bucket as a fabrication and
+ * the divergence evidence is what a reader triages on; and it says NOTHING about whether the sentence is
+ * TRUE of the tree or whether the claim it supports is right — a correctly-pasted sentence supporting a
+ * spec-wrong conclusion is invisible to it, exactly as it is to every other check here.
+ *
  * A CITATION IS NOT ALWAYS SPELLED WITH A §, AND THE ONE THAT IS NOT IS WHERE THE ERRORS WERE. quickjs.c
  * writes `7.4.9 IteratorClose`, never `§7.4.9` — 58 times, and the §-only reader saw NONE of them. A bare
  * dotted number cannot be admitted on sight (`0.0` is a double, `1.5` is a factor, `13.2` is a version), so it
@@ -183,6 +209,14 @@ import { dirname, join, relative } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(HERE);
 const INDEX_DIR = join(HERE, "specindex");
+/* THE QUOTATION CORPUS IS A SECOND ARTIFACT, NOT A SECOND TOOL — and it lives beside the resolver index rather
+ * than inside it because the two answer different questions at different costs. The resolver index is 1.3 MB
+ * and every run of this audit parses all of it; a standard's TOKEN TEXT is an order of magnitude larger and is
+ * read by ONE mode. Splitting them means the default audit pays nothing, and it makes NOT-CHECKED a state the
+ * filesystem can represent: a standard with a section index and no text corpus is counted and printed as
+ * unchecked, which is what CLAUDE.md demands in place of a silent zero. */
+const TEXT_DIR = join(INDEX_DIR, "text");
+const textFileOf = (key) => join(TEXT_DIR, key + ".json");
 
 /* A section that LINKS a term this many times is a section the term is ABOUT. One passing reference is not a
  * subject, and treating it as one would confirm every citation of every chapter that mentions anything. */
@@ -467,6 +501,86 @@ function scanUses(body, marks, idToTerm, uses) {
   }
 }
 
+/* ---- the quotation corpus: a section's own words ---------------------------------------------------------- */
+
+/* WHAT IS STORED IS WHAT IS COMPARED, AND THAT IDENTITY IS THE WHOLE RELIABILITY OF THE CHECK. A quotation in a
+ * C comment and the same sentence in a standard differ in every way except their words: the comment wraps the
+ * line and prefixes it with `*`, the standard splits the same phrase across <a>, <var> and <code> so a tag
+ * strip leaves `sheet ’s media` where the comment wrote `sheet's media`, one side spells an apostrophe curly
+ * and the other straight, and the standard's own generator emits &amp; where the author typed &. Every one of
+ * those is punctuation or markup, and NONE of them is a word. So both sides reduce to the same thing — a
+ * lowercase stream of alphanumeric runs, single-spaced — and the corpus stores that stream rather than the
+ * prose it came from. A reader who greps the committed file is then reading EXACTLY the bytes the check reads,
+ * with no second normalization standing between the artifact and the answer. */
+/* A LIST MARKER IS NOT TEXT ON EITHER SIDE, AND THAT ASYMMETRY WAS MANUFACTURING FINDINGS BY THE DOZEN. A
+ * standard numbers its algorithm steps with a CSS counter, so `1.` and `2.` exist in the RENDERING and not in
+ * the document — while a comment quoting those steps types the numbers out, because that is what the reader
+ * of the page saw. The quotation then carries tokens the corpus cannot have, and the comparison breaks at its
+ * SECOND word every time: a fifty-seven-word quotation of the COOP matching algorithm, three of the permissions
+ * policy's own numbered steps, `1. Let attribute be this's tabindex attribute` — every one of them pasted
+ * faithfully and every one reported as diverging immediately.
+ * IT IS STRIPPED FROM BOTH SIDES RATHER THAN FROM THE QUOTATION, and that is the whole of the correctness. A
+ * marker looks exactly like the end of a sentence that happens to finish on a number (`must be 0. Return
+ * true`), so a rule applied to one side only would delete a token the other side still has and turn a
+ * matching pair into a miss — the normalizer inventing the defect from the other direction. Applied to both,
+ * such a sentence loses the same token on both sides and still compares equal. */
+const STEP_MARKER = /\b\d+(?:\.\d+)*\.\s+(?=[A-Z])/g;
+
+function tokenText(html) {
+  return decodeEntities(
+    String(html)
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+      .replace(/<[^>]*>/g, " "))
+    .replace(/\s+/g, " ").replace(STEP_MARKER, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/* A SECTION'S TEXT ENDS WHERE THE NEXT HEADING BEGINS, AND AN UNNUMBERED HEADING IS A HEADING. Without that
+ * second half every bikeshed standard's LAST numbered section swallows the whole back matter — the Index, the
+ * IDL Index, the References — which is thousands of words of the standard's own vocabulary, filed under one
+ * number. A quotation checked against it would VERIFY against text that section does not contain, and a false
+ * VERIFY is the silent direction: the tool would certify a fabrication. So every <hN> and every <footer> is a
+ * boundary, and only the ones the reader numbered start a section. */
+function withBoundaries(body, marks) {
+  const at = new Set(marks.map((m) => m.at));
+  const stops = [];
+  const re = /<(?:h[1-6]|footer)\b/gi;
+  for (let m; (m = re.exec(body)); ) if (!at.has(m.index)) stops.push({ at: m.index, no: null });
+  return [...marks, ...stops].sort((a, b) => a.at - b.at);
+}
+
+/* A SECTION CONTAINS ITS SUBSECTIONS, and this stores each section's OWN slice so that containment is a JOIN
+ * the audit performs rather than a duplication the corpus carries. The slices of a section and its descendants
+ * are contiguous in the document, so concatenating them in numeric order reproduces the original stream — no
+ * artificial adjacency is created at a boundary, and no byte is stored twice. */
+function collectText(body, marks, into) {
+  const b = withBoundaries(body, marks);
+  for (let i = 0; i < b.length; i++) {
+    if (!b[i].no) continue;
+    const end = i + 1 < b.length ? b[i + 1].at : body.length;
+    const t = tokenText(body.slice(b[i].at, end));
+    if (!t) continue;
+    into.set(b[i].no, into.has(b[i].no) ? into.get(b[i].no) + " " + t : t);
+  }
+}
+
+/* The corpus records the SAME two staleness facts the resolver index does, and the audit refuses to use a
+ * corpus whose pair disagrees with its index's — a text file regenerated at a different edition from the
+ * section numbers it is keyed by would answer questions about a document no single fetch ever saw. */
+function writeText(spec, sections, texts, specUpdated) {
+  mkdirSync(TEXT_DIR, { recursive: true });
+  const out = { spec: spec.label, key: spec.key, base: spec.base, specUpdated: (specUpdated || "").trim(),
+    fetched: new Date().toISOString().slice(0, 10),
+    sections: Object.fromEntries([...texts].sort((a, b) => cmpNo(a[0], b[0]))) };
+  writeFileSync(textFileOf(spec.key), JSON.stringify(out, null, 1) + "\n");
+  let words = 0, missing = 0;
+  for (const t of texts.values()) words += t.split(" ").length;
+  for (const no of sections.keys()) if (!texts.has(no)) missing++;
+  console.log(`  ${spec.key} text: ${texts.size} sections, ${words} words` +
+    (missing ? `, ${missing} numbered section(s) with no text of their own` : ""));
+}
+
 /* A dfn whose whole content is a link OUT to another standard is an IMPORT, not a definition. HTML §2.1.9
  * "Dependencies" re-exports several hundred terms that other standards own — `computed value`,
  * `containing block` — each as a <dfn> holding nothing but an absolute link. Indexing those filed half of CSS
@@ -558,7 +672,7 @@ function regenWhatwgMultipage(spec) {
   const secnos = (toc.match(/<span class=secno>/g) || []).length;
   if (parsed !== secnos) throw new Error(`${spec.key}: the TOC has ${secnos} secno spans and the parse read ${parsed} — the parse is wrong`);
 
-  const defs = new Map(), uses = new Map(), idToTerm = new Map(), bodies = [];
+  const defs = new Map(), uses = new Map(), idToTerm = new Map(), bodies = [], texts = new Map();
   const sorted = [...pages].sort();
   for (const page of sorted) {
     const body = curl(spec.base + page);
@@ -579,8 +693,9 @@ function regenWhatwgMultipage(spec) {
     bodies.push({ page, body, marks });
     process.stderr.write(`  ${page}: ${marks.length} headings\n`);
   }
-  for (const b of bodies) scanUses(b.body, b.marks, idToTerm, uses);
+  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectText(b.body, b.marks, texts); }
   writeIndex(spec, finish(spec, sections, defs, uses, updated));
+  writeText(spec, sections, texts, updated);
 }
 
 /* ---- reader: Bikeshed single page (DOM, URL, Fetch) ------------------------------------------------------ */
@@ -644,8 +759,10 @@ function regenBikeshed(spec) {
     if (id && (op || primary)) idToTerm.set(id, op || primary);
   }
   scanUses(body, marks, idToTerm, uses);
+  const texts = new Map(); collectText(body, marks, texts);
   console.error(`  ${spec.key}: ${marks.length} headings on one page, ${ops.size} declared abstract operations`);
   writeIndex(spec, finish(spec, sections, defs, uses, updated, ops));
+  writeText(spec, sections, texts, updated);
 }
 
 /* ---- reader: ReSpec single page (Permissions) ------------------------------------------------------------ */
@@ -702,8 +819,10 @@ function regenRespec(spec) {
     if (id && (op || primary)) idToTerm.set(id, op || primary);
   }
   scanUses(body, marks, idToTerm, uses);
+  const texts = new Map(); collectText(body, marks, texts);
   console.error(`  ${spec.key}: ${marks.length} numbered headings on one page, ${ops.size} declared abstract operations`);
   writeIndex(spec, finish(spec, sections, defs, uses, updated, ops));
+  writeText(spec, sections, texts, updated);
 }
 
 /* ---- reader: xmlspec (XML 1.0) --------------------------------------------------------------------------- */
@@ -746,8 +865,10 @@ function regenXmlspec(spec) {
     idToTerm.set(m[1], term);
   }
   scanUses(body, marks, idToTerm, uses);
+  const texts = new Map(); collectText(body, marks, texts);
   console.error(`  ${spec.key}: ${marks.length} numbered headings, ${defs.size} definitions`);
   writeIndex(spec, finish(spec, sections, defs, uses, updated));
+  writeText(spec, sections, texts, updated);
 }
 
 /* ---- reader: tc39 multipage (ECMAScript) ----------------------------------------------------------------- */
@@ -876,8 +997,10 @@ function regenTc39(spec) {
     bodies.push({ body, marks });
     process.stderr.write(`  ${page}: ${marks.length} headings\n`);
   }
-  for (const b of bodies) scanUses(b.body, b.marks, idToTerm, uses);
+  const texts = new Map();
+  for (const b of bodies) { scanUses(b.body, b.marks, idToTerm, uses); collectText(b.body, b.marks, texts); }
   writeIndex(spec, finish(spec, sections, defs, uses, updated));
+  writeText(spec, sections, texts, updated);
 }
 
 function regen(keys) {
@@ -1048,7 +1171,23 @@ function walk(dir, out = []) {
  * next person to build something the spec makes unreachable, "SPEC-WRONG and had been followed once" — is a
  * message, not a comment. Third element: "c" for comment, "s" for a string literal. `inSpans` reads [0] and
  * [1] only and is unaffected. */
-function proseSpans(src) {
+function proseSpans(src, path) {
+  /* A MARKDOWN FILE IS ALL PROSE, AND ITS UNIT IS THE PARAGRAPH. CLAUDE.md's own rule is that a `.md` a C file
+   * cites by name is CODE for the purposes of a claim about this tree, and a design note is where a reader
+   * goes to learn WHY — so a fabricated quotation there is the highest-leverage one in the repository. Read
+   * as C it is nonsense: every apostrophe opens a string literal. Read as ONE span it is worse than nonsense,
+   * because a citation would then govern every quotation to the end of the file. A blank line is what ends a
+   * paragraph, and a paragraph is the prose unit a comment block is the C analogue of. */
+  if (path && /\.md$/i.test(path)) {
+    const out = [];
+    for (let i = 0; i < src.length; ) {
+      let e = src.indexOf("\n\n", i);
+      if (e < 0) e = src.length;
+      if (e > i) out.push([i, e, "c"]);
+      i = e + 2;
+    }
+    return out;
+  }
   const spans = [];
   const n = src.length;
   for (let i = 0; i < n; ) {
@@ -1106,6 +1245,198 @@ function inCrashMessage(src, spans, at) {
   return false;
 }
 
+/* ---- the quotation check -------------------------------------------------------------------------------- */
+
+/* WHY A QUOTATION NEEDS ITS OWN CHECK, AND WHY IT IS THE ONE AXIS NOTHING ELSE HERE CAN ASK. Everything above
+ * judges a NUMBER: does the standard have it, does the term live there, does the title match. A quotation is a
+ * different claim — that these WORDS occur in that section — and it is the claim a reader trusts most and
+ * verifies least, because a quoted sentence appears to remove the need to open the spec at all. That is the
+ * asymmetry: a wrong number sends a reader to the wrong place, where they find out; a fabricated quotation
+ * tells them not to go. CLAUDE.md §Browser half states it and names a measured instance; a second was found
+ * with a fabricated sentence attributed to a Web IDL step it had been sitting under, trusted, for as long as
+ * anyone had read it. Neither is visible to any check above, because both citations carry a number that
+ * RESOLVES, a title that MATCHES, and a term the standard really defines. Only the section's own text can say. */
+
+/* WHICH QUOTATIONS ARE CHECKED: THE ONES A CITATION GOVERNS, because a finding must falsify a CLAIM and an
+ * unattributed quotation makes none. This tree quotes constantly — its own prose, CLAUDE.md, a variable's
+ * meaning, a page's minified JavaScript — and a checker that reached for all of them would be asking whether
+ * arbitrary English appears in a standard, which is not a question about the tree. So a quotation belongs to
+ * the nearest citation BEFORE it, and the region a citation governs ends at the next citation or at the end of
+ * the prose it sits in, whichever comes first. */
+
+/* A C MESSAGE IS SEVERAL ADJACENT LITERALS AND A QUOTATION CROSSES THEM, which is why the region is a RUN
+ * rather than a span. A DFAIL that quotes a sentence puts the opening `\"` in one literal and the closing one
+ * three lines down, so a per-literal scan finds an opening quote and no close and reads nothing at all —
+ * silently, in exactly the place CLAUDE.md says a wrong citation costs the most, since a crash message is read
+ * by someone standing at an abort with no file open. */
+function spanIdxAt(spans, at) {
+  let lo = 0, hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid][1] <= at) lo = mid + 1;
+    else if (spans[mid][0] > at) hi = mid - 1;
+    else return mid;
+  }
+  return -1;
+}
+
+/* The prose a citation governs, flattened into ONE line the way a reader reads it. A comment's line wrap and
+ * its `*` gutter are not part of any sentence; a literal run's joints are not either, and the escape a C
+ * literal spells `\"` is the quotation mark the author wrote. Unescaping is what makes a quotation inside a
+ * crash message the same text as the same quotation inside a comment. */
+function governedProse(src, spans, at, len, stopAt) {
+  const i = spanIdxAt(spans, at);
+  if (i < 0) return "";
+  const kind = spans[i][2];
+  let end = spans[i][1];
+  if (kind === "s") {
+    for (let k = i; k + 1 < spans.length && spans[k + 1][2] === "s"; k++) {
+      /* adjacent literals of ONE message are separated by nothing but whitespace and their own two quotes */
+      if (!/^["\s]*$/.test(src.slice(spans[k][1], spans[k + 1][0]))) break;
+      end = spans[k + 1][1];
+    }
+  }
+  if (stopAt !== null && stopAt < end) end = stopAt;
+  const raw = src.slice(at + len, Math.max(at + len, end));
+  return kind === "s"
+    /* the joint between two literals is an unescaped `"` pair; a `\"` is content and must survive it */
+    ? unescapeC(raw.replace(/(?<!\\)"\s*"/g, ""))
+    : raw.replace(/\n\s*\*?\s*/g, " ");
+}
+
+/* EVERY C ESCAPE, NOT JUST THE BACKSLASH-PAIR — because the one this tree writes most in a spec quotation is
+ * the one a naive `\\(.)` rule destroys. A standard's prose is full of curly apostrophes, so a message quoting
+ * it writes `a transaction\u2019s scope`; dropping the backslash alone leaves the WORD `u2019` wedged into the
+ * sentence, and the checker then reports a correctly-pasted quotation as diverging at its second word. That is
+ * the normalizer manufacturing the finding, which is the one failure mode a checker must not have. */
+const C_ESCAPE = /\\(u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,2}|[0-7]{1,3}|[\s\S])/g;
+function unescapeC(s) {
+  return s.replace(C_ESCAPE, (m, e) => {
+    const c = e[0];
+    if (c === "u" || c === "U") return String.fromCodePoint(parseInt(e.slice(1), 16));
+    if (c === "x") return String.fromCharCode(parseInt(e.slice(1), 16));
+    if (c >= "0" && c <= "7") return String.fromCharCode(parseInt(e, 8));
+    return c === "n" || c === "t" || c === "r" || c === "f" || c === "v" ? " " : c;
+  });
+}
+
+/* A QUOTATION IS A DOUBLE-QUOTED RUN AND NOTHING ELSE. This tree writes code in backticks and a term in single
+ * quotes; the double quote is what it uses to say "these are the standard's own words", which is the only
+ * spelling that carries the claim this check falsifies.
+ * THE PAIRING IS SCANNED AND NOT MATCHED, and the difference is not style — a regex with a MINIMUM LENGTH
+ * silently re-pairs every quote after a short one. `serialize as \"{\"` is a one-character quotation, so a
+ * pattern demanding two characters skips its opening mark, pairs its CLOSING mark with the next opening one,
+ * and hands the checker a fragment that begins mid-sentence and belongs to no quotation at all. Measured: it
+ * manufactured findings whose quoted text started with a comma. A scanner has no minimum, so a short
+ * quotation is READ and then declined by the word floor, where the report can count it. */
+function quotedRuns(prose) {
+  const out = [];
+  for (let i = 0; i < prose.length; i++) {
+    const ch = prose[i];
+    /* A QUOTE THE AUTHOR ESCAPED IS NOT A DELIMITER. Both zones write a nested quotation as `\"`: a C message
+     * because the literal needs it, a comment because it is quoting C. Reading one as a close pairs the
+     * opening mark with a mark INSIDE the quotation and hands the checker a fragment that stops mid-sentence —
+     * measured, on a DFAIL quoting `window.open`'s method steps, whose quotation was cut at "throw an". */
+    if (prose[i - 1] === "\\") continue;
+    if (ch !== '"' && ch !== "\u201c") continue;
+    const close = ch === '"' ? '"' : "\u201d";
+    let j = prose.indexOf(close, i + 1);
+    while (j > 0 && prose[j - 1] === "\\") j = prose.indexOf(close, j + 1);
+    if (j < 0) break;
+    out.push({ text: prose.slice(i + 1, j), at: i });
+    i = j;
+  }
+  return out;
+}
+
+/* AN ELLIPSIS IS A CLAIM ABOUT BOTH HALVES, WHICH IS WHAT MAKES IT CHECKABLE RATHER THAN AN ESCAPE HATCH.
+ * `"the disabled attribute … whether the style sheet is applied"` asserts that the first phrase appears, that
+ * the second appears, and that the second appears AFTER the first — three facts a section's own words either
+ * carry or do not. So the quotation is split on the elision mark and matched fragment by fragment, in order
+ * and without overlap; nothing is loosened by the author having elided the middle. */
+const ELLIDED = /\s*(?:\[\s*)?(?:…|\.\s*\.\s*\.+)(?:\s*\])?\s*/;
+
+/* THE QUOTATION SIDE KEEPS ITS ANGLE BRACKETS AND THE SPEC SIDE DOES NOT, AND THAT ASYMMETRY IS DELIBERATE.
+ * Markup exists only on the spec side, so `tokenText` strips tags there; a comment that writes `<iframe>` or
+ * `<var>` in running prose is writing WORDS, and stripping them here would delete a token the standard really
+ * has — a false finding manufactured by the normalizer. Everything else is shared: both sides end as a
+ * lowercase stream of alphanumeric runs, so curly quotes, the possessive the spec splits across a tag
+ * boundary, hyphenation and every difference of punctuation are gone from both at once. */
+const quoteTokens = (s) => decodeEntities(String(s)).replace(/\s+/g, " ").replace(STEP_MARKER, "")
+  .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/* THE THREE FLOORS BELOW ARE MEASURED, NOT CHOSEN, and the measurement is the reason each is where it is. A
+ * short phrase is a COLLOCATION rather than a quotation, so a checker resting on one does not report a weaker
+ * fact — it reports a coincidence, and in the VERIFY direction that is silent: it certifies a fabrication.
+ * WHAT WAS MEASURED, on these committed corpora: 400 random n-word phrases drawn from one standard, counted
+ * for occurrence in some OTHER standard. At n=3, 103 of 400 for HTML and 170 for DOM. At n=4, 33 and 84. At
+ * n=6, 6 and 32. At n=8, 1 and 10. At n=10, 1 and 4. At n=12, 0 and 0. DOM is the noisiest because its
+ * vocabulary is every other standard's; HTML is the largest and so the easiest to hit by chance. The curve is
+ * what fixes the numbers:
+ *   MIN_FRAGMENT_WORDS = 4 — below this a fragment is not evidence at all (a fifth of DOM's 4-word phrases
+ *     occur elsewhere), so a shorter fragment is NOT COMPARED and the report says how many were skipped.
+ *   MIN_COMPARED_WORDS = 6 — the floor is on the COMPARED words, not on the quotation's length, because an
+ *     ellipsis can leave a long quotation resting on one short fragment. A quotation whose whole evidence is
+ *     four words is declined and counted, never verified on 8-to-21% odds.
+ *   ALT_FLOOR = 10 — a claim that ANOTHER standard owns these words is asserted only above 10, where the
+ *     coincidence rate is at or under 1%. Below it the tool was naming `fetch §4.12.1` for `same origin with
+ *     the top`, which is a stock phrase and not a passage. This floor is higher than the other two because it
+ *     is the only one that names a document the citation never mentioned. */
+const MIN_FRAGMENT_WORDS = 4;
+const MIN_COMPARED_WORDS = 6;
+const ALT_FLOOR = 10;
+
+function fragmentsOf(quote) {
+  const all = String(quote).split(ELLIDED).map(quoteTokens).filter(Boolean);
+  const big = all.filter((f) => f.split(" ").length >= MIN_FRAGMENT_WORDS);
+  const words = all.reduce((n, f) => n + f.split(" ").length, 0);
+  const compared = big.reduce((n, f) => n + f.split(" ").length, 0);
+  return { all, big, words, compared, elided: all.length - big.length };
+}
+
+/* IN ORDER AND WITHOUT OVERLAP, ON WHOLE WORDS. The haystack and the needle are both space-separated token
+ * streams, so a bare indexOf would match `the disabled` inside `lathe disabled`; padding both with a space
+ * makes every comparison a word comparison. */
+function containsFragments(hay, frags) {
+  const h = " " + hay + " ";
+  let pos = 0;
+  for (const f of frags) {
+    const i = h.indexOf(" " + f + " ", pos);
+    if (i < 0) return false;
+    pos = i + f.length + 1;
+  }
+  return true;
+}
+
+/* A BARE "NOT FOUND" IS THREE ANSWERS WEARING ONE NAME, AND WHICH ONE IT IS DECIDES WHAT THE READER DOES.
+ * A quotation whose FIRST NINE WORDS are the standard's and whose tenth is not has been mis-transcribed: the
+ * passage is real, the author dropped or reworded a clause, and the repair is to paste the sentence again. A
+ * quotation of which NOT ONE PHRASE occurs anywhere in the standard is the fabrication CLAUDE.md names — a
+ * sentence nobody in that working group ever wrote — and the repair is to delete it or to replace the claim.
+ * A quotation that is the TREE'S OWN prose in quotation marks is the same shape as the second and is not a
+ * defect at all. Reporting the three with one number would be the defect this file exists to find, so the
+ * finding carries the longest prefix that IS the standard's: it is the evidence for the claim, it is computed
+ * rather than asserted, and it is the discriminator a reader triages on. */
+function longestPrefixWords(hay, words) {
+  const h = " " + hay + " ";
+  let lo = 0, hi = words.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (h.includes(" " + words.slice(0, mid).join(" ") + " ")) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+
+/* WHERE THE QUOTATION LEAVES THE STANDARD: the first fragment that is not there, and how much of it is. */
+function divergence(hay, frags) {
+  for (let i = 0; i < frags.length; i++) {
+    const w = frags[i].split(" ");
+    const n = longestPrefixWords(hay, w);
+    if (n < w.length) return { frag: i, matched: n, of: w.length, head: w.slice(0, n).join(" "), next: w[n] };
+  }
+  return null;
+}
+
 function inSpans(spans, at) {
   let lo = 0, hi = spans.length - 1;
   while (lo <= hi) {
@@ -1147,6 +1478,31 @@ function audit(argv, opts = {}) {
      * is that the table has no prototype to inherit an answer from. */
     for (const t of ["sections", "dfns", "ops", "uses"]) Object.setPrototypeOf(ix[t], null);
     idx.set(s.key, ix);
+  }
+  /* THE QUOTATION CORPUS IS LOADED ONLY IN THE MODE THAT READS IT, and a standard with no corpus is NOT
+   * CHECKED — counted, named, and never mistaken for one that passed. The staleness pair is ASSERTED rather
+   * than defaulted past: a corpus fetched at a different edition from the section numbers it is keyed by would
+   * answer questions about a document no single fetch ever saw, and CLAUDE.md's rule for a producer that does
+   * not produce what a consumer reads is a crash, not a `|| {}`. */
+  const wantQuotes = argv.includes("--quotes");
+  const txt = new Map(), txtStale = new Map();
+  if (wantQuotes) for (const [key, ix] of idx) {
+    const f = textFileOf(key);
+    if (!existsSync(f)) continue;
+    const tx = JSON.parse(readFileSync(f, "utf8"));
+    for (const need of ["sections", "specUpdated", "fetched"])
+      if (!tx[need]) throw new Error(`${relative(ROOT, f)} has no "${need}" — re-run: node engine/citegen.mjs --regen ${key}`);
+    /* THE EDITION IS THE STANDARD'S OWN STATEMENT AND THE FETCH DATE IS OURS, so the agreement that matters is
+     * the EDITION. Two fetches on different days of an unmoved standard are the same document, and demanding
+     * the same fetch date would refuse a corpus that is exactly right — a check spending its own coverage. A
+     * corpus keyed by section numbers from a DIFFERENT edition is the real hazard, and specUpdated is what
+     * names it. */
+    if (tx.specUpdated !== ix.specUpdated) {
+      txtStale.set(key, `the corpus is edition "${tx.specUpdated}" and the section index is "${ix.specUpdated}"`);
+      continue;
+    }
+    Object.setPrototypeOf(tx.sections, null);
+    txt.set(key, tx);
   }
   if (!idx.size) {
     console.error(`no committed index in ${relative(ROOT, INDEX_DIR)} — run: node engine/citegen.mjs --regen`);
@@ -1191,10 +1547,34 @@ function audit(argv, opts = {}) {
       const p = join(HERE, extra);
       if (existsSync(p)) files.push(p);
     }
+    /* AND THE TWO DOCUMENTS THE TREE DEFERS TO. CLAUDE.md states the rule this closes — a `.md` a C file cites
+     * by name is CODE, because a claim about this tree travels by reference and nothing mechanical reports
+     * that it has gone stale — and this file's own header used to name `.md` as its blind spot. These two are
+     * cited by name from C hundreds of times between them, and they carry real spec citations with quoted
+     * titles and quoted sentences, so leaving them out is the silent zero rather than a clean bill. */
+    for (const doc of ["CLAUDE.md", "SECURITY.md"]) {
+      const p = join(ROOT, doc);
+      if (existsSync(p)) files.push(p);
+    }
   }
 
   const findings = [];
   const undecided = [];
+  const quotes = [];
+  const qstat = { seen: 0, checked: 0, verified: 0, okNearby: 0, wrongSection: 0, wrongSectionAncestor: 0, wrongStandard: 0, notFound: 0, notFoundNothing: 0,
+                  noCorpus: 0, noSection: 0, tooShort: 0, voted: 0 };
+  const noCorpusBy = new Map();
+  const gapHist = [];
+  /* One standard's whole text, joined once. The divergence probe asks it repeatedly and rebuilding a
+   * four-megabyte string per finding would make the mode's cost quadratic in its own findings. */
+  const wholes = new Map();
+  const wholeOf = (key) => {
+    if (!wholes.has(key)) {
+      const sx = txt.get(key).sections;
+      wholes.set(key, Object.keys(sx).sort(cmpNo).map((n) => sx[n]).join(" "));
+    }
+    return wholes.get(key);
+  };
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
                  unverified: 0, multiSpec: 0,
@@ -1331,7 +1711,7 @@ function audit(argv, opts = {}) {
   for (const file of files) {
     const src = opts.srcOf ? opts.srcOf(file) : readFileSync(file, "utf8");
     const lineOf = lineIndex(src);
-    const spans = proseSpans(src);
+    const spans = proseSpans(src, file);
 
     /* PASS 1 — collect candidates and this file's anchor votes. */
     const cites = [];
@@ -1445,7 +1825,7 @@ function audit(argv, opts = {}) {
 
     for (const c of cites) {
       if (c.foreign) {
-        stat.total++; stat.other++;
+        stat.total++; stat.other++; c.admitted = true;
         const k = c.anchor.slice(6);
         byOther.set(k, (byOther.get(k) || 0) + 1);
         continue;
@@ -1453,6 +1833,9 @@ function audit(argv, opts = {}) {
       const g = group.get(c.no);
       if (c.bare && !g.evidence) continue;      /* a number, not a citation */
       stat.total++;
+      /* A CITATION ENDS THE REGION THE ONE BEFORE IT GOVERNS, whatever standard it turns out to name — so the
+       * mark is set here, where a candidate becomes a citation, and not where it resolves. */
+      c.admitted = true;
       if (c.bare) stat.bare++;
 
       /* RESOLUTION, in order of how much the citation itself proves. */
@@ -1516,6 +1899,7 @@ function audit(argv, opts = {}) {
       }
       if (!spec) { stat.skipped++; continue; }
       if (!idx.has(spec)) { stat.other++; byOther.set(spec.replace(/^other:/, ""), (byOther.get(spec.replace(/^other:/, "")) || 0) + 1); continue; }
+      c.spec = spec; c.how = how;
       stat[how === "anchored" ? "anchored" : how === "term" ? "byTerm"
            : how === "title" ? "byTitle" : "byFile"]++;
       byKey.set(spec, (byKey.get(spec) || 0) + 1);
@@ -1729,6 +2113,129 @@ function audit(argv, opts = {}) {
       if (verdict.kind.startsWith("OK")) { stat.confirmed++; continue; }
       findings.push({ ...rec, ...verdict });
     }
+
+    /* PASS 4 — THE QUOTATIONS EACH CITATION GOVERNS. It runs after resolution because it USES the resolution:
+     * this check does not decide which standard a comment is about, it asks whether the words the comment
+     * attributes to a section are that section's words. Deriving the standard again here would be a second
+     * copy of the most argued-over rule in this file, and the copy that drifts is the one nobody runs. */
+    {
+      const admitted = cites.filter((c) => c.admitted);
+      /* WHICH CITATIONS SHARE A PROSE UNIT WITH THIS ONE — see the OK-NEARBY channel below. */
+      const bySpan = new Map();
+      for (const c of admitted) {
+        const k = spanIdxAt(spans, c.at);
+        if (k < 0) continue;
+        if (!bySpan.has(k)) bySpan.set(k, []);
+        bySpan.get(k).push(c);
+      }
+      for (let i = 0; i < admitted.length; i++) {
+        const c = admitted[i];
+        const stop = i + 1 < admitted.length ? admitted[i + 1].at : null;
+        const prose = governedProse(src, spans, c.at, c.len, stop);
+        for (const q of quotedRuns(prose)) {
+          const f = fragmentsOf(q.text);
+          if (!f.all.length) continue;
+          if (f.compared < MIN_COMPARED_WORDS) { qstat.tooShort++; continue; }
+          qstat.seen++;
+          const rec = { file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec: c.spec,
+                        how: c.how, quote: q.text.trim(), words: f.words, elided: f.elided, gap: q.at,
+                        crash: inCrashMessage(src, spans, c.at) };
+          /* THE FIVE STATES ARE KEPT APART, because CLAUDE.md's recurring defect is several states behind one
+           * answer and a search cannot be directed toward a gap it cannot see. Each refusal below is a
+           * DIFFERENT fact about why this quotation was not judged, and each is counted under its own name. */
+          if (!c.spec) { qstat.voted++; continue; }              /* foreign or unresolved — no claim to check */
+          /* THE FILE VOTE MAY RESOLVE AND MAY NOT JUDGE — this file's own division of labour, applied. A
+           * quotation finding is a statement about a STANDARD, so a citation whose standard is an inference
+           * from its neighbours has nothing here that can be demonstrated. */
+          if (c.how === "file") { qstat.voted++; continue; }
+          if (!txt.has(c.spec)) { qstat.noCorpus++; noCorpusBy.set(c.spec, (noCorpusBy.get(c.spec) || 0) + 1); continue; }
+          const tx = txt.get(c.spec).sections;
+          /* A SECTION CONTAINS ITS SUBSECTIONS — the same rule check (3) applies to a term, applied to text,
+           * and it is the join that keeps the corpus free of duplication. The slices are contiguous in the
+           * document, so numeric order reproduces the original stream. */
+          const own = Object.keys(tx).filter((n) => n === c.no || contains(c.no, n)).sort(cmpNo);
+          if (!own.length) { qstat.noSection++; continue; }
+          qstat.checked++;
+          if (containsFragments(own.map((n) => tx[n]).join(" "), f.big)) { qstat.verified++; gapHist.push([q.at, 1]); continue; }
+          gapHist.push([q.at, 0]);
+          /* NOT IN THE CITED SECTION — and the next two questions are what separate a WRONG NUMBER from a
+           * WRONG STANDARD from a sentence nobody wrote. Naming where the words DO live is the difference
+           * between a finding a reader can act on and one they must re-derive. */
+          /* A NUMBER THE AUTHOR WROTE IN THIS SAME COMMENT IS A NUMBER THE AUTHOR CITED, and this file already
+           * says so about a citation's own run: a finding that claims "the thing is numbered somewhere else"
+           * is simply FALSE when somewhere else is a section standing four lines up under the same `/*`. The
+           * quotation-to-citation rule is NEAREST-PRECEDING, which is right for the common shape and wrong
+           * whenever a second citation intervenes between the subject and its quotation — measured, on a
+           * DFAIL that opens `§8.4.1's THREE-ARGUMENT open`, cites `Web IDL §3.6` for the overload rule, and
+           * then quotes the ENTRY'S method steps, which are §8.4.1's. Nearest-preceding charges Web IDL with
+           * a sentence the same message correctly attributes elsewhere. So a quotation confirmed by ANY
+           * citation in its own prose unit is CONFIRMED — counted apart from a direct verification, because a
+           * confirmation may quantify over everything the comment says while a finding may only assert what
+           * it can prove. */
+          const near = (bySpan.get(spanIdxAt(spans, c.at)) || []).find((o) => {
+            if (o === c || !o.spec || o.how === "file" || !txt.has(o.spec)) return false;
+            const ox = txt.get(o.spec).sections;
+            const ext = Object.keys(ox).filter((n) => n === o.no || contains(o.no, n)).sort(cmpNo);
+            return ext.length && containsFragments(ext.map((n) => ox[n]).join(" "), f.big);
+          });
+          if (near) { qstat.okNearby++; continue; }
+          const elsewhere = Object.keys(tx).filter((n) => containsFragments(tx[n], f.big)).sort(cmpNo);
+          if (elsewhere.length) {
+            qstat.wrongSection++;
+            /* AN ANCESTOR IS A DIFFERENT AND WEAKER CLAIM THAN A STRANGER, AND SAYING WHICH IS WHAT KEEPS THIS
+             * CHANNEL FROM CRYING WOLF. `§2.2.6` for a sentence that lives at `§2.2.3` is a wrong number. But
+             * a standard writes an algorithm in a section's PREAMBLE and then a subsection per case, so
+             * `§6.4.8's serialization` for a sentence in §6.4 is an author naming the arm rather than the
+             * algorithm — still a mismatch at the granularity this check asks about, and not the same defect.
+             * Reporting both under one sentence is the collapse this file is written against, so the relation
+             * is named and counted apart. */
+            const anc = elsewhere.every((n) => contains(n, c.no));
+            if (anc) qstat.wrongSectionAncestor++;
+            quotes.push({ ...rec, kind: "QUOTE-WRONG-SECTION", at: elsewhere, anc });
+            continue;
+          }
+          const foreign = [];
+          for (const [k, t2] of txt) {
+            if (k === c.spec) continue;
+            const hit = Object.keys(t2.sections).filter((n) => containsFragments(t2.sections[n], f.big)).sort(cmpNo);
+            if (hit.length) foreign.push(`${k} §${hit.slice(0, 3).join(", §")}`);
+          }
+          if (foreign.length) { qstat.wrongStandard++; quotes.push({ ...rec, kind: "QUOTE-WRONG-STANDARD", where: foreign }); continue; }
+          qstat.notFound++;
+          /* THE WHOLE STANDARD IS THE HAYSTACK FOR THE DIVERGENCE, not the cited section, because the question
+           * this evidence answers is "are these the standard's words at all" — and a section boundary is
+           * exactly what the reader is being told is NOT the problem. */
+          const d = divergence(wholeOf(c.spec), f.big);
+          if (d && d.matched < MIN_FRAGMENT_WORDS) qstat.notFoundNothing++;
+          /* A ONE-WORD DRIFT DEFEATS AN EXACT SEARCH AND THEREBY HIDES A WRONG STANDARD, so where the
+           * quotation is plausibly a real sentence the PREFIX is asked of every corpus, not only the cited
+           * one. Measured, and it is why this exists: a DFAIL quoted `window.open`'s method steps and
+           * attributed them to Web IDL §3.6; the standard's own wording carries a `then` the quotation drops,
+           * so every exact channel came back empty and the finding said only "diverges after 4 words" — while
+           * TWENTY of those twenty-four words are HTML's, one section away from where the same comment
+           * correctly names HTML further down its own sentence. Naming the better match turns a vague finding
+           * into the one a reader can act on, and it costs one probe per corpus over the population that has
+           * already failed every exact test. */
+          let alt = null;
+          if (d && d.matched >= MIN_FRAGMENT_WORDS) {
+            const w0 = f.big[0].split(" ");
+            for (const [k] of txt) {
+              if (k === c.spec) continue;
+              const w = wholeOf(k);
+              if (!(" " + w + " ").includes(" " + w0.slice(0, MIN_FRAGMENT_WORDS).join(" ") + " ")) continue;
+              const n = longestPrefixWords(w, w0);
+              if (n >= ALT_FLOOR && n > d.matched && (!alt || n > alt.matched)) alt = { key: k, matched: n };
+            }
+            if (alt) {
+              const head = w0.slice(0, alt.matched).join(" ");
+              alt.at = Object.keys(txt.get(alt.key).sections)
+                .filter((n) => (" " + txt.get(alt.key).sections[n] + " ").includes(" " + head + " ")).sort(cmpNo);
+            }
+          }
+          quotes.push({ ...rec, kind: "QUOTE-NOT-FOUND", div: d, alt });
+        }
+      }
+    }
   }
 
   /* A site the tool CANNOT decide, standing on a number whose other sites in the same file ARE diagnosed, is
@@ -1770,6 +2277,13 @@ function audit(argv, opts = {}) {
     `${stat.confirmedByRun} by another number in the same citation's own run), ` +
     `${stat.unverified} carry no title and no term any index knows, ${stat.multiSpec} name a term more than one standard defines`);
   console.log(`  ${stat.foreignTerm} name a term only ANOTHER standard defines, so the standard they cite numbers nothing this audit could hold them to`);
+  /* THE AXIS THIS RUN DID NOT ASK ABOUT IS NAMED IN THE RUN THAT DID NOT ASK IT. A mode nobody knows exists is
+   * a silent zero with a flag in front of it: the reader sees a report full of numbers, none of which is about
+   * the WORDS, and has no way to learn that the question was never put. */
+  if (!wantQuotes)
+    console.log(`  ${qstat.seen} quotation(s) of ${MIN_COMPARED_WORDS}+ words stand in prose a citation governs and NOTHING ABOVE READS THEIR WORDS — ` +
+      `a fabricated sentence beside a correct number passes every check in this report. --quotes compares them against the section's own text`);
+
   /* A TRUNCATED LIST THAT DOES NOT SAY IT IS TRUNCATED IS READ AS THE WHOLE LIST, AND THESE TWO LINES ARE THE
    * ONLY PLACE THIS REPORT DISCLOSES WHAT IT DID NOT LOOK AT. CLAUDE.md calls an unindexed standard "COUNTED
    * and never CHECKED, which is a silent zero rather than a clean bill" — that silence is only broken if a
@@ -1831,6 +2345,57 @@ function audit(argv, opts = {}) {
       console.log(`      ${v.text.trim()}`);
     }
     if (crash.length > cap) console.log(`  … ${crash.length - cap} more (--all)`);
+  }
+
+  /* THE QUOTATION REPORT NAMES ITS AXIS AND ITS DENOMINATOR IN THE SAME LINE. CLAUDE.md: a coverage figure
+   * states what it is a fraction of, or it is not a coverage figure — and every auditor here partitions, so
+   * saying which question this one asked is what keeps a zero from reading as a clean bill on the others. */
+  if (wantQuotes) {
+    console.log(`\nQUOTATION CHECK — do the words a citation puts in quotes occur in the section it names?`);
+    console.log(`  (this asks about TEXT. It says nothing about whether the number exists, whether the algorithm lives there,`);
+    console.log(`   or whether the claim the sentence makes is true — those are the checks above, and they are different axes.)`);
+    console.log(`  ${qstat.seen} quotation(s) of ${MIN_COMPARED_WORDS}+ words stand in prose a citation governs; ${qstat.checked} were compared against a section's own words`);
+    console.log(`    VERIFIED ${qstat.verified}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${qstat.okNearby}  WRONG-SECTION ${qstat.wrongSection} (${qstat.wrongSectionAncestor} of them at a section that CONTAINS the cited one)  WRONG-STANDARD ${qstat.wrongStandard}  NOT-FOUND ${qstat.notFound}` +
+      ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words — a fabricated sentence and a piece of this tree's own prose in quotation marks both land there, and nothing mechanical separates them)`);
+    console.log(`  NOT CHECKED, and why: ${qstat.noCorpus} cite a standard with no committed text corpus` +
+      (noCorpusBy.size ? ` (${[...noCorpusBy].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(" ")})` : "") +
+      `; ${qstat.voted} sit under a citation naming no standard, whose standard only a file vote placed` +
+      `; ${qstat.noSection} cite a §N the standard does not have (the corpus holds text for every section its index has, so this is the UNKNOWN-SECTION population above)` +
+      `; a further ${qstat.tooShort} quoted run(s) are shorter than ${MIN_COMPARED_WORDS} words or carry no fragment of ${MIN_FRAGMENT_WORDS} and are not quotations this check can falsify`);
+    if (argv.includes("--gaps")) {
+      const b = new Map();
+      for (const [g, ok] of gapHist) { const k = Math.min(9, Math.floor(g / 60)); const r = b.get(k) || [0, 0]; r[ok]++; b.set(k, r); }
+      for (const k of [...b.keys()].sort((a, z) => a - z))
+        console.log(`  gap ${k * 60}-${k * 60 + 59}${k === 9 ? "+" : ""} chars after the §: verified ${b.get(k)[1]}, not found ${b.get(k)[0]}`);
+    }
+    if (txtStale.size) for (const [k, why] of txtStale)
+      console.log(`  ${k}: text corpus REFUSED — ${why}; re-run: node engine/citegen.mjs --regen ${k}`);
+    const qg = new Map();
+    for (const q of quotes) { if (!qg.has(q.kind)) qg.set(q.kind, []); qg.get(q.kind).push(q); }
+    const qlimit = argv.includes("--all") ? Infinity : 60;
+    for (const kind of ["QUOTE-NOT-FOUND", "QUOTE-WRONG-STANDARD", "QUOTE-WRONG-SECTION"]) {
+      const g = qg.get(kind) || [];
+      console.log(`\n${kind}: ${g.length}`);
+      /* A CRASH PRINTS ITS MESSAGE TO SOMEONE WHO HAS NO FILE OPEN, so a fabricated quotation inside one is
+       * listed first — the same ordering, and the same reason, as --unanchored's. */
+      const rank = (q) => (q.crash ? 0 : 2) + (q.div && q.div.matched < MIN_FRAGMENT_WORDS ? 0 : 1);
+      const ord = [...g].sort((a, b) => rank(a) - rank(b));
+      for (const q of ord.slice(0, qlimit)) {
+        console.log(`  ${q.file}:${q.line}  ${q.spec} §${q.no}${q.crash ? "  [in a crash message]" : ""}` +
+          (kind === "QUOTE-WRONG-SECTION" ? ` — these words are that standard's, at §${q.at.slice(0, 4).join(", §")}` +
+             (q.anc ? " — which CONTAINS the cited number, so this is an arm named for its algorithm rather than a wrong number" : "")
+           : kind === "QUOTE-WRONG-STANDARD" ? ` — these words are ${q.where.slice(0, 3).join("; ")}`
+           : q.div ? ` — diverges from ${q.spec} after ${q.div.matched} of ${q.div.of} words` +
+                     (q.div.frag ? ` (in elided fragment ${q.div.frag + 1})` : "") +
+                     (q.div.matched ? `: "${q.div.head}" is there, "${q.div.next}" is not`
+                                    : `: not even its FIRST WORD follows a boundary there`)
+                     + (q.alt ? ` — but ${q.alt.matched} of those words ARE ${q.alt.key} §${q.alt.at.slice(0, 3).join(", §")}'s` : "")
+             : ` — ${q.words} words that appear in NO indexed standard`) +
+          (q.elided ? ` (${q.elided} fragment(s) under ${MIN_FRAGMENT_WORDS} words not compared)` : ""));
+        console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
+      }
+      if (g.length > qlimit) console.log(`  … ${g.length - qlimit} more (--all)`);
+    }
   }
 
   const groups = new Map();

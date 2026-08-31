@@ -486,11 +486,25 @@ static const char *HTML =
        evaluated per ELEMENT against a query container selected from that element's ancestors, and the author
        cascade flattens the rules that apply into one text matched by selector, so it crashes by name rather
        than resolve a per-element condition to a document-wide boolean (core/css/css_rule.c's cascade arm says
-       what to build). §6.1.1's disabled flag — "whether the style sheet is applied" — is what keeps those two
-       apart HONESTLY: the cascade skips a disabled sheet before it walks a single rule, so every member below
-       is exercised on a real rule in a real sheet while the unbuilt half stays unbuilt and keeps its crash. An
-       enabled one would abort this document at the first of its twenty-four getComputedStyle calls, which is
-       the forcing function working and not a fixture to write.
+       what to build). What keeps those two apart is CSSOM §6.1.1 "The StyleSheet Interface"'s setter, which
+       the script below calls: "On setting, the disabled attribute must set the disabled flag if the new value
+       is true, or unset the disabled flag otherwise." So every member below is exercised on a real rule in a
+       real sheet while the unbuilt half stays unbuilt and keeps its crash. An enabled one would abort this
+       document at the first of its twenty-four getComputedStyle calls, which is the forcing function working
+       and not a fixture to write.
+       AND THE STEP THIS FIXTURE ACTUALLY LEANS ON IS NOWHERE WRITTEN DOWN, WHICH A FABRICATED QUOTATION USED
+       TO HIDE. The sentence that stood here — "whether the style sheet is applied" — APPEARS NOWHERE IN
+       CSSOM, and it was not decoration: it was doing the work of a normative rule that does not exist. The
+       flag is CSSOM §6.1 "CSS Style Sheets"'s, and everything that standard says about what it DOES is
+       "Either set or unset. Unset by default. Note: Even when unset it does not necessarily mean that the CSS
+       style sheet is actually used for rendering." — a statement about the UNSET case, which is the opposite
+       end from the one relied on here. CSS Cascade 5 does not mention a disabled sheet at all, and the only
+       place either standard states an EFFECT is a note in HTML §4.2.4 "The link element": "Removing the
+       disabled attribute dynamically … will fetch and apply the style sheet". So "a set flag keeps the sheet
+       out of the cascade" is an IMPLICATION of two notes about the other direction. That is enough for a
+       fixture to rest on and it is not enough to state as a quoted rule, and the difference between those two
+       is exactly what the invented sentence erased. A fabricated quotation is the one citation error that
+       tells its reader NOT to open the spec, which is why it outlived every number beside it.
        SIX RULES ARE WRITTEN AND FOUR SURVIVE. `not (x) and (y)` mixes the `not` arm with a combinator, which
        §5.4's three alternatives admit no production for, and `@container { }` is its `!` refusing a condition
        with neither term — both are at-rules whose grammar failed, which CSS Syntax §8 drops with their
