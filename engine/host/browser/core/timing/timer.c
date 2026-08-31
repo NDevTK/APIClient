@@ -1299,7 +1299,8 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        every entry, above the dispatch, because it belongs to no stage. */
     JS_FreeValue(ctx, cb_result);
     *presult = JS_UNDEFINED;
-    /* §3.6's ARITY CHECK AND STEP 14.2's DEFAULT ARE THE DECLARATION'S, and both are asserted rather than
+    /* §3.6's ARITY CHECK (step 5) AND STEPS 15.4.1/16.1's DEFAULT ARE THE DECLARATION'S, and both are
+       asserted rather than
        re-derived. `idl_optional_from(1)` makes position 0 required, so `setTimeout()` is a TypeError before
        this body is entered — the `if (argc < 1) JS_ThrowTypeError` that stood here was a consumer restating
        its producer's contract. `idl_arg_default(1, IDL_DEFAULT_ZERO)` then guarantees position 1, so an
@@ -1883,7 +1884,8 @@ static int js_clear_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
        coincidence a body should not be relying on and an assert is what stops it from starting to. */
     DCHECK(argc == 1,
            "§8.7's `clearTimeout`/`clearInterval` reached its body with an argument count its declaration does "
-           "not produce — its one position is optional and carries the IDL's `= 0`, so §3.6 step 14.2 places a "
+           "not produce — its one position is optional and carries the IDL's `= 0`, so §3.6 steps 15.4.1 "
+           "and 16.1 place a "
            "value at it on every call");
     gctx = timer_global(ctx, hdr, NULL);
     if (!gctx)
@@ -2049,8 +2051,9 @@ void timer_init(JSContext *ctx)
 
     DCHECK(!g_ready, "timer_init ran twice — §8.7 Timers's members are declared once per agent");
     /* THE `= 0` ABOVE IS PART OF THE DECLARATION, and it was written in the comment and not in the code.
-       §3.6 step 14.2 gives an optional argument whose IDL writes `= …` THAT value, while a position with no
-       declared default is ABSENT — so all four members reached their bodies with an undefined where the IDL
+       §3.6 steps 15.4.1 and 16.1 give an optional argument whose IDL writes `= …` THAT value, while a
+       position with no declared default is ABSENT (15.4.2 / 16.2's "missing") — so all four members reached
+       their bodies with an undefined where the IDL
        guarantees a number, and each body would have had to invent the 0 its declaration owes it. */
     g_id_set_timeout = idl_method_id_step(ctx, SET_TIMER, 2, NULL, 0, &TI_DECL, TI_MAGIC_TIMEOUT);
     idl_optional_from(1);

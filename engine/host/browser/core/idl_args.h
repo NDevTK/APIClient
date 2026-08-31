@@ -944,10 +944,30 @@ void idl_optional_from(int first_optional);
  * so a member that forgot cannot reach a conversion. */
 void idl_overload_split_optional_from(int longer_first_optional);
 
-/* §3.6 STEP 14.2'S DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a position, beside "the page
-   passed one" and "the argument is absent", and exactly the distinction IdlDictDefault already draws for a
-   dictionary member. §3.6's absent rule above is for an optional argument with NO default value; where the
-   IDL writes `= …`, step 14.2 replaces the undefined with THAT value and the body never sees a hole.
+/* WEB IDL §3.6 Overload resolution algorithm's DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a
+   position, beside "the page passed one" and "the argument is absent", and exactly the distinction
+   IdlDictDefault already draws for a dictionary member. §3.6's absent rule above is for an optional argument
+   with NO default value; where the IDL writes `= …`, the algorithm places THAT value and the body never sees
+   a hole.
+
+   THE CONVENTION FOR CITING IT, STATED ONCE HERE AND NOT RE-DERIVED AT EACH SITE — §3.6 is 17 top-level steps
+   and it places a declared default in TWO of them, which is why no single sub-number names this rule:
+     - step 15.4.1, inside `While i < argcount` — the page REACHED the position and passed `undefined` there.
+       Its guard is step 15.4, "If optionality is 'optional' and V is undefined", and its sibling 15.4.2 is the
+       absent rule ("append to values the special value 'missing'").
+     - step 16.1, inside `While i is less than the number of arguments callable is declared to take` — the page
+       STOPPED SHORT of the position. Its sibling 16.2 appends "missing" only "if callable's argument at index
+       i is not variadic", which is what makes a variadic member's declared head behave like any other.
+   A site that means the rule cites both; a site that means only one of the two cites that one. Step 11.4.1 is
+   the third such clause and is deliberately NOT cited anywhere: it sits in `While i < d`, which runs only when
+   step 8 set a distinguishing argument index, and step 8 sets one only "if there is more than one entry in S"
+   — a length-differing split has been reduced to one entry by steps 3-4 before then, so this engine cannot
+   reach it. The day a same-length overload is declared, that clause becomes reachable and this list grows.
+   IT WAS CITED AS "step 14.2" AT TWENTY-TWO SITES AND THAT NUMBER IS A REAL STEP ABOUT SOMETHING ELSE: step 14
+   is "If i = d and method is not undefined", the arm that builds a sequence from an iterator, and its 14.2 is
+   "Let T be the type at index i in the type list of the remaining entry in S". A reader who followed it landed
+   on a live step that mentions no default at all, which is the failure mode a wrong number has and a missing
+   one does not.
    IT WAS NOT EXPRESSIBLE AND THE BODIES PAID FOR IT. Indexed Database §4.4's
    `transaction(storeNames, optional IDBTransactionMode mode = "readonly", …)` is the member that needs it: with
    only "absent" to say, the body would read `undefined` and substitute "readonly" itself — the IDL's own

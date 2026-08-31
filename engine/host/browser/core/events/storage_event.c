@@ -192,8 +192,9 @@ static JSValue js_se_init_storage_event(JSContext *ctx, JSValueConst this_val, i
         return JS_ThrowTypeError(ctx, "initStorageEvent called on something that is not a StorageEvent");
     DCHECK(event_is(ctx, this_val), "an object carrying StorageEvent's slot record is not an Event — the record "
                                     "is placed only on an event this component's mint already built");
-    /* EVERY POSITION IS THERE, INCLUDING THE SEVEN OPTIONAL ONES: the declaration states §3.6 step 14.2's
-       default for each, so the machine PLACES the IDL's value and this body never reads an absence as one.
+    /* EVERY POSITION IS THERE, INCLUDING THE SEVEN OPTIONAL ONES: the declaration states §3.6 steps 15.4.1
+       and 16.1's default for each, so the machine PLACES the IDL's value and this body never reads an
+       absence as one.
        A shorter argc means those defaults were not declared. */
     DCHECK(argc >= 8, "initStorageEvent's body ran with fewer positions than its IDL lists — every optional "
                       "argument of this member carries a declared default, so the argument machine materializes "
@@ -288,9 +289,10 @@ static const JSCFunctionListEntry js_se_proto[] = {
 
 void storage_event_init(JSContext *ctx)
 {
-    /* §12.2.4's `initStorageEvent`, position for position. The seven optional ones each carry §3.6 step 14.2's
-       declared default, so an omitted argument arrives as the IDL's value rather than as a hole this body would
-       have to fill. */
+    /* §12.2.4's `initStorageEvent`, position for position. The seven optional ones each carry §3.6 step
+       16.1's declared default — `initStorageEvent('x')` stops short of all seven, which is that loop's own
+       case — so an omitted argument arrives as the IDL's value rather than as a hole this body would have
+       to fill. */
     static const IdlArgType SE_INIT_ARGS[8] = {
         IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING_NULLABLE,
         IDL_DOMSTRING_NULLABLE, IDL_USVSTRING, IDL_INTERFACE_NULLABLE,

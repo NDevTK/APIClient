@@ -1198,7 +1198,7 @@ function audit(argv, opts = {}) {
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
                  unverified: 0, multiSpec: 0,
-                 foreignTerm: 0, titleRefused: 0 };
+                 foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0 };
   const byKey = new Map();
   /* Per standard, how many of its audited citations were placed there by the file vote rather than by their
    * own anchor or their own term — and the sites themselves, so the count has a list behind it. */
@@ -1283,6 +1283,22 @@ function audit(argv, opts = {}) {
      * first spelling of this had no flag and matched NOTHING, which reads exactly like a clean result. */
     const m = new RegExp("^[^A-Za-z0-9]*" + words.map(RE_ESC).join("[^A-Za-z0-9]+"), "i").exec(raw);
     return !!m && ENDS_A_NAME.test(raw.slice(m[0].length));
+  };
+
+  /* THE TITLE A CITATION STATES, READ OUT OF ONE STANDARD'S HEADINGS — the longest leading phrase (or the
+   * whole quoted phrase) that titles a section of `tt`. It is ONE function because it is asked TWICE about
+   * two different questions — WHICH STANDARD, at the resolution below, and WHICH SECTION, at TITLE-MISMATCH —
+   * and a second copy would be a second list of what counts as a stated title, drifting from the one that
+   * decides findings. The two floors it carries are the file's own and are argued at TITLE-MISMATCH: a
+   * one-word title is refused unless the author QUOTED it, and the longest leading phrase wins so a short
+   * title nested inside a longer one cannot fire ahead of it. */
+  const claimIn = (tt, c) => {
+    if (c.quoted) { const q = normTerm(c.quoted); return tt.has(q) ? q : null; }
+    for (let n = Math.min(maxTitleWords, c.words.length); n >= 2; n--) {
+      const p = c.words.slice(0, n).join(" ");
+      if (tt.has(p) && delimited(c.after, c.words.slice(0, n))) return p;
+    }
+    return null;
   };
 
   /* `opOK` says the phrase's RAW spelling at the citation is identifier-shaped, which is the one thing that
@@ -1404,6 +1420,14 @@ function audit(argv, opts = {}) {
       c.ev = c.quoted
         ? probe(normTerm(c.quoted), c.no, only, nameIsIdentifier(c.quoted.trim()))
         : lookup(c.words, c.no, only, c.opHead);
+      /* THE STANDARDS WHOSE HEADINGS THE CITATION'S OWN STATED TITLE NAMES, collected across EVERY index for
+       * the same reason check (2) asks every candidate: a title is evidence about which STANDARD as much as
+       * about which section, and asking only the one the resolver picked makes the answer depend on the guess
+       * it is meant to replace. Until this existed the resolver could not act on that sentence even though
+       * check (2) states it outright, so a citation whose ONLY evidence was the title CLAUDE.md asks authors
+       * to write had no evidence at all as far as the resolver was concerned. */
+      c.titleEv = [];
+      for (const [k, tt] of titleToNo) { const q = claimIn(tt, c); if (q) c.titleEv.push({ key: k, claim: q }); }
     }
 
     /* PASS 3 — GROUP EVIDENCE admits the bare numbers. A bare dotted number is a citation when some other
@@ -1450,6 +1474,37 @@ function audit(argv, opts = {}) {
         spec = g.keys.has(fallback) ? fallback : null;
         how = "term";
       }
+      /* A STATED TITLE RESOLVES THE STANDARD, AND IT SITS ABOVE THE FILE VOTE BECAUSE IT IS EVIDENCE WHERE THE
+       * VOTE IS A GUESS. This does not REPLACE a resolution in the sense the paragraph below refuses — every
+       * rule above it still wins — it replaces the GUESS, which is the one thing the header says may resolve
+       * and may not judge. That distinction is the whole reason the number-does-not-exist check can be asked
+       * here at all: `§3.2.4.6 unsigned long` names a Web IDL heading and nothing else in this tree's indexes,
+       * so the standard is the citation's own evidence and a wrong number under it is demonstrable rather than
+       * inferred.
+       * IT MUST NAME EXACTLY ONE STANDARD. `Abstract operations` titles a section of nearly every bikeshed
+       * spec and `Introduction` titles one of all of them; a title naming several is a coincidence generator
+       * rather than evidence, which is the same floor keepTerm applies to a one-word term and the same one the
+       * unquoted title check already applies here.
+       * AND THE STANDARD MUST PLACE THAT TITLE NEAR THE CITED NUMBER — the same section, an ancestor, a
+       * descendant, or a SIBLING under the same parent. THIS IS THE HALF THAT WAS MEASURED AND IS NOT
+       * CAUTION: "only one INDEXED standard uses this title" is not "only one standard uses this title", and
+       * the gap between those is every standard this audit does not hold — 1605 citations' worth. Without the
+       * corroboration eight findings appeared and the ones read were all the same mis-resolution: `§10.13
+       * "Serialization"` is CSS Typed OM, which nothing here indexes, and `serialization` titles css-images-3
+       * §7, so the tool named a standard the comment never meant and then reported its number missing;
+       * `POINTER LOCK 2.0 §6 "Extensions to the MouseEvent Interface"` went to CSSOM View §10 the same way.
+       * A title sitting in the cited number's own neighbourhood cannot be that: a standard that numbers this
+       * heading at §3.2.4.6 is a standard whose §3.2.4.x IS this subject, so a §3.2.4.12 written beside it is
+       * demonstrably that standard with the NUMBER wrong. A title sitting nowhere near is the tell that the
+       * STANDARD is wrong, which check (3)'s own `else` already refuses to judge past for the same reason.
+       * What that refusal costs is disclosed rather than swallowed — see the number-exists counter below. */
+      if (!spec && c.titleEv.length === 1 && idx.has(c.titleEv[0].key)) {
+        const at = titleToNo.get(c.titleEv[0].key).get(c.titleEv[0].claim);
+        const parent = (s) => (s.includes(".") ? s.slice(0, s.lastIndexOf(".")) : null);
+        const near = (t) => t === c.no || contains(t, c.no) || contains(c.no, t) ||
+                            (parent(t) !== null && parent(t) === parent(c.no));
+        if (at.some(near)) { spec = c.titleEv[0].key; how = "title"; }
+      }
       if (!spec && fallback && idx.has(fallback)) { spec = fallback; how = "file"; }
       /* LAST, AND ONLY WHERE EVERY OTHER RULE HAS GIVEN UP: the citation's OWN term evidence. It is placed here
        * rather than ahead of the group because anywhere earlier it does not ADD a resolution, it REPLACES one —
@@ -1461,7 +1516,8 @@ function audit(argv, opts = {}) {
       }
       if (!spec) { stat.skipped++; continue; }
       if (!idx.has(spec)) { stat.other++; byOther.set(spec.replace(/^other:/, ""), (byOther.get(spec.replace(/^other:/, "")) || 0) + 1); continue; }
-      stat[how === "anchored" ? "anchored" : how === "term" ? "byTerm" : "byFile"]++;
+      stat[how === "anchored" ? "anchored" : how === "term" ? "byTerm"
+           : how === "title" ? "byTitle" : "byFile"]++;
       byKey.set(spec, (byKey.get(spec) || 0) + 1);
       /* A GUESSED RESOLUTION IS COUNTED APART FROM A MATCHED ONE EVERYWHERE IT IS COUNTED AT ALL. Pooling them
        * makes "audited by standard: html=N" a number in which inference and evidence are indistinguishable —
@@ -1478,8 +1534,9 @@ function audit(argv, opts = {}) {
       const sections = ix.sections, no = c.no;
       let verdict = null;
 
-      /* (1) The number the standard does not have — ASKED ONLY OF AN EXPLICITLY ANCHORED CITATION, and the
-       * asymmetry is the point rather than caution. This check fires on ABSENCE, which is exactly what a
+      /* (1) The number the standard does not have — ASKED ONLY WHERE THE STANDARD IS THE CITATION'S OWN
+       * EVIDENCE, which is an explicit anchor or a stated TITLE, and the asymmetry is the point rather than
+       * caution. This check fires on ABSENCE, which is exactly what a
        * mis-resolved citation produces. */
       /* AND THE `else` IS A SOUNDNESS FILTER, NOT AN ACCIDENT OF NESTING — this was tried the other way and
        * measured. Ungating the term check on "does the resolved standard have this number" added 252 findings
@@ -1489,8 +1546,17 @@ function audit(argv, opts = {}) {
        * cites Encoding §7.1 which nothing here indexes, `element.h` cites HTML §4.6.3 in a URL-flavoured
        * sentence. A number the resolved standard does not have is the tell that the resolution is wrong, and
        * judging past it is the tool asserting an error it cannot demonstrate. */
+      /* A TERM-RESOLVED CITATION IS STILL NOT ASKED, AND THAT IS THE PARAGRAPH ABOVE RATHER THAN AN OVERSIGHT:
+       * term evidence names a standard that DEFINES a phrase the comment uses, which is what prose in a spec
+       * ecosystem looks like, so a number that standard lacks is the tell that the RESOLUTION is wrong. A
+       * stated title is not that — it names a standard by quoting its own heading, so the standard is settled
+       * and the number is the only thing left that can be wrong. THE COST OF THE OLD GATE WAS A SILENT ZERO:
+       * a citation naming no standard and stating a title stood on ANY number, existent or not, and every
+       * check that a guess disqualifies declined to look — so the site read exactly like a clean one. It is
+       * counted now wherever it is still refused, because a refusal nobody can see is the same zero. */
       if (!sections[no]) {
-        if (c.anchor) verdict = { kind: "UNKNOWN-SECTION", msg: `${spec} has no §${no}` };
+        if (c.anchor || how === "title") verdict = { kind: "UNKNOWN-SECTION", msg: `${spec} has no §${no}` };
+        else if (how === "file") stat.numberRefused++;
       } else {
         /* (2) THE SECTION'S OWN TITLE IS ASKED FIRST, AND THE ORDER IS THE WHOLE POINT. A citation written in
          * the form CLAUDE.md §Browser half mandates — the number with its title beside it — has already
@@ -1629,12 +1695,7 @@ function audit(argv, opts = {}) {
          * count is exactly the findings a guessed standard cost. */
         if (!verdict) {
           const tt = titleToNo.get(spec);
-          let claim = null;
-          if (c.quoted) { const q = normTerm(c.quoted); if (tt.has(q)) claim = q; }
-          else for (let n = Math.min(maxTitleWords, c.words.length); n >= 2; n--) {
-            const p = c.words.slice(0, n).join(" ");
-            if (tt.has(p) && delimited(c.after, c.words.slice(0, n))) { claim = p; break; }
-          }
+          let claim = claimIn(tt, c);
           /* A SECTION CONTAINS ITS OWN SUBSECTIONS, so citing §4.9.5 in prose that names §4.9's title is less
            * precise and not wrong — the identical rule check (3) applies to a term, applied to a title for the
            * identical reason. `readable_byte_stream.c` cites Streams §4.9.5 "Byte stream controllers" and says
@@ -1697,9 +1758,11 @@ function audit(argv, opts = {}) {
       `${Object.keys(ix.uses).length} with a prominent use site — index fetched ${ix.fetched}, standard updated ${ix.specUpdated}`);
   }
   console.log(`  ${stat.total} citations in ${files.length} files (${stat.bare} written without a §, admitted by group evidence)`);
-  console.log(`  resolved: ${stat.anchored} by their own anchor, ${stat.byTerm} by the term they name`);
-  console.log(`  INFERRED: ${stat.byFile} name no standard and no term, and were placed by their file's dominant anchor — a guess, ` +
-    `so nothing below judges them (${stat.titleRefused} title check(s) refused on that ground); --unanchored lists them`);
+  console.log(`  resolved: ${stat.anchored} by their own anchor, ${stat.byTerm} by the term they name, ` +
+    `${stat.byTitle} by a section TITLE they state that only one standard uses`);
+  console.log(`  INFERRED: ${stat.byFile} name no standard, no term and no title, and were placed by their file's dominant anchor — a guess, ` +
+    `so nothing below judges them (${stat.titleRefused} title check(s) and ${stat.numberRefused} number-exists check(s) refused on that ground); ` +
+    `--unanchored lists them`);
   console.log(`  ${stat.other} belong to a standard this audit does not index; ${stat.skipped} name no standard and no term it knows`);
   console.log(`  audited by standard (in parentheses, how many of them only a file vote placed there): ` +
     `${[...byKey].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}(${byKeyVoted.get(k) || 0})`).join(" ")}`);
@@ -1830,7 +1893,7 @@ function since(ref, argv) {
     try { baseSrc.set(p, execFileSync("git", ["show", `${ref}:${rel}`], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })); }
     catch { baseSrc.set(p, ""); }        /* absent at ref — a new file owns every finding in it */
   }
-  const key = (f) => `${f.file} ${f.kind} ${f.no} ${f.msg}`.replace(/:\d+/g, "");
+  const key = (f) => `${f.file}\u0000${f.kind}\u0000${f.no}\u0000${f.msg}`.replace(/:\d+/g, "");
   const tip = audit(argv, { files, quiet: true });
   const base = audit(argv, { files, quiet: true, srcOf: (p) => baseSrc.get(p) });
   const had = new Set(base.map(key));

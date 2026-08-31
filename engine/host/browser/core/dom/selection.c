@@ -835,7 +835,7 @@ void selection_init(JSContext *ctx)
     g_id[SM_COLLAPSE] = idl_method_id(ctx, NULLNODE_OFFSET, 2, js_sel_member, SM_COLLAPSE);
     idl_iface_brand(node_class_id());
     idl_optional_from(1);
-    idl_arg_default(1, IDL_DEFAULT_ZERO, NULL);   /* §3.6 step 14.2's `= 0` */
+    idl_arg_default(1, IDL_DEFAULT_ZERO, NULL);   /* §3.6 steps 15.4.1 and 16.1's `= 0` */
     g_id[SM_COLLAPSE_TO_START] = idl_method_id(ctx, NULL, 0, js_sel_member, SM_COLLAPSE_TO_START);
     g_id[SM_COLLAPSE_TO_END] = idl_method_id(ctx, NULL, 0, js_sel_member, SM_COLLAPSE_TO_END);
     g_id[SM_EXTEND] = idl_method_id(ctx, NODE_OFFSET, 2, js_sel_member, SM_EXTEND);
@@ -849,7 +849,7 @@ void selection_init(JSContext *ctx)
     g_id[SM_CONTAINS_NODE] = idl_method_id(ctx, NODE_BOOL, 2, js_sel_member, SM_CONTAINS_NODE);
     idl_iface_brand(node_class_id());
     idl_optional_from(1);
-    idl_arg_default(1, IDL_DEFAULT_FALSE, NULL);   /* §3.6 step 14.2's `= false` */
+    idl_arg_default(1, IDL_DEFAULT_FALSE, NULL);   /* §3.6 steps 15.4.1 and 16.1's `= false` */
     g_id[SM_COMPOSED_RANGES] = idl_method_id_dict(ctx, ONE_DICT, 1, GET_COMPOSED_RANGES_OPTIONS,
                                                   (int)(sizeof(GET_COMPOSED_RANGES_OPTIONS) /
                                                         sizeof(GET_COMPOSED_RANGES_OPTIONS[0])),

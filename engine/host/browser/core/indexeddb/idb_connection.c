@@ -607,7 +607,8 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
     if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
     DCHECK(JS_IsString(argv[1]),
            "§4.4's transaction was handed a mode that is not a string — `optional IDBTransactionMode mode = "
-           "\"readonly\"` is an enumeration WITH a default, so §3.6 step 14.2 places one whether or not the "
+           "\"readonly\"` is an enumeration WITH a default, so §3.6 steps 15.4.1 and 16.1 place one whether "
+           "or not the "
            "page passed one");
     DCHECK(JS_IsObject(options),
            "§4.4's transaction was handed no options dictionary — the IDL writes `optional "
@@ -740,7 +741,8 @@ void idb_connection_init(JSContext *ctx)
     /* `[NewObject] IDBTransaction transaction((DOMString or sequence<DOMString>) storeNames,
         optional IDBTransactionMode mode = "readonly", optional IDBTransactionOptions options = {});` — the
        union is what kept this member out, and it is a declared type because its arm is decided by a read of
-       the page's value. `mode` carries §3.2.19's value list AND §3.6 step 14.2's default, both stated below. */
+       the page's value. `mode` carries §3.2.19's value list AND §3.6 steps 15.4.1 and 16.1's default, both
+       stated below. */
     static const IdlArgType TX_ARGS[3] = { IDL_DOMSTRING_OR_SEQUENCE, IDL_ENUM, IDL_DICT };
     /* `dictionary IDBTransactionOptions { IDBTransactionDurability durability = "default"; };` — one member,
        whose value list IS its type and whose default its IDL writes, so the body reads a value that is there
@@ -774,7 +776,7 @@ void idb_connection_init(JSContext *ctx)
                                           js_conn_transaction, 0);
     idl_optional_from(1);                                 /* `mode` and `options` are both optional */
     idl_enum_values(TX_MODES);                            /* §3.2.19's value list for the `mode` position */
-    idl_arg_default(1, IDL_DEFAULT_STRING, "readonly");   /* §3.6 step 14.2's `= "readonly"` */
+    idl_arg_default(1, IDL_DEFAULT_STRING, "readonly");   /* §3.6 steps 15.4.1 and 16.1's `= "readonly"` */
     g_id_create_store = idl_method_id_dict(ctx, CREATE_ARGS, 2, CREATE_INIT,
                                            (int)(sizeof CREATE_INIT / sizeof CREATE_INIT[0]),
                                            js_conn_create_object_store, 0);

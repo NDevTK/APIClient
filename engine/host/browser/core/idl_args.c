@@ -182,7 +182,8 @@ int idl_number_of(JSContext *ctx, IdlArgType t, JSValueConst v, double *out)
     if (!concolic_is(v)) {
         DCHECK(JS_IsNumber(v),
                "a numeric IDL argument reached its body neither a Number nor unknown external input. An "
-               "`undefined` here is §3.6 step 14.2 NOT DECLARED: an optional argument whose IDL writes `= …` "
+               "`undefined` here is §3.6 steps 15.4.1 and 16.1 NOT DECLARED: an optional argument whose IDL "
+               "writes `= …` "
                "holds that value, and a position that never called idl_arg_default arrives ABSENT instead — "
                "declare the default beside idl_optional_from rather than reading the absence in the body");
         r = JS_ToFloat64(ctx, out, v);
@@ -244,7 +245,8 @@ static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *val
    needs, and there is nothing left to run out of. */
 #define IDL_POOL_CHUNK 128
 
-/* §3.6 step 14.2's DEFAULT VALUE AT ONE POSITION, stated in the same two fields IdlDictMember already uses for
+/* §3.6 steps 15.4.1 and 16.1's DEFAULT VALUE AT ONE POSITION — see idl_args.h's idl_arg_default for why
+   the rule is two clauses and not one. Stated in the same two fields IdlDictMember already uses for
    a dictionary member's: the KIND, and the string the IDL wrote for the one kind that carries one. It is a
    struct rather than two parallel arrays so that a member's positions cannot be described half in one and half
    in the other. */
@@ -292,7 +294,8 @@ typedef struct {
        steps 3-4 is the one whose optionality step 15.3 reads and the shorter entry's is the wrong list. */
     int        split_at;
     int        split_longer_optional;
-    /* §3.6 STEP 14.2's DEFAULT VALUES, one entry per position the IDL lists — see idl_arg_default. NULL for a
+    /* §3.6 STEPS 15.4.1 AND 16.1's DEFAULT VALUES, one entry per position the IDL lists — see
+       idl_arg_default. NULL for a
        member declaring none, which is nearly all of them; allocated by the first declaration that names one,
        and freed with the pool exactly as `types` is. A position whose entry is IDL_DEFAULT_NONE has no default,
        which is what §3.6's absent rule is for. */
@@ -673,8 +676,8 @@ static int idl_members_depth(const IdlDictMember *ms, int n)
 
 /* A DEFAULT VALUE, AS AN IDL VALUE. It is already converted — a default is written in the IDL, not computed
    from the page — so it is placed and never coerced.
-   ONE FUNCTION, WHEREVER IT WAS DECLARED: §3.2.17 step 4.1.5 (a dictionary member) and §3.6 step 14.2 (an
-   optional positional argument) place the SAME kinds of value, so a second copy for the argument side would be
+   ONE FUNCTION, WHEREVER IT WAS DECLARED: §3.2.17 step 4.1.5 (a dictionary member) and §3.6 steps 15.4.1
+   and 16.1 (an optional positional argument) place the SAME kinds of value, so a second copy would be
    a second list of which forms the platform writes. */
 static JSValue idl_default_of(JSContext *ctx, IdlDictDefault kind, const char *str)
 {
@@ -2396,15 +2399,23 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            reaches the body as the `undefined` it would have anyway; what changes is only that the dictionary
            behind them exists. A VARIADIC member may not declare one at all, which the conversion asserts. */
         /* …AND SO IS A POSITION WITH A DECLARED DEFAULT, for exactly the same reason and by §3.6's own step
-           14.2: "if the argument is optional and it has a default value, set the value to that default" runs
-           for EVERY declared argument, not only for the ones the page reached — so a member the page stopped
-           short of still receives the IDL's value at every defaulted position behind it.
+           16, whose loop runs "While i is less than the number of arguments callable is declared to take"
+           and whose 16.1 is "If callable's argument at index i is declared with a default value, then append
+           to values that default value". That loop STARTS where the passed arguments ran out, so it is the
+           clause about exactly this case — a member the page stopped short of still receives the IDL's value
+           at every defaulted position behind it.
+           THE SENTENCE QUOTED HERE BEFORE — "if the argument is optional and it has a default value, set the
+           value to that default" — APPEARS NOWHERE IN WEB IDL, and it was attributed to a step 14.2 that is
+           really "Let T be the type at index i in the type list of the remaining entry in S". A fabricated
+           quotation is the one citation error that tells the reader NOT to open the spec, which is why it
+           outlived every number beside it.
            IT WAS THE DICTIONARY CLAUSE ALONE, AND THE ONE EXISTING USER WAS SAVED BY ACCIDENT. IndexedDB
            §4.4's `transaction(storeNames, optional IDBTransactionMode mode = "readonly", optional
            IDBTransactionOptions options = {})` declares a default at position 1, and `db.transaction(["s"])`
            reached the body with argv[1] undefined — except that position 2 is a dictionary, so the clause
            above extended the count past 1 and the default was placed anyway. The body's own DCHECK
-           ("§3.6 step 14.2 places one whether or not the page passed one") states the rule this now keeps: a
+           (idl_number_of's, which says an `undefined` at a numeric position means no default was DECLARED)
+           states the rule this now keeps: a
            member whose defaulted position has no dictionary behind it — Console §1.4.1's
            `time(optional DOMString label = "default")` — would have reached its body with nothing there. */
         if (!m->variadic) {
@@ -2413,8 +2424,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     s->n = r + 1;
         }
         /* THE DEFAULT CLAUSE APPLIES TO A VARIADIC MEMBER TOO, and that is not symmetry for its own sake — a
-           variadic member's DECLARED positions are the ones BEFORE the tail, and §3.6 step 14.2 reads a default
-           for each of them exactly as it does for a member with no tail. Console §1.4.2's
+           variadic member's DECLARED positions are the ones BEFORE the tail, and §3.6 step 16.1 reads a
+           default for each of them exactly as it does for a member with no tail — it is 16.2, the "missing"
+           arm, that asks "if callable's argument at index i is not variadic" and so stops at the tail.
+           Console §1.4.2's
            `timeLog(optional DOMString label = "default", any... data)` is one: `console.timeLog()` passes
            nothing, so the count above is 0, and without this the body would be handed an EMPTY argument vector
            for a member whose IDL guarantees a label at position 0. The dictionary clause stays where it is
@@ -2490,9 +2503,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             s->i < idl_declared_positions(m) && s->i >= first_opt && JS_IsUndefined(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            /* §3.6 STEP 14.2: an optional argument whose IDL writes `= …` is not absent — it holds THAT value,
-               which is already an IDL value and is therefore placed rather than coerced. A position with no
-               declared default is absent, which is the undefined the body reads as "not given". */
+            /* §3.6 STEP 15.4, BOTH ARMS — the guard reached here is that one, "If optionality is 'optional'
+               and V is undefined". Its 15.4.1 gives an argument whose IDL writes `= …` THAT value, which is
+               already an IDL value and is therefore placed rather than coerced; its 15.4.2 appends "the
+               special value 'missing'" for a position with no declared default, which is the undefined the
+               body reads as "not given". Step 16.1 is the same placement for a position the page never
+               reached — see idl_args.h's idl_arg_default. */
             *slot = (m->arg_dflts != NULL && m->arg_dflts[s->i].kind != IDL_DEFAULT_NONE)
                   ? idl_default_of(ctx, m->arg_dflts[s->i].kind, m->arg_dflts[s->i].str)
                   : JS_UNDEFINED;
@@ -3763,7 +3779,8 @@ void idl_overload_split_optional_from(int longer_first_optional)
 }
 
 /* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it must be stated AFTER
-   that one: §3.6 step 14.2 reads a default only for an OPTIONAL argument, so a default on a position the member
+   that one: §3.6 step 15.4 reads a default only for an OPTIONAL argument — its guard is "If optionality is
+   'optional' and V is undefined" — so a default on a position the member
    still calls required is a declaration disagreeing with itself. */
 void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str)
 {
@@ -3776,7 +3793,7 @@ void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str)
            "an argument default named a position the member's IDL does not list — the index is into that "
            "member's own type list, which is what its declaration passed");
     DCHECK(index >= m->first_optional,
-           "a REQUIRED argument was given a default value — §3.6 step 14.2 reads one only for an optional "
+           "a REQUIRED argument was given a default value — §3.6 step 15.4 reads one only for an optional "
            "argument, so idl_optional_from is stated before the defaults the optional positions carry");
     DCHECK(dflt != IDL_DEFAULT_NONE,
            "an argument default declared IDL_DEFAULT_NONE, which is the ABSENCE of a default — that is what a "
@@ -5103,7 +5120,8 @@ void idl_args_pool_free(void)
            this pool allocates per member, and it is freed here beside the other two. */
         free(idl_member(i)->types);
         idl_member(i)->types = NULL;
-        /* §3.6 step 14.2's declared defaults — the strings themselves are the declaring component's statics;
+        /* §3.6 steps 15.4.1 and 16.1's declared defaults — the strings themselves are the declaring
+           component's statics;
            the array naming them is this pool's, allocated by the first default a member declared. */
         free(idl_member(i)->arg_dflts);
         idl_member(i)->arg_dflts = NULL;

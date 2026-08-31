@@ -1620,7 +1620,9 @@ static const char *HTML =
     " && cl.classList === cll ? 'iscl' : 'wrong'));"
     /* §3.9's INDEXED PROPERTY GETTER — `list[0]` is a LOOKUP, not a property, which is the whole difference:
        it answers against the attribute as it is NOW, so it cannot go stale the way a written-out index would.
-       And §3.7.10 gives an interface with one %Array.prototype.values% as its @@iterator, so `for..of` and
+       And §3.7.9 Iterable declarations gives an interface with an INDEXED PROPERTY GETTER one
+       %Array.prototype.values% as its @@iterator — that is its first arm, and §3.7.10 is the ASYNCHRONOUS
+       declaration, which a DOMTokenList does not make — so `for..of` and
        spread over a classList are ordinary code that had nothing. */
     "var clj = [];"
     "for (var cq = 0; cq < cll.length; cq++) clj.push(cll[cq]);"
@@ -2025,7 +2027,9 @@ static const char *HTML =
     /* §5.2's iterable<>. Iteration is NOT the raw list: it SORTS by name and COMBINES each name's values, so
        two `x-a` appends are ONE entry — while `set-cookie` stays one entry per value, which is the whole reason
        the list keeps pairs. forEach hands the page (value, key) in that order, and its callback is the page's
-       code driven as a request. `for...of` over the Headers itself is `entries`, per §3.7.10. */
+       code driven as a request. `for...of` over the Headers itself is `entries`, per §3.7.9 Iterable
+       declarations' PAIR-ITERATOR arm, which defines @@iterator and `entries` as the SAME function object.
+       Not §3.7.10 Asynchronous iterable declarations: Headers writes `iterable<>`, not `async iterable<>`. */
     "(function(){ var h = new Headers({'x-b': '2'});"
       " h.append('x-a', '1'); h.append('x-a', '9');"
       " h.append('Set-Cookie', 'c1'); h.append('Set-Cookie', 'c2');"
@@ -6508,7 +6512,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/ceattr\"",     "data-w"  },   /* attributeChangedCallback, for the OBSERVED name only */
         { "\"/api/classlist\"",  "iscl"    },   /* §7.1 add/remove/toggle/replace over the class attribute */
         { "\"/api/clview\"",     "isview"  },   /* …and the list is a VIEW, with nothing to keep in step */
-        { "\"/api/clindex\"",    "isindex" },   /* §3.9 list[i], and §3.7.10's @@iterator */
+        { "\"/api/clindex\"",    "isindex" },   /* §3.9 list[i], and §3.7.9's @@iterator */
         { "\"/api/matches\"",    "ismatch" },   /* §4.9 matches, and closest walking INCLUSIVE ancestors */
         { "\"/api/matchbad\"",   "issyn"   },
         { "\"/api/serialize\"",  "%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E" },   /* §8.4, and `<br>` is void */
