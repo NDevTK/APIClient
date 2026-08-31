@@ -5,6 +5,24 @@
 
 #include "check.h"
 #include "core/dom/selector_match.h"
+#include "core/html/custom_elements.h"
+
+/* THE HOST LANGUAGE'S ANSWERS, for the pseudo-classes whose truth is not a shape of the tree. Selectors Level
+   5 §7 "Exposing custom state: the :state() pseudo-class" states the rule in general — "The exact matching
+   behavior of :state() pseudo-class is defined by the host language" — and HTML §4.16.3 "Pseudo-classes"
+   defines `:defined` the same way, by deferring to DOM §4.9 "Interface Element"'s custom element state. The
+   table is STATIC because lxb_selectors_host_cb_set borrows it for the arena's whole life, and it is installed
+   at init rather than per match so there is no window in which a compiled `:defined` could be matched against
+   an arena that has nobody to ask. */
+static bool host_defined(const lxb_dom_node_t *node, void *ctx)
+{
+    (void)ctx;   /* the realm is the ELEMENT's own document's, derived per node — never the running flow's */
+    return custom_elements_is_defined(node);
+}
+
+static const lxb_selectors_host_cb_t HOST_CB = { host_defined };
+
+const lxb_selectors_host_cb_t *selector_match_host_cb(void) { return &HOST_CB; }
 
 /* THE ONE ARENA, AND WHY ONE IS ENOUGH: there is NO REST POINT INSIDE A MATCH. lxb_selectors_match_node is a
    single C call that returns before the machine driving it can yield, and it ends in lxb_selectors_clean — so
@@ -21,6 +39,7 @@ void selector_match_init(void)
     g_arena = lxb_selectors_create();
     CHECK(g_arena != NULL && lxb_selectors_init(g_arena) == LXB_STATUS_OK,
           "the CSS selector matcher could not be created");
+    lxb_selectors_host_cb_set(g_arena, &HOST_CB, NULL);
 }
 
 void selector_match_free(void)
@@ -91,6 +110,11 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
     SelHit h = { false, 0 };
 
     DCHECK(g_arena != NULL, "a selector was matched before selector_match_init ran");
+    DCHECK(g_arena->host == &HOST_CB,
+           "the agent's selector-matching arena has no host-language answer table — a `:defined` in the "
+           "compiled list reaches lxb_selectors_pseudo_class's host arm and calls through a NULL. "
+           "selector_match_init installs it; an arena that reached a match without one was built somewhere "
+           "else or had the table cleared under it");
     DCHECK(node != NULL && list != NULL, "a selector match was asked about no node or no compiled selector");
     if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     DCHECK(!g_in_match, "the agent's one selector-matching arena was re-entered — one arena is correct only "

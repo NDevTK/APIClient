@@ -210,6 +210,12 @@ JSValue custom_elements_definition_of_element(JSContext *ctx, JSValueConst wrap)
 /* DOM §4.9's custom element state for an element — one of the five CE_STATE_* values. §4.13.7's
    `attachInternals` step 6 branches on exactly it. */
 int custom_elements_state_of_element(JSContext *ctx, JSValueConst wrap);
+/* DOM §4.9's "defined" — the state is "uncustomized" or "custom" — which is what HTML §4.16.3
+   "Pseudo-classes" defines `:defined` as matching. It takes the NODE and no realm because the selector
+   matcher has neither: `lxb_selectors_host_cb_t` (lexbor/selectors/selectors.h) is asked while walking a
+   tree, so the element's own document's realm is derived here rather than carried in from whoever ran the
+   query. Never mints a wrapper. */
+bool custom_elements_is_defined(const lxb_dom_node_t *n);
 /* HTML §4.13.3 "Core concepts"'s "valid custom element name" — five requirements over UTF-8 bytes, the first
    of which is the DOM's own "valid element local name" (core/dom/names.h). It is NO LONGER a grammar: the
    `PotentialCustomElementName` production this comment used to name has been REMOVED from the standard, which

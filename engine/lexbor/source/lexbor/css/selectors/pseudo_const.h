@@ -58,7 +58,13 @@ typedef enum {
     LXB_CSS_SELECTOR_PSEUDO_CLASS_VALID             = 0x0027,
     LXB_CSS_SELECTOR_PSEUDO_CLASS_VISITED           = 0x0028,
     LXB_CSS_SELECTOR_PSEUDO_CLASS_WARNING           = 0x0029,
-    LXB_CSS_SELECTOR_PSEUDO_CLASS__LAST_ENTRY       = 0x002a
+    /* HTML §4.16.3 "Pseudo-classes"'s `:defined`. APPENDED rather than filed alphabetically between DEFAULT and
+       DISABLED, because lxb_css_selectors_pseudo_data_pseudo_class[] is indexed BY this enum and its rows are
+       positional: inserting in the middle renumbers every row after it, and the alphabetical order the
+       generator emits is presentation. Its answer is not a fact about the tree — see
+       lxb_selectors_host_cb_t in selectors/selectors.h for who is asked. */
+    LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED           = 0x002a,
+    LXB_CSS_SELECTOR_PSEUDO_CLASS__LAST_ENTRY       = 0x002b
 }
 lxb_css_selector_pseudo_class_id_t;
 

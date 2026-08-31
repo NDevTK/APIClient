@@ -6,6 +6,7 @@
    the tree layer for a nodeType-keyed walk instead answered "" for every `<script><![CDATA[ … ]]></script>` an
    XHTML document ships, and "" is exactly the value the next step already has a meaning for. */
 #include "core/dom/text_content.h"
+#include "core/dom/selector_match.h"
 #include <string.h>
 #include <stdlib.h>
 #include <lexbor/css/css.h>
@@ -28,6 +29,11 @@ void dom_collect_scripts(lxb_html_document_t *dom, struct scr_ctx *out) {
     if (!list) { lxb_css_parser_destroy(p, true); return; }
     lxb_selectors_t *sel = lxb_selectors_create();
     if (!sel || lxb_selectors_init(sel) != LXB_STATUS_OK) { if (sel) lxb_selectors_destroy(sel, true); lxb_css_selector_list_destroy_memory(list); lxb_css_parser_destroy(p, true); return; }
+    /* THE SAME HOST ANSWERS AS THE AGENT'S ARENA. This walk's selector is the literal "script", so no
+       host-language pseudo-class can reach it today — and that is a reason to install the table, not to skip
+       it: the day this string grows a `:defined`, the alternative is a NULL call inside lexbor rather than a
+       different answer, and core/dom/selector_match.h's contract is that one selector has one meaning. */
+    lxb_selectors_host_cb_set(sel, selector_match_host_cb(), NULL);
     lxb_selectors_find(sel, lxb_dom_interface_node(dom), list, scr_collect_cb, out);
     /* the selector list owns its OWN css memory arena (lxb_css_selectors_parse allocates it), separate from the
        parser's — destroying the parser does NOT free it, so free it explicitly or it leaks per call. */

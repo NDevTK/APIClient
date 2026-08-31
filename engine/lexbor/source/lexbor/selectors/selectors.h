@@ -70,6 +70,23 @@ typedef lxb_selectors_entry_t *
 (*lxb_selectors_state_cb_f)(lxb_selectors_t *selectors,
                             lxb_selectors_entry_t *entry);
 
+/*
+ * THE HOST LANGUAGE'S SEAM. A pseudo-class whose answer is NOT a fact about the tree cannot be decided here:
+ * Selectors Level 5 §7 "Exposing custom state: the :state() pseudo-class" says outright that "The exact
+ * matching behavior of :state() pseudo-class is defined by the host language", and HTML §4.16.3
+ * "Pseudo-classes" defines `:defined` by deferring to DOM §4.9 "Interface Element"'s custom element state --
+ * which is state the embedder keeps, not a shape this tree has.
+ *
+ * So those arms ASK, exactly as lxb_html_tree_dom_cb_t is asked for the writes tree construction makes. An
+ * embedder that compiles such a selector and installs no table is a NULL call and not a wrong answer, which is
+ * the point: a default of `false` would report every element as un-defined and nothing would say so.
+ */
+typedef struct {
+    /* DOM §4.9: "An element whose custom element state is "uncustomized" or "custom" is said to be defined." */
+    bool (*defined)(const lxb_dom_node_t *node, void *ctx);
+}
+lxb_selectors_host_cb_t;
+
 struct lxb_selectors_entry {
     uintptr_t                     id;
     lxb_css_selector_combinator_t combinator;
@@ -104,6 +121,11 @@ struct lxb_selectors {
     lexbor_dobject_t         *nested;
 
     lxb_selectors_nested_t   *current;
+
+    /* NULL until lxb_selectors_host_cb_set -- lxb_selectors_create calloc()s, so an embedder that never sets
+       one gets NULL rather than a stale table. */
+    const lxb_selectors_host_cb_t *host;
+    void                     *host_ctx;
 
     lxb_selectors_opt_t      options;
     lxb_status_t             status;
@@ -240,6 +262,20 @@ lxb_inline void
 lxb_selectors_opt_set(lxb_selectors_t *selectors, lxb_selectors_opt_t opt)
 {
     selectors->options = opt;
+}
+
+/*
+ * Install the host language's answer table -- see lxb_selectors_host_cb_t.
+ *
+ * `cb` is BORROWED and must outlive `selectors`; a static table is the shape intended. `ctx` is handed back to
+ * every callback unchanged.
+ */
+lxb_inline void
+lxb_selectors_host_cb_set(lxb_selectors_t *selectors,
+                          const lxb_selectors_host_cb_t *cb, void *ctx)
+{
+    selectors->host = cb;
+    selectors->host_ctx = ctx;
 }
 
 /*

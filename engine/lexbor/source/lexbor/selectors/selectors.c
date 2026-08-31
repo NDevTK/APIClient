@@ -95,7 +95,8 @@ lxb_selectors_match_attribute(const lxb_css_selector_t *selector,
                               lxb_dom_node_t *node, lxb_selectors_entry_t *entry);
 
 static bool
-lxb_selectors_pseudo_class(const lxb_css_selector_t *selector,
+lxb_selectors_pseudo_class(lxb_selectors_t *selectors,
+                           const lxb_css_selector_t *selector,
                            const lxb_dom_node_t *node);
 
 static bool
@@ -1316,7 +1317,7 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
             return lxb_selectors_match_attribute(entry->selector, node, entry);
 
         case LXB_CSS_SELECTOR_TYPE_PSEUDO_CLASS:
-            return lxb_selectors_pseudo_class(entry->selector, node);
+            return lxb_selectors_pseudo_class(selectors, entry->selector, node);
 
         case LXB_CSS_SELECTOR_TYPE_PSEUDO_CLASS_FUNCTION:
             return lxb_selectors_pseudo_class_function(selectors,
@@ -1566,7 +1567,8 @@ lxb_selectors_match_attribute(const lxb_css_selector_t *selector,
 }
 
 static bool
-lxb_selectors_pseudo_class(const lxb_css_selector_t *selector,
+lxb_selectors_pseudo_class(lxb_selectors_t *selectors,
+                           const lxb_css_selector_t *selector,
                            const lxb_dom_node_t *node)
 {
     lexbor_str_t *str;
@@ -1648,6 +1650,15 @@ lxb_selectors_pseudo_class(const lxb_css_selector_t *selector,
             }
 
             return false;
+
+        case LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED:
+            /* HTML §4.16.3 "Pseudo-classes": "The :defined pseudo-class must match any element that is
+               defined." Whether an element IS defined is DOM §4.9 "Interface Element"'s custom element state,
+               which no shape of this tree carries -- so the host answers. An embedder that let this selector
+               compile and installed no table is a NULL call here, deliberately: reporting `false` would say
+               every element in the document is un-defined, which is a wrong answer no test distinguishes from
+               an unbuilt one. */
+            return selectors->host->defined(node, selectors->host_ctx);
 
         case LXB_CSS_SELECTOR_PSEUDO_CLASS_CURRENT:
         case LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFAULT:

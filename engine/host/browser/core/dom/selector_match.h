@@ -36,6 +36,13 @@ typedef struct SelectorList {
 void selector_match_init(void);
 void selector_match_free(void);
 
+/* THE HOST LANGUAGE'S ANSWER TABLE — the pseudo-classes lexbor cannot decide from the tree (`:defined` is HTML
+   §4.16.3 "Pseudo-classes" deferring to DOM §4.9 "Interface Element"'s custom element state). It is exposed
+   because a second `lxb_selectors_t` anywhere in this engine must answer them IDENTICALLY: this file's own
+   contract above is that there is ONE meaning for a selector, and an arena built without this table does not
+   give a different answer, it calls through a NULL. Borrowed, static, valid for the process. */
+const lxb_selectors_host_cb_t *selector_match_host_cb(void);
+
 /* SELECTORS §5 "parse a selector". NULL is the spec's `failure`, which every caller turns into a SyntaxError.
    The returned record is owned by the caller at one reference. */
 SelectorList *selector_list_compile(const char *sel);

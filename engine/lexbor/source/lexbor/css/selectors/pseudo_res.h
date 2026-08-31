@@ -61,7 +61,8 @@ static const lxb_css_selectors_pseudo_data_t lxb_css_selectors_pseudo_data_pseud
     {(lxb_char_t *) "user-invalid", 12, LXB_CSS_SELECTOR_PSEUDO_CLASS_USER_INVALID},
     {(lxb_char_t *) "valid", 5, LXB_CSS_SELECTOR_PSEUDO_CLASS_VALID},
     {(lxb_char_t *) "visited", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_VISITED},
-    {(lxb_char_t *) "warning", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_WARNING}
+    {(lxb_char_t *) "warning", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_WARNING},
+    {(lxb_char_t *) "defined", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED}
 };
 
 static const lxb_css_selectors_pseudo_data_func_t lxb_css_selectors_pseudo_data_pseudo_class_function[LXB_CSS_SELECTOR_PSEUDO_CLASS_FUNCTION__LAST_ENTRY] = 
@@ -153,7 +154,20 @@ static const lxb_css_selectors_pseudo_data_func_t lxb_css_selectors_pseudo_data_
       .cb.failed = lxb_css_state_failed, .cb.end = lxb_css_selectors_state_function_end}, false, false}
 };
 
-static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] = 
+/* HAND-EDITED, and the header above says not to — so here is the invariant that makes an edit CHECKABLE
+   without the generator, which this tree does not carry.
+   lexbor_shs_entry_get_lower_static (core/shs.c) reads slot 0's key_len as the TABLE SIZE, starts at
+   ((((lower(k[0]) * lower(k[len-1])) * lower(k[0])) + len) % size) + 1, and walks `next`. Two properties are
+   what an added row can break, and only the second is obvious:
+     - the chain must be reachable from that bucket, and
+     - it must be sorted by ASCENDING key_len, because the walk RETURNS NULL the moment it meets an entry
+       whose key_len exceeds the key's — so a short key filed behind a long one is unreachable while every
+       row still looks present.
+   "defined" (len 7) hashes to bucket 48, which held "first-child" (len 11). Filing it behind that row would
+   have hit exactly the second rule, so "first-child" moved to the free slot 14 and "defined" took the bucket
+   with next=14. Verified by simulating the lookup above over every named key in the table (42 reachable, 0
+   unreachable) and over near-miss keys that must still miss. */
+static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] =
 {
     {NULL, NULL, 78, 0}, 
     {"focus-visible", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_FOCUS_VISIBLE], 13, 0}, 
@@ -169,7 +183,7 @@ static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] =
     {"indeterminate", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_INDETERMINATE], 13, 0}, 
     {"local-link", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_LOCAL_LINK], 10, 0}, 
     {"user-invalid", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_USER_INVALID], 12, 0}, 
-    {NULL, NULL, 0, 0}, 
+    {"first-child", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_FIRST_CHILD], 11, 0}, 
     {NULL, NULL, 0, 0}, 
     {NULL, NULL, 0, 0}, 
     {NULL, NULL, 0, 0}, 
@@ -203,7 +217,7 @@ static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] =
     {"target", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_TARGET], 6, 0}, 
     {"read-only", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_READ_ONLY], 9, 10}, 
     {NULL, NULL, 0, 0}, 
-    {"first-child", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_FIRST_CHILD], 11, 0}, 
+    {"defined", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED], 7, 14}, 
     {"disabled", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_DISABLED], 8, 0}, 
     {NULL, NULL, 0, 0}, 
     {"required", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_REQUIRED], 8, 0}, 

@@ -595,11 +595,40 @@ bool custom_elements_name_is_valid(const char *name, size_t len)
     return custom_elements_name_verdict(name, len) == CE_NAME_OK;
 }
 
+/* THE STATE AN ELEMENT WAS *CREATED* WITH, for one nothing has written a state onto — DOM §4.9 "Interface
+   Element"'s create an element, whose final `Otherwise` branch creates the element "uncustomized" and then:
+   "If namespace is the HTML namespace, and either localName is a valid custom element name or is is non-null,
+   then set result's custom element state to "undefined"."
+   THE NAMESPACE IS HALF OF THAT CONDITION and this derivation used to omit it, so an SVG or MathML element
+   with a hyphenated local name derived "undefined" — a state DOM §4.9 reaches only through the HTML namespace.
+   Nothing could see the difference until `:defined` existed, because §4.13.5's upgrade returns early for
+   "undefined" and "uncustomized" alike and `attachInternals` step 6 rejects both; DOM §4.9 makes exactly one
+   of them DEFINED, which is where it becomes observable.
+
+   NAMED RESIDUAL — the `is is non-null` DISJUNCT IS NOT ASKED, because this engine keeps no is value: an
+   element created by `createElement("abbr", {is: "my-abbr"})` or parsed from `<abbr is="my-abbr">` derives
+   "uncustomized" here and therefore reports as DEFINED, where DOM §4.9 makes it "undefined" and NOT defined.
+   The next diff carries the is value on the element as its own state, set once at creation by DOM §4.9's
+   create an element and never re-read from the content attribute — a later `setAttribute("is", …)` must not
+   change it, which is exactly why deriving it from the attribute here would be a different wrong answer
+   rather than a narrower one. Its absence shows as `custom-elements/pseudo-class-defined-customized-builtins`
+   reporting a customized built-in as `:defined`. */
+static int ce_state_derive(const lxb_dom_node_t *n)
+{
+    size_t len = 0;
+    const lxb_char_t *tag;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return CE_STATE_UNCUSTOMIZED;
+    if (n->ns != LXB_NS_HTML) return CE_STATE_UNCUSTOMIZED;
+    tag = lxb_dom_element_local_name(lxb_dom_interface_element((lxb_dom_node_t *)n), &len);
+    if (tag && len && custom_elements_name_is_valid((const char *)tag, len)) return CE_STATE_UNDEFINED;
+    return CE_STATE_UNCUSTOMIZED;
+}
+
 /* DOM §4.9's custom element state for an element, DERIVED when nothing has written one — see g_state_key. The
    wrapper is the store, so this answers for the element the page holds and forks with the flow that changed it. */
 static int ce_state_of(JSContext *ctx, JSValueConst wrap)
 {
-    lxb_dom_node_t *n;
     JSValue v;
     int32_t s = 0;
 
@@ -612,14 +641,39 @@ static int ce_state_of(JSContext *ctx, JSValueConst wrap)
                "values — the slot is written by ce_set_state and by nothing else");
         return (int)s;
     }
-    n = node_of(wrap);
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return CE_STATE_UNCUSTOMIZED;
-    {
-        size_t len = 0;
-        const lxb_char_t *tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
-        if (tag && len && custom_elements_name_is_valid((const char *)tag, len)) return CE_STATE_UNDEFINED;
+    return ce_state_derive(node_of(wrap));
+}
+
+/* SELECTORS' HOST SEAM — HTML §4.16.3 "Pseudo-classes": "The :defined pseudo-class must match any element that
+   is defined", and DOM §4.9 "Interface Element": "An element whose custom element state is "uncustomized" or
+   "custom" is said to be defined."
+   IT ASKS THE ELEMENT'S OWN WRAPPER AND NEVER MINTS ONE. A match walks every candidate in the document, so
+   minting a wrapper per node would build a JS object for a tree the page has not touched — and the answer for
+   a node with no wrapper is complete without one, because the state slot is written only by ce_set_state,
+   which runs on a wrapper the page already holds. */
+bool custom_elements_is_defined(const lxb_dom_node_t *n)
+{
+    JSValueConst wrap;
+    JSContext *ctx;
+    int st;
+
+    DCHECK(n != NULL, "the :defined pseudo-class was asked about no node — lxb_selectors only reaches this arm "
+                      "for a candidate it is standing on");
+    DCHECK(n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "the :defined pseudo-class was asked about a node that is not an ELEMENT — DOM §4.9's custom "
+           "element state is a property of elements, and lxb_selectors_match_node filters non-elements before "
+           "any pseudo-class arm runs");
+    wrap = node_wrap_peek(n);
+    if (!JS_IsObject(wrap)) { st = ce_state_derive(n); }
+    else {
+        ctx = document_realm_of(n);
+        DCHECK(ctx != NULL,
+               "an element that ALREADY HAS a wrapper sits in a document with no realm record — a wrapper is "
+               "built by node_wrap in some realm, so the document it belongs to has one. Give that document a "
+               "record, or establish how this node got a wrapper without one");
+        st = ce_state_of(ctx, wrap);
     }
-    return CE_STATE_UNCUSTOMIZED;
+    return st == CE_STATE_UNCUSTOMIZED || st == CE_STATE_CUSTOM;
 }
 
 static void ce_set_state(JSContext *ctx, JSValueConst wrap, int state)
