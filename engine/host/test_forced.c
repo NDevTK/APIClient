@@ -5559,6 +5559,13 @@ enum { SESS_EXPLORE = 0, SESS_PARK = 1, SESS_RESUME = 2 };
    every sample of a live run — a static would pin the first sample's failure forever, and report a statement
    that had since become true. */
 static void fold_row(int *row, const char **why, int ok, const char *what) {
+    /* A ROW THAT IS 0 AND CARRIES NO TEXT IS THE COUNT-WITH-NO-NAME-IN-IT THIS WHOLE MECHANISM EXISTS TO
+       REFUSE, so it is caught at the fold rather than discovered as a blank column in a report. It matters
+       most for a NESTED fold — a row whose clause is another row's boolean passes that row's OWN `why` up as
+       the text, which is only sound because a 0 row always has one; this is where that is asserted. */
+    DCHECK(ok || what != NULL,
+           "a probe clause failed with no diagnostic: either a caller passed NULL for `what`, or it forwarded "
+           "an inner row's `why` for an inner row that is 0 without having recorded one");
     if (ok) return;
     *row = 0;
     if (!*why) *why = what;
@@ -5664,6 +5671,40 @@ static int emitted_record_has(const char *js, const char *url, const char *needl
     for (p = e; p + n <= e + span; p++)
         if (memcmp(p, needle, n) == 0) return 1;
     return 0;
+}
+
+/* ONE ENDPOINT'S REQUEST METHOD — the one field of a record that no reader above can reach, because it is the
+   one field that sits BEFORE the address. `endpoint_json_array` writes `{"method":..,"url":..,"params":[..`
+   (solver/endpoint.c), and `emitted_record_span` deliberately begins PAST the url because an address is not an
+   observation — so the method is outside every scope this file could state, and a row about it had no spelling
+   but a whole-document one.
+   THAT WHOLE-DOCUMENT SPELLING IS A COLLISION THE WHOLE-JSON RULE CANNOT SEE, WHICH IS WHY THIS IS A READER AND
+   NOT A LONGER `strstr`. `strstr(js, "\"POST\"")` is a needle whose own two quote bytes are token boundaries,
+   so the containment axis rules it safe and is right to: nothing CONTAINS it. It is answered instead by
+   EQUALITY, from every other POST record in the document — and this fixture emits several — so the clause that
+   read "this request was recorded as a POST" was satisfied by any POST anywhere, whatever method this one
+   carried. A token that many records emit is a join defect and not a containment one.
+   THE WALK BACK IS WHAT MAKES IT AN ASSERTION RATHER THAN A LONGER PATTERN. Spelling the pair as one
+   `snprintf("\"method\":\"%s\",\"url\":\"%s\"")` matches exactly and says nothing when it does not: a wrong
+   method and an emitter that moved the field read the same 0. Locating the record by its address and then
+   requiring the field to be there is what tells those apart at the origin. */
+static int emitted_record_method(const char *js, const char *url, const char *method) {
+    char pat[160];
+    const char *u, *o, *v;
+    size_t n = strlen(method);
+    int k = snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "an endpoint row's url pattern did not fit its buffer — a truncated pattern matches a PREFIX of the "
+          "address, so the row would read the method out of some other endpoint's record");
+    if (!(u = strstr(js, pat))) return 0;
+    for (o = u; o > js && *o != '{'; o--) { }
+    DCHECK(*o == '{' && strncmp(o + 1, "\"method\":\"", 10) == 0 && u > o + 12 && u[-1] == ',' && u[-2] == '"',
+           "endpoint_json_array writes a record whose `\"url\"` is not immediately preceded by the `\"method\"` "
+           "field this reader reads it out of, so every method probe reads 0 for a reason that is not about "
+           "what the engine recorded");
+    v = o + 11;                                   /* past `{"method":"` — the method's own first byte */
+    return (size_t)(u - 2 - v) == n && memcmp(v, method, n) == 0;
 }
 
 /* The first byte INSIDE one param's validValues array, or NULL when this endpoint or this param is absent. */
@@ -6183,8 +6224,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        is one the popup's `/\{([^}\/]+)\}/` substitution can find — `{state}.id` has its braces around the root
        source and the member path OUTSIDE them, so the segment becomes `{state.id}` — and the param is that
        name at location "path" with NO value, because a symbolic server-injected field determined none. */
-    int path_param = strstr(js, "\"/v1/users/{state.id}/posts\"") && strstr(js, "\"name\":\"state.id\"") &&
-                     strstr(js, "\"location\":\"path\"");
+    /* THREE WHOLE-DOCUMENT EXISTENCES THAT NAMED NO RECORD BETWEEN THEM. `"name":"state.id"` and
+       `"location":"path"` were asked of the whole document, so ANY param anywhere carrying that name and ANY
+       param anywhere at that location satisfied them — including two different params of two different
+       records, which is the shape this row exists to refuse. The emitter writes the two fields ADJACENT
+       (`{"name":..,"location":..`), so asking for them as one needle INSIDE this record's own span is the join
+       the row was always making, and it is one clause rather than two because the emitter joins them. */
+    const char *path_param_why = NULL; int path_param = 1;
+    fold_row(&path_param, &path_param_why, !!strstr(js, "\"/v1/users/{state.id}/posts\""),
+             "NOT REACHED: there is no /v1/users/{state.id}/posts record at all, so the templated-address "
+             "statement never ran and the clause below is not being reported on. That is the SCHEDULE");
+    fold_row(&path_param, &path_param_why,
+             emitted_record_has(js, "/v1/users/{state.id}/posts",
+                                "\"name\":\"state.id\",\"location\":\"path\""),
+             "the record EXISTS and its templated segment is not registered on it as a PATH param named "
+             "`state.id` — path_scan re-spelled the address without minting the hole, or minted it at some "
+             "other location or under some other name");
     /* THE BODY'S FIELDS, from the bytes the page composed, with the literals the code computed.
        FOLDED, WITH THE SAME FIRST-CLAUSE RULE THE SORT ROWS CARRY, applied to the one row in this document
        whose statement runs JSON.stringify. That is what makes it worth folding rather than a sweep: this
@@ -6198,27 +6253,46 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        body param at all (the POST never ran, OR the serialization yielded nothing readable — the one clause
        whose second reading should ever send anyone at that machine) from a schema that is present and missing
        a field (the walk ran and dropped a member). Two different next steps that used to be one 0.
-       THE FIRST CLAUSE DELIBERATELY DOES NOT ASSERT THE RECORD'S ADDRESS. `"/v1/users/{state.id}/posts"` would
-       have made a cleaner three-way split and it belongs to `path-param`, which is a statement about the PATH:
-       folding it in here would have coupled two rows, so a re-spelled path would redden a row about the BODY
-       and the localisation would point at the wrong machine. A row states its own statement; where that leaves
-       two readings in one clause, the clause NAMES the row that separates them instead of borrowing it. */
+       THE FIRST CLAUSE STILL DOES NOT ASSERT THE RECORD'S ADDRESS AND THE ONES BELOW IT NOW DO, which is not
+       an inconsistency — it is the split. The `"location":"body"` clause is the one whose second reading sends
+       somebody at a machine ("the POST never ran, or the serialization yielded nothing"), so it must stay
+       answerable by a body param on ANY record: scoping it would fold that reading into the address and the
+       row would lose it. Every clause AFTER it is a claim about one member of ONE schema, and asked unscoped
+       those were satisfied by any `title` and any `firstPost` anywhere in the document — the join defect, not
+       a localisation choice. The coupling that used to be the reason for leaving them bare is real and is now
+       stated where it can be acted on: the scoped clauses NAME `path-param` in their own message, so a red
+       body row caused by a re-spelled address says so instead of being unfalsifiable to avoid saying it. */
     const char *body_param_why = NULL;
     int body_param = 1;
     fold_row(&body_param, &body_param_why, !!strstr(js, "\"location\":\"body\""),
              "no body param on the surface AT ALL — either the POST statement never ran or its "
              "`body:` JSON.stringify produced nothing a schema could be read out of; `path-param` is the row "
              "that separates those, since it asserts the same statement's record and nothing about the body");
-    fold_row(&body_param, &body_param_why, strstr(js, "\"name\":\"title\"") && strstr(js, "\"firstPost\""),
-             "the body schema is there and `title` is missing or lost its computed literal `firstPost`");
+    fold_row(&body_param, &body_param_why,
+             param_value_is(js, "/v1/users/{state.id}/posts", "title", "firstPost"),
+             "the body schema is there and this statement's own record does not carry `title` = `firstPost` — "
+             "the walk dropped the member, or it lost the computed literal. IT CAN ALSO MEAN THE ADDRESS "
+             "MOVED: this clause is scoped to `/v1/users/{state.id}/posts`, so a re-spelled path reddens it "
+             "here as well, and `path-param` is the row that says which of the two it is");
     fold_row(&body_param, &body_param_why, !!strstr(js, "\"name\":\"count\""),
              "the body schema is there and `count` is missing — one member was dropped from the walk");
     /* THE ALIGNED EXAMPLE: the shape's hole and the concolic's concrete URL line up segment for segment, so the
        path param carries `visible` — the value the document actually has. The query param on the same record is
        what proves all three locations coexist rather than one overwriting the others. */
-    int path_example = strstr(js, "\"/v1/vis/{hidden|visible}/reports\"") &&
-                       strstr(js, "\"name\":\"hidden|visible\"") && strstr(js, "\"visible\"") &&
-                       strstr(js, "\"name\":\"deep\"");
+    const char *path_example_why = NULL; int path_example = 1;
+    fold_row(&path_example, &path_example_why, !!strstr(js, "\"/v1/vis/{hidden|visible}/reports\""),
+             "NOT REACHED: there is no /v1/vis/{hidden|visible}/reports record at all, so this run did not "
+             "answer the statement. That is the SCHEDULE");
+    fold_row(&path_example, &path_example_why,
+             param_value_is(js, "/v1/vis/{hidden|visible}/reports", "hidden|visible", "visible"),
+             "the record EXISTS and its PATH hole `hidden|visible` does not carry `visible` — path_scan's "
+             "alignment did not line the concolic's concrete URL up with the shape segment for segment, so the "
+             "hole was minted without the example the run actually had");
+    fold_row(&path_example, &path_example_why,
+             param_value_is(js, "/v1/vis/{hidden|visible}/reports", "deep", "1"),
+             "the record EXISTS with its path hole filled and the QUERY param `deep` is not there carrying "
+             "`1` — a path param and a query param on ONE record is the whole claim, so this says one "
+             "location overwrote the other rather than coexisting with it");
     /* ─── THE `if (cfg.admin)` FAMILY, AND THE RUNG IT NEVER HAD ────────────────────────────────────────────
        SEVEN rows hang off ONE statement — the fork and the three read-backs immediately after it — and every
        one of them was a CONJUNCTION OVER BOTH ARMS with nothing underneath it. So all seven read 0 for a
@@ -6361,10 +6435,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "acADMIN", "acPUBLIC");
     /* ASYNC THROW: a heap-resident async body that throws becomes a REJECTED promise; the .catch reaction fires
        and records /api/caught — proving the exception unwind of an async tramp frame (reject, not propagate). */
-    int async_throw = (strstr(js, "\"/api/caught\"") && strstr(js, "asyncThrew"));
+    const char *async_throw_why = NULL; int async_throw = 1;
+    fold_row(&async_throw, &async_throw_why, !!strstr(js, "\"/api/caught\""),
+             "NOT REACHED: there is no /api/caught record at all, so the rejected promise's .catch reaction "
+             "never ran. That is the SCHEDULE");
+    fold_row(&async_throw, &async_throw_why, param_value_is(js, "/api/caught", "e", "asyncThrew"),
+             "the .catch reaction RAN and /api/caught's `e` does not carry `asyncThrew` — the async tramp "
+             "frame's unwind rejected with something other than the value the body threw");
     /* ASYNC LOOP + PREEMPT: an async body with a loop is preempted mid-iteration; the deep-preempt stashes and
        rebuilds the whole TrampFrame chain (incl. async_data), so it resumes correctly. s=0+..+24=300. */
-    int async_preempt = (strstr(js, "\"/api/asyncloop\"") && strstr(js, "\"2000\""));
+    const char *async_preempt_why = NULL; int async_preempt = 1;
+    fold_row(&async_preempt, &async_preempt_why, !!strstr(js, "\"/api/asyncloop\""),
+             "NOT REACHED: there is no /api/asyncloop record at all, so the preempted async body never "
+             "reached its fetch. That is the SCHEDULE");
+    fold_row(&async_preempt, &async_preempt_why, param_value_only(js, "/api/asyncloop", "s", "2000"),
+             "the async body RAN and /api/asyncloop's `s` is not exactly `2000` — the deep-preempt rebuilt "
+             "the TrampFrame chain at some other iteration, so the loop resumed short of its end or ran an "
+             "iteration twice. Asked as `_only` because the sum is a value the code DETERMINED: a SECOND "
+             "entry means the flow forked where this statement cannot");
     /* ORPHAN-INVOKE, IN TWO ROWS BECAUSE IT IS TWO CLAIMS. The first is that a function nothing in the document
        calls was RUN — with no driving there is no request at all, which is what a page holding only such a
        function measured. The second is that its parameter arrived as unknown external input: `role === 'admin'`
@@ -6448,8 +6536,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        other statement. So the term could not fail while any sibling reply-reader emitted, and what it appeared
        to assert (that json()'s field reached THIS endpoint) was never measured. Scoped to the one param of the
        one endpoint, which is what the claim was always about. */
-    int fetch_await = (strstr(js, "\"/api/user\"") &&
-                       param_value_is(js, "/api/user", "region", "us-west-2"));
+    /* AND THE EXISTENCE CLAUSE IS ITS OWN RUNG. Standing beside a scoped one in a single `&&`, it added
+       nothing a reader could act on — `param_value_is` returns 0 when the record is absent, so the scoped
+       clause already answers it, and folding them made "the await never delivered" and "the reply's field
+       did not reach this param" one 0 that named neither. */
+    const char *fetch_await_why = NULL; int fetch_await = 1;
+    fold_row(&fetch_await, &fetch_await_why, !!strstr(js, "\"/api/user\""),
+             "NOT REACHED: there is no /api/user record at all, so `await fetch('/api/config')` never "
+             "delivered its reply and json() never ran. That is the SCHEDULE");
+    fold_row(&fetch_await, &fetch_await_why, param_value_is(js, "/api/user", "region", "us-west-2"),
+             "the reply WAS delivered and /api/user's `region` does not carry `us-west-2` — §6.4.3 json() "
+             "parsed the host's bytes and its field did not flow into this endpoint as a concrete example");
     /* THE SECOND REACTION OF `.then(r => r.json()).then(…)` — and the row is the PAIR, because either half
        alone is a term that cannot localise. `chain1` alone says the reply was delivered and the first handler
        ran; `chain2` is the only thing that says json()'s own promise ever SETTLED, and its absence beside a
@@ -6479,15 +6576,43 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     const char *clone_body_why = NULL; int clone_body = 1;
     fold_row(&clone_body, &clone_body_why, !!strstr(js, "\"/api/clonebody\""),
              "NOT REACHED: there is no /api/clonebody record at all, so this run did not answer the statement");
-    fold_row(&clone_body, &clone_body_why, strstr(js, "\"copy\"") && strstr(js, "\"orig\""),
-             "§6.4 the clone's read and the ORIGINAL's read did not both reach this endpoint");
+    /* THE TWO READS ARE TWO PARAMS OF THIS RECORD, AND THE OLD CLAUSES ASKED FOR THEIR NAMES. `"copy"` and
+       `"orig"` matched `"name":"copy"` anywhere in the document, so the pair stated that two params exist
+       somewhere and nothing about what either read BACK — and both are the region field of the reply this
+       fixture's own host serves, so asking for the VALUE is what says the clone and the original decoded the
+       same bytes rather than merely being registered. */
+    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "copy", "us-west-2"),
+             "§6.4 the CLONE's json() did not reach this endpoint with the reply's own field: /api/clonebody's "
+             "`copy` does not carry `us-west-2`");
+    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "orig", "us-west-2"),
+             "§6.4 the ORIGINAL's json() did not reach this endpoint with the reply's own field: "
+             "/api/clonebody's `orig` does not carry `us-west-2` — the clone consumed the body the original "
+             "still had to read");
     fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "used", "sync"),
              "§6.4 clone() on an already-read body did not throw SYNCHRONOUSLY: `used` is not `sync`");
     /* §6.4.1/§6.4.2: the reply read as BYTES. 22 is the fixture reply's length and 123 is its leading '{' — the
        two agreeing is what says arrayBuffer() and bytes() are two views of ONE byte sequence, and a length the
        record carried rather than one a strlen guessed. */
-    int body_bytes = (strstr(js, "\"/api/bodybytes\"") && strstr(js, "\"22\"") &&
-                      strstr(js, "\"123\"") && strstr(js, "truetrue"));
+    /* AND `22` IS TWO FACTS, WHICH ONE `strstr` CANNOT BE. The claim is that arrayBuffer()'s `byteLength` and
+       bytes()'s `length` AGREE, and the statement puts them on two params — so a single whole-document
+       `strstr(js, "\"22\"")` was answered by EITHER of them, and a run in which the two DISAGREED satisfied
+       the row exactly as the correct one does. That is the join defect at its sharpest: the row's headline
+       claim is an equality between two params and the spelling could not see either param. */
+    const char *body_bytes_why = NULL; int body_bytes = 1;
+    fold_row(&body_bytes, &body_bytes_why, !!strstr(js, "\"/api/bodybytes\""),
+             "NOT REACHED: there is no /api/bodybytes record at all, so this run did not answer the "
+             "statement. That is the SCHEDULE");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "len", "22"),
+             "§6.4.1 arrayBuffer()'s `byteLength` is not exactly 22 — the record did not carry the reply's "
+             "own length");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "n", "22"),
+             "§6.4.2 bytes()'s `length` is not exactly 22 — it disagrees with arrayBuffer()'s byteLength on "
+             "the SAME reply, so the two are not two views of one byte sequence");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "b0", "123"),
+             "§6.4.2 the first byte is not exactly 123 (`{`) — the two reads agreed on a length and not on "
+             "the bytes");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "kind", "truetrue"),
+             "§6.4.1/§6.4.2 the two results are not an ArrayBuffer and a Uint8Array");
     /* THE LATCH TIME-TRAVELS: two arms forked BEFORE either read one shared reply, and BOTH read it. If the
        body-used flag did not ride the COW delta, the second arm's read would throw and only one tag would be
        here — which is exactly what it did, as a `body stream already read` page error. */
@@ -6626,13 +6751,41 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* THE ENDPOINT CARRIES ITS HEADERS: the two literals as the strings the code computed, and the
        Authorization as a SHAPE, because a value built out of unknown input is not one this engine may invent.
        The method comes from the same init, so a POST recorded as a GET would fail here too. */
-    int needsauth = (strstr(js, "\"/api/needsauth\"") && strstr(js, "\"POST\"") &&
-                     strstr(js, "\"x-api-version\":\"2024-11-01\"") &&
-                     strstr(js, "\"content-type\":\"application/json\"") &&
-                     strstr(js, "\"authorization\":\"Bearer {state}.token\""));
+    /* FIVE WHOLE-DOCUMENT EXISTENCES OVER ONE RECORD, AND THE METHOD CLAUSE IS THE ONE WORTH NAMING. The three
+       header needles are each unique bytes, so nothing CONTAINED them and the containment axis called them
+       clean — but `"POST"` is answered by EQUALITY from every other POST record this fixture emits, and there
+       are several, so the clause that read "this request was recorded as a POST" could not fail while any POST
+       existed anywhere. The headers were the same defect one step weaker: three tokens somewhere, on no stated
+       record, so a seam that filed them under a different endpoint satisfied the row. */
+    const char *needsauth_why = NULL; int needsauth = 1;
+    fold_row(&needsauth, &needsauth_why, !!strstr(js, "\"/api/needsauth\""),
+             "NOT REACHED: there is no /api/needsauth record at all, so this run did not answer the "
+             "statement and none of the four facts below is being reported on. That is the SCHEDULE");
+    fold_row(&needsauth, &needsauth_why, emitted_record_method(js, "/api/needsauth", "POST"),
+             "the record EXISTS and its own `method` is not POST — the init bag's method did not reach the "
+             "record, so a request this page makes as a POST is reported as something a client may repeat");
+    fold_row(&needsauth, &needsauth_why,
+             emitted_record_has(js, "/api/needsauth", "\"x-api-version\":\"2024-11-01\""),
+             "/api/needsauth's own headers do not carry `x-api-version: 2024-11-01` — a literal the code "
+             "computed, so this is the header list not reaching the record rather than a value to supply");
+    fold_row(&needsauth, &needsauth_why,
+             emitted_record_has(js, "/api/needsauth", "\"content-type\":\"application/json\""),
+             "/api/needsauth's own headers do not carry `content-type: application/json`");
+    fold_row(&needsauth, &needsauth_why,
+             emitted_record_has(js, "/api/needsauth", "\"authorization\":\"Bearer {state}.token\""),
+             "/api/needsauth's own headers do not carry the Authorization as the SHAPE `Bearer "
+             "{state}.token` — a value built out of unknown input either collapsed to an invented example or "
+             "was dropped, and either way the surface stops saying what a caller must supply");
     /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
        parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
-    int pending_await = (strstr(js, "\"/api/lazy\"") && strstr(js, "lazyRegion"));
+    const char *pending_await_why = NULL; int pending_await = 1;
+    fold_row(&pending_await, &pending_await_why, !!strstr(js, "\"/api/lazy\""),
+             "NOT REACHED: there is no /api/lazy record at all, so the flow parked at the await and never "
+             "resumed. That is the SCHEDULE");
+    fold_row(&pending_await, &pending_await_why, param_value_is(js, "/api/lazy", "r", "lazyRegion"),
+             "the flow RESUMED and /api/lazy's `r` does not carry `lazyRegion` — the continuation was "
+             "delivered without the settled value, so the await resumed on something other than what the "
+             "promise settled with");
     /* PER-FLOW PROMISE STATE: a promise created BEFORE a snapshot fork and settled per-flow with a DIFFERENT
        value in each arm; both shBETA and shSTABLE present ⇒ the shared promise's settlement is isolated per
        flow (no cross-flow contamination) — async STATE time-travels, not just async execution. */
@@ -6991,7 +7144,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "outcome seam answered some other position here, or answered one source twice");
     /* THE SYNCHRONOUS HOST READ resumed at its own call site, three times in a loop, each answer landing in
        the call that asked for it — hr0hr1hr2 in order, never interleaved or reused. */
-    int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
+    const char *hostreq_why = NULL; int hostreq_tt = 1;
+    fold_row(&hostreq_tt, &hostreq_why, !!strstr(js, "\"/api/hostreq\""),
+             "NOT REACHED: there is no /api/hostreq record at all, so the three synchronous host reads never "
+             "reached their fetch. That is the SCHEDULE");
+    fold_row(&hostreq_tt, &hostreq_why, param_value_only(js, "/api/hostreq", "v", "hr0hr1hr2"),
+             "the loop RAN and /api/hostreq's `v` is not exactly `hr0hr1hr2` — an answer landed in a call "
+             "that did not ask for it, was reused across iterations, or arrived out of order. Asked as "
+             "`_only` because the concatenation is a value the code DETERMINED: a second entry means the "
+             "flow forked where this statement cannot");
     /* AND ACROSS A FORK: each arm re-issued its own request under its own world, so BOTH answers exist. */
     const char *hostreqfork_why = NULL; int hostreqfork_tt = 1;
     FORK_ROW(js, &hostreqfork_tt, &hostreqfork_why, "/api/hostreqfork", "v",
@@ -7009,11 +7170,38 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&navopen_tt, &navopen_why, param_value_is(js, "/api/navopen", "v", "proxy"),
              "§7.4 open() handed back no WindowProxy — this statement's `v` is `null`");
     /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
-    int sop_tt = (strstr(js, "\"/api/sop\"") && strstr(js, "SecurityError:closedok") && !strstr(js, "LEAKED"));
+    /* THE NEGATIVE STAYS WHOLE-DOCUMENT AND THE POSITIVES DO NOT, which is this file's own discriminator: a
+       superstring or a neighbouring record can only make `!strstr` fail EARLY, never pass, so `LEAKED`
+       anywhere really is the finding it claims to be — while `SecurityError:closedok` asked unscoped was
+       satisfied by any record carrying those bytes and said nothing about THIS proxy. */
+    const char *sop_why = NULL; int sop_tt = 1;
+    fold_row(&sop_tt, &sop_why, !!strstr(js, "\"/api/sop\""),
+             "NOT REACHED: there is no /api/sop record at all, so the cross-origin read statement never ran. "
+             "That is the SCHEDULE");
+    fold_row(&sop_tt, &sop_why, param_value_is(js, "/api/sop", "v", "SecurityError:closedok"),
+             "§7.2.1 the cross-origin WindowProxy did not answer BOTH halves: /api/sop's `v` is not "
+             "`SecurityError:closedok`, so either `name` did not throw a SecurityError or `closed` did not "
+             "answer false — a filter that threw for everything passes a test that only checks the throw");
+    fold_row(&sop_tt, &sop_why, !strstr(js, "LEAKED"),
+             "§7.2.1 a cross-origin `name` was READ: `LEAKED` is in the document. Deliberately asked of the "
+             "WHOLE document rather than of this record — a leak anywhere is the finding");
     /* A cross-document read suspended and resumed with the peer's answer. */
-    int xdocread_tt = (strstr(js, "\"/api/xdocread\"") && strstr(js, "xread"));
+    const char *xdocread_why = NULL; int xdocread_tt = 1;
+    fold_row(&xdocread_tt, &xdocread_why, !!strstr(js, "\"/api/xdocread\""),
+             "NOT REACHED: there is no /api/xdocread record at all, so the cross-document read never "
+             "returned. That is the SCHEDULE");
+    fold_row(&xdocread_tt, &xdocread_why, param_value_is(js, "/api/xdocread", "v", "xread"),
+             "the read RETURNED and /api/xdocread's `v` is not `xread` — the flow resumed at the call site "
+             "with something other than the peer's answer, so one of `closed`/`length` came back undefined "
+             "or the wrong type");
     /* The same cross-document read reached from inside a QUEUED JOB, which parks the flow at a job root. */
-    int xdocjob_tt = (strstr(js, "\"/api/xdocjob\"") && strstr(js, "jobread"));
+    const char *xdocjob_why = NULL; int xdocjob_tt = 1;
+    fold_row(&xdocjob_tt, &xdocjob_why, !!strstr(js, "\"/api/xdocjob\""),
+             "NOT REACHED: there is no /api/xdocjob record at all, so the flow parked at a job root and "
+             "never resumed. That is the SCHEDULE");
+    fold_row(&xdocjob_tt, &xdocjob_why, param_value_is(js, "/api/xdocjob", "v", "jobread"),
+             "the job RESUMED and /api/xdocjob's `v` is not `jobread` — a cross-document read reached from "
+             "inside a queued job answered something other than the peer's `closed`");
     /* §8.7 Timers + §8.1.7: the microtask ran first, then the two timers in the order they were set.
        A CONDITIONAL COLLISION, WHICH IS THE KIND A SCAN OF A PASSING RUN CANNOT SEE. No token this document
        emits contains `ABC` while the document is RIGHT — but `/api/scriptorder`'s own failing spelling IS
@@ -7028,7 +7216,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§8.1.7 the microtask and the two timers did not run in the order they were queued");
     /* §8.7's string handler was compiled and RUN as a program, and the handle the two arms hand back comes
        out of one per-global counter. Two endpoints because the two halves fail independently. */
-    int timerstr_tt = (strstr(js, "\"/api/timerstr\"") && strstr(js, "strran"));
+    const char *timerstr_why = NULL; int timerstr_tt = 1;
+    fold_row(&timerstr_tt, &timerstr_why, !!strstr(js, "\"/api/timerstr\""),
+             "NOT REACHED: there is no /api/timerstr record at all, so §8.7's string handler was never "
+             "compiled or never fired. That is the SCHEDULE");
+    fold_row(&timerstr_tt, &timerstr_why, param_value_is(js, "/api/timerstr", "v", "strran"),
+             "the timer FIRED and /api/timerstr's `v` is not `strran` — the string handler reached its fetch "
+             "without having been run as a program");
     /* AND `next` IS NOT THIS STATEMENT'S ALONE. The @S URL sink's source renders as `{state}.next` in
        `securitySinks` — the same spelling `s_poc`/`s_stage` ask for a few hundred lines down — so the old
        unscoped term read 1 on every run that recorded the location sink at all, whatever the counter did.
@@ -7043,10 +7237,23 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§8.7's handle counter gave two LIVE timers one identifier, so clearTimeout would clear the wrong one");
     /* §8.7 step 4 asked about an unknown `timeout`: the fork has a consumer, so the document survives it.
        A 0 here is an ABORT at the fork seam and not a missing endpoint — see the statement that produces it. */
-    int unkdelay_tt = (strstr(js, "\"/api/unkdelay\"") && strstr(js, "forked"));
+    const char *unkdelay_why = NULL; int unkdelay_tt = 1;
+    fold_row(&unkdelay_tt, &unkdelay_why, !!strstr(js, "\"/api/unkdelay\""),
+             "NOT REACHED: there is no /api/unkdelay record at all — an ABORT at the fork seam and not a "
+             "missing endpoint. That is the SCHEDULE; see the statement that produces it");
+    fold_row(&unkdelay_tt, &unkdelay_why, param_value_is(js, "/api/unkdelay", "v", "forked"),
+             "the statement RAN and /api/unkdelay's `v` is not `forked` — §8.7 step 4's unknown `timeout` "
+             "handed back something that is not a number, so the fork had no consumer");
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
-    int ifnav_tt = (strstr(js, "\"/api/iframenav\"") && strstr(js, "ifnav"));
+    const char *ifnav_why = NULL; int ifnav_tt = 1;
+    fold_row(&ifnav_tt, &ifnav_why, !!strstr(js, "\"/api/iframenav\""),
+             "NOT REACHED: there is no /api/iframenav record at all, so the inserted iframe statement never "
+             "reached its fetch. That is the SCHEDULE");
+    fold_row(&ifnav_tt, &ifnav_why, param_value_is(js, "/api/iframenav", "v", "ifnav"),
+             "the statement RAN and /api/iframenav's `v` is not `ifnav` — §4.8.5's inserted iframe got no "
+             "child navigable, its proxy was not stable across two reads, or the read through it did not "
+             "resolve to the peer's answer");
     /* §7.4.4 step 8 moved this Document's address to a route the run COMPUTED out of a reply, and the notice
        that carries that address off this instance said `derived`. FOUR CONDITIONS AND NOT ONE, folded so the
        row NAMES the one that failed: they fail for four different reasons, three of them in different
@@ -7079,9 +7286,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        since, which is CLAUDE.md's greppable tell exactly: a name READ in one place and WRITTEN in none. The
        whole marker is named here rather than a fragment of it, because a fragment is what let the first half
        of this string go on looking right after the second half stopped existing. */
-    int idbopen_tt = (strstr(js, "\"/api/idbopen\"") &&
-                     strstr(js, "0:1:versionchange:pending:a+b:same:plain:DataError:99:done:7:u-9"
-                                ":a+b:perhandle:1:fixture"));
+    const char *idbopen_why = NULL; int idbopen_tt = 1;
+    fold_row(&idbopen_tt, &idbopen_why, !!strstr(js, "\"/api/idbopen\""),
+             "NOT REACHED: there is no /api/idbopen record at all, so §5.1's open never reached `success`. "
+             "That is the SCHEDULE");
+    fold_row(&idbopen_tt, &idbopen_why,
+             param_value_only(js, "/api/idbopen", "v",
+                              "0:1:versionchange:pending:a+b:same:plain:DataError:99:done:7:u-9"
+                              ":a+b:perhandle:1:fixture"),
+             "the open SUCCEEDED and /api/idbopen's `v` is not exactly the marker the statement composes — "
+             "§5.1's open, §2.7 + §2.8's request inside it, or §2.5's LIST key path over the store the same "
+             "upgrade creates answered differently. The WHOLE marker is asserted rather than a fragment, "
+             "because a fragment is what let the first half of this string go on looking right after the "
+             "second half stopped existing");
 
     /* §6.1 AND §5.5 STEP 2 OVER RECORDS, from the page's own door — the four claims the in-C round-trip
        fixture used to make before §6.1 became a step machine with no C entry. The taint term is read as the
@@ -7099,7 +7316,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* THE OTHER HALF OF THAT NOTE — §4.5's worked example, where the population's ConstraintError aborts the
        whole UPGRADE TRANSACTION rather than failing one `put`. Two errors, from two objects, and neither is
        derivable from the other: the transaction's is why it died, the open request's is §5.1 step 10.8's. */
-    int idbuniq_tt = (strstr(js, "\"/api/idbuniq\"") && strstr(js, "ConstraintError:AbortError"));
+    const char *idbuniq_why = NULL; int idbuniq_tt = 1;
+    fold_row(&idbuniq_tt, &idbuniq_why, !!strstr(js, "\"/api/idbuniq\""),
+             "NOT REACHED: there is no /api/idbuniq record at all, so the open request's `error` handler "
+             "never ran. That is the SCHEDULE");
+    fold_row(&idbuniq_tt, &idbuniq_why,
+             param_value_only(js, "/api/idbuniq", "v", "ConstraintError:AbortError"),
+             "the handler RAN and /api/idbuniq's `v` is not exactly `ConstraintError:AbortError` — §4.5's "
+             "population failure did not abort the whole UPGRADE TRANSACTION, or the two errors are not the "
+             "two independent ones (the transaction's says why it died, §5.1 step 10.8's says what the open "
+             "request saw)");
 
     /* §6.1's TWO CLAIMS, as the tokens the page's own comparison emitted. The expected bytes are in the
        document (see `/api/cssprop` in HTML above) because that is where the read happens and where nothing
@@ -7259,8 +7485,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        dispatch distinguishes by the phase each runs at. Both phases present is the whole claim; either alone
        is a ToBoolean pinning the flag at the boundary, which is what the plain reader did and which made the
        arm fork above it half-useless. */
-    int aelunk_tt = (strstr(js, "\"/api/aelunk\"")
-                     && strstr(js, "aelcapturing") && strstr(js, "aelbubbling"));
+    const char *aelunk_why = NULL; int aelunk_tt = 1;
+    FORK_ROW(js, &aelunk_tt, &aelunk_why, "/api/aelunk", "v",
+             "DOM §2.7's flatten-options step 2 reading `capture` off an UNKNOWN options bag, which is one "
+             "registration that must be both a capturing listener and a bubbling one",
+             "aelcapturing", "aelbubbling");
     /* WEB IDL §3.2.3 boolean AT A DECLARED ARGUMENT POSITION, which is the row above's defect one layer out
        and at a different site: not a dictionary member the flattening reads, but the CONVERSION every member
        and every reflected setter declaring IDL_BOOLEAN shares. ECMAScript §7.1.2 ToBoolean ( arg ) ends
@@ -7271,23 +7500,52 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `boolctl` IS THE NEGATIVE CONTROL AND IT ASSERTS AN ABSENCE: `toggle('bctl', true)` is a value the page
        determined, so §3.2.3 runs the real coercion and no fork happens — `ctloff` appearing at all would mean
        the conversion forks concrete values too, which passes every positive row above while being wrong. */
-    int boolarg_tt   = (strstr(js, "\"/api/boolarg\"")
-                        && strstr(js, "boolon") && strstr(js, "booloff"));
-    int boolattr_tt  = (strstr(js, "\"/api/boolattr\"")
-                        && strstr(js, "attrset") && strstr(js, "attrclear"));
-    int boolclone_tt = (strstr(js, "\"/api/boolclone\"")
-                        && strstr(js, "clonedeep") && strstr(js, "cloneshallow"));
-    int boolctl_tt   = (strstr(js, "\"/api/boolctl\"")
-                        && strstr(js, "ctlon") && !strstr(js, "ctloff"));
+    const char *boolarg_why = NULL; int boolarg_tt = 1;
+    FORK_ROW(js, &boolarg_tt, &boolarg_why, "/api/boolarg", "v",
+             "Web IDL §3.2.3 boolean at a TYPE-LIST ARGUMENT position over an unknown — ECMAScript §7.1.2 "
+             "ToBoolean answers true for every concolic, so a single world is the collapse",
+             "boolon", "booloff");
+    const char *boolattr_why = NULL; int boolattr_tt = 1;
+    FORK_ROW(js, &boolattr_tt, &boolattr_why, "/api/boolattr", "v",
+             "Web IDL §3.2.3 boolean at a [Reflect]ed CONTENT ATTRIBUTE's setter over an unknown",
+             "attrset", "attrclear");
+    const char *boolclone_why = NULL; int boolclone_tt = 1;
+    FORK_ROW(js, &boolclone_tt, &boolclone_why, "/api/boolclone", "v",
+             "Web IDL §3.2.3 boolean at an argument of a STEP MACHINE (cloneNode's `deep`) over an unknown",
+             "clonedeep", "cloneshallow");
+    /* THE NEGATIVE CONTROL, WHICH IS NOT A FORK ROW: it asserts that exactly ONE world exists. `toggle('bctl',
+       true)` is a value the page determined, so §3.2.3 runs the real coercion and no fork happens — `ctloff`
+       appearing at all would mean the conversion forks concrete values too, which passes every positive row
+       above while being wrong. The positive half is scoped like every other world clause; the negative half
+       stays whole-document, because a superstring or a neighbouring record can only make it fail EARLY. */
+    const char *boolctl_why = NULL; int boolctl_tt = 1;
+    fold_row(&boolctl_tt, &boolctl_why, !!strstr(js, "\"/api/boolctl\""),
+             "NOT REACHED: there is no /api/boolctl record at all, so the negative control did not run and "
+             "says nothing about §3.2.3. That is the SCHEDULE");
+    fold_row(&boolctl_tt, &boolctl_why, param_value_is(js, "/api/boolctl", "v", "ctlon"),
+             "the statement RAN and /api/boolctl's `v` does not carry `ctlon` — `toggle('bctl', true)` did "
+             "not put the class on, so the control asserts nothing about the conversion");
+    fold_row(&boolctl_tt, &boolctl_why, !strstr(js, "ctloff"),
+             "§3.2.3 forked a CONCRETE boolean: `ctloff` is in the document, so the conversion forks values "
+             "the page determined and every positive boolean row above is passing for the wrong reason. "
+             "Deliberately asked of the WHOLE document — that world existing anywhere is the finding");
     /* THE BITWISE/SHIFT FAMILY OVER UNKNOWN INPUT. Both arms present is the whole claim: a `&` whose result
        collapsed to a bare number (or to NaN) decides the branch and the sibling is never reached, which is
        precisely the coverage §Re-execution means by "opacity SURVIVES numeric coercion". `bwhash` asserts only
        that the shift/xor chain COMPLETED — before the family had concolic semantics it aborted the document,
        so the endpoint's existence is the measurement. `bwtramp` is the mixed shape: an unknown on the left and
        the page's own suspending valueOf on the right. */
-    int bwfork_tt  = (strstr(js, "\"/api/bwfork\"") && strstr(js, "bwwide") && strstr(js, "bwnarrow"));
+    const char *bwfork_why = NULL; int bwfork_tt = 1;
+    FORK_ROW(js, &bwfork_tt, &bwfork_why, "/api/bwfork", "v",
+             "a `&` over unknown input keeping its opacity — a result that collapsed to a bare number (or to "
+             "NaN) decides the branch and the sibling endpoint is never reached",
+             "bwwide", "bwnarrow");
     int bwhash_tt  = (strstr(js, "\"/api/bwhash\"") != NULL);
-    int bwtramp_tt = (strstr(js, "\"/api/bwtramp\"") && strstr(js, "bwand") && strstr(js, "bwzero"));
+    const char *bwtramp_why = NULL; int bwtramp_tt = 1;
+    FORK_ROW(js, &bwtramp_tt, &bwtramp_why, "/api/bwtramp", "v",
+             "the MIXED shape — an unknown on the left of the `&` and the page's own suspending valueOf on "
+             "the right, so the operand is resolved through the tramp and the result is still opaque",
+             "bwand", "bwzero");
     /* the controller's `abort` listener actually ran, and the timeout's unknown flag forked both ways.
        SCOPED: `fired` is a substring of `/api/unkdelay/fired`, the endpoint the §8.7 unknown-timeout statement
        learns from its own timer callback in this same document — so the old term read 1 out of THAT record's
@@ -7299,7 +7557,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the AbortSignal's `abort` listener did not run as a real event on this flow — `v` is not `fired`");
     /* a DOMString argument coerced through the PAGE's toString (with a loop in it), then used as the real
        event type — the listener firing proves the coerced value was the one it registered under */
-    int idlcoerce_tt = (strstr(js, "\"/api/idlcoerce\"") && strstr(js, "coerced"));
+    const char *idlcoerce_why = NULL; int idlcoerce_tt = 1;
+    fold_row(&idlcoerce_tt, &idlcoerce_why, !!strstr(js, "\"/api/idlcoerce\""),
+             "NOT REACHED: there is no /api/idlcoerce record at all, so the listener registered under the "
+             "coerced type never fired. That is the SCHEDULE");
+    fold_row(&idlcoerce_tt, &idlcoerce_why, param_value_is(js, "/api/idlcoerce", "v", "coerced"),
+             "the listener FIRED and /api/idlcoerce's `v` is not `coerced` — the DOMString argument was "
+             "registered under something other than what the page's own toString returned, so the machine "
+             "did not park on step_tostring_run and resume at the exact stage");
     /* THE DOM INTERFACES. Each is one spec sentence the components used to get wrong, and each answers with a
        token that only the correct behaviour can produce — `percopy`/`wrong`/`child` are what the old code said.
        TWO OF THE FIVE COULD NOT FAIL. `shared` is a substring of `/api/shared`, the endpoint the promise-state
@@ -7308,14 +7573,46 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        calling it five. Each is now asked of its own endpoint's own param, and the negatives are asked of that
        param too: a value that is neither spelling is what a fork or a dropped param produces, and that is a
        finding, not a match. */
-    int domproto_tt = (strstr(js, "\"/api/protoid\"") &&
-                       param_value_is(js, "/api/protoid", "v", "shared") &&
-                       !param_value_is(js, "/api/protoid", "v", "percopy"));
-    int cdnull_tt   = (strstr(js, "\"/api/cdnull\"")  &&
-                       param_value_is(js, "/api/cdnull", "v", "empty"));
-    int tcnull_tt   = (strstr(js, "\"/api/tcnull\"")  && strstr(js, "nochild") && !strstr(js, "\"child\""));
-    int nodeval_tt  = (strstr(js, "\"/api/nodeval\"") && strstr(js, "\"null\""));
-    int tcset_tt    = (strstr(js, "\"/api/tcset\"")   && strstr(js, "tcSET"));
+    const char *domproto_why = NULL; int domproto_tt = 1;
+    fold_row(&domproto_tt, &domproto_why, !!strstr(js, "\"/api/protoid\""),
+             "NOT REACHED: there is no /api/protoid record at all, so this run did not answer the statement");
+    fold_row(&domproto_tt, &domproto_why, param_value_is(js, "/api/protoid", "v", "shared"),
+             "§4.4 two elements do not share ONE function object: /api/protoid's `v` does not carry "
+             "`shared` — the member is installed per instance rather than on the PROTOTYPE");
+    fold_row(&domproto_tt, &domproto_why, !param_value_is(js, "/api/protoid", "v", "percopy"),
+             "§4.4 a per-element copy of the member EXISTS: /api/protoid's `v` carries `percopy`, which is "
+             "the answer the old code gave and must not be one this run can still produce");
+    const char *cdnull_why = NULL; int cdnull_tt = 1;
+    fold_row(&cdnull_tt, &cdnull_why, !!strstr(js, "\"/api/cdnull\""),
+             "NOT REACHED: there is no /api/cdnull record at all, so this run did not answer the statement");
+    fold_row(&cdnull_tt, &cdnull_why, param_value_is(js, "/api/cdnull", "v", "empty"),
+             "§4.9.2 [LegacyNullToEmptyString] DOMString `data` set to null did not become \"\": "
+             "/api/cdnull's `v` does not carry `empty`, so the four characters `null` were written instead");
+    /* AND THE LAST THREE WERE THE SAME DEFECT AS THE TWO ABOVE, ONE AXIS OVER. `"null"` is the spelling of an
+       ABSENT value and therefore the most widely emitted token this document has — asked of the whole
+       document it was answered by any absent value anywhere, and what it appeared to assert (that THIS node's
+       `nodeValue` read back null) was never measured. `nochild` and `tcSET` were unique bytes and still named
+       no record, so a seam that filed either under another endpoint satisfied the row. */
+    const char *tcnull_why = NULL; int tcnull_tt = 1;
+    fold_row(&tcnull_tt, &tcnull_why, !!strstr(js, "\"/api/tcnull\""),
+             "NOT REACHED: there is no /api/tcnull record at all, so this run did not answer the statement");
+    fold_row(&tcnull_tt, &tcnull_why, param_value_is(js, "/api/tcnull", "v", "nochild"),
+             "§4.9.3 `DOMString? textContent` set to null did not leave the element with NO child: "
+             "/api/tcnull's `v` does not carry `nochild`");
+    fold_row(&tcnull_tt, &tcnull_why, !param_value_is(js, "/api/tcnull", "v", "child"),
+             "§4.9.3 textContent set to null left a child behind — /api/tcnull's `v` carries `child`, which "
+             "is the four-character string `null` having been inserted as a text node");
+    const char *nodeval_why = NULL; int nodeval_tt = 1;
+    fold_row(&nodeval_tt, &nodeval_why, !!strstr(js, "\"/api/nodeval\""),
+             "NOT REACHED: there is no /api/nodeval record at all, so this run did not answer the statement");
+    fold_row(&nodeval_tt, &nodeval_why, param_value_is(js, "/api/nodeval", "v", "null"),
+             "§4.4 `nodeValue` on an ELEMENT is not null: /api/nodeval's `v` does not carry `null`");
+    const char *tcset_why = NULL; int tcset_tt = 1;
+    fold_row(&tcset_tt, &tcset_why, !!strstr(js, "\"/api/tcset\""),
+             "NOT REACHED: there is no /api/tcset record at all, so this run did not answer the statement");
+    fold_row(&tcset_tt, &tcset_why, param_value_is(js, "/api/tcset", "v", "tcSET"),
+             "§4.9.3 textContent did not read back what was just written to it: /api/tcset's `v` does not "
+             "carry `tcSET`");
     /* §13.15.3 STEP 1.c OVER THE EXAMPLES, three separate claims. `addfork` is the INVARIANT: the sum stayed
        unknown, so both arms ran — a numeric arm that answered with a bare number would decide the branch and
        lose one endpoint. `addnum` is the MEASUREMENT: `num` cancels, so §6.1.6.1.7 Number::add ( x, y )
@@ -7330,7 +7627,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        token contains, and these two are contained by `/api/addnum/v` and `/api/addstr/r`; the marker says the
        containment is the intended match. It is CHECKED rather than obeyed: the gate still reddens the day a
        SECOND endpoint shares the prefix, which is the day the row stops naming one statement. */
-    int addfork_tt  = (strstr(js, "\"/api/addfork\"") && strstr(js, "addpos") && strstr(js, "addneg"));
+    const char *addfork_why = NULL; int addfork_tt = 1;
+    FORK_ROW(js, &addfork_tt, &addfork_why, "/api/addfork", "v",
+             "§13.15.3 step 1.c keeping the SUM unknown — an arm that answered with a bare number would "
+             "decide the branch and lose one of the two endpoints",
+             "addpos", "addneg");
     int addnum_tt   = (strstr(js, "/api/addnum/") /*probegate:prefix*/    && strstr(js, "\"v1000000\""));
     int addstr_tt   = (strstr(js, "/api/addstr/") /*probegate:prefix*/    && strstr(js, "\"r1920\""));
     /* §4.12.1.1's "immediately execute the script element" AT A POSITION INSIDE THE DOCUMENT'S OWN SEQUENCE.
@@ -7339,7 +7640,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        scheduler whose cursor walked the document's scripts before the flow's own rows could put it, and the
        place from which it runs after the program that reports. `ABC` must NOT satisfy this row, which is why
        the token is quoted whole rather than searched for as a substring of the sequence. */
-    int scriptorder_tt = (strstr(js, "\"/api/scriptorder\"") && strstr(js, "\"ABXC\""));
+    const char *scriptorder_why = NULL; int scriptorder_tt = 1;
+    fold_row(&scriptorder_tt, &scriptorder_why, !!strstr(js, "\"/api/scriptorder\""),
+             "NOT REACHED: there is no /api/scriptorder record at all, so the reporting <script> never ran. "
+             "That is the SCHEDULE");
+    fold_row(&scriptorder_tt, &scriptorder_why, param_value_only(js, "/api/scriptorder", "seq", "ABXC"),
+             "§4.12.1.1 the injected program did not run at the slot AFTER the <script> that injected it: "
+             "/api/scriptorder's `seq` is not exactly `ABXC`. `ABC` is the near-miss and the whole point — "
+             "that is the same program pushed to the TAIL, where a scheduler whose cursor walked the "
+             "document's scripts before the flow's own rows would put it. Asked as `_only` because the "
+             "sequence is a value the document DETERMINED");
 
     /* HTML §3.1.7's `currentScript`, in THREE rows because these are three independent claims and one boolean
        over them would say only that one of three unrelated things is wrong.
@@ -7353,10 +7663,35 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `current-script-inject` is the arm that INJECTED: §4.12.1.1's "immediately execute the script element"
        runs `csINJ` at the slot after the program that appended it, and the element that program reads is its
        OWN — not the one that injected it, which is what a slot written by the injecting program would give. */
-    int cscurrent_tt = (strstr(js, "\"/api/csend\"") && strstr(js, "\"csA:inline|csC\""));
-    int csrestore_tt = (strstr(js, "\"/api/cstimer\"") && strstr(js, "\"/api/csmod\"") &&
-                        !strstr(js, "\"LEAK\""));
-    int csinject_tt = (strstr(js, "\"/api/csinj\"") && strstr(js, "\"csINJ\""));
+    const char *cscurrent_why = NULL; int cscurrent_tt = 1;
+    fold_row(&cscurrent_tt, &cscurrent_why, !!strstr(js, "\"/api/csend\""),
+             "NOT REACHED: there is no /api/csend record at all, so script C never ran. That is the SCHEDULE");
+    fold_row(&cscurrent_tt, &cscurrent_why, param_value_is(js, "/api/csend", "el", "csA:inline|csC"),
+             "§4.12.1.1's classic arm did not answer `currentScript` per element: /api/csend's `el` is not "
+             "`csA:inline|csC`. `csA:inline|csA` is a slot that leaked between PROGRAMS and `csINJ` is one "
+             "that leaked between FLOWS — both are this clause failing, and the value it carries says which");
+    /* TWO RECORDS AND A WHOLE-DOCUMENT ABSENCE, WHICH IS THREE CLAUSES AND WAS ONE BYTE. The timer task and
+       the module arm are two different observers of step 4, and either one missing is a different machine —
+       folded, the row said only that one of three unrelated things was wrong. */
+    const char *csrestore_why = NULL; int csrestore_tt = 1;
+    fold_row(&csrestore_tt, &csrestore_why, !!strstr(js, "\"/api/cstimer\""),
+             "NOT REACHED: there is no /api/cstimer record at all, so §4.12.1.1 step 4 was never observed "
+             "from a TIMER TASK. That is the SCHEDULE");
+    fold_row(&csrestore_tt, &csrestore_why, !!strstr(js, "\"/api/csmod\""),
+             "NOT REACHED: there is no /api/csmod record at all, so §4.12.1.1 step 4 was never observed from "
+             "the MODULE arm. That is the SCHEDULE, and it is a different observer from the timer above");
+    fold_row(&csrestore_tt, &csrestore_why, !strstr(js, "\"LEAK\""),
+             "§4.12.1.1 step 4 did not empty the slot: one of the two observers saw an element while no "
+             "script was executing. Deliberately asked of the WHOLE document — a leak seen by either "
+             "observer is the finding, and an absence is the only thing that can prove this half");
+    const char *csinject_why = NULL; int csinject_tt = 1;
+    fold_row(&csinject_tt, &csinject_why, !!strstr(js, "\"/api/csinj\""),
+             "NOT REACHED: there is no /api/csinj record at all, so the injected program never ran. That is "
+             "the SCHEDULE");
+    fold_row(&csinject_tt, &csinject_why, param_value_is(js, "/api/csinj", "el", "csINJ"),
+             "§4.12.1.1's \"immediately execute the script element\" read the WRONG element: /api/csinj's "
+             "`el` is not `csINJ`, so the injected program saw the element that injected it rather than its "
+             "own — a slot written by the injecting program");
     /* The §4.4 algorithms, each proved by its own endpoint carrying a token only the right answer produces.
        READ INSIDE THE ENDPOINT'S OWN RECORD, which is what the address column is for and is the whole reason
        it is no longer written quoted. Spelled as two whole-document `strstr`s this was a hundred-odd
@@ -7579,8 +7914,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* requestSubmit(): the CANCELLED form's action must never appear, and the uncancelled one's must. */
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "/api/never"),
              "§4.10 requestSubmit()'s CANCELLED form never reached its action");
-    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"/api/didsubmit\"") && strstr(js, "\"rs\""),
+    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"/api/didsubmit\""),
              "§4.10 requestSubmit()'s uncancelled form reached its action");
+    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "/api/didsubmit", "ok", "rs"),
+             "§4.10 the uncancelled form's entry list carried the control's VALUE: /api/didsubmit's `ok` is "
+             "not `rs`. Asked of this record's own param because `\"rs\"` unscoped was two bytes any other "
+             "statement could answer, and the form reaching its action is the clause above it");
     /* §4.13: the async reaction's loop ran to its END across the preempts, not to some suspended partial. */
     fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"44850\""),
              "§4.13 the async reaction's loop ran to its END across the preempts");
@@ -7592,8 +7931,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              !!strstr(js, "%3Csection%20data-k%3D%22v%22%3E%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E%3C%2Fsection%3E"),
              "§8.4 outerHTML serialised the element ITSELF, tag and attributes included");
     /* §4.13.3: the old value, the new one, the removal's null — and NOTHING for the unobserved attribute. */
-    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"first\"") && strstr(js, "\"second\""),
-             "§4.13.3 attributeChangedCallback saw the old value and the new one");
+    /* THE OLD VALUE AND THE NEW ONE ARE TWO PARAMS OF ONE RECORD. The callback fetches `?n=&o=&v=`, so the
+       second `setAttribute` puts `first` on `o` and `second` on `v` — and asked as two whole-document
+       existences the pair could be answered by ANY statement carrying either word, including one record
+       carrying both on the SAME param, which is precisely the reading (old and new arrived separately) the
+       row exists to make. */
+    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "/api/ceattr", "o", "first"),
+             "§4.13.3 attributeChangedCallback did not see the OLD value: /api/ceattr's `o` does not carry "
+             "`first`");
+    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "/api/ceattr", "v", "second"),
+             "§4.13.3 attributeChangedCallback did not see the NEW value: /api/ceattr's `v` does not carry "
+             "`second`");
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "data-ignored") && !strstr(js, "\"nope\""),
              "§4.13.3 the UNOBSERVED attribute produced no reaction");
     /* §8.1.4.7: the rejection nobody handled is reported, and the one handled a microtask later is NOT. */
@@ -7612,23 +7960,43 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        SyntaxError, so `catch` ran with a real Error object rather than a shape. Negative: the same builtin over
        a source whose delivery contradicts the parse forked NOTHING and threw, so a completion no value of that
        source can produce was never fabricated. */
-    int jsonfork_tt = strstr(js, "\"/api/jsonok\"") && strstr(js, "\"/api/jsonthrew\"")
-                   && strstr(js, "\"validValues\":[\"SyntaxError\"]")
-                   && strstr(js, "\"/api/jsonrawthrew\"") && !strstr(js, "/api/jsonrawok");
+    /* FOUR RECORDS AND A VALUE, AND THE VALUE CLAUSE NAMED NONE OF THEM. Three of these are existences of
+       three DIFFERENT endpoints, which is legitimate and is why the row is a chain rather than one scope; the
+       fourth clause is a claim about `/api/jsonthrew`'s own param and was spelled as a whole-document
+       `strstr` for a `validValues` array, so ANY endpoint anywhere whose param carried exactly one
+       `SyntaxError` satisfied it — including the raw-source arm two lines below, which emits the same name. */
+    const char *jsonfork_why = NULL; int jsonfork_tt = 1;
+    fold_row(&jsonfork_tt, &jsonfork_why, !!strstr(js, "\"/api/jsonok\""),
+             "the SUCCESS completion of JSON.parse over unknown text was never reached: there is no "
+             "/api/jsonok record. Both completions from ONE run is the claim, so this half alone is the "
+             "snapshot fork inside the builtin not having been taken");
+    fold_row(&jsonfork_tt, &jsonfork_why, !!strstr(js, "\"/api/jsonthrew\""),
+             "the THROW completion of JSON.parse over unknown text was never reached: there is no "
+             "/api/jsonthrew record, so `catch` never ran on that arm");
+    fold_row(&jsonfork_tt, &jsonfork_why, param_value_only(js, "/api/jsonthrew", "n", "SyntaxError"),
+             "the throw arm ran with something that is not a real SyntaxError: /api/jsonthrew's `n` is not "
+             "exactly `SyntaxError`, so `catch` received a shape rather than an Error object");
+    fold_row(&jsonfork_tt, &jsonfork_why, !!strstr(js, "\"/api/jsonrawthrew\""),
+             "JSON.parse over the RAW source (whose leading `#` contradicts the parse) did not throw: there "
+             "is no /api/jsonrawthrew record");
+    fold_row(&jsonfork_tt, &jsonfork_why, !strstr(js, "/api/jsonrawok"),
+             "JSON.parse over the RAW source FABRICATED a success completion no value of that source can "
+             "produce: /api/jsonrawok is in the document. Deliberately asked of the WHOLE document — that "
+             "endpoint existing at all is the finding, and only an absence can prove this half");
     /* FIVE INDEPENDENT SPEC SENTENCES UNDER ONE NAME, FOLDED so the 0 names which one. They are five different
        components and five different endpoints, so a bare `&&` chain printed one byte for five findings — the
-       same count-with-no-name-in-it this file's own banner refuses one level up. */
+       same count-with-no-name-in-it this file's own banner refuses one level up.
+       EACH SUB-ROW'S OWN TEXT IS WHAT TRAVELS, not a summary of it written here. A one-line restatement at
+       this level is a SECOND copy of the sub-row's claim, and the copy is the one that rots — it also cannot
+       carry what the sub-row now separates, which is "the statement never ran" against "it ran and answered
+       wrongly". Forwarding the inner `why` is sound because a 0 row always carries one, and `fold_row`'s own
+       DCHECK is where that is asserted rather than assumed. */
     const char *domidl_why = NULL; int domidl_tt = 1;
-    fold_row(&domidl_tt, &domidl_why, domproto_tt,
-             "§4.4 an interface member lives on the SHARED prototype, not a per-element copy (/api/protoid)");
-    fold_row(&domidl_tt, &domidl_why, cdnull_tt,
-             "§4.10 CharacterData created with no data reads back the EMPTY string (/api/cdnull)");
-    fold_row(&domidl_tt, &domidl_why, tcnull_tt,
-             "§4.4 setting textContent to null leaves NO child (/api/tcnull)");
-    fold_row(&domidl_tt, &domidl_why, nodeval_tt,
-             "§4.4 an Element's nodeValue is null (/api/nodeval)");
-    fold_row(&domidl_tt, &domidl_why, tcset_tt,
-             "§4.4 textContent read back what it was set to (/api/tcset)");
+    fold_row(&domidl_tt, &domidl_why, domproto_tt, domproto_why);
+    fold_row(&domidl_tt, &domidl_why, cdnull_tt,   cdnull_why);
+    fold_row(&domidl_tt, &domidl_why, tcnull_tt,   tcnull_why);
+    fold_row(&domidl_tt, &domidl_why, nodeval_tt,  nodeval_why);
+    fold_row(&domidl_tt, &domidl_why, tcset_tt,    tcset_why);
     /* THE DEADLINE GATE. `live` was the single worst-scoped world token in this file after `sync`: it is a
        substring of the endpoints `/api/live` and `/api/cssidxlive`, of the value `islive` that BOTH of those
        emit, and it is the whole of a PARAM NAME (`/api/gbn?…&live=`) that reaches the document as
@@ -7963,9 +8331,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     Probe probes[] = {
         { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE, uid_why },
         { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
-        { "path-param", path_param, "/v1/users/", SESS_EXPLORE },
+        { "path-param", path_param, "/v1/users/", SESS_EXPLORE, path_param_why },
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
-        { "path-example", path_example, "/v1/vis/", SESS_EXPLORE },
+        { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
         { "role-public", role_public, "/api/data?role=", SESS_EXPLORE },
         { "merged", merged, "/api/data?role=", SESS_EXPLORE },
         { "pinned", pinned, "/api/region/", SESS_EXPLORE },
@@ -7994,8 +8362,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "async", async_tt, "/api/then", SESS_EXPLORE, async_why },
         { "await", await_tt, "/api/await", SESS_EXPLORE, await_why },
         { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE, asynccall_why },
-        { "throw", async_throw, "/api/caught", SESS_EXPLORE },
-        { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE },
+        { "throw", async_throw, "/api/caught", SESS_EXPLORE, async_throw_why },
+        { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE, async_preempt_why },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
            where it is composed above. Each row still names its own endpoint; what the shared clause adds is
            which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can
@@ -8007,20 +8375,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
         { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
-        { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
+        { "fetch", fetch_await, "/api/config", SESS_EXPLORE, fetch_await_why },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
-        { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
+        { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
         { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
         { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE, hdrs_why },
         { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE, hdrproxy_why },
-        { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE },
+        { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE, needsauth_why },
         { "hdr-iter", hdriter, "/api/hdriter", SESS_EXPLORE, hdriter_why },
         { "hdr-seq", hdrseq, "/api/hdrseq", SESS_EXPLORE },
         { "hdr-record", hdrrec, "/api/hdrrec", SESS_EXPLORE },
         { "mp-escape", mpesc, "/api/mpesc", SESS_EXPLORE },
-        { "pending", pending_await, "/api/lazy", SESS_EXPLORE },
+        { "pending", pending_await, "/api/lazy", SESS_EXPLORE, pending_await_why },
         { "promise-state", promise_state, "/api/shared", SESS_EXPLORE, promise_state_why },
         { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE, delete_iso_why },
         { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE, global_delete_why },
@@ -8032,31 +8400,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "cl-unknown-src", clunk_src_tt, "/api/clunknown", SESS_EXPLORE },
         { "cl-unknown", clunk_tt, "/api/clunknown", SESS_EXPLORE },
         { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE, layoutfork_why },
-        { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE },
+        { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE, aelunk_why },
         /* WEB IDL §3.2.3 boolean OVER UNKNOWN INPUT — one row per ROUTE to the one conversion, plus the
            control that says the fork is not firing on values the page determined. */
-        { "bool-arg", boolarg_tt, "/api/boolarg", SESS_EXPLORE },
-        { "bool-reflect", boolattr_tt, "/api/boolattr", SESS_EXPLORE },
-        { "bool-stepmachine", boolclone_tt, "/api/boolclone", SESS_EXPLORE },
-        { "bool-concrete", boolctl_tt, "/api/boolctl", SESS_EXPLORE },
-        { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE },
+        { "bool-arg", boolarg_tt, "/api/boolarg", SESS_EXPLORE, boolarg_why },
+        { "bool-reflect", boolattr_tt, "/api/boolattr", SESS_EXPLORE, boolattr_why },
+        { "bool-stepmachine", boolclone_tt, "/api/boolclone", SESS_EXPLORE, boolclone_why },
+        { "bool-concrete", boolctl_tt, "/api/boolctl", SESS_EXPLORE, boolctl_why },
+        { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE, bwfork_why },
         { "bitwise-chain", bwhash_tt, "/api/bwhash", SESS_EXPLORE },
-        { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE },
+        { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE, bwtramp_why },
         { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
         { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
-        { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE },
+        { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
         { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE, domidl_why },
         { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
         { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
         { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
-        { "add-fork", addfork_tt, "/api/addfork", SESS_EXPLORE },
+        { "add-fork", addfork_tt, "/api/addfork", SESS_EXPLORE, addfork_why },
         { "add-number", addnum_tt, "/api/addnum", SESS_EXPLORE },
         { "add-string", addstr_tt, "/api/addstr", SESS_EXPLORE },
-        { "script-order", scriptorder_tt, "/api/scriptorder", SESS_EXPLORE },
-        { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE },
-        { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE },
-        { "current-script-inject", csinject_tt, "/api/csinj", SESS_EXPLORE },
+        { "script-order", scriptorder_tt, "/api/scriptorder", SESS_EXPLORE, scriptorder_why },
+        { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE, cscurrent_why },
+        { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE, csrestore_why },
+        { "current-script-inject", csinject_tt, "/api/csinj", SESS_EXPLORE, csinject_why },
         { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE, owfork_why },
         { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE, genfork_why },
         { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE, gen2fork_why },
@@ -8086,20 +8454,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE, gcallfork_why },
         { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE, gapplyfork_why },
         { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE, grefapplyfork_why },
-        { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE },
+        { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE, hostreq_why },
         { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE, hostreqfork_why },
-        { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE },
+        { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE, jsonfork_why },
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
-        { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE },
-        { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE },
-        { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE },
+        { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
+        { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
+        { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE, xdocjob_why },
         { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE, timer_why },
-        { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE },
+        { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE, timerstr_why },
         { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
-        { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE },
-        { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE },
+        { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
+        { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
         { "route-seed", routeseed_tt, "/api/routeseed", SESS_EXPLORE, routeseed_why },
-        { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
+        { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE, idbopen_why },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },
         { "loc-hash-param", lochash_tt, "/api/idbrec", SESS_EXPLORE },
@@ -8108,7 +8476,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idb-range-throw", idbrange_throw_tt, "/api/idbcount", SESS_EXPLORE },
         { "idb-range-order", idbrange_order_tt, "/api/idbcount", SESS_EXPLORE },
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
-        { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
+        { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE, idbuniq_why },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE, optiter_why },
         { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE, cssprop_why },
         { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE, csspropText_why },
