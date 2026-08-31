@@ -23,9 +23,9 @@
 
 /* DOM §1.4 "valid element local name", the five steps exactly. Note that it is the ONLY one of the three that
    is an algorithm rather than a character set, and that it permits U+003D (=), which an attribute local name
-   does not — §1.4's stated intention is "to allow any name that is possible to construct using the HTML PARSER,
-   plus some additional possibilities", so a name XML 1.0 §2.3's `Name` production rejects (`a=b`, `a<b`, `A`
-   followed by U+00D7) is valid here and setAttribute does not throw for it. The three examples that stood here
+   does not — §1.4's stated intention is "to allow any name that is possible to construct using the HTML parser
+   (the branch where the first code point is an ASCII alpha), plus some additional possibilities", so a name
+   XML 1.0 §2.3's `Name` production rejects (`a=b`, `a<b`, `A` followed by U+00D7) is valid here and setAttribute does not throw for it. The three examples that stood here
    were each WRONG in a way this file's own steps decide: `1abc` and `<` both fail step 3, which admits only
    U+003A, U+005F and U+0080 and above once step 2's ASCII-alpha branch is not taken, and `a:b` is a perfectly
    good Name because §2.3 requires a processor to accept the colon as a name character. The two predicates are

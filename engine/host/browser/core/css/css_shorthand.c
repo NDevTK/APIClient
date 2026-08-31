@@ -697,7 +697,7 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
 
 /* ---- CSSOM §6.6's REVERSE DIRECTION -----------------------------------------------------------------------
  *
- * THE FORWARD DIRECTION ABOVE ANSWERS ONE QUESTION AT A TIME — "what does this declaration give that longhand"
+ * THE FORWARD DIRECTION ABOVE ANSWERS ONE QUESTION AT A TIME — what does this declaration give that longhand
  * — and the cascade never needs another, because it resolves one property for one element. CSSOM §6.6's
  * SERIALIZE A CSS DECLARATION BLOCK asks the mirror question and cannot be written without it: given the whole
  * set of declarations, which shorthand covers a group of them, and what value would that shorthand carry.
@@ -760,7 +760,8 @@ typedef struct {
        declarations set NOTHING, and the flag that used to record that is deleted with the row that had it. */
     const char *probe;
     /* CSS_SH_TRIPLE ONLY — each longhand's own `Initial:` line, in the row's canonical order. §6.7.2's rule is
-       "if component values can be omitted ... without changing the meaning of the value, omit them", and a
+       "If component values can be omitted or replaced with a shorter representation without changing the
+       meaning of the value, omit/replace them.", and a
        term holding its initial is exactly one that can be, so this list is the omission's DATA and belongs to
        the row rather than to the algorithm. It is the SAME list the forward expansion fills an omitted term
        from, which is what keeps the two directions one statement. NULL for every other kind, asserted. */
@@ -1082,8 +1083,8 @@ static char *css_sh_two_axis_value(const char *const *v)
 }
 
 /* A THREE-TERM `||`, written in the canonical order of the grammar with each term omitted when it holds that
-   longhand's initial value — §6.7.2's "if component values can be omitted ... without changing the meaning of
-   the value, omit them". `initial` is the same list the forward expansion fills an omitted term from, which is
+   longhand's initial value — §6.7.2's "If component values can be omitted or replaced with a shorter
+   representation without changing the meaning of the value, omit/replace them." `initial` is the same list the forward expansion fills an omitted term from, which is
    what keeps the two directions one statement; it is the ROW's, because the rule is one algorithm over two
    grammars (css-backgrounds-3 §3.4's `<line-width> || <line-style> || <color>` and css-inline-3 §4.2's
    `[first|last] || <'alignment-baseline'> || <'baseline-shift'>`).

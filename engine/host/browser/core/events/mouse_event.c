@@ -28,7 +28,7 @@
  *     };
  *
  * WHAT WAS BLOCKED ON IT. DOM §2.9 step 6.4 decides an ACTIVATION event by "event is a MouseEvent object and
- * event's type is click" — a question about the OBJECT, which event_target.c could only ask of the type
+ * event's type attribute is \"click\"" — a question about the OBJECT, which event_target.c could only ask of the type
  * string, so any `new Event('click')` was an activation event and `new MouseEvent('click')` was a missing
  * global. §4.5's createEvent had to refuse `mouseevent`/`mouseevents`, which is how a great deal of shipped
  * code synthesises a click. mouse_event_is is the answer to step 6.4's real question.

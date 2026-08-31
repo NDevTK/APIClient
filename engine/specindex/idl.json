@@ -2,7 +2,7 @@
  "spec": "Web IDL Standard",
  "key": "idl",
  "base": "https://webidl.spec.whatwg.org/",
- "specUpdated": "21 August 2026",
+ "specUpdated": "31 August 2026",
  "fetched": "2026-08-31",
  "sections": {
   "1": {

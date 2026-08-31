@@ -2,7 +2,7 @@
  "spec": "Fetch Standard",
  "key": "fetch",
  "base": "https://fetch.spec.whatwg.org/",
- "specUpdated": "25 August 2026",
+ "specUpdated": "31 August 2026",
  "fetched": "2026-08-31",
  "sections": {
   "1": {

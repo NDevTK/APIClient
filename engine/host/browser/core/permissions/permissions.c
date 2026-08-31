@@ -179,8 +179,9 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
               "§6.2.1's promise capability could not be allocated — a query that answers with neither a "
               "promise nor a throw is a call a page can only hang on");
         s->started = 1;
-        /* WEB IDL §3.7.7's BRAND CHECK, which every operation performs before its algorithm: "If esValue does
-           not implement the interface, throw a TypeError." The same section makes that a REJECTION here rather
+        /* WEB IDL §3.7.7's BRAND CHECK, which every operation performs before its algorithm: "If jsValue does
+           not implement the interface target, throw a TypeError." (The standard renamed that variable from
+           `esValue`, so the older spelling names a sentence Web IDL no longer contains.) The same section makes that a REJECTION here rather
            than a throw, because the operation's return type is a promise — which is why it is asked AFTER the
            capability exists rather than at the top of the member. */
         if (!permissions_brand(ctx, hdr->this_val)) {
@@ -298,8 +299,9 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                               permission_feature_name(s->feature), permission_feature_subject(s->feature));
             return pq_reject(ctx, s, presult);
         }
-        /* Web IDL §3.2.15's INTERFACE conversion: "a platform object implementing the interface crosses as itself and
-           anything else is a TypeError". The brand belongs to the component that owns the interface, which is
+        /* Web IDL §3.2.15's INTERFACE conversion — a platform object implementing the interface crosses as
+           itself and anything else is a TypeError. That sentence is this file's summary of the conversion and
+           not the standard's own words, so it does not stand in quotation marks. The brand belongs to the component that owns the interface, which is
            why the registry holds a test rather than a class id. */
         if (!permission_subject_is(s->feature, s->subject_v)) {
             JS_ThrowTypeError(ctx, "the `%s` of a permission descriptor for '%s' is not of the interface type "
@@ -353,7 +355,8 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             JS_FreeValue(ctx, cb_result);
         }
         cb_result = JS_UNDEFINED;
-        /* Web IDL §3.2.18: "if S is not one of the enumeration's values, throw a TypeError". Never the default — an
+        /* Web IDL §3.2.18 Enumeration types: "If S is not one of E's enumeration values, then throw a TypeError."
+           Never the default — an
            unrecognised value is an error, and silently taking `read` for it would answer a question the page
            did not ask. */
         v = JS_ToCString(ctx, s->aspect_v);

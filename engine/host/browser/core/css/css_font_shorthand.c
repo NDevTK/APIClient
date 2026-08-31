@@ -603,7 +603,8 @@ char *css_font_shorthand_value(const char *const *values)
                       values[FONT_SLOT_STRETCH], strlen(values[FONT_SLOT_STRETCH])))
         return NULL;
     if (values[FONT_SLOT_SIZE][0] == '\0' || values[FONT_SLOT_FAMILY][0] == '\0') return NULL;
-    /* §6.7.2's "if component values can be omitted ... without changing the meaning of the value, omit them" —
+    /* §6.7.2's "If component values can be omitted or replaced with a shorter representation without changing
+       the meaning of the value, omit/replace them." —
        and for §2.7 that is exactly the terms holding their own initial value, because the shorthand resets
        every omitted one to it. */
     for (i = FONT_SLOT_STYLE; i <= FONT_SLOT_STRETCH; i++)

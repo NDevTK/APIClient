@@ -22,7 +22,7 @@ JSValue mouse_event_proto(JSContext *ctx);
 JSValue mouse_event_new(JSContext *ctx);
 
 /* IS THIS OBJECT A MouseEvent — DOM §2.9 step 6.4's own question ("event is a MouseEvent object and event's
-   type is `click`"), and the brand this interface's members check. It is the slot record and not the class,
+   type attribute is \"click\""), and the brand this interface's members check. It is the slot record and not the class,
    so it stays true across an interface that inherits this one. */
 bool mouse_event_is(JSContext *ctx, JSValueConst v);
 

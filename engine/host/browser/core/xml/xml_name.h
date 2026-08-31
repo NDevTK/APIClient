@@ -32,8 +32,8 @@
  * to https://www.w3.org/TR/xml/#NT-Name — to THIS, not to any of the DOM's own three name predicates.
  *
  * IT IS NOT core/dom/names.c AND MUST NEVER MERGE WITH IT. Those are DOM §1.4's predicates, whose stated
- * intention is "to allow any name that is possible to construct using the HTML parser, plus some additional
- * possibilities". The two are ORDERED, and the order is worth checking rather than assuming: every Name is a
+ * intention is "to allow any name that is possible to construct using the HTML parser (the branch where the
+ * first code point is an ASCII alpha), plus some additional possibilities". The two are ORDERED, and the order is worth checking rather than assuming: every Name is a
  * valid element local name (a Name's first code point is `:`, `_`, an ASCII alpha or something >= U+00C0, and
  * every NameChar after it is an ASCII alpha, an ASCII digit, `-`, `.`, `:`, `_` or >= U+0080 — which is §1.4
  * step 4's set exactly), while the converse fails wide open: `a=b`, `a<b` and `A` followed by U+00D7 are all
