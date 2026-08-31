@@ -6248,18 +6248,84 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        not own; `sd1sd2-3` is the DEFAULT ordering, where the two concrete elements must still be ordered
        against each other and the unknown must still be an element; `same-3-312` is the typed-array sort's
        receiver coming back with its write-back performed. */
-    int sortcollapse_tt = (strstr(js, "\"/api/sortcollapse\"") && strstr(js, "sc0sc1-2"));
-    int sortvalueof_tt  = (strstr(js, "\"/api/sortvalueof\"") && strstr(js, "sv0sv1"));
-    int sortrest_tt     = (strstr(js, "\"/api/sortrest\"") && strstr(js, "sr0sr1-2"));
-    int sortdefault_tt  = (strstr(js, "\"/api/sortdefault\"") && strstr(js, "sd1sd2-3"));
-    int sortta_tt       = (strstr(js, "\"/api/sortta\"") && strstr(js, "same-3-312"));
+    /* EACH OF THESE IS FOLDED AND NOT `&&`-ED, AND THE FIRST CLAUSE IS ALWAYS "THERE IS A RECORD AT ALL".
+       A bare conjunction reports ONE 0 for two findings that send a reader to opposite places: a statement this
+       run ANSWERED WRONGLY (the collapse, or the fork, is broken) and one it NEVER REACHED (the frontier had
+       not got here when the harness stopped it). Those are the two states CLAUDE.md's @S rule names — "a
+       candidate killed by a gate must be distinguishable from one a filter ate and from one that was never
+       scheduled" — and a sort row is where they were conflated.
+       MEASURED, AND IT COST A LANE A SESSION. A smoke that spent its whole CPU budget having answered 83 of
+       177 statements produced `sortcollapse=1 sortvalueof=1 sortrest=1 sortdefault=1 sortta=1 sortnan=1
+       sortdefctl=1 sortbranch=0`, which splits one-world-passes / two-world-fails and reads as a defect in
+       FORKING. In the same census `fefork owfork genfork setaddfork redfork rerepfork toprimfork gcallfork`
+       and every other two-world row were 0 too, because no second world had reached this block yet — but the
+       eight rows were read on their own and a lane was sent to find a fork-clone gap in Array.prototype.sort's
+       step machine that nothing in that run pointed at. The clause below is what the run had to say and could
+       not: there is no /api/sortbranch record AT ALL. */
+    const char *sortcollapse_why = NULL, *sortvalueof_why = NULL, *sortrest_why = NULL;
+    const char *sortdefault_why = NULL, *sortta_why = NULL;
+    int sortcollapse_tt = 1, sortvalueof_tt = 1, sortrest_tt = 1, sortdefault_tt = 1, sortta_tt = 1;
+
+    fold_row(&sortcollapse_tt, &sortcollapse_why, !!strstr(js, "\"/api/sortcollapse\""),
+             "NOT REACHED: no /api/sortcollapse record at all — this run did not answer the statement, which "
+             "is the SCHEDULE and says nothing about the collapse");
+    fold_row(&sortcollapse_tt, &sortcollapse_why, !!strstr(js, "sc0sc1-2"),
+             "the statement ran and did not compose sc0sc1-2: the comparison either FORKED (an ordering that "
+             "is not the identity) or the machine's completion became a derived unknown with no [0]/.u/.length");
+    fold_row(&sortvalueof_tt, &sortvalueof_why, !!strstr(js, "\"/api/sortvalueof\""),
+             "NOT REACHED: no /api/sortvalueof record at all — the SCHEDULE, not §7.1.1 ToPrimitive's report");
+    fold_row(&sortvalueof_tt, &sortvalueof_why, !!strstr(js, "sv0sv1"),
+             "the statement ran and did not compose sv0sv1: the unknown reached through valueOf did not "
+             "collapse to +0 the way the direct one does");
+    fold_row(&sortrest_tt, &sortrest_why, !!strstr(js, "\"/api/sortrest\""),
+             "NOT REACHED: no /api/sortrest record at all — the SCHEDULE, not the callback's argument frame");
+    fold_row(&sortrest_tt, &sortrest_why, !!strstr(js, "sr0sr1-2"),
+             "the statement ran and did not compose sr0sr1-2: either the collapse, or the REST parameter did "
+             "not receive both of CompareArrayElements' operands from slots the frame owns");
+    fold_row(&sortdefault_tt, &sortdefault_why, !!strstr(js, "\"/api/sortdefault\""),
+             "NOT REACHED: no /api/sortdefault record at all — the SCHEDULE, not the default ordering");
+    fold_row(&sortdefault_tt, &sortdefault_why, !!strstr(js, "sd1sd2-3"),
+             "the statement ran and did not compose sd1sd2-3: the two concrete elements lost their ordering "
+             "against each other, or the unknown stopped being an element");
+    fold_row(&sortta_tt, &sortta_why, !!strstr(js, "\"/api/sortta\""),
+             "NOT REACHED: no /api/sortta record at all — the SCHEDULE, not the typed-array sort");
+    fold_row(&sortta_tt, &sortta_why, !!strstr(js, "same-3-312"),
+             "the statement ran and did not compose same-3-312: the receiver did not come back as itself, or "
+             "§23.2.3.29 step 9's write-back did not run");
     /* THE CONTROLS, which must read the same before and after that collapse exists. sortnan takes the very
        predicate the collapse leaves through (23.1.3.30.2 step 4.b's +0 for NaN), sortdefctl is the default
        ordering with nothing unknown in it, and sortbranch is THE FORK THAT MUST SURVIVE — the branch is inside
-       the comparator's BODY rather than over its result, so both orderings are still two worlds. */
-    int sortnan_tt      = (strstr(js, "\"/api/sortnan\"") && strstr(js, "n1n2n3n4"));
-    int sortdefctl_tt   = (strstr(js, "\"/api/sortdefctl\"") && strstr(js, "cdacdbcdc"));
-    int sortbranch_tt   = (strstr(js, "\"/api/sortbranch\"") && strstr(js, "cb0cb1") && strstr(js, "cb1cb0"));
+       the comparator's BODY rather than over its result, so both orderings are still two worlds.
+       SORTBRANCH HAS THREE STATES AND NOT TWO, which is the whole reason it is folded per ORDERING: a run that
+       reached it and produced ONE ordering is a fork that was eaten, and the clause NAMES WHICH ARM SURVIVED —
+       cb0cb1 is the comparator's -1 and cb1cb0 its +1, so the surviving needle says which side of
+       `cfg.admin ? 1 : -1` the run kept. A run that produced NEITHER has not been here. Those are three
+       different next steps and they used to be one 0. */
+    const char *sortnan_why = NULL, *sortdefctl_why = NULL, *sortbranch_why = NULL;
+    int sortnan_tt = 1, sortdefctl_tt = 1, sortbranch_tt = 1;
+
+    fold_row(&sortnan_tt, &sortnan_why, !!strstr(js, "\"/api/sortnan\""),
+             "NOT REACHED: no /api/sortnan record at all — the SCHEDULE, not step 4.b's +0 for NaN");
+    fold_row(&sortnan_tt, &sortnan_why, !!strstr(js, "n1n2n3n4"),
+             "the statement ran and did not compose n1n2n3n4: a NaN comparison stopped keeping the earlier "
+             "element, which is the predicate the unknown-collapse leaves through");
+    fold_row(&sortdefctl_tt, &sortdefctl_why, !!strstr(js, "\"/api/sortdefctl\""),
+             "NOT REACHED: no /api/sortdefctl record at all — the SCHEDULE, not the default ordering");
+    fold_row(&sortdefctl_tt, &sortdefctl_why, !!strstr(js, "cdacdbcdc"),
+             "the statement ran and did not compose cdacdbcdc: the default ordering is wrong with nothing "
+             "unknown in it at all, so this is not about the collapse");
+    fold_row(&sortbranch_tt, &sortbranch_why,
+             !!strstr(js, "\"/api/sortbranch\""),
+             "NOT REACHED: no /api/sortbranch record at all — NEITHER ordering exists, so no world has run "
+             "this statement and this row says nothing whatever about forking inside the comparator. Read it "
+             "against the run's standing and against the other two-world rows (fefork, owfork, genfork, "
+             "redfork, rerepfork, toprimfork, gcallfork): 0 across all of them is a run that stopped");
+    fold_row(&sortbranch_tt, &sortbranch_why, !!strstr(js, "cb0cb1"),
+             "the statement ran and only the +1 ordering (cb1cb0) exists: the comparator's -1 arm was LOST — "
+             "one world reached the sort and its sibling did not survive the fork inside the comparator body");
+    fold_row(&sortbranch_tt, &sortbranch_why, !!strstr(js, "cb1cb0"),
+             "the statement ran and only the -1 ordering (cb0cb1) exists: the comparator's +1 arm was LOST — "
+             "one world reached the sort and its sibling did not survive the fork inside the comparator body");
     /* generator .next() driven via .call (gci.next.call(gci)): the reflection bypass that previously DFAILed as a
        drive-to-completion is now routed onto do_generator_tramp at do_forward_call. Both gcA and gcP present ⇒ the
        branch inside the .call-driven generator body snapshot-forks per arm, never drives to completion. */
@@ -7195,14 +7261,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE },
         { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE },
         { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE },
-        { "sortcollapse", sortcollapse_tt, "/api/sortcollapse", SESS_EXPLORE },
-        { "sortvalueof", sortvalueof_tt, "/api/sortvalueof", SESS_EXPLORE },
-        { "sortrest", sortrest_tt, "/api/sortrest", SESS_EXPLORE },
-        { "sortdefault", sortdefault_tt, "/api/sortdefault", SESS_EXPLORE },
-        { "sortta", sortta_tt, "/api/sortta", SESS_EXPLORE },
-        { "sortnan", sortnan_tt, "/api/sortnan", SESS_EXPLORE },
-        { "sortdefctl", sortdefctl_tt, "/api/sortdefctl", SESS_EXPLORE },
-        { "sortbranch", sortbranch_tt, "/api/sortbranch", SESS_EXPLORE },
+        /* EACH CARRIES ITS OWN `why`, and the first clause of every one is "there is a record at all" — a 0
+           on any of these names whether the run ANSWERED the statement wrongly or never REACHED it, which is
+           the distinction a bare `&&` folded away and a lane was dispatched on. */
+        { "sortcollapse", sortcollapse_tt, "/api/sortcollapse", SESS_EXPLORE, sortcollapse_why },
+        { "sortvalueof", sortvalueof_tt, "/api/sortvalueof", SESS_EXPLORE, sortvalueof_why },
+        { "sortrest", sortrest_tt, "/api/sortrest", SESS_EXPLORE, sortrest_why },
+        { "sortdefault", sortdefault_tt, "/api/sortdefault", SESS_EXPLORE, sortdefault_why },
+        { "sortta", sortta_tt, "/api/sortta", SESS_EXPLORE, sortta_why },
+        { "sortnan", sortnan_tt, "/api/sortnan", SESS_EXPLORE, sortnan_why },
+        { "sortdefctl", sortdefctl_tt, "/api/sortdefctl", SESS_EXPLORE, sortdefctl_why },
+        { "sortbranch", sortbranch_tt, "/api/sortbranch", SESS_EXPLORE, sortbranch_why },
         { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE },
         { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE },
         { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE },
