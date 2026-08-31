@@ -708,8 +708,8 @@ run:
         }
 
         case S_READ_DONE: {
-            /* The read result is 7.4.14's `{ value, done }`, built by §4.3 for this read alone — so its two
-               members are read as OWN SLOTS. It is an ordinary object and the page owns Object.prototype;
+            /* The read result is 7.4.14's `{ value, done }`, built by §4.4's read() for this read alone —
+               so its two members are read as OWN SLOTS. It is an ordinary object and the page owns Object.prototype;
                going through a lookup would let a page trap a value it has never been handed. */
             JSValue done_v = JS_UNDEFINED, chunk = JS_UNDEFINED;
             JSAtom a_done = JS_NewAtom(ctx, "done"), a_value = JS_NewAtom(ctx, "value");

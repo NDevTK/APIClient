@@ -1,4 +1,10 @@
-/* ReadableStream — the Streams Standard §4.2, §4.3 and §4.5.
+/* ReadableStream — the Streams Standard §4.2, §4.3, §4.4 and §4.5.
+ *
+ * §4.3 IS A MIXIN OF TWO MEMBERS AND NOT THE READER — `ReadableStreamGenericReader` declares `closed` and
+ * `cancel()`, and NOTHING else. `read()` and `releaseLock()` belong to §4.4 The ReadableStreamDefaultReader
+ * class and §4.5 The ReadableStreamBYOBReader class, which INCLUDE that mixin; every `Generic*` abstract
+ * operation is §4.9.3 Readers. A citation here that said §4.3 for any of those resolved to a section that
+ * defines them nowhere, which reads as checked and is not.
  *
  * WHY IT IS BUILT NOW. It is the largest absent component by a wide margin: 74 corpus failures name it
  * directly, 19 more name TextDecoderStream, and every `response.body.getReader()` is another. It is also the
@@ -306,7 +312,7 @@ JSValue rs_take_read(JSContext *ctx, StreamData *d, int reject)
     return f;
 }
 
-/* §4.3's read result: 7.4.14 CreateIterResultObject — `{ value, done }`. One per read request, because §4.2
+/* §4.4's read() result: 7.4.14 CreateIterResultObject — `{ value, done }`. One per read request, because §4.2
    says so and because a shared object would be observable as identity.
    THE MEMBERS ARE DEFINED, NOT ASSIGNED. CreateIterResultObject uses CreateDataPropertyOrThrow, which is
    [[DefineOwnProperty]] and ignores the prototype chain entirely; an ASSIGNMENT is [[Set]], which consults it.
@@ -549,11 +555,28 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
         if (r != 0) return r;
         in = JS_UNDEFINED;
         if (w->settle == S_REL_CLOSED) {
-            /* §4.3's GenericRelease, in the one order that works: the `closed` promise is settled while the
-               reader still holds the lock, and only then is the lock dropped. */
+            /* §4.9.3 Readers' ReadableStreamReaderGenericRelease steps 8-9, in the one order that works: the
+               `closed` promise is settled (steps 4-6) while the reader still holds the lock, and only then is
+               the lock dropped. */
             DCHECK(rd != NULL, "a release sequence ran on a stream that has no reader");
             rs_stream_set(ctx, d, &d->reader, JS_UNDEFINED);
             rd_set(ctx, rd, &rd->stream, JS_UNDEFINED);
+            /* …AND THE SECOND TYPEERROR, WHICH IS A DIFFERENT OBJECT AND NOT A SECOND SPELLING OF THE FIRST.
+               §4.9.3's ReadableStreamDefaultReaderRelease is three steps — "Perform !
+               ReadableStreamReaderGenericRelease(reader)", then "Let e be a NEW TypeError exception", then
+               "Perform ! ReadableStreamDefaultReaderErrorReadRequests(reader, e)" — and
+               ReadableStreamBYOBReaderRelease is the same three over the read-INTO requests. GenericRelease
+               step 4/5 already rejected `closed` with a TypeError of its own, so a release that reuses that
+               one object hands the page a `read()` rejection and a `closed` rejection that compare `===`,
+               which no browser does and which a page can see with two `.catch`es and one comparison.
+               THE MESSAGE IS THE SAME BECAUSE THE STANDARD DEFINES NEITHER — what it defines is that there
+               are two exceptions, and identity is the only part of that a page can observe.
+               `w->err` HELD THE FIRST AND IS SAFE TO DROP HERE: reader_closed_run above already handed its
+               own reference to the reject (`w->value` holds the dup that the settling call consumes), and the
+               S_REL_LOOP tail below re-dups out of `w->err` for every parked request. */
+            JS_FreeValue(ctx, w->err);
+            JS_ThrowTypeError(ctx, "this reader was released while it was still in use");
+            w->err = JS_GetException(ctx);
             w->settle = S_REL_LOOP;
         } else {
             w->settle = w->settle == S_CLOSE_CLOSED ? S_CLOSE_LOOP : S_ERR_LOOP;
@@ -860,20 +883,20 @@ static const JSTrampStepDef js_rxn_defs[4] = {
 };
 #undef RXN_DEF
 
-/* ---- §4.3's reader ---------------------------------------------------------------------------------------- */
+/* ---- §4.4's reader ---------------------------------------------------------------------------------------- */
 
-/* §4.3's `read()`. A MACHINE, because settling the promise it returns is the PAGE'S code: 27.5.1.3 step 2.f
+/* §4.4's `read()`. A MACHINE, because settling the promise it returns is the PAGE'S code: 27.5.1.3 step 2.f
  * reads `Get(resolution, "then")` off the result object, whose prototype the page owns. The same reason
  * body.c's readers are machines, and the same shape.
  *
  * It also performs §4.5's PullSteps, which is where a stream's `pull` is asked for on demand — and the spec's
  * ORDER is that the close-or-pull happens BEFORE the read request is answered, so those are stages ahead of the
  * settle rather than after it. */
-/* WHERE THIS MACHINE RESTS. §4.3's read() is three steps over §4.9.3's ReadableStreamDefaultReaderRead, whose
+/* WHERE THIS MACHINE RESTS. §4.4's read() is three steps over §4.9.3's ReadableStreamDefaultReaderRead, whose
    step 6.2 is §4.5's [[PullSteps]] — and the close-or-pull that operation performs runs BEFORE the read
    request is answered, which is why those are stages ahead of the settle rather than after it. */
 #define RD_STAGES(X) \
-    X(RD_START, "Streams §4.3 read() steps 1-3 and §4.9.3 ReadableStreamDefaultReaderRead steps 1-6 (the brand, " \
+    X(RD_START, "Streams §4.4 read() steps 1-3 and §4.9.3 ReadableStreamDefaultReaderRead steps 1-6 (the brand, " \
                 "the released refusal, the promise, and what the stream's state answers with)") \
     X(RD_CLOSE, "Streams §4.5 [[PullSteps]] step 3.3 (draining the last chunk of a stream whose close was " \
                 "requested performs ReadableStreamClose)") \
@@ -936,7 +959,7 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
         }
         STEP_GOTO(s->hdr.stage, RD_SETTLE, &s->w.phase, NULL);
         if (JS_IsUndefined(rd->stream)) {
-            /* §4.3: a released reader's read() REJECTS rather than throwing — it is a promise-returning
+            /* §4.4: a released reader's read() REJECTS rather than throwing — it is a promise-returning
                member, and a page's `.catch` is where it expects to see this. */
             JS_ThrowTypeError(ctx, "this reader has been released");
             s->result = JS_GetException(ctx);
@@ -1051,11 +1074,11 @@ static int js_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
 
 static const JSTrampStepDef js_read_def = {
     sizeof(JSReadState), js_read_step, js_read_fini, 0, .catches_abrupt = 1, .visit = js_read_visit,
-    .algorithm = "Streams §4.3 read(), through §4.9.3 ReadableStreamDefaultReaderRead", .steps = RD_STEPS
+    .algorithm = "Streams §4.4 read(), through §4.9.3 ReadableStreamDefaultReaderRead", .steps = RD_STEPS
 };
 
-/* §4.3's `releaseLock()`. A MACHINE, because releasing is not just dropping the lock: it REJECTS the reader's
- * `closed` promise with a TypeError and rejects every read request the reader had parked — both of which settle
+/* §4.4's and §4.5's `releaseLock()`. A MACHINE, because releasing is not just dropping the lock: it REJECTS
+ * the reader's `closed` promise with a TypeError and rejects every read request the reader had parked — both of which settle
  * promises, which is the page's code. A release that only dropped the lock left a page awaiting `reader.closed`
  * forever, and a `read()` issued before it never answered at all; that is what made the corpus's whole
  * default-reader file report NOTHING rather than a failure, because testharness cannot complete while a
@@ -1275,7 +1298,8 @@ static int js_get_reader_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         s->reader = obj;
         if (JS_IsException(rd->closed)) return -1;
         d->reader = JS_DupValue(ctx, obj);
-        /* §4.3's GenericInitialize: a stream that is ALREADY finished settles `closed` here and now. */
+        /* §4.9.3's ReadableStreamReaderGenericInitialize: a stream that is ALREADY finished settles `closed`
+           here and now. */
         if (d->state == RS_READABLE) goto done;
         rd->closed_settled = 1;
         s->w.func = rd->closed_funcs[d->state == RS_ERRORED];
@@ -1889,7 +1913,8 @@ static void rs_iter_work_start(RsIterWork *k)
 /* §4.2.5: "The asynchronous iterator initialization steps for a ReadableStream, given stream, iterator, and
    args, are: 1. Let reader be ? AcquireReadableStreamDefaultReader(stream). 2. Set iterator's reader to reader.
    3. Let preventCancel be args[0]["preventCancel"]. 4. Set iterator's prevent cancel to preventCancel."
-   A STEP because step 1 is a CALL: §4.3's acquisition SETTLES the reader's `closed` promise at once on a stream
+   A STEP because step 1 is a CALL: §4.9.1's AcquireReadableStreamDefaultReader reaches §4.9.3's
+   ReadableStreamReaderGenericInitialize, which SETTLES the reader's `closed` promise at once on a stream
    that has already closed or errored, and a resolving function is the page's code — which is the ONE place
    these steps rest, and therefore the one stage they declare. It is numbered from
    IDL_ASYNC_ITER_INIT_STEP_FIRST because Web IDL §3.7.10 step 3.1.6 is what runs it, and joined onto that
@@ -1897,7 +1922,7 @@ static void rs_iter_work_start(RsIterWork *k)
 #define RSI_INIT_STAGES(X) \
     X(RSI_INIT_ACQUIRE, \
       "Streams §4.2.5 asynchronous iterator initialization steps step 1 (reader is ? " \
-      "AcquireReadableStreamDefaultReader(stream), whose §4.3 acquisition settles the reader's closed promise " \
+      "AcquireReadableStreamDefaultReader(stream), whose §4.9.3 GenericInitialize settles the reader's closed " \
       "at once on a stream that has already closed or errored)")
 enum { IDL_ASYNC_ITER_INIT_STAGE_BASE(RSI_INIT_STAGES) RSI_INIT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RSI_INIT_STEPS[] = { RSI_INIT_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -2018,7 +2043,7 @@ static int js_rs_iter_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             int done;
 
             DCHECK(JS_IsObject(result),
-                   "§4.3's read() fulfilled with something that is not the iteration result object it built");
+                   "§4.4's read() fulfilled with something that is not the iteration result object it built");
             done_v = JS_GetPropertyStr(ctx, result, "done");
             done = JS_ToBool(ctx, done_v);
             JS_FreeValue(ctx, done_v);
@@ -2032,7 +2057,7 @@ static int js_rs_iter_rxn_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
                 STEP_GOTO(s->hdr.stage, RSIX_RELEASE, &s->w.phase, NULL);
             } else {
                 /* chunk steps, given chunk: "Resolve promise with chunk" — the CHUNK, and not the
-                   { value, done } object §4.3's read() wrapped it in. §3.7.10.2's fulfillSteps reads what the
+                   { value, done } object §4.4's read() wrapped it in. §3.7.10.2's fulfillSteps reads what the
                    declaration's type says, and `async_iterable<any>` says the chunk. */
                 s->w.value = JS_GetPropertyStr(ctx, result, "value");
                 if (JS_IsException(s->w.value)) { s->w.value = JS_UNDEFINED; return JS_STEP_ABRUPT; }
@@ -2644,8 +2669,8 @@ static const JSTrampStepDef js_tee_defs[TEE_N] = {
 };
 #undef TEE_DEF
 
-/* §4.2's `tee()`. A MACHINE because it acquires a reader, and §4.3's acquisition settles `closed` at once on a
-   stream that has already finished. */
+/* §4.2's `tee()`. A MACHINE because it acquires a reader, and §4.9.3's GenericInitialize settles `closed` at
+   once on a stream that has already finished. */
 typedef struct {
     StreamWork w;
     JSValue  tee;
@@ -4120,8 +4145,9 @@ void readable_stream_install_protos(JSContext *ctx)
     idl_install_step_method(ctx, reader_p, "cancel", 0, g_cancel_stepids[CANCEL_ON_DEFAULT]);
     JS_SetClassProto(ctx, g_reader_class, reader_p);
 
-    /* §4.5's ReadableStreamBYOBReader, whose THREE members from §4.3's mixin are the same three machines with
-       the other brand, and whose `read` is §4.9.5's pull-into. It is the same CLASS as §4.4's reader — one
+    /* §4.5's ReadableStreamBYOBReader, whose THREE machine members — §4.5's own `read(view, options)` and
+       `releaseLock()`, and §4.3's mixin `cancel()` — are the same three machines with the other brand, and
+       whose `read` is §4.9.5's pull-into. It is the same CLASS as §4.4's reader — one
        record, one lock — so its prototype cannot be the class's, and lives in a per-realm value slot. */
     {
         JSValue byob_p = JS_NewObject(ctx);

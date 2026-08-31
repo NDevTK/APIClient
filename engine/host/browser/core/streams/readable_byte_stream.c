@@ -8,9 +8,9 @@
  * implementation with the right name, so it does not have one.
  *
  * WHAT IS HERE: §4.7's controller with its byte queue and its list of PULL-INTO DESCRIPTORS, §4.8's BYOB
- * request, §4.5's `read(view, {min})` (the reader OBJECT is §4.3's mixin and lives with the reader class in
- * readable_stream.c, because a BYOB reader and a default reader are one record and one lock), and §4.9.5's
- * abstract operations.
+ * request, §4.5's `read(view, {min})` (the reader OBJECT is §4.5's class, which INCLUDES §4.3's mixin, and
+ * lives with the reader class in readable_stream.c, because a BYOB reader and a default reader are one record
+ * and one lock), and §4.9.5's abstract operations.
  *
  * THE BUFFERS ARE TRANSFERRED, AND THAT IS THE OBSERVABLE BEHAVIOUR. §8.3's TransferArrayBuffer DETACHES what
  * it was given and answers a new buffer over the same bytes, and every path here performs it: an enqueued
