@@ -140,12 +140,16 @@ static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool
     return css_px_min(best, css_px_add(origin, lo));
 }
 
-/* THE EXTREME OVER EVERY DESCENDANT'S BOX, in tree order. The walk descends through an element that generates
-   NO box of its own, deliberately: css-display §3.1's `display: contents` gives such an element no box while
-   "its children and pseudo-elements still generate boxes and text runs as normal", and those children are
-   descendants of `el` exactly as any other box is. core/dom/element_view.h's one predicate is what decides
-   which nodes have a box, so a `display: none` subtree contributes nothing without this walk carrying a second
-   copy of that rule.
+/* THE EXTREME OVER EVERY DESCENDANT'S BOX, in tree order. WHICH NODES HAVE A BOX IS TWO QUESTIONS AND NOT ONE,
+   which is css-display-3 §2.5 "Box Generation: the none and contents keywords"' own split and is what decides
+   where this walk stops. `none` is stated over a SUBTREE — "the element and its descendants generate no boxes
+   or text sequences" — so the walk does not descend under one. `contents` is stated over ONE BOX — "the
+   element itself does not generate any boxes, but its children and pseudo-elements still generate boxes and
+   text sequences as normal" — so the walk folds nothing for the element and descends anyway, because those
+   children are descendants of `el` exactly as any other box is. core/dom/element_view.h answers both, and both
+   are ASKED: reading its per-element predicate as the subtree answer is what put this walk inside every
+   `<script>` and `<style>` in every document (HTML §15.3.1 Hidden elements gives all fourteen `display: none`)
+   and made it ask the layout where a run that generates no box at all had been placed.
    A TEXT RUN IS A DESCENDANT BOX TOO, and it is the one this walk could silently miss. §2 says "all of the
    element's descendants' boxes" and an anonymous inline box holding a text run is one of them, so a
    `<div style="width:50px">verylongword</div>` has a scrolling area WIDER than its padding box in every user
@@ -177,7 +181,10 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
     CssPx best = sa_inline_context_extreme(el, vertical, ending_at_hi, seed);
 
     while (n != NULL) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        /* css-display-3 §2.5's `none` is the one answer that reaches past this node — see the banner. */
+        bool descend = n->type != LXB_DOM_NODE_TYPE_ELEMENT || element_view_subtree_has_boxes(n);
+
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && descend) {
             lxb_dom_element_t *d = lxb_dom_interface_element(n);
 
             if (element_view_has_box(n)) {
@@ -230,7 +237,7 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                       "named one crash earlier: the `span`'s own box is placed by §9.4.2 and "
                       "core/layout/flow_position.c aborts for it before this walk descends into its text");
         }
-        if (n->first_child != NULL) { n = n->first_child; continue; }
+        if (descend && n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;
         if (n == root) break;
         n = n->next;

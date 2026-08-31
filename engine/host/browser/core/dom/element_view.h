@@ -204,6 +204,26 @@ void element_view_free(void);
    a wider answer than a laying-out browser's. `n` must be an element. */
 bool element_view_has_box(const lxb_dom_node_t *n);
 
+/* css-display-3 §2.5 "Box Generation: the none and contents keywords"' OTHER HALF — whether ANY box is
+   generated anywhere in `n`'s subtree, `n`'s own included. §2.5 states its two keywords apart and the
+   difference is exactly a subtree: `none` is "the element and its descendants generate no boxes or text
+   sequences", while `contents` is "the element itself does not generate any boxes, but its children and
+   pseudo-elements still generate boxes and text sequences as normal". The predicate above answers `false` for
+   BOTH, because it is asked about one element's own box; a WALK over a subtree needs them apart, because one
+   of them is a reason to stop descending and the other is a reason to keep going.
+   IT IS EXPORTED BECAUSE READING `element_view_has_box` AS THE SUBTREE ANSWER IS A SILENT WRONG ONE, and it
+   has been made: a walk that guarded its per-ELEMENT step with the predicate above and descended
+   unconditionally reached the TEXT inside every `<script>`, `<style>`, `<title>` and `<head>` in every
+   document — HTML §15.3.1 Hidden elements puts `display: none` on all fourteen — and asked the layout where
+   that run's boxes were. §2.5 says there are none, and the run is not the crash's subject: a run whose
+   SUBTREE generates no boxes and a run whose formatting context this engine cannot name are two different
+   facts, and a walk that cannot tell them apart reports the second for the first.
+   IT ANSWERS THE SAME THREE PRELIMINARIES the predicate above does — connected, in a document some navigable
+   is presenting, and no `display: none` on the element or on any ancestor — and `element_view_has_box` is now
+   written as this plus §2.5's `contents` test on the element itself, so the two cannot come apart. `n` must be
+   an element. */
+bool element_view_subtree_has_boxes(const lxb_dom_node_t *n);
+
 /* §6's `scrollTop`/`scrollLeft` GETTER AS THE INTERNAL ALGORITHM — §2 Terminology's own rule that a member
    "said to call another method or attribute" invokes the INTERNAL API and never the page-visible one, so a page
    that overwrites `Element.prototype.scrollTop`'s getter cannot change what §6.1's algorithms measure. `vertical`

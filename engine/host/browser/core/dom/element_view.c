@@ -217,14 +217,14 @@ static JSValue ev_env_long(JSContext *ctx, const EvTarget *t, const char *member
    which invokes the attribute in those words) is what said so: §2 requires an algorithm that calls an attribute
    to invoke its internal API, and an internal API each caller re-states is not one API. */
 
-bool element_view_has_box(const lxb_dom_node_t *n)
+bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *a;
     JSContext *dctx;
 
     DCHECK(n && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "the associated-box predicate was asked about a node that is not an element — only elements "
-           "generate the principal boxes CSSOM VIEW §6 and HTML's `being rendered` are about");
+           "css-display-3 §2.5's subtree question was asked about a node that is not an element — the two "
+           "keywords it is stated over are values of `display`, and only an element has one");
     /* A node whose root is not a document has no boxes in any user agent. */
     if (!node_is_connected(n)) return false;
     /* And neither does one in a document nothing is presenting: a DOMParser document, a `<template>`'s
@@ -238,21 +238,42 @@ bool element_view_has_box(const lxb_dom_node_t *n)
        for the `hidden` CONTENT ATTRIBUTE, which is one UA-stylesheet rule for one of the values `display` can
        take — so an author `display: none`, the rule for `<head>` and `<script>`, and a page's own
        `[hidden] { display: block }` overriding the UA rule were all invisible to it. The attribute is now
-       decided where every other UA rule is (css_style_declaration.c's UA layer), and this asks the one
-       question: an element whose computed display is `none` generates no box, an element whose computed
-       display is `contents` generates none of its OWN (its children still do), and no descendant of a
-       `display: none` ancestor generates one either. */
+       decided where every other UA rule is (css_style_declaration.c's UA layer), and this asks css-display-3
+       §2.5's ONE keyword that reaches a whole subtree: "the element and its descendants generate no boxes or
+       text sequences". */
     for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
         char *d = css_computed_value(lxb_dom_interface_element((lxb_dom_node_t *)a), "display");
-        bool boxless = d != NULL && (strcmp(d, "none") == 0 ||
-                                     (a == n && strcmp(d, "contents") == 0));
+        bool none;
 
         DCHECK(d != NULL, "the cascade produced no computed `display` for an element — the UA layer answers "
                           "`inline` for every element it does not name, so this cannot be unset");
+        none = strcmp(d, "none") == 0;
         free(d);
-        if (boxless) return false;
+        if (none) return false;
     }
     return true;
+}
+
+bool element_view_has_box(const lxb_dom_node_t *n)
+{
+    char *d;
+    bool contents;
+
+    DCHECK(n && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "the associated-box predicate was asked about a node that is not an element — only elements "
+           "generate the principal boxes CSSOM VIEW §6 and HTML's `being rendered` are about");
+    /* THE SUBTREE HALF FIRST, and it is the same walk rather than a copy of it: everything that stops boxes
+       being generated ANYWHERE below `n` also stops `n`'s own. */
+    if (!element_view_subtree_has_boxes(n)) return false;
+    /* AND css-display-3 §2.5's OTHER KEYWORD, which reaches exactly one box: `contents` means "the element
+       itself does not generate any boxes, but its children and pseudo-elements still generate boxes and text
+       sequences as normal", so it is asked of `n` alone and never of an ancestor. */
+    d = css_computed_value(lxb_dom_interface_element((lxb_dom_node_t *)n), "display");
+    DCHECK(d != NULL, "the cascade produced no computed `display` for an element — the UA layer answers "
+                      "`inline` for every element it does not name, so this cannot be unset");
+    contents = strcmp(d, "contents") == 0;
+    free(d);
+    return !contents;
 }
 
 /* CSSOM VIEW's "POTENTIALLY SCROLLABLE IN AN AXIS" — the branch four of §6's steps take and none of them could
