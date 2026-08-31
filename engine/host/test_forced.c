@@ -8322,8 +8322,17 @@ static int fixture_have_answers(void) {
     ok = probes_report(js, false);
     /* …AND THE @S SEARCHES THEMSELVES, BECAUSE THIS IS THE ONLY PLACE THEY CAN BE OBSERVED AT ALL. The probe
        row says whether a sink FIRED and nothing about how far the search that is trying to got — that is what
-       the parked entry's own numbers are for (solve.h: tried, turns, reached, survived/survivedOf, escaped,
-       payloads), and every one of them was being composed here, 1382 times in one run, and freed unread.
+       the parked entry's own numbers are for — the record solve.h documents at `parked search`, which OWNS that
+       list and is the only place to read it. THE NAMES USED TO BE ENUMERATED HERE AND ARE DELETED RATHER THAN
+       BROUGHT UP TO DATE: it was a second copy of a list another file owns, and it had already drifted — it
+       named SEVEN of the twenty members solve.h declares for that record, so a reader checking what this hook
+       observes against what the search reports would have found the difference and believed THIS file. Bringing
+       it up to date would only reset the drift, which is what the site one file over demonstrates: the popup
+       kept a hand-written set of "fields a card reads", corrected five times by its own comments, and had
+       drifted again badly enough that an improved ratchet re-rendered nothing. Its fix was to key on the record
+       rather than on a restatement of it, and that is the rule here too — the copy that drifts is the copy
+       nobody runs against reality. Every one of those numbers was being composed here, 1382 times in one run,
+       and freed unread.
        THE COMPLETION PRINT CANNOT SUBSTITUTE FOR IT: `@RESULT` runs after run_scheduler returns, and a run
        whose frontier does not drain is killed by build.mjs's backstop before it gets there — so on exactly the
        runs where the @S half is stuck, the document exists 1382 times and is printed zero times.
