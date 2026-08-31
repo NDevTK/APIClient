@@ -92,25 +92,25 @@ typedef struct Flow {
        lives in `dec_blob` below — the shared frozen chain — whether it was frozen by a suspend, by a fork, or
        rebuilt by the cold tier from a recipe. ONE representation, so a resumed flow and a forked one are the
        same kind of thing to everything downstream. */
-    double val;            /* accumulated emitted VALUE (new @H + @S) — the WFQ's reward term, ONE POINT PER
-                              EMISSION (both detectors credit exactly 1.0) */
-    /* HOW MUCH OF `val` THIS FLOW DID NOT EARN — the reward it INHERITED, at the instant it was forked or
-       rebuilt. It ranks nothing and has exactly one reader, flow_wfq_census below, because `val` alone cannot
-       answer the question a frontier that retires flows steadily without emitting anything poses: whether its
-       members are producing and being outranked, or coasting on an ancestor's findings. `val` is copied at
-       every fork (flow_fork_inherit) and restored by the cold tier, so it is monotone down a fork chain and
-       says what an ANCESTRY emitted; `val - val_born` is what THIS flow emitted, and a frontier where that is
-       zero for every member is one whose whole reward ordering was decided before any of them existed.
-       A FROM-BASELINE FLOW INHERITS IT TOO, and this line used to say the opposite ("0 for a from-baseline
-       flow … it inherited nothing, so all of its reward is its own from the start"). That was a description of
-       a defect: `val` is the frontier's dominant term and a newcomer entering at zero entered BELOW every
-       member of a frontier whose arms had all inherited the boot family's reward, which is not "the system's
-       virtual time" and is not reachable by the ordering again. flow_arrive_at_virtual_time assigns both halves
-       now, exactly as flow_fork_inherit does, so this field means the same thing at both doors: everything a
-       flow was handed, and `val - val_born` is everything it has emitted since. The cold tier's rebuild is the
-       one writer that REPLACES the pair rather than inheriting it — a resumed flow is a returning member
-       carrying its own parked account, not a newcomer being placed. */
-    double val_born;
+    /* WHAT THIS ONE MEMBER HAS EMITTED (new @H + @S), ONE POINT PER EMISSION — A CENSUS QUANTITY AND NOT A
+       RANK, WHICH IS THE CORRECTION THIS FIELD CARRIES. It used to be "the WFQ's reward term" and it was also
+       copied at every fork and at every from-baseline arrival, and those two sentences cannot both be true of
+       one number: a term COPIED AT AN INSTANT differs between two arms of one parent by whatever the parent
+       emitted between their two branches, which is birth order and not merit, and it is unbounded while every
+       other term of the weight has a range of at most 1.0 — so it dominated, and an unbounded term read
+       descending on birth order serves newest-first. Measured on the smoke fixture: a frontier growing roughly
+       twenty-four fold inside a frozen reward band a hundred and sixty-eight points wide, its floor never
+       moving off its second reading, and not one member reaching the tail.
+       §scheduler'S REWARD IS THE FORK FAMILY'S NOW (flow.c's FlowAcct `val`, reached by flow_reward below), at
+       the SAME accounting unit the aging that cancels it is charged to. This field is what the account cannot
+       say: which MEMBERS are producing. A frontier retiring members steadily while every one of them reads
+       zero here is one coasting on an ancestor's findings — the question `val_born` was invented to ask by
+       subtraction, and there is nothing to subtract once nothing is inherited, so that field is DELETED rather
+       than kept beside this one.
+       NEVER COPIED, NEVER INHERITED, NEVER READ BY flow_weight. A fork's precondition asserts it is still zero
+       (flow.c's flow_fork_inherit), which is what keeps it a measurement: the moment it is assigned at a fork
+       it is a rank again, and a rank a fork copies is the defect above. */
+    double val;
     /* THE AGING TERM, AND ITS UNIT IS THE WHOLE OF WHETHER THE TERM WORKS. Thread time in MICROSECONDS burned
        since this flow's last emit — never a step/opcode/visit count. A count is not commensurate with `val`
        above: a step used to be a whole drain and became one unit of work, so the same charge billed a flow the
@@ -860,6 +860,22 @@ int flow_owes_answer(const Flow *f);
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);
 
+/* §scheduler'S REWARD TERM AS THE ORDER READS IT — this flow's FORK FAMILY's accumulated emitted value, not the
+ * member's own `val`, which ranks nothing (see the field). It is exported because two consumers outside flow.c
+ * have to name the quantity flow_weight is actually a function of and the family node is private to that file:
+ * the scheduler's ranked-state cache, which asserts that the value yield only fires when a term of the weight
+ * MOVED — a cache keyed on the member's own ledger would go on agreeing while the rank changed underneath it —
+ * and the cold tier, whose recipe carries (path, reward) across a session and must carry the reward the
+ * resumed frontier will be ordered by. Departed flows read 0.0: their account is gone and so is their rank. */
+double flow_reward(const Flow *f);
+
+/* …AND THE ONE WRITER OF IT THAT IS NEITHER AN EMISSION NOR AN ARRIVAL — the cold tier's rebuild, REPLACING
+ * the account a from-baseline flow was placed at with the one the session that parked it wrote down. A resumed
+ * member is not a newcomer, so it does not enter at the frontier's virtual time; it comes back at its own.
+ * It is not exported for anyone else: a caller that wanted to SET a reward wants flow_credit_emit, which is a
+ * ledger entry and is paid once per observation. See flow.c. */
+void flow_restore_reward(Flow *f, double val);
+
 /* THIS FLOW COMPLETED A UNIT OF WORK — the optimism term's "visit", credited by the scheduler at the ONE point
  * that can see the whole of a step: after flow_step returns, when the flow is left BETWEEN units. It is a
  * scheduler statement rather than a flow_step one because flow_step returns from a dozen arms and half of them
@@ -885,7 +901,8 @@ void flow_credit_visit(Flow *f);
  * be the from-baseline population — a candidate session, a joined document's boot flow, the first flow — on
  * the reasoning that such a flow "enters at reward 0 (flow_add's zeros), so its weight is at most 1.0 for its
  * whole life". That stopped being true the moment flow.c's flow_arrive_at_virtual_time began assigning the
- * REWARD among the four tags a newcomer arrives at: a from-baseline flow now enters at the INCUMBENT's reward,
+ * REWARD among the four tags a newcomer arrives at (onto the newcomer's own family node, since founding a
+ * family is what from-baseline means): a from-baseline flow now enters at the INCUMBENT's reward,
  * ties with it, and is placed by flow_pick's strict comparison rather than held under a ceiling. So inside a
  * busy period this row is 0 BY CONSTRUCTION — it can be non-zero only before the first pick, where SFQ's v(0)
  * is 0 — and a reader that tests it for "is there a population down at the bottom" is testing for a set the
@@ -896,11 +913,18 @@ void flow_credit_visit(Flow *f);
  * order was permanently false on the run where it was the answer.
  *
  * THE POPULATION IS `members - self_emit` INSTEAD, and the two rows are not interchangeable. That difference
- * is how many members have earned NONE of the reward they are ranked on — the inheritance the aging term's
- * family half exists to cancel — and it is what a reader wants when it asks WHOSE reward the order is. A
- * candidate is in that set for the reason it used to be in `val_zero`'s: it records no endpoints by design
- * (endpoint_suppress), so the only thing that can raise its reward above what it inherited is the very sink it
- * is trying to reach.
+ * is how many members have earned NONE of the reward they are ranked on, and it is what a reader wants when it
+ * asks WHOSE reward the order is. A candidate is in that set for the reason it used to be in `val_zero`'s: it
+ * records no endpoints by design (endpoint_suppress), so the only thing that can raise its account above what
+ * it was placed at is the very sink it is trying to reach.
+ * AND IT MEANS SOMETHING DIFFERENT NOW THAT THE REWARD IS THE FORK FAMILY'S, WHICH IS WORTH SAYING BECAUSE THE
+ * ROW READS THE SAME. It used to say how much of the order was INHERITANCE — every arm holding a copy of a
+ * prefix nobody standing there had earned — and a high count was the ordering defect itself. Held on the
+ * account, the reward is no longer copied to anybody, so a member that has emitted nothing is not carrying a
+ * rank it did not earn; it is standing in a family that did. The count is then a fact about the DOCUMENT's
+ * branching rather than about the scheduler: how many live arms one producing account is spread over. What
+ * makes it a finding again is the pairing — `members - self_emit` at the whole frontier WITH `families > 1`
+ * and a reward spread, which is one account outranking another while none of the second's members can act.
  *
  * AND IT REPORTS THE WEIGHTS THEMSELVES, which is a reversal of what this comment used to say. It said the
  * census "calls flow_weight for nothing at all — it reports the two terms, never their sum", on the reasoning
@@ -930,13 +954,26 @@ typedef struct {
        there eventually" is reading a term that only ever pushes the tail further away. WHAT THE ORDER IS
        ACTUALLY MADE OF is then this spread against `self_emit`: flow.c's flow_pick asserts that the reward gap
        is the ONLY quantity that can put a never-run member behind the flow it picks, and `self_emit` says
-       whether that gap is something the members earned or something they were handed. */
+       whether that gap is something the members earned or something they were handed.
+       IT IS THE FORK FAMILY'S REWARD, READ PER MEMBER, AND THAT IS WHAT THE SPREAD NOW MEANS. The reward is
+       held on the account the aging is charged to (flow.c's FlowAcct `val`), so every arm of one family reads
+       one number and a frontier that is ONE family — which a real page's is, every flow descending from the
+       boot flow — has a spread of exactly ZERO here whatever it does. That is not the row going blind; it is
+       the row saying that within a family the guarantee flow_pick's third assertion is tight in holds
+       outright, because the gap it is tight in is identically zero. A NON-ZERO spread is therefore a statement
+       about several ACCOUNTS — several documents, several @S searches, a resumed frontier's rebuilt recipes —
+       and is read beside `families` below, which says how many there are. Read as a per-member reward it was
+       something else entirely: a per-CHAIN prefix, differing between arms by what their common parent emitted
+       between their two branches, unbounded against every other term's range of 1.0, and therefore the whole
+       of the order on exactly the frontier where it named nothing anybody had done. */
     double val_min;
     double val_max;
-    double val_top;    /* …and flow_best's own reward, so the top of the order is named rather than inferred */
-    long val_zero;     /* members that inherited nothing and have emitted nothing — ceiling 1.0 (see above) */
-    long self_emit;    /* members with val > val_born: they emitted something THEMSELVES rather than inheriting
-                          it. Zero here while `finished` climbs is work that advances no statement. */
+    double val_top;    /* …and flow_best's family's, so the top of the order is named rather than inferred */
+    long val_zero;     /* members whose fork family has emitted nothing — ceiling 1.0 (see above) */
+    long self_emit;    /* members with val > 0: they emitted something THEMSELVES rather than standing on an
+                          account an ancestor filled. Zero here while `finished` climbs is work that advances no
+                          statement. It is a plain test and no longer a subtraction, because nothing is
+                          inherited to subtract. */
     long unrun;        /* members with cpu == 0 — never charged for the thread, or emitted since they last
                           were. IT IS NOT flow_pick'S OWN DEFINITION, which is what this row used to claim: the
                           pick's `unrun` is the population whose weight is at least 1.0, and that needs every
@@ -973,10 +1010,13 @@ typedef struct {
     int64_t vis_max;
     /* THE SERVICE OF THE WHOLE FORK FAMILY, IN THE SAME NOTCHES — and it DECIDES THE ORDER now, which is the
        correction this row carries. It was added as a diagnostic beside the ranking, to answer whether the
-       reward SCALE was what a run was stuck on: `val` is copied at every fork while the aging meant to cancel
-       it was charged to whichever arm held the thread, so a family with N live arms presented its reward N
-       times and paid for it N times over. The reading came back 8910 against an `svc_max` of 1124 — a factor of
-       7.93 — and flow_weight's aging term now reads this quantity instead (flow.c's FlowAcct `fam_us`).
+       reward SCALE was what a run was stuck on: the reward was then copied at every fork while the aging meant
+       to cancel it was charged to whichever arm held the thread, so a family with N live arms presented its
+       reward N times and paid for it N times over. The reading came back 8910 against an `svc_max` of 1124 — a
+       factor of 7.93 — and flow_weight's aging term now reads this quantity instead (flow.c's FlowAcct
+       `fam_us`). THE OTHER HALF OF THAT PRESENTATION IS GONE TOO: the reward is held on the same node
+       (FlowAcct's `val`), so a family presents it ONCE however many arms it wears, and the two terms are
+       finally one account read two ways rather than a credit inflated by N against a debit that is not.
        SO THE PAIR IS READ THE OTHER WAY ROUND FROM HERE ON. `svc_fam_max` is the AGING's own denominator and
        `svc_max` is one member's share of it; their ratio is the fork factor of the widest family in the
        frontier, which is a fact about the DOCUMENT's branching and no longer a defect in the ordering. What

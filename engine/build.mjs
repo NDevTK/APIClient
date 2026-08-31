@@ -807,14 +807,22 @@ function wfqReading(out) {
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
                 `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}; ${ucb}`;
   /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
-     one the verdict's own sentence makes a claim about. `selfEmit` counts members with `val > val_born` — the
-     ones that emitted something THEMSELVES — so the difference is how many are ranked entirely on an ancestor's
-     findings, which is precisely what the aging term's family half exists to cancel and precisely what the
-     reader wants when the spread is wide. Stated on every arm of this function for the reason `orderedBy` is:
-     the caller renders it, so an arm without it renders a hole. */
+     one the verdict's own sentence makes a claim about. `selfEmit` counts members that have emitted something
+     THEMSELVES, so the difference is how many stand on an account some other arm of their fork family filled.
+     THE SENTENCE IT USED TO END ON IS RETIRED AND IS NOT A SMALLER VERSION OF ITSELF. It said the spread
+     between the ends "is an ANCESTRY's", which was true while the reward was copied onto every arm at its fork
+     instant — a per-CHAIN prefix, so two arms of one family stood at two rewards for something neither of them
+     did. The reward is the fork FAMILY's now (solver/flow.h's flow_reward), read through the account the aging
+     is charged to, so every arm of one family reads one number and a spread is a gap between ACCOUNTS. That
+     makes this row and `fam` a PAIR and neither is worth rendering alone: a large `inherited` with ONE family
+     is a producing account spread over many live arms, which is what a branching document looks like and is
+     not a defect; the same figure with SEVERAL families and a spread is one account outranking another none of
+     whose members can act, which is. Stated on every arm of this function for the reason `orderedBy` is: the
+     caller renders it, so an arm without it renders a hole. */
   const inherited = w.members - w.selfEmit;
-  const whose = `${inherited} of the ${w.members} members have earned NONE of the reward they are ranked on ` +
-                `(${w.selfEmit} have emitted since birth), so the spread between the ends is an ANCESTRY's`;
+  const whose = `${inherited} of the ${w.members} members have emitted none of the reward their account holds ` +
+                `(${w.selfEmit} have emitted something themselves), so any spread between the ends is between ` +
+                `ACCOUNTS and is read against the family count beside it`;
   return {
     /* THE DISCRIMINATOR IS THE REWARD SPREAD AGAINST THE OPTIMISM TERM'S WHOLE RANGE, AND IT USED TO CARRY A
        SECOND CONJUNCT THAT THE ENGINE HAS SINCE MADE PERMANENTLY FALSE. It read `&& w.valZero > 0`, on the
@@ -841,8 +849,9 @@ function wfqReading(out) {
                  ["aging", rangeOwn + rangeFam]].sort((a, b) => b[1] - a[1]);
       return t[0][1] <= 0 ? "nothing — every term reads the same at both ends of this frontier" : t[0][0];
     })(),
-    text: `@WFQ: ${w.members} members, reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ${w.valZero} at ` +
-          `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread; ` +
+    text: `@WFQ: ${w.members} members, account reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ` +
+          `${w.valZero} on accounts at 0, ${w.selfEmit} emitted something themselves, ` +
+          `${w.unrun} never charged for the thread; ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
           `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate; ` +
           `${cand}; ${jobs}; ` + terms,

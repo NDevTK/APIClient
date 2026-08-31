@@ -337,8 +337,11 @@ static void park_rec_cand(const Flow *f, long id)
         DCHECK((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'),
                "a sink class name holds something other than letters — it is a field of the recipe grammar, so "
                "a ',' in it shifts every field after it and a ';' splits the record in two");
-    if (id < 0) snprintf(head, sizeof head, "c-,%.17g,", f->val);
-    else        snprintf(head, sizeof head, "c%ld,%.17g,", id, f->val);
+    /* THE REWARD FIELD IS THE ONE THE ORDER IS MADE OF — flow_reward, this flow's fork FAMILY's accumulated
+       value (solver/flow.h). `f->val` is one member's own ledger and ranks nothing, so parking it would write a
+       recipe whose reward is not the quantity the resumed frontier is ordered by. */
+    if (id < 0) snprintf(head, sizeof head, "c-,%.17g,", flow_reward(f));
+    else        snprintf(head, sizeof head, "c%ld,%.17g,", id, flow_reward(f));
     park_open_rec();
     park_str(head);
     park_str(f->cand_sink);
@@ -754,17 +757,25 @@ void cold_park_flow(Flow *f)
     id = seg ? park_emit_chain(seg) : -1;
     /* THE REWARD TRAVELS WITH THE FLOW because the ONE global frontier is ordered by it across sessions —
        §scheduler's "a high-value flow suspended last week resumes ahead of a low-value fresh one today".
-       It is what the flow EMITTED, which is history and not a live value, so it is the one number here
-       that is neither re-derived nor re-fetched, and it is what breaks the tie at the instant a resumed
-       frontier starts: every member is then unrun (cpu 0, full optimism bonus), so without it the WFQ
-       would pick by registry position and call that value-of-information.
+       It is what the flow's fork FAMILY emitted (solver/flow.h's flow_reward), which is history and not a live
+       value, so it is the one number here that is neither re-derived nor re-fetched, and it is what breaks the
+       tie at the instant a resumed frontier starts: every member is then unrun (cpu 0, full optimism bonus), so
+       without it the WFQ would pick by registry position and call that value-of-information.
+       A PARK SPLITS A FAMILY INTO ONE ACCOUNT PER RECORD, which is a property of the tier and not a defect in
+       it. A live family's arms share one account; each arm parked separately rebuilds as its own from-baseline
+       flow founding its own family, so N parked arms of one family come back as N accounts each carrying the
+       family's whole reward. That is the same inflation the paragraph below describes and it is answered the
+       same way — every resumed member is inflated in proportion to what its account emitted, so the ORDER,
+       which is the only thing a weight decides, is preserved. What would NOT be preserved is the alternative:
+       parking a share would make a resumed frontier's order depend on how many of one family's arms the tier
+       happened to have room for, which is a fact about the disk share and not about the flows.
        A REPLAY RE-EMITS, so a resumed flow is credited again for findings it is carrying credit for. That
        is a real inflation and it is deliberately not corrected here: it applies to every resumed flow in
        proportion to what it emitted, so the ORDER — which is the only thing a weight decides — is the one
        this number exists to preserve. Correcting it would mean deciding which of this session's emissions
        were "the same finding" as last session's, which is a question about the SERVER's surface today, not
        about the flow. */
-    DCHECK(f->val == f->val && f->val >= 0.0 && f->val < 1e300,
+    DCHECK(flow_reward(f) == flow_reward(f) && flow_reward(f) >= 0.0 && flow_reward(f) < 1e300,
            "a flow was parked with a reward that is not a number the WFQ can order by — a NaN compares "
            "false in both directions, so the resumed frontier's order would depend on array position, and "
            "an infinity does not survive the round trip as a number at all");
@@ -778,8 +789,8 @@ void cold_park_flow(Flow *f)
         g_parked_census.cands++;
         break;
     case PARK_KIND_FLOW:
-        if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
-        else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
+        if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", flow_reward(f));
+        else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, flow_reward(f));
         park_rec(rec);
         g_parked_census.flows++;
         break;
@@ -1068,13 +1079,13 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
        parked reward is assigned over the inherited one rather than added to it — adding would credit this
        session's findings to last session's flow, and leaving the inherited one would silently discard the
        ordering the park exists to preserve. */
-    fl->val = val;
-    /* A RESUME IS A REBUILD AND NOT AN EMISSION, so every point of that reward was INHERITED from the session
-       that parked it — this flow has produced nothing yet in this one. It is the same statement the fork makes
-       (flow.c's flow_fork_inherit), made at the other place a flow is handed another flow's account, so the
-       census row counting members that have emitted something themselves does not read a whole resumed
-       frontier as productive on the strength of last session's findings. */
-    fl->val_born = val;
+    /* A RESUME IS A REBUILD AND NOT AN EMISSION, which is why this goes to the flow's own fork FAMILY and never
+       to `Flow.val`. The account is what the order reads and what the recipe carried across the session; the
+       member's own ledger is what THIS flow has emitted in THIS session, and a resumed flow has emitted
+       nothing yet — so the census row counting members that have produced something themselves must not read a
+       whole resumed frontier as productive on the strength of last session's findings. flow_restore_reward
+       asserts that this flow founds its own account, which a from-baseline flow does by construction. */
+    flow_restore_reward(fl, val);
     return fl;
 }
 

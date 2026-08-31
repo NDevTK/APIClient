@@ -51,8 +51,8 @@ typedef struct FlowAcct {
     /* THE FAMILY'S SERVICE SINCE ITS LAST EMISSION — the quantity flow_weight's aging term is now made of, and
        MEANINGFUL ONLY ON A ROOT (`up == NULL`). Every flow carries a direct `family` pointer at that root, so
        this is read and written in O(1) and never by walking.
-       WHY IT REPLACED THE PER-ARM CHARGE. flow_fork_inherit COPIES the reward down every arm, so a family that
-       emitted V and has N live arms presents V exactly N times; the aging that is supposed to cancel V was
+       WHY IT REPLACED THE PER-ARM CHARGE. The reward was then COPIED down every arm at its fork, so a family
+       that emitted V and had N live arms presented V exactly N times; the aging that is supposed to cancel V was
        charged to whichever arm HELD THE THREAD, and the departed-arm hand-up below moved it only when an arm
        LEFT. The arms that stayed LIVE each carried only the prefix from their own fork point, so every one of
        them had to individually burn V / FLOW_AGE_RATE before it stopped outranking a reward-0 member: the
@@ -63,12 +63,43 @@ typedef struct FlowAcct {
        `valMax` of 10.0. The eight members at reward 0 were the @S candidates and `candSvcMax` was 1: over a
        fifteen-minute run the whole security search got about one quantum. That is not scheduler polish, it is
        the reason the @S half reports nothing.
-       SO THE TWO TERMS ARE NOW SYMMETRIC: the reward is the FAMILY's (copied at every fork) and the aging that
-       cancels it is the FAMILY's (charged once however many names the family wears). §scheduler's sentence —
-       "a monopolizer that burns CPU without emitting sinks below productive+unrun flows" — is about a
-       monopolizer, and this file already said which one: "a fork chain is one monopolizer wearing N names, so
-       it enters at one place and it is charged as one thing." It entered at one place and was charged as N. */
+       SO THE TWO TERMS ARE NOW SYMMETRIC: the reward is the FAMILY's (`val` below) and the aging that cancels
+       it is the FAMILY's (charged once however many names the family wears). §scheduler's sentence — "a
+       monopolizer that burns CPU without emitting sinks below productive+unrun flows" — is about a monopolizer,
+       and this file already said which one: "a fork chain is one monopolizer wearing N names, so it enters at
+       one place and it is charged as one thing." It entered at one place and was charged as N.
+       THAT SENTENCE USED TO READ "the reward is the FAMILY's (COPIED AT EVERY FORK)", AND THE PARENTHESIS
+       REFUTED THE CLAIM IT WAS OFFERED AS EVIDENCE FOR. A quantity copied at the fork INSTANT is not the
+       family's: two arms of one parent, forked at two instants, hold what the parent held at two different
+       times, so they differ by exactly what the parent emitted in between — which neither of them did. The
+       reward was therefore a PER-CHAIN PREFIX wearing a family's name, and the aging that was charged once per
+       family could not cancel it, because a common offset cancels out of every within-family comparison while
+       the prefix spread does not. On a real page the whole frontier is ONE family, so that spread WAS the
+       order: members served strictly newest-first, the tail unreachable at any silence, and a frontier that
+       grows without draining. The field below is what makes the sentence true. */
     int64_t fam_us;
+    /* THE FAMILY'S ACCUMULATED EMITTED VALUE — §scheduler's reward term, held at the SAME accounting unit that
+       pays the aging above and for the same reason, MEANINGFUL ONLY ON A ROOT.
+       A CREDIT MINTED ONCE MAY BE PRESENTED ONCE. The defect the paragraph above describes is one emission
+       raising N members' rank while the debit that cancels it is charged to one account: the credit inflates
+       by the fork factor of the page's own bundle and the debit does not, so no amount of silence can ever pay
+       it off, and §scheduler's "a never-run flow is never starved" is false of every frontier whose reward
+       spread exceeds the optimism term's whole range of 1.0. Held here, one emission raises the family once,
+       and the silence charged to that family cancels exactly it.
+       IT IS ALSO WHAT MAKES A FORK RANK-NEUTRAL FOR FREE, AND ACROSS MORE THAN ONE INSTANT. A copied term is
+       neutral only between a parent and the arm born at that instant; flow_fork_inherit's equality is written
+       over one branch and cannot see the pair it does not compare — two arms of the same parent, forked at two
+       instants, which must also be worth the same because neither did anything between the two branches. A
+       term read through the shared root satisfies both by construction: there is nothing to copy, so there is
+       nothing a fork can carry differently.
+       WHAT THE ORDER IS THEN MADE OF, AT TWO SCOPES, WHICH IS THE POINT AND NOT A SIDE EFFECT. WITHIN a family
+       this term is a common offset and cancels, so members are ordered by the optimism bonus and their OWN
+       silence — both bounded, both reset by their own emission — which is fair queueing over the arms and is
+       §scheduler's BFS. BETWEEN families it is the whole bandit ordering, charged once against a silence
+       charged once, so a family that emitted V holds the thread for V seconds of ITS OWN silence and is then
+       passed. Neither scope can do the other's job, which is the same sentence flow_silence_notch already
+       makes about the two halves of the aging. */
+    double val;
     /* THE CENSUS'S MARK, AND IT IS HERE BECAUSE A FAMILY HAS NO MEMBER OF ITS OWN TO BE COUNTED THROUGH. The
        census reaches families only via their arms, so counting DISTINCT ones out of one walk of the frontier
        is a set problem, and the set's identity is this NODE'S ADDRESS rather than any value it holds — two
@@ -146,6 +177,45 @@ static int64_t acct_family_us(const Flow *f) {
     return f->family ? f->family->fam_us : 0;   /* departed: its node is gone and so is its rank */
 }
 
+/* …AND THE REWARD THAT SILENCE IS SUBTRACTED FROM, read through the SAME pointer for the same reason — see
+   FlowAcct's `val`. It is the WFQ's reward term and the only reading of it the order makes: `Flow.val` beside
+   it is what ONE member emitted and is a census quantity, never a rank. Exported as flow_reward (flow.h)
+   because the node is private to this file and the ranked-state cache and the cold tier both have to name the
+   quantity the weight is actually a function of. */
+static double acct_family_val(const Flow *f) {
+    return f->family ? f->family->val : 0.0;    /* departed: its node is gone and so is its rank */
+}
+
+double flow_reward(const Flow *f) {
+    DCHECK(f != NULL, "the WFQ's reward term was asked of no flow — a reward belongs to a fork family and a "
+                      "flow is how one is reached, so there is no family here for this to be the reward of");
+    return acct_family_val(f);
+}
+
+/* A REBUILT FLOW'S ACCOUNT, REPLACED RATHER THAN INHERITED — the ONE writer of the reward that is neither an
+   emission nor an arrival, and the only caller is the cold tier's rebuild.
+   WHY IT IS A REPLACEMENT AND NOT AN ADD. flow_add places a from-baseline flow at the frontier's virtual time,
+   which includes the reward tag, because a newcomer with no account of its own must enter beside the flow in
+   service rather than below the whole frontier. A rebuilt flow is not a newcomer: it is a member coming BACK,
+   carrying the account the session that parked it wrote down. Adding would credit this session's findings to
+   last session's flow; leaving the placement would silently discard the cross-session ordering the park exists
+   to preserve, which is §Time-travel's "a high-value flow suspended last week resumes ahead of a low-value
+   fresh one today".
+   IT MAY ONLY EVER WRITE A FAMILY OF ITS OWN. A rebuilt flow founds its own family by construction (it is
+   from-baseline, so flow_add_unseeded minted it a root and never joined it to anything), and writing through a
+   JOINED tag would silently re-place every arm of somebody else's family — the one way this entry could reach
+   past the flow it was handed. Asserted here rather than trusted, because the caller cannot see the tag. */
+void flow_restore_reward(Flow *f, double val) {
+    DCHECK(f != NULL && f->acct != NULL && f->family == f->acct && f->acct->up == NULL,
+           "a rebuilt flow's parked reward was written through a fork family it does not own — a resume founds "
+           "its own account, so a joined tag here re-places every live arm of another family at a reward that "
+           "belongs to one parked recipe");
+    DCHECK(val == val && val >= 0.0 && val < 1e300,
+           "a parked reward came back as something the WFQ cannot order by — a NaN compares false in both "
+           "directions, so the resumed frontier's order would fall back on registry position");
+    f->family->val = val;
+}
+
 /* THE RANKING CHANGED, SO THE RUNNING FLOW'S CLAIM ON THE THREAD MAY HAVE. §scheduler's VALUE YIELD fires "the
    moment a parked flow outranks (or on an emit/fork/suspension that changes ranks)", and this is the moment: a
    sibling landed on the frontier, a flow left it, or the running flow emitted. Bumping the generation alone made
@@ -189,13 +259,24 @@ void flow_credit_emit(double v) {
                     "findings at one point each, and a zero credit resets the aging that outranks a monopolizer "
                     "while adding nothing to weigh it against");
     if (!g_running) return;
-    /* THE INHERITED HALF MAY NEVER EXCEED THE WHOLE, asserted where the whole moves. `val_born` is what this
-       flow was handed at its fork or its rebuild and `val` is what it holds now, so a flow standing above its
-       own birth mark is one whose two writers ran in the wrong order — and the only symptom would be a census
-       row reporting that nothing in the frontier has ever emitted anything. */
-    DCHECK(g_running->val_born <= g_running->val,
-           "a flow holds more inherited reward than reward — its birth mark was written after its account, so "
-           "the census cannot tell what this flow emitted from what it was handed");
+    /* THE ORDER'S REWARD IS THE FAMILY'S, so the credit lands on the family — see FlowAcct's `val`. This is the
+       whole of the difference between a credit that can be paid off and one that cannot: raise the family once
+       and the silence charged to that same family cancels exactly it; raise every ARM instead and one emission
+       is presented as many times as the page's bundle happens to branch, against a debit charged once.
+       IT MAY NOT BE ROUTED THROUGH A DEPARTED NODE. A running flow is a member of the frontier and a member
+       owns its account, so a NULL family here is a flow that was credited after it left — the emission would
+       be recorded nowhere and the finding would rank nothing. */
+    DCHECK(g_running->family != NULL,
+           "the flow holding the thread belongs to no fork family, so there is nothing for this emission to be "
+           "credited to — a departed flow was left running, and the reward this finding is worth is about to "
+           "be dropped on the floor while the detector reports it as recorded");
+    g_running->family->val += v;
+    /* …AND THIS ONE MEMBER'S OWN LEDGER, WHICH RANKS NOTHING AND IS NOT A SECOND COPY OF THE LINE ABOVE. The
+       family total says what an ACCOUNT has emitted and is the order; this says what THIS FLOW emitted, which
+       is the one question the total structurally cannot answer and the one the census exists to ask — a
+       frontier retiring members steadily while every one of them reads zero here is a frontier coasting on an
+       ancestor's findings. It is never copied, never inherited and never read by flow_weight, which is what
+       keeps it a measurement rather than a rank. */
     g_running->val += v;
     g_running->cpu = 0;   /* emitted -> this flow's own half of the aging is forgiven with the family's below */
     /* …AND THE OPTIMISM TERM'S OWN QUANTITY, which is what the line above used to be doing under a comment that
@@ -207,7 +288,7 @@ void flow_credit_emit(double v) {
        it stops emitting it falls behind every arm it forked while it was working. */
     g_running->visits = 0;
     /* …AND THE FAMILY'S AGING WITH IT, which is the forgiveness that actually moves a rank now. The reward this
-       emission raises is the FAMILY's — flow_fork_inherit copies `val` to every arm — so the aging it is
+       emission raises is the FAMILY's — it is credited to the family's own account above — so the aging it is
        weighed against has to be forgiven at the same granularity, or an arm that emits carries the silence of
        every sibling that did not and the credit buys it nothing. §scheduler prices this term against "a
        monopolizer that burns CPU WITHOUT EMITTING", and a family one of whose arms just emitted is not one.
@@ -433,13 +514,18 @@ void flow_credit_visit(Flow *f) {
  * the constructor's zeros. Each zero is a false statement about that flow, and each is false in the direction
  * that promotes it:
  *
- *   `val` — the sibling has, by construction, executed every emission the parent made before the branch; they
- *   are in its own delta and its own recipe replays them. Zeroing it says the flow that found six endpoints and
- *   then branched produced nothing, and ranks its two continuations below arms nobody has looked at. The cold
- *   tier already decided this question the other way at the OTHER place a flow is rebuilt from another's state:
- *   park_flow carries `val` across the park and states plainly that a replay re-emits and the resulting
- *   double-count is deliberate, because ORDER is the only thing a weight decides. A fork is the same rebuild
- *   and was answering it differently.
+ *   the REWARD — the sibling has, by construction, executed every emission the parent made before the branch;
+ *   they are in its own delta and its own recipe replays them. Zeroing it says the flow that found six
+ *   endpoints and then branched produced nothing, and ranks its two continuations below arms nobody has looked
+ *   at.
+ *   AND IT IS NO LONGER COPIED AT ALL, WHICH IS THE STRONGER FORM OF THE SAME RULE AND NOT A RETRACTION OF IT.
+ *   A copy is neutral between a parent and the arm born AT THAT INSTANT, and this function's own equality is
+ *   written over exactly that pair — so it could never see the pair it does not compare: two arms of one
+ *   parent, forked at two instants, which must ALSO be worth the same, because neither of them did anything
+ *   between the two branches. A copied reward makes them differ by what the PARENT emitted in between, which
+ *   is birth order and nothing else, and an order read descending on birth order is newest-first. The reward
+ *   lives on the fork family (FlowAcct's `val`) and the arm JOINS that family below, so there is nothing to
+ *   copy and nothing a fork can carry differently — at this instant or at any later one.
  *
  *   `cpu` — the sibling has burned the parent's CPU, through the parent, on the prefix it is resuming. Zeroing
  *   it hands a flow that has been running since boot a silence of ZERO, which is the aging the term reserves
@@ -469,27 +555,40 @@ void flow_credit_visit(Flow *f) {
  * new policy: a continuation of an active flow enters at that flow's virtual time, never at the system's, or
  * any flow can reset its own virtual clock by splitting.
  *
- * WHAT IT DOES TO A FROM-BASELINE FLOW IS NOT WHAT THIS PARAGRAPH USED TO CLAIM, and the claim was checkable
- * against the formula three functions below it. It said "a genuinely from-baseline flow (the first flow, a
- * candidate session, a cold resume) still enters at zero and still outranks everything, which is what
- * §scheduler's 'a never-run flow is never starved' is about". Such a flow enters at reward 0 and service 0,
- * so its weight is EXACTLY 1.0 — the optimism term's whole range — and it outranks a flow of reward V only
- * once THAT flow's chain has burned (V − 1) / FLOW_AGE_RATE microseconds since its last emit: about a second
- * of unproductive thread time per point, for each such member, since aging is per flow. Inheritance makes
- * `val` monotone down every fork chain, so on a document whose exploration has emitted V findings the entire
- * tree below that prefix sits above 1.0 and a from-baseline flow is reached when that tree DRAINS — not when
- * the optimism term decides it is starved. That is a real ordering with a real justification (the tree is
- * where the emissions came from) and it is NOT the guarantee the deleted sentence made, so it is written down
- * as what it is. §scheduler's "never starved" is true among members of EQUAL reward and among no others.
- * WHICH OF THE TWO A RUN IS IN IS NOW A MEASUREMENT rather than either sentence: flow_wfq_census reports the
- * reward spread over the frontier and how many members sit at reward 0, and engine.c emits it as @WFQ beside
- * @PROGRESS and @COLD.
+ * "NEVER STARVED IS TRUE AMONG MEMBERS OF EQUAL REWARD AND AMONG NO OTHERS" IS STILL THE ARITHMETIC, AND THE
+ * PARAGRAPH THAT DERIVED IT WENT ON TO OFFER A JUSTIFICATION THE FRONTIER FALSIFIED. It said that with `val`
+ * monotone down every fork chain, "the entire tree below that prefix sits above 1.0 and a from-baseline flow
+ * is reached when that tree DRAINS", and called that a real ordering with a real justification. The tree does
+ * not drain. Measured on the smoke fixture, three runs, one of them uninterrupted to the census that stopped
+ * changing: the frontier grew roughly twenty-four fold while the top of the reward ledger never advanced once
+ * and the floor never moved off its second reading, with the whole spread — a hundred and sixty-eight points
+ * against every other term's range of one — standing between two populations neither of which had emitted
+ * anything ITSELF. A justification that rests on a drain, on a frontier that grows, is not a weaker guarantee
+ * than the one it replaced; it is the same starvation with a reason attached.
  *
- * AND INHERITANCE IS ONLY HALF OF IT — the other half is that the sibling stays ATTACHED. Copying the two terms
- * says where the arm enters; it says nothing about where the thread time the arm goes on to burn ends up, and
- * for an arm that runs the rest of the document and FINISHES the answer was nowhere. So this is also the line
- * that records the fork EDGE, and the two are one statement: a fork chain is one monopolizer wearing N names, so
- * it enters at one place and it is charged as one thing. See FlowAcct. */
+ * WHAT IS ACTUALLY WRONG IS NOT THE INHERITANCE AND IT IS NOT THE SIGN — IT IS THE SCOPE, AND THE FIX IS THE
+ * ONE THIS FILE ALREADY MADE ON THE OTHER SIDE OF THE LEDGER. A copied reward is a PER-CHAIN PREFIX: within one
+ * family it differs between arms only by when each was forked, and the aging that is supposed to cancel it is
+ * charged to the family, which makes it a common offset that cancels out of every within-family comparison
+ * while the prefix spread does not. On a real page the whole frontier is one family, so the term the order was
+ * actually made of was birth position and the term meant to answer it could not reach. Held on the family
+ * (FlowAcct's `val`) the two are one account: every member of a family reads the SAME reward, so "members of
+ * EQUAL reward" stops being the exception and becomes what a family IS, and §scheduler's guarantee holds
+ * within one by construction — an arm's silence is frozen at the instant it was forked while the flow that
+ * forked it goes on burning, so an unrun arm ranks AT or ABOVE the flow that made it, always, and the queue
+ * drains oldest-arm-first. Between families the reward orders exactly what it is for, charged once against a
+ * silence charged once.
+ * WHICH STATE A RUN IS IN IS STILL A MEASUREMENT rather than any sentence here: flow_wfq_census reports the
+ * reward spread over the frontier and how many members have emitted anything themselves, and engine.c emits it
+ * as @WFQ beside @PROGRESS and @COLD. A spread above 1.0 there is now a statement about SEVERAL FAMILIES, which
+ * is a fact about the documents and the searches a session is holding rather than about one page's branching.
+ *
+ * AND THE JOIN IS THE WHOLE OF IT NOW — the sibling stays ATTACHED, and that one line carries both the reward
+ * and the aging's family half. Where the arm enters and where the thread time it goes on to burn ends up were
+ * two statements maintained separately, and for an arm that runs the rest of the document and FINISHES the
+ * second answer was nowhere. They are one statement and one pointer: a fork chain is one monopolizer wearing N
+ * names, so it enters at one place, it is charged as one thing, and it is CREDITED as one thing. See
+ * FlowAcct. */
 void flow_fork_inherit(Flow *sib, const Flow *parent) {
     DCHECK(sib != NULL && parent != NULL && sib != parent,
            "a fork's accounting was inherited from nobody, or from itself — this is the one line that decides "
@@ -497,9 +596,9 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     /* NOTHING MAY HAVE BEEN CREDITED OR CHARGED FIRST, because the inheritance ASSIGNS both terms. A caller
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
-    DCHECK(sib->val == 0.0 && sib->val_born == 0.0 && sib->cpu == 0 && sib->visits == 0 &&
+    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->visits == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
-           sib->family == sib->acct && sib->family->fam_us == 0,
+           sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->val == 0.0,
            "a forked sibling was credited, charged or DECIDED before it inherited its parent's account — it "
            "was ranked, and possibly run, at a weight that belongs to no flow, and this assignment throws that "
            "away. `path_forced` is in the same list for the same reason one field over: a sibling that had "
@@ -510,12 +609,13 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     DCHECK(sib->acct != NULL && sib->acct->up == NULL,
            "a forked sibling already stood under a flow in the fork tree — it is being given a second parent, "
            "so the service it sheds when it departs is charged to a chain it was never part of");
-    sib->val = parent->val;
-    /* …AND THE MARK THAT SAYS IT WAS INHERITED. `val` is the whole of the sibling's reward and none of it is
-       its own, so this is the quantity the census subtracts to ask what a member has emitted since it began —
-       the one question `val` cannot answer once it is copied down a fork chain. Written here, beside the copy
-       it describes, so a term the fork carries cannot acquire one without acquiring the other. */
-    sib->val_born = parent->val;
+    /* THE REWARD IS NOT COPIED HERE AND ITS ABSENCE IS THE MECHANISM, not an omission. It is carried by the
+       family join below — one pointer, read by every arm — which is why the equality at the end of this
+       function still holds over a term this function never names. A copy would be neutral only against the arm
+       born at THIS instant and would put two arms of one parent, forked at two instants, at two different
+       rewards for something neither of them did; see the banner and FlowAcct's `val`. `Flow.val` beside it is
+       what ONE member has emitted, it is never inherited, and it ranks nothing — which is why the precondition
+       above requires it to still be zero rather than assigning it. */
     sib->cpu = parent->cpu;
     /* …AND THE COMPLETED UNITS, which is the optimism term's coordinate and the same sentence a third time: an
        arm has, by construction, finished every program, job, delivery and lifecycle stage its parent finished
@@ -540,11 +640,15 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        merely survived, by branching, which is worth two thirds of the comparator's whole range. */
     sib->cand_surv = parent->cand_surv;
     sib->cand_rung = parent->cand_rung;
-    /* AND THE FAMILY IT JOINS — the term the AGING reads, and the one line that makes "a fork chain is one
-       monopolizer wearing N names" true of the arithmetic rather than only of this comment. The arm does not
-       FOUND a family: flow_new minted it a root of its own (that is what the precondition above checks), and
-       this hands that root back and points the arm at its parent's. Every microsecond any arm of the family
-       burns from here on is charged once, to this node, and read by every arm.
+    /* AND THE FAMILY IT JOINS — the term the AGING reads AND the term the REWARD is, and the one line that
+       makes "a fork chain is one monopolizer wearing N names" true of the arithmetic rather than only of this
+       comment. The arm does not FOUND a family: flow_new minted it a root of its own (that is what the
+       precondition above checks), and this hands that root back and points the arm at its parent's. Every
+       microsecond any arm of the family burns from here on is charged once, to this node, and read by every
+       arm; every finding any arm emits is credited once, to the same node, and read by every arm.
+       IT CARRIES TWO OF THE EQUALITY'S TERMS AND NOT ONE, which is why this is the line the whole assertion
+       below rests on. The reward used to be a field copied a few lines up, and copying is exactly what made it
+       a per-chain prefix rather than the family quantity this file already called it.
        ITS OWN NODE IS STILL THE FORK EDGE and is still refcounted — the two are different structures answering
        different questions: `acct`/`up` is the ANCESTRY (who forked whom, and what keeps a root addressable),
        `family` is the ACCOUNT. Collapsing them would mean walking the ancestry on every flow_weight, and
@@ -576,17 +680,25 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
        instead of six minutes later in a progress line that says `finished 0`.
        RE-DERIVED FOR EVERY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
-       `val + (cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must carry
-       SIX things for this to hold and it carries exactly six: `val` (copied above), `cand_surv` and
-       `cand_rung` (copied above — the fitness comparator's two rung quantities),
-       `visits` (copied above — the optimism term's), `cpu` (copied above — the aging's own half), and the
-       family tag (joined above — the aging's other half). Each addition
-       to the formula has arrived through this line firing, which is the whole reason it is written as an
-       equality over flow_weight rather than as a list of fields. This assertion is what FORCES the join: had the arm kept
-       the fresh root flow_new minted it, its `fam_us` would be 0 against a parent family that has burned, so
-       the sibling would be born STRICTLY better than its parent and this line would fire at the very first
-       fork. That is the reset-by-splitting the whole of this accounting forbids, and it is caught here rather
-       than in a census that says the frontier never sinks. */
+       `fam_val + (cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must
+       carry SIX things for this to hold and it carries exactly six through FIVE assignments: `cand_surv` and
+       `cand_rung` (copied above — the fitness comparator's two rung quantities), `visits` (copied above — the
+       optimism term's), `cpu` (copied above — the aging's own half), and the family tag (joined above), which
+       carries BOTH the reward and the aging's other half. Each addition to the formula has arrived through this
+       line firing, which is the whole reason it is written as an equality over flow_weight rather than as a
+       list of fields. This assertion is what FORCES the join, and it now forces it twice over: had the arm kept
+       the fresh root flow_new minted it, its `fam_us` would be 0 against a parent family that has burned AND
+       its `val` would be 0 against a parent family that has emitted, so the sibling would be born strictly
+       better on one coordinate and strictly worse on the other and this line would fire at the very first fork.
+       That is the reset-by-splitting the whole of this accounting forbids, and it is caught here rather than in
+       a census that says the frontier never sinks.
+       AND IT IS A CLAIM ABOUT ONE INSTANT, WHICH IS THE LIMIT OF WHAT ANY ASSERTION AT A FORK CAN BE. It
+       compares the arm born HERE against the parent HERE, so it cannot see two arms of the same parent forked
+       at two instants — and a term COPIED at the fork instant makes exactly that pair differ, by whatever the
+       parent did in between, which is birth order and not merit. That pair is why the reward is not a copied
+       field: a term read through the shared root is equal across every arm at every instant, so the equality
+       this line can check and the equality it cannot are the same equality. Any FUTURE term whose value can
+       move between two forks of one parent is under that rule and belongs on the account, not on the flow. */
     DCHECK(flow_weight(sib) == flow_weight(parent),
            "a fork changed the ranking — the sibling is the parent's path with one arm appended, so the two "
            "must be worth the same at the instant of the branch; a weight term the fork does not carry lets a "
@@ -921,8 +1033,10 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->acct->owner = f; f->acct->refcount = 1;
     /* …AND IT IS ITS OWN FAMILY UNTIL SOMETHING SAYS OTHERWISE. A from-baseline flow founds a family and keeps
        this; a FORK joins its parent's (flow_fork_inherit) and this root becomes a plain ancestry node. Pointed
-       here rather than left NULL so no flow can exist without an account for the aging term to read, which is
-       the same reason the node above is minted here. */
+       here rather than left NULL so no flow can exist without an account for the aging term OR THE REWARD to
+       read, which is the same reason the node above is minted here. The node arrives zeroed from
+       `reclaim_calloc`, so a fresh family stands at reward 0 and silence 0 — which is what the fork's and the
+       arrival's preconditions both check for, and which is why neither of them has to assign a fresh one. */
     f->family = f->acct;
     g_acct_live++;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
@@ -986,9 +1100,9 @@ static double flow_queue_weight(const Flow *f);
  * parallel assertion is an EQUALITY over the weight and would have fired at the very first fork, which is
  * exactly the difference between an assert that FORCES a rule and one that merely records a direction.
  *
- * WHAT IT COST, MEASURED, AND IT IS THE WHOLE @S SURFACE. `val` is copied to every arm at every fork, so a
- * document's frontier stands at its boot family's reward — 401 members at `valMax` 118 on the smoke fixture —
- * while a from-baseline flow entered at reward ZERO. The only members of that frontier at zero were the twelve
+ * WHAT IT COST, MEASURED, AND IT IS THE WHOLE @S SURFACE. The reward was then copied to every arm at every
+ * fork, so a document's frontier stood at its boot family's reward — 401 members at `valMax` 118 on the smoke
+ * fixture — while a from-baseline flow entered at reward ZERO. The only members of that frontier at zero were the twelve
  * @S candidate sessions (`valZero:12` beside `cands:12`, the same twelve flows counted twice), so their weight
  * was `1.0 − aging` = 0.976 for the entire run against a `wTop` that never fell below 56. They were never
  * picked: `turns:0` on all twelve after 254,181 switches, in the field solve.h added precisely to tell "the WFQ
@@ -997,17 +1111,26 @@ static double flow_queue_weight(const Flow *f);
  * only inside a candidate flow, so on any document whose exploration keeps emitting, all of them were
  * unreachable BY CONSTRUCTION and the run reported a clean parked search instead of a starved one.
  *
- * INHERITING THE REWARD IS NOT CREDITING IT, and the design already carries the field that says so. `val_born`
- * is "how much of `val` this flow did not earn"; a fork takes its parent's reward and marks all of it
- * inherited, and a newcomer at v(t) is the same statement made at the other door. It cannot promote either: the
- * newcomer TIES with the flow in service, and flow_pick's STRICT comparison leaves the thread where it is until
- * the incumbent's own service moves it — which is start-time fair queueing doing exactly what this rule is.
+ * INHERITING THE REWARD IS NOT CREDITING IT, AND THE TWO DOORS ARE NOT SYMMETRIC — WHICH IS THE CORRECTION
+ * THIS PARAGRAPH CARRIES. A FORK does not inherit the reward at all any more: it JOINS the family that holds
+ * it, so there is no copy at that door and nothing for a copy to be wrong about (flow_fork_inherit says why).
+ * A FROM-BASELINE FLOW FOUNDS A FAMILY, which is the whole of what "from-baseline" means, so it has an account
+ * of its own and that account has to be PLACED — at the frontier's virtual time, which is the reward the
+ * account in service stands at. It cannot promote: the newcomer TIES with the flow in service, and flow_pick's
+ * STRICT comparison leaves the thread where it is until the incumbent's own service moves it, which is start-
+ * time fair queueing doing exactly what this rule is.
+ * IT IS PLACED AND IT IS NOT PAID, AND THE DIFFERENCE IS WHAT THE NEW FAMILY OWES AFTERWARDS. The newcomer's
+ * account starts at V having emitted nothing, and then pays for it: its own silence is charged to its own
+ * family alone, so it falls below the frontier after V seconds of its own unproductive thread time exactly as
+ * the family it was placed beside would. Entering at zero instead is not the conservative choice, it is the
+ * measured defect this rule was written for — a candidate session placed V points below a frontier it can
+ * never re-enter, with `turns:0` in the field that exists to say so.
  * The prose above already reached this conclusion for the boot-flow door and stopped one step short of it:
- * "Inheritance closes that for `f(){g()}` and left it open for `open()`." Inheritance is the closure; it was
- * applied to three coordinates and not to the fourth. */
+ * "Inheritance closes that for `f(){g()}` and left it open for `open()`." The join is the closure at the fork;
+ * this is the closure at the other three doors. */
 static void flow_arrive_at_virtual_time(Flow *f) {
-    DCHECK(f->val == 0.0 && f->val_born == 0.0 && f->cpu == 0 && f->visits == 0 &&
-           f->family == f->acct && f->family->fam_us == 0,
+    DCHECK(f->val == 0.0 && f->cpu == 0 && f->visits == 0 &&
+           f->family == f->acct && f->family->fam_us == 0 && f->family->val == 0.0,
            "a from-baseline flow was charged or handed an account before it arrived — the arrival rule ASSIGNS "
            "every term, so a caller that wrote one first has ranked this flow at a virtual time nobody chose "
            "and this assignment throws that away");
@@ -1015,12 +1138,14 @@ static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(flow_is_member(g_running),
            "the flow holding the thread is not a member of the frontier, so the virtual time a newcomer would "
            "enter at is a tag belonging to no queue — a newcomer placed against it is placed against nothing");
-    f->val = g_running->val;                              /* the reward term's coordinate */
-    /* …AND THE MARK THAT NONE OF IT IS THIS FLOW'S OWN, written beside the copy for the same reason
-       flow_fork_inherit writes it beside its own: `val` is now a statement about an ANCESTRY, and the census
-       row that asks what a member has emitted ITSELF (`val > val_born`) would otherwise read a whole frontier
-       of newcomers as productive on the strength of the flow that happened to be running when they arrived. */
-    f->val_born = g_running->val;
+    /* THE REWARD TERM'S COORDINATE, WRITTEN ON THE NEW FAMILY AND READ OFF THE RUNNING ONE — the same quantity
+       at both ends, which is what makes the equality below exact. It is NOT `g_running->val`: that is one
+       member's own ledger and ranks nothing, and reading it here would place the newcomer at whatever prefix
+       the flow that happened to hold the thread had earned rather than at the virtual time of the account the
+       frontier is actually ordered by. `Flow.val` stays zero — this flow has emitted nothing itself, and the
+       census row that asks what a member emitted ITSELF must not read a whole frontier of newcomers as
+       productive on the strength of the flow that was running when they arrived. */
+    f->family->val = acct_family_val(g_running);
     f->visits = g_running->visits;                        /* the optimism term's coordinate */
     f->cpu = g_running->cpu;                              /* …and the aging term's own half */
     f->family->fam_us = acct_family_us(g_running);        /* …and its family half */
@@ -1034,13 +1159,14 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        distance is a fraction OF A PAYLOAD, and a newcomer's payload is not the payload the flow in service
        holds — there is no position for it to arrive at, which is why flow_queue_weight excludes it and why a
        second per-item reading added to flow_weight would fire flow_fork_inherit's assert instead of this one.
-       EXACT WITH NO EPSILON: all four tags are copied verbatim and the silence notch is an integer division of
-       copied integers, so the two sides are the same float expression over the same values. */
+       EXACT WITH NO EPSILON: all four tags are copied verbatim — the reward onto the newcomer's own family
+       node, the other three onto the flow — and the silence notch is an integer division of copied integers,
+       so the two sides are the same float expression over the same values. */
     DCHECK(flow_queue_weight(f) == flow_queue_weight(g_running),
            "a flow arriving from the baseline did not enter at the frontier's virtual time — it was placed "
            "above the flow in service (a page promoting the documents and candidate sessions it creates over "
            "the whole backlog) or below it (a newcomer the ordering can never reach, which is what starved "
-           "every @S candidate session behind a boot family whose reward its arms had all inherited)");
+           "every @S candidate session behind a boot family whose account the whole frontier stood on)");
 }
 
 /* THE PROGRAMS A NEW FLOW STARTS WITH — installed by the session, asked at the ONE place a flow is created.
@@ -1826,11 +1952,23 @@ int64_t flow_silence_notch(const Flow *f) {
    at, and a per-payload reading is not one — the payload a newcomer carries is not the payload the flow in
    service carries, so there is nothing for it to arrive at. It is the one term the arrival names rather than
    copies, and naming it is what keeps the assert below an exact equality instead of a tolerance.
-   EXACT IN INTEGERS AND IN FLOATS. `val` and `visits` are copied verbatim by both entries, and the silence
-   notch is an integer division of copied integers, so two flows that arrived at one another compare EQUAL here
-   with no epsilon — which is the same property flow_fork_inherit's assert already rests on. */
+   EXACT IN INTEGERS AND IN FLOATS. The reward is read through a POINTER a fork shares and is copied verbatim
+   at the one door that founds a family, `visits` is copied verbatim by both entries, and the silence notch is
+   an integer division of copied integers, so two flows that arrived at one another compare EQUAL here with no
+   epsilon — which is the same property flow_fork_inherit's assert already rests on, and the reward half of it
+   is now an identity of the structure rather than a property of two copies agreeing. */
 static double flow_queue_weight(const Flow *f) {
-    double reward = f->val;
+    /* THE REWARD IS THE FORK FAMILY'S, NOT THE FLOW'S, and that is the one substantive thing this function
+       says. §scheduler's reward is "accumulated emitted VALUE", and the accumulator is the same account the
+       aging is charged to — one emission raises it once, one second of that account's silence gives one point
+       of it back, and the two terms are then commensurate at the same scope. Read off the FLOW it was a
+       per-chain prefix: two arms of one family held what their common parent held at two different instants,
+       so they differed by an amount NEITHER of them earned, that difference was unbounded while every other
+       term's range is at most 1.0, and the family charge that was supposed to cancel it is a common offset
+       that cancels out of the comparison instead. On a page whose whole frontier is one family — which is the
+       ordinary case, every flow descending from the boot flow — the order was then birth position read
+       newest-first, and no silence at any price could reach the tail. See FlowAcct's `val`. */
+    double reward = acct_family_val(f);
     /* §scheduler'S THREE QUANTITIES, AND THIS FUNCTION USED TO HOLD TWO. "accumulated emitted VALUE + a UCB
        optimism bonus ∝ 1/(visits+1) − CPU-AGING" names emitted value, VISITS and CPU; the optimism term read
        `cpu / FLOW_SERVICE_US`, so thread time was in both non-reward terms at two scopes and the visit count
@@ -2041,7 +2179,11 @@ double flow_weight(const Flow *f) {
    assertion.
    `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
 static inline int64_t flow_silence_us_to_sink(const Flow *f) {
-    return (int64_t)((f->val + 1.0) * (double)FLOW_SILENCE_US) + FLOW_SERVICE_US;
+    /* THE REWARD IN THE DERIVATION IS THE ONE flow_queue_weight READS, which is the FAMILY's — the same
+       account the silence on the other side of this inequality is charged to. Read off the flow it would be a
+       bound on a quantity the weight does not contain, so the guard would pass on a state the order does not
+       have and fail on one it does. */
+    return (int64_t)((acct_family_val(f) + 1.0) * (double)FLOW_SILENCE_US) + FLOW_SERVICE_US;
 }
 
 /* HOST-OWED MARKS — see flow.h for what a mark means and why the flow carries one at all.
@@ -2231,11 +2373,12 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        MEMBER BEHIND.
 
        THE DERIVATION, redone here rather than carried over, because that is what keeps this a check instead
-       of a number somebody believed. `unrun` has EVERY non-reward term at zero, so its weight is exactly
-       `u->val + 1.0 + D_u` with `D_u` its fitness distance. Write `best`'s out with `v` its visit count, `A`
-       its silence notch and `Q` the price of a quantum:
+       of a number somebody believed. Write `R(f)` for the reward flow_queue_weight reads — the fork FAMILY's
+       accumulated value, not the member's own ledger, which ranks nothing. `unrun` has EVERY non-reward term
+       at zero, so its weight is exactly `R(u) + 1.0 + D_u` with `D_u` its fitness distance. Write `best`'s out
+       with `v` its visit count, `A` its silence notch and `Q` the price of a quantum:
 
-           w(best) − w(unrun) = (best->val − u->val) + 1/(1+v) − A*Q + D_best − 1.0 − D_u
+           w(best) − w(unrun) = (R(best) − R(u)) + 1/(1+v) − A*Q + D_best − 1.0 − D_u
 
        and since `1/(1+v) <= 1`, `A*Q >= 0`, `D_best <= 1` (flow_distance is a fraction of FLOW_RUNGS_N) and
        `D_u >= 0`, every one of the four non-reward differences is at most `+1.0 − 1.0 + 1.0 − 0` = 1.0. That
@@ -2245,7 +2388,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        EXACTLY zero in real arithmetic only when `best` is itself untouched (v = 0, A = 0) and carries the
        comparator's full range against an unrun member carrying none, and the two sides then group the same
        rewards differently: this side subtracts two composed weights, the other subtracts two raw rewards. That
-       is exact for INTEGRAL rewards and `val` is NOT integral — flow_credit_emit asserts only `v > 0.0`, and
+       is exact for INTEGRAL rewards and the reward is NOT integral — flow_credit_emit asserts only `v > 0.0`, and
        @S's filter-survival ratchet credits the increment between two ratios (see FLOW_SILENCE_US above, which
        used to claim otherwise). One ulp of a fractional reward is then the whole difference between the two
        groupings at that corner, so the epsilon covers rounding and is not a tolerance on the CLAIM: away from
@@ -2262,13 +2405,16 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
 
        AND IT IS WHERE THE READER LEARNS WHICH TERM BURIED THE BACKLOG. The inequality is tight in the reward
        and slack in everything else, so a frontier whose untouched members are unreachable is one whose reward
-       GAP is unreachable — never an aging or optimism question. The two census rows that then say whether
-       that gap was earned or inherited are `self_emit` beside `val_max - val_min` (flow.h: "a frontier where
-       that is zero for every member is one whose whole reward ordering was decided before any of them
-       existed"), and flow_fork_inherit states the consequence: §scheduler's "never starved" is true among
-       members of EQUAL reward and among no others. */
+       GAP is unreachable — never an aging or optimism question. §scheduler's "never starved" is therefore true
+       among members of EQUAL reward and among no others, which is the arithmetic and not a policy.
+       WHICH IS WHY THE REWARD SITS ON THE FORK FAMILY. Members of one family read one reward, so within a
+       family — and a real page's whole frontier is one — the gap this inequality is tight in is IDENTICALLY
+       ZERO and the guarantee holds outright. A gap here is now a gap between ACCOUNTS: two documents, two
+       searches, a resumed frontier's several rebuilt recipes. The census row that says which is `families`
+       beside the reward spread, and `self_emit` beside them says whether the leading account earned what it is
+       ranked on or was placed at it by the arrival rule. */
     DCHECK(worst || !best || !unrun ||
-           bw - unrun_w <= (best->val - unrun->val) + 1.0 + 1e-9,
+           bw - unrun_w <= (acct_family_val(best) - acct_family_val(unrun)) + 1.0 + 1e-9,
            "the WFQ put a never-run member further behind the flow it picked than the two flows' REWARD gap "
            "plus one emission — so some term other than the reward has a range wider than a finding, and "
            "§scheduler's 'a never-run flow is never starved' is now a claim about a term nobody bounded");
@@ -2351,13 +2497,30 @@ void flow_wfq_census(WfqCensus *out) {
         else if (f == g_running) decide_live_stats(&dec, NULL);
         if (dec > out->dec_max) out->dec_max = dec;
 
-        DCHECK(f->val_born <= f->val,
-               "a member of the frontier holds more inherited reward than reward — its birth mark and its "
-               "account disagree, so `self_emit` below counts something that was never an emission");
-        if (i == 0 || f->val < out->val_min) out->val_min = f->val;
-        if (i == 0 || f->val > out->val_max) out->val_max = f->val;
-        if (f->val == 0.0) out->val_zero++;
-        if (f->val > f->val_born) out->self_emit++;
+        /* THE REWARD ROWS READ THE TERM THE ORDER IS MADE OF, which is the FAMILY's — a census denominated in
+           a quantity the pick does not read is the shape flow.h's own paragraph describes, where a spread was
+           taken as "the reward term is ordering the frontier" on a run whose top weight the spread had nothing
+           to do with. Reached per MEMBER because a family has no member of its own to be asked, so a family
+           with N arms contributes its reward N times to these extrema — which is right for a SPREAD (it is the
+           range the pick can see across the members it ranks) and is exactly why `families` is reported beside
+           them: on a one-family frontier this spread is zero by the structure, and a non-zero one is a
+           statement about several accounts rather than about one page's branching.
+           NO MEMBER MAY HOLD MORE THAN ITS ACCOUNT DOES, asserted where both are in one hand. `Flow.val` is
+           what this ONE member emitted and every point of it was credited to its family in the same call, so a
+           member standing above its own family is one whose two writers came apart — and the only symptom
+           would be a `self_emit` row counting emissions the order never saw. */
+        DCHECK(f->val <= acct_family_val(f) ||
+               f->family == NULL,   /* departed members are not walked, but the read is stated as the pair */
+               "a member of the frontier has emitted more than the fork family it is credited to holds — the "
+               "two writers of one emission have come apart, so the order is ranking an account that is "
+               "missing findings this member's own ledger already counted");
+        if (i == 0 || acct_family_val(f) < out->val_min) out->val_min = acct_family_val(f);
+        if (i == 0 || acct_family_val(f) > out->val_max) out->val_max = acct_family_val(f);
+        if (acct_family_val(f) == 0.0) out->val_zero++;
+        /* …AND WHAT THIS MEMBER ITSELF PUT THERE, which is the one question the account cannot answer and the
+           reason `Flow.val` exists at all. It is not a subtraction any more: nothing is inherited, so a
+           member's own ledger IS what it emitted since it was born. */
+        if (f->val > 0.0) out->self_emit++;
         if (f->cpu == 0) out->unrun++;
         /* THE OPTIMISM TERM'S OWN COORDINATE — completed units of work, which no service row can stand in for
            (flow.h). `vis_max == 0` on a frontier of thousands is the statement that not one member has reached
@@ -2448,7 +2611,10 @@ void flow_wfq_census(WfqCensus *out) {
         }
     }
     top = flow_best();
-    if (top) { out->val_top = top->val; out->w_top = flow_weight(top); }
+    /* …AND THE FRONT OF THE ORDER, READ IN THE SAME QUANTITY THE ORDER IS: the reward flow_queue_weight reads,
+       which is the top flow's fork FAMILY's. `top->val` would be one member's own ledger and would report the
+       front of the queue in a quantity the pick never consults. */
+    if (top) { out->val_top = flow_reward(top); out->w_top = flow_weight(top); }
 
     /* HOW FAR THE JOB BACKLOG STANDS BEHIND THE FRONT OF THE QUEUE — see flow.h. Taken here and not in the
        scan because it is a difference against a top the scan cannot know, and left at 0 when nothing is

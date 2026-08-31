@@ -5454,9 +5454,14 @@ static int preempt_hook(int kind) {
            handed on by the pick's registry order, a rival recomputed against a stale cache, a weight term that
            moves with something this list does not name. Any of those is a swap of two COW deltas bought with
            nothing, and at 512 flows that was 1.28 million of them for one document. */
+        /* THE REWARD CLAUSE READS flow_reward AND NOT `cur->val`, because the term flow_weight is a function of
+           is the flow's fork FAMILY's account and `cur->val` is one member's own ledger, which ranks nothing.
+           Keyed on the ledger this clause would go on agreeing across exactly the change it exists to permit —
+           a SIBLING's emission raising the account every arm of the family is ranked by — and the assertion
+           would fire on a legitimate rank change with all four terms reported unchanged. */
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
                flow_silence_notch(cur) != g_ranked_silence ||
-               cur->visits != g_ranked_visits || cur->val != g_ranked_val ||
+               cur->visits != g_ranked_visits || flow_reward(cur) != g_ranked_val ||
                flow_distance(cur) != g_ranked_dist,
                "the VALUE YIELD fired on a flow whose rank nothing changed since the scheduler switched it in — "
                "same frontier generation, same silence notch, same completed-unit count, same reward and same "
@@ -6713,7 +6718,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        answer was "this one" — the pick that led here compared it against every runnable member and found none
        strictly better, so from this instant the value yield may only fire if one of these moves. The
        hook's assertion reads them; nothing decides from them. */
-    g_ranked_gen = flow_frontier_gen(); g_ranked_val = f->val;
+    g_ranked_gen = flow_frontier_gen(); g_ranked_val = flow_reward(f);   /* the reward term — the FAMILY's */
     g_ranked_silence = flow_silence_notch(f);  /* the aging term — see the assertion in preempt_hook */
     g_ranked_visits = f->visits;               /* …and the optimism term's, which is a count and not a clock */
     g_ranked_dist = flow_distance(f);          /* …and the fitness term's, which is a reading and not a payment */
