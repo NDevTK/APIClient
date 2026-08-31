@@ -2982,18 +2982,42 @@ function audit(argv, opts = {}) {
     const qg = new Map();
     for (const q of quotes) { if (!qg.has(q.kind)) qg.set(q.kind, []); qg.get(q.kind).push(q); }
     const qlimit = argv.includes("--all") ? Infinity : 60;
+    /* A CRASH PRINTS ITS MESSAGE TO SOMEONE WHO HAS NO FILE OPEN, so a quotation inside one is listed first —
+     * the same ordering, and the same reason, as --unanchored's. */
+    const rank = (q) => (q.crash ? 0 : 1);
+    /* AND QUOTE-NOT-FOUND IS TWO QUESTIONS UNDER ONE NAME, WHICH ONE HEAD CANNOT SERVE. The summary line above
+     * already states the split and then the list ignored it: the old ordering put the EARLY-DIVERGENCE band
+     * first, and that band is the one the same sentence calls indistinguishable from this tree's own prose in
+     * quotation marks. It is also the large one — 566 of 781 at the revision this was written — so a 60-item
+     * head ranked that way was 60 items a reader cannot act on, with every falsifiable one behind them.
+     *   MIS-TRANSCRIBED is a real sentence that went wrong partway: the words matched, then stopped matching,
+     *     so the standard's own text names the repair. `run consume body` for `to return the result of running
+     *     consume body`, `a header list contains a name` for `a header list list contains a header name name`.
+     *   UNSEPARABLE leaves the standard immediately. A fabrication lands there and so does a correctly-quoted
+     *     piece of this tree's own prose, and no rule here can tell them apart — which is a fact to PRINT, not
+     *     a reason to lead with it or to hide it.
+     * Both are printed, each with its own count, its own head and its own file roll. Not a reordering of one
+     * list: a reordering would still bury one question under the other's cap, and the count is the point. */
+    const bands = [];
     for (const kind of ["QUOTE-NOT-FOUND", "QUOTE-WRONG-STANDARD", "QUOTE-WRONG-SECTION"]) {
       const g = qg.get(kind) || [];
-      console.log(`\n${kind}: ${g.length}`);
-      /* A CRASH PRINTS ITS MESSAGE TO SOMEONE WHO HAS NO FILE OPEN, so a fabricated quotation inside one is
-       * listed first — the same ordering, and the same reason, as --unanchored's. */
-      const rank = (q) => (q.crash ? 0 : 2) + (q.div && q.div.matched < MIN_FRAGMENT_WORDS ? 0 : 1);
+      if (kind !== "QUOTE-NOT-FOUND") { bands.push([kind, g, ""]); continue; }
+      const late = (q) => q.div && q.div.matched >= MIN_FRAGMENT_WORDS;
+      bands.push([`${kind} / MIS-TRANSCRIBED`, g.filter(late),
+        ` — matched ${MIN_FRAGMENT_WORDS}+ words and then diverged, so the standard's own text names the exact word to repair.` +
+        ` An ELIDED PARENTHETICAL lands here too and is not a defect: IndexedDB writes "less than or equal to 2^53 (9007199254740992) + 1"` +
+        ` and a comment quoting it without the figure diverges truthfully. The divergence point is printed so a reader can tell those apart in one glance`]);
+      bands.push([`${kind} / UNSEPARABLE`, g.filter((q) => !late(q)),
+        ` — left the standard within ${MIN_FRAGMENT_WORDS} words. A fabricated sentence and this tree's own prose in quotation marks both land here and nothing mechanical separates them; each needs a human`]);
+    }
+    for (const [label, g, why] of bands) {
+      console.log(`\n${label}: ${g.length}${why}`);
       const ord = [...g].sort((a, b) => rank(a) - rank(b));
       for (const q of head(ord, qlimit)) {
         console.log(`  ${q.file}:${q.line}  ${quoteMsg(q)}`);
         console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
       }
-      elided(ord, qlimit, kind);
+      elided(ord, qlimit, label);
     }
   }
 
