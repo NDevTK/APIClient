@@ -13383,14 +13383,37 @@ static void abi_stalled(void)
            g_abi_declined ? g_abi_declined : "(none stated)", fetches, ops);
 }
 
+/* A REFUSAL THAT OWED NO REGISTER ENTRY IS STILL A REFUSAL, AND IT USED TO LEAVE WITH THE PROCESS. The zone
+   declines two different kinds of thing: a request on one of the two registers, which the abort above reports
+   because the frontier is parked on it — and a NOTICE, which owes nothing and parks nobody. A `navigable.create`
+   the zone would not provision is the second kind: the child navigable simply never becomes a document, the
+   frontier drains normally, and every sentence explaining why the peer does not exist was freed at the bottom
+   of this arm without being read. That is the emitted-with-no-reader defect on the one channel whose whole
+   subject is what could not be done, so it is read HERE, on the one path every exit passes through — the
+   drained frontier, the referenced instance's release, and (in a release build, where the abort above is
+   compiled out and there is nothing else left to print them) a stall.
+   ON `stderr`, BECAUSE `stdout` IS THE RECORD CHANNEL. The zone parses every line it reads there against a
+   verb, so a sentence written to it is a record under a verb nothing carries. */
+static void abi_report_declines(void)
+{
+    if (!g_abi_declined) return;
+    fprintf(stderr, "[abi] the trusted zone refused work during this session, and the `@RESULT` below is what "
+                    "was learned WITHOUT it — a refusal that owed no register entry parks no flow, so nothing "
+                    "else in this process would ever have said so:\n%s\n", g_abi_declined);
+    fflush(stderr);
+}
+
 /* THE ARM ITSELF. One document in, one result out.
    THE RECORD IS `document` and then, in `qjs_init`'s own parameter order, every fact that entry takes:
    `<address><TAB><name><TAB><headers b64><TAB><document b64><TAB><top-level creation URL><TAB>
     <inherited CSP b64><TAB><CSP self-origin><TAB><COEP><TAB><COEP endpoint><TAB><COEP report-only><TAB>
     <COEP report-only endpoint><TAB><parent navigable><TAB><container policy><TAB><ancestor origins><TAB>
-    <creation sandboxing flags>`,
+    <creation sandboxing flags><TAB><peer reference>`,
    verb first and tab separated, which is `wpt_runner.c`'s child channel's own shape rather than a second
-   grammar.
+   grammar. The LAST field is the one that is not a `qjs_init` parameter and not a fact about the Document at
+   all: it is whether another agent created this navigable and still holds a WindowProxy for it, which decides
+   whether this instance's timelines may run out (`qjs_set_referenced`). It rides this record because it is a
+   fact of PROVISIONING and this record is the provisioning.
    TEN OF THOSE FIELDS USED TO BE ANSWERED HERE, WITH THE SPEC'S OWN ANSWERS FOR A TOP-LEVEL TRAVERSABLE, and
    the answers were right for the only document this arm could then be handed. They are wrong for the one it
    can be handed now: a PEER INSTANCE provisioned for a CROSS-ORIGIN CHILD is rooted at a document whose
@@ -13409,10 +13432,10 @@ static int abi_main(void)
     char *rec, *p;
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
     const char *coep_ro, *coep_ro_ep, *parent, *container_policy, *ancestor_origins;
-    const char *creation_sandbox_flags;
+    const char *creation_sandbox_flags, *referenced_f;
     char *headers, *html, *csp;
     size_t headers_n = 0, html_n = 0, csp_n = 0;
-    int r;
+    int r, referenced;
 
     rec = abi_line();
     CHECK(rec != NULL, "this host was started with no document record at all — a Document is a tree over bytes "
@@ -13536,6 +13559,23 @@ static int abi_main(void)
           "with a word of its own, so an absent field is a caller that did not state which applies and this "
           "instance would run the scripts, submit the forms and relax the `document.domain` an embedder's "
           "`sandbox` attribute forbids");
+    /* AND THE SEVENTEENTH, WHICH IS NOT A DOCUMENT FACT AT ALL. The sixteen above are HTML §7.5.1's — they
+       describe the Document this process builds — and this one describes the INSTANCE: whether some other
+       agent created the navigable this document is the active document of, and therefore still holds a
+       WindowProxy for it. It is on this record because it is a fact of PROVISIONING and this record IS the
+       provisioning, so a zone that provisions a peer cannot state the sixteen and forget the one that decides
+       whether the peer is still alive when the first read arrives. `abi_take` refuses an absent field, so it
+       cannot be omitted by a zone that has not been updated — which is the whole reason it is a field rather
+       than a second record the zone may or may not send.
+       IT IS `0` OR `1` AND NOTHING ELSE, checked here rather than at the ABI so the SPELLING is refused where
+       the text is read: `qjs_set_referenced` sees an int and a `strtoul` of anything else would hand it a
+       number the zone never wrote. */
+    referenced_f = abi_take(&p, "peer reference");
+    CHECKF(!strcmp(referenced_f, "0") || !strcmp(referenced_f, "1"),
+           "the document record states the peer reference `%s`, which is neither `0` nor `1` — the zone that "
+           "provisioned this instance either created it for a navigable another agent holds a WindowProxy for "
+           "or it did not, and a third spelling is a field read at the wrong tab", referenced_f);
+    referenced = referenced_f[0] == '1';
     /* AND NOTHING AFTER IT. A record with a field this driver does not read is a writer NEWER than this reader,
        which a left-to-right walk is structurally silent about — it only ever asks for what it was told to
        expect — so the value would be computed, sent, and consumed by nothing while its author believed it
@@ -13557,6 +13597,11 @@ static int abi_main(void)
        and the list it was parsed into is released inside the entry above, so these bytes are done. The
        DOCUMENT's are not — see the free at the bottom. */
     free(headers);
+
+    /* BEFORE THE FRONTIER IS SEEDED, which is the entry's own contract and is also the only ordering that is
+       true: the flag decides whether this instance's LAST timeline finishes, and a session that has begun may
+       already have taken that decision. */
+    qjs_set_referenced(referenced);
 
     /* NO RESIDUE, STATED. `qjs_begin`'s argument is the parked frontier a previous session left, and the empty
        string is the positive statement that this session continues none. A cross-session resume is a field on
@@ -13581,13 +13626,32 @@ static int abi_main(void)
                condition: whether that payment unparked a flow is the frontier's answer to give on the next
                step, not this host's to predict — and predicting it is how a driver comes to stop one step
                before the work it was waiting for. */
-            if (abi_pay() == 0) { abi_stalled(); break; }
+            if (abi_pay() == 0) {
+                /* …UNLESS NOTHING WAS OWED, WHICH IS A DIFFERENT SENTENCE AND ONLY A REFERENCED INSTANCE CAN
+                   SAY IT. A document a peer holds a WindowProxy for does not finish: its last timeline reports
+                   host-owed and the scheduler stalls with BOTH REGISTERS EMPTY, waiting to be asked something
+                   (solver/engine.h's engine_set_referenced). That is not a refusal and reporting it as one
+                   would abort every peer this transport has ever provisioned — the crash would stand exactly
+                   where the design says the instance should be resting.
+                   THE ZONE'S SILENCE IS ITS ANSWER HERE. It writes a round to a stalled instance only when it
+                   has something for it, so a paid-nothing round reaching a referenced instance is the zone
+                   stating that no peer will ask this document anything again — which is the end of this
+                   instance's part in the session, not an unpaid bill. The registers are read rather than
+                   assumed empty: a referenced instance that ALSO parked on a reply was genuinely refused, and
+                   that is abi_stalled's case exactly as it is for any other instance. */
+                if (referenced && *qjs_pending() == '\0' && *qjs_host_requests() == '\0') break;
+                abi_stalled();
+                break;
+            }
         }
         /* ENGINE_STEP_YIELD — the thread was ASKED FOR, not a payment, so a host with nothing else to do
            steps straight back in. There is no membership assert on `step` here and that is deliberate:
            `qjs_step` asserts it at the entry that PRODUCES the code, and a rule spelled at both is two. */
     }
 
+    /* WHAT THE ZONE REFUSED, BEFORE THE RESULT AND NOT AFTER IT: a reader who takes the `@RESULT` line as this
+       session's finding set has to have already been told which documents are missing from it. */
+    abi_report_declines();
     /* THE RESULT, on the same @RESULT line every other host of this engine writes — the one the harnesses
        already read, rather than a marker invented here that no shipped path emits. */
     printf("@RESULT %s\n", qjs_result());

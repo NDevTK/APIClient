@@ -113,6 +113,13 @@ static JSRuntime           *g_rt;
 static JSContext           *g_ctx;
 static int                  g_begun;
 static int                  g_done;
+/* WHAT THE PROVISIONING ZONE STATED ABOUT THIS INSTANCE — see qjs_set_referenced. It is not a copy of
+ * solver/engine.c's flag: that one is the SCHEDULER's reading of this fact and this one is the ABI's record of
+ * having been handed it, which is what lets the stall assert below tell a bill from a document that is merely
+ * waiting to be asked something. It survives a session boundary for the reason engine.h gives — whether a peer
+ * holds a WindowProxy for this document is a property of the instance's PROVISIONING and not of any one run of
+ * its frontier — so qjs_teardown does not clear it. */
+static int                  g_referenced;
 
 /* THE DOCUMENT THIS INSTANCE LAST ANSWERED WITH, HELD BECAUSE THE ANSWER IS A POINTER AND THE HOST CANNOT FREE
  * ONE. `result_json` composes a FRESH malloc'd document per call and says so (solver/result.h: "caller frees"),
@@ -1165,6 +1172,41 @@ QJS_EXPORT unsigned qjs_bundle_id(void)
    rots. The question is the engine's, over the engine's registers (engine.h's engine_host_owes), and no host
    restates it. */
 
+/* A PEER HOLDS A REFERENCE INTO THIS INSTANCE'S DOCUMENT, so its timelines may not RUN OUT — solver/engine.h's
+ * engine_set_referenced, which until now had no entry in this ABI at all. The consequence was not a missing
+ * feature but a WRONG one, and it was silent at both ends: a cross-origin child provisioned by the trusted zone
+ * ran its scripts, its frontier drained, its session closed — and the first `otherW.length` its creator read
+ * arrived at a document with no timeline to answer in. The engine names it from the far side (engine_perform's
+ * count assert, engine_route's drained-instance assert), which is the right place for the crash and the wrong
+ * place for the fix: the fact is not one the engine can see. An instance exists because SOME OTHER AGENT
+ * created its navigable, and the only party that knows that is the one that provisioned it — the trusted zone,
+ * which holds the routing table SECURITY.md gives it and nothing else.
+ *
+ * BEFORE THE FRONTIER IS SEEDED, and asserted rather than merely documented. `engine_set_referenced` decides
+ * whether the LAST timeline finishes, so a host that stated it after the frontier had already drained would be
+ * stating it about a session that had already made the decision — and the statement would read as taken while
+ * the document it was about was gone. wpt_runner.c's child host places it on the same line for the same reason.
+ *
+ * IT IS NOT A SESSION FACT. A parked instance resumes into the same provisioning: the peer that held a proxy
+ * for this document holds one still, because the name it routes on is stable across a park BY REQUIREMENT
+ * (solver/world.h). So this survives qjs_teardown, and the resumed session inherits the statement rather than
+ * waiting to be told again by a zone that has no reason to repeat itself. */
+QJS_EXPORT void qjs_set_referenced(int referenced)
+{
+    DCHECK(g_ctx != NULL, "qjs_set_referenced ran before qjs_init built the context — the statement is about "
+                          "THIS instance's document, and there is no document yet for a peer to hold a "
+                          "reference into");
+    DCHECK(!g_begun, "a peer's reference into this document was declared after the frontier was seeded — the "
+                     "flag decides whether the LAST timeline may finish, so a session that has already begun "
+                     "may already have taken that decision and closed over the flows this was meant to keep");
+    DCHECK(referenced == 0 || referenced == 1,
+           "a peer reference was declared with something that is neither of the two answers — the host either "
+           "provisioned this instance for a navigable another agent created or it did not, and a third value "
+           "would be read by whichever arm the scheduler's test happens to be written as");
+    g_referenced = referenced;
+    engine_set_referenced(referenced);
+}
+
 /* PHASE 2 — seed the frontier. */
 QJS_EXPORT void qjs_begin(const char *recipes)
 {
@@ -1252,20 +1294,25 @@ QJS_EXPORT int qjs_step(void)
        of THIS ABI can pay are the two registers it can read, so a stall that leaves both of them empty is a
        host told to act with nothing to act on — the frontier then waits for the rest of the session on a
        payment nobody can identify, which reads from outside exactly like a document that is merely slow.
-       IT IS ALSO WHERE THE ONE OTHER STALL CAUSE WOULD ANNOUNCE ITSELF. engine_sched_step stalls for two
-       reasons: engine_host_owes (both registers' union, and its own dev walk asserts every outstanding entry
-       is tellable through one of them) and engine_set_referenced — a document a peer holds a reference into,
-       whose last timeline reports host-owed instead of finishing and which owes NO register entry at all.
-       This ABI has no entry that sets referenced (wpt_runner.c's child host does; this one has never had one),
-       so today the second cause cannot arise here and the assert is exact. The day a Referenced entry is added
-       to this ABI, this is the line that fires, and what it names is the work: a stall the host answers by
-       ROUTING an operation rather than by filling a register is a third thing to pay, and the host's step
-       branch has to be able to tell it from the other two. */
-    DCHECK(r != ENGINE_STEP_STALLED ||
+       AND THERE ARE TWO STALL CAUSES, WHICH IS WHY THE HOST'S OWN STATEMENT IS PART OF THE CONDITION.
+       engine_sched_step stalls for engine_host_owes (both registers' union, and its own dev walk asserts every
+       outstanding entry is tellable through one of them) and for engine_set_referenced — a document a peer
+       holds a reference into, whose last timeline reports host-owed instead of finishing and which owes NO
+       register entry at all. The second is not a bill and must never be paid: what it waits for is a QUESTION
+       from another instance, which arrives through qjs_perform or qjs_route and which no register of this one
+       can name. A host that read it as a bill would find nothing owed and conclude it was being refused.
+       SO THE THIRD DISJUNCT IS `g_referenced` AND NOT A THIRD REGISTER, and that is the whole distinction: the
+       host is entitled to tell the two apart because it MADE the statement (qjs_set_referenced) — it is not
+       inferring a cause from an absence, which is exactly what an empty bill looks like from outside. An
+       UNREFERENCED instance stalling with both registers empty is still the failure this assert has always
+       named, and it is still named here. */
+    DCHECK(r != ENGINE_STEP_STALLED || g_referenced ||
            *engine_pending_fetches() != '\0' || *engine_host_requests() != '\0',
            "the scheduler asked this host to PAY and named nothing owed — a stall reaches the host as a bill "
            "over qjs_pending and qjs_host_requests, and with both empty there is no record to answer, so every "
-           "flow parked here waits for the rest of the session on a payment nothing identifies");
+           "flow parked here waits for the rest of the session on a payment nothing identifies. This instance "
+           "declared no peer reference, so it is not the referenced case either: nothing is waiting to be "
+           "asked a question here, and nothing is owed a reply");
     g_done = (r == ENGINE_STEP_DONE);
     return r;
 }

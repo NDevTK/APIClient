@@ -2716,7 +2716,8 @@ if (NATIVE) {
        cannot collide with the fixture's — every other symbol in either file is `static`. What it contributes
        is the ABI ITSELF, which `test_forced.c`'s `--abi` arm is now a host of, so the two are one program:
        run with no arguments it is the fixture, run with `--abi` it drives a document through the same
-       twenty-two entries the extension calls.
+       `qjs_*` entries the extension calls. (A COUNT stood here and was wrong by one before this line was even
+       read — a number in prose that `QJS_ABI` answers is status, and the grep is the authority.)
        THIS SUPERSEDES A COMPILE-ONLY GATE THAT STOOD HERE and is deleted with it rather than kept beside it.
        That gate was `clang -fsyntax-only` over ENTRY_ABI, and its own comment gave the reason it existed:
        §Testing's "A TRANSLATION UNIT NO GATE COMPILES IS OUTSIDE THE GATE, AND THE SHIPPED ENTRY POINT IS THE
@@ -2834,7 +2835,7 @@ const QJS_ABI = ["qjs_init", "qjs_join", "qjs_unload", "qjs_bundle_id", "qjs_beg
                  "qjs_pending", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route",
-                 "qjs_perform", "qjs_host_answer_remote", "qjs_world_gone"];
+                 "qjs_set_referenced", "qjs_perform", "qjs_host_answer_remote", "qjs_world_gone"];
 
 /* THE LIST IS THE ABI, SO THE ENTRY POINT AND THE LIST ARE ONE FACT AND ARE CHECKED AGAINST EACH OTHER. Both
    directions are a real defect and neither has a symptom at build time: an entry main.c defines and this omits

@@ -1747,10 +1747,9 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            "a record was routed into an instance whose frontier had DRAINED — every timeline of the document "
            "finished, so there is no flow to seed the delivery on and no scheduler to run it. A document a peer "
            "can still post to is a REFERENCED document and engine_set_referenced holds its last timeline open "
-           "for exactly this, but nothing outside wpt_runner.c sets it: there is no `qjs_set_referenced` in "
-           "main.c's ABI at all, so the trusted zone — the only zone that knows a peer still holds a "
-           "WindowProxy for this document — has no way to say so. Add the entry and set it from the create "
-           "notice the zone already acts on");
+           "for exactly this, so reaching this line means the zone that PROVISIONED this instance did not say "
+           "that a peer holds a WindowProxy for its document — which is the one fact this engine cannot see for "
+           "itself and the one the routing table has by construction");
 
     /* EVERY ROUTED RECORD'S FIRST TWO FIELDS ARE THE TRANSPORT'S: the target DOCUMENT (which instance) and the
        sending flow's WORLD (whose timeline). Everything after them belongs to the component named by the op,

@@ -408,7 +408,32 @@ async function main() {
      with the child's NAME, ADDRESS, ORIGIN and POLICY over a pipe and stamps the child's origin from the
      parent. What differs is only which process is trusted — there the runner owns the network, here the
      parent does — and the record on the wire is this channel's `document` line rather than an argv. */
-  async function provision({ docId, url, origin, headers, bytes, facts }) {
+  /* …AND `referenced` IS THE ONE FACT OF THAT PROVISIONING THAT IS NOT ABOUT THE DOCUMENT. A document a peer
+     holds a WindowProxy for may not run its timelines out: its last flow reports host-owed instead of
+     finishing, so there is still somewhere for a `windowproxy.get` or a delivery to arrive
+     (solver/engine.h's engine_set_referenced, reached through `qjs_set_referenced`). Without it a peer this
+     zone provisioned ran its scripts, drained, closed — and the first cross-origin read its creator made
+     arrived at a document with no timeline to answer in. The engine crashes there, at the far end, which is
+     the right place for the crash and the wrong place for the fix: an instance exists because SOME OTHER
+     AGENT created its navigable, and the party that knows that is the one holding the routing table.
+     THE QUESTION IS "DOES ANOTHER INSTANCE HOLD A WINDOWPROXY FOR *THIS* DOCUMENT", AND IT IS ASKED PER ARM
+     BECAUSE THE ANSWER IS NOT THE SAME FOR ALL FOUR. "The engine minted the name" is the tempting shortcut and
+     it is WRONG for one of them: §7.1.3.2's swap mints a name too, and its step 10 note ("browsingContext will
+     not be used by the new Document that we are about to create") DISCARDS the browsing context the creator's
+     handle names — core/frame/browsing_context_group.c performs that discard and says in as many words that a
+     read through the handle afterwards answers about the OLD document. So nothing holds a proxy for the
+     swapped-TO document, and holding its frontier open would be waiting for a question that cannot be asked.
+     BOTH ERRORS ARE SILENT AND THEY ARE NOT SYMMETRIC. Understating it drains a peer that was about to be
+     read, and the crash lands in the ASKING instance's engine, one process away from the zone that decided
+     it. Overstating it keeps a frontier alive until the session ends, which costs a process and truncates
+     nothing. That is not a licence to guess high: it is why the rule is stated per arm with its reason, so
+     the next arm has to answer the question rather than inherit an answer. */
+  async function provision({ docId, url, origin, headers, bytes, facts, referenced }) {
+    if (referenced !== 0 && referenced !== 1)
+      throw new Error(`an instance was provisioned for ${url} without stating whether a peer holds a ` +
+                      'reference into its document — the flag decides whether its timelines may finish, so ' +
+                      'an unstated one is a peer that either drains before it is asked anything or waits ' +
+                      'for a question nobody can ask, and neither is visible from here');
     const child = spawn(bin, ['--abi'], { stdio: ['pipe', 'pipe', 'inherit'] });
     const e = {
       docId, docUrl: url, origin, child,
@@ -446,7 +471,8 @@ async function main() {
                     'this line — its stderr is this process\'s — and they are the diagnosis; this is the ' +
                     'pipe noticing afterwards.');
     });
-    e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts].join('\t'));
+    e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts,
+           String(referenced)].join('\t'));
     instances.push(e);
     loops.push(drive(e));
     retryHeld();
@@ -678,8 +704,13 @@ async function main() {
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
          may be minted by the untrusted side because it is only a name, while the ORIGIN is what every
          bundle's cross-origin check is written against. */
+      /* REFERENCED, AND THE CREATE NOTICE IS ITSELF THE PROOF: the creating engine minted `f[1]` because its
+         page already holds a WindowProxy for this navigable, which is the only reason a delivery has to be
+         routed here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document,
+         so this document's timelines may not run out before they do. */
       await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
-                        headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f) });
+                        headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f),
+                        referenced: 1 });
       return;
     }
     /* `navigable.swap <new document> <url> <origin> <provenance>` — HTML §7.1.3.2 "Browsing context group switches due to
@@ -700,8 +731,15 @@ async function main() {
          zone declined at `document.fetch` could be fetched through one notice later. */
       const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`, f[4]);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE NAMED IT" IS THE WRONG READING. §7.1.3.2 step
+         10's note says the old browsing context "will not be used by the new Document that we are about to
+         create", and core/frame/browsing_context_group.c discards it right after emitting this notice — so the
+         page that navigated still holds its handle, and that handle answers about the document it had, not
+         about this one. Nothing anywhere holds a proxy for the swapped-TO document, so keeping its timelines
+         open would park its last flow for a question no instance can ask. */
       await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
-                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url) });
+                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
+                        referenced: 0 });
       return;
     }
     /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
@@ -748,8 +786,11 @@ async function main() {
          §7.1.7 has no container to clone, §7.3.1.3 gives it no parent and no container element, and §3.1.3's
          steps 2-3 return the empty list. `topLevelFacts` is those ten statements, and the address it is given
          is the RESPONSE's, because §7.5.1's creationURL is where the bytes came from. */
+      /* AND NOT REFERENCED, WHICH IS THE SAME SENTENCE THE NAME ABOVE IS MINTED BY: nothing holds a proxy for
+         a route the bundle merely DECLARED — this zone named the document because no page ever held one. */
       await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: new URL(loaded.url).origin,
-                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url) });
+                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
+                        referenced: 0 });
       return;
     }
     /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances, relayed
@@ -947,9 +988,13 @@ async function main() {
     flush();
   }
 
+  /* THE SEED IS NOT REFERENCED. A person named this address and this zone fetched it; no agent created its
+     navigable and no page holds a WindowProxy for it, so its frontier is entitled to DRAIN and its session to
+     close — which is what produces the `@RESULT` this process exists to print. Stating it rather than leaving
+     it off is the point of the flag being required: a root held open by mistake never finishes. */
   const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
-                                 facts: topLevelFacts(docUrl) });
+                                 facts: topLevelFacts(docUrl), referenced: 0 });
 
   /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its
      driver to this queue, and an `all` taken over the queue as it stood would return before that peer's
