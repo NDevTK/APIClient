@@ -67,6 +67,13 @@ QJS_EXPORT void qjs_teardown(void);
 QJS_EXPORT const char *qjs_pending(void);
 QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *reply, const char *body,
                             unsigned body_len);
+/* …AND HOW IT REFUSES ONE, WHICH IS THE OTHER HALF OF PAYING AND NOT A KIND OF FAILURE. `qjs_provide` with the
+   JSON `null` is Fetch §5.6 "Fetch methods"' NETWORK ERROR, and that is the honest answer wherever a real
+   browser performing this same request would also produce one. Where none would — the firing policy declining
+   to spend an act, the destructive deny list, a method the chokepoint cannot issue — this entry is the answer:
+   nothing is fabricated about the origin, the flow keeps its park, and the engine forks the arm that runs the
+   page's failure path so the `catch` is explored without the wait being spent. */
+QJS_EXPORT void qjs_decline(const char *method, const char *url, const char *reason);
 QJS_EXPORT const char *qjs_host_requests(void);
 QJS_EXPORT const char *qjs_host_notices(void);
 QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion,

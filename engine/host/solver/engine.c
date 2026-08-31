@@ -2640,7 +2640,14 @@ const char *engine_pending_fetches(void) {
             int prov_v = (int)pending_get_int(pe, PEND_PROV);
             const char *prov = engine_provenance_token(prov_v);
             size_t il = strlen(ini), pl = strlen(prov);
-            int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
+            /* …AND A REQUEST THE ZONE HAS ALREADY REFUSED IS NOT ON THIS LIST, WHICH IS WHAT KEEPS A DECLINE A
+               FORK RATHER THAN A SPIN. An unanswered entry is re-joined on EVERY step, so a zone that declined
+               it once would be shown it again on the next round and would decline it again — and each decline
+               that reached the engine would fork another failure arm, which is a flow per round for the rest
+               of the session over a question that was answered the first time. A refusal is an ANSWER to "will
+               you make this request", and this list is what the host can still be ASKED; the record keeps the
+               reason, and the flow parked on it keeps its snapshot. */
+            int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE) || pending_entry_declined(pe));
             if (!skip) {
                 char *q = join, *stop = join + n_out;
                 /* A SYNCHRONOUS HOST REQUEST HAS NO ADDRESS AND MUST NOT REACH THIS LIST — it is
@@ -2922,7 +2929,16 @@ int engine_host_owes(void) {
         for (int j = 0, m = pending_count(f->pending); j < m; j++) {
             JSValue e = pending_entry(f->pending, j);
             JSValue uv = pending_get(e, PEND_URL);
+            /* A DECLINED ENTRY IS DELIBERATELY UNTELLABLE, AND THAT IS THE ONE STATE THIS CHECK MUST NOT CALL A
+               DEFECT. Everything else here is one claim — an unanswered entry must be on one of the two lists
+               the host is handed, or the flow waits for the rest of the session with nothing to show for it.
+               A refusal makes that wait DELIBERATE: the zone has answered "no", the joins stop listing the
+               request precisely so it is not re-asked and re-declined, and the flow keeps its snapshot at the
+               line it parked on — §@S's search-not-yet-solved, which fires the day the origin is widened. The
+               `declined` reason on the record is what makes it a park a reader can account for rather than a
+               flow that silently left the run. */
             int tellable = pending_get_int(e, PEND_HAVE_VALUE) ||
+                           pending_entry_declined(e) ||
                            JS_IsString(uv) ||
                            pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ;
             JS_FreeValue(pending_ctx(), uv);
@@ -3108,6 +3124,80 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
                "join drops a request as soon as it carries a value, so the host is answering one it was shown "
                "once, twice. request=%s %s", method, url);
     return n;
+}
+
+/* THE OTHER ANSWER A HOST CAN GIVE ONE OF THESE REQUESTS: this zone will not ask. See engine.h.
+ *
+ * IT WRITES A FACT AND FORKS NOTHING, which is the same split engine_host_answer makes at the other seam and
+ * for the same reason: this runs BETWEEN scheduler steps, where the running flow, the applied delta and the
+ * live DOM head all belong to whichever flow the scheduler last ran, so an arm minted here would be a
+ * stranger's timeline wearing the refused flow's name. The refusal lands on the RECORD; flow_decline_fork
+ * builds the pair of arms later, from each parked flow's own step, with that flow switched in.
+ *
+ * ONE RECORD IS ONE MEMBER OF THE OUTSTANDING SET HOWEVER MANY ARMS HOLD IT (pending_index.h), so marking the
+ * members of the pair's node refuses the request for every timeline parked on it at once — exactly as one
+ * reply fills every entry naming it. Each of those timelines still owes its OWN arm, which is why the mark
+ * that says "this register has had its fork" is per REGISTER and not written here.
+ *
+ * AND EVERY FLOW PARKED ON IT IS ASKABLE AGAIN. A flow waiting on the host leaves the pick until a HOST EVENT
+ * clears it, and a refusal is a host event: without this clear the refused flows would never be picked, so the
+ * fork this refusal exists to make would never be taken and the frontier would sit on a decline nobody could
+ * act on. Same call, same reasoning and the same bounded early-clear as the reply path's. */
+int engine_decline(JSContext *ctx, const char *method, const char *url, const char *reason) {
+    PendIndexNode *node;
+    int matched, marked = 0, i;
+    JSValue rv;
+
+    DCHECK(method != NULL && url != NULL,
+           "a refusal was recorded for no request — a decline answers the same (method, url) pair a reply "
+           "answers, because it is an answer to the same question, and one that names neither half refuses "
+           "nothing and leaves every flow parked");
+    DCHECK(method_is_token(method),
+           "a refusal names a METHOD that is not a token — Fetch §2.2.1 Methods, RFC 9110 §5.6.2 Tokens. A "
+           "host sending the URL where the method goes has its operands shifted by one");
+    /* THE REASON IS NOT OPTIONAL AND NOT ALLOWED TO BE EMPTY, because it is the ONLY account anybody ever gets
+       of a request nobody made: the flow parked on it will not drain this session, and a reader looking at a
+       frontier that stops has nothing else to read. It also decides what happens NEXT — `blocked-provenance`
+       names a per-origin widening that would make this fire, `blocked-destructive` names a refusal nothing
+       reopens — and only the zone that applied the rule knows which. */
+    DCHECK(reason != NULL && *reason != '\0',
+           "a request was refused with no REASON — the party that refused is the party that knows why, and an "
+           "unnamed refusal leaves a frontier parked with nothing anywhere to say which rule holds it");
+    node = pending_index_find(method, url);
+    matched = node ? pending_index_node_count(node) : 0;
+    rv = JS_NewString(ctx, reason);
+    CHECK(!JS_IsException(rv), "engine: OOM recording the trusted zone's refusal of a request");
+    for (i = 0; i < matched; i++) {
+        JSValue p = pending_index_node_member(node, i);
+        /* AN ALREADY-REFUSED RECORD IS LEFT AS IT IS RATHER THAN RE-MARKED, and that is not idempotence for
+           its own sake. A record leaves this node only when the last register naming it gives it back, so a
+           pair whose flows have not yet TAKEN their declines still holds them here — and a fresh park on the
+           same address (an @S candidate re-fire re-runs the document and re-issues its fetches) puts an
+           unrefused record in the same node, which is what the zone is answering. Overwriting the old ones
+           would replace the sentence their waiting arms are going to report with one written for a different
+           park. */
+        if (!pending_entry_declined(p)) {
+            DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
+                   "the frontier's outstanding set holds an ANSWERED record — a record leaves that set on the "
+                   "write that answers it, so this member outlived its own answer and would be refused after "
+                   "the server had already replied to it");
+            pending_set(p, PEND_DECLINED, JS_DupValue(ctx, rv));
+            marked++;
+        }
+        JS_FreeValue(ctx, p);
+    }
+    JS_FreeValue(ctx, rv);
+    if (marked) flow_clear_host_owed_all();
+    /* NOBODY IS PARKED ON IT — the same two shapes engine_provide's caller tells apart, and the same credit
+       excuses one of them. A refusal for a pair no flow ever asked for is the host's pending/decline pairing
+       off by one; a refusal for a pair whose flow was PAGED OUT to the cold tier is the mechanism working, and
+       that sale is consumed here exactly as a reply consumes it. */
+    if (matched == 0 && !engine_take_paged_owed())
+        DFAILF("a refusal was recorded for a request no flow is parked on and none was paged out — the host's "
+               "pending/decline pairing is off, and refusing nothing leaves the flow that IS parked waiting "
+               "for a reply this zone has already decided not to fetch. request=%s %s reason=%s",
+               method, url, reason);
+    return marked;
 }
 /* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
    run — and the kind decides exactly two questions, both of them at the ends of that program's life: may it
@@ -4237,6 +4327,178 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
                "re-issues an unanswered request under a fresh id, so this arm would be waiting on a question "
                "nobody has been asked");
         JS_FreeValue(ctx, se);
+        return 1;
+    }
+    return 0;
+}
+
+/* ONE ARM PER DECLINED REQUEST — the fork a REFUSAL owes, and the half of a decline that a chokepoint may not
+ * buy by mis-grading its own refusal.
+ *
+ * WHAT A DECLINE IS. The trusted zone grades every refusal on one checkable axis: would a REAL BROWSER
+ * performing this same request also produce Fetch §5.6 "Fetch methods"' network error? Where it would — a
+ * blocked scheme, a CORS failure, a CORB-blocked body — §5.6 IS the fidelity and the reply arrives as one.
+ * Where it would not — the firing policy declining to spend an act at an unwidened origin, the destructive
+ * deny list refusing to send a session-ending GET, a method the chokepoint cannot issue — no browser refuses
+ * anything, so there is no fact about the origin to relay and the flow PARKS instead of being told the server
+ * was unreachable.
+ *
+ * AND THE PARK ALONE IS NOT THE WHOLE ANSWER, WHICH IS WHAT THIS BUILDS. A page that writes
+ * `fetch(u).then(ok).catch(err)` has TWO real arms, and a declined request is precisely an outcome nothing
+ * observed: this zone refused to ask, so whether the server would have answered 200, 500 or nothing at all is
+ * unconstrained. CLAUDE.md §Solver-half says what that means — where the domain permits both outcomes BOTH
+ * arms run, which is how gated code is reached — and a park explores NEITHER, because it suspends in front of
+ * both. So the refusal forks:
+ *   - THE WAITING ARM is the sibling assembled below. It keeps the unanswered record and stays parked at the
+ *     line that asked, which is §@S's search-not-yet-solved, and it fires the day the origin is widened. It is
+ *     the SUCCESS ARM and it is deliberately UN-FABRICATED: it holds no reply, no status, no bytes and no
+ *     example, because a value known only to satisfy a gate is a shape and never a pick, and a synthesized
+ *     200 with an invented body is the plausible-datum defect performed one network hop out.
+ *   - THE FAILURE ARM is this flow, which takes §5.6's network error (JS_NULL, the same value the delivery
+ *     machine already rejects with) and runs the page's `catch`. That is a REAL BEHAVIOUR CHANGE and it is
+ *     the point rather than a cost to be softened: error-handling code that has never run in this engine now
+ *     runs, and §What-the-tool-produces is about reaching what the bundle CAN do but didn't — a `.catch` is
+ *     where a bundle keeps its fallback endpoints, its retry hosts and its degraded-mode configuration.
+ *
+ * AND THE FAILURE ARM'S PATH IS FORCED, MARKED HERE AND NOT LEFT TO BE DERIVED. Everything that arm goes on to
+ * build rests on an outcome this engine SUPPLIED and nobody observed, so a request it composes is evidence
+ * about what a server says to a request no client makes — which is PROV_FORCED's own definition and the
+ * weakest grade this vocabulary has. flow_mark_forced_arm is called BEFORE the arm can run one opcode and in
+ * the same operation as the fork, so there is no window in which it records anything as DERIVED: the wrong
+ * grade is impossible rather than discouraged, exactly as endpoint.c's `same_identity` makes it impossible for
+ * a forced sighting to merge into a derived record. The WAITING arm inherits the parent's mark as it stands
+ * BEFORE this line (flow_fork_inherit runs inside the assembly), which is right — it has taken no such arm.
+ *
+ * WHY HERE, for flow_answer_fork's reasons exactly and with nothing added: this runs from flow_step with `f`
+ * SWITCHED IN, which is the only moment cow_delta_fork, dom_cow_fork and decide_fork_same_path all describe
+ * the same flow; and BEFORE the flow resumes its frame, because the frame is what the arm is a clone OF.
+ * ONE ARM PER STEP, like every other branch of flow_step — the scheduler re-ranks between each.
+ *
+ * ONLY A `fetch()` PARK HAS A FAILURE ARM TO BUILD TODAY, and the others crash rather than pick the nearest
+ * wrong answer. A network error crosses as JS_NULL and FLOW_PENDING_RESOLVE is the kind whose delivery already
+ * knows how to reject with one. The three PROGRAM kinds do not: HTML §4.12.1.1 "Processing model"'s failure is
+ * an `error` event fired at the element with the row running nothing, and answering one with JS_NULL would
+ * reach reply_source_text with no response to read bytes out of. */
+static int flow_decline_fork(JSContext *ctx, Flow *f) {
+    int n = pending_count(f->pending), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(f->pending, i), se, pe, reason;
+        JSValue *clone;
+        void *parked;
+        int in_program, in_job, kind;
+        Flow *sib;
+
+        if (!pending_entry_declined(e) || pending_get_int(e, PEND_DECLINE_TAKEN)) {
+            JS_FreeValue(ctx, e);
+            continue;
+        }
+        DCHECK(flow_running() == f,
+               "a decline fork was taken while another flow was switched in — the arm would clone that flow's "
+               "delta and DOM head and call the result the refused flow's");
+        /* A REFUSAL AND A REPLY ARE THE TWO THINGS THAT CANNOT BOTH BE TRUE OF ONE REQUEST, asserted where the
+           pair is read rather than where each half is written. `haveValue` says the server answered; `declined`
+           says nobody asked it. A record carrying both would send this flow down its failure path over a reply
+           it also holds, and there is no reading of that a page could observe consistently. */
+        DCHECK(!pending_get_int(e, PEND_HAVE_VALUE),
+               "a request carries BOTH a reply and a refusal — engine_decline writes the refusal only onto "
+               "records the host still owes, so a record holding an answer as well is a decline that raced a "
+               "delivery and the flow would run its failure path over a body it already has");
+        kind = (int)pending_get_int(e, PEND_KIND);
+        reason = pending_get(e, PEND_DECLINED);
+        if (kind != FLOW_PENDING_RESOLVE) {
+            const char *why = JS_ToCString(ctx, reason);
+            DFAILF("a park owing a PROGRAM was DECLINED by the trusted zone and this fork has no failure arm "
+                   "for it. Fetch §5.6 \"Fetch methods\"' network error crosses as JS_NULL and the fetch "
+                   "delivery rejects with it; a `<script src>`, an injected script and a module load are owed "
+                   "BYTES, and HTML §4.12.1.1 \"Processing model\" makes their failure an `error` event fired "
+                   "at the element with the row running NOTHING — a different arm, in the delivery, which does "
+                   "not exist. Answering one with JS_NULL instead would reach reply_source_text with no "
+                   "response to read a body out of. BUILD §4.12.1.1's error arm; until then this crashes "
+                   "rather than picking the nearest wrong answer. kind=%d refusal=%s", kind,
+                   why ? why : "(unreadable)");
+            if (why) JS_FreeCString(ctx, why);
+            /* AND IN RELEASE, WHERE THAT ABORT IS COMPILED OUT, THE PARK IS WHAT IT ALREADY WAS. Falling
+               through would answer a program park with JS_NULL and reach reply_source_text with no response
+               to read bytes out of; leaving the record untaken leaves the flow parked at the line that asked,
+               which is the state this seam has always had for a refused script load. Nothing is invented and
+               nothing is lost — the arm is missing, not the wait. */
+            JS_FreeValue(ctx, reason);
+            JS_FreeValue(ctx, e);
+            continue;
+        }
+        /* BOTH HOMES OF THE SUSPENSION ARE ASKED, AND NEITHER IS REQUIRED — which is the one place this fork
+           differs from flow_answer_fork's and is not a weakening of it. That one forks a flow suspended AT a
+           synchronous cross-instance read, so it always holds a call site: a frame if it was inside a program,
+           a parked continuation if it was inside a job. A flow waiting on a REPLY usually holds neither. A
+           `fetch()` does not suspend its caller — it parks a register entry, hands back a pending promise, and
+           the program runs on to its end — so the ordinary shape here is a flow BETWEEN tasks, whose
+           continuation is the promise reaction the delivery will enqueue rather than an activation anybody is
+           standing in. engine_sibling_assemble takes exactly that (`clone != NULL || parent->frame == NULL`),
+           and a frameless arm resumes its scheduler step where its parent was.
+           WHAT IS STILL REFUSED IS BOTH AT ONCE, because then the arm would carry one live suspension and
+           silently abandon the other. */
+        in_program = f->frame != NULL;
+        in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
+        DCHECK(f->parked == NULL,
+               "a flow holds parked continuations on its own slot while it is SWITCHED IN — the switch hands "
+               "the whole set to the runtime and clears the slot, so a set here belongs to a switch-out that "
+               "did not happen and the arm below would fork the runtime's set instead of this flow's");
+        DCHECK(!(in_program && in_job),
+               "a flow is suspended in BOTH homes at once — it holds a program frame AND a parked "
+               "continuation, so the arm below would carry one of two live suspensions and silently abandon "
+               "the other. Clone both onto the arm, in the order flow_step resumes them");
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+        CHECK(!in_program || clone != NULL,
+              "engine: a flow parked on a DECLINED request could not be cloned — the arm that keeps waiting "
+              "for the real answer is the only thing that makes a per-origin widening mean anything");
+        CHECK(!in_job || parked != NULL,
+              "engine: a flow parked on a DECLINED request inside a job could not have its continuation "
+              "cloned — the waiting arm would have no activation to resume with");
+        sib = engine_sibling_assemble(ctx, f, clone,
+                                      decide_fork_same_path("(the trusted zone declined this request — no "
+                                                            "predicate was asked)"),
+                                      concolic_pins_suspend());
+        DCHECK(sib->parked == NULL,
+               "a freshly assembled arm already holds parked continuations — the assembly builds a flow that "
+               "has never run, so a set on it came from somewhere that is not this fork");
+        sib->parked = parked;
+        /* THE WAITING ARM'S OWN COPY OF THE RECORD, AND THE MARK THAT SAYS IT HAS HAD ITS FORK. The record is
+           SHARED by pending_fork, so both sides take a private copy: without that, the first flow to step
+           would consume a decline that belongs to every timeline parked on it, and every other one would be
+           denied the arm it is owed. The copy leaves the frontier's outstanding set, which is exactly right —
+           no reply is coming for it — and it keeps the reason, which is the account a reader gets of a park
+           that will not drain. */
+        se = pending_unshare(sib->pending, i);
+        pending_set_int(se, PEND_DECLINE_TAKEN, 1);
+        DCHECK(!pending_get_int(se, PEND_HAVE_VALUE) && pending_entry_declined(se),
+               "the waiting arm of a decline came out of the unshare holding an answer, or holding no refusal "
+               "— it is the arm that goes on waiting for the real one, so an answered copy would resume it "
+               "over a reply nobody sent and an unrefused copy would be re-listed to the host and re-declined");
+        JS_FreeValue(ctx, se);
+        /* …AND THIS FLOW'S, ANSWERED WITH §5.6's NETWORK ERROR. JS_NULL is what core/fetch/fetch.h documents a
+           network error as and what the delivery machine already rejects with, so the page's `catch` runs
+           through its own ordinary path — there is no second delivery here and no reply record invented to
+           carry it. */
+        pe = pending_unshare(f->pending, i);
+        pending_set_int(pe, PEND_DECLINE_TAKEN, 1);
+        pending_set(pe, PEND_VALUE, JS_NULL);
+        pending_set_int(pe, PEND_HAVE_VALUE, 1);
+        JS_FreeValue(ctx, pe);
+        /* AND WHAT THIS PATH IS EVIDENCE OF, FROM THIS INSTANT. Everything below this line stands on an
+           outcome nothing observed, so every request it builds declares itself FORCED (pending_prov_compose
+           reads the mark at the park) and every endpoint it records is a FORCED sighting that endpoint.c's
+           identity keeps out of the derived pool. Marked AFTER the assembly, so the waiting arm — which has
+           taken no such arm — inherits the path as it stood before the refusal. */
+        flow_mark_forced_arm();
+        DCHECK(flow_path_forced(f),
+               "the failure arm of a decline is standing on an unobserved outcome and its path does not say "
+               "so — every request it goes on to build would declare itself DERIVED, which publishes a value "
+               "reached only because this engine supplied an answer under the claim that the app's own code "
+               "computed it");
+        JS_FreeValue(ctx, reason);
+        JS_FreeValue(ctx, e);
         return 1;
     }
     return 0;
@@ -6059,6 +6321,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
            is switched in, so its delta, its DOM head and its decision state are the ones an arm inherits. */
         g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
         if (flow_answer_fork(ctx, f)) return 0;
+        /* AND ONE ARM PER DECLINED REQUEST, BESIDE IT AND FOR THE SAME REASON — a fork over a VALUE that
+           arrived rather than over a predicate, and the same three things (the frame this flow is SUSPENDED
+           in, its delta, its DOM head) are what the arm is made of, so it is taken at the same point and
+           before anything else this flow could do. What differs is only what arrived: there, a peer's second
+           true answer; here, the trusted zone stating it will not ask at all — which is TWO feasible outcomes
+           and no observation of either, so both arms run (flow_decline_fork). */
+        g_step_unit = STEP_UNIT_FORK_DECLINED_REQ;
+        if (flow_decline_fork(ctx, f)) return 0;
         /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
            contract: a forced preempt must be transparent to observable ordering, so the flow resumes BEFORE any
            job it has queued. Yielding after one resume keeps the scheduler in charge of fairness; the park (if

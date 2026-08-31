@@ -1666,6 +1666,26 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
     }
 }
 
+/* THE ZONE REFUSING TO ASK, WHICH IS AN ANSWER AND IS NOT A REPLY — see solver/engine.h's engine_decline for
+   the whole of the rule, and extension/lib/safe-fetch.js for the axis it is graded on.
+   THE PAIRING ASSERT IS engine_decline's OWN and is not restated here, which is the difference between this
+   entry and qjs_provide one function up: that one owns the paged-sale credit because it holds the reply value
+   across the call, and this one carries nothing the engine cannot see. Restating the test would be two answers
+   to one question about one refusal, and the second would be the one nobody kept in step. */
+QJS_EXPORT void qjs_decline(const char *method, const char *url, const char *reason)
+{
+    DCHECK(g_begun, "a request was refused to an engine that never ran");
+    DCHECK(method != NULL && url != NULL,
+           "a refusal arrived naming no request — qjs_pending answers "
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and a refusal answers the same PAIR "
+           "a reply does, because it answers the same question; one that names neither half refuses nothing");
+    DCHECK(reason != NULL && *reason != '\0',
+           "a refusal arrived with no REASON — the flow it refuses will not drain this session, so the reason "
+           "is the only account a reader ever gets of it, and it is what says whether a per-origin widening "
+           "would make this request fire");
+    engine_decline(g_ctx, method, url, reason);
+}
+
 /* WHAT ONLY THE TRUSTED ZONE CAN ANSWER, as `id<TAB>op` lines. A cross-document operation — creating a
    navigable, reading through a WindowProxy — is answered by the instance holding that document, and only the
    offscreen knows which instance that is. The asking flow is SUSPENDED until qjs_host_answer lands, so this

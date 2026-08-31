@@ -1001,6 +1001,33 @@ void engine_pending_split(char *line, const char **method, const char **destinat
    and it is the CALLER that tells those apart because the caller owns the credit. */
 int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value);
 
+/* REFUSE ONE REQUEST — the same `(method, url)` pair, because a refusal is an answer to the same question, and
+ * it returns how many records it newly refused (0 with nothing matched is the host's pairing being off, or a
+ * sale, and this function tells those two apart itself).
+ *
+ * IT IS NOT A NETWORK ERROR AND MUST NEVER BE SPELLED AS ONE. A refusal a REAL BROWSER also makes — a blocked
+ * scheme (Fetch §4.3 "Scheme fetch" ends its switch "Return a network error"), a §4.10 "CORS check" failure,
+ * a CORB-blocked body — comes through engine_provide as Fetch §5.6 "Fetch methods"' network error, which is
+ * the FIDELITY. This entry is for the other kind: a refusal only THIS TOOL makes, where no browser refuses
+ * anything and there is therefore no fact about the origin to relay. Handing the flow §5.6's error for one of
+ * those tells it the server was unreachable for a request nobody sent, and every branch under the page's
+ * `catch` is then explored on an observation that does not exist — and it destroys the property that makes
+ * the per-origin widening mean anything, since a flow that has already run its failure path cannot fire the
+ * day the origin is widened. The trusted zone grades its own refusal on exactly that axis and states which
+ * one it is (extension/lib/safe-fetch.js); a host that re-derived the grade could only ever answer for the
+ * rule its re-derivation happened to know about.
+ *
+ * WHAT IT COSTS AND WHAT PAYS FOR IT. A park alone explores NEITHER arm of `fetch(u).then(ok).catch(err)`,
+ * and a declined request is precisely an unconstrained outcome — so this refusal makes the flow FORK: one arm
+ * goes on waiting (the success arm, holding no invented reply), the other takes §5.6's network error and runs
+ * the page's error path, with its own path marked FORCED so every value it learns carries the weakest grade
+ * this vocabulary has. flow_decline_fork builds that pair; this only records the fact, because an arm minted
+ * between scheduler steps would clone whichever flow the scheduler last ran.
+ *
+ * `reason` IS THE ZONE'S OWN WORDS and is copied. It is the only account anybody gets of a request this tool
+ * chose not to make, and it is what tells a reader whether a widening would change the answer. */
+int engine_decline(JSContext *ctx, const char *method, const char *url, const char *reason);
+
 /* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a synchronously-driven generator body forked
    the flow, and clone_deep_flow built a per-flow gen_data clone. Stash the swap; engine_fork_finalize drains it
    onto the new sibling's COW delta (so the shared generator object resolves per-flow). */

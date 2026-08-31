@@ -162,6 +162,46 @@ int pending_prov_compose(int kind, int path_forced);
  * through it costs nothing and keeps the record made of JS values. JS_UNDEFINED for a park no element caused.
  * SHARE, because it belongs to the record for the reason `doc` does: an arm forked while the load is in flight
  * is loading the same script for the same element. */
+/* `declined` IS THE TRUSTED ZONE REFUSING TO ASK, WHICH IS AN ANSWER AND IS NOT A REPLY — the one thing this
+ * record could not say and the reason a whole class of flow had nowhere to go.
+ *
+ * A refusal a REAL BROWSER also makes (a blocked scheme, a CORS failure, a CORB-blocked body) is Fetch §5.6
+ * "Fetch methods"' network error and arrives here as one: `value` is JS_NULL, `haveValue` is set, and the flow
+ * resumes down its failure path having been told the truth. A refusal only THIS TOOL makes — the firing policy
+ * declining to spend an act at an unwidened origin, the destructive deny list refusing to send a session-ending
+ * GET, a method the chokepoint cannot issue — has no browser behind it, so there is no reply to write and
+ * `haveValue` stays clear: the flow stays PARKED, which is what §@S requires of a search not yet solved.
+ * IT IS A SEPARATE FIELD FROM THE ANSWER BECAUSE IT IS A DIFFERENT FACT AND THE PAIR IS ASSERTED. `haveValue`
+ * says a reply exists; this says the question will not be asked. A record carrying both would be a flow told
+ * the server answered AND that nobody asked it, and the two send it in opposite directions.
+ * SHARE, for `value`'s reason exactly: the refusal is a fact about the REQUEST — the address, its method, its
+ * provenance and this session's per-origin policy — so it is true of every arm parked on it, including arms
+ * forked before the refusal arrived. It is written ONCE, by engine_decline, and the host that writes it is the
+ * only party that knows the rule that fired (extension/lib/safe-fetch.js grades its own refusal).
+ * ITS REASON IS THE ZONE'S OWN WORDS AND IS THE ONLY ACCOUNT ANYBODY GETS of a request nobody made, which is
+ * why it is the field's VALUE rather than a boolean beside a reason kept elsewhere: JS_NULL is "this zone has
+ * refused nothing", and a string is the refusal with the sentence that explains it. */
+/* `declineTaken` IS WHETHER *THIS REGISTER'S* NAMING OF THAT RECORD HAS ALREADY FORKED ITS FAILURE ARM, and
+ * without it the decline is a SPIN rather than a fork.
+ *
+ * A declined request has TWO feasible outcomes and this engine must explore both (CLAUDE.md §Solver-half:
+ * where the domain permits both, BOTH arms run). One arm goes on WAITING — it is the success arm, and it is
+ * un-fabricated: it holds no reply, invents no status and no bytes, and it fires the day the origin is widened.
+ * The other takes §5.6's network error and runs the page's `.catch`, which is where bundles keep their fallback
+ * endpoints, their retry hosts and their degraded-mode configuration. flow_decline_fork builds that pair, and
+ * having built it once for a register it must never build it again: a second arm would be a byte-identical
+ * timeline of the same flow, which is duplication and not exploration.
+ * IT IS PER REGISTER AND NOT PER RECORD, WHICH IS WHY THE FORK UNSHARES BOTH SIDES. pending_fork SHARES a
+ * record between an arm and its parent, so N flows can be parked on ONE record — and each of them is a
+ * DIFFERENT timeline that diverged after the park, so each owes its own failure arm. A mark written on the
+ * shared record would give the first flow to step its arm and silently deny every other one, which is
+ * §scheduler's razor exactly ("drops, starves, skips … ANY flow"). So each side of the fork takes a private
+ * copy of the record and marks it, the shared original loses those two namings, and when the last register has
+ * taken its decline the record leaves the frontier's outstanding set on its own — which is also what stops the
+ * host being shown, and re-declining, a request it has already refused.
+ * SHARE, for `answerFixed`'s reason exactly: an arm forked AFTER the decline was taken is that timeline
+ * continued, and its own failure path is explored by the failure arm's own branch-siblings rather than by a
+ * second arm of the same decline. */
 /* AND THE FOURTH COLUMN IS THE FIELD'S "NOTHING YET", WHICH IS WHY THIS TABLE IS FOUR COLUMNS AND NOT THREE.
  * Three of the four things a field obliges were already derived from this list — the id, the interned name, and
  * what the fork does with it — and the fourth, its value at the push, was a SEPARATE hand-written sequence of
@@ -208,7 +248,10 @@ int pending_prov_compose(int kind, int path_forced);
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* 0 is "this park's reply is not a program", which is every kind but the injected <script src> */ \
     X(DOC,        "doc",       PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
-    X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)
+    X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)                              \
+    /* the zone has refused nothing about this request — see the two fields below */   \
+    X(DECLINED,   "declined",  PEND_SHARE,  JS_NULL)                                   \
+    X(DECLINE_TAKEN, "declineTaken", PEND_SHARE, JS_FALSE)
 
 enum {
 #define PEND_ENUM(id, name, copy, dflt) PEND_##id,
@@ -306,6 +349,16 @@ int  pending_outstanding(JSValueConst reg);
    dynamic `import()` does not, so one number over the whole register cannot answer it. */
 int  pending_outstanding_kind(JSValueConst reg, int kind);
 
+/* HAS THE TRUSTED ZONE REFUSED THIS ENTRY — the `declined` field read through its own vocabulary, so no caller
+   ever spells the JS_NULL-versus-string test for itself, and so the field's two legal shapes are asserted in
+   ONE place rather than at each reader.
+   IT IS ASKED OF AN ENTRY AND NOT OF A REGISTER, which is a statement about who needs it. `pending_outstanding`
+   stays TRUE for a refused entry and must: the flow is parked at the line that asked, so a predicate answering
+   "not outstanding" would let it read as FINISHED and tear its timeline down. What changes is only what the
+   HOST can still be asked, and every one of those readers — the join, the reply debt, the fork — is standing at
+   one entry when it asks. */
+int  pending_entry_declined(JSValueConst e);
+
 /* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptI -1, req 0).
    Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller.
    `path_forced` IS THE PUSHING FLOW'S OWN (flow_path_forced), and it is a PARAMETER rather than a lookup for
@@ -365,7 +418,15 @@ JSValue pending_fork(JSValueConst reg);
    owned. There is exactly one field that must DIFFER between two arms — the unanswered synchronous request's
    rendezvous id, because its answer is computed under the ASKING FLOW'S WORLD — and a shared record cannot
    hold two of them, so it stops being shared first. The copy goes through PENDING_FIELDS and asserts the
-   source's own-property count against it. */
+   source's own-property count against it.
+   AND THE SECOND KIND OF RECORD THAT MUST STOP BEING SHARED IS A DECLINED ONE, for the same sentence about a
+   different field. The rule this admits under is not "which kind" but WHAT THE HOST CAN STILL DO: the copy
+   leaves the frontier's outstanding set while the original stays in it, so it is sound exactly when no reply
+   is coming for the original — which is what a HOSTREQ record is (it is keyed by request id and was never in
+   that set) and what a DECLINED record is (this zone has said it will not ask). A record of any other kind
+   copied here would have the host answer the original while the arm holding the copy waited for the rest of
+   the session with nothing anywhere to say so; a declined one waits for the rest of the session too, and its
+   `declined` reason is the something that says so. */
 JSValue pending_unshare(JSValueConst reg, int i);
 
 /* THE CENSUS ROW (solver/cold.h): what this register would cost a pager. Now quickjs's bytes rather than the

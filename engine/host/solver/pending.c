@@ -155,6 +155,38 @@ static int pend_owed(JSValueConst e)
     return !pending_get_int(e, PEND_HAVE_VALUE);
 }
 
+/* …AND THE HALF OF IT THE HOST CAN STILL ACT ON, WHICH IS A DIFFERENT QUESTION AND USED TO BE THE SAME ONE.
+   The paragraph above is right that "owed" has one meaning; what it did not have was a second thing to ask,
+   and a decline is that second thing. An entry the trusted zone has REFUSED is still unanswered — its flow is
+   parked at the line that asked, so `pending_outstanding` above must go on saying so or the flow reads as
+   FINISHED and its whole timeline is torn down — and the host is nonetheless owed NOTHING for it: no reply is
+   coming, the joins do not list it, and a debt credited for it could only ever be spent excusing some LATER
+   reply the host genuinely mispaired (pending.h says exactly that at pending_owed_replies).
+   So the two diverge here and nowhere else: "is this flow still waiting" is `pend_owed`, and "can the host
+   still be asked" is this. */
+static int pend_host_owed(JSValueConst e)
+{
+    return pend_owed(e) && !pending_entry_declined(e);
+}
+
+int pending_entry_declined(JSValueConst e)
+{
+    JSValue d = pending_get(e, PEND_DECLINED);
+    int hit;
+
+    /* THE REASON OR NOTHING, AND NOTHING IS A POSITIVE STATEMENT. JS_NULL is "this zone has refused nothing
+       about this request"; a STRING is the refusal, and it carries the sentence that explains it. A third
+       shape would be a caller writing this field from outside engine_decline, so it crashes rather than
+       being read as either answer. */
+    DCHECK(JS_IsNull(d) || JS_IsString(d),
+           "a pending record's refusal is neither the JS_NULL that means `nothing has been refused` nor the "
+           "reason string a refusal is — engine_decline is the field's one writer and it writes the trusted "
+           "zone's own words, so a third shape is a write from somewhere that does not hold a refusal");
+    hit = JS_IsString(d);
+    JS_FreeValue(pend_ctx(), d);
+    return hit;
+}
+
 int pending_blocked(JSValueConst reg)
 {
     int n = pend_len(reg), i;
@@ -215,7 +247,11 @@ int pending_owed_replies(JSValueConst reg)
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
         int kind = (int)pending_get_int(e, PEND_KIND);
-        if (kind != FLOW_PENDING_HOSTREQ && pend_owed(e)) {
+        /* `pend_host_owed` AND NOT `pend_owed`: A DECLINED PARK IS A REPLY THAT CANNOT ARRIVE. The zone has
+           said it will not ask, so crediting a debt for it would hand the surplus to the next reply the host
+           genuinely mispaired — which is the exact defect the paragraph below and pending.h both describe,
+           reached through the one entry kind for which no reply exists at all. */
+        if (kind != FLOW_PENDING_HOSTREQ && pend_host_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
                lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>URL` and engine_provide delivers
                against the pair, so an owed
@@ -710,11 +746,19 @@ JSValue pending_unshare(JSValueConst reg, int i)
        copy free of it. A record of any OTHER kind reaching here would be a second, untracked twin of a request
        the set still names through the original: the host would answer the original, and the arm holding the
        copy would wait for the rest of the session with nothing anywhere to say so. */
-    DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ,
-           "a pending record that is not a synchronous host request was unshared — the three callers of this "
-           "are the rendezvous id and the peer's further answers, both of which are HOSTREQ, and a fetch record "
-           "copied here would leave the copy outside the frontier's outstanding set while the original still "
-           "answers for the address");
+    /* …AND THE SECOND IS A RECORD THE ZONE HAS REFUSED, which is the SAME rule and not an exception to it. What
+       makes an unshare unsound is a reply that can still arrive for the original: the copy is outside the
+       frontier's outstanding set, so the host answers the original and the arm holding the copy waits for the
+       rest of the session with nothing to say so. A HOSTREQ is admitted because it was never in that set; a
+       DECLINED record is admitted because no reply is coming for it at all — this zone has stated it will not
+       ask — and the wait it leaves the arm in is the PARK §@S requires, with the refusal's own reason on the
+       record as the something that says so. The failure arm forked beside it is answered in the same operation
+       and leaves the set by being answered. */
+    DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ || pending_entry_declined(src),
+           "a pending record that is neither a synchronous host request nor a DECLINED one was unshared — a "
+           "fetch record copied here would leave the copy outside the frontier's outstanding set while the "
+           "original still answers for the address, so the host would answer the original and the arm holding "
+           "the copy would wait for the rest of the session with nothing anywhere to say so");
     dst = pend_entry_copy(src);
     /* THIS REGISTER STOPS NAMING THE ORIGINAL, so the naming goes back exactly as it does at a remove — the
        count is over registers and this slot has just changed which record it holds. A no-op for the kind the

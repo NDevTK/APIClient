@@ -225,6 +225,20 @@ const ABSENT = '-';
    decision is the stale-`DFAIL` failure with a process boundary in the middle. */
 function decline(reason) { return `decline\t${b64(reason)}`; }
 
+/* …AND THE SAME WORDS ADDRESSED TO THE PARK THEY REFUSE, WHICH IS A DIFFERENT RECORD BECAUSE IT IS A DIFFERENT
+   ACT. The one above owes nothing: it explains a NOTICE this zone would not provision, or states that nothing
+   more is coming for an instance. This one ANSWERS one of the requests `qjs_pending` listed, and it is keyed on
+   the same `(method, url)` pair a `provide` is because it answers the same question — so the engine can act on
+   it: the record carries the refusal, the flow parked on it keeps its snapshot, and the engine forks the arm
+   that runs the page's failure path (solver/engine.h's engine_decline).
+   THE PAIR IS THE JOIN'S OWN, WHICH IS WHY IT IS `url` AND NEVER `abs`. The engine parked on the address it
+   wrote on the pending line; `abs` is this zone resolving that address against the document in order to apply
+   a policy to it, and a refusal that named the resolved form would refuse a request no register holds.
+   THE REASON IS BASE64 AND THE PAIR IS NOT, exactly as `provide` writes them: a method is a token and a URL has
+   had every tab and newline removed by URL Standard §4.4 "URL parsing", while a reason is a whole English
+   sentence this zone composed and the channel is line-oriented. */
+function declineRequest(method, url, reason) { return `decline-request\t${method}\t${url}\t${b64(reason)}`; }
+
 /* THE FIRING DECISION IS NOT HERE ANY MORE, AND ITS ABSENCE IS THE DIFF RATHER THAN A DELETION.
  * Three constants stood in this space: `PROVENANCE_DECLINE`, a per-class refusal for every DERIVED and FORCED
  * park; `NAVIGATION_WIDENING`, a Set this file held; and `FORCED_NAVIGATION`, the sentence it refused a
@@ -619,7 +633,13 @@ async function main() {
          `bridge.js` held the same test — the same question in two hosts, answered differently: this one
          declined and that one returned §5.6's network error for a request nobody sent. `safeFetchMethodRefusal`
          is that answer given once, in the same refusal vocabulary the reply record carries. */
-      e.ready.push(decline(`${method} ${abs} — ${methodRefusal.reason}. The chokepoint is GET-only by ` +
+      /* ADDRESSED TO THE PARK, because a flow IS waiting on this one. It used to be the unaddressed record,
+         which said the right sentence to a reader and nothing at all to the engine — so the wait was spent in
+         the only way a wait can be spent badly: not at all. The flow keeps its park AND gets the arm that runs
+         its failure path, which is the whole of what §Solver-half's both-arms means for an outcome nobody
+         observed. */
+      e.ready.push(declineRequest(method, url,
+                          `${method} ${abs} — ${methodRefusal.reason}. The chokepoint is GET-only by ` +
                            'ABSENCE (SECURITY.md §Network), so this address can only be DERIVED and reported, ' +
                            'never issued; answering it with a GET\'s body would be a wrong answer rather than ' +
                            'a missing one'));
@@ -657,14 +677,16 @@ async function main() {
     if (raw.refusal && raw.refusal.kind === 'decline') {
       const refusal = ZONE.safeFetchFiringRefusal(provenance, abs);
       if (!refusal) {
-        e.ready.push(decline(`${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
+        e.ready.push(declineRequest(method, url,
+                            `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
                              'request: no browser refuses it, so there is nothing to hand the flow back and a ' +
                              'network error would tell it the server was unreachable. The flow stays PARKED, ' +
                              'and the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says ' +
                              'is not a gap in the report but IS the report'));
         return;
       }
-      e.ready.push(decline(`${method} ${abs} — ${raw.refusal.reason}. A ${refusal.toUpperCase()} park at an ` +
+      e.ready.push(declineRequest(method, url,
+                            `${method} ${abs} — ${raw.refusal.reason}. A ${refusal.toUpperCase()} park at an ` +
                            'origin nobody has widened for exploration: pass `--explore <origin>` to widen it, ' +
                            'and note what that obliges — §@H makes the reply to a forced request evidence ' +
                            'about what a server says to a request no client makes, so its values are carried ' +

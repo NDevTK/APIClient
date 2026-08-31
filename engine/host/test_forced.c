@@ -13364,9 +13364,40 @@ static int abi_pay(void)
             DCHECK(rn == strlen(reason), "a refusal reason carries a NUL");
             abi_declined(reason);
             free(reason);
+        } else if (!strcmp(verb, "decline-request")) {
+            /* A REFUSAL ADDRESSED TO A PARKED REQUEST, WHICH IS A DIFFERENT RECORD FROM THE ONE ABOVE BECAUSE
+               IT IS A DIFFERENT ACT. `decline` states a reason and owes nothing: a notice the zone would not
+               provision, or the session-ending sentence that nothing more is coming. This one ANSWERS one of
+               the requests `qjs_pending` listed — the same (method, url) pair a `provide` answers, because it
+               answers the same question — and the engine acts on it: the record carries the refusal, the flow
+               parked on it keeps its snapshot, and one arm is forked to run the page's failure path.
+               THE ARITY DOES NOT DISTINGUISH THEM AND MUST NOT BE ASKED TO. A reader that told a one-field
+               record from a three-field one by counting tabs would be reading the grammar out of the data,
+               which is the skew `abi_take` refuses at every other field of this channel. Two acts, two verbs.
+               IT COUNTS AS A PAYMENT, for the `world-gone` arm's reason exactly: `paid == 0` at a stall is
+               this host reading the zone as declining EVERYTHING, and a zone that refused a parked request has
+               acted on this instance's registers — the flow it refused becomes runnable again and forks. Left
+               uncounted, the very first refusal would end the session at `abi_stalled` before the arm it
+               creates had ever been stepped, so the fork would exist and never once run. */
+            const char *method = abi_take(&p, "refused request method");
+            const char *url = abi_take(&p, "refused request URL");
+            char *reason;
+            size_t rn = 0;
+
+            reason = abi_bytes(abi_take(&p, "refusal reason"), &rn, "refusal reason");
+            CHECKF(p == NULL, "a refused request carries a field after its reason. trailing=[%s]", p ? p : "");
+            DCHECK(rn == strlen(reason), "a refusal reason carries a NUL");
+            CHECK(*method != '\0' && *url != '\0',
+                  "a refused request named no method or no address — the refusal is keyed on the PAIR exactly "
+                  "as a reply is, so a half-named one refuses whichever request the engine's pairing assert "
+                  "happens to fall on and leaves the flow that IS parked waiting for the session");
+            qjs_decline(method, url, reason);
+            free(reason);
+            paid++;
         } else {
             CHECKF(0, "a record arrived on this host's channel under the verb `%s`, which it does not carry — "
                       "the payment round takes `provide`, `answer`, `route`, `perform`, `remote`, "
+                      "`decline-request`, "
                       "`world-gone`, `decline` and `go`, and a verb this host does not know is a zone "
                       "expecting a capability it has not", verb);
         }

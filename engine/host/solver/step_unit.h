@@ -51,6 +51,7 @@
     X(NONE,               "none")                                                 \
     /* the arms that PERFORM work — a step here is progress by definition */      \
     X(FORK_PEER_ANSWER,   "fork-over-a-peer-answer")                              \
+    X(FORK_DECLINED_REQ,  "fork-over-a-declined-request")                         \
     X(RESUME_PARKED,      "resume-parked-continuation")                           \
     X(LINK_CONNECTED,     "link-connected-time")                                  \
     X(ROUTED_DELIVERY,    "routed-delivery")                                      \

@@ -2721,7 +2721,26 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   if (msg && typeof msg.sourceUrl === "string" && /[?&]__forcepark=1\b/.test(msg.sourceUrl) && !(prior && prior.recipes)) {
     _forceparkSteps = 2;   // park after boot + the first flow burst: flows have RUN + SUSPENDED (real decvecs) but not yet drained
   }
-  const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
+  /* THE CHOKEPOINT AND THE DOCUMENT'S ADDRESS ARE A LOAD ORDER, NOT A NETWORK CONDITION — asked ONCE, here,
+     and as a crash rather than as an answer. This was `const canFetch = …`, tested at two seams, and each of
+     them answered it with Fetch §5.6 "Fetch methods"' network error: `fetched` returned `null` and the XHR
+     seam returned a status-0 record. Neither is true of anything. `safeFetch` not being a function means this
+     realm loaded `safe-fetch.js` late or not at all, and a document with no `sourceUrl` is a park whose
+     addresses cannot be resolved at all — both are THIS ZONE assembled wrong, and telling the page's code
+     that its server could not be reached converts a wiring defect into a fact about somebody's origin, which
+     the page then explores a whole failure path under. It is also the shape that hides worst: every fetch of
+     every document fails identically and the run reports a page that learned nothing rather than a host that
+     was never ready. */
+  DCHECK(typeof self.safeFetch === "function",
+         "an engine is being driven in a realm where `safeFetch` is not a function — SECURITY.md puts every " +
+         "byte of network through that chokepoint, so this zone cannot answer a single park, and the two " +
+         "seams that used to report it as a network error told every page's code that its server was " +
+         "unreachable. It is a load order: `extension/lib/safe-fetch.js` has not been loaded into this realm");
+  DCHECK(msg && typeof msg.sourceUrl === "string" && msg.sourceUrl !== "",
+         "an engine is being driven for a document with no source URL — every park's address is resolved " +
+         "against it (`new URL(u, msg.sourceUrl)`), so without one nothing this frontier asks for can be " +
+         "named, and answering that with a network error reports an unreachable server for a request this " +
+         "zone could not even address");
   /* THE REPLY RECORD THE ENGINE PARSES, which is the ONE shape every host of this engine delivers —
      `{status, statusText, headers: [[name, value], …], urlList, computedType}` PLUS the body's BYTES beside
      it, the same
@@ -2781,7 +2800,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
        once, in the refusal vocabulary the chokepoint's own reply record carries. */
     const _mRefusal = self.safeFetchMethodRefusal(method);
     if (_mRefusal) return { refusal: _mRefusal };
-    if (!canFetch || hasHole(u)) return null;
+    /* `canFetch` IS GONE FROM THIS TEST AND IS NOW A CRASH AT THE TOP OF THIS FUNCTION'S SCOPE — it was this
+       zone's own load order (the chokepoint absent, the document with no address) reported to the page as a
+       network error, which is a fact about somebody's origin that nothing observed.
+       WHAT IS LEFT IS `hasHole`, AND IT IS STILL A FABRICATED NETWORK ERROR. It is not a refusal of an ACT at
+       all: it is a park the ENGINE emitted carrying an address it never determined, so there is no request to
+       make and nothing for a chokepoint to grade — safe-fetch.js knows nothing about concolic holes and
+       relaying it as a `decline` would be a refusal nobody made. It belongs with §@H's shape rules, where an
+       address the run did not compute is a SHAPE and the honest answer is that this park should never have
+       been listed to a host at all. Left as it stands rather than mis-graded here. */
+    if (hasHole(u)) return null;
     try {
       const abs = new URL(u, msg.sourceUrl).href;
       // a CODE load: classified by its destination (CORB), never credentialed. Every other destination: opt-in
@@ -2987,7 +3015,11 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
             "resumed down its failure path");
       return { meta: { status: 0, statusText: _xhrMethodRefusal.reason, headers: [] }, bytes: null };
     }
-    if (!canFetch) return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
+    /* AND THE SAME LOAD-ORDER TEST IS GONE FROM HERE TOO, for the same reason and with one seam's worth more
+       damage: this answered with a status-0 record and an EMPTY `statusText`, which XMLHttpRequest §3.5.6
+       "The send() method"'s handle errors turns into the page's `error` event with no account of itself
+       anywhere — a zone that was never ready, reported as a server that could not be reached, with the field
+       that would have named the rule left blank. It is asserted once at the top of this function's scope. */
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
       /* THE CREDENTIALS MODE IS PART OF THE REQUEST'S IDENTITY TOO, AND IT IS REFUSED RATHER THAN DOWNGRADED —
@@ -3470,6 +3502,24 @@ async function engineProvide(eng, method, url, rep) {
   await eng.r.renderer.provide({ method, url, reply: JSON.stringify(rep === null ? null : rep.meta),
                                  body: rep === null ? null : rep.bytes });
 }
+/* THE OTHER ANSWER, ON THE SAME PAIR — this zone stating it will not make the request at all.
+   IT IS NOT A DELIVERY WITH A DIFFERENT PAYLOAD AND MUST NEVER BE SPELLED AS ONE, which is why the assert one
+   function up refuses a refusal at `provide` rather than translating it. `provide` hands over a RESPONSE and
+   settles the park; there is no response here, and the JSON `null` that would stand in is Fetch §5.6 "Fetch
+   methods"' network error — a fact about the origin that nothing observed. What the engine does with this is
+   the part a chokepoint may not buy by mis-grading: the flow keeps its park AND forks the arm that runs the
+   page's `catch`, so the wait is preserved and the failure path is explored, neither at the other's expense.
+   THERE ARE NO BYTES BESIDE IT, and that is the shape rather than an omission: every other record on this
+   interface that carries a payload carries it because something produced one. Nothing was fetched. */
+async function engineDecline(eng, method, url, reason) {
+  DCHECK(typeof method === "string" && method !== "" && typeof url === "string" && url !== "",
+         "a refusal was relayed naming no request — it is keyed on the (method, url) pair exactly as a reply " +
+         "is, because it answers the same question, and a half-named one refuses a request no flow parked on");
+  DCHECK(typeof reason === "string" && reason !== "",
+         "a refusal was relayed with no reason — the flow it refuses will not drain this session, so this is " +
+         "the only account of it anybody gets and it is what says whether a widening would change the answer");
+  await eng.r.renderer.decline({ method, url, reason });
+}
 /* ONE LINE, SPLIT IN ONE PLACE — the mirror of the engine's own `engine_pending_split`, which exists because
    three C hosts each finding the TAB for themselves is three places for the grammar to drift; a fourth host in
    another language is not an exception to that. The delimiter is unambiguous by two specs and neither half can
@@ -3564,26 +3614,34 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
   for (const line of requests) {
     const { method, destination, provenance, url } = pendingRequest(line);
     const answer = await eng.fetched(method, url, destination, provenance);
-    /* A DECLINE IS DELIVERED BY DELIVERING NOTHING, and that is the whole mechanism rather than an omission
-       in it. The engine's pending register keys a park on (method, url) and clears it when `provide` answers;
-       leaving the entry there is the flow STAYING PARKED — the same thing `engine/trusted.mjs` does by pushing
-       `decline` instead of `provide`, and the same thing its C reader does with one (`abi_declined` records
-       the reason and never touches `qjs_provide`). This host had no such arm at all: every refusal came back
-       as `null` and settled the park with Fetch §5.6's network error.
-       THE REASON IS PRINTED BECAUSE THE PARTY THAT REFUSED IS THE PARTY THAT KNOWS WHY — the chokepoint's own
-       words, in the same shape the route-declaration decline above already reports one, so a person reading a
-       frontier that will not drain is told WHICH RULE holds it rather than left to guess at a policy this zone
-       deliberately does not own. `blocked-provenance:forced` and `blocked-destructive:logout` are different
-       sentences to that reader: the first names a per-origin widening that would make this fire, the second
-       names a refusal nothing reopens, and both are addresses DERIVED IN FULL AND REPORTED — which
-       §Attacker-sources says is not a gap in the report but IS the report. */
+    /* A DECLINE IS ITS OWN DELIVERY, AND DELIVERING NOTHING WAS ONLY HALF OF IT. The park was right — the
+       engine's register keys on (method, url), `provide` clears the entry, and leaving it there is the flow
+       STAYING PARKED, which is what §@S requires of a search not yet solved and what lets the request fire the
+       day the origin is widened. What silence could not do is tell the ENGINE anything, and two things follow
+       from that and both are defects. The engine re-lists an unanswered request on EVERY round, so a refusal
+       relayed as silence is re-offered and re-refused for the rest of the session — a spin rather than a park,
+       which is exactly what `bridge.js`'s XHR seam already records about declining by not answering. And the
+       page's `catch` arm is never explored: a declined request is an outcome NOTHING OBSERVED, so whether the
+       server would have answered 200, 500 or nothing at all is unconstrained, and §Solver-half says both
+       feasible arms run. A park suspends in front of both.
+       SO IT IS SAID OUT LOUD, ON ITS OWN METHOD. `Decline` carries the same PAIR `Provide` does — a refusal
+       answers the same question a reply answers — and the chokepoint's own words with it: the engine records
+       the refusal, stops listing the request, keeps one arm WAITING with no reply invented for it, and forks
+       the other to run the page's failure path with its path marked FORCED. `blocked-provenance:forced` and
+       `blocked-destructive:logout` are different sentences to the person reading a frontier that will not
+       drain — the first names a per-origin widening that would make this fire, the second names a refusal
+       nothing reopens — and both are addresses DERIVED IN FULL AND REPORTED, which §Attacker-sources says is
+       not a gap in the report but IS the report. */
     if (answer !== null && answer.refusal) {
       DCHECK(typeof answer.refusal.reason === "string" && answer.refusal.reason !== "",
              "a declined request carries no reason — the reason is the only account a person gets of a park " +
              "this zone will not pay, and an unnamed one leaves a frontier stalled with nothing to read");
-      console.warn("[bridge] " + method + " " + url + " — " + answer.refusal.reason +
-                   ". This zone DECLINED to make the request, so the flow stays PARKED rather than being " +
-                   "told the server was unreachable; the address is derived and reported");
+      DCHECK(answer.refusal.kind === "decline",
+             "a refusal graded `" + answer.refusal.kind + "` reached the decline seam — `network` is a " +
+             "refusal a real browser performing this same request also makes, so it is Fetch §5.6 \"Fetch " +
+             "methods\"' network error and belongs on `Provide` as the JSON `null`; relaying it here would " +
+             "leave the flow parked on a failure that IS a fact about the origin");
+      await engineDecline(eng, method, url, answer.refusal.reason);
       continue;
     }
     await engineProvide(eng, method, url, answer);

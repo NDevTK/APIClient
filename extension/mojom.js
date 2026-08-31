@@ -675,6 +675,37 @@
                  "whether a peer holds a proxy is a property of the instance's PROVISIONING and not of any " +
                  "one run of its frontier" }],
         reply: [WORKING_SET] },
+
+      /* THE OTHER WAY TO ANSWER A REQUEST ON `GetPending`, AND IT IS A SECOND METHOD RATHER THAN A FLAG ON
+         `Provide` BECAUSE IT IS A DIFFERENT ACT. `Provide` hands the engine a RESPONSE — a reply record, or
+         the JSON `null` that is Fetch §5.6 "Fetch methods"' network error — and settles the park either way.
+         That is the honest answer wherever a real browser performing this same request would also produce a
+         network error (a blocked scheme, a §4.10 "CORS check" failure, a CORB-blocked body). Where none would
+         — the firing policy declining to spend an act at an unwidened origin, the destructive deny list, a
+         method this zone cannot issue — there is no response and there is nothing about the origin to relay,
+         and sending `null` for one of those tells the flow the server was unreachable for a request nobody
+         sent. A boolean on `Provide` would put those two in one record with a field deciding which, which is
+         exactly the fold ordinal 4's own `why` describes as a fold no host can undo. */
+      { ordinal: 23, name: "Decline",
+        params: [
+          { name: "method", type: "string", retained: false,
+            why: "the METHOD half of the request this refuses, keyed exactly as `Provide`'s is, because a " +
+                 "refusal answers the same question a reply answers: the engine's pending register is keyed " +
+                 "on the PAIR, and a refusal naming the address alone would refuse whichever request happens " +
+                 "to be parked on it first" },
+          { name: "url", type: "string", retained: false,
+            why: "the TARGET half of that same request, matched against what a flow parked on — " +
+                 "`engine_decline` DFAILs on a pair no flow is parked on and no sale explains, for the reason " +
+                 "`Provide` does" },
+          { name: "reason", type: "string", retained: false,
+            why: "why this zone will not make the request, in the zone's own words. It is not diagnostics: " +
+                 "the flow refused here will not drain this session, so this sentence is the only account " +
+                 "anybody ever gets of it, and it is what says what would change the answer — " +
+                 "`blocked-provenance` names a per-origin widening that would make the request fire, " +
+                 "`blocked-destructive` names a refusal nothing reopens. The party that refused is the only " +
+                 "party that knows which rule fired, which is why the grade and the sentence both travel " +
+                 "from the chokepoint rather than being re-derived by a reader" }],
+        reply: [WORKING_SET] },
     ],
   });
 
