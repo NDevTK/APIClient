@@ -394,7 +394,26 @@ function _isPrivateHost(host) {
    deny list becomes useless: `/catalogue` contains no token `logout`, and `/deleted-items`
    yields `deleted`, which is not `delete`. Each path segment and query token is tested
    raw AND with `-`, `_` and `.` removed, so `log-out` and `log_out` reach `logout`
-   without the list having to enumerate spellings. */
+   without the list having to enumerate spellings.
+   AND IT IS MATCHED PERCENT-DECODED AS WELL AS RAW, because the address this gate is
+   handed is the address a URL PARSER produced and a parser only ever ENCODES. URL
+   Standard §1.3 "Percent-encoded bytes" gives the basic URL parser a percent-ENCODE set
+   per component and no decode step anywhere, so `URL.pathname` hands back whatever
+   triplets its input carried — while RFC 3986 §6.2.2.2 "Percent-Encoding Normalization"
+   says two URIs differing only in those triplets are EQUIVALENT ("normalized by decoding
+   any percent-encoded octet that corresponds to an unreserved character"), which is what
+   the server on the other end acts on. Tokenising only the raw form therefore let the
+   whole list be walked past by spelling one letter as its own hexadecimal: measured, at
+   the revision this paragraph was written, `/log%6Fut` and `/%64elete/account` both
+   answered `""` — no token, request permitted, cookies attached. `%2F` is worse than an
+   escaped letter because it also DELETES a segment boundary the tokeniser splits on, so
+   `/api%2Flogout` was one token `api2flogout` and matched nothing either.
+   THIS IS DELIBERATELY NOT §6.2.2.2's NORMALIZATION, and the difference is the direction.
+   §6.2.2.2 licenses decoding UNRESERVED octets only, because decoding a reserved one
+   (§2.2's `/`) changes what the URI MEANS — so a normalizer must not, and this gate is not
+   normalizing. It is building a SECOND set of tokens to test, and a token that only exists
+   under an over-eager decode can do exactly one thing: refuse one more request. That is the
+   cheap direction this whole list is built on. */
 var _DESTRUCTIVE = [
   /* ending a session or revoking an authorization */
   "logout", "logoff", "signout", "signoff", "deauth", "deauthorize", "revoke",
@@ -420,15 +439,35 @@ var _DESTRUCTIVE_SET = (function () {
   }
   return m;
 })();
-/* Returns the token that refused this URL, or "" — a POSITIVE statement that nothing in
-   the list matched, never a boolean whose false could also mean "not asked". The token
-   travels into the status message so a refusal is attributable and a reviewer can
-   disagree with THIS entry rather than with the list. */
-function _destructiveToken(u) {
-  var raw;
-  try { raw = (String(u.pathname) + "&" + String(u.search)).toLowerCase(); }
-  catch (e) { return ""; }
-  var parts = raw.split(/[^a-z0-9._-]+/);
+/* URL STANDARD §1.3 "Percent-encoded bytes"' PERCENT-DECODE, ONE PASS — and it is that
+   algorithm rather than `decodeURIComponent` for the one property a gate needs: IT CANNOT
+   FAIL. §1.3 says of each byte "if byte is 0x25 (%) and the next two bytes after byte in
+   input are not in the ranges 0x30 (0) to 0x39 (9), 0x41 (A) to 0x46 (F), and 0x61 (a) to
+   0x66 (f), all inclusive, append byte to output" — a bare `%` is DATA, not an error.
+   `decodeURIComponent("%")` throws a URIError instead, and so does every ill-formed UTF-8
+   sequence, so reaching for it here would put a `try`/`catch` in front of a security gate
+   whose catch arm is "no token matched" — an absent answer read as a permit, which is the
+   defaulted-read defect standing exactly where a refusal belongs.
+   IT STOPS AT BYTES AND NEVER DECODES THEM TO TEXT. §1.3's output is a BYTE SEQUENCE and
+   nothing here needs characters out of it: the token class below is `[a-z0-9._-]`, so a byte
+   outside ASCII is a SEPARATOR whatever text it would have become, and a UTF-8 decode could
+   only ever turn one separator into another. Each triplet therefore becomes ONE code unit
+   whose value is that byte, which is also what makes the caller's termination argument hold.
+   §2.1's "the uppercase hexadecimal digits 'A' through 'F' are equivalent to the lowercase
+   digits" is why both cases are accepted here rather than lowercased first. */
+function _percentDecode(s) {
+  var out = "";
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (c !== "%" || i + 2 >= s.length || !/^[0-9a-fA-F]{2}$/.test(s.substr(i + 1, 2))) { out += c; continue; }
+    out += String.fromCharCode(parseInt(s.substr(i + 1, 2), 16));
+    i += 2;
+  }
+  return out;
+}
+/* ONE FORM'S TOKENS, so the two forms cannot drift into two matchers. */
+function _destructiveIn(form) {
+  var parts = form.toLowerCase().split(/[^a-z0-9._-]+/);
   for (var i = 0; i < parts.length; i++) {
     var t = parts[i];
     if (!t) continue;
@@ -437,6 +476,40 @@ function _destructiveToken(u) {
     if (squashed && _DESTRUCTIVE_SET[squashed]) return squashed;
   }
   return "";
+}
+/* Returns the token that refused this URL, or "" — a POSITIVE statement that nothing in
+   the list matched, never a boolean whose false could also mean "not asked". The token
+   travels into the status message so a refusal is attributable and a reviewer can
+   disagree with THIS entry rather than with the list.
+   THE RAW FORM IS ASKED FIRST so an address that already matched names the SAME token it
+   named before, and only then each successive decoding — a server that decodes once sees
+   the first, one that decodes what its own framework already decoded sees a later one, and
+   this gate does not have to know which kind it is talking to. */
+function _destructiveToken(u) {
+  var form;
+  try { form = String(u.pathname) + "&" + String(u.search); }
+  catch (e) { return ""; }
+  for (;;) {
+    var t = _destructiveIn(form);
+    if (t) return t;
+    var next = _percentDecode(form);
+    /* TERMINATION IS STRUCTURAL AND IS NOT A §NO BOUNDS CAP — there is no counter here and
+       nothing decides that work will not happen. A pass that changed anything replaced at
+       least one three-code-unit triplet with one code unit, so it is strictly SHORTER; a
+       pass that changed nothing returns the identical string. A strictly shrinking string
+       over a finite input cannot loop, and "no shorter" is therefore the positive statement
+       "there is nothing left to decode" rather than a guard against a bad state.
+       ASSERTED BECAUSE THE EXIT RESTS ON IT: a decoder that stopped implementing §1.3 could
+       make those two facts disagree, and the loop is inside the one chokepoint every byte of
+       this extension goes through. */
+    DCHECK(next === form || next.length < form.length,
+           "a percent-decoding pass returned a string that differs from its input yet is no shorter — URL " +
+           "Standard §1.3 \"Percent-encoded bytes\" replaces a three-code-unit triplet with one byte and " +
+           "copies every other code unit unchanged, so a change that does not shorten is this decoder no " +
+           "longer implementing it, and the destructive-path loop uses that length to know it is done");
+    if (next.length >= form.length) return "";
+    form = next;
+  }
 }
 
 function _urlList(requested, resp) {
