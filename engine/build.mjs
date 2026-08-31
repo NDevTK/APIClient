@@ -1124,6 +1124,64 @@ const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds
    off `@RESULT` can read them off the line and a rename breaks in one place rather than drifting in two. */
 const SCENSUS_FIELDS = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"];
 const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "orphansMet", "orphansUnmet"];
+/* THE ORPHAN-DRIVE CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT, for SCENSUS_FIELDS' reason exactly — the
+   same two producers reach a reader twice (this line, and `result_json`'s `_orphansDriven`/`_orphansAsked`
+   which bridge.js asserts and the popup renders), so a reader who learns the names off `@RESULT` reads them
+   off the stream and a rename breaks in one place instead of drifting in two. */
+const OCENSUS_FIELDS = ["_orphansDriven", "_orphansAsked"];
+/* ONE FIELD CONTRACT, ONE IMPLEMENTATION OF IT. Three readers here assert the same thing about a census line —
+   every name in the contract is present and is a NUMBER — and the assertion had been written out twice
+   already; a third copy is the drift this file's own record-field gate exists to catch, one level up in the
+   instrument rather than in the tree it audits. The COMPOSER is a parameter because it is the only part that
+   differs: it is what a reader who hits this throw has to go and open. */
+function censusFields(v, marker, fields, composer) {
+  for (const f of fields)
+    if (typeof v[f] !== "number")
+      throw new Error(`[build] the ${marker} census has no numeric \`${f}\` — this reader compares ` +
+                      `${fields.join(", ")} and ${composer} is what decides they exist; a renamed ` +
+                      `field must be renamed here rather than silently compared as undefined.`);
+  return v;
+}
+/* A MARKER'S WHOLE STREAM, SPLIT AT THE POINTS ITS PRODUCER RESTARTS THE COUNT — the shape a reader needs when
+ * the fact is a TIME SERIES and not a final number, which is a different question from the one `oneCensus` and
+ * `lastTwo` answer and is why this is a third helper rather than an argument to either.
+ *
+ * WHY IT SPLITS AT ALL, AND WHY A DROP IS NOT CORRUPTION. solver/engine.c releases the orphan counters with
+ * the agent (`g_orphans_driven = 0; g_orphan_asks = 0;`) and its own comment says why they are per-SESSION and
+ * not per-process: "the whole of what `asked` is for is that `asked == 0` means NO FLOW IN THIS SESSION ever
+ * reached the end of its own work. A carried-over count makes that read `asked > 0` for a session that never
+ * asked at all". A host that takes one runtime down and brings another up therefore emits two rising ramps on
+ * ONE stdout, and last-minus-first across the pair is a difference between two different sessions' counters —
+ * a number about nothing, which is the defect §Testing names when it says an artifact of HOW you asked must
+ * never be reported as a fact about WHAT you asked. So a decrease is READ as the boundary it is, the sessions
+ * are returned as sessions, and the caller states which one it is reading rather than averaging them.
+ *
+ * MONOTONE WITHIN A SESSION IS THEN AN INVARIANT AND NOT AN ASSUMPTION: the only writes to either counter are
+ * `++` and that release, so inside one segment the sequence can only rise. The split is what makes that true,
+ * which is why the caller may compare two samples of one segment at all.
+ *
+ * THE BOUNDARY IS *ANY* COUNTER FALLING AND NOT ALL OF THEM, AND THE STRICTER RULE IS THE WRONG ONE — written
+ * down because it is what the next reader will reach for, and it would fire on the round trip WORKING. The
+ * release zeroes the pair together, but the first sample AFTER it is not taken at that instant: a session that
+ * inherits drives from a residue raises `driven` on the cold-tier path before any flow has asked, so a stream
+ * running (driven 0, asked 400) -> release -> (driven 5, asked 0) shows `asked` falling while `driven` RISES.
+ * Requiring every counter to fall would read that legal boundary as one continuous session and splice two
+ * sessions' counters into one ramp. Within a session neither counter can fall, so one falling is already
+ * proof of a boundary and is the whole test. */
+function censusSessions(out, marker, fields, composer, counters) {
+  const s = [];
+  for (const m of out.matchAll(new RegExp(`^${marker} (\\{.*\\})$`, "gm")))
+    { try { s.push(censusFields(JSON.parse(m[1]), marker, fields, composer)); } catch (e) {
+        if (e instanceof SyntaxError) continue;   /* a truncated tail line, as `lastTwo` reads one */
+        throw e; } }
+  if (s.length === 0) return null;
+  const runs = [[s[0]]];
+  for (let i = 1; i < s.length; i++) {
+    if (counters.some((k) => s[i][k] < s[i - 1][k])) runs.push([s[i]]);
+    else runs[runs.length - 1].push(s[i]);
+  }
+  return runs;
+}
 function oneCensus(out, marker, fields) {
   const m = [...out.matchAll(new RegExp(`^${marker} (\\{.*\\})$`, "gm"))];
   if (!m.length) return null;
@@ -1131,12 +1189,7 @@ function oneCensus(out, marker, fields) {
   try { v = JSON.parse(m[m.length - 1][1]); }
   catch { throw new Error(`[build] the last ${marker} line is not JSON — test_forced.c composes it in one ` +
                           `printf, so a line that will not parse is that printf truncated or interleaved.`); }
-  for (const f of fields)
-    if (typeof v[f] !== "number")
-      throw new Error(`[build] the ${marker} census has no numeric \`${f}\` — this reader compares ` +
-                      `${fields.join(", ")} and test_forced.c's printf is what decides they exist; a renamed ` +
-                      `field must be renamed here rather than silently compared as undefined.`);
-  return v;
+  return censusFields(v, marker, fields, "test_forced.c's printf");
 }
 function coldRoundTrip(v1, v2, store) {
   const park = oneCensus(v1.captured, "@COLDPARK", COLDPARK_FIELDS);
@@ -1216,11 +1269,7 @@ function lastTwo(out, marker, fields, composer) {
     { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
   if (s.length === 0) return null;
   const b = s[s.length - 1], a = s[Math.floor((s.length - 1) / 2)];
-  for (const f of fields) for (const c of [a, b])
-    if (typeof c[f] !== "number")
-      throw new Error(`[build] the ${marker} census has no numeric \`${f}\` — this discriminator reads ` +
-                      `${fields.join(", ")} and ${composer} is what decides they exist; a renamed field must ` +
-                      `be renamed here rather than silently compared as undefined.`);
+  for (const c of [a, b]) censusFields(c, marker, fields, composer);
   return { a, b, n: s.length };
 }
 /* THE LARGEST OF A NAMED SET, AND WHICH OF THEM MOVED — the shape every reading below is built out of. The
@@ -1405,10 +1454,88 @@ function censusReading(out) {
                    ? ` — sources were read and NO sink ever ran, so an empty @S surface is a reach problem `
                      + `rather than a page with nothing to find`
                    : ``));
+  /* AND THE SAME FOR THE HEADLINE SURFACE, WHICH IS THE @S CENSUS'S ORPHAN-SIDE TWIN AND WAS THE HALF WITH NO
+     READER AT ALL. §What-the-tool-produces makes orphan-invoke the proposition ("a sniffer shows what FIRED;
+     this shows what the bundle CAN do but didn't"), and solver/engine.h's census is the pair that says whether
+     this engine ever got to it: `asked` is how many times a flow ran out of work and put the question,
+     `driven` is how many bodies it took. test_forced.c printed them at every sample and NOTHING in this tree
+     matched the marker — a computed writer consumed by nobody, which §A-FIELD-A-CONSUMER-DEFAULTS calls the
+     mirror of the read-with-no-writer defect and harder to see, because the value is real and asserted.
+
+     WHAT THE SERIES ANSWERS THAT A FINAL PAIR CANNOT, WHICH IS THE WHOLE REASON IT IS READ AS A SERIES:
+       1. ON THE RUNS THAT MATTER THERE IS NO FINAL PAIR. The document that carries these two numbers is
+          rendered by `result_json` and printed after run_scheduler RETURNS, so a run whose frontier does not
+          drain is killed by this file's own backstop before it gets there. On exactly the run where the orphan
+          half is stuck, the pair is computed at every sample and printed zero times. The stream survives the
+          kill; the document does not. §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES: an ABSENT result and a zero
+          result are different facts and must never be averaged.
+       2. A TAKE THAT STOPPED READS IDENTICALLY TO ONE THAT WORKED. `asked 400, driven 12` at the end is either
+          a mechanism that ran throughout or one that drove twelve bodies early and has driven NOTHING since
+          while the asks kept climbing. Those take opposite work and one pair cannot separate them. Only two
+          samples separated in time say which.
+
+     A CORRECTION TO THE WRITER'S OWN COMMENT, RECORDED HERE BECAUSE THAT FILE WAS BEING EDITED BY ANOTHER LANE
+     WHEN THIS LANDED. test_forced.c says of the pair "their ONLY reader was the result document", and that is
+     FALSE: `probes_report` in the same file reads `engine_orphan_census` too and renders the three-state
+     `orphan_why` sentence out of it, so the classification NOT-ASKED / ASKED-AND-DROVE-NOTHING / DROVE-N was
+     already reachable in-process. What was true is the part that matters and is why this reader exists anyway
+     — `orphan_why` classifies ONE INSTANT, so it cannot see state 2 above, and it is composed only where the
+     fixture's own orphan probe rows exist, while the marker is printed on every sample of every document. The
+     over-claim is worth correcting rather than repeating: a reader who checked it would find the second
+     consumer, disbelieve the whole note, and miss the real gap it names.
+
+     `driven > asked` IS LEGAL AND IS NOT FLAGGED — the obvious invariant here is FALSE, and it is written down
+     because the next reader will reach for it. solver/engine.c raises `driven` at TWO sites: a fresh take
+     (after the ask), and a cold-tier RESUMED drive building its call frame, which returns before the ask is
+     ever counted. A session that inherits drives from a residue therefore raises `driven` with no `asked`
+     beside it, and an assert ordering the two would fire on the round trip working. */
+  const ocs = censusSessions(out, "@OCENSUS", OCENSUS_FIELDS,
+                             "test_forced.c's fixture_have_answers printf", OCENSUS_FIELDS);
+  if (ocs) {
+    const run = ocs[ocs.length - 1], first = run[0], last = run[run.length - 1];
+    const dAsk = last._orphansAsked - first._orphansAsked, dDrv = last._orphansDriven - first._orphansDriven;
+    /* THE FRONTIER'S OWN MOVEMENT, WHICH IS WHAT MAKES `asked == 0` A VERDICT RATHER THAN A SHRUG. A session
+       that never reached the question and a session that barely ran are the same zero, and @COLD's `live` is
+       the number that splits them. It is read as a POSITIVE statement and never defaulted: with no @COLD line
+       there is no frontier reading to cite, and the sentence says that instead of implying a still frontier. */
+    const liveMoved = c ? c.b.live - c.a.live : null;
+    parts.push(`orphan drive: ${last._orphansAsked} ask(s), ${last._orphansDriven} body(ies) driven` +
+      (ocs.length > 1 ? ` — read off the LAST of ${ocs.length} sessions on this stdout, since solver/engine.c `
+                      + `releases both counters with the agent and last-minus-first across a restart is a `
+                      + `difference between two different sessions` : ``) +
+      (run.length < 2
+        ? `; ONE sample, so this run states a pair and not a series — whether the take is moving is the `
+          + `question this reader exists to answer and a single sample cannot answer it`
+        : `; over ${run.length} samples asked +${dAsk}, driven +${dDrv}` +
+          (last._orphansAsked === 0
+            ? ` — NEVER ASKED. engine_orphan_fork is reached only where a flow has no program, job, lifecycle `
+              + `event, timer, rendering opportunity or outstanding reply left, so no flow of this session has `
+              + `run out of its own work yet. That is the SCHEDULE and says nothing whatever about the take, `
+              + `the drive, or whether this bundle ships uncalled code`
+              + (liveMoved === null
+                  ? ` (no @COLD line in this run, so there is no frontier reading to say whether it was moving)`
+                  : liveMoved > 0
+                    ? ` — and the frontier GREW by ${liveMoved} live member(s) across the same span, so the `
+                      + `session was running and still never reached the question`
+                    : ` — and @COLD's live count did not grow either, so this may be a session that barely ran `
+                      + `rather than one that ran and never asked`)
+            : dAsk === 0 && dDrv === 0
+              ? ` — both counters FLAT across the whole span while the session went on sampling: the frontier `
+                + `has stopped reaching the question, which is neither the take nor the page`
+              : dDrv === 0
+                ? ` — asked ${dAsk} more time(s) and drove NOTHING across the span. That is the TAKE` +
+                  (last._orphansDriven === 0
+                    ? `: JS_OrphanTakeOne's entered/is_program/bytecode filter, or the orphan-generation memo `
+                      + `answering for a heap that has moved. It is not the schedule — the frontier is asking`
+                    : `, and it is the state a final pair cannot report: ${last._orphansDriven} bodies WERE `
+                      + `driven earlier in this session and none in the ${run.length} samples since, so the `
+                      + `take has stopped rather than never started`)
+                : ` — both rising, so the mechanism is working end to end this session`)));
+  }
   return parts.length ? parts.join("; ")
-                      : "no @HEAP/@SWAP/@COLD/@FORKAT/@SCENSUS census in this run — a stage that drives no " +
-                        "scheduler prints none of them, so this is the absence of the signal and not a " +
-                        "reading of the run";
+                      : "no @HEAP/@SWAP/@COLD/@FORKAT/@SCENSUS/@OCENSUS census in this run — a stage that " +
+                        "drives no scheduler prints none of them, so this is the absence of the signal and " +
+                        "not a reading of the run";
 }
 
 /* WHAT THIS RUN'S NUMBERS ARE DENOMINATED IN, READ FROM THE ENGINE'S OWN STATEMENT OF IT — solver/quantum.c's
