@@ -116,8 +116,8 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
 /* `body_n` IS THE PROGRAM'S LENGTH and is not `strlen(body)`: an element page code INSERTED carries whatever
    was assigned to its `.textContent`, which never went through HTML §13.2.5.4 "Script data state" (the state
    that turns a U+0000 into a U+FFFD), so its text may hold a NUL that a parsed document's inline script
-   provably cannot. The DOM already answers the length — `lxb_dom_node_text_content` fills one — and dropping
-   it was how an injected chunk ran as a prefix of itself. */
+   provably cannot. The DOM already answers the length — DOM §4.11 "Interface Text"'s child text content fills
+   one (core/dom/text_content.h) — and dropping it was how an injected chunk ran as a prefix of itself. */
 void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
                                  lxb_dom_element_t *el);
 /* …AND THE ONE THAT IS NOT. HTML §4.12.1.1 "Processing model": an inline classic script whose element a page

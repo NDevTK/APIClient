@@ -64,6 +64,7 @@
 #include "core/dom/name_intern.h"  /* §4.4's names in the COPY's document — see clone_element_into */
 #include "core/dom/node_heap.h"    /* …and whose arenas the node's BYTES are in, which §4.5 also decides */
 #include "core/dom/node_interface.h" /* …and which C struct those names mean, on create AND on destroy */
+#include "core/dom/text_content.h" /* §4.4's "switching on the interface node implements", answered in ONE place */
 /* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
    boundary for the same reason. */
@@ -786,8 +787,11 @@ bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
         return true;                                                                        /* STEP 5.2 */
     }
     /* STEP 6. A CDATASection IS a Text node — §4.12 Interface CDATASection is `interface CDATASection : Text`
-       — so both are the one case. */
-    if (node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION)
+       — so both are the one case, and core/dom/text_content.h is where that sentence is written down. It was
+       spelled out here and again at step 8 below and again at §4.4's textContent walk, and the fourth and
+       fifth spellings of it (a `script`'s source text, a document's bundle identity) got it WRONG, which is
+       what made one question asked in five places into one component asked from them. */
+    if (dom_node_is_text(node))
         return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                     "a document cannot have a Text node child"), false;
     /* STEP 7 — the CharacterData nodes step 6 did not reject (Comment, ProcessingInstruction) are legal
@@ -797,8 +801,7 @@ bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
     if (node_is_document_fragment(node)) {
         for (c = node->first_child; c; c = c->next) {
             if (c->type == LXB_DOM_NODE_TYPE_ELEMENT) n_el++;
-            else if (c->type == LXB_DOM_NODE_TYPE_TEXT || c->type == LXB_DOM_NODE_TYPE_CDATA_SECTION)
-                has_text = true;
+            else if (dom_node_is_text(c)) has_text = true;
         }
         if (n_el > 1 || has_text)                                                           /* STEP 8.1 */
             return JS_ThrowDOMException(ctx, "HierarchyRequestError",
@@ -3387,10 +3390,13 @@ static bool node_has_children_as_text(const lxb_dom_node_t *n)
 /* §4.4 textContent's READ — A MACHINE, and the same shape as §8.4's serialiser: the answer is the concatenated
    data of every Text node under this one, so the work is the SUBTREE, and it was a plain C accessor.
    `document.body.textContent` on a real page is the whole document inside one opcode.
-   Lexbor's lxb_dom_node_text_content walks it TWICE — once to measure, once to copy — into a buffer from the
-   document's memory. One pass into a growing buffer is what a resumable walk needs anyway, and it is strictly
-   less work; what it has to reproduce exactly is WHICH nodes count, which is Text nodes and nothing else, over
-   child links — so a `<template>`'s content is not part of its element's text. */
+   THE COMPLETING SPELLING OF THE SAME CONCATENATION IS core/dom/text_content.h, and this walk cannot call it:
+   that one measures and copies in two passes and returns, while this one must REST between nodes, so the two
+   share the PREDICATE (dom_node_is_text) and nothing else. That is the whole of what they have to agree about
+   — which nodes count — and it is exactly what they disagreed about while this file spelled the test itself:
+   DOM §4.12 "Interface CDATASection" makes a CDATA section a Text node and a nodeType comparison does not.
+   The traversal is over CHILD LINKS, which is DOM §1.1's descendant relation — so a `<template>`'s content,
+   reached only through §4.7's host, is not part of its element's text. */
 /* WHERE THIS MACHINE RESTS. §4.4's textContent getter is `get text content`, which SWITCHES on the interface
    `this` implements — every arm but one is O(1) and answered in the first stage — and the Element and
    DocumentFragment arm is `descendant text content`, a concatenation over every Text descendant in tree order.
@@ -3479,7 +3485,11 @@ static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
                                         JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len));
         return JS_STEP_DONE;
     }
-    if (s->cursor->type == LXB_DOM_NODE_TYPE_TEXT) {
+    /* §4.4's own words for what this walk counts: "To get text content with a node node, return the following,
+       switching on the interface node implements" — an INTERFACE, so a CDATASection is a Text node and its
+       data is part of §4.11's descendant text content. This tested the nodeType, which is a different question
+       that happens to agree on every document holding no CDATA section. */
+    if (dom_node_is_text(s->cursor)) {
         lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(s->cursor);
         node_text_append(ctx, s, (const char *)cd->data.data, cd->data.length);
     }

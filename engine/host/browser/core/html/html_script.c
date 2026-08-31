@@ -14,6 +14,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "core/dom/node.h"
+#include "core/dom/text_content.h"   /* §4.12.1.1's "el's child text content" is DOM §4.11's, over DOM's own Text test */
 #include "core/dom/element.h"    /* §4.12.1.1's children changed steps are RECORDED for the ONE drain that can run them */
 #include "core/dom/document.h"   /* which DOCUMENT this program belongs to: the realm it is compiled in */
 #include "core/dom/document_current_script.h"   /* "execute the script element" step 6's classic arm, steps 1-2 and 4 */
@@ -458,15 +459,24 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        steps exist for. Setting the flag before this test would make that element permanently inert and the
        chunk would never run, which is the exact defect those steps were built to end.
        THE LENGTH IS THE DOM's AND NOT A `strlen` — see the report at the bottom for why this element's text is the
-       one inline source that can hold a U+0000. */
+       one inline source that can hold a U+0000.
+       AND IT IS THE **CHILD** TEXT CONTENT, WHICH IS THE STANDARD'S OWN WORD AND NOT THIS ENGINE'S SHORTHAND.
+       DOM §4.11 "Interface Text" defines two concatenations and §4.12.1.1 names the CHILD one; the difference
+       is invisible in an HTML document, where §13.2.5.4 "Script data state" makes a `script`'s content one
+       Text node and nothing else, and REAL in an XML one, where a `script` element's content is XML §3.1's
+       [43] `content` and may hold elements. It is also where DOM's "Text node" stops meaning "nodeType is
+       TEXT": §4.12 "Interface CDATASection" is `interface CDATASection : Text { };`, so the CDATA section an
+       XHTML document writes its program in IS part of this concatenation. core/dom/text_content.h answers both
+       halves once; a nodeType-keyed walk answered "" here and took step 6's return for a page that had a
+       program. */
     has_src = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"src", 3);
     {
-        lxb_char_t *probe = has_src ? NULL : lxb_dom_node_text_content(n, &n_len);
+        char *probe = has_src ? NULL : dom_child_text_content(n, &n_len);
 
         if (!has_src) {
-            bool empty = probe == NULL || n_len == 0;
+            bool empty = n_len == 0;
 
-            if (probe) lxb_dom_document_destroy_text(n->owner_document, probe);
+            free(probe);
             if (empty) return;
         }
     }
@@ -588,7 +598,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
            "§4.12.1.1 owes no fetch for a classic script whose source it already has, so its tail ends at "
            "`immediately execute the script element` and only a module leaves by another door");
     {
-        lxb_char_t *txt = lxb_dom_node_text_content(n, &n_len);
+        char *txt = dom_child_text_content(n, &n_len);
         /* STEP 5's SOURCE TEXT AGAIN, AND IT IS NOT EMPTY — step 6 above returned for an element with no src
            whose child text content is the empty string, and no page code has run since (the steps between are
            this engine's own reads). A second read rather than a saved buffer because the first is discarded on
@@ -639,10 +649,13 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                        performed in it: this body is reached from inside a DOM mutation, from inside an
                        attribute change and from inside a parse, and running the page's code needs a flow base
                        under it that none of those three has.
-                       THE COPY IS THE NUL, AND IT IS NOT A CONVENIENCE. lexbor allocates `length + 1` for an
-                       ELEMENT's text content and its concatenating walk never writes the last byte, while every
-                       compiler entry in this engine requires `input[input_len] == '\0'`. Compiled off that
-                       buffer, a program would end in whatever the document arena last held there. */
+                       THE COPY IS THE LIFETIME AND NO LONGER THE NUL. It used to be the NUL: the tree layer
+                       allocated `length + 1` for an element's text content and its concatenating walk never
+                       wrote the last byte, so a program compiled off that buffer ended in whatever the
+                       document arena last held there. core/dom/text_content.h terminates its own answer, so
+                       that argument has been retired — what remains is that `txt` is released at the bottom of
+                       this block while `imm->text` is read by the flow that performs step 36 afterwards, which
+                       is a lifetime and not a byte. */
                     imm->text = malloc(n_len + 1);
                     CHECK(imm->text != NULL,
                           "§4.12.1.1 step 36's source text could not be copied — dropping it means an injected "
@@ -654,7 +667,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                     imm->el = el;
                 }
             }
-            lxb_dom_document_destroy_text(n->owner_document, txt);
+            free(txt);
         }
     }
 }

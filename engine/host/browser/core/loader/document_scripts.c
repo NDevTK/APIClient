@@ -1,6 +1,11 @@
 /* Document script inventory + bundle identity — see document_scripts.h. */
 #include "core/loader/document_scripts.h"
 #include "check.h"
+/* HTML §4.12.1.1 "Processing model" says "Let source text be el's child text content" and links that phrase to
+   DOM §4.11 "Interface Text", which ranges over Text NODES — an interface, so a CDATASection is one. Asking
+   the tree layer for a nodeType-keyed walk instead answered "" for every `<script><![CDATA[ … ]]></script>` an
+   XHTML document ships, and "" is exactly the value the next step already has a meaning for. */
+#include "core/dom/text_content.h"
 #include <string.h>
 #include <stdlib.h>
 #include <lexbor/css/css.h>
@@ -120,9 +125,16 @@ unsigned document_bundle_id(lxb_html_document_t *dom) {
             continue;
         }
         if (!script_type_executes(script_block_type(el))) continue;   /* data block: not part of JS identity */
-        size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
-        if (txt && tl) { for (size_t k = 0; k < tl; k++) { bh ^= txt[k]; bh *= 16777619u; } bh ^= '|'; bh *= 16777619u; }
-        if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
+        /* THE SAME CONCATENATION THE PROGRAM ITSELF IS TAKEN FROM — core/dom/text_content.h — because identity
+           is over the bytes that RUN. Two spellings of "this element's text" would let a document's id and its
+           program disagree, which for an XHTML bundle is precisely what happened: the id was computed over an
+           empty string for every script whose body is a CDATA section.
+           THE BYTES ARE HASHED UNSIGNED. `char` is signed on the hosts this builds for, so a byte at or above
+           0x80 would sign-extend into the mix and the id would differ from the same document's under an
+           unsigned buffer — a difference in the frontier key, from a cast. */
+        size_t tl = 0; char *txt = dom_child_text_content(lxb_dom_interface_node(el), &tl);
+        if (tl) { for (size_t k = 0; k < tl; k++) { bh ^= (unsigned char)txt[k]; bh *= 16777619u; } bh ^= '|'; bh *= 16777619u; }
+        free(txt);
     }
     free(c.els);
     return bh ? bh : 1;
@@ -181,22 +193,43 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
                (`<script src="">alert(1)</script>` ran the alert). What is still owed is the error event, which
                needs a task on this document rather than anything here. */
             if (src && sl) {
+                /* THE ROW IS NOT CONDITIONAL ON THE ALLOCATION, for the same reason the inline branch below is
+                   not: a `<script src>` this scan drops is an external program the document never fetches, and
+                   it leaves the table looking exactly like a document that shipped one fewer script. An `if
+                   (u)` here was that hole with a NULL check's face on it. */
                 char *u = malloc(sl + 1);
-                if (u) { memcpy(u, src, sl); u[sl] = 0;
-                         ds.srcs[ds.n] = u; ds.bodies[ds.n] = NULL; ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
-                         ds.els[ds.n] = el;
-                         ds.n++; }
+
+                CHECK(u != NULL,
+                      "OOM copying a `<script src>` URL out of the tree — a row this scan does not write is a "
+                      "program the document never fetches, and nothing downstream can tell that from a "
+                      "document that shipped one fewer script");
+                memcpy(u, src, sl); u[sl] = 0;
+                ds.srcs[ds.n] = u; ds.bodies[ds.n] = NULL; ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
+                ds.els[ds.n] = el;
+                ds.n++;
             }
             continue;
         }
-        size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
-        if (txt && tl) {
-            char *b = malloc(tl + 1);
-            if (b) { memcpy(b, txt, tl); b[tl] = 0; ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
-                     ds.els[ds.n] = el;
-                     ds.bodies[ds.n++] = b; }
+        /* §4.12.1.1's STEPS 5 AND 6, AND THE EMPTY ANSWER IS STEP 6 BEING TAKEN. "Let source text be el's
+           child text content." then "If el has no `src` attribute, and source text is the empty string, then
+           return." So a zero length here is the standard's own return for an element with no program — a
+           `<script>` holding only a comment — and it is stated as that rather than tested as a hole.
+           IT USED TO BE A HOLE, AND THAT IS THE WHOLE OF WHY THIS FILE CHANGED. The concatenation came from a
+           nodeType-keyed walk that cannot see a CDATASection, so every `<script><![CDATA[ … ]]></script>` in an
+           XHTML document measured zero, took this return, and left NO ROW — a document whose own code silently
+           did not run, indistinguishable from one that shipped none. The copy-if-malloc-succeeded below it was
+           the second half of the same shape: a failed allocation ALSO left no row, so a page's program could
+           vanish with nothing said. The buffer is now the concatenation's own — allocated once, NUL-terminated
+           and ADOPTED into the table — so there is no second allocation to fail and no branch to drop a row. */
+        {
+            size_t tl = 0;
+            char *txt = dom_child_text_content(lxb_dom_interface_node(el), &tl);
+
+            if (tl == 0) { free(txt); continue; }
+            ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
+            ds.els[ds.n] = el;
+            ds.bodies[ds.n++] = txt;
         }
-        if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
     /* EVERY ROW OF THIS TABLE IS ONE ELEMENT OF THIS TREE, asserted at the producer because this is the one
        place it is structurally true: both branches above write `els` beside the body or the address they wrote.

@@ -31,6 +31,7 @@
 #include "core/dom/document.h"
 #include "core/frame/sandboxing.h"
 #include "core/dom/node.h"
+#include "core/dom/text_content.h"   /* §4.10.11's "its child text content", which is DOM §4.11's */
 #include "core/encoding/encoding.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -318,14 +319,19 @@ static JSValue js_ctrl_get_value(JSContext *ctx, JSValueConst this_val, int magi
     i = attr_shadow_find(el, ATTR_SLOT_PROPERTY, NULL, "value");
     if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));   /* the state the page assigned */
 
-    /* §4.10.11 a textarea's default value is its CHILD TEXT, raw. */
+    /* §4.10.11 The textarea element: the element's raw value with a false dirty value flag is "its child text
+       content" — the section states it twice in those words, at the children-changed steps and at the reset
+       algorithm, and the `defaultValue` getter "must return the element's child text content".
+       IT WAS THE DESCENDANT TEXT while the comment said CHILD, and the two differ exactly where an element
+       child of a `<textarea>` is representable — which HTML §13.2.5.2 "RCDATA state" forbids in the HTML syntax
+       and an XML document permits. DOM §4.12 "Interface CDATASection" is the other half: a `<textarea>` whose
+       default value is written as a CDATA section read back as the empty string. */
     if (magic == CTRL_TEXTAREA) {
         lxb_dom_node_t *n = lxb_dom_interface_node(el);
-        lxb_char_t *txt = lxb_dom_node_text_content(n, &len);
-        JSValue r;
-        if (!txt) return JS_NewStringLen(ctx, "", 0);
-        r = JS_NewStringLen(ctx, (const char *)txt, len);
-        lxb_dom_document_destroy_text(n->owner_document, txt);
+        char *txt = dom_child_text_content(n, &len);
+        JSValue r = JS_NewStringLen(ctx, txt, len);
+
+        free(txt);
         return r;
     }
     /* §4.10.10: "The value of an option element is the value of the `value` content attribute, if there is one,
