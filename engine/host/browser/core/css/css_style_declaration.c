@@ -2341,9 +2341,15 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
                       "should have refused the call");
     name = JS_ToCString(ctx, argv[0]);
     value = JS_ToCString(ctx, argv[1]);
-    /* Web IDL §3.6's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call that stopped short of the position
-       arrives with a shorter argc, and one that reached it with `undefined` arrives with undefined in the slot —
-       "if the argument is optional and its value is undefined, it is absent". This member's IDL writes
+    /* Web IDL §3.6 Overload resolution algorithm's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call
+       that stopped short of the position arrives with a shorter argc (step 16, whose 16.2 appends "the special
+       value 'missing'"), and one that reached it with `undefined` arrives with undefined in the slot (step
+       15.4, "If optionality is 'optional' and V is undefined", whose 15.4.2 appends the same).
+       THE SENTENCE QUOTED HERE BEFORE — "if the argument is optional and its value is undefined, it is absent"
+       — APPEARS NOWHERE IN WEB IDL. It is the same fabrication idl_args.c records having found at its own
+       §3.6 sites, arriving a second time in a second file, which is why the numbered steps are named here
+       instead: a fabricated quotation is the one citation error that tells the reader not to open the spec.
+       This member's IDL writes
        `optional CSSOMString priority = ""`, so absent IS the empty string, which is a POSITIVE statement that
        the page named no priority rather than a hole. Converting either would produce the four characters
        "undefined" and abandon the call at step 4 below. */
