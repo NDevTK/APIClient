@@ -153,8 +153,10 @@ typedef enum {
        index 0 throws BEFORE index 1 is pulled, and a page whose iterator has side effects per element can tell
        that apart from a walk that collects the whole list and checks it afterwards. A body cannot get that
        order back: it runs after §3.6 has converted every position.
-       The value list is declared beside the POSITION (idl_arg_enum), exactly as an interface type's is
-       (idl_arg_iface) and a typed array's T is (idl_typed_array). */
+       The value list is declared where the POSITION is: beside an argument position by idl_arg_enum, exactly
+       as an interface type's is (idl_arg_iface) and a typed array's T is (idl_typed_array), and beside a
+       DICTIONARY MEMBER in IdlDictMember::values — the same two roads a bare IDL_ENUM's list takes, because
+       the list belongs to the TYPE and both walks convert the same type. */
     IDL_SEQUENCE_ENUM,
     /* `sequence<double>` — §3.2.21 Sequences' iterator-protocol conversion with §3.2.7 `double` as the
        element type.
@@ -604,9 +606,18 @@ static inline bool idl_type_brands_interface(IdlArgType t)
  * conversion arm's `t ==` chain plus the DCHECK standing over it, and a set written once per reader is the
  * second copy CLAUDE.md names.
  *
- * Every reader asks THIS: the positional conversion's bare-enumeration arm, the element conversion inside
- * §3.2.21's sequence walk, idl_arg_enum's position check, and the seal's sweep over the whole platform — so a
- * type added to the enum that needs a value list is a type all four learn about at once.
+ * Every reader asks THIS: idl_arg_enum's position check, the seal's sweep over every declared argument
+ * position, and the seal's sweep over every declared DICTIONARY MEMBER — of both roads a member list is
+ * recorded by, a member's anonymous dictionary argument and the intern table of named declarations — so a type
+ * added to the enum that needs a value list is a type all of them learn about at once.
+ *
+ * THE CONVERSIONS ARE NOT AMONG THEM AND THAT IS DELIBERATE. An arm converting a value has already resolved
+ * the position to ONE type and asks for that type by name (`t == IDL_SEQUENCE_ENUM`), because what it needs to
+ * know is which element conversion to run and not whether some type in a set would want a list. Asking this
+ * predicate there would collapse the three rows onto one arm, and they are three different conversions: a bare
+ * `E` tests the member's own string, an `E?` admits null first, and a `sequence<E>` tests each element inside
+ * §3.2.21.1's repeat loop. The predicate answers a DECLARATION-TIME question — was the type given the `E` it
+ * needs — and that is the only question with one answer for all three.
  *
  * IDL_ENUM_NULLABLE is here even though §3.2.20's null rule collapses it to IDL_ENUM before any membership
  * test is reached, for idl_type_brands_interface's own reason: the DECLARATION is what the seal and
@@ -628,7 +639,13 @@ static inline bool idl_type_admits_enumeration(IdlArgType t)
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
    `required` (an absent required member is a TypeError, and for a dictionary `undefined` IS absent). A member
    with no `required` written is optional, which is what leaving the field off an initialiser gives. */
-/* `values` is the NULL-terminated list an IDL_ENUM member's IDL lists, and is read by nothing else.
+/* `values` is the NULL-terminated §3.2.18 value list of a member whose type NAMES AN ENUMERATION — which is
+   every type idl_type_admits_enumeration answers true for and no other, so it is the dictionary-member half of
+   what idl_arg_enum states beside an argument position. It is what §3.2.18 step 2's membership test is against,
+   whether the member is a bare `E` / `E?` or a `sequence<E>` whose ELEMENT conversion runs that same step, and
+   the seal asserts both directions of the pair over every declared member list at once — so a list stated at a
+   type that reads none, or a type that reads one and states none, is a crash at the seal rather than on
+   whichever call first reaches the member.
    `level` is WHICH DICTIONARY IN THE INHERITANCE CHAIN declares the member — 0 for the most-derived one's
    BASE, counting up to the dictionary itself. §3.2.17 reads the INHERITED members first and each dictionary's
    own members lexicographically among themselves, so `FilePropertyBag : BlobPropertyBag` reads endings, type,

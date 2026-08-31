@@ -1049,6 +1049,43 @@ static const char *idl_typed_array_name(int kind)
    rather than at whichever call happens to reach that position first. The reverse is asserted too: a T
    declared at a position whose type is something else describes a member that is not this one, which is
    exactly how a setter stated from an INSTALL lands on whichever component declared last (IDL_LAST_DECL_ONLY). */
+/* WEB IDL §3.2.18 Enumeration types' `E` ON A DICTIONARY MEMBER — idl_seal_check_enums' sweep one level down,
+ * over ONE declared member list, and the same two directions asked of the same one predicate.
+ *
+ * THE ADDRESS IS IN THE MESSAGE AND NOT IN THIS LINE, which is the whole reason this is allowed to be a shared
+ * helper: a DCHECK stamps the file and line it is WRITTEN at, so an invariant checked here would report this
+ * function for every declaration in the engine. What a reader has to be sent to is a DECLARATION, and a
+ * declaration is named by its dictionary and its member — so the caller states WHOSE list this is (`whose_kind`
+ * and `whose_name`, in two pieces so nothing has to be composed into a buffer on a path a release build
+ * compiles out) and the assert names the member inside it. There are two callers and both are the seal's; the
+ * pair they print is what identifies the row to edit, and this function's own line identifies nothing.
+ *
+ * A MEMBER LIST IS REACHED BY TWO ROADS and the sweep has to walk both, because they are recorded in two
+ * places: a member's own dictionary argument is an ANONYMOUS list the pool holds (`IdlMember::dict`), and every
+ * NAMED dictionary — an algorithm's own (idl_dict_declare) and every one a member's type nests — is in the
+ * intern table, which idl_dict_intern fills recursively. A sweep over only the first would be silent about
+ * exactly the dictionaries whose declaration is furthest from any argument position. */
+static void idl_seal_check_dict_enums(const IdlDictMember *ms, int n,
+                                      const char *whose_kind, const char *whose_name)
+{
+    int k;
+
+    for (k = 0; k < n; k++) {
+        bool stated = ms[k].values != NULL;
+
+        DCHECKF(!idl_type_admits_enumeration(ms[k].type) || stated,
+                "member `%s` of %s`%s` is declared a Web IDL §3.2.18 enumeration and names no values for it — "
+                "§3.2.18 step 2 is \"If S is not one of E's enumeration values, then throw a TypeError\", and "
+                "with no E there is nothing to be one of, so every string the page wrote would cross into the "
+                "algorithm. State them in the member's `values` field",
+                ms[k].name, whose_kind, whose_name);
+        DCHECKF(idl_type_admits_enumeration(ms[k].type) || !stated,
+                "member `%s` of %s`%s` states §3.2.18's values and its declared type asks for no enumeration — "
+                "no conversion reads them, so the declaration describes a member that never tests against them",
+                ms[k].name, whose_kind, whose_name);
+    }
+}
+
 /* A DICTIONARY POSITION AND ITS MEMBER LIST ARE ONE DECLARATION, asserted over the whole platform rather than
    at the position that happens to be converted first. §3.2.17's conversion is a walk of the member list, so a
    position declared IDL_DICT with no list is a conversion with nothing to read: before the walk existed it
@@ -1056,15 +1093,26 @@ static const char *idl_typed_array_name(int kind)
    and the IDL's own defaults would never be placed. The walk refuses it at its start instead, and this is what
    makes that refusal unreachable rather than a crash waiting for a page to call the member.
    THE CONVERSE IS THE OTHER HALF: a member list declared at a member with no dictionary position is a
-   declaration describing a member that is not this one, exactly as the typed-array pair above states. */
+   declaration describing a member that is not this one, exactly as the typed-array pair above states.
+   AND THE MEMBERS THEMSELVES ARE SWEPT HERE, through the helper above: this is the one moment every member
+   list the platform declared exists and none of them can change again, which is the same reason the position
+   sweeps are the seal's rather than each conversion's. */
 static void idl_seal_check_dictionaries(void)
 {
     int i, k;
 
+    for (i = 0; i < g_ndicts; i++)
+        idl_seal_check_dict_enums(g_dicts[i].d->members, g_dicts[i].d->n, "dictionary ", g_dicts[i].d->name);
     for (i = 0; i < g_n; i++) {
         const IdlMember *m = idl_member(i);
         bool has_position = false;
 
+        /* AN ANONYMOUS LIST HAS NO IDENTIFIER, so the MEMBER it was declared at is its address — the same
+           answer idl_dict_order_check reaches for when it has to name one of these, and for the same reason:
+           a member's own dictionary argument is an array with no name to print. */
+        if (m->dict_n > 0)
+            idl_seal_check_dict_enums(m->dict, m->dict_n, "the dictionary argument of member ",
+                                      m->name ? m->name : "(not installed)");
         for (k = 0; k < m->nargs; k++)
             if (idl_type_is_dictionary(m->types[k])) has_position = true;
         DCHECK(!has_position || m->dict_n > 0,
@@ -1763,17 +1811,6 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
                "a dictionary member was declared as a §3.6 overload split — that type resolves between "
                "two overload ENTRIES at an argument position, and a member is inside one entry already; "
                "the member's own IDL names either the sequence or the dictionary, never both");
-        /* §3.2.21 OVER A DICTIONARY MEMBER IS THIS FUNCTION'S OWN COPY OF THE ARGUMENT-POSITION WALK, and it
-           has no §3.2.18 element arm — so a member declared this way would run step 3.3's element conversion
-           as a plain ToString and place every string the page wrote, which is the same silent shape the two
-           asserts above name. Twenty dictionary members of the platform's IDL are `sequence<E>`
-           (GPUDeviceDescriptor's requiredFeatures and XRHitTestOptionsInit's entityTypes among them), so this
-           is a row to BUILD beside the IDL_SEQUENCE_DOMSTRING arm below — the element conversion is
-           step_tostring_run then idl_enum_check against `dm->values`, exactly as the argument path does — and
-           not a shape to keep out. */
-        DCHECK(mt != IDL_SEQUENCE_ENUM,
-               "a dictionary member was declared `sequence<E>` and the dictionary walk has no §3.2.18 element "
-               "conversion — build it beside this function's IDL_SEQUENCE_DOMSTRING arm, over dm->values");
         /* §3.2.17 (ES-to-IDL list) step 4.1.5's DEFAULT comes first, because it is the difference between a
            member that does not exist and one that exists holding what the IDL wrote. It is already an IDL
            value, so nothing converts it.
@@ -1856,7 +1893,8 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
             w->mv = seq;
         }
         else if (mt == IDL_SEQUENCE_DOMSTRING || mt == IDL_SEQUENCE_INTERFACE ||
-                 mt == IDL_SEQUENCE_OBJECT || mt == IDL_SEQUENCE_DOUBLE) {
+                 mt == IDL_SEQUENCE_OBJECT || mt == IDL_SEQUENCE_DOUBLE ||
+                 mt == IDL_SEQUENCE_ENUM) {
             /* §3.2.21 over a dictionary member. A value that is not an Object is a TypeError before
                anything is read, exactly as it is in argument position — the check is on the TYPE and
                not on iterability, so `{attributeFilter: "id"}` throws even though a string iterates.
@@ -1944,6 +1982,26 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
                 in = JS_UNDEFINED;
                 if (r > 0) return r;
                 if (r < 0) return -1;
+                /* §3.2.18 Enumeration types' step 2 — "If S is not one of E's enumeration values, then throw a
+                   TypeError" — over the string step 1's ToString just produced, and it is the SAME
+                   idl_enum_check the argument-position element arm calls: what differs between the two is
+                   only WHERE this position's `E` was declared (a member's own `values` here, idl_arg_enum's
+                   per-position list there), never the test. It runs none of the page's code, so it is decided
+                   here rather than being a rest point; and it is decided BEFORE the cursor's next pull, which
+                   is §3.2.21.1 Creating a sequence from an iterable's own order — the element conversion is
+                   step 3.3 of the repeat loop, after step 3.1's IteratorStepValue and before the next
+                   iteration's — and is observable to a page whose iterator has side effects.
+                   IT IS ASKED POSITIVELY, for the reason the argument path's twin states: this ToString is the
+                   fall-through every sequence element type that is not OBJECT, INTERFACE or DOUBLE lands on,
+                   so a negative test would silently hand each row added later a check its element type never
+                   asked for. */
+                if (mt == IDL_SEQUENCE_ENUM &&
+                    idl_enum_check(ctx, str, dm->values, dm->name) < 0) {
+                    /* The string is this block's and has not been handed to the list — the -1 edge discharges
+                       what the WALK owns (its `visit` names `seq_list`) and knows nothing about a local. */
+                    JS_FreeValue(ctx, str);
+                    return -1;
+                }
                 JS_SetPropertyUint32(ctx, w->seq_list, w->seq_n++, str);
                 w->seq_phase = 1;
             }
