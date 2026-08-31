@@ -294,6 +294,18 @@ typedef struct Flow {
        only firing proves it, so the replay re-observes or nothing is recorded. See cold.c's park_rec_cand. */
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
+    /* WHERE THIS CANDIDATE'S PAYLOAD CAME FROM — the park record it was rebuilt out of (1), or this session's
+       own search list (0). It exists so that "these bytes have no row in this session's record" is a POSITIVE
+       statement rather than a hole a reader fills with a guess.
+       §@S ALREADY SAYS THE FACT AND NOTHING STATED IT. A cold-resumed candidate's payload "rides the resumed
+       FLOW rather than this session's record" (solve.h, on `payloads` being empty beside a non-zero `tried`),
+       so solve.c's arrival check cannot decide from the payload list alone whether an unlisted payload is a
+       resumed one — which is legitimate — or a candidate assembled outside both doors, which is the assembly
+       failure that check exists to catch. Those are opposite verdicts and the list reports them identically.
+       IT IS RE-DERIVED AND NEVER PARKED, exactly like `cand_verifying` above it: a candidate that parks again
+       is written as a 'c' record and comes back through the same rebuild arm, which sets this again. Nothing
+       reads it before that arm runs — solve.c reads it only at a sink, and a flow reaches a sink by running. */
+    int cand_resumed;      /* this candidate was rebuilt from a park record, so its payload has no row here */
     /* HOW FAR THIS CANDIDATE'S OWN BYTES HAVE GOT — §@S's fitness read as a COMPARATOR, which is a different
        quantity from the reward beside it and is the half `val` structurally cannot be.
        A REWARD IS A LEDGER AND A FITNESS IS A COMPARATOR, and the two obey opposite rules. A ledger records

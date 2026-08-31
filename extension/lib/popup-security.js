@@ -267,6 +267,24 @@ function _parkedProgress(item) {
   // class states its vectors at detection and has `probes:0`), so this branch — which requires `probes > 0` —
   // is reached only where the field is present. The parked block asserts that biconditional rather than
   // letting a `=== 0` here silently answer for a missing field.
+  // …AND THE CROSS-SESSION RUN IS ANSWERED BEFORE THE PROBES-ONLY BRANCH, because that branch's whole sentence
+  // is false of it. "Every one of them was an inert PROBE, so there is nothing that could arrive" is a claim
+  // about the runs and reads them off the LIST, and a candidate rebuilt out of the cold tier carries its
+  // payload on the resumed FLOW and is in no row — so the branch below would tell the reader nothing could
+  // arrive about a search whose furthest run is a real breakout that did. It is also the strongest thing a
+  // parked @S entry can say: this search is older than this session, its bytes were derived and parked
+  // somewhere else, and they came back and were re-run against today's page.
+  if (item.resumed > 0 && item.payloads.length === item.probes)
+    return held + ', and ' + item.resumed + ' of its ' + item.tried + ' run'
+         + (item.tried === 1 ? "" : "s") + ' came back from a PREVIOUS SESSION — those candidates were derived '
+         + 'and parked before this run, and their bytes ride the resumed flow rather than this session\'s '
+         + 'list, which is why nothing below is an attack of this session\'s. '
+         + (item.reached > 0
+            ? 'They reached this sink ' + item.reached + ' time' + (item.reached === 1 ? "" : "s")
+              + ' and did not fire, so this is a question about the BYTES: a breakout an earlier session built '
+              + 'arrives at today\'s page and does not break out of it'
+            : 'They have not reached this sink yet, so this is a distance question through today\'s document '
+              + 'and not one about the payload');
   if (item.payloads.length && item.payloads.length === item.probes) {
     if (item.witnessed === 0)
       return held + ' and every one of them was an inert PROBE whose bytes have NOT yet been seen at this '
@@ -506,7 +524,7 @@ function renderSecurityPanel() {
 
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
-    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns,
+    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, resumed, reached, turns,
     // substituted, sinkStrings, survived,
     // survivedOf, escaped, fires?, probes, payloads, survivedBy, withdrawn, sourceEncodes?, delivery?,
     // deliveryPrefix?}
@@ -651,6 +669,21 @@ function renderSecurityPanel() {
         "a parked @S record reached the popup without sink/source/tried — solve_json_array emits all three, "
         + "and without `tried` the card would say '0 breakouts run' about a search that has run (sink="
         + pit.sink + " source=" + pit.source + ")");
+      // …AND `resumed` BESIDE IT, BECAUSE IT IS THE OTHER TERM OF `tried` AND WITHOUT IT THE ARITHMETIC solve.h
+      // STATES CANNOT BE PERFORMED. `tried` is the entries not marked `withdrawn` PLUS the candidates the
+      // engine rebuilt out of the cold tier, whose bytes ride the resumed FLOW and are in no row of `payloads`
+      // at all. A reader given only the first term reads `tried:6` beside an empty list identically as a
+      // cross-session search whose every run came back from a park document and as a producer that dropped a
+      // field — and a `|| 0` here would pick the second, which is the confident wrong direction: it would
+      // license every probes-only and every survivedBy implication below over a search whose furthest run has
+      // no column at all. Emitted UNCONDITIONALLY and 0 is the load-bearing value (every run is a row here),
+      // so there is no absent form to read positively.
+      DCHECK(typeof pit.resumed === "number" && pit.resumed >= 0 && pit.resumed <= pit.tried,
+        "a parked @S record reached the popup without its cold-resumed run count, or with more resumed runs "
+        + "than runs — solve_json_array emits `resumed` on every parked entry and it is a subset of `tried` by "
+        + "construction (solve_resume_candidate raises both together), so this card is about to read the "
+        + "columns below as a complete account of what this search has run when it is not (sink=" + pit.sink
+        + " tried=" + JSON.stringify(pit.tried) + " resumed=" + JSON.stringify(pit.resumed) + ")");
       DCHECK(typeof pit.reached === "number" && typeof pit.turns === "number" && Array.isArray(pit.payloads),
         "a parked @S record reached the popup without reached/turns/payloads — solve_json_array emits all "
         + "three on every parked entry, so absence is that serializer or the relay to this panel broken, and "
@@ -786,11 +819,23 @@ function renderSecurityPanel() {
       // search holding nothing but probes cannot have had a breakout ARRIVE — `reached` is raised only where
       // a marker-carrying candidate is seen at the sink. The pair disagreeing means the probe cursor and the
       // arrival counter were measured on different searches.
-      DCHECK(!(pit.payloads.length && pit.payloads.length === pit.probes) || pit.reached === 0,
+      // …AND THE IMPLICATION IS ABOUT THE RUNS, NOT ABOUT THE LIST, WHICH IS THE QUANTIFIER IT WAS MISSING. It
+      // holds exactly while every run this search has had is a ROW in `payloads`, and §@S has one run that is
+      // legitimately not: a candidate rebuilt out of the cold tier carries its payload on the resumed FLOW, so
+      // its marker-carrying bytes really can arrive at a sink whose whole visible list is probes. The engine's
+      // own arrival assert made the same unquantified claim and ABORTED the process on it — the first time a
+      // parked candidate ever came back and reached its sink, which is the one run the whole cross-session
+      // machinery exists to produce. `resumed` is the producer stating the excuse; inferring it here from
+      // `tried` against `payloads` and `withdrawn` would be this view re-deriving a producer fact it cannot
+      // check, which is the drift these cards exist to end.
+      DCHECK(!(pit.payloads.length && pit.payloads.length === pit.probes)
+             || pit.reached === 0 || pit.resumed > 0,
         "a parked @S record reports a breakout ARRIVING at a sink while every candidate it has run is an inert "
-        + "probe — a probe carries no marker by construction, so nothing this search ran could have raised "
-        + "`reached` (sink=" + pit.sink + " reached=" + pit.reached + " probes=" + pit.probes
-        + " payloads=" + pit.payloads.length + ")");
+        + "probe and none of its runs came back from a previous session — a probe carries no marker by "
+        + "construction and a resumed candidate's payload is the only marker-carrying bytes with no row in "
+        + "`payloads`, so with neither of those nothing this search ran could have raised `reached` (sink="
+        + pit.sink + " reached=" + pit.reached + " probes=" + pit.probes
+        + " payloads=" + pit.payloads.length + " resumed=" + pit.resumed + ")");
       // `witnessed` IS ASSERTED AS A BICONDITIONAL WITH `probes`, BECAUSE ITS ABSENCE AND ITS ZERO ARE THE TWO
       // FACTS THE CARD NOW SPLITS ON AND A `=== 0` CANNOT TELL THEM APART. solve_json_array emits the field
       // only for a class whose `derive` column is set, and solve_init asserts the exclusive-or that makes that

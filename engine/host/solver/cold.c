@@ -1428,6 +1428,15 @@ void cold_resume(JSContext *ctx, const char *recipes)
                it here is what says the flow never owned it. */
             fl->cand_sink = solve_resume_candidate(fl->cand_src, root, sname);
             free(root);
+            /* AND THE PAYLOAD'S PROVENANCE IS STATED, because this is the only site that knows it. These bytes
+               came out of the record above, so this session's search list has no row for them unless its own
+               derivation independently constructs the same string. solve.c's arrival check reads exactly this
+               to tell a resumed candidate — legitimate — from a candidate assembled outside both of the
+               search's doors, which is a defect; without it the two are one absent row. Set here rather than
+               re-derived on switch-in the way `cand_verifying` is, because there is nothing on the flow to
+               re-derive it FROM: a resumed candidate and a seeded one are byte-for-byte the same assembly
+               apart from where the payload was read. */
+            fl->cand_resumed = 1;
             /* AND IT IS REBUILT EXACTLY AS AN 'f' IS, including a `-` segment. The temptation here is to say
                that `-` means "never scheduled" and leave such a candidate un-started, the way
                solve_seed_candidates leaves a fresh one — but the record CANNOT distinguish that from a flow

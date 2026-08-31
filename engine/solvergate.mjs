@@ -698,7 +698,20 @@ const DROP = new Map([
      BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated for the reason the row above states it: this
      classification was made when the two fields were added, before any run, so nobody may read it as evidence
      that a mismatch in either was ever observed here. */
-  [".securitySinks[]", new Set(["tried", "turns", "substituted", "sinkStrings"])],
+  /* `resumed` IS THE SAME ROW AGAIN AND IT IS THE PUREST CASE OF IT — a count of how many of this search's runs
+     were rebuilt out of the cold tier. The `park` schedule is DEFINED as the one that parks a frontier and
+     rebuilds it in a second session (this file requires `@RESUMED > 0` from it, above), and no other schedule
+     resumes anything at all, so this number is not merely schedule-INFLUENCED like its neighbours: the
+     schedule is its entire content. Holding it invariant would fail `park` against the reference on healthy
+     code, every time, by construction.
+     ITS NEIGHBOURS STAY COMPARED FOR THE REASON THE TWO ROWS ABOVE GIVE, and `payloads`/`probes` are the ones
+     to watch here rather than to drop: a resumed candidate registers its search before any exploration flow of
+     the new session detects one, and until add_pending's `opened` latch that ORDER decided whether the search
+     was ever opened — so the resuming session built no probe, derived nothing, and reported `payloads:[]`
+     where the reference reported a probe and its escapes. That is a divergence this gate is exactly right to
+     see, and the fix belongs in solve.c rather than in this set. BY CONSTRUCTION AND NOT FROM A MEASUREMENT,
+     stated for the reason the rows above state it. */
+  [".securitySinks[]", new Set(["tried", "resumed", "turns", "substituted", "sinkStrings"])],
 ]);
 function canonStr(v, path) {
   if (Array.isArray(v)) {

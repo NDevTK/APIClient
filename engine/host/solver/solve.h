@@ -168,7 +168,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
                       [,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"reached":M,"turns":T,
                       "substituted":D,"sinkStrings":X,"survived":S,
                       "survivedOf":L[,"survivedAt":A,"survivedTo":O],"escaped":E[,"fires":F][,"witnessed":W]
                       ,"probes":P,"payloads":[..],
@@ -302,9 +302,13 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    `survivedBy:[16,0]` resolves it: the probe's bytes reached a sink and the breakout's never did, which is a
    question about the SECOND traversal, while `[16,9]` would say the breakout travelled and something after
    arrival is the problem. A ZERO is a real value each entry must be able to say, and a candidate whose payload
-   this session's record does not hold — a cold-resumed one, whose bytes ride the resumed FLOW rather than the
-   record, which is the same reason `payloads` can be empty beside a non-zero `tried` — contributes to
-   `survived` and to no column here, because there is no row of this session's for it.
+   this session's record does not hold contributes to `survived` and to no column here, because there is no row
+   of this session's for it. The COLD TIER is the one producer of such a candidate — a resumed one's bytes ride
+   the resumed FLOW rather than the record, which is the same reason `payloads` can be empty beside a non-zero
+   `tried` — and it is a fact about the PAYLOAD rather than about the flow: where this session's own derivation
+   independently constructs the same string, that is one payload and therefore ONE row, which both flows write,
+   exactly as two seeded flows carrying identical bytes would (push_breakout dedups by text for the same
+   reason). What has no row is bytes this session never held, never the fact of having been resumed.
    `withdrawn` IS THE THIRD COLUMN OF THAT SAME TABLE, and it exists because the row it describes is otherwise
    the exact report of its own opposite. The deliverability table a breakout is constructed under is MEASURED,
    by a delivery probe that has to run, so it narrows AFTER escapes have already been queued: a spelling built
@@ -315,7 +319,18 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    mutating, and `survivedBy:0, withdrawn:1` is the SOURCE's percent-encode set making this exit unsatisfiable
    by construction, which is the joint solve's correct and final answer for that spelling. It is also the
    arithmetic that keeps `tried` and `payloads` readable together — `tried` counts the entries NOT marked here,
-   plus any candidate resumed out of the cold tier, which has no row at all.
+   plus any candidate resumed out of the cold tier whose bytes this session's own search never constructed, and
+   which therefore has no row at all. `resumed` IS THAT SECOND TERM, and until it was emitted this arithmetic
+   was one a reader could not perform: the sentence named two quantities and the record carried one, so
+   `tried:6` beside `payloads:[]` read identically as a cross-session search whose every run was rebuilt from a
+   park document and as a producer that had dropped a field.
+   `resumed` IS ALSO WHAT LICENSES THE IMPLICATIONS READ OFF THE THREE COLUMNS ABOVE. Each of them — a
+   `survivedBy` zero, a `withdrawn` flag, and `probes == payloads` beside a non-zero `reached` — is a statement
+   about the runs this search has had, and each is sound exactly while every one of those runs IS a row here. A
+   resumed candidate is the one run that is not: its bytes ride the FLOW, so a search holding nothing but its
+   own probes really can report a breakout ARRIVING, which is the opposite of what the probes-only reading
+   says. `resumed:0` is therefore the positive statement that the columns are complete, and it is emitted
+   unconditionally because that zero is the load-bearing value.
    WITHDRAWING IS PRUNING A CONTRADICTED ARM AND NOT A BOUND: no count, no age, no retry limit and no seen-set
    decides it — only whether a positive observation of this search's own says these bytes do not arrive, and
    the table narrows solely on evidence (an unobserved byte keeps its arm). A PROBE is never marked: the

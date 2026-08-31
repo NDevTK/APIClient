@@ -3807,6 +3807,13 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
         sib->cand_sink = parent->cand_sink;   /* solve.c's static table text; not owned, so not copied */
         sib->cand_fired = parent->cand_fired;
+        /* AND WHERE THE PAYLOAD CAME FROM, which is a fact about the BYTES and therefore about both arms. An
+           arm of a resumed candidate is carrying the record's payload exactly as its parent is, so an arm that
+           lost this bit would be a flow whose bytes this session's search list has no row for and which claims
+           it was seeded out of that list — the state solve.c's arrival assert exists to catch, manufactured by
+           the fork. It fires at the FIRST branch a resumed candidate takes on its way to the sink, which on a
+           gated document is every one of them. */
+        sib->cand_resumed = parent->cand_resumed;
     }
     /* AND SO DOES BEING A DRIVEN ORPHAN, which is the same sentence about the third thing a flow can be: an arm
        of an orphan drive is that drive continued, so it is no more reproducible from a decision vector than its
@@ -3833,10 +3840,13 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        as the queued job's realm below, and for the same reason: the three fields are copied out one by one
        precisely so a fourth is visible, which is exactly how these three came to be missing. */
     DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
-           (sib->cand_sink != NULL) == (parent->cand_sink != NULL),
+           (sib->cand_sink != NULL) == (parent->cand_sink != NULL) &&
+           sib->cand_resumed == parent->cand_resumed,
            "an arm of an @S candidate session left the fork without the substitution that makes it one — it "
            "would explore the other arm as an ordinary flow inside a heap the payload has already been read "
-           "into, report its requests as observed endpoints, and be unable to record a fire");
+           "into, report its requests as observed endpoints, and be unable to record a fire; or it kept the "
+           "substitution and lost the record of WHERE those bytes came from, which makes a resumed candidate's "
+           "own arm indistinguishable from a candidate assembled outside the search's two doors");
     /* AND THE RANK THAT SUBSTITUTION IS THE DENOMINATOR OF — flow.h's "every non-candidate stands at exactly
        0", asserted at the ONE point where it is transiently false and then made true again. flow_fork_inherit
        runs first (it decides where the arm enters the queue) and copies the parent's ladder position, so

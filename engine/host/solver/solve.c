@@ -52,6 +52,37 @@ void solve_arrival_census(long *reached, long *tainted, long *suppressed) {
 
 static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand_verifying; }
 
+/* ONE CANDIDATE OF ONE SINK'S SEARCH — its bytes, WHAT KIND OF THING THOSE BYTES ARE, and how much of them has
+   ever been seen at a sink. The three used to be a `char **` beside an `int *` beside a LEADING COUNT, and the
+   kind is the member that makes the difference: a probe is an INSTRUMENT (an inert context probe, or a
+   delivery probe built out of the source's own percent-encode set) and an escape is an ATTACK, and every
+   reader of this list has to know which it is holding — the seeder must not withdraw an instrument, the
+   derivation's hand-off assert must know whether an escape was received, the arrival assert must know whether
+   the bytes that turned up could have been built by this search, and the report states the split.
+   THE KIND IS A PROPERTY OF THE ENTRY AND NEVER OF ITS POSITION, which is what this field is FOR. It was
+   `index < nprobe`, a positional convention re-established by one assignment (`nprobe = npl`) at one instant —
+   correct only while that instant was provably the one moment nothing else had been pushed. That precondition
+   is not a property of the label, it is a property of the ORDER two independent producers happen to arrive in,
+   and §A-FIELD-A-CONSUMER-DEFAULTS' relative applies exactly: a count that means one thing when detection
+   opens a search on a slot it created and another when it opens one a cold resume created is a field that
+   means two things depending on who wrote it. Written by the pusher, which is the only party that knows.
+   AND THE THREE TRAVEL TOGETHER FOR THE REASON THE OLD PAIR'S OWN COMMENT GAVE AND COULD ONLY HOPE FOR: `pl`
+   and `surv_pl` were "parallel and grown together so the two cannot come apart", which is an obligation on
+   every future push, free and clone site (§Architecture: a struct copied field-by-field must dup EVERY owned
+   field). One array of one record is how that obligation stops existing. */
+#define CAND_PROBE  1   /* an instrument — inert by construction, never an attack, never withdrawn */
+#define CAND_ESCAPE 2   /* an attack — derived from a witness, or a single-context class's written-down vector */
+typedef struct {
+    char *bytes;   /* owned */
+    int   kind;    /* CAND_PROBE | CAND_ESCAPE — see above */
+    /* THE PER-CANDIDATE HALF OF THE SURVIVAL PAIR. `surv_run`/`surv_len` is the search's BEST and saturates at
+       a full-length run the moment any one candidate lands intact — the ratchet's own consequence — so it
+       cannot say whether the run it is reporting was the inert probe's or a breakout's. Those are the two
+       flows whose only difference is these bytes, so telling them apart IS the remaining question. Report-only:
+       the WFQ credit stays on the search-level ratchet, worth at most one rung, so this changes no ordering. */
+    int   surv;
+} CandPayload;
+
 /* A detected sink awaiting fire-verification. `seeded` is per SINK, not per session: a sink discovered late —
    inside a lazily-imported chunk, inside an injected <script src> — is discovered after the frontier has already
    drained once, and a one-shot "the candidates are seeded" latch meant it never got any. That latch was a cap:
@@ -238,20 +269,32 @@ typedef struct {
        TEXT, never an index into the class table: a candidate flow carries its payload to the cold tier and back
        (cold.c parks `cand_payload` as bytes for exactly this reason), so a recipe parked this session must
        still mean the same thing to a build whose tables have changed. */
-    char **pl; int npl, plcap, seeded;
-    /* HOW MANY OF `pl`'s LEADING ENTRIES ARE PROBES rather than escapes — one fact rather than an arithmetic
-       the readers of `npl` each restated. A derived class opens with an inert CONTEXT probe and, where the
-       source declares a percent-encode set, a DELIVERY probe beside it; a single-context class opens with its
-       written-down vectors and has none. `npl > nprobe` is then exactly "this search has constructed an
-       escape", which `npl > 1` only approximated and stopped meaning the moment a second probe existed. */
-    int nprobe;
-    /* THE PER-CANDIDATE HALF OF THE SURVIVAL PAIR, parallel to `pl` (see push_breakout). `surv_run`/`surv_len`
-       is the search's BEST and saturates at a full-length run the moment any one candidate lands intact — the
-       ratchet's own consequence — so it cannot say whether the run it is reporting was the inert probe's or a
-       breakout's. Those are the two flows whose only difference is these bytes, so telling them apart IS the
-       remaining question. Report-only: the WFQ credit stays on the search-level ratchet, worth at most one
-       rung, so adding this changes no ordering. */
-    int *surv_pl; int svcap;
+    CandPayload *pl; int npl, plcap, seeded;
+    /* HOW MANY OF THIS SEARCH'S RUNS CAME BACK OUT OF THE COLD TIER — the operand solve.h's own arithmetic for
+       `tried` names and nothing emitted, which made that arithmetic unperformable by the only reader it was
+       written for. `tried` is "the entries not marked `withdrawn`, PLUS any candidate resumed out of the cold
+       tier, which has no row at all", and the second term was a sentence rather than a number: a reader
+       holding `tried:6` beside an empty `payloads` could not tell a cross-session search from a producer that
+       had dropped a field. Raised beside `tried` at the one door that produces it (solve_resume_candidate).
+       IT IS ALSO WHAT MAKES `reached` READABLE BESIDE A PROBES-ONLY LIST. "A search holding nothing but its
+       own probes cannot have had a breakout arrive" is TRUE of a search all of whose runs are rows in that
+       list and FALSE the moment one of its runs is a resumed candidate, whose marker-carrying bytes ride the
+       FLOW and are in no row — the same implication solve.c's arrival assert used to make and the popup still
+       makes. Emitted so the consumer states it from a producer fact instead of inferring it from an
+       arithmetic over three other fields, which is the view-restating-a-producer-fact this file declines
+       twice elsewhere. */
+    int resumed;
+    /* HAS DETECTION OPENED THIS SEARCH — a fact about the SEARCH, and the reason it is a field rather than the
+       `created` flag add_pending used to read. Two doors reach an entry and only one of them can open a
+       search: DETECTION stands at the sink holding the value that arrived, which is what the class's probe and
+       the re-injection point are both taken from, while a COLD RESUME merely re-registers a candidate of a
+       search a previous session opened. `created` answers "did this call make the array slot", and the two
+       questions come apart in the order the cold tier makes structural — cold_resume runs at engine init, so
+       in a resuming session the resume ALWAYS makes the slot and detection always found one. Read off
+       `created`, detection then returned before pushing anything: no probe, no vectors, no path, and a report
+       that said `payloads:[]`, which solve.h defines as the positive statement that this source can carry no
+       exit at all. See add_pending. */
+    int opened;
     /* WHICH BYTES OF A CANDIDATE ACTUALLY REACH THIS SINK, and the witness a changed answer is re-derived from
        — §@S's SECOND observation, which the derivation was being run without.
        §@S requires the three observations to be solved JOINTLY: the sink's parse context, the per-flow
@@ -619,9 +662,14 @@ void solve_init(JSContext *ctx) {
    flow is waiting on in one component and a detected-but-unsolved sink in this one, and one word carrying two
    meanings across two vocabularies is how a set of names goes wrong. What this returns is one sink's SEARCH. */
 /* THE SEARCH FOR A (source, class) IF THERE IS ONE — the READ half, separate from sink_search because
-   find-or-CREATE is the wrong primitive for a caller that is merely observing. Opening a search is an EVENT
-   (it credits the running flow with a new attacker-source-reaches-sink), so a lookup that created one would
-   both fabricate a search with no breakouts and pay a flow for discovering nothing. */
+   find-or-CREATE is the wrong primitive for a caller that is merely observing: a lookup that created one would
+   fabricate a search with no breakouts, no path and nothing to seed, and every later reader of g_pending would
+   take it for a detected sink.
+   THE ARGUMENT THAT USED TO STAND HERE WAS ONE ABOUT PAYMENT — "opening a search is an EVENT (it credits the
+   running flow)" — AND THAT IS NO LONGER A PROPERTY OF THIS CALL. The credit moved to where the OBSERVATION
+   is, which is detection opening the search (add_pending), because creating the array slot and opening the
+   search are two facts and the cold tier makes them come apart. Creating one now costs nothing and is still
+   wrong, for the reason above; a reader who re-derives the payment argument will find it at the open. */
 static Cand *search_of(const char *src, int sink) {
     for (int i = 0; i < g_pending_n; i++)
         if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return &g_pending[i];
@@ -674,7 +722,6 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        own pair: 0 is a real offset, so a zeroed pair states that a run this search has never observed begins
        at the candidate's first byte. Same realloc'd-and-never-zeroed line as every field around it. */
     e->surv_at = -1; e->surv_out = -1;
-    e->surv_pl = NULL; e->svcap = 0;
     /* EVERYTHING DELIVERS UNTIL A RUN SAYS OTHERWISE — the sound-only direction (solve_filter.h): a search
        whose delivery probe has not come back keeps every arm, exactly as a branch whose domain permits both
        outcomes keeps both. The array is realloc'd and never zeroed, so an omission here would read a
@@ -686,9 +733,16 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     /* SAME LINE AND SAME REASON AS `reach_credited`: the array is realloc'd and never zeroed, and a latch left
        holding whatever the allocator had spends a rung this search has never been paid. */
     e->escaped = 0; e->escape_credited = 0;
-    e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0; e->nprobe = 0;
+    e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
+    /* NOTHING HAS COME BACK FROM THE COLD TIER YET, on the same line as every field around it: the array is
+       realloc'd and never zeroed, and a garbage nonzero here does not merely misreport a quantity — it excuses
+       exactly the arrival the assert beside it exists to catch, which is the confident-wrong direction. */
+    e->resumed = 0;
+    /* THE SEARCH IS NOT OPEN YET, AND THE SLOT EXISTING IS NOT THE SAME FACT — see add_pending. The array is
+       realloc'd and never zeroed, so a latch left holding whatever the allocator had would make a search read
+       as already opened and it would never get its probe. */
+    e->opened = 0;
     *created = 1;
-    flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
     return e;
 }
 
@@ -696,29 +750,88 @@ static Cand *sink_search(const char *src, int sink, int *created) {
    writes it (a loop over innerHTML), and two occurrences of the source can land in the same tokenizer state,
    so the same constructed escape arrives more than once — and each duplicate would otherwise be a whole extra
    re-run of the page that can only reproduce a result already had. */
-static void push_breakout(Cand *e, const char *payload) {
+static void push_breakout(Cand *e, const char *payload, int kind) {
     DCHECK(e && payload && *payload, "a breakout was queued onto no sink, or with no bytes in it");
-    for (int i = 0; i < e->npl; i++) if (!strcmp(e->pl[i], payload)) return;
+    /* THE KIND IS STATED BY THE PUSHER AND ASSERTED HERE, because it is the one fact about these bytes that
+       cannot be recovered from them afterwards. Every reader below acts on it — the seeder declines to
+       withdraw an instrument, the arrival assert asks whether the bytes could have been BUILT by this search,
+       the report splits `probes` from attacks — so a third value, or a zero left by a caller that did not
+       think about it, would put an entry in a state every one of those readers answers differently for. */
+    DCHECK(kind == CAND_PROBE || kind == CAND_ESCAPE,
+           "a candidate was queued as neither an instrument nor an attack — a probe is inert and is never "
+           "withdrawn and never counted as an arrival, an escape is the opposite on all three, and there is no "
+           "third thing for this list to hold");
+    /* DEDUPED BY TEXT, AND THE KIND IS PART OF WHAT THAT SETTLES. Two producers can reach the same bytes — a
+       written-down vector and a derivation, or a derivation re-run under a narrowed table — and a duplicate
+       would otherwise be a whole extra re-run of the page that can only reproduce a result already had. An
+       entry keeps the kind it was FIRST pushed with, which is sound because the two producers that can collide
+       are both escape producers: a probe is built out of this file's own locators (derive_probe, bytes_probe)
+       and no derivation emits one, so a collision between an instrument and an attack is not reachable. It is
+       asserted rather than assumed, because that argument is about the locator vocabulary and a class added
+       later owns its own. */
+    for (int i = 0; i < e->npl; i++)
+        if (!strcmp(e->pl[i].bytes, payload)) {
+            DCHECK(e->pl[i].kind == kind,
+                   "one candidate's bytes have been queued as an instrument by one producer and as an attack "
+                   "by another — a probe carries this file's own locator and a derivation constructs from the "
+                   "sink's grammar, so identical bytes from both means a class's probe vocabulary has come to "
+                   "overlap its escapes and every reader of the kind now answers for whichever pushed first");
+            return;
+        }
     if (e->npl >= e->plcap) {
         e->plcap = e->plcap ? e->plcap * 2 : 8;
-        e->pl = realloc(e->pl, (size_t)e->plcap * sizeof(char *));
+        e->pl = realloc(e->pl, (size_t)e->plcap * sizeof(CandPayload));
         CHECK(e->pl, "solve: OOM recording a breakout for a sink search");
     }
-    e->pl[e->npl] = strdup(payload);
-    CHECK(e->pl[e->npl], "solve: OOM recording a breakout for a sink search");
-    /* PARALLEL TO `pl` AND GROWN WITH IT, so the two cannot come apart. `surv_pl[i]` is the longest run of
-       `pl[i]` ITSELF that has ever been seen at a sink — the per-candidate half of `surv_run`/`surv_len`, which
-       saturates at 1.0 the moment ANY candidate lands intact and then cannot say WHICH one did. A derived
-       class's `pl[0]` is its inert context probe and `pl[1..]` are the breakouts built from what that probe
-       observed, so this array is exactly the statement "the probe's bytes got somewhere and the breakout's did
-       not" — the two flows differ in nothing but these bytes, so that is the whole question. */
-    if (e->plcap > e->svcap) {
-        e->surv_pl = realloc(e->surv_pl, (size_t)e->plcap * sizeof(int));
-        CHECK(e->surv_pl, "solve: OOM recording a breakout's own survival");
-        e->svcap = e->plcap;
-    }
-    e->surv_pl[e->npl] = 0;
+    e->pl[e->npl].bytes = strdup(payload);
+    CHECK(e->pl[e->npl].bytes, "solve: OOM recording a breakout for a sink search");
+    e->pl[e->npl].kind = kind;
+    e->pl[e->npl].surv = 0;
     e->npl++;
+}
+
+/* HOW MANY OF THIS SEARCH'S CANDIDATES ARE INSTRUMENTS — the report's `probes`, READ OFF THE LABELS rather
+   than off a leading count, so it states what the entries ARE and not where they happen to sit. */
+static int cand_probes(const Cand *e) {
+    int n = 0;
+    DCHECK(e != NULL, "the probe count was asked of no search");
+    for (int i = 0; i < e->npl; i++) if (e->pl[i].kind == CAND_PROBE) n++;
+    return n;
+}
+
+/* HAS THIS SEARCH CONSTRUCTED AN ESCAPE? — the question `npl > nprobe` was the arithmetic for. It is a
+   statement about what the list HOLDS, so it is answered by asking the entries, and it is then true in every
+   order the two producers can arrive in rather than only in the one the leading count was taken in. */
+static int cand_has_escape(const Cand *e) {
+    DCHECK(e != NULL, "the escape question was asked of no search");
+    for (int i = 0; i < e->npl; i++) if (e->pl[i].kind == CAND_ESCAPE) return 1;
+    return 0;
+}
+
+/* WHAT KIND OF THING THESE EXACT BYTES ARE TO THIS SEARCH, or 0 for bytes this session's record does not hold.
+   THE ZERO IS A POSITIVE STATEMENT AND ITS ONE LEGITIMATE PRODUCER IS THE COLD TIER: a resumed candidate's
+   payload rides the resumed FLOW rather than this session's record (solve.h, on `payloads` being empty beside
+   a non-zero `tried`), so it has no row here unless this session's own derivation independently constructed
+   the same bytes — in which case it is the same payload, one row, which is what deduping by text means.
+   Every caller of this therefore reads the zero against `Flow.cand_resumed` and never as "not found". */
+static int cand_kind_of(const Cand *e, const char *bytes) {
+    DCHECK(e != NULL && bytes != NULL, "a candidate's kind was asked of no search, or about no bytes");
+    for (int i = 0; i < e->npl; i++) if (!strcmp(e->pl[i].bytes, bytes)) return e->pl[i].kind;
+    return 0;
+}
+
+/* CAN THIS SEARCH ACCOUNT FOR THE BYTES THAT JUST ARRIVED AT ITS SINK? — breakout_arrived's whole condition,
+   held as ONE call so it can be spelled inside the DCHECK. A release build type-checks a DCHECK's condition
+   and never evaluates it, so written as a local read before the assert this scan would run on the shipped
+   arrival path for a check that build does not make; written as the condition it costs exactly nothing there.
+   It is side-effect-free, which is what a DCHECK condition must be (check.h). */
+static int cand_arrival_is_attack(const Cand *e, const Flow *f) {
+    int kind;
+    DCHECK(e != NULL && f != NULL && f->cand_payload != NULL,
+           "the arrival question was asked of no search, or of a flow carrying no payload — the caller has "
+           "already CHECKed both, so reaching here without them means a second route into this rung");
+    kind = cand_kind_of(e, f->cand_payload);
+    return kind == CAND_ESCAPE || (kind == 0 && f->cand_resumed);
 }
 
 /* THE SEARCH LEARNS HOW THE ATTACKER'S BYTES ARRIVE — once, from the value that arrived. A source reaching a
@@ -747,7 +860,35 @@ static void add_pending(const char *src, const char *root, int sink) {
        exploration flow of this session has re-reached it. On a found entry this call is the EQUALITY assert,
        which is the whole of what says the two ends of the tier agree about how these bytes arrive. */
     cand_learn_root(e, root);
-    if (!created) return;
+    /* OPENING A SEARCH IS A PROPERTY OF THE SEARCH, NOT OF WHO MADE THE SLOT, and this line used to be
+       `if (!created) return;` — the same defect as the leading probe count, one level up and with worse
+       consequences. Two independent producers reach g_pending: DETECTION, which is the only one that can open
+       a search (it is the one moment a flow stands at the sink holding the value that arrived, which is what
+       the probe and the re-injection point are both taken from), and a COLD RESUME, which registers a
+       candidate of a search opened in an earlier session. `created` conflates "this call made the array slot"
+       with "this call opened the search", and those come apart in exactly one order — the one the cold tier
+       makes STRUCTURAL, since cold_resume runs at engine init and detection cannot run before a flow does. In
+       that order the resume created the slot, so detection returned HERE: no context probe, no written-down
+       vectors, no re-injection point, `search_seeds` false for ever. The session's search for that sink could
+       then construct nothing, derive nothing and seed nothing, and the report said `payloads:[]` — which
+       solve.h defines as the positive statement that this source can carry no exit from the state its bytes
+       landed in. A silent wrong verdict produced by arrival order.
+       ASKED OF THE ENTRY, it is right in both orders: whichever door made the slot, the first DETECTION opens
+       the search, and the second and hundredth return here as they always did. */
+    if (e->opened) return;
+    /* …AND THE ONLY OTHER DOOR THAT CAN HAVE MADE THE SLOT SAYS SO IN ITS OWN NUMBERS. A detection opening a
+       search on an entry it did not create means some other producer made that entry, and there is exactly one
+       — solve_resume_candidate, which raises `tried` for every candidate it rebuilds. So the two halves of the
+       state this latch now permits are checkable against each other, and a THIRD door (a future writer into
+       g_pending that neither detects nor resumes) shows up here instead of quietly acquiring a probe and a
+       path it has no claim to. */
+    DCHECK(created || e->tried > 0,
+           "a sink search is being opened on an entry this detection did not create and no cold-resumed "
+           "candidate accounts for — g_pending has two writers, detection and the cold tier's rebuild, and the "
+           "second raises `tried` for every record it brings back, so an entry that predates this call with "
+           "nothing tried was put there by a third door and is about to be handed a context probe and a "
+           "re-injection point on behalf of a search nobody opened");
+    e->opened = 1;
     /* THE RE-INJECTION POINT IS A FACT ABOUT THE SEARCH, NOT ABOUT THE DERIVATION, so it is taken HERE — at the
        one moment a flow is standing at this sink holding the value that reached it. The field's own comment
        used to say this was the DERIVED classes' problem and that a single-context class "states its vectors at
@@ -772,13 +913,28 @@ static void add_pending(const char *src, const char *root, int sink) {
            "an attacker source reached a sink with no flow running — a concolic value is minted by a flow and "
            "carried by one, so there is no route to this line from outside the scheduler, and the path about to "
            "be frozen would be whatever chain the previously-switched-in flow left behind");
+    /* AND THE FLOW THAT MADE THE OBSERVATION IS THE ONE PAID FOR IT. This credit — "a NEW
+       attacker-source-reaches-sink: value-of-information for the running flow" — used to sit on the CREATE, in
+       sink_search, which is the same conflation the `opened` latch above ends: a cold resume creating the slot
+       is not an observation of anything (it re-registers a search a previous session opened), and cold_resume
+       runs at engine init where there is no running flow at all — so in that order the credit was dropped on
+       the floor and the exploration flow that later did the real detecting was paid nothing for it. The
+       observation is the OPEN, so the credit is at the open. Below the assert above rather than beside the
+       latch, so that "no flow is running here" aborts as the invariant it is instead of being spent as a
+       silently-skipped payment. */
+    flow_credit_emit(1.0);
     e->reinject = decide_freeze_path();
     sc = sink_class(sink);
-    if (sc->vectors) { for (int c = 0; sc->vectors[c]; c++) push_breakout(e, sc->vectors[c]); }
+    /* A SINGLE-CONTEXT CLASS'S WRITTEN-DOWN VECTORS ARE ATTACKS, which is what `probes:0` beside a non-empty
+       list states and what used to be spelled by leaving `nprobe` at 0 for this arm. Said rather than
+       implied: the seeder withdraws a contradicted one of these and the report marks it, both of which are
+       correct for a vector and wrong for an instrument. */
+    if (sc->vectors) { for (int c = 0; sc->vectors[c]; c++) push_breakout(e, sc->vectors[c], CAND_ESCAPE); }
     else {
-        /* THE PROBES ARE THE LEADING ENTRIES AND THE COUNT IS TAKEN HERE, at the one moment nothing else has
-           been pushed — see `nprobe`. */
-        push_breakout(e, derive_probe(sc->derive));
+        /* THE INSTRUMENTS, LABELLED AS INSTRUMENTS. They used to be told apart by being pushed FIRST and
+           counted, which required this to be the one moment nothing else had been pushed; the label carries
+           the fact instead, so it survives an entry this call did not create. */
+        push_breakout(e, derive_probe(sc->derive), CAND_PROBE);
         /* AND THE DELIVERY PROBE BESIDE IT, for the class that DERIVES and only for it. That is routing and
            not an exception: the table it fills is read by a derivation choosing between two spellings of one
            exit transition, so a class whose breakouts are WRITTEN DOWN has nothing to read it, and a probe for
@@ -790,11 +946,10 @@ static void add_pending(const char *src, const char *root, int sink) {
             const char *enc = concolic_source_encodes(root);
             if (enc && *enc) {
                 char *bp = bytes_probe(enc);
-                push_breakout(e, bp);
+                push_breakout(e, bp, CAND_PROBE);
                 free(bp);
             }
         }
-        e->nprobe = e->npl;
     }
     DCHECK(e->npl > 0 && e->reinject != NULL,
            "a search was opened with no candidate to run or with no path to run it on — the class states one of "
@@ -950,8 +1105,15 @@ static void detect_sink(JSValueConst arg, int cls) {
  * opens it (add_pending) until record_sink CLOSES it at the fire, and the two things record_sink does there are
  * one statement: it releases the path because "a solved search seeds no further candidates", and this is what
  * makes that sentence true instead of hoped. The third door agrees without an exception being written for it —
- * a cold-resumed entry (solve_resume_candidate) holds no path and seeds nothing through this file, because its
- * candidates come back as FLOWS rather than as payloads.
+ * a cold-resumed entry (solve_resume_candidate) holds no path OF ITS OWN and seeds nothing through this file,
+ * because its candidates come back as FLOWS rather than as payloads.
+ * THAT IS A STATEMENT ABOUT THE RESUME AND NOT ABOUT THE ENTRY, and the difference is the whole of what
+ * add_pending's `opened` latch fixed. A resumed entry acquires a path the moment an EXPLORATION flow of this
+ * session detects the same sink — which is a detection like any other and opens the search like any other —
+ * and from then on it seeds, derives and reports exactly as one opened by detection first. What it never has
+ * is a path taken by the resume itself, because a verifying flow does not detect. Read as a claim about the
+ * ENTRY, this sentence said a resumed search is inert for the life of the session, which is precisely the
+ * wrong verdict `opened` exists to stop.
  * IT IS NOT A SEEN-SET AND TRUNCATES NOTHING. What closes a search is EMITTED OUTPUT — a fire-verified PoC for
  * this exact (source, sink) — which is the one thing §NO BOUNDS allows to prove a flow is done; record_sink
  * already discards a duplicate PoC for the pair at its own top, so what is declined here is a whole document
@@ -1003,7 +1165,7 @@ static void queue_derived(void *user, const char *breakout) {
            "a derived @S breakout carries a byte this search has OBSERVED does not reach its sink — the "
            "derivation is given the same table and emits nothing outside it, so this escape was constructed "
            "past the constraint and would spend a document re-run to arrive transformed");
-    push_breakout(e, breakout);
+    push_breakout(e, breakout, CAND_ESCAPE);
 }
 
 /* THE SEARCH THE RUNNING CANDIDATE BELONGS TO — asked by BOTH halves of a verifying run, the context probe
@@ -1066,9 +1228,10 @@ static void learn_witness(Cand *e, const char *out) {
 /* …AND WHAT IT ANSWERED IS READ. Both derivations RETURN how many escapes they constructed and this call was
    discarding it — a computed value with no reader, which §@S names as the mirror of the read-with-no-writer
    defect and calls "not a mechanism". What the number closes is a silent drop: a breakout the derivation
-   CONSTRUCTED and the search never received leaves `npl == nprobe`, which the report states as "this search has
-   built no escape" — the state a reader takes to mean the source cannot carry an exit from the state its bytes
-   are in. queue_derived has exactly one door that drops (a search closed by a fire between the derivation and
+   CONSTRUCTED and the search never received leaves a list of nothing but instruments, which the report states
+   as `probes == payloads` — read as "this search has built no escape", the state a reader takes to mean the
+   source cannot carry an exit from the state its bytes are in. queue_derived has exactly one door that drops
+   (a search closed by a fire between the derivation and
    the push), and a search that fired holds the breakout that fired it, so the implication holds with no
    exception written for it. */
 static void derive_from_witness(Cand *e) {
@@ -1087,7 +1250,7 @@ static void derive_from_witness(Cand *e) {
         if (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
         else                            built += solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
     }
-    DCHECK(built == 0 || e->npl > e->nprobe,
+    DCHECK(built == 0 || cand_has_escape(e),
            "a derivation constructed an escape that this search does not hold — the constructed count and the "
            "search's own payload list are the two ends of one hand-off, so a search left holding nothing but "
            "its probes after a derivation that built something has DROPPED it, and the report would state "
@@ -1169,10 +1332,35 @@ static void breakout_arrived(Cand *e) {
           "solve: a breakout arrived at a sink with no candidate substitution on the running flow — nothing but "
           "a candidate run injects a marker, and the rung below is paid on whether THIS search still holds "
           "these exact bytes as viable, so an arrival with no payload cannot be told from one it withdrew");
-    DCHECK(e->npl > e->nprobe,
-           "a sink recorded a BREAKOUT arriving while its search holds nothing but its own probes — a derived "
-           "class's breakout exists only because a probe run returned one, and a single-context class's "
-           "vectors are not probes at all (nprobe is 0 for it), so these bytes were not built by this search");
+    /* WHAT ARRIVED IS ASKED OF THE BYTES, NOT OF A COUNT — and that is the whole of the fix rather than a
+       restatement. The check used to be `npl > nprobe`: "this search holds at least one entry past its leading
+       probes". That is a claim about the LIST, and it stands in for the claim anybody actually wants, which is
+       about THESE BYTES: could this search have produced the thing that just turned up? The two agree only
+       while every candidate of a search has a row in that list, and §@S has one kind that legitimately does
+       not — a candidate resumed out of the cold tier, whose payload rides the resumed FLOW (solve.h, on
+       `payloads` being empty beside a non-zero `tried`). Such an entry stands at `npl == 0`, so the list claim
+       read FALSE for a candidate that had replayed its recorded path, delivered its payload and carried it all
+       the way to its own sink — the search's furthest arrival aborting the process on a check about a list it
+       was never in.
+       THE THREE STATES, AND EACH IS DECIDED BY THE ENTRY'S OWN LABEL:
+         CAND_ESCAPE  this search built or stated these bytes as an attack — the ordinary case, in either
+                      order the two producers arrive in, because the label is pushed with the entry.
+         0            this session's record has no row for these bytes, which the cold tier is the one
+                      legitimate producer of and which `cand_resumed` STATES rather than leaving to be
+                      inferred from an absence.
+         CAND_PROBE   the bytes that arrived are one of this search's own INSTRUMENTS. That is what this check
+                      is for and what it still catches: a probe is inert by construction and carries no X9, so
+                      the marker partition that routed this arrival has broken, and the ladder is about to pay
+                      an arrival rung — and, at the URL class, a FIRE — for a measurement rather than an
+                      attack. It was previously caught only in the special case where the probe was ALSO the
+                      only thing in the list. */
+    DCHECK(cand_arrival_is_attack(e, f),
+           "a sink recorded a BREAKOUT arriving whose bytes are not an attack of this search — they are "
+           "either one of its own inert PROBES, which carries no marker and cannot fire, so the partition "
+           "that routed this arrival has broken and a measurement is about to be paid an arrival rung; or "
+           "they are bytes this session's record does not hold and the flow carrying them was not rebuilt "
+           "from a park record, which means a candidate was assembled outside both of the search's doors "
+           "(solve_seed_candidates and solve_resume_candidate) and nothing knows what it is running");
     /* …AND THE SAME PRECONDITION filter_survived STATES, at the rung above it. The marker is a strong
        partition and not a proof: `X9` is two characters and a minified bundle names things that way, so an
        arrival credited without this is a whole rung — and, at the URL class, a FIRE — taken on the page's own
@@ -1356,16 +1544,19 @@ static void filter_survived(const char *out) {
        `tried` for a cold-resumed candidate whose payload rides the resumed FLOW rather than this session's
        record, so its bytes are legitimately not in `pl` (solve.h says the same thing about `payloads` being
        empty beside a non-zero `tried`). The search-level pair still records it, so nothing is lost — only the
-       per-candidate column, which this session has no row for. */
+       per-candidate column, which this session has no row for.
+       AND THE INDEX IS FOUND WHEN THIS SESSION HAPPENS TO HOLD THE SAME BYTES, which is correct and not a
+       collision: the column is keyed by PAYLOAD and not by flow, so a resumed candidate and a derived one
+       carrying the same string are one row that both write — the same reason push_breakout dedups by text. */
     {
         int idx = -1;
-        for (int i = 0; i < e->npl; i++) if (!strcmp(e->pl[i], f->cand_payload)) { idx = i; break; }
+        for (int i = 0; i < e->npl; i++) if (!strcmp(e->pl[i].bytes, f->cand_payload)) { idx = i; break; }
         if (idx >= 0) {
-            DCHECK(o.len == (int)strlen(e->pl[idx]),
+            DCHECK(o.len == (int)strlen(e->pl[idx].bytes),
                    "a candidate's payload matched its search's record by text and disagrees with it by length — "
                    "the two are the same bytes by construction, so the per-candidate survival column is about "
                    "to be scaled by a denominator that is not this candidate's");
-            if (o.run > e->surv_pl[idx]) e->surv_pl[idx] = o.run;
+            if (o.run > e->pl[idx].surv) e->pl[idx].surv = o.run;
         }
     }
     /* Cross-multiplied so the comparison is exact rather than a float one, and so the zero state — no
@@ -1907,6 +2098,11 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
            that can say a park document's records still agree with each other. */
         cand_learn_root(e, root);
         e->tried++;
+        /* …AND WHICH OF THOSE RUNS THIS IS, because `tried` alone cannot say. A reader holding `tried:6` beside
+           an empty `payloads` list is looking at either a cross-session search whose every run came back from
+           a park document, or a producer that dropped the payload field — solve.h's arithmetic names the two
+           terms and only one of them was ever a number. This is the other one. */
+        e->resumed++;
     }
     /* IT COSTS WHAT A FRESH ONE COSTS, so it counts as one. This number is what says whether a run got slower
        because there were more searches or because each search grew, and a resumed candidate re-runs the whole
@@ -1954,11 +2150,13 @@ int solve_seed_candidates(JSContext *ctx) {
                asked of "a constructed escape"; the DELIVERY probe is built OUT OF the very bytes in question,
                so a table it narrowed would contradict the instrument that measured it, and the CONTEXT probe
                is ASCII alphanumeric precisely so it cannot change the parse it reads. Both are measurements,
-               not attacks, and `nprobe` is where that line already is. */
-            if (e->seeded >= e->nprobe && !solve_delivered_ok(&e->deliv, e->pl[e->seeded])) continue;
+               not attacks, and the entry's own KIND is where that line is — asked of the candidate about to
+               become a flow rather than of its position in the list. */
+            if (e->pl[e->seeded].kind == CAND_ESCAPE &&
+                !solve_delivered_ok(&e->deliv, e->pl[e->seeded].bytes)) continue;
             f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* a candidate session runs from the baseline */
             f->cand_src     = strdup(e->src);
-            f->cand_payload = strdup(e->pl[e->seeded]);
+            f->cand_payload = strdup(e->pl[e->seeded].bytes);
             f->cand_sink    = sink_name(e->sink);
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
             /* THE OTHER SIDE OF THE WITHDRAWAL, ASSERTED WHERE THE COST IS TAKEN RATHER THAN WHERE THE
@@ -1967,7 +2165,7 @@ int solve_seed_candidates(JSContext *ctx) {
                costing a traversal — and the push-time check being the ONLY check is exactly what let that
                happen once. A route into flow creation that does not pass the skip above crashes here instead
                of quietly spending the run and the rung. */
-            DCHECK(e->seeded < e->nprobe || solve_delivered_ok(&e->deliv, f->cand_payload),
+            DCHECK(e->pl[e->seeded].kind == CAND_PROBE || solve_delivered_ok(&e->deliv, f->cand_payload),
                    "a candidate flow was created for a payload this search has OBSERVED cannot reach its sink — "
                    "the delivery table narrows after a breakout is queued, so deliverability asked once at the "
                    "derivation is a constraint that has expired by the time the flow is made, and this run can "
@@ -2295,6 +2493,21 @@ char *solve_json_array(JSContext *ctx) {
         json_buf_raw(&b, ","); json_buf_key(&b, "search"); json_buf_str(&b, "parked");
         json_buf_raw(&b, ","); json_buf_key(&b, "tried");
         snprintf(t, sizeof t, "%d", g_pending[i].tried); json_buf_raw(&b, t);
+        /* …AND HOW MANY OF THOSE RUNS CAME BACK FROM A PREVIOUS SESSION, which is the term solve.h's own
+           arithmetic for `tried` names and which no field carried. `tried` is the entries not marked
+           `withdrawn` PLUS the candidates resumed out of the cold tier, and a reader given only the first term
+           cannot perform it: `tried:6` beside `payloads:[]` reads identically as a cross-session search whose
+           every run was rebuilt from a park record and as a producer that dropped a field.
+           IT IS ALSO THE ONE FACT THAT MAKES `reached` READABLE BESIDE A PROBES-ONLY LIST, which is why it is
+           emitted here rather than left as prose. "A search holding nothing but probes cannot have had a
+           breakout ARRIVE" is true of a search whose every run is a row in that list and false the moment one
+           of them is a resumed candidate — its marker-carrying bytes ride the FLOW and are in no row. The
+           consumer states that from this number instead of inferring it from `tried` against `payloads` and
+           `withdrawn`, which would be a view re-deriving a producer fact it cannot check.
+           UNCONDITIONAL, AND 0 IS THE LOAD-BEARING VALUE: it is the positive statement that every run this
+           search has had is one of the rows below, which is what licenses every implication read off them. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "resumed");
+        snprintf(t, sizeof t, "%d", g_pending[i].resumed); json_buf_raw(&b, t);
         /* …AND HOW MANY OF THOSE RUNS GOT HERE, which is the half `tried` cannot state (see the field). The
            two together are the only thing that tells a document nobody has explored far enough apart from a
            breakout that arrived and did not work — `reached:0` is the first, anything else is the second. */
@@ -2425,11 +2638,17 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_raw(&b, ","); json_buf_key(&b, "witnessed");
             snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_raw(&b, t);
         }
-        /* HOW MANY OF `payloads`' LEADING ENTRIES ARE PROBES — the producer fact that splits `reached:0` one
-           more time, and the one state of this search the report could not say at all. `npl > nprobe` is
-           stated at the field's declaration as exactly "this search has constructed an escape", and it is
-           asserted at queue_derived; it was never emitted, so a reader had the two halves of the question and
-           not the question. The consumer must not re-derive it: the probe is told apart by carrying no marker,
+        /* HOW MANY OF `payloads`' ENTRIES ARE PROBES — counted off the entries' own labels, which is the
+           producer fact that splits `reached:0` one more time and the one state of this search the report
+           could not say at all. `payloads.length > probes` is exactly "this search has constructed an escape",
+           the question `cand_has_escape` answers and queue_derived's hand-off asserts; it was never emitted,
+           so a reader had the two halves of the question and not the question.
+           IT IS NO LONGER A LEADING COUNT, and the emitted number is unchanged by that: probes are pushed when
+           detection opens the search and nothing else pushes one, so they still occupy the leading positions —
+           what changed is that the report now states what the entries ARE rather than where they sit, and a
+           producer that ever pushed out of that order would be reported correctly instead of silently
+           relabelling everything after it.
+           The consumer must not re-derive it: the probe is told apart by carrying no marker,
            the marker vocabulary is this engine's, and deciding it from POSITION would be a view restating a
            producer fact it cannot check — which is why popup-security.js declines to, twice, in its own words.
            WITHOUT IT A MEASURED PAGE IS DESCRIBED WRONG, not merely described thinly. An `innerHTML` sink fed
@@ -2442,11 +2661,11 @@ char *solve_json_array(JSContext *ctx) {
            states its written-down vectors at detection and has no probe at all, so `probes:0` beside a
            non-empty list is the positive statement that every entry is an attack. */
         json_buf_raw(&b, ","); json_buf_key(&b, "probes");
-        snprintf(t, sizeof t, "%d", g_pending[i].nprobe); json_buf_raw(&b, t);
+        snprintf(t, sizeof t, "%d", cand_probes(&g_pending[i])); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "payloads"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_raw(&b, ",");
-            json_buf_str(&b, g_pending[i].pl[c]);
+            json_buf_str(&b, g_pending[i].pl[c].bytes);
         }
         json_buf_raw(&b, "]");
         /* …AND HOW FAR EACH OF THOSE PAYLOADS GOT, one entry per `payloads` entry and in the same order, so a
@@ -2460,7 +2679,7 @@ char *solve_json_array(JSContext *ctx) {
         json_buf_raw(&b, ","); json_buf_key(&b, "survivedBy"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_raw(&b, ",");
-            snprintf(t, sizeof t, "%d", g_pending[i].surv_pl[c]); json_buf_raw(&b, t);
+            snprintf(t, sizeof t, "%d", g_pending[i].pl[c].surv); json_buf_raw(&b, t);
         }
         json_buf_raw(&b, "]");
         /* …AND WHICH OF THEM THE SEARCH'S OWN MEASUREMENT HAS SINCE WITHDRAWN, one entry per `payloads` entry
@@ -2485,8 +2704,8 @@ char *solve_json_array(JSContext *ctx) {
         json_buf_raw(&b, ","); json_buf_key(&b, "withdrawn"); json_buf_raw(&b, "[");
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_raw(&b, ",");
-            json_buf_raw(&b, (c >= g_pending[i].nprobe &&
-                               !solve_delivered_ok(&g_pending[i].deliv, g_pending[i].pl[c])) ? "1" : "0");
+            json_buf_raw(&b, (g_pending[i].pl[c].kind == CAND_ESCAPE &&
+                               !solve_delivered_ok(&g_pending[i].deliv, g_pending[i].pl[c].bytes)) ? "1" : "0");
         }
         json_buf_raw(&b, "]");
         /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
@@ -2513,9 +2732,8 @@ void solve_free(void) {
        becomes here. */
     JS_SetEvalSinkHook(NULL);
     for (int i = 0; i < g_pending_n; i++) {
-        for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c]);
+        for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c].bytes);
         free(g_pending[i].pl);
-        free(g_pending[i].surv_pl);   /* grown with `pl` (push_breakout), so freed beside it */
         /* THE CONTEXT WITNESSES — one owned copy per distinct sink write, kept for the re-derivation a changed
            delivery observation performs, so they live exactly as long as the search does. */
         for (int c = 0; c < g_pending[i].nwit; c++) free(g_pending[i].wit[c]);
