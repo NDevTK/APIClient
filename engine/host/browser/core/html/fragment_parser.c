@@ -80,9 +80,9 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
    and only `parser`, so the instant the feed ended and the parser was destroyed the machine reported itself
    FORKABLE — while still OWNING the whole tree the parse had produced (`frag`, deep-destroyed by
    fragment_parse_release, with `node` the cursor into it and §8.6.4 set and filter HTML's sanitizer walk
-   standing inside it) and, for §8.5.5 step 5 and §8.5.7 step 6, an `own_context` element that is in no tree
-   and that fragment_parse_release also destroys. Neither is in fragment_parse_visit, because JSStepVisit has
-   no operation for a private DOM tree — so a fork taken at a FRAG_PLACE or FRAG_CLEAR or SAN_* rest point
+   standing inside it) and, for §8.5.5 step 5, §8.5.6 step 4 and §8.5.7 step 6, an `own_context` element that
+   is in no tree and that fragment_parse_release also destroys. Neither is in fragment_parse_visit, because
+   JSStepVisit has no operation for a private DOM tree — so a fork taken at a FRAG_PLACE or FRAG_CLEAR or SAN_* rest point
    handed two arms ONE tree: both would place the same nodes into their own documents and
    both fragment_parse_releases would destroy it. Those rest points are reachable, because the placement's
    §4.2.3 insertion steps run page code (a custom element's connectedCallback), which is where a concolic branch
@@ -119,9 +119,9 @@ const char *fragment_parse_unforkable(const void *st)
         return "a fragment parse cannot be forked between its parse and its placement — this machine OWNS the "
                "tree the parse produced (`frag`, which fragment_parse_release deep-destroys, with `node` the "
                "cursor into it and §8.6.4 set and filter HTML's sanitizer walk standing inside it) and, for "
-               "§8.5.5 step 5 and §8.5.7 step 6, an `own_context` element that is in no tree and that "
-               "fragment_parse_release destroys too. fragment_parse_visit declares neither, because JSStepVisit "
-               "has no operation for a PRIVATE DOM TREE, so the sibling arm would share one tree with the "
+               "§8.5.5 step 5, §8.5.6 step 4 and §8.5.7 step 6, an `own_context` element that is in no tree "
+               "and that fragment_parse_release destroys too. fragment_parse_visit declares neither, because "
+               "JSStepVisit has no operation for a PRIVATE DOM TREE, so the sibling arm would share one tree with the "
                "original: two arms placing the same nodes and two releases destroying them. "
                "BUILD THAT OPERATION — a `v->tree` whose three consumers do different work the way v->reexec's "
                "do: the CLONE deep-copies the subtree into the same document arena and re-points every cursor "

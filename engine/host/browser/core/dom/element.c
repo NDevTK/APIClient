@@ -705,11 +705,11 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                the fragment's first child happened to be. The element is created here and destroyed with the
                machine: it is in no tree, so nothing else ever would. */
             if (node_is_document_fragment(n->parent)) {
-                s->own_context = lxb_dom_document_create_element(n->owner_document,
-                                                                 (const lxb_char_t *)"body", 4, NULL);
-                CHECK(s->own_context != NULL,
-                      "§8.5.5 step 5's `body` element could not be created — outerHTML would then parse "
-                      "against a context the algorithm does not have");
+                /* "…AND THE HTML NAMESPACE" is step 5's own last clause, NAMED here rather than taken from
+                   `lxb_dom_document_t::type`, which nothing in this engine writes — see document.h's
+                   document_create_element_html. An element inside a fragment of an XML document was getting a
+                   `body` in NO namespace, which §13.4 step 2 reads to pick the tokenizer state. */
+                s->own_context = document_create_element_html(n->owner_document, "body", 4);
             } else {
                 DCHECK(n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
                        "§8.5.5 step 2 gave outerHTML a parent that is neither a Document (step 4's throw), a "
@@ -891,7 +891,7 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
     }
     if (hdr->stage == FRAG_START) {
         lxb_dom_element_t *el = element_of_value(hdr->this_val);
-        lxb_dom_node_t *n;
+        lxb_dom_node_t *n, *context;
         const char *html;
         int where;
         bool outside;
@@ -908,20 +908,66 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
                                  "insertAdjacentHTML at an outside position whose context is null or a Document");
             return JS_STEP_ABRUPT;
         }
+        context = outside ? n->parent : n;                          /* step 3's answer, still a NODE */
+        /* HTML §8.5.6 STEP 4, VERBATIM: "If context is not an Element or all of the following are true:
+           context's node document is an HTML document; context's local name is "html"; and context's namespace
+           is the HTML namespace, then set context to the result of creating an element given this's node
+           document, "body", and the HTML namespace."
+           IT WAS ABSENT, AND ITS ABSENCE IS NOT A MISSING EDGE CASE — the two positions that resolve the
+           context to `this`'s PARENT resolve it to `<html>` for every element that is a direct child of the
+           document element, which is `<head>` and `<body>` themselves. `document.body.insertAdjacentHTML(
+           "afterend", markup)` therefore parsed the markup against `<html>`, and a fragment parse whose context
+           is `<html>` starts in §13.2.6.4.3 'The "before head" insertion mode' — whose "anything else" arm
+           is verbatim: Insert an HTML element for a "head" start tag token with no attributes. … Reprocess the
+           current token. The reprocess then runs on through §13.2.6.4.4 'The "in head" insertion mode' (Pop
+           the current node (which will be the head element) off the stack of open elements. … Reprocess the
+           token.) to §13.2.6.4.6 'The "after head" insertion mode', whose own anything-else arm is: Insert an
+           HTML element for a "body" start tag token with no attributes. So the member inserted a
+           second `<head>` and a second `<body>` into the document on every such call, and the WPT file's own
+           name for that is "Inserting kids of the <html> element should not do weird things with implied
+           <body>/<head> tags": one head became three.
+           IT IS A SOLVER FACT AND NOT ONLY A FIDELITY ONE. This member is a §@S sink, and the breakout is
+           derived from the HTML §13.2.5 tokenization state and the insertion mode the tainted bytes land in —
+           so a context that is `<html>` where a browser's is `body` derives the breakout for a document a
+           browser never builds, and derives it CONFIDENTLY.
+           THE FIRST ARM IS LOAD-BEARING AND IS NOT §8.5.7's. §8.5.7 step 6 opens "If element is null", whose
+           `element` is by construction null-or-Element; step 4 here opens "If context is NOT AN ELEMENT",
+           because step 3 can hand it a DocumentFragment — an element inside a fragment, whose parent is
+           neither null nor a Document and so passes the throw above. That node was being cast to an element
+           and handed to §13.4, which reads its local name and namespace off a header that names no element. */
+        if (context->type != LXB_DOM_NODE_TYPE_ELEMENT ||
+            (!document_is_xml_of(context->owner_document) &&
+             context->ns == LXB_NS_HTML &&
+             lxb_html_tree_node_is(context, LXB_TAG_HTML))) {
+            /* "…given THIS'S node document", never the context's: the two are the same document here, and the
+               standard names this's because that is the one it can guarantee. The element is in no tree, so
+               the machine owns it and fragment_parse_release destroys it on the completed and the throw path
+               alike — the same field, and the same reason, as §8.5.5 step 5's and §8.5.7 step 6's. */
+            s->own_context = document_create_element_html(n->owner_document, "body", 4);
+            context = lxb_dom_interface_node(s->own_context);
+        }
+        DCHECK(context->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "HTML §8.5.6 \"The insertAdjacentHTML() method\" step 4 left a context that is not an Element — "
+               "its first arm is \"if context is not an Element\", so after step 4 the context is either the "
+               "Element step 3 resolved or the `body` step 4 created, and HTML §13.4 \"Parsing HTML fragments\" "
+               "step 2 reads the context element's local name and namespace to choose the tokenizer state");
         solve_html_sink(ctx, s->compliant);
         if (concolic_is(s->compliant)) return JS_STEP_DONE;
         DCHECK(JS_IsString(s->compliant), "insertAdjacentHTML reached the body unconverted");
         html = JS_ToCString(ctx, s->compliant);
         if (!html) return JS_STEP_ABRUPT;
         /* Parsed in the context it will LIVE in: the parent for the outside positions, this element for the
-           inside ones. A `<td>` inserted beforeend of a `<tr>` survives; parsed against the wrong context it
-           would be dropped by the tree builder and the page would find nothing it inserted. */
+           inside ones — or step 4's `body` where neither of those is a context §13.4 can parse against. A
+           `<td>` inserted beforeend of a `<tr>` survives; parsed against the wrong context it would be dropped
+           by the tree builder and the page would find nothing it inserted. STEP 6 still places around `this`
+           in `this`'s real parent, which is why the anchor is `n` whatever step 4 did: step 4 reassigns the
+           local, not the tree. */
         /* §8.5.6 step 5 invokes the fragment parsing algorithm with the two-argument spelling, whose
            `allowDeclarativeShadowRoots` default is FALSE — a `<template shadowrootmode>` inserted this way
            stays a template, exactly as it does through innerHTML. */
         /* §8.5.6 invokes the fragment parsing algorithm steps with no scriptingMode, so HTML §8.5.4's default
            INERT applies — an `insertAdjacentHTML`'d `<script>` is marked already started and does not run. */
-        fragment_parse_begin(ctx, s, outside ? lxb_dom_interface_element(n->parent) : el, n, where, html,
+        fragment_parse_begin(ctx, s, lxb_dom_interface_element(context), n, where, html,
                              false, false, FRAG_SCRIPTING_INERT);
         JS_FreeCString(ctx, html);
         hdr->stage = FRAG_FEED;

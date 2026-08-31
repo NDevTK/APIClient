@@ -1574,7 +1574,7 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
            document if its type is `xml`; otherwise an HTML document" is what the first conjunct asks, which is
            why it is the NEGATION of document_is_xml_of and not a content-type string.
            WHY THE STANDARD DOES THIS AT ALL: parsing against `<html>` would put the markup through
-           §13.2.6.4.5 'The "before head" insertion mode' and materialise a `<head>` and a `<body>` around it,
+           §13.2.6.4.3 'The "before head" insertion mode' and materialise a `<head>` and a `<body>` around it,
            which is the compat bug the WPT file cites (Mozilla 585819) — so `<span>Hello</span>` selected over
            `document.documentElement` must come back as one `<span>` and not as a document skeleton.
            The `body` is in NO TREE and nothing else will ever free it, so the machine owns it: it goes on
@@ -1584,10 +1584,11 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
             (!document_is_xml_of(lxb_dom_interface_node(el)->owner_document) &&
              lxb_dom_interface_node(el)->ns == LXB_NS_HTML &&
              lxb_html_tree_node_is(lxb_dom_interface_node(el), LXB_TAG_HTML))) {
-            s->own_context = lxb_dom_document_create_element(doc, (const lxb_char_t *)"body", 4, NULL);
-            CHECK(s->own_context != NULL,
-                  "§8.5.7 step 6's `body` element could not be created — createContextualFragment would then "
-                  "parse against a context the algorithm does not have");
+            /* "…AND THE HTML NAMESPACE" is step 6's own last clause, so it is NAMED here. It was being taken
+               from `lxb_dom_document_t::type`, which nothing in this engine writes — see document.h's
+               document_create_element_html — and a Range whose start node is in an XML document therefore got
+               a `body` in NO namespace, which §13.4 step 2 reads to pick the tokenizer state. */
+            s->own_context = document_create_element_html(doc, "body", 4);
             el = s->own_context;
         }
         DCHECK(lxb_dom_interface_node(el)->owner_document == doc,

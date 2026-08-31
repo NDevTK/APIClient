@@ -732,14 +732,44 @@ static JSValue js_doc_create_fragment(JSContext *ctx, JSValueConst this_val, int
     return node_wrap(ctx, lxb_dom_interface_node(frag));
 }
 
+/* THE HTML NAMESPACE, spelled once for this file. Every component that needs the URL as bytes keeps its own —
+   core/html/trusted_types.c, core/html/sanitizer.c and core/xml/xml_serialize.c each do — because it is a
+   constant of the standards rather than a fact any one of them owns. */
+#define DOC_NS_HTML "http://www.w3.org/1999/xhtml"
+
 /* 4.5.1 createElement. The element is created IN this document and returned DETACHED — a page builds a subtree
    and attaches it later, and creating it already-attached would put nodes in the tree the page never inserted.
-   It is not a per-flow write for that reason: nothing observable changed until appendChild, which IS one. */
+   It is not a per-flow write for that reason: nothing observable changed until appendChild, which IS one.
+ *
+ * ITS NAMESPACE IS DOM §4.5 "Interface Document"'s STEP 4 AND IT IS CONDITIONAL, which is the whole reason
+ * this body states it instead of reaching lxb_dom_document_create_element. That entry answers the namespace
+ * from `lxb_dom_document_t::type` — and §4.5's `type` is kept on THIS engine's Document record, which nothing
+ * ever mirrors into lexbor's field, so it reads `html` for every document this engine builds. The measured
+ * consequence is not subtle: `(new Document()).createElement("root")` came back in the HTML namespace, so
+ * XMLSerializer wrote `xmlns="http://www.w3.org/1999/xhtml"` onto an element that is in no namespace at all,
+ * and an XML document's `createElement("child")` under an `xmlns="uri1"` default serialized as that default
+ * instead of as `xmlns=""`. Step 4 is a DISJUNCTION lexbor's entry could not express in any case, verbatim:
+ * "Let namespace be the HTML namespace, if this is an HTML document or this's content type is
+ * "application/xhtml+xml"; otherwise null." An XHTML document is an XML document (its type is `xml`) AND
+ * creates in the HTML namespace, so neither term alone is the rule.
+ *
+ * STEP 2 IS THE SAME FACT ONE STEP EARLIER — DOM §4.5 "Interface Document" again, verbatim: "If this is an
+ * HTML document, then set localName to localName in ASCII lowercase" — and it was being applied
+ * unconditionally, because lexbor's `lxb_tag_append_lower` folds every name it interns. `(new Document()).createElement("rOOt")` therefore had local name "root" where the
+ * step leaves it alone. Both steps ask the SAME question and it is asked once, of the record.
+ *
+ * THE ANSWER COMES FROM `d`, WHICH IS §4.5's "this". Not from the running realm's document and not from the
+ * element's owner after the fact: `foreignDoc.createElement("p")` is `foreignDoc`'s question, and the receiver
+ * is what names it. */
 static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)magic;
     const char *tag;
+    size_t tag_len = 0;
+    char *folded = NULL;
+    const char *local, *ns;
     lxb_dom_element_t *el;
+    lxb_dom_document_t *dom;
     Document *d;
     JSValue r;
 
@@ -765,18 +795,46 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
         JS_FreeValue(ctx, ex);
         return concolic_builtin_hook(ctx, argv[0], "createElement", real);
     }
-    tag = JS_ToCString(ctx, argv[0]);
+    /* LENGTH-CARRYING, for createElementNS's reason one algorithm down: §1.4 decides what a name may contain
+       and `strlen` decides about the prefix of the string in front of a U+0000, which are two different names. */
+    tag = JS_ToCStringLen(ctx, &tag_len, argv[0]);
     if (!tag) return JS_EXCEPTION;
     /* §4.5 step 5's "create an element GIVEN THIS": the element's node document is the RECEIVER's, never the
        realm's active one — `foreignDoc.createElement("p")` builds a node of foreignDoc. */
     d = doc_receiver(ctx, this_val);
     if (!d) { JS_FreeCString(ctx, tag); return JS_EXCEPTION; }
-    el = lxb_dom_document_create_element(lxb_dom_interface_document(d->dom),
-                                         (const lxb_char_t *)tag, strlen(tag), NULL);
+    dom = lxb_dom_interface_document(d->dom);
+    local = tag;
+    if (!d->is_xml) {                                               /* STEP 2 */
+        size_t i;
+        folded = js_malloc(ctx, tag_len + 1);
+        CHECK(folded != NULL,
+              "createElement could not copy its own local name — §4.5 step 2 folds it and the argument's bytes "
+              "belong to the JSString, which this must not write through");
+        for (i = 0; i < tag_len; i++)
+            folded[i] = (tag[i] >= 'A' && tag[i] <= 'Z') ? (char)(tag[i] - 'A' + 'a') : tag[i];
+        folded[tag_len] = '\0';
+        local = folded;
+    }
+    /* STEP 4, both terms. §4.5's "A document is said to be an XML document if its type is `xml`; otherwise an
+       HTML document" is the first; the second is a compare against the CONTENT TYPE, which is a different
+       field for the reason DocumentKind states — HTML §7.5.4 "Loading text documents" makes an HTML document
+       whose content type is `text/plain`, so neither field answers for the other. */
+    ns = (!d->is_xml || strcmp(d->content_type, "application/xhtml+xml") == 0) ? DOC_NS_HTML : NULL;
+    el = element_create_ns(dom, ns, ns ? sizeof(DOC_NS_HTML) - 1 : 0, local, tag_len, NULL, 0);
+    js_free(ctx, folded);
     JS_FreeCString(ctx, tag);
-    dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
-    DCHECK(el != NULL, "createElement produced no element — a page building its DOM would silently build "
-                       "nothing and every query after it would answer null");
+    /* TWO-SIDED, AND THE SIDE THAT WAS SILENT IS THE ONE THAT COST THE MEASUREMENT. element_create_ns interns
+       the namespace and PICKS THE ELEMENT'S C STRUCT from the id it gets back, so an element whose `ns` is not
+       the one step 4 chose is an element whose struct and whose namespace are two different elements — and
+       core/dom/element.c records that this is not hypothetical: a case-folding probe answers LXB_NS_HTML for
+       `HTTP://WWW.W3.ORG/1999/XHTML`. Asked here rather than inside the creation because step 4's CHOICE is
+       what is being checked, and only this line made it. */
+    DCHECK(lxb_dom_interface_node(el)->ns == (ns != NULL ? LXB_NS_HTML : LXB_NS__UNDEF),
+           "DOM §4.5 \"Interface Document\"'s createElement step 4 chose a namespace and the element came back "
+           "in another one — the element's C struct is picked from the interned namespace id, so the two "
+           "disagreeing means the node reports a namespace its own interface does not implement");
+    dom_cow_note_created(lxb_dom_interface_node(el));   /* this flow made it: the delta owns it */
     r = element_wrap(ctx, el);
     return r;
 }
@@ -1112,13 +1170,15 @@ static const IdlStepDecl DOC_CREATE_EL_STEP = {
    document (§4.5 step 5's "given this"), and HTML §3.2.3 step 9.2 creates in the CURRENT GLOBAL's. */
 JSValue document_create_element_internal(JSContext *ctx, const char *local, size_t len)
 {
-    lxb_dom_element_t *el = lxb_dom_document_create_element(lxb_dom_interface_document(doc_here(ctx)->dom),
-                                                            (const lxb_char_t *)local, len, NULL);
+    /* THE HTML NAMESPACE, NAMED. §4.13.3 "Core concepts" admits a custom element name only for an element in
+       the HTML namespace, so there is nothing conditional here and nothing to ask a document field about —
+       see document.h's document_create_element_html for why asking would have been the wrong shape. A
+       definition's local name is a valid custom element name, which is lowercase ASCII by §4.13.3's own
+       production, so §4.5 step 2's fold is a no-op over it and its absence changes no byte. */
+    lxb_dom_element_t *el = document_create_element_html(lxb_dom_interface_document(doc_here(ctx)->dom),
+                                                         local, len);
 
-    dom_cow_note_created(el ? lxb_dom_interface_node(el) : NULL);   /* this flow made it: the delta owns it */
-    DCHECK(el != NULL, "HTML §3.2.3 step 9 produced no element for a definition's local name — the definition "
-                       "was made from a name §4.13.3 \"Core concepts\" already accepted, so Lexbor refusing it "
-                       "is a disagreement about what a name is");
+    dom_cow_note_created(lxb_dom_interface_node(el));   /* this flow made it: the delta owns it */
     return element_wrap(ctx, el);
 }
 
@@ -2664,9 +2724,11 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
            is exactly that, and a title it is given is dropped rather than given a head to live in. */
         if (!el && !head) goto done;
         if (!el) {
-            lxb_dom_element_t *made = lxb_dom_document_create_element(lxb_dom_interface_document(d->dom),
-                                                                      (const lxb_char_t *)"title", 5, NULL);
-            CHECK(made != NULL, "document.title=: the title element could not be created");
+            /* THE HTML NAMESPACE, NAMED — this arm is already guarded by `de->ns == LXB_NS_HTML`, so the
+               `title` the setter creates belongs beside a document element that is in that namespace and
+               there is no question to ask. */
+            lxb_dom_element_t *made = document_create_element_html(lxb_dom_interface_document(d->dom),
+                                                                   "title", 5);
             el = lxb_dom_interface_node(made);
             dom_cow_note_created(el);
             dom_cow_append_child(head, el);
@@ -4251,6 +4313,21 @@ bool document_is_xml_of(const lxb_dom_document_t *dom)
                       "parse-boundary correction runs over a tree, so a caller reaching here with no record "
                       "is one whose correction would run over a tree nothing has classified");
     return d->is_xml;
+}
+
+/* DOM §4.9 "Interface Element"'s "create an element" with the HTML namespace NAMED — see document.h for the
+   four standards sentences that name it and for why a creation states its namespace instead of asking a
+   document field this engine does not maintain. One line, and it exists so that four call sites cannot drift
+   about which namespace "the HTML namespace" is: the URL is a constant of the standard and is spelled once. */
+lxb_dom_element_t *document_create_element_html(lxb_dom_document_t *dom, const char *local, size_t local_len)
+{
+    DCHECK(dom != NULL && local != NULL && local_len != 0,
+           "§4.9's create-an-element was asked for an element with no document or no local name — every one of "
+           "the four algorithms that reach this passes a literal name and the document its own step names");
+    /* element_create_ns never returns NULL (core/dom/element.h) and interns the three names AS GIVEN, which is
+       what keeps a `body` created here from being folded through a hash that already answers LXB_NS_HTML for a
+       namespace that is not the HTML namespace. */
+    return element_create_ns(dom, DOC_NS_HTML, sizeof(DOC_NS_HTML) - 1, local, local_len, NULL, 0);
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,

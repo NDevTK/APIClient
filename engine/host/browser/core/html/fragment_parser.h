@@ -117,9 +117,11 @@ typedef struct {
     char   *html;                 /* the markup, owned: the parser is handed slices of it across suspensions */
     size_t  len, off;
     lxb_dom_element_t *context;
-    /* §8.5.5 STEP 5's / §8.5.7 STEP 6's `body`, when there is one: an element this machine CREATED to be the
-       parse context and that is in no tree, so this machine has to destroy it. Owned, and released on the
-       throw path too. */
+    /* §8.5.5 STEP 5's / §8.5.6 STEP 4's / §8.5.7 STEP 6's `body`, when there is one: an element this machine
+       CREATED to be the parse context and that is in no tree, so this machine has to destroy it. Owned, and
+       released on the throw path too. The three steps differ in WHEN they create one — a DocumentFragment
+       parent for §8.5.5, a non-Element or `<html>` context for §8.5.6, a null or `<html>` element for §8.5.7 —
+       and agree exactly on what it is, which is why one field carries all three. */
     lxb_dom_element_t *own_context;
     lxb_dom_node_t *anchor, *ref, *frag, *node;
     /* §8.6.4 set and filter HTML's STEPS 4 AND 8. `san_config` is the canonical configuration the options resolved to, held from

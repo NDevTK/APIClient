@@ -228,7 +228,10 @@ static JSValue js_append_child(JSContext *ctx, JSValueConst this_val, int argc, 
     const char *mark = JS_ToCString(ctx, argv[0]);
     if (mark) {
         lxb_dom_document_t *doc = lxb_dom_interface_node(g_body)->owner_document;
-        lxb_dom_element_t *span = lxb_dom_document_create_element(doc, (const lxb_char_t *)"span", 4, NULL);
+        /* THE HTML NAMESPACE, NAMED — see core/dom/document.h's document_create_element_html. The vendor
+           entry this used to call decides the namespace from `lxb_dom_document_t::type`, which nothing in this
+           engine writes, so a fixture asking it was asking a field with no writer. */
+        lxb_dom_element_t *span = document_create_element_html(doc, "span", 4);
         if (span) {
             lxb_dom_element_set_attribute(span, (const lxb_char_t *)"data-mark", 9,
                                           (const lxb_char_t *)mark, strlen(mark));   /* part of the inserted subtree */

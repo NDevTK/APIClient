@@ -26,6 +26,7 @@
 #include "quickjs.h"
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"
+#include "core/dom/document_type.h"
 #include "core/dom/dom_implementation.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"

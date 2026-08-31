@@ -355,6 +355,26 @@ const char *document_content_type_of(const lxb_dom_document_t *dom);
    has to hold both. */
 bool document_is_xml_of(const lxb_dom_document_t *dom);
 
+/* DOM §4.9 "Interface Element"'s "CREATE AN ELEMENT" WITH THE HTML NAMESPACE NAMED — the shape four standards
+   sentences spell out in full rather than deriving: HTML §8.5.5 "The outerHTML property" setter step 5 ("set
+   parent to the result of creating an element given this's node document, "body", and the HTML namespace"),
+   HTML §8.5.6 "The insertAdjacentHTML() method" step 4 and HTML §8.5.7 "The createContextualFragment() method"
+   step 6 (both "then set context to the result of creating an element given this's node document, "body", and
+   the HTML namespace"), and DOM §4.5.1's createHTMLDocument.
+
+   IT EXISTS BECAUSE THE NAMESPACE MUST BE STATED AND NOT ASKED. `lxb_dom_document_create_element` decides it
+   from `lxb_dom_document_t::type`, and DOM §4.5's `type` is kept on THIS engine's Document record — nothing
+   here ever writes lexbor's field, so it reads HTML for every document this engine builds and the namespace a
+   creation got was one nobody decided. For the four sites above the answer is a constant of the standard, so
+   naming it is not a workaround: an algorithm that says "and the HTML namespace" has no question to ask.
+   §4.5's createElement is the one creation whose namespace is genuinely CONDITIONAL, and its own step 4 is a
+   DISJUNCTION lexbor's entry cannot express at all ("the HTML namespace, if this is an HTML document or this's
+   content type is "application/xhtml+xml"; otherwise null") — so it states its answer at its own site and
+   reaches core/dom/element.h's element_create_ns directly.
+
+   `local` is BORROWED and need not be NUL-terminated. Never returns NULL — element_create_ns says why. */
+lxb_dom_element_t *document_create_element_html(lxb_dom_document_t *dom, const char *local, size_t local_len);
+
 /* THE DOCUMENT IS ABOUT TO BE DESTROYED — release the record that names it, and everything the record holds
    (its wrapper, its DOMImplementation, its policy container). Called from the ONE place a document's lifetime
    ends, which is dom_cow's destroy, so a record cannot outlive its tree and a flow that created a document
