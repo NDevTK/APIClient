@@ -76,13 +76,28 @@ JSValue realm_value_get(JSContext *ctx, int slot);              /* OWNED: the ca
 /* A STEP OF A STANDARD WHOSE PRODUCER IS NOT IN THIS BUILD — the two-sided assertion, and the reason it is a
  * function rather than a comment at each site.
  *
- * A great many algorithm steps drain a work-set that some OTHER interface fills: update-the-rendering's resize
- * steps drain a viewport's change, its step 23 drains the top layer `dialog.showModal()` fills, §6.6.7's flush
- * reads the target element §7.4.6.4's scroll-to-the-fragment sets. Where this engine has none of that
- * interface, the work-set is EMPTY BY CONSTRUCTION and the step has nothing to do — but writing that down as a
- * comment states it once and never checks it again. This asserts it: `path` names the MEMBER whose arrival
- * would give the step work, and the moment somebody lands it, the DCHECK fires AT the step that must then be
- * written, with `what` naming the standard, the step number and the shape of the work.
+ * A great many algorithm steps drain a work-set that some OTHER INTERFACE fills: update-the-rendering's step 23
+ * drains the top layer `dialog.showModal()` fills, and a media element's steps drain the track lists a
+ * `TextTrackList` would populate. Where this engine has none of that interface, the work-set is EMPTY BY
+ * CONSTRUCTION and the step has nothing to do — but writing that down as a comment states it once and never
+ * checks it again. This asserts it: `path` names the MEMBER whose arrival would give the step work, and the
+ * moment somebody lands it, the DCHECK fires AT the step that must then be written, with `what` naming the
+ * standard, the step number and the shape of the work.
+ *
+ * ITS DOMAIN IS A MEMBER, AND THAT IS A LIMIT AND NOT A DETAIL. `path` is a [[HasProperty]] walk from a global,
+ * so this can only ever answer "is this MEMBER INSTALLED" — and a great many producers are not members at all.
+ * An INTERNAL ALGORITHM has no name on any global: CSSOM VIEW §3.1 "Scrolling"'s perform a scroll is what fills
+ * §13.2's pending scroll events, and HTML §7.4.6.4 "Scrolling to a fragment" is what sets a Document's target
+ * element, and neither is reachable from a global by any path. SIX SITES IN FIVE FILES ASKED FOR `scrollTo`
+ * ANYWAY, as the nearest member-shaped name to those two, and the proxy was wrong in BOTH directions at once:
+ * `Element.prototype.scrollTo` is installed in this build and moves nothing, so installing CSSOM VIEW §4's
+ * three Window members would have fired all six on a capability that had not arrived — a probe REPORTING A
+ * CAPABILITY AS PRESENT, which is worse than an absent probe because the next reader builds on it — while
+ * building §7.4.6.4's three non-scrolling effects would have left every one of them silent. So the rule is
+ * mechanical: **if the producer is not a member a page could name, this is the wrong instrument.** Ask the
+ * component that owns the capability instead — core/dom/element_scrolling.h answers the first of those two and
+ * core/dom/document.h the second — which is the same cure core/timing/hr_time.c records for
+ * `crossOriginIsolated`, where the probe fired on the first coarsen of every run one turn after it was written.
  *
  * `path` is resolved from this realm's GLOBAL, dot by dot — `ResizeObserver`, `Document.prototype.activeElement`,
  * `HTMLDialogElement.prototype.showModal`. A dotted path rather than a bare name because the INTERFACE OBJECT is

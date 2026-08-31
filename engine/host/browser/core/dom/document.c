@@ -2402,6 +2402,17 @@ lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc)
     return doc_child_named(document_document_element_of(doc), "body", "frameset");
 }
 
+/* HTML §7.4.6.4 "Scrolling to a fragment"'s TARGET ELEMENT — see document.h for why NULL here is the standard's
+   own initial value rather than a stand-in, and for what asking a name on the global instead cost its readers. */
+lxb_dom_node_t *document_target_element(JSContext *ctx)
+{
+    DCHECK(ctx != NULL,
+           "HTML §7.4.6.4's TARGET ELEMENT was asked for with no realm — it is a field of ONE Document, and the "
+           "realm is which document is being asked about; a caller with no realm has no document either");
+    (void)ctx;
+    return NULL;
+}
+
 /* DOM §2.7's DEFAULT PASSIVE VALUE names four targets, and three of them are this file's definitions: the node
    DOCUMENT itself, its document element, and its body. The fourth is the Window, which is not a node and is
    answered where the registration is. It lives here so the two §3.1.1 lookups have one implementation. */

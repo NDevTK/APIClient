@@ -175,35 +175,38 @@ static bool sandboxes_automatic_features(JSContext *docctx)
     return (document_active_sandbox_flags(docctx) & SANDBOX_AUTOMATIC_FEATURES) != 0;
 }
 
-/* §6.6.7 flush step 4's second disjunct — "topDocument has non-null TARGET ELEMENT".
-   A Document's target element is HTML §7.4.6.4's: SCROLL TO THE FRAGMENT sets it from the document's indicated
-   part, and no other algorithm in any standard writes it. This build performs no scroll-to-the-fragment — it
-   has no scrolling box for one to scroll — so no Document has ever had one set. That is ASSERTED against the
-   producer rather than written down as a comment, which is the whole difference between a check and a claim. */
+/* §6.6.7 flush step 4's second disjunct — "or topDocument has non-null TARGET ELEMENT".
+   A Document's target element is HTML §7.4.6.4 "Scrolling to a fragment"'s: that algorithm sets it from the
+   document's indicated part and no other algorithm in any standard writes one, so core/dom/document.h owns the
+   field and answers it. THIS STEP IS NOW THE READ IT IS RATHER THAN A PROBE — it asked
+   `realm_awaits(docctx, "scrollTo", …)`, a NAME ON THE GLOBAL standing in for a Document field, and that proxy
+   was wrong in both directions at once: installing CSSOM VIEW §4's `scrollTo` on the Window would have fired it
+   while no Document could hold a target element, and building §7.4.6.4 — three of whose four observable effects
+   have nothing to do with scrolling — would have left it silent at the moment this step came alive. Reading the
+   field needs no two-sided assertion at all: the day §7.4.6.4 writes one, this step starts skipping the
+   algorithm exactly as §6.6.7 says it must. */
 static bool top_document_has_target_element(JSContext *docctx)
 {
-    realm_awaits(docctx, "scrollTo",
-                 "HTML §6.6.7 flush autofocus candidates step 4 skips the whole algorithm — emptying the "
-                 "candidates and setting the processed flag — when topDocument has a non-null TARGET ELEMENT, "
-                 "which HTML §7.4.6.4's SCROLL TO THE FRAGMENT sets from the document's indicated part. This "
-                 "build now has a way to scroll a scrolling box, so §7.4.6.4 can run and a Document can hold a "
-                 "target element: store it on the Document and read it here");
-    return false;
+    return document_target_element(docctx) != NULL;
 }
 
 /* §6.6.7 flush steps 5.7-5.8 — "let inclusiveAncestorDocuments be a list consisting of the active document of
-   doc's INCLUSIVE ANCESTOR NAVIGABLES; if any Document in inclusiveAncestorDocuments has non-null target
-   element, then continue". Same absent state as step 4's, and the walk that reads it is absent with it: there is
-   no field for the walk to collect, so writing the climb now would be a climb to nowhere. The assert names BOTH
-   halves, so the day the producer lands the reader knows the step is a walk and not a single read. */
+   doc's INCLUSIVE ANCESTOR NAVIGABLES" / "if any Document in inclusiveAncestorDocuments has non-null target
+   element, then continue". Step 4 above is a single read and is written as one; THIS one is a CLIMB, and the
+   climb is what is missing rather than the field.
+   SO THE ASSERTION IS OVER THE FIELD AND NOT OVER A NAME, and `doc` itself is what it can be asked about: the
+   list is INCLUSIVE, so doc is a member of it, and a target element on doc alone is already enough to make this
+   step continue. It asked `realm_awaits(docctx, "scrollTo", …)` — see step 4 above for why a name on the global
+   was neither necessary nor sufficient for a Document field. */
 static bool an_ancestor_document_has_target_element(JSContext *docctx)
 {
-    realm_awaits(docctx, "scrollTo",
-                 "HTML §6.6.7 flush autofocus candidates step 5.8 SKIPS a candidate when any of the active "
-                 "documents of its navigable's INCLUSIVE ANCESTOR NAVIGABLES has a non-null TARGET ELEMENT — a "
-                 "`#fragment` in an ancestor frame outranks a descendant's autofocus. This build now has a way "
-                 "to scroll a scrolling box, so §7.4.6.4 can set one: store the target element on the Document, "
-                 "and write this step as the climb of doc's inclusive ancestor navigables that it is");
+    DCHECK(document_target_element(docctx) == NULL,
+           "HTML §6.6.7 \"The `autofocus` attribute\" flush autofocus candidates step 5.8 SKIPS a candidate "
+           "when any of the active documents of its navigable's INCLUSIVE ANCESTOR NAVIGABLES has a non-null "
+           "TARGET ELEMENT — a `#fragment` in an ancestor frame outranks a descendant's autofocus. A Document "
+           "can hold one now, and this reads only doc's own: write step 5.7 as the collection of the active "
+           "documents of doc's inclusive ancestor navigables that it is, and step 5.8 as the search over that "
+           "list");
     return false;
 }
 

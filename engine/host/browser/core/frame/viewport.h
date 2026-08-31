@@ -193,10 +193,16 @@ double viewport_scrolling_area_height(JSContext *ctx);
    the clamped position is the one the viewport already has — which is every request, while the scrolling area
    is the ICB, and viewport.c asserts exactly that rather than assuming it. So the write is not ignored: it is
    RUN, and the spec's own clamp is what makes it a no-op.
-   IT IS NOT `window.scroll` — that member is still absent, and four unwritten steps across three files assert
-   themselves against its arrival (rendering.c's update-the-rendering step 9, autofocus.c's §6.6.7 steps 4 and
-   5.8, focus.c's §6.6.6 step 4) because it is the member whose existence would mean a scrolling box can
-   actually be MOVED. Nothing here moves one. */
+   IT IS NOT `window.scroll` — that member is a separate question, and INSTALLING IT WOULD NOT CHANGE ANYTHING
+   THIS FILE DOES. §4's three Window members are §4's argument questions plus a call to this algorithm, so a
+   build with them scrolls exactly as far as a build without them: nowhere. That is worth stating because six
+   sites in five files used to assert themselves against the NAME `scrollTo` on the global as a stand-in for
+   "a scrolling box can be MOVED", and this header used to name four of them as though the member were the
+   capability. It is not, and the sites now ask the component that owns CSSOM VIEW §3.1 "Scrolling"'s perform a
+   scroll (core/dom/element_scrolling.h's `element_scrolling_box_can_move`) — whose viewport half is derived
+   from the two operands of the clamp above, so the day this file's scrolling area stops being the initial
+   containing block, every step that drains what a scroll produces fires without anyone having to remember
+   them. Nothing here moves a box, and this is where that stops being true. */
 void viewport_scroll(JSContext *ctx, double x, double y);
 
 /* CSSOM VIEW §13.1 step 1, as the one question the resize steps ask: "has doc's viewport had its width or

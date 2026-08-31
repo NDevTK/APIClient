@@ -46,6 +46,8 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "quickjs.h"
+
 /* CSSOM VIEW §6's `enum ScrollLogicalPosition { "start", "center", "end", "nearest" }`, which §6.1's determine
    the scroll-into-view position branches over four ways on each axis. It is an enum here and a string at the
    boundary: core/idl_args.h has already checked the value against §3.2.18's enumeration list, so a spelling
@@ -87,5 +89,44 @@ void element_scrolling_scroll_element(lxb_dom_element_t *el, double x, double y,
 void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const char *behavior,
                                                ScrollLogicalPosition block, ScrollLogicalPosition inline_pos,
                                                lxb_dom_element_t *container);
+
+/* CAN A SCROLLING BOX IN THIS REALM'S DOCUMENT BE AT A POSITION OTHER THAN THE ONE THIS ENGINE DERIVES —
+ * CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL ("when a user agent is to perform a scroll of a scrolling box
+ * box, to a given position position"), asked as the CAPABILITY it is and answered by the component that owns
+ * the algorithm.
+ *
+ * WHAT ASKS IT, AND WHY THE QUESTION IS WORTH EXPORTING. CSSOM VIEW §13.2 "Scrolling" gives every Document "an
+ * associated list of pending scroll events, which stores pairs of (EventTarget, DOMString), initially empty",
+ * and the ONLY thing that appends to it is a viewport or an element that "gets scrolled". Steps in two other
+ * standards drain or carry what that append produces, and each has to know whether a box in this build can move
+ * at all: HTML §8.1.7.3 "Processing model" update-the-rendering step 9 ("for each doc of docs, run the scroll
+ * steps for doc"), and HTML §7.4.6.5 "Persisted history entry state"'s scroll position data. One fact, two
+ * readers, one derivation.
+ *
+ * WHY IT IS NOT `realm_awaits(ctx, "scrollTo", …)`, WHICH IS WHAT THOSE READERS ASKED. A [[HasProperty]] on the
+ * global answers whether a MEMBER IS INSTALLED, and no member is this capability — the two are not even
+ * correlated. `Element.prototype.scrollTo` IS installed in this build (core/dom/element_view.c) and moves
+ * nothing; CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window would move nothing either, because
+ * their whole body is §4's argument questions and a call to `viewport_scroll`, whose clamp lands on the
+ * position the viewport already has. So the name test was neither necessary nor sufficient, and its failure was
+ * PRE-LOADED rather than latent: installing §4's three members satisfies it, so the readers would have fired
+ * announcing a capability that had not arrived — a probe that reports a capability as PRESENT is worse than no
+ * probe, because the next reader builds on it. core/timing/hr_time.c records the identical defect over
+ * `crossOriginIsolated` and states the cure this follows: it is a component's answer and not a probe of the
+ * global. A producer that is an INTERNAL ALGORITHM has no name on the global to probe for, so `realm_awaits`
+ * is the wrong instrument for it by construction — core/realm.h says so at the mechanism.
+ *
+ * THE ANSWER IS DERIVED ON BOTH HALVES AND NEITHER HALF IS A STORED FLAG.
+ *   THE VIEWPORT half is derived LIVE, from the clamp's own two operands: §4's `scroll()` clamps a request into
+ *   §2's scrolling area of the viewport, which core/frame/viewport.h derives as CSS 2.1 §10.1's initial
+ *   containing block — and the ICB IS the viewport, so the clamp has nowhere to land but the position the
+ *   viewport already has. The comparison below reads those same two functions, so the day a layout extends the
+ *   area past the ICB this answers true with nobody having to remember it.
+ *   THE ELEMENT half is derived FROM THE CRASH. §6.1's perform-a-scroll step in element_scrolling.c is the one
+ *   site for "an element cannot hold a scroll position" and it DFAILs rather than moving one, so no element in
+ *   this engine has ever been anywhere but the origin core/dom/element_view.c's `scrollTop` getter step 8
+ *   derives. That DFAIL names this function, so the diff that deletes it is the diff that turns this half into
+ *   a read of real state. */
+bool element_scrolling_box_can_move(JSContext *ctx);
 
 #endif

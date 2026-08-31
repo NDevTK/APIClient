@@ -60,6 +60,7 @@
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
+#include "core/dom/element_scrolling.h"
 #include "core/dom/element_view.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
@@ -1093,34 +1094,39 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                    "the focus machine was declared with a magic that is none of its entry points — every "
                    "algorithm that enters §6.6.4 declares one here, and a new one arrives with the branch that "
                    "sets up its focus target");
-            /* §6.6.6's focus(options) step 1. Steps 3 and 4 are decided here, where the OPTIONS are, and both
-               are answered rather than deferred:
+            /* §6.6.6's focus(options) step 1. Steps 3 and 4 are decided in this arm, where the OPTIONS are, and
+               both are answered rather than deferred:
                  step 3's "indicate focus" is the focus ring — a user-agent presentation with no scriptable
                    result, which is the one shape §NO STUBS permits as a documented no-effect;
-                 step 4's "scroll a target into view" needs a SCROLLING BOX, and this build has none — asserted
-                   the way rendering.c asserts its own unwritten steps, against the producer that would make one
-                   exist, so the day CSSOM-View's scrolling arrives this fires and names the step to write. */
-            {
-                JSValue g = JS_GetGlobalObject(ctx), scroll;
-                JSAtom a = JS_NewAtom(ctx, "scrollTo");
-                int has;
-
-                CHECK(a != JS_ATOM_NULL, "focus: the `scrollTo` producer name could not be interned");
-                has = JS_GetOwnSlot(ctx, &scroll, g, a);
-                JS_FreeAtom(ctx, a);
-                if (has > 0) JS_FreeValue(ctx, scroll);
-                JS_FreeValue(ctx, g);
-                DCHECK(has <= 0 || idl_dict_bool(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, "preventScroll"),
-                       "HTML §6.6.6 focus() step 4 SCROLLS A TARGET INTO VIEW (CSSOM VIEW) given this, "
-                       "\"auto\", \"center\" and \"center\" — this build now has a way to scroll a scrolling "
-                       "box, so step 4 must be written here");
-            }
+                 step 4's "scroll a target into view" needs a scrolling box that can be at a position other than
+                   the one this engine derives, and no box in this build can be — asserted below, the way
+                   rendering.c asserts its own unwritten steps, so the day CSSOM VIEW §3.1 "Scrolling"'s perform
+                   a scroll arrives this fires and names the step to write.
+               STEP 4's ASSERT ASKED FOR THE NAME `scrollTo` ON THE GLOBAL, with its own [[GetOwnProperty]]
+                   rather than `realm_awaits`, and the name was never the capability. `Element.prototype
+                   .scrollTo` is installed in this build and moves nothing; installing CSSOM VIEW §4's
+                   `scrollTo` on the Window would have satisfied the test and moved nothing either, so the
+                   DCHECK would have fired announcing a scrolling box that could still only be at its origin —
+                   a probe reporting a capability as PRESENT, which is worse than no probe. The question now
+                   goes to the component that owns §3.1 (core/dom/element_scrolling.h), and it is asked of THIS'S
+                   NODE DOCUMENT rather than of the running realm, for the same reason step 1's allow focus
+                   steps are: §6.1's scroll a target into view walks out of the element to ITS document's
+                   viewport. That is why it sits below the `doc` resolution rather than above it. */
             /* Step 1's allow focus steps are given THIS'S NODE DOCUMENT, not the running realm's — an element
                adopted into another same-origin document is focused under that document's policy. A document
                with no browsing context has neither the feature nor an activation, so its elements are not
                focusable through this member at all. */
             doc = n->owner_document ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
             if (!doc) return 0;
+            DCHECK(!element_scrolling_box_can_move(doc) ||
+                   idl_dict_bool(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, "preventScroll"),
+                   "HTML §6.6.6 \"Focus management APIs\" focus() step 4 — \"if options[\"preventScroll\"] is "
+                   "false, then scroll a target into view given this, \"auto\", \"center\", and \"center\"\" — "
+                   "must be written here: a scrolling box in this element's document can now be at a position "
+                   "other than the one this engine derives. The algorithm step 4 calls is already exported "
+                   "(core/dom/element_scrolling.h's element_scrolling_scroll_target_into_view), so what is "
+                   "missing is a stage of this machine AFTER §6.6.4's focusing steps, with `scrollIntoView`'s "
+                   "own step 7 — the target has an associated box — asked first");
             s->allow_win = JS_DupValue(ctx, document_window_proxy(doc));
             STEP_GOTO(hdr->stage, FOC_ALLOW, &s->fphase, &s->ua_phase, NULL);
             continue;

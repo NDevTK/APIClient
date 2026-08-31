@@ -10,6 +10,7 @@
 #include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/dom/document.h"
+#include "core/dom/element_scrolling.h"
 #include "core/events/event_target.h"
 #include "core/events/hash_change_event.h"
 #include "core/events/pop_state_event.h"
@@ -697,17 +698,24 @@ static void sh_apply_free(JSContext *ctx, SessionHistoryApply *a)
  * THIS USER AGENT HAS NO SCROLL POSITION TO SAVE — core/frame/viewport.c DERIVES scrollX/scrollY rather than
  * holding them, because with no layout the scrolling area is the viewport and the only position it can have is
  * (0,0) — so the scroll position data of every entry is that one point and restoring it moves nothing. The
- * optional clause is optional. Asserted against the producer rather than written down as a claim: `scrollTo` is
- * the member whose arrival means a scrolling box can be moved at all, which is the same probe viewport.c's own
- * two-sided assertion and core/html/autofocus.c's target-element checks are asked against. */
+ * optional clause is optional. Asserted against the CAPABILITY rather than written down as a claim — and the
+ * capability is asked of the component that owns CSSOM VIEW §3.1 "Scrolling"'s perform a scroll
+ * (core/dom/element_scrolling.h), not of a name on the global. This asked `realm_awaits(ctx, "scrollTo", …)`,
+ * and a [[HasProperty]] answers whether a MEMBER is installed: `Element.prototype.scrollTo` is installed here
+ * and moves nothing, and CSSOM VIEW §4's `scrollTo` on the Window would move nothing either, so the probe was
+ * pre-loaded to fire on a scroll position that is still the one derivation this file relies on. */
 static void sh_persisted_state(JSContext *ctx)
 {
-    realm_awaits(ctx, "scrollTo", "HTML §7.4.6.5's save/restore persisted state carries a session history "
-                                  "entry's SCROLL POSITION DATA across a traversal, and this build now has a "
-                                  "way to move a scrolling box — so an entry gains a scroll position data "
-                                  "field, activate-history-entry writes the outgoing entry's from the "
-                                  "document's restorable scrollable regions, and §7.4.6.2 step 6.4.4 restores "
-                                  "the incoming entry's when its scroll restoration mode is \"auto\"");
+    DCHECK(!element_scrolling_box_can_move(ctx),
+           "HTML §7.4.6.5 \"Persisted history entry state\"'s save persisted state — \"set the scroll position "
+           "data of entry to contain the scroll positions for all of entry's document's restorable scrollable "
+           "regions\" — carries a session history entry's SCROLL POSITION DATA across a traversal, and a "
+           "scrolling box in this document can now be at a position other than the one this engine derives. So "
+           "an entry gains a scroll position data field, activate-history-entry writes the outgoing entry's "
+           "from the document's restorable scrollable regions, and §7.4.6.2 \"Updating the document\"'s update "
+           "document for history step application restores the incoming entry's where it says \"Restore "
+           "persisted state given entry\" — twice, once on each arm of its same-document branch — with the "
+           "\"auto\" condition living inside §7.4.6.5's restore-persisted-state and not at either call site");
 }
 
 /* §7.4.6.1's ACTIVATE HISTORY ENTRY for this navigable — reached only when update-only is false, which is only
@@ -1728,21 +1736,28 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
 
     STEP_ARM(SHFRAG_TAIL);
     JS_FreeValue(ctx, in);
-    /* STEP 15: "SCROLL TO THE FRAGMENT given navigable's active document" — §7.4.6.4, which is more than a
-       scroll: it sets the Document's TARGET ELEMENT (the `:target` pseudo-class), runs the ancestor revealing
-       algorithm, runs the FOCUSING STEPS for that element and moves the sequential focus navigation starting
-       point. None of it has a producer in this build, and the assertion is asked against the member whose
-       arrival makes the algorithm expressible at all rather than being written down as a claim. */
-    realm_awaits(ctx, "scrollTo",
-                 "HTML §7.4.2.3.3 step 15 SCROLLS TO THE FRAGMENT after a hash route, and §7.4.6.4 is four "
-                 "observable things and not one: it sets the Document's TARGET ELEMENT from its INDICATED PART "
-                 "(which is what `:target` selects, and what §6.6.7's flush autofocus candidates step 4 reads "
-                 "— core/html/autofocus.c asserts against this same member for it), runs the ancestor "
-                 "revealing algorithm, runs §6.6.3's focusing steps for that element with the viewport as the "
-                 "fallback target, and moves the sequential focus navigation starting point. This build now "
-                 "has a way to scroll a scrolling box: write §7.4.6.4 in core/rendering, give the Document its "
-                 "target element and its indicated part (§7.4.6.4's own definition: the node the URL's "
-                 "fragment identifies, or null), and call it here and at §7.4.6.2 step 8's try-to-scroll");
+    /* STEP 15: "Scroll to the fragment given navigable's active document" — §7.4.6.4 "Scrolling to a
+       fragment", which is more than a scroll: it sets the Document's TARGET ELEMENT (the `:target`
+       pseudo-class), runs the ancestor revealing algorithm, runs the FOCUSING STEPS for that element and moves
+       the sequential focus navigation starting point. Only ONE of those four is a scroll.
+       WHICH IS WHY THE ASSERTION IS OVER THE TARGET ELEMENT AND NOT OVER `scrollTo`. This asked
+       `realm_awaits(ctx, "scrollTo", …)`, a name on the global standing in for the state §7.4.6.4 writes, and
+       that proxy was wrong in both directions: installing CSSOM VIEW §4's `scrollTo` on the Window fires it
+       while nothing here can set a target element, and the three non-scrolling effects above are buildable
+       with no scrolling box at all — so the day one of them lands, the probe would have stayed silent.
+       core/dom/document.h owns the field and answers it; this is the one site that would write it. */
+    DCHECK(document_target_element(ctx) == NULL,
+           "HTML §7.4.2.3.3 \"Fragment navigations\" step 15 — \"Scroll to the fragment given navigable's "
+           "active document\" — is unwritten while a Document can now hold a TARGET ELEMENT. §7.4.6.4 "
+           "\"Scrolling to a fragment\" is four observable things and not one: it sets the Document's target "
+           "element from its INDICATED PART (\"the one that its URL's fragment identifies, or null if the "
+           "fragment does not identify anything\", which is what `:target` selects and what §6.6.7's flush "
+           "autofocus candidates step 4 and step 5.8 read — core/html/autofocus.c reads the same field), runs "
+           "the ancestor revealing algorithm, runs §6.6.4 \"Processing model\"'s focusing steps for that "
+           "element with the Document's viewport as the fallback target, and moves the sequential focus "
+           "navigation starting point. Write §7.4.6.4 with its select-the-indicated-part and "
+           "find-a-potential-indicated-element "
+           "sub-algorithms, give the Document the field core/dom/document.h derives, and call it here");
     /* STEPS 16-17: "let traversable be navigable's TRAVERSABLE NAVIGABLE. Append the following session history
        SYNCHRONOUS NAVIGATION STEPS involving navigable to traversable: finalize a same-document navigation …;
        invoke WebDriver BiDi fragment navigated …". The finalize is what gives the entry its STEP and its place

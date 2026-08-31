@@ -231,7 +231,11 @@ static bool es_perform_scroll(const EsBox *b, const double position[2], const ch
           "function already carries (`smooth` against `instant`, with `auto` deferring to the computed "
           "`scroll-behavior` of css-overflow-3 §4.1 \"Smooth Scrolling: the scroll-behavior Property\"), and "
           "its step 7.1 emits `scrollend`. BUILD the per-flow position first — the getter and this setter are "
-          "one fact — then §3.1 over it");
+          "one fact — then §3.1 over it. AND THE DIFF THAT DELETES THIS CRASH OWES ONE MORE THING: "
+          "`element_scrolling_box_can_move` below derives its ELEMENT half FROM this crash, and three steps "
+          "that drain or carry what a scroll produces read it (HTML §8.1.7.3 update-the-rendering step 9, HTML "
+          "§7.4.6.5's scroll position data, and CSSOM VIEW §13.2's pending scroll events), so that half stops "
+          "being a derivation the moment an element can hold a position and becomes a read of the real one");
     return true;
 }
 
@@ -474,4 +478,28 @@ void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const 
             }
         }
     }
+}
+
+/* CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL, ASKED AS A CAPABILITY — see element_scrolling.h for the
+ * three readers, for why this is a component's answer rather than a `realm_awaits` over a name on the global,
+ * and for the derivation each half rests on. */
+bool element_scrolling_box_can_move(JSContext *ctx)
+{
+    DCHECK(ctx != NULL,
+           "CSSOM VIEW §3.1's perform-a-scroll capability was asked without a realm — the viewport half is a "
+           "fact about the viewport THIS realm's document is presented in, and core/frame/viewport.h answers "
+           "for the realm it is passed and never for a remembered one");
+    /* THE VIEWPORT HALF, derived from §4's clamp's own operands. `viewport_scroll` clamps a request to
+       max(0, min(x, area - viewport)) on each axis, so the clamp can land anywhere but the origin exactly
+       when the scrolling area is larger than the viewport. `viewport_exists` is not asked here: where there is
+       no viewport, core/frame/viewport.h answers both extents from the same modelled geometry and the
+       comparison is false, which is the right answer — a document no navigable is presenting has no box for
+       §3.1 to move. */
+    if (viewport_scrolling_area_width(ctx)  > viewport_width(ctx))  return true;
+    if (viewport_scrolling_area_height(ctx) > viewport_height(ctx)) return true;
+    /* THE ELEMENT HALF, derived from the crash in `es_perform_scroll` above: an element that reached a real
+       perform-a-scroll aborts there rather than moving, so every element in this engine is at the origin
+       core/dom/element_view.c's `scrollTop` getter step 8 derives, and there is nothing for §13.2's list to
+       have been appended for. */
+    return false;
 }

@@ -270,16 +270,20 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
  * decidable and geometry is not, and it is only geometry this derivation ever needed.
  *
  * THE MOMENT THERE IS A LAYOUT this stops being a derivation: the scrolling area becomes the union above, the
- * position becomes real state, and this becomes the read of what §3's perform-a-scroll wrote. The two-sided
- * assertion for that already exists and is in the right place — update-the-rendering step 9 (CSSOM VIEW §13.2's
- * SCROLL STEPS) is asserted against `scrollTo`, the member whose arrival means a scrolling box can be moved at
- * all, so the step that would have to drain doc's pending scroll events names itself first. §6's
- * `scrollTop`/`scrollLeft` setter reaches `viewport_scroll` below and moves nothing: its clamp collapses to the
- * position the viewport already has, which is asserted there. SO DO §6's `scroll()`, `scrollTo()` and
- * `scrollBy()` ON AN ELEMENT, at their steps 8 and 9 — a root element and a quirks-mode body route to this
- * viewport algorithm by name, which is why the probe above names `scrollTo` ON THE GLOBAL and not the member
- * name alone: the WINDOW member is the one whose arrival means the viewport can be moved, and an ELEMENT
- * member of the same name reaches this clamp exactly as the setter does. */
+ * position becomes real state, and this becomes the read of what §3.1's perform-a-scroll wrote. The two-sided
+ * assertion for that already exists and is in the right place — update-the-rendering step 9 (CSSOM VIEW §13.2
+ * "Scrolling"'s SCROLL STEPS) asks core/dom/element_scrolling.h whether a box in the document can be at a
+ * position other than the one this engine derives, so the step that would have to drain doc's pending scroll
+ * events names itself first. §6's `scrollTop`/`scrollLeft` setter reaches `viewport_scroll` below and moves
+ * nothing: its clamp collapses to the position the viewport already has, which is asserted there. SO DO §6's
+ * `scroll()`, `scrollTo()` and `scrollBy()` ON AN ELEMENT, at their steps 8 and 9 — a root element and a
+ * quirks-mode body route to this viewport algorithm by name.
+ * THAT ASSERTION USED TO BE A [[HasProperty]] FOR `scrollTo` ON THE GLOBAL, and the paragraph that stood here
+ * defended the choice: the WINDOW member was said to be the one whose arrival means the viewport can be moved,
+ * with the ELEMENT member of the same name reaching this clamp exactly as the setter does. Both halves of that
+ * are true and the conclusion does not follow — an installed member is not a moved box, and §4's Window members
+ * are this same clamp with §4's argument questions in front of them, so installing them would have fired six
+ * assertions across five files while every scroll in this engine remained the no-op its own clamp decides. */
 double viewport_scroll_x(JSContext *ctx)
 {
     (void)ctx;

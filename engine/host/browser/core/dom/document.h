@@ -314,6 +314,30 @@ bool document_is_passive_default_node(const lxb_dom_node_t *n);
 lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc);
 lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc);
 
+/* HTML §7.4.6.4 "Scrolling to a fragment"'s TARGET ELEMENT of the document this realm is presenting — "there is
+ * also a target element for each Document, which is used in defining the :target pseudo-class and is updated by
+ * the above algorithm. It is initially null."
+ *
+ * NULL IS THE STANDARD'S OWN ANSWER FOR A DOCUMENT §7.4.6.4 HAS NOT RUN ON, so it is a derivation and not a
+ * stand-in: scroll to the fragment is the ONLY algorithm in any standard that writes a target element ("set
+ * document's target element to target" on its element arm, "set document's target element to null" on the other
+ * two), this build runs it nowhere, and the one site that would run it — HTML §7.4.2.3.3's step 15, in
+ * core/frame/session_history.c — asserts against THIS function rather than writing the claim down as a comment.
+ * The initial value is therefore the current value for every Document there has ever been here.
+ *
+ * IT IS THE FACT ITSELF AND NOT A PROXY FOR ONE, which is the whole reason it exists. HTML §6.6.7 "The
+ * `autofocus` attribute"'s flush autofocus candidates reads a target element twice — step 4's second disjunct
+ * ("or topDocument has non-null target element") and step 5.8's climb over the inclusive ancestor navigables —
+ * and both of those asked `realm_awaits(docctx, "scrollTo", …)` instead, a NAME ON THE GLOBAL standing in for a
+ * Document field. That proxy was wrong in BOTH directions at once. Installing CSSOM VIEW §4's `scrollTo` on the
+ * Window fires it while no Document can hold a target element — a probe announcing a capability that has not
+ * arrived, which is worse than no probe because the next reader builds on it. And building §7.4.6.4, whose
+ * four observable effects are setting the target element, running the ancestor revealing algorithm, running
+ * §6.6.4 "Processing model"'s focusing steps and moving the sequential focus navigation starting point — only
+ * ONE of which is a scroll — would have left it SILENT at the moment its readers came alive. A capability is asked
+ * of the component that owns the capability; core/timing/hr_time.c records what asking the global cost. */
+lxb_dom_node_t *document_target_element(JSContext *ctx);
+
 /* A SECOND DOCUMENT IN THIS REALM — what DOM §4.5.1's createDocument and createHTMLDocument return, and what
    HTML's `new Document()` builds. It has NO BROWSING CONTEXT: no navigable, no Window, no WindowProxy, and no
    scripts, which is why §3.1.1's `location` is null on it. It is NOT a second realm and NOT a second instance —

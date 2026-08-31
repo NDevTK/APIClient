@@ -7,6 +7,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+#include "core/dom/element_scrolling.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/events/report_exception.h"
@@ -254,14 +255,25 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
    `visual_viewport_resize_changed` are the two halves, each latching in the component that owns the geometry,
    because a viewport this file remembered for itself would be a second answer to the one fact.
 
-   Step 9, still asserted at the place the algorithm runs it. */
+   Step 9, still asserted at the place the algorithm runs it — but NOT against a name on the global any more.
+   It asked `realm_awaits(docctx, "scrollTo", …)`, and this step's producer is not a member: CSSOM VIEW §13.2
+   "Scrolling" fills doc's list when a viewport or an element GETS SCROLLED, which is §3.1's perform a scroll
+   and is an INTERNAL ALGORITHM with no name on any global to probe for. The proxy was pre-loaded to fire on a
+   false premise — CSSOM VIEW §4's `scroll`/`scrollTo`/`scrollBy` on the Window are §4's argument questions plus
+   a call to `viewport_scroll`, whose clamp lands on the position the viewport already has, so installing them
+   satisfies a [[HasProperty]] and moves nothing, and this step would have announced a producer that did not
+   exist. The capability is asked of the component that owns it; core/dom/element_scrolling.h states the
+   derivation on both halves and core/timing/hr_time.c records what the name test cost the last time. */
 static void step_9(JSContext *docctx)
 {
-    realm_awaits(docctx, "scrollTo",
-                "update the rendering step 9 runs the SCROLL STEPS (CSSOM VIEW §13.2) over doc's pending "
-                "scroll events, firing scroll/scrollend/scrollsnapchange in the order they were added — this "
-                "build now has a way to scroll a scrolling box, so that list has a producer and step 9 must be "
-                "written");
+    DCHECK(!element_scrolling_box_can_move(docctx),
+           "HTML §8.1.7.3 \"Processing model\" update-the-rendering step 9 — \"for each doc of docs, run the "
+           "scroll steps for doc\" — runs CSSOM VIEW §13.2 \"Scrolling\"'s SCROLL STEPS over doc's PENDING "
+           "SCROLL EVENTS, the per-Document list \"which stores pairs of (EventTarget, DOMString), initially "
+           "empty\", firing scroll/scrollend/scrollsnapchange in the order they were added. A scrolling box in "
+           "this document can now be at a position other than the one this engine derives, so that list has a "
+           "producer: give the Document the list, append to it at the three places §13.2 says a viewport, an "
+           "element or a visual viewport gets scrolled, and write step 9 as the drain it is");
 }
 
 /* STEP 10 IS WRITTEN — it is UR_MEDIA, below. Its assert is gone rather than relaxed, which is the whole point
