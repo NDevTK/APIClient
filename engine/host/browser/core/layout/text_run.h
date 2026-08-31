@@ -121,7 +121,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/line_break.h"
 
-/* THE RUN IS A SEQUENCE OF ITEMS AND NOT OF CHARACTERS, because three different things occupy positions in it
+/* THE RUN IS A SEQUENCE OF ITEMS AND NOT OF CHARACTERS, because four different things occupy positions in it
  * and only one of them is text. css-sizing-3 §2.2 "Intrinsic Contributions" puts an inline box's own horizontal
  * margins, borders and padding into what it contributes ("based on the OUTER SIZE of the box"), and css-text-3
  * §5.5 "Line Breaking Details" places them at the box's TWO BOUNDARIES rather than at every break inside it —
@@ -155,11 +155,39 @@
  * line break. So the declaration supplies the U+000A the document does not contain, and [UAX14] LB6
  * `× ( BK | CR | LF | NL )` then forbids a break before it while LB5 `LF !` makes the break after it mandatory.
  * That is why there is ONE [UAX14] pass and no second mechanism deciding where a `br` breaks: an action written
- * here beside actions the annex computed would be two rule sets over one run. */
+ * here beside actions the annex computed would be two rule sets over one run.
+ *
+ * THE ATOMIC INLINE IS THE FOURTH THING AND IT IS THE ONE THAT HAS BOTH — a WIDTH like an edge and a code point
+ * like a forced break — which is exactly why it is not either of them wearing an extra field. css-text-3 §5.5
+ * "Line Breaking Details": "for Web-compatibility there is a SOFT WRAP OPPORTUNITY BEFORE AND AFTER each
+ * REPLACED ELEMENT OR OTHER ATOMIC INLINE, even when adjacent to a character that would normally suppress them,
+ * including U+00A0 NO-BREAK SPACE." So it introduces the two breaks §5.5 says an inline box boundary must not
+ * (which is what stops it being an EDGE), and CSS 2.2 §9.4.2 puts its whole box on the line — "horizontal
+ * margins, borders, and padding are respected between these boxes" — so it occupies an inline size a forced
+ * break does not have. CSS 2.2 §9.2.2 "Inline-level elements and inline boxes" says why one item is the whole
+ * of it: an atomic inline-level box "participate[s] in [its] inline formatting context as a SINGLE OPAQUE BOX",
+ * so it is never split across lines and there is nothing inside it for the run to hold.
+ * ONE KIND SERVES A REPLACED ELEMENT AND AN `inline-block` ALIKE, and that is §5.5's own sentence rather than a
+ * generalisation: it names "each replaced element OR OTHER atomic inline" as one category. What differs between
+ * them is only where the WIDTH comes from (CSS 2.2 §10.3.2 "Inline, replaced elements" for the first, §10.3.9
+ * "'Inline-block', non-replaced elements in normal flow" for the second), which is the CALLER's derivation and
+ * not a fact this run records.
+ * ITS CODE POINT IS U+FFFC OBJECT REPLACEMENT CHARACTER, whose [UAX14] Line_Break class is CB — and that is a
+ * derivation of §5.5's two sentences rather than a convenient stand-in. LB20 `÷ CB`, `CB ÷` ("break before and
+ * after unresolved CB") is the opportunity on each side that §5.5's first sentence requires; and because LB8a
+ * `ZWJ ×`, LB11 `× WJ`, `WJ ×`, LB12 `GL ×` and LB12a `[^SP BA HY] × GL` are all EARLIER rules than LB20, the
+ * annex already prohibits exactly what §5.5's second sentence prohibits — "with the exception of U+00A0
+ * NO-BREAK SPACE, there must be no soft wrap opportunity between atomic inlines and adjacent characters
+ * belonging to the Unicode GL, WJ, or ZWJ line breaking classes". The NAMED EXCEPTION is the one place the two
+ * disagree, since U+00A0 is itself GL, and text_run.c applies it as a stated §5.5 tailoring of the one pass —
+ * see `tr_atomic_nbsp_tailoring` there for why that is one rule set and not two. */
 typedef enum {
     TEXT_RUN_ITEM_CHAR = 0,   /* one code point surviving css-text-3 §4.1.1's Phase I */
     TEXT_RUN_ITEM_EDGE,       /* an inline box boundary: an inline size, and no code point at all */
     TEXT_RUN_ITEM_FORCED_BREAK, /* HTML §15.3.4's `display-outside: newline`: a code point, and no size */
+    TEXT_RUN_ITEM_ATOMIC,     /* css-text-3 §5.5's replaced element or other atomic inline: a size AND a code
+                                 point — CSS 2.2 §9.4.2's margin box on the line, and the U+FFFC whose [UAX14]
+                                 class CB puts an opportunity on each side of it */
 } TextRunItemKind;
 
 /* ONE ITEM OF THE COLLECTED RUN. The inline it belongs to travels with it because both of the properties this
@@ -175,10 +203,12 @@ typedef enum {
 typedef struct {
     TextRunItemKind kind;
     lxb_dom_element_t *style;
-    /* THE CODE POINT [UAX14] DECIDES THIS ITEM'S BOUNDARIES FROM — TEXT_RUN_ITEM_CHAR and
-       TEXT_RUN_ITEM_FORCED_BREAK, which are exactly the kinds that have one. For a character it is the
-       character; for a forced break it is the U+000A css-text-3 §4 names as HTML's newline, supplied by HTML
-       §15.3.4's declaration rather than by the document. An EDGE has none and its slot is never read. */
+    /* THE CODE POINT [UAX14] DECIDES THIS ITEM'S BOUNDARIES FROM — TEXT_RUN_ITEM_CHAR,
+       TEXT_RUN_ITEM_FORCED_BREAK and TEXT_RUN_ITEM_ATOMIC, which are exactly the kinds that have one. For a
+       character it is the character; for a forced break it is the U+000A css-text-3 §4 names as HTML's newline,
+       supplied by HTML §15.3.4's declaration rather than by the document; for an atomic inline it is the U+FFFC
+       whose class CB is what css-text-3 §5.5's "soft wrap opportunity before and after" is expressed as. An
+       EDGE has none and its slot is never read. */
     uint32_t cp;
     /* css-text-3 §3's `nowrap` "suppresses line breaks (text wrapping) within the source" while leaving white
        space collapsible, so whether an opportunity EXISTS is a second fact about the inline and not derivable
@@ -189,7 +219,14 @@ typedef struct {
        other `white-space` value would not be trimmable, so the flag is carried rather than re-derived from the
        code point. */
     bool collapsible_space;
-    /* TEXT_RUN_ITEM_EDGE only: css-sizing-3 §2.2's outer-size contribution at this one boundary of the box. */
+    /* THE INLINE SIZE THIS ITEM OCCUPIES ON ITS LINE, for the two kinds that have one and NOT the same quantity
+       for both. TEXT_RUN_ITEM_EDGE holds css-sizing-3 §2.2's outer-size contribution at ONE boundary of an
+       inline box, so the box's two edges carry its two halves; TEXT_RUN_ITEM_ATOMIC holds the WHOLE margin box
+       (CSS 2 §8.1's outer edge) of a box CSS 2.2 §9.2.2 makes "a single opaque box", so there is no second item
+       for the other half. They share a slot because the per-line sum does the same thing with both — add it at
+       the position the item sits at — and they are told apart by the KIND, which is what every accessor below
+       asserts on. A CHARACTER's contribution is css-values-4 §6.1.1's advance measure of its own code point and
+       is not stored, and a FORCED BREAK contributes none at all. */
     CssPx size;
 } TextRunItem;
 
@@ -207,9 +244,12 @@ typedef struct {
     bool in_white_space_run;
     /* [UAX14]'s ACTION AT EVERY POSITION of the run's own CODE POINTS — `actions[k]` is the action at the
        boundary immediately before code point `k`, and `item_of_cp[k]` is the ITEM that code point belongs to.
-       The code points are the run's characters AND its forced breaks, which are the two kinds that have one;
-       an inline box edge contributes none, per css-text-3 §5.5. Both arrays are written by `finish` and
-       RETAINED until `release`, because all three partitions above are walks over this one pass: a second
+       The code points are the run's characters, its forced breaks AND its atomic inlines, which are the three
+       kinds that have one; an inline box edge contributes none, per css-text-3 §5.5. Both arrays are written by
+       `finish`, which also applies §5.5's ONE tailoring of the annex (the U+00A0 exception beside an atomic
+       inline — see text_run.c's `tr_atomic_nbsp_tailoring`), so what they hold is [UAX14] AS CSS 2.2 REQUIRES
+       IT and every partition below reads that one answer rather than re-deriving it. They are RETAINED until
+       `release`, because all three partitions above are walks over this one pass: a second
        `line_break_actions` call for the fill would be the same rules run twice with two chances to disagree
        about where this run may break. Owned; NULL exactly while `ncps` is zero. */
     LineBreakAction *actions;
@@ -270,6 +310,29 @@ void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, 
    to nothing else — measuring css-values-4 §6.1.1's advance for it would put the first available font's
    .notdef width on the line for a box that draws no glyph. */
 void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *style);
+
+/* ADD ONE ATOMIC INLINE at the current position of the run — css-text-3 §5.5 "Line Breaking Details"' "each
+   replaced element or other atomic inline". `size` is the box's MARGIN BOX inline size (CSS 2 §8.1 "Box
+   dimensions": "the four margin edges define the box's margin box"), which is what CSS 2.2 §9.4.2 puts on the
+   line: "horizontal margins, borders, and padding are respected between these boxes".
+   IT IS ONE CALL AND NOT A PAIR OF EDGES, which is CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"
+   rather than a shorthand: an atomic inline-level box "participate[s] in [its] inline formatting context as a
+   SINGLE OPAQUE BOX", so it is never split across two line boxes and there is no inside of it for the run to
+   hold. Bracketing it with two edges would additionally place two boundaries §5.5 says introduce no break
+   around a box whose whole point is that it introduces two.
+   THE SIZE IS THE CALLER'S DERIVATION AND THE SECTION DEPENDS ON THE BOX TYPE — CSS 2.2 §10.3.2 "Inline,
+   replaced elements" for a replaced element, §10.3.9 "'Inline-block', non-replaced elements in normal flow" for
+   an `inline-block`, and its own module's for an inline-flex or inline-grid — which is why this entry takes the
+   number rather than deriving it: a component that chose the section would be classifying the box a second
+   time, in a file that has no reason to know the difference.
+   IT TAKES NO CODE POINT, for `text_run_measure_add_forced_break`'s reason: WHICH code point expresses §5.5's
+   two opportunities is a fact about the section and not the caller's to vary, so two callers cannot disagree
+   about what an atomic inline is to [UAX14].
+   `size` MAY BE ZERO — HTML §15.4.2's fourth rule gives an `img` that represents nothing natural dimensions of
+   0, and CSS 2.2 §10.3.2's first arm takes that width whole — and it may be NEGATIVE, because CSS 2.2 §8.3
+   "Margin properties" allows negative margins and the margin box is the border box plus both of them. Neither
+   is a call to skip: the item's POSITION is what puts §5.5's two opportunities on the line. */
+void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size);
 
 /* RUN [UAX14] OVER EVERYTHING COLLECTED and produce css-sizing-3 §2.1's two answers. Every caller must reach
    this: the measurement does not exist until it runs. Adding a node afterwards is a caller that ran two
@@ -364,6 +427,18 @@ bool text_run_measure_item_is_text(const TextRunMeasure *m, size_t i);
    no line box at all — which CSS 2.2 §8.3.1's collapse-through note reads as a box whose margins collapse
    through it, for a document that renders one line of text height. */
 bool text_run_measure_item_is_forced_break(const TextRunMeasure *m, size_t i);
+
+/* IS ITEM `i` AN ATOMIC INLINE. CSS 2.2 §9.4.2's zero-height rule ends its list with "and NO OTHER IN-FLOW
+   CONTENT", which is the conjunct an atomic inline satisfies and neither of the other two entries answers: it
+   is not TEXT (it draws no glyph and §9.4.2 asks about text separately) and it is not a preserved newline. A
+   consumer deciding whether one of the fill's lines exists therefore asks all three, and a line holding an
+   `<img>` exists however empty the rest of it is.
+   IT IS ALSO WHAT SEPARATES THE TWO SIZED KINDS at CSS 2.2 §10.8's step 1, which gives them different answers
+   from different sentences: "for REPLACED elements, inline-block elements, and inline-table elements, this is
+   the height of their MARGIN BOX; for inline boxes, this is their 'line-height'." An EDGE belongs to a box on
+   the second side of that semicolon and this item is the first, so a walk over a line's items cannot take one
+   height for both. */
+bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i);
 
 /* css-sizing-3 §2.1's MAX-CONTENT and MIN-CONTENT INLINE SIZES, in CSS pixels — the two answers, read through
    entries rather than off the struct so that the one relation between them is asserted where it is read. */

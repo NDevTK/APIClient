@@ -192,6 +192,25 @@ CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
    core/layout/flow_position.h owns that half. */
 CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
 
+/* THE USED EXTENT OF THE MARGIN EDGE on one axis, in CSS pixels — CSS 2 §8.1 "Box dimensions"' outermost
+   nesting, "the margin edge surrounds the box margin … the four margin edges define the box's MARGIN BOX". It
+   is the border edge plus the two margins on the axis, and it is the third entry of the same one nesting for
+   the reason the second is: which box `used_value_px` handed back is css-sizing §5's question, so a caller
+   holding only the number cannot add the right terms to it.
+   ITS CALLER IS CSS 2.2 §10.8's STEP 1 — "for replaced elements, inline-block elements, and inline-table
+   elements, this is the HEIGHT OF THEIR MARGIN BOX; for inline boxes, this is their 'line-height'" — and CSS
+   2.2 §9.4.2's line, which puts the same box's inline extent between its neighbours ("horizontal margins,
+   borders, and padding are respected between these boxes"). Both are core/layout/line_box.c, which reads this
+   on one axis for the height and on the other for the width of the run item that carries an atomic inline.
+   IT CAN BE NEGATIVE AND THAT IS NOT A DEFECT, which is the one way it differs from the two edges above: CSS
+   2.2 §8.3 "Margin properties" says "negative values for margin properties are allowed", so `margin: -100px`
+   on a 10px box makes its margin box −190px on that axis. §8.1's nesting is unconditional and the arithmetic
+   is stated over it, so there is no floor here — a caller that needs one is asking a different section's
+   question.
+   IT IS AN EXTENT AND NOT AN AREA, exactly as the two above are: an area is this extent on both axes AND the
+   box's POSITION, which core/layout/flow_position.h owns. */
+CssPx used_value_margin_edge_px(lxb_dom_element_t *el, bool vertical);
+
 /* THE SAME BORDER EDGE, for a caller that has ALREADY derived the box's CONTENT extent on that axis. CSS 2.1
    §8.1's box model is one nesting — content, then padding, then border — so this is that content extent plus
    the four terms css-sizing-3 §3.3's conversion is stated over, computed in the one function that owns them.

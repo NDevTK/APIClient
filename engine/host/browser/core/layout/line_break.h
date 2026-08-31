@@ -26,8 +26,8 @@
  * file whose asserts do not cover them.
  *
  * WHAT IT DOES NOT DO IS TAILOR. UAX14 §8 "Customization" and css-text-3 §5.1 "Breaking Rules for Letters: the
- * word-break property", §5.2 "Breaking Rules for Punctuation: the line-break property", §5.3 "Breaking Within
- * Words: the overflow-wrap/word-wrap property" and §6.1 "Hyphenation Control: the hyphens property" are the
+ * word-break property", §5.2 "Line Breaking Strictness: the line-break property", §5.3 "Hyphenation: the
+ * hyphens property" and §5.4 "Overflow Wrapping: the overflow-wrap (word-wrap) property" are the
  * four knobs a CSS UA turns, and this engine's cascade derives a computed value for none of them — so there
  * are no criteria to tailor with and the untailored default is the answer. core/layout/text_run.c asserts that
  * at the one place the cascade is read; this file holds no CSS at all, which is why the assert is there and

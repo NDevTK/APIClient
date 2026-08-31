@@ -25,6 +25,7 @@
 #include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/replaced_element.h"
 #include "core/layout/scroll_container.h"
 #include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
@@ -1094,7 +1095,18 @@ ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
     bool inl, table;
 
     DCHECK(d != NULL, "the cascade produced no computed `display` for an element");
-    inl = strcmp(d, "inline") == 0;
+    /* THE INLINE ARM IS TWO CONJUNCTS AND `display` IS ONLY THE FIRST, which is CSS 2.2 §9.4.2's own
+       split-an-inline-box sentence read with §9.2.2 beside it. What §6's step 3 counts once per LINE BOX is
+       the box "when an inline box exceeds the width of a line box, it is SPLIT into several boxes and these
+       boxes are distributed across several line boxes" — an inline BOX. A REPLACED element keeps a computed
+       `display` of `inline` and is not one: §9.2.2 makes it an atomic inline-level box that "participate[s] in
+       [its] inline formatting context as a SINGLE OPAQUE BOX", which css-text-3 §5.5 names in the same breath
+       as an `inline-block` ("each replaced element or other atomic inline"), so an `img` is ONE fragment
+       however many lines the paragraph around it has. It is also the pair CSS 2.1 §10.3.1's and §10.6.1's
+       titles are written over — "Inline, NON-REPLACED elements" — which is why core/layout/used_value.c asserts
+       the identical conjunction and core/layout/scrolling_area.c splits on the identical predicate: one fact
+       answered from three places, and this was the one place that answered it with half the question. */
+    inl = strcmp(d, "inline") == 0 && !replaced_element_of(el).replaced;
     table = strcmp(d, "table") == 0 || strcmp(d, "inline-table") == 0;
     free(d);
     if (inl) return ELEMENT_VIEW_FRAGMENTS_LINE_BOXES;

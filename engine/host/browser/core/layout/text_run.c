@@ -222,7 +222,33 @@ static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, 
    declaration names and for why [UAX14] rather than this file decides the boundaries around it. */
 static bool tr_kind_has_code_point(TextRunItemKind kind)
 {
-    return kind == TEXT_RUN_ITEM_CHAR || kind == TEXT_RUN_ITEM_FORCED_BREAK;
+    return kind == TEXT_RUN_ITEM_CHAR || kind == TEXT_RUN_ITEM_FORCED_BREAK ||
+           kind == TEXT_RUN_ITEM_ATOMIC;
+}
+
+/* DOES THIS KIND OCCUPY AN INLINE SIZE ON ITS LINE — the other partition of the four kinds, and it is NOT the
+   complement of the one above. An EDGE has a size and no code point, a FORCED BREAK has a code point and no
+   size, an ATOMIC INLINE has BOTH, and a CHARACTER has neither in this sense (its width is css-values-4
+   §6.1.1's advance measure of its own code point, read from the font rather than stored). The two questions
+   therefore cross, which is exactly why they are two functions and not one flag. */
+static bool tr_kind_has_size(TextRunItemKind kind)
+{
+    return kind == TEXT_RUN_ITEM_EDGE || kind == TEXT_RUN_ITEM_ATOMIC;
+}
+
+/* IS THIS ITEM CONTENT css-text-3 §4.1.2 "Phase II: Trimming and Positioning" STOPS AT — the test that finds a
+   line's two trim boundaries. §4.1.2 removes "a sequence of collapsible spaces at the beginning of a line" and
+   again at the end, so what bounds the sequence is the first thing on the line that is not one of those spaces.
+   AN ATOMIC INLINE IS SUCH A THING AND AN EDGE IS NOT, which is the whole reason this is a predicate rather
+   than a `kind == CHAR` test at each end. An inline box BOUNDARY is not content — "an inline box opened before
+   a line's leading space leaves that space at the beginning of the line" — but a replaced element or other
+   atomic inline IS, so `<div> <img> a</div>` keeps the space between the image and the `a` and trims only the
+   one before the image. A scan that stopped only at characters would trim the middle space as though it were
+   at the line's edge, which is a space every user agent renders. */
+static bool tr_item_stops_trim(const TextRunItem *it)
+{
+    if (it->kind == TEXT_RUN_ITEM_ATOMIC) return true;
+    return it->kind == TEXT_RUN_ITEM_CHAR && !it->collapsible_space;
 }
 
 /* THE FIELDS OF ONE KIND, REACHED ONLY THROUGH A CHECK OF THAT KIND. Every read of `cp`, `wraps`,
@@ -242,13 +268,16 @@ static const TextRunItem *tr_char_at(const TextRunMeasure *m, size_t i)
     return &m->items[i];
 }
 
-static const TextRunItem *tr_edge_at(const TextRunMeasure *m, size_t i)
+static const TextRunItem *tr_sized_at(const TextRunMeasure *m, size_t i)
 {
     DCHECK(i < m->count, "an item of a collected run was read past its end");
-    DCHECK(m->items[i].kind == TEXT_RUN_ITEM_EDGE,
-           "an EDGE item's inline size was read from an item that is a CHARACTER or a FORCED LINE BREAK — a "
+    DCHECK(tr_kind_has_size(m->items[i].kind),
+           "a STORED inline size was read from an item that is a CHARACTER or a FORCED LINE BREAK — a "
            "character's contribution is css-values-4 §6.1.1's advance measure of its own code point and a "
-           "forced break's is nothing at all, which are two different quantities read two different ways");
+           "forced break's is nothing at all, which are two different quantities read two different ways. The "
+           "two kinds that DO carry one are an inline box EDGE (css-sizing-3 §2.2's outer size at one boundary) "
+           "and an ATOMIC INLINE (CSS 2 §8.1's whole margin box), and the per-line sum adds either at the "
+           "position its item sits at");
     return &m->items[i];
 }
 
@@ -260,7 +289,8 @@ static uint32_t tr_code_point_at(const TextRunMeasure *m, size_t i)
 {
     DCHECK(i < m->count, "an item of a collected run was read past its end");
     DCHECK(tr_kind_has_code_point(m->items[i].kind),
-           "a code point was read from an inline box EDGE. css-text-3 §5.5 \"Line Breaking Details\" says an "
+           "a code point was read from an inline box EDGE, which is the one kind of the four that has none. "
+           "css-text-3 §5.5 \"Line Breaking Details\" says an "
            "inline box boundary \"do[es] not introduce a forced line break or soft wrap opportunity in the "
            "flow\", so handing one to [UAX14] would create or forbid a break at exactly the position the "
            "sentence says to leave alone — and the code point it would hand over is the zero `tr_append_item` "
@@ -331,6 +361,57 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
        those. §4.1.1's own step 1 — "any sequence of collapsible spaces and tabs immediately preceding or
        following a segment break is removed" — reaches the same answer by a third route. Three derivations,
        one number; the flag is set to the one that follows from step 4's own wording. */
+    m->in_white_space_run = false;
+}
+
+/* css-text-3 §5.5's ATOMIC INLINE, PUT IN THE RUN AS THE ONE CODE POINT [UAX14] NEEDS TO DECIDE ITS TWO
+   BOUNDARIES. U+FFFC OBJECT REPLACEMENT CHARACTER has Line_Break class CB, and LB20 "Break before and after
+   unresolved CB" is §5.5's "there is a soft wrap opportunity before and after each replaced element or other
+   atomic inline" — see text_run.h for why the rest of §5.5's sentence needs no rule here and why its NAMED
+   EXCEPTION does.
+   IT IS A CONSTANT HERE AND NOT AN ARGUMENT, for `TR_HTML_NEWLINE`'s reason: two callers free to pass a
+   different code point would be two answers to what an atomic inline is to the annex. */
+#define TR_OBJECT_REPLACEMENT 0xFFFCU
+
+void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size)
+{
+    TextRunItem *it;
+
+    DCHECK(m != NULL && style != NULL,
+           "an atomic inline was added with no accumulator or no element. CSS 2.2 §10.8's step 1 takes \"the "
+           "height of their margin box\" for exactly this box, and CSS 2.2 §9.4.2 puts that box's horizontal "
+           "margins, borders and padding on the line — both are facts about ONE element, so there is no atomic "
+           "inline without the box it is");
+    DCHECK(!m->finished,
+           "an atomic inline was added to a measurement that has already produced its answers. [UAX14] ran over "
+           "the code points as they stood, so this is one accumulator being used for two runs");
+    /* THE [UAX14] PASS IS ABOUT TO INCLUDE THIS POSITION, so the tailoring this component does not honour is
+       asserted here as well as at a text node and at a forced break — an inline formatting context that is
+       nothing but a single `<img>` adds no text node at all and would otherwise run the untailored annex with
+       nothing having said so.
+       THE SPACING MODEL IS ASSERTED HERE AND THE FORCED BREAK DELIBERATELY DOES NOT, and the difference is that
+       this item HAS an inline extent for a spacing term to sit beside. css-text-3 §7.2 "Tracking: the
+       letter-spacing property" adds its length "between each typographic character unit", and the boundaries
+       either side of an atomic inline are two such positions on this line — so the day the cascade models the
+       property, this sum acquires a term at exactly this item and the assert is what says so. */
+    tr_require_no_spacing_model();
+    tr_require_no_line_break_tailoring();
+    DCHECK(line_break_class_of(TR_OBJECT_REPLACEMENT) == LB_CLASS_CB,
+           "U+FFFC OBJECT REPLACEMENT CHARACTER's [UAX14] Line_Break class is not CB in "
+           "core/layout/line_break_class.c, so LB20 \"Break before and after unresolved CB\" no longer puts "
+           "css-text-3 §5.5's soft wrap opportunity before and after this box. That sentence is what this item "
+           "kind IS, and the code point is how it is expressed to the annex — a different class here means the "
+           "generated table and this constant have come apart, and the run would break around an image "
+           "according to whatever rule that other class reaches");
+    it = tr_append_item(m, TEXT_RUN_ITEM_ATOMIC, style);
+    it->cp = TR_OBJECT_REPLACEMENT;
+    it->size = size;
+    /* AN ATOMIC INLINE CLOSES A COLLAPSIBLE WHITE-SPACE RUN, and unlike the forced break's flag this one is
+       OBSERVABLE. css-text-3 §4.1.1 step 4 collapses "any collapsible space IMMEDIATELY FOLLOWING another
+       collapsible space", and this box is a character between them in §4.1.1's sense — it renders — so the
+       spaces on its two sides are two runs and each keeps its own surviving U+0020. `<div>a <img> b</div>`
+       therefore has a space on each side of the image, which is what every user agent renders, and leaving the
+       flag set as an EDGE does would silently delete the second one. */
     m->in_white_space_run = false;
 }
 
@@ -430,22 +511,30 @@ static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_
            "css-text-3 §4.1.2's per-line sum was asked for a prefix that ends outside the line it is a prefix "
            "of. The trim range below is the LINE's, so a bound past `hi` would sum items §4.1.2 never looked at "
            "and a bound before `lo` would sum a negative span");
-    /* §4.1.2's TWO EDGES ARE FOUND OVER THE CHARACTERS AND AN EDGE ITEM DOES NOT STOP THE SCAN. The section
-       removes "a sequence of collapsible spaces at the BEGINNING of a line" and again at the end, and a box
-       boundary is not a space — an inline box opened before a line's leading space leaves that space at the
-       beginning of the line, so a scan that halted on the boundary would keep a space every user agent drops.
+    /* §4.1.2's TWO ENDS ARE FOUND OVER THE ITEMS THAT ARE CONTENT, which `tr_item_stops_trim` decides and which
+       an inline box EDGE is not. The section removes "a sequence of collapsible spaces at the BEGINNING of a
+       line" and again at the end, and a box boundary is not a space — an inline box opened before a line's
+       leading space leaves that space at the beginning of the line, so a scan that halted on the boundary would
+       keep a space every user agent drops. An ATOMIC INLINE is on the other side of that test for the same
+       reason read the other way: it renders, so a space beyond it is not at the line's edge at all.
        The two ends are found first and nothing is moved, because `lo` and `hi` still delimit the ITEMS whose
        edges are summed: trimming by advancing the range would drop an edge that sits outside the surviving
        text, which is precisely the case an empty inline box at a line's start is. */
     for (i = lo; i < hi; i++)
-        if (m->items[i].kind == TEXT_RUN_ITEM_CHAR && !m->items[i].collapsible_space) { keep_lo = i; break; }
+        if (tr_item_stops_trim(&m->items[i])) { keep_lo = i; break; }
     for (i = hi; i > lo; i--)
-        if (m->items[i - 1].kind == TEXT_RUN_ITEM_CHAR && !m->items[i - 1].collapsible_space) { keep_hi = i; break; }
+        if (tr_item_stops_trim(&m->items[i - 1])) { keep_hi = i; break; }
     for (i = lo; i < upto; i++) {
         CssPx advance;
 
-        if (m->items[i].kind == TEXT_RUN_ITEM_EDGE) {
-            sum = css_px_add(sum, tr_edge_at(m, i)->size);
+        /* THE TWO SIZED KINDS ARE SUMMED WHEREVER THEY LAND and neither is subject to §4.1.2's trim, which
+           `tr_item_stops_trim` above is the other half of: the section removes a sequence of COLLAPSIBLE SPACES
+           at a line's two ends, and neither an inline box boundary nor an atomic inline is one. An EDGE
+           contributes css-sizing-3 §2.2's outer size at one boundary of its box and an ATOMIC INLINE the whole
+           of CSS 2 §8.1's margin box, which is CSS 2.2 §9.4.2's "horizontal margins, borders, and padding are
+           respected between these boxes" for a box the section makes "a single opaque box". */
+        if (tr_kind_has_size(m->items[i].kind)) {
+            sum = css_px_add(sum, tr_sized_at(m, i)->size);
             continue;
         }
         /* A FORCED BREAK OCCUPIES A POSITION AND NO WIDTH. The U+000A it carries exists for [UAX14] alone — see
@@ -523,35 +612,59 @@ static lxb_dom_element_t *tr_nearest_common_ancestor(lxb_dom_element_t *a, lxb_d
     return a;
 }
 
-/* NEITHER SIDE OF AN OPPORTUNITY CAN BE A FORCED BREAK, AND `tr_char_at` IS WHERE THAT IS ENFORCED — a theorem
-   of [UAX14] rather than a case this function declines to handle, and it is worth naming because the crash
-   would otherwise read as an omission. HTML §15.3.4's newline is a U+000A, whose Line_Break class is LF: LB6
-   `× ( BK | CR | LF | NL )` makes the boundary BEFORE it PROHIBITED and LB5 `LF !` makes the boundary AFTER it
-   MANDATORY, so no boundary touching one is ever LINE_BREAK_OPPORTUNITY and this function is never reached with
-   one. A break item's `wraps` and `collapsible_space` are therefore never read, which is why
-   `text_run_measure_add_forced_break` does not compute them. */
+/* NEITHER SIDE OF AN OPPORTUNITY CAN BE A FORCED BREAK, AND THE ASSERT BELOW IS WHERE THAT IS ENFORCED — a
+   theorem of [UAX14] rather than a case this function declines to handle, and it is worth naming because the
+   crash would otherwise read as an omission. HTML §15.3.4's newline is a U+000A, whose Line_Break class is LF:
+   LB6 `× ( BK | CR | LF | NL )` makes the boundary BEFORE it PROHIBITED and LB5 `LF !` makes the boundary AFTER
+   it MANDATORY, so no boundary touching one is ever LINE_BREAK_OPPORTUNITY and this function is never reached
+   with one. A break item's `wraps` and `collapsible_space` are therefore never read, which is why
+   `text_run_measure_add_forced_break` does not compute them.
+   AN ATOMIC INLINE CAN BE ON EITHER SIDE AND THAT IS §5.5's OWN WORDING, not a widening: the section hands the
+   decision to "the white-space property on the nearest common ancestor" for "soft wrap opportunities defined by
+   the boundary between two CHARACTERS OR ATOMIC INLINES". So the ancestor walk is the answer for a boundary
+   with an image on one side of it exactly as it is for one between two letters, and a `white-space: nowrap`
+   container suppresses both. What an atomic inline can NEVER be is §5.5's first case — a character "that
+   disappears at the line break" — since it renders, which is why that arm still asks only about a collapsible
+   space and why an atomic's `collapsible_space` slot stays the false `tr_append_item` wrote. */
 static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t left_item, size_t right_item)
 {
-    const TextRunItem *left = tr_char_at(m, left_item), *right = tr_char_at(m, right_item);
+    const TextRunItem *left, *right;
     lxb_dom_element_t *nca;
     bool wraps;
 
-    DCHECK(!right->collapsible_space,
+    DCHECK(left_item < m->count && right_item < m->count,
+           "css-text-3 §5.5's soft wrap opportunity was asked about an item past the end of the collected run");
+    left = &m->items[left_item];
+    right = &m->items[right_item];
+    DCHECK((left->kind == TEXT_RUN_ITEM_CHAR || left->kind == TEXT_RUN_ITEM_ATOMIC) &&
+               (right->kind == TEXT_RUN_ITEM_CHAR || right->kind == TEXT_RUN_ITEM_ATOMIC),
+           "css-text-3 §5.5's soft wrap opportunity was asked about a boundary one of whose sides is an inline "
+           "box EDGE or a FORCED LINE BREAK. §5.5 states the question over \"two characters or atomic inlines\" "
+           "and neither other kind can be a side of one: an edge contributes no code point at all, so [UAX14] "
+           "never decided a boundary at it, and a forced break is a U+000A that LB6 makes PROHIBITED before and "
+           "LB5 makes MANDATORY after — so a boundary touching one is never an OPPORTUNITY and this function is "
+           "unreachable for it");
+    DCHECK(right->kind != TEXT_RUN_ITEM_CHAR || !right->collapsible_space,
            "[UAX14] LB7 \"do not break before spaces or zero width space\" was asked to allow a break before a "
            "collapsible space. core/layout/line_break.c returns PROHIBITED there unconditionally, so this is "
            "the rule chain and this file disagreeing about which side of a space the opportunity is on");
     /* §5.5's FIRST case, which is about ONE character rather than a boundary: "for soft wrap opportunities
        created by characters that disappear at the line break (e.g. U+0020 SPACE), properties on the box
        DIRECTLY CONTAINING THAT CHARACTER control the line breaking at that opportunity." */
-    if (left->collapsible_space) return left->wraps;
+    if (left->kind == TEXT_RUN_ITEM_CHAR && left->collapsible_space) return left->wraps;
     nca = tr_nearest_common_ancestor(left->style, right->style);
     wraps = tr_wraps(nca);
     /* TWO-SIDED, AND THE SIDE IT CHECKS IS THE COLLECTION'S. Where the two characters are in the SAME inline
        box that box IS the nearest common ancestor, so this fresh read of `white-space` must produce exactly
        the flag `tr_append` recorded when the character was collected. A disagreement is the cascade having
        answered differently for one element at two times — a per-flow computed value read outside the flow
-       that collected it — which would silently move a break rather than fail. */
-    DCHECK(nca != left->style || wraps == left->wraps,
+       that collected it — which would silently move a break rather than fail.
+       IT IS ASKED ONLY OF A CHARACTER, because only `tr_append` records a flag to compare against: an ATOMIC
+       INLINE's `wraps` slot is the false `tr_append_item` wrote and stands for nothing. That is not a case
+       excluded to keep the assert quiet — a boundary whose left side is an atomic inline cannot have that box
+       as its nearest common ancestor at all, since core/layout/line_box.c does not descend into an atomic and
+       so nothing inside one is ever the boundary's other side. */
+    DCHECK(left->kind != TEXT_RUN_ITEM_CHAR || nca != left->style || wraps == left->wraps,
            "css-text-3 §5's `white-space` read for one element answered differently at collection time and at "
            "measurement time. The characters of an inline formatting context are collected and then measured "
            "within one flow, so the cascade cannot have changed between them; this is a computed value being "
@@ -577,6 +690,60 @@ static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t left_item, si
 static size_t tr_item_boundary_of_cp(const size_t *item_of_cp, size_t k)
 {
     return k == 0 ? 0 : item_of_cp[k - 1] + 1;
+}
+
+/* css-text-3 §5.5's ONE TAILORING OF [UAX14], applied ONCE over the single pass — the U+00A0 NO-BREAK SPACE
+ * beside an atomic inline, which is the only boundary where the section and the annex's own answer differ.
+ *
+ * WHY THERE IS EXACTLY ONE, AND WHY THAT IS A DERIVATION RATHER THAN A SURVEY. §5.5 states the atomic inline's
+ * two opportunities and their suppression in two consecutive sentences:
+ *   "For Web-compatibility there is a soft wrap opportunity BEFORE AND AFTER each replaced element or other
+ *    atomic inline, EVEN WHEN ADJACENT TO A CHARACTER THAT WOULD NORMALLY SUPPRESS THEM, INCLUDING U+00A0
+ *    NO-BREAK SPACE."
+ *   "However, WITH THE EXCEPTION OF U+00A0 NO-BREAK SPACE, there must be no soft wrap opportunity between
+ *    atomic inlines and adjacent characters belonging to the Unicode GL, WJ, or ZWJ line breaking classes."
+ * U+FFFC's class is CB and LB20 `÷ CB`, `CB ÷` is the first sentence; the second sentence is already what the
+ * annex answers, because LB8a `ZWJ ×`, LB11 `× WJ`, `WJ ×`, LB12 `GL ×` and LB12a `[^SP BA HY] × GL` are all
+ * EARLIER rules than LB20 and therefore win. The two statements agree everywhere except on U+00A0 itself,
+ * which IS a GL character — so the annex suppresses the opportunity there and §5.5 requires it. That single
+ * boundary is what this function writes, and nothing else.
+ *
+ * IT IS NOT "TWO RULE SETS OVER ONE RUN", which is the thing text_run.h forbids and the shape this most
+ * resembles. The forbidden shape is an action WRITTEN HERE BESIDE actions the annex computed for the same
+ * question — two deciders, free to disagree. This is a CSS-level tailoring the annex itself provides for
+ * (UAX14 §8 "Customization") and css-text-3 makes normative, applied to the ONE array before any partition
+ * reads it: after this call there is still exactly one answer for each boundary, and the max-content walk, the
+ * min-content walk and CSS 2.2 §9.4.2's fill all read it.
+ *
+ * A MANDATORY ACTION IS NEVER OVERWRITTEN, and that is §5.5's own first bullet rather than caution: preserved
+ * segment breaks and BK/NL characters "must be treated as FORCED line breaks", which is a stronger statement
+ * than an opportunity, and [UAX14] LB3 makes the eot position mandatory as well. Downgrading one to an
+ * opportunity would put a `br` beside an image on the same line. The loop's own bounds keep eot out of reach;
+ * the test keeps the rest out. */
+static void tr_atomic_nbsp_tailoring(TextRunMeasure *m, const uint32_t *cps)
+{
+    size_t i;
+
+    for (i = 1; i < m->ncps; i++) {
+        bool left_atomic = m->items[m->item_of_cp[i - 1]].kind == TEXT_RUN_ITEM_ATOMIC;
+        bool right_atomic = m->items[m->item_of_cp[i]].kind == TEXT_RUN_ITEM_ATOMIC;
+        uint32_t other = left_atomic ? cps[i] : cps[i - 1];
+
+        if (left_atomic == right_atomic) continue;   /* neither side, or both — no adjacent character */
+        if (other != 0x00A0) continue;
+        DCHECK(line_break_class_of(0x00A0) == LB_CLASS_GL,
+               "U+00A0 NO-BREAK SPACE's [UAX14] Line_Break class is not GL, so LB12 `GL ×` and LB12a "
+               "`[^SP BA HY] × GL` are no longer what suppresses the opportunity beside it and this tailoring "
+               "is correcting a rule that no longer fires. css-text-3 §5.5's exception names this character by "
+               "code point, so the class is the thing that moved and core/layout/line_break_class.c is where");
+        DCHECK(m->actions[i] != LINE_BREAK_MANDATORY,
+               "css-text-3 §5.5's U+00A0 exception was about to downgrade a MANDATORY break to a soft wrap "
+               "opportunity. No rule makes a boundary between U+FFFC (class CB) and U+00A0 (class GL) "
+               "mandatory — LB4, LB5 and LB6 are stated over BK, CR, LF and NL and LB3 over eot, which this "
+               "loop does not reach — so a mandatory action here is the rule chain and this derivation having "
+               "come apart, and taking the opportunity would move a forced line break");
+        m->actions[i] = LINE_BREAK_OPPORTUNITY;
+    }
 }
 
 void text_run_measure_finish(TextRunMeasure *m)
@@ -613,8 +780,8 @@ void text_run_measure_finish(TextRunMeasure *m)
     m->item_of_cp = malloc(m->ncps * sizeof *m->item_of_cp);
     CHECK(cps != NULL && m->actions != NULL && m->item_of_cp != NULL,
           "out of memory running [UAX14]'s line breaking over one inline formatting context. Every allocation "
-          "is one entry per code point of the run — its own text and its forced breaks — so a failure here is "
-          "the physical floor");
+          "is one entry per code point of the run — its own text, its forced breaks and its atomic inlines — "
+          "so a failure here is the physical floor");
     for (i = 0; i < m->count; i++) {
         if (!tr_kind_has_code_point(m->items[i].kind)) continue;
         cps[k] = tr_code_point_at(m, i);
@@ -626,6 +793,9 @@ void text_run_measure_finish(TextRunMeasure *m)
            "first one did, so the [UAX14] arrays are sized for a run that is not the one being copied into "
            "them. Nothing may append between the two walks — they are one statement in one function");
     line_break_actions(cps, m->ncps, m->actions);
+    /* css-text-3 §5.5's OWN TAILORING, APPLIED TO THE ONE ARRAY BEFORE ANY PARTITION READS IT — see the
+       function for which single boundary it is and for why it is not a second rule set. */
+    tr_atomic_nbsp_tailoring(m, cps);
     /* THE TWO ANSWERS ARE THE SAME WALK OVER DIFFERENT LINES, which is css-sizing-3 §2.1's own construction:
        the sizes differ by "if NONE of the soft wrap opportunities were taken" against "if ALL" were. So the
        max-content lines are cut by FORCED breaks alone — CSS 2.2 §10.3.5's "without breaking lines other than
@@ -658,7 +828,7 @@ void text_run_measure_finish(TextRunMeasure *m)
         if (i < m->ncps && (forced || soft)) m->splits = true;
         if (forced && i < m->ncps) {
             LineBreakClass cls = line_break_class_of(cps[i - 1]);
-            bool is_break_item = m->items[m->item_of_cp[i - 1]].kind == TEXT_RUN_ITEM_FORCED_BREAK;
+            TextRunItemKind kind = m->items[m->item_of_cp[i - 1]].kind;
 
             /* WHICH SIDE OF THIS ASSERT AN ITEM IS ON IS DECIDED BY ITS KIND AND CHECKED AGAINST ITS CLASS,
                which is the whole point: the two are written by different components and a disagreement is one
@@ -669,14 +839,21 @@ void text_run_measure_finish(TextRunMeasure *m)
                respects", an LF because it is the segment break §4.1.3 transforms into one). A FORCED BREAK item
                reaches it through LF and only LF, because that is the code point HTML §15.3.4's `newline`
                names — so a break item whose class is anything else is `TR_HTML_NEWLINE` and
-               core/layout/line_break_class.c having come apart. */
-            DCHECK(is_break_item ? cls == LB_CLASS_LF : (cls == LB_CLASS_BK || cls == LB_CLASS_NL),
+               core/layout/line_break_class.c having come apart. AN ATOMIC INLINE REACHES IT AT ALL, which is
+               why the third arm is `false` rather than a class test: its code point is U+FFFC, class CB, and
+               LB20 `÷ CB`, `CB ÷` is an OPPORTUNITY on both sides — no rule of the annex makes a boundary at a
+               CB mandatory, so a mandatory action there is the rule chain having produced one. */
+            DCHECK(kind == TEXT_RUN_ITEM_FORCED_BREAK
+                       ? cls == LB_CLASS_LF
+                       : (kind == TEXT_RUN_ITEM_CHAR && (cls == LB_CLASS_BK || cls == LB_CLASS_NL)),
                    "a FORCED line break inside a collapsed run came from an item whose [UAX14] class is not the "
                    "one its kind implies. A CHARACTER may reach a mandatory action only as css-text-3 §5.5's BK "
                    "or NL, since §4.1.1 collapses CR and LF away before this measurement sees them; a FORCED "
                    "BREAK item may reach it only as LF, since HTML §15.3.4's `display-outside: newline` is the "
-                   "U+000A css-text-3 §4 names. So this is Phase I's collapsible set, this file's newline "
-                   "constant, and [UAX14]'s classes having come apart");
+                   "U+000A css-text-3 §4 names; and an ATOMIC INLINE may not reach one at all, since its U+FFFC "
+                   "is class CB and LB20 breaks before and after it rather than mandating. So this is Phase I's "
+                   "collapsible set, this file's two code-point constants, and [UAX14]'s classes having come "
+                   "apart");
         }
         if (forced) {
             m->max_content = css_px_max(m->max_content, tr_line_size(m, max_line, at));
@@ -787,6 +964,13 @@ bool text_run_measure_item_is_forced_break(const TextRunMeasure *m, size_t i)
     return m->items[i].kind == TEXT_RUN_ITEM_FORCED_BREAK;
 }
 
+bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    return m->items[i].kind == TEXT_RUN_ITEM_ATOMIC;
+}
+
 bool text_run_measure_splits(const TextRunMeasure *m)
 {
     tr_require_answers(m);
@@ -840,8 +1024,9 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
            puts all of it on ONE line box. */
         DCHECK(!m->splits, "a run with no CODE POINTS in it reported a break position, and css-text-3 §5.5 says "
                            "an inline box boundary is not one — so `finish` recorded a split from an item that "
-                           "carries no code point for [UAX14] to have decided about. A forced break carries "
-                           "one, so a `br` in this run would have been counted and this arm not taken");
+                           "carries no code point for [UAX14] to have decided about. A forced break carries one "
+                           "and so does an atomic inline, so a `br` or an `<img>` in this run would have been "
+                           "counted and this arm not taken");
         out[0].from = 0;
         out[0].to = m->count;
         out[0].size = tr_line_size(m, 0, m->count);

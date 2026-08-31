@@ -124,12 +124,15 @@ static void lb_require_baseline_alignment(lxb_dom_element_t *el)
               "inline-level box a source of `first` or `last`, which selects WHICH of its own baseline sets "
               "aligns to the line — \"when an inline-level box has more than one possible source for baseline "
               "information (such as for a multi-line inline block or inline flex container)\". A box with more "
-              "than one baseline set is a box with more than one line inside it, which is an ATOMIC INLINE, "
-              "and this component crashes for one of those before it reaches this check. So the two answers "
-              "have come apart: either an atomic inline reached the line without being classified as one, or "
-              "a declaration set `baseline-source` on a non-replaced inline box, where §4.2.1's own "
-              "`Applies to:` line still admits it and the first and last baseline sets are the same set. "
-              "DECIDE which, here, before reading a source that selects between one thing");
+              "than one baseline set is a box with more than one LINE inside it, and neither box that reaches "
+              "this check is one. An `inline` box's own two baseline sets are the SAME set, which §4.2.1's "
+              "`Applies to:` line still admits and which makes the source a choice between one thing. A "
+              "REPLACED element reaches this check too and has NO baseline set at all — CSS 2.2 §10.8's "
+              "`vertical-align` definition gives a baseline to an `inline-table` and to an `inline-block` and "
+              "to nothing else, which is why `lb_atomic_extent` aligns its BOTTOM MARGIN EDGE to the line — so "
+              "the source selects between none. The box that genuinely has two is the ATOMIC INLINE this "
+              "component still crashes for, and building its baseline is where this longhand acquires a "
+              "meaning. DECIDE which of the three is here, before reading a source that selects nothing");
     shift = css_computed_length(el, "baseline-shift");
     if (shift.kind != CSS_LENGTH_ABSOLUTE || shift.px.px != 0.0)
         DFAIL("css-inline-3 §4.2.3 \"Post-Alignment Shift: the baseline-shift longhand\" shifts this "
@@ -205,6 +208,39 @@ static LbExtent lb_strut_extent(lxb_dom_element_t *el)
            "section's own \"the height of the inline box … is thus exactly 'line-height'\" is an identity over "
            "`A + L/2` and `D + L/2` with `L = 'line-height' - AD`, so a disagreement here is one of the three "
            "operands having been read for a different element than the other two");
+    return out;
+}
+
+/* §10.8's STEP 1 FOR AN ATOMIC INLINE, WHICH IS THE OTHER HALF OF ITS OWN SENTENCE. "The height of each
+   inline-level box in the line box is calculated. For REPLACED ELEMENTS, INLINE-BLOCK elements, and
+   INLINE-TABLE elements, this is the HEIGHT OF THEIR MARGIN BOX; for inline boxes, this is their
+   'line-height'." So this box is measured by CSS 2 §8.1's outer edge (core/layout/used_value.h) and NOT by
+   `lb_strut_extent`, which is §10.8.1's strut for a box containing no glyphs and would answer the second half
+   of that semicolon for a box on the first.
+   ALL OF IT IS ABOVE THE BASELINE, AND THAT IS §10.8's `vertical-align` DEFINITION RATHER THAN AN ESTIMATE.
+   Two sentences of it compose: "in the following definitions, for inline non-replaced elements, the box used
+   for alignment is the box whose height is the 'line-height' … FOR ALL OTHER ELEMENTS, THE BOX USED FOR
+   ALIGNMENT IS THE MARGIN BOX", and `baseline`'s own definition — "align the baseline of the box with the
+   baseline of the parent box. IF THE BOX DOES NOT HAVE A BASELINE, ALIGN THE BOTTOM MARGIN EDGE with the
+   parent's baseline." A REPLACED ELEMENT HAS NO BASELINE: §10.8 gives one to an `inline-table` ("the baseline
+   of the first row") and to an `inline-block` ("the baseline of its last line box in the normal flow, unless
+   it has either no in-flow line boxes or if its 'overflow' property has a computed value other than
+   'visible'"), and to nothing else — so the bottom margin edge sits ON the line's baseline, `D'` is zero and
+   `A'` is the whole margin box. That is why an image on a line of text leaves the font's descender visible
+   below it, which is the single most recognisable thing about inline replaced content.
+   THE ALIGNMENT IS `baseline` BY ASSERTION AND NOT BY ASSUMPTION: `lb_require_baseline_alignment` runs over
+   this element before it reaches the run, so any other css-inline-3 §4.2 value has already crashed. A box that
+   HAS a baseline is the arm that is missing here rather than the arm that is wrong — see the atomic-inline
+   crash in `lb_child`, whose remaining work is exactly that baseline.
+   NO FLOOR ON THE HEIGHT, because CSS 2.2 §8.3 allows a negative margin and §8.1's nesting is unconditional.
+   `lb_take` is a maximum against the line's strut, which §10.8.1 makes non-negative for a non-negative
+   `line-height`, so a negative margin box cannot pull a line box below zero — it simply does not win. */
+static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
+{
+    LbExtent out;
+
+    out.above = used_value_margin_edge_px(el, true);
+    out.below = css_px(0.0);
     return out;
 }
 
@@ -289,9 +325,10 @@ static bool lb_phrasing_break(TextRunMeasure *m, lxb_dom_element_t *el)
               "computed `white-space` that governs. That is not a refinement, it is the case §15.3.4's own "
               "`nobr wbr { white-space: normal; }` rule exists to make work, and reading the nearest common "
               "ancestor instead would answer `nowrap` for exactly the document that rule is written about. "
-              "BUILD both, then the atomic inline is the same item carrying a WIDTH as well as its two "
-              "opportunities — which is why css-text-3 §5.5's \"soft wrap opportunity before and after each "
-              "replaced element or other atomic inline\" is the next case and not a separate one");
+              "THE ATOMIC INLINE IS NO LONGER THE THING THIS WAITS FOR: text_run.h's fourth item kind carries "
+              "§5.5's \"soft wrap opportunity before and after each replaced element or other atomic inline\" "
+              "as a U+FFFC of class CB, and this element needs a DIFFERENT code point under DIFFERENT rules, "
+              "which is why the two were never one case. BUILD the two above");
         return true;
     case PHRASING_BREAK_NONE:
         return false;
@@ -378,22 +415,29 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
     free(d);
     if (atomic)
         DFAIL("CSS 2.2 §9.2.2 makes this an ATOMIC INLINE-LEVEL box, which \"participate[s] in [its] inline "
-              "formatting context as a single opaque box\" — and css-text-3 §5.5 \"Line Breaking Details\" "
-              "states the consequence this component cannot absorb: \"for Web-compatibility there is a SOFT "
-              "WRAP OPPORTUNITY before and after each replaced element or other atomic inline\". One atomic "
-              "inline therefore puts a break opportunity on the line, so how many line boxes there are becomes "
-              "a function of this box's own used WIDTH — §10.3.9's for an inline-block, its own module's for an "
-              "inline-flex or inline-grid — and §10.8's step 1 wants its MARGIN BOX height rather than its "
-              "`line-height` (\"for replaced elements, inline-block elements, and inline-table elements, this "
-              "is the height of their margin box\"). THE BREAK SEARCH IS BUILT and is no longer part of what "
-              "this names: core/layout/text_run.h's fill already distributes a run against each line's "
-              "available width. TWO THINGS ARE LEFT AND THEY ARE BOTH ABOUT THIS BOX. (1) Its used inline "
-              "size, from core/layout/used_value.c, carried into the run as an item that has a WIDTH and its "
-              "own two opportunities — which is none of the three item kinds text_run.h has, since a CHAR is "
-              "sized by an advance measure, an EDGE introduces no break, and a FORCED BREAK has no width and "
-              "is mandatory rather than an opportunity. (2) §10.8's step 1 over its margin "
-              "box, which `lb_strut_extent` does not compute: that function is §10.8.1's strut for a box "
-              "containing no glyphs, and an atomic inline is a box whose own height is a layout");
+              "formatting context as a single opaque box\". THE RUN ITEM IS BUILT AND IS NO LONGER PART OF WHAT "
+              "THIS NAMES: core/layout/text_run.h carries css-text-3 §5.5's atomic inline as a kind of its own "
+              "— a MARGIN BOX inline size at a position plus the U+FFFC whose [UAX14] class CB is \"a soft wrap "
+              "opportunity before and after each replaced element or other atomic inline\" — and the REPLACED "
+              "arm below already emits one, so the fill, the per-line sum and §10.8's step 1 over a margin box "
+              "(`lb_atomic_extent`) all run for this shape of box today. WHAT IS LEFT IS TWO THINGS AND BOTH "
+              "ARE FACTS ABOUT THIS BOX RATHER THAN ABOUT THE LINE. (1) THE BASELINE, which is where an "
+              "`inline-block` and a replaced element part company: §10.8's `vertical-align` definition gives "
+              "this box one — \"the baseline of an 'inline-block' is the baseline of ITS LAST LINE BOX in the "
+              "normal flow, unless it has either no in-flow line boxes or if its 'overflow' property has a "
+              "computed value other than 'visible', in which case the baseline is the bottom margin edge\", and "
+              "\"the baseline of an 'inline-table' is the baseline of the first row\" — so `A'` and `D'` split "
+              "its margin box at that line rather than putting all of it above the baseline, which is what "
+              "`lb_atomic_extent` does for a box §10.8 gives NO baseline. BUILD the inner baseline: it is this "
+              "component's own answer one level down (the last line box of the formatting context inside this "
+              "box, and its `e.above`), plus `overflow`, whose computed value core/css/css_computed_value.c "
+              "must derive for the exception to be readable. (2) THE USED INLINE SIZE for the box types CSS "
+              "2.1 §10 does not own: §10.3.9 \"'Inline-block', non-replaced elements in normal flow\" answers "
+              "an `inline-block` (core/layout/used_value.c's shrink-to-fit), but an `inline-flex` and an "
+              "`inline-grid` are their own modules' (css-flexbox §9 and css-grid §11) and `uv_box_kind` "
+              "classifies neither — it reads them as block-level and would run §10.3.3's constraint equation "
+              "over a box no part of §10.3 describes. FIX THAT CLASSIFICATION FIRST, in used_value.c, so the "
+              "width this arm would ask for crashes by its own module's name instead of answering wrongly");
     /* CSS 2.2 §9.2.1.1's SECOND PARAGRAPH, which is a DIFFERENT box structure from its first and is reached
        from here rather than from block_flow.c — the block-level box is not a child of the block container at
        all, so the classification that delimits the anonymous runs never sees it. It is named apart from the
@@ -433,16 +477,6 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
               "the anonymous box as its SIBLING, so a run block_flow.c delimited for one must contain none — "
               "and the run is delimited by the very classifier this crash contradicts, which is why one assert "
               "at this consumer covers both callers and a second copy inside the generation would not");
-    if (replaced_element_of(el).replaced)
-        DFAIL("HTML §15.4 makes this a REPLACED ELEMENT, so §10.8's step 1 takes \"the height of their margin "
-              "box\" rather than its `line-height`, and css-text-3 §5.5 puts a soft wrap opportunity before "
-              "and after it — the same two consequences an atomic inline has, reached through the element's "
-              "own nature rather than through its `display`. Its natural dimensions are already answered "
-              "(core/layout/replaced_element.h) and so is the break search the width feeds — "
-              "core/layout/text_run.h's fill — so what is missing is the used width §10.3.2 derives from "
-              "those dimensions, and the same run item the atomic inline case above names: one carrying a "
-              "WIDTH and its own two soft wrap opportunities. BUILD it with that case, since one item kind "
-              "serves both");
     /* §10.8's step 2 for this box. It is asked at the WALK and not at the per-line pass below even though the
        height is measured there, because it is a question about the BOX — whether §10.8.1's `A'` and `D'` are
        measured from the same baseline as its neighbours' — and every box in this context is reached exactly
@@ -450,8 +484,28 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
        IT IS ASKED OF A `br` TOO, and that is §10.8's step 1 rather than a wide net: the break is an
        inline-level box ON the line it ends, so `lb_line_extent` takes its `A'` and `D'` like any other box's —
        `<br style="line-height:100px">` makes a line 100px tall — and a box whose extents enter step 3's maxima
-       is a box step 2 has to have aligned. */
+       is a box step 2 has to have aligned.
+       IT IS ASKED OF A REPLACED ELEMENT BEFORE ITS ITEM IS COLLECTED, because `lb_atomic_extent` puts the whole
+       of that box ABOVE the baseline and §10.8's `vertical-align` definition is the only reason it may: "if the
+       box does not have a baseline, align the BOTTOM MARGIN EDGE with the parent's baseline" is the `baseline`
+       arm, and any other alignment moves the box somewhere this file does not compute. */
     lb_require_baseline_alignment(el);
+    /* HTML §15.4 "Replaced elements" MAKES THIS A REPLACED ELEMENT, which is css-text-3 §5.5's "each replaced
+       element or other atomic inline" reached through the element's own nature rather than through its
+       `display` — an `img` is `display: inline` and is not an inline BOX. Its two consequences are the atomic
+       inline's, and both are the item: §5.5 puts a soft wrap opportunity before and after it, and CSS 2.2
+       §9.4.2 puts its horizontal margins, borders and padding on the line between its neighbours.
+       THE WIDTH IS THE MARGIN BOX'S AND IS core/layout/used_value.h's, WHICH ALREADY RUNS §10.3.2 "Inline,
+       replaced elements" over core/layout/replaced_element.h's natural dimensions — so nothing is derived here
+       and there is no second answer to how wide an image is. The walk does NOT descend into it and emits no
+       edges around it: CSS 2.1 §3.1 puts a replaced element's content "outside the scope of the CSS formatting
+       model", and §9.2.2 makes the box "a single opaque box", so there is no inside for this run to hold.
+       ITS HEIGHT IS READ AT THE LINE AND NOT HERE, because §10.8's step 1 is a question about the LINE the item
+       lands on — `lb_atomic_extent` is where the same margin box is asked for on the other axis. */
+    if (replaced_element_of(el).replaced) {
+        text_run_measure_add_atomic(m, el, used_value_margin_edge_px(el, false));
+        return;
+    }
     /* THE ELEMENTS THAT CHANGE WHERE THE RUN BREAKS ARE PLACED BEFORE ANYTHING ELSE IS COLLECTED FOR THEM,
        because the fill's whole answer is a function of the break positions and a run collected without one of
        them is a partition of different text. A phrasing break is not additionally an inline box. */
@@ -511,9 +565,12 @@ static void lb_walk(TextRunMeasure *m, lxb_dom_element_t *el)
    surviving collapsible space, and a run consisting only of those never arrives: CSS 2.2 §9.2.2.1 "Anonymous
    inline boxes" removes it before the walk ("white space content that would subsequently be collapsed away …
    does not generate any anonymous inline boxes"), which core/layout/block_flow.h decides at `lb_text`. So a
-   line holding a character item holds a character the document contains. Two of the other three conjuncts
-   crash on the way here — preserved white space in `tr_wraps`, in-flow content at the atomic-inline and
-   replaced arms — leaving the box-edges conjunct and the PRESERVED NEWLINE for this function to decide.
+   line holding a character item holds a character the document contains. One of the other three conjuncts still
+   crashes on the way here — preserved white space, in `tr_wraps` — and "NO OTHER IN-FLOW CONTENT" is now a live
+   question this function answers rather than one the walk aborted for: an ATOMIC INLINE item is exactly that
+   content, so a line holding a replaced element EXISTS however empty the rest of it is, and
+   `<div><img alt=""></div>` is a box whose margins do not collapse through it even though the image is 0 by 0.
+   That leaves the box-edges conjunct and the PRESERVED NEWLINE for this function to decide alongside it.
    "DO NOT END WITH A PRESERVED NEWLINE" IS ANSWERED OVER THE LAST ITEM THAT RENDERS, and the qualification is
    forced by the fill's own mapping rather than chosen. A forced break closes its line at the boundary
    immediately after it, so it is the last item on its line everywhere except at [UAX14] LB3's end of text,
@@ -538,15 +595,25 @@ static LbExtent lb_line_extent(lxb_dom_element_t *style, const TextRunMeasure *m
         lxb_dom_element_t *box = text_run_measure_item_style(m, i);
         bool text = text_run_measure_item_is_text(m, i);
         bool brk = text_run_measure_item_is_forced_break(m, i);
+        bool atom = text_run_measure_item_is_atomic(m, i);
 
-        lb_take(&out, lb_strut_extent(box));
-        /* THE BOX-EDGES TEST IS STILL SHORT-CIRCUITED BEHIND THE TEXT ONE, and that is not a saving:
+        /* §10.8's STEP 1 IS ONE SENTENCE WITH A SEMICOLON IN IT AND THIS IS THE SEMICOLON: "for replaced
+           elements, inline-block elements, and inline-table elements, this is the height of their MARGIN BOX;
+           for inline boxes, this is their 'line-height'." An atomic inline's item is on the first side and
+           every other item's box is on the second, so the two extents come from two functions and a walk that
+           took the strut for both would report an image's height as its `line-height`. */
+        lb_take(&out, atom ? lb_atomic_extent(box) : lb_strut_extent(box));
+        /* THE BOX-EDGES TEST IS STILL SHORT-CIRCUITED BEHIND THE OTHERS, and that is not a saving:
            `lb_has_nonzero_box_edges` reads used values, which is a derivation that crashes for box types this
-           engine does not lay out, so asking it about a box the first conjunct already answered for would turn
+           engine does not lay out, so asking it about a box an earlier conjunct already answered for would turn
            a measured line into an abort. */
-        if (text || lb_has_nonzero_box_edges(box)) *exists = true;
+        if (text || atom || lb_has_nonzero_box_edges(box)) *exists = true;
         if (brk) breaks++;
-        if (text || brk) last_rendering = i;
+        /* AN ATOMIC INLINE RENDERS, so it is one of the things a line can be said to END WITH — which is what
+           keeps §9.4.2's last conjunct from reading a forced break through an image that follows it. That
+           configuration is unreachable ([UAX14] LB5 `LF !` closes the line at the break), and the point of
+           including it here is that this test does not depend on that being true. */
+        if (text || brk || atom) last_rendering = i;
     }
     DCHECK(breaks <= 1,
            "CSS 2.2 §9.4.2's fill put TWO forced line breaks on ONE line box. [UAX14] LB5 \"Treat CR followed "
@@ -758,13 +825,16 @@ void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_
                line. */
             LbExtent b;
 
-            /* ONLY A CHARACTER ITEM'S BOX IS TAKEN HERE, and the other two kinds are not omitted — they are
-               ANOTHER WALK'S. An EDGE and a FORCED BREAK both belong to a real ELEMENT, whose own box CSSOM
-               VIEW §2's walk over the element tree reaches and places (core/layout/flow_position.h), and a
-               non-replaced inline box's vertical margins, padding and borders do not enter §10.8's line box
-               calculation at all — so its margin edge is NOT derivable from `A'` and `D'` and taking it from
-               them here would be a smaller rectangle than the one it renders. The ANONYMOUS INLINE BOX around
-               a text run is the box with no element to be reached through, which is why it is this walk's. */
+            /* ONLY A CHARACTER ITEM'S BOX IS TAKEN HERE, and the other three kinds are not omitted — they are
+               ANOTHER WALK'S. An EDGE, a FORCED BREAK and an ATOMIC INLINE all belong to a real ELEMENT, whose
+               own box CSSOM VIEW §2's walk over the element tree reaches and places
+               (core/layout/flow_position.h), and each has a margin edge that walk composes DIRECTLY rather than
+               out of this line: a non-replaced inline box's vertical margins, padding and borders do not enter
+               §10.8's line box calculation at all, and an atomic inline HAS a used width and height of its own
+               (core/layout/scrolling_area.c takes exactly that path for a replaced inline, and CSS 2.1 §10.3.2
+               is where its extent comes from). Deriving either from `A'` and `D'` here would be a rectangle
+               smaller than the one it renders. The ANONYMOUS INLINE BOX around a text run is the box with no
+               element to be reached through, which is why it alone is this walk's. */
             if (!text_run_measure_item_is_text(&m, j)) continue;
             b = lb_strut_extent(text_run_measure_item_style(&m, j));
             *lo = css_px_min(*lo, css_px_sub(css_px_add(top, e.above), b.above));
@@ -979,7 +1049,16 @@ static void lb_edge_items(const TextRunMeasure *m, lxb_dom_element_t *el, size_t
 
     for (i = 0; i < count; i++) {
         if (text_run_measure_item_style(m, i) != el) continue;
-        if (text_run_measure_item_is_text(m, i) || text_run_measure_item_is_forced_break(m, i)) continue;
+        /* THE THREE KINDS THAT ARE NOT AN EDGE, EXCLUDED BY NAME. A CHARACTER and a FORCED BREAK carry an
+           element that is not this box's boundary, and an ATOMIC INLINE is a box that HAS no boundaries — CSS
+           2.2 §9.2.2 makes it "a single opaque box" and `lb_child` emits one item for the whole of it. None of
+           the three can belong to `el` here (the caller has established that `el` is a non-replaced inline box
+           and this walk does not descend into an atomic), so the test is what makes that a statement rather
+           than an arrangement: a kind reaching the count below would delimit a fragment by something that is
+           not a boundary of this box. */
+        if (text_run_measure_item_is_text(m, i) || text_run_measure_item_is_forced_break(m, i) ||
+            text_run_measure_item_is_atomic(m, i))
+            continue;
         if (found == 0) *open = i; else *close = i;
         found++;
     }
@@ -1016,6 +1095,22 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
            "them — and this component's own walk crashes for one before a fill exists to place it. The caller's "
            "own step (core/dom/element_view.h's fragment kind) decides which it has, so reaching here with an "
            "atomic inline is those two classifications having come apart");
+    /* THE OTHER HALF OF "NON-REPLACED INLINE BOX", AND IT IS NOT THE `display` THE TEST ABOVE READS. HTML §15.4
+       "Replaced elements" makes an `img`, an `iframe`, a `video` or an `input` a replaced element while its
+       computed `display` stays `inline`, and CSS 2.2 §9.2.2's opaque-box sentence covers it for the same reason
+       it covers an `inline-block` — css-text-3 §5.5 names them together as "each replaced element or other
+       atomic inline". So it is ONE fragment, and `lb_child` collects it as ONE run item rather than as a pair
+       of boundaries: the edge walk below would find none and delimit a fragment out of another box's. */
+    DCHECK(!replaced_element_of(el).replaced,
+           "CSSOM VIEW §6's per-line box fragments were asked for a REPLACED inline element. HTML §15.4 makes "
+           "it a replaced element with a computed `display` of `inline`, and CSS 2.2 §9.2.2 makes such a box "
+           "\"a single opaque box\" that is never split across line boxes — so §6's step 3 count is ONE and its "
+           "border area is composed the ordinary way, from CSS 2.1 §10.3.2's used width and §10.6.2's used "
+           "height (core/layout/used_value.h) plus the box's own position, exactly as core/layout/"
+           "scrolling_area.c already composes it for the same element. core/dom/element_view.h's fragment kind "
+           "is what decides that, and reaching here means it read the `display` without asking HTML §15.4 — "
+           "which is the same pair of conjuncts core/layout/used_value.c asserts over, and the two have come "
+           "apart");
     /* HTML §15.3.4 "Phrasing content"'s `br { display-outside: newline; }` and `wbr { display-outside:
        break-opportunity; }` reach this component as plain `display: inline` boxes carrying a fact the cascade
        cannot answer for (core/layout/phrasing_break.h), and `lb_child` puts them on the line as a FORCED BREAK

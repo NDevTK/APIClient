@@ -178,15 +178,22 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
                   "§10.3.2 \"Inline, replaced elements\" over the natural dimensions "
                   "core/layout/replaced_element.h already answers), not the text of its children. AND IT CUTS "
                   "THE MIN-CONTENT SEGMENT: css-text-3 §5.5 \"Line Breaking Details\" puts \"a soft wrap "
-                  "opportunity before and after each replaced element or other atomic inline\", so it is a "
-                  "break this accumulator's [UAX14] pass cannot see, since that pass runs over code points and "
-                  "this box is not one. THE RUN IS ALREADY ITEM-BASED and carries three kinds — a character, "
-                  "an inline box EDGE, and HTML §15.3.4's FORCED BREAK — so what is left is a FOURTH: a box "
-                  "item carrying an inline size AND its own two soft wrap opportunities, which no existing "
-                  "kind is (a CHAR is sized by an advance measure, an EDGE introduces no break, and a FORCED "
-                  "BREAK is mandatory and has no width). BUILD it with the `wbr` opportunity above, which "
-                  "needs the same opportunity machinery and none of the width, then §10.3.2's used width "
-                  "into it");
+                  "opportunity before and after each replaced element or other atomic inline\". THE ITEM KIND "
+                  "IS NO LONGER WHAT IS MISSING: core/layout/text_run.h now carries §5.5's atomic inline as a "
+                  "fourth kind — a margin-box inline size at a position plus the U+FFFC whose [UAX14] class CB "
+                  "is those two opportunities — and core/layout/line_box.c's walk over the same children "
+                  "already emits one for this element. WHAT IS LEFT IS THE OUTER SIZE, AND IT IS A CYCLE "
+                  "RATHER THAN AN ABSENCE, which is why this arm cannot simply call what that walk calls. "
+                  "`used_value_margin_edge_px` resolves a PERCENTAGE margin or padding against the containing "
+                  "block's width, and for a box whose width is CSS 2.2 §10.3.5's shrink-to-fit that width is "
+                  "THE ANSWER THIS WALK IS BEING RUN TO PRODUCE — so the call would not crash, it would "
+                  "recurse. `intrinsic_inline_box_edge_px` is the same six lengths with that percentage "
+                  "REFUSED, and it is refused there for exactly this reason. BUILD the outer size out of it: "
+                  "the leading edge, plus §10.3.2's used CONTENT width (`used_value_content_px`, whose arms "
+                  "over natural dimensions consult no containing-block width — its ratio arm reads the used "
+                  "HEIGHT, a different axis, and its undefined arm crashes), plus the trailing edge. That is "
+                  "ONE derivation of the same number line_box.c reads whole, differing only in refusing the "
+                  "input that would make it self-referential, and the refusal is the point");
         /* §5.5: "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the
            flow", and css-text-3 §4.1.1's collapsing crosses the boundary too ("even one outside the boundary
            of the inline containing that space, provided both spaces are within the same inline formatting

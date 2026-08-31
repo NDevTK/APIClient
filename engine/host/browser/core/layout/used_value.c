@@ -1696,6 +1696,24 @@ CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical)
     return uv_edge_px(el, vertical, true);
 }
 
+/* CSS 2 §8.1's OUTERMOST NESTING, stated over the border edge above rather than over a third surround — "the
+   margin edge surrounds the box margin", and the two margins on the axis are the only terms between the two
+   boxes. It is written here and not at the caller for `uv_edge_px`'s reason one level out: `used_value_px`'s
+   answer for a margin is CSS 2.1 §10.3's, whose `auto` rule differs by BOX TYPE (§10.3.1, §10.3.5 and §10.3.9
+   each make a horizontal `auto` margin 0 while §10.3.3 may give it the slack), so a caller adding "the
+   margins" would be choosing a section it has no reason to know it was choosing.
+   NO FLOOR AND NO ASSERT ON THE SIGN, which is CSS 2.2 §8.3's own "negative values for margin properties are
+   allowed" — see used_value.h. The border edge inside it IS asserted non-negative, by `uv_edge_px`. */
+CssPx used_value_margin_edge_px(lxb_dom_element_t *el, bool vertical)
+{
+    CssPx border;
+
+    DCHECK(el != NULL, "a margin edge's extent was asked for with no element");
+    border = uv_edge_px(el, vertical, true);
+    border = css_px_add(border, used_value_px(el, vertical ? "margin-top" : "margin-left"));
+    return css_px_add(border, used_value_px(el, vertical ? "margin-bottom" : "margin-right"));
+}
+
 /* §10.4/§10.7's CLAMP RUNS HERE TOO, and it is the one place it runs over a tentative value the caller
    computed rather than one `uv_pass_size` produced. That is not a second implementation of the algorithm: the
    extent handed in IS §10.6.3's answer, which is step 1's "tentative used height", and steps 2 and 3 substitute
