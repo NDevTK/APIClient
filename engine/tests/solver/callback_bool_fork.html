@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>callback-result gate fork</title>
+<script>
+/* ONE PROBLEM: the gate a bundle writes as a CALLBACK rather than as an `if`.
+ *
+ * `arr.filter(x => x.isAdmin)` is a branch over unknown input with the branch spelled as a predicate handed to
+ * a C builtin. There is no OP_if_false in it, so nothing the interpreter does could decide it; the decision is
+ * §7.1.2 ToBoolean, performed inside the builtin, on a value whose type is Object because that is the carrier
+ * an unknown rides. §7.1.2 step 4 returns true for an Object, so EVERY element was kept, no sibling flow was
+ * built, and nothing crashed to say that a gate had been answered rather than explored. not_fork.html is this
+ * document's twin one layer in: there the coercion was the `!` operator's, here it is the builtin's, and the
+ * defect is the same one — a coercion that answers from the REPRESENTATION deletes an arm silently.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT, which is the only claim this gate itself makes: every case
+ * below forks and every arm fetches, so every arm parks on a reply and which one resumes first is the
+ * schedule's choice. A new fork SITE inside a step machine is exactly the shape that can break the razor — a
+ * resume that drops, starves, skips, reorders or forgets an arm is a cap — and this one is new in a place no
+ * previous fork lived: the fork is taken with a C machine mid-algorithm, holding an element it has read and
+ * not yet tested, so the sibling's snapshot has to carry the machine's own cursor as well as the flow's. The
+ * gate stores no expected output and fails only when one build disagrees with ITSELF, so nothing here needs
+ * updating when the solver learns more.
+ *
+ * THE REST-PARAMETER CASE IS NOT DECORATION. A step builtin's callback frame is the one place `narg_alloc == 0`
+ * can be wrong: borrowing argument slots is sound only when they are the CALLER'S operand stack, and a
+ * callback borrows from the machine's own buffer instead — which every other argument shape reaches identically
+ * and cannot distinguish. A callee with a rest parameter is the shape that builds an array out of those slots,
+ * so it is the only one that can find it, and this fork is taken while such a frame has just returned. */
+
+/* FORKS: the predicate's answer is unknown, so both worlds exist and both must be reachable. */
+if ([1].filter(() => __FLAGS.a).length) { fetch("/api/filter/kept"); } else { fetch("/api/filter/dropped"); }
+if ([1].every(() => __FLAGS.b))         { fetch("/api/every/all"); }  else { fetch("/api/every/none"); }
+if ([1].some(() => __FLAGS.c))          { fetch("/api/some/any"); }   else { fetch("/api/some/none"); }
+
+/* THE SAME FORK WITH A REST-PARAMETER CALLBACK — see the paragraph above for why this shape and no other. */
+if ([1].filter((...args) => __FLAGS.d).length) { fetch("/api/rest/kept"); } else { fetch("/api/rest/dropped"); }
+
+/* THE CASE WITH A PREDICTION THIS GATE CANNOT MAKE, and it is here anyway because it is the one that says the
+ * coercion reached the BRANCH seam rather than the outcome seam. `/never` must never be fetched: the flow
+ * proved `__FLAGS.e` truthy at the `if`, and the coercion inside `every` asks about THAT predicate — one gate,
+ * however it is spelled, one constraint entry — so it is DECIDED and does not fork. Key it by the operation
+ * instead and this document starts emitting an endpoint no value of `__FLAGS.e` can produce, IDENTICALLY under
+ * every schedule, which is the honest limit of a differential and the reason the claim is written here rather
+ * than left to the number. */
+if (__FLAGS.e) {
+  if ([1].every(() => __FLAGS.e)) { fetch("/api/e/admin"); } else { fetch("/api/never/every"); }
+}
+
+/* AND THE TWO WALKS THAT ASK §7.1.2 NOTHING, stated positively rather than left to be inferred from silence.
+ * forEach DISCARDS what its callback returned and map KEEPS it whole; neither algorithm contains a ToBoolean,
+ * so neither may fork here. map's value is coerced later, by the `if`, which is one fork over one predicate —
+ * if the walk itself acquired one there would be two questions about `__FLAGS.g` and the flow would stand on
+ * two arms that contradict each other. */
+[1].forEach(() => __FLAGS.f);
+if ([1].map(() => __FLAGS.g)[0]) { fetch("/api/map/truthy"); } else { fetch("/api/map/falsy"); }
+</script>
