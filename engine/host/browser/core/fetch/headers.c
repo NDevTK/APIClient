@@ -732,7 +732,7 @@ int header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard
 }
 
 enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE, HDR_MEMBER_N };
-/* THE AGENT'S POOL ENTRIES, one per §5.2 operation — the OBJECTS they are installed as are each realm's. */
+/* THE AGENT'S POOL ENTRIES, one per §5.1 Headers class operation — the OBJECTS they are installed as are each realm's. */
 static int g_id[HDR_MEMBER_N];
 
 static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -747,7 +747,7 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
     if (!h)
         return JS_EXCEPTION;
     if (magic == HDR_GETSETCOOKIE) {
-        /* §5.2 getSetCookie(): every `set-cookie` value, each on its own — the one member for which the list's
+        /* §5.1 getSetCookie(): every `set-cookie` value, each on its own — the one member for which the list's
            repeats are the answer rather than something `get` folds away. */
         JSValue arr = JS_NewArray(ctx);
         uint32_t k = 0;
@@ -773,7 +773,7 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         if (value) JS_FreeCString(ctx, value);
         return JS_EXCEPTION;
     }
-    /* §5.2's three WRITES each run their own steps; a read is not guarded at all, because the page can
+    /* §5.1's three WRITES each run their own steps; a read is not guarded at all, because the page can
        already see every one of these headers and refusing to answer would hide state rather than protect it. */
     switch (magic) {
     case HDR_APPEND:
@@ -785,7 +785,7 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         }
         break;
     case HDR_SET: {
-        /* §5.2 set steps 2-5. Step 3 tests the value ON ITS OWN, because set REPLACES rather than joins. */
+        /* §5.1 set steps 2-5. Step 3 tests the value ON ITS OWN, because set REPLACES rather than joins. */
         char *lower = header_lower(name);
         int allow = headers_guard_allows(ctx, h->guard, name, norm);
         if (allow > 0 && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
@@ -805,7 +805,7 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         break;
     }
     case HDR_DELETE: {
-        /* §5.2 delete steps 1-5, and step 2 IS NOT WHAT STOOD HERE. It reads: "If this's guard is
+        /* §5.1 delete steps 1-5, and step 2 IS NOT WHAT STOOD HERE. It reads: "If this's guard is
            'request-no-cors', name is not a no-CORS-safelisted request-header name, AND name is not a
            privileged no-CORS request-header name, then return." A privileged name is one of the two that get
            THROUGH — the note beside the privileged list says such a header "will be removed if the request is
@@ -840,7 +840,7 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         char *v;
         DCHECK(magic == HDR_GET, "a Headers member was declared with a magic this component does not answer");
         v = header_list_get(l, name);
-        r = v ? JS_NewString(ctx, v) : JS_NULL;   /* §5.2: absent is null, not "" */
+        r = v ? JS_NewString(ctx, v) : JS_NULL;   /* §5.1: absent is null, not "" */
         free(v);
     }
     }
@@ -850,9 +850,9 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
     return r;
 }
 
-/* ---- iteration: §5.2's `iterable<ByteString, ByteString>` ------------------------------------------------ */
+/* ---- iteration: §5.1's `iterable<ByteString, ByteString>` ------------------------------------------------ */
 
-/* §5.2 "sort and combine": iteration does NOT walk the raw list. It yields each name ONCE, lowercased and in
+/* §2.2.2 Headers' "sort and combine": iteration does NOT walk the raw list. It yields each name ONCE, lowercased and in
    byte order, with that name's values joined by ", " — so `for (const [k, v] of h)` over an append-append pair
    sees one entry, not two. `Set-Cookie` is the exception the spec spells out: each of its values is yielded on
    its own, which is the same reason the list keeps pairs at all.
@@ -868,7 +868,7 @@ static void header_sort_and_combine(const HeaderList *l, HeaderList *out)
         size_t total = 0;
         for (j = 0; j < i; j++) if (!strcmp(l->e[j].name, name)) { seen = 1; break; }
         if (seen) continue;
-        if (!strcmp(name, "set-cookie")) {            /* each value on its own, per §5.2 */
+        if (!strcmp(name, "set-cookie")) {            /* each value on its own, per §5.1 */
             for (j = 0; j < l->n; j++)
                 if (!strcmp(l->e[j].name, name)) header_list_append(out, name, l->e[j].value);
             continue;
@@ -896,7 +896,7 @@ static void header_sort_and_combine(const HeaderList *l, HeaderList *out)
     }
 }
 
-/* §3.7.10's DEFAULT ITERATOR OBJECT is the shared one. Headers' own copy of it — the iterator class, the
+/* §3.7.9.1 Default iterator objects' DEFAULT ITERATOR OBJECT is the shared one. Headers' own copy of it — the iterator class, the
    prototype, `next`, `keys`/`values`/`entries`, `@@iterator` and the forEach machine — is deleted rather than
    kept beside it: the six things are identical for every `iterable<K, V>` interface, and what is actually
    Headers' is the two operations below. */
@@ -1312,7 +1312,7 @@ void headers_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_headers_ctor_decl, 0);
     idl_optional_from(0);   /* §5.1: `constructor(optional HeadersInit init)` */
 
-    /* §5.2's `iterable<ByteString, ByteString>` — the shared default iterator object over the two operations
+    /* §5.1's `iterable<ByteString, ByteString>` — the shared default iterator object over the two operations
        above, so the six members it defines exist once for every such interface rather than once per. */
     g_pair_handle = idl_pair_iter_declare(ctx, &HEADERS_PAIR_OPS);
     realm_declare_intrinsic(headers_install_proto);
