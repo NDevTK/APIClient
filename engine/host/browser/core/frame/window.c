@@ -617,6 +617,32 @@ static int win_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, 
     return 0;
 }
 
+/* THERE IS NO [[PreventExtensions]] HERE, AND THAT IS THE SPEC RATHER THAN THE OMISSION IT LOOKS LIKE beside
+ * the tables in this engine that carry one. Web IDL §3.9.5 [[PreventExtensions]] — "Return false." — is a
+ * LEGACY PLATFORM OBJECT's, and the definition that excludes this class by name is one section away, in Web
+ * IDL §2.12 Objects implementing interfaces: "Legacy platform objects are platform objects that implement an
+ * interface which does not have a [Global] extended attribute, and which supports indexed properties, named
+ * properties, or both." (§3.9 itself never restates it, which is why the number to cite for the EXCLUSION is
+ * not the number to cite for the refusal.) Window IS [Global], so it is not one; its indexed access is
+ * §7.2.2.2's and its named access lives on the WindowProperties object below, which is a
+ * named properties object and carries §3.7.4.5's refusal instead. HTML's refusal for a window is §7.2.3.4
+ * [[PreventExtensions]] ( ) — also "Return false." — and that is the WINDOWPROXY's internal method, not this
+ * object's. A Window's own extensibility is ordinary, so this table is complete for what this class IS.
+ *
+ * NAMED RESIDUAL — WHAT IS NOT COVERED: `Object.freeze(window)`, `Object.preventExtensions(window)` and
+ * `Reflect.preventExtensions(window)` AT THE ROOT NAVIGABLE. A browser refuses all three at §7.2.3.4, because
+ * `window` there names a WindowProxy. Here it does not: window_install gives the GLOBAL OBJECT this class and
+ * installs `window`, `self` and `frames` as that same object, identifying the Window with its proxy — so there
+ * is no WindowProxy at the root for §7.2.3.4 to be asked of, and the freeze succeeds. Every CHILD navigable is
+ * already covered: `frames[0]`, `iframe.contentWindow`, `parent` and a grandchild's `top` are
+ * core/frame/window_proxy.c's WindowProxy objects, whose table carries §7.2.3.4.
+ * WHAT THE NEXT DIFF BUILDS: a WindowProxy for the ROOT navigable, so `window`, `self`, `frames` and `top` at
+ * a top-level document resolve to one rather than to the global — which is what §7.2.2 The Window object says
+ * they return, and what the identification above stands in for.
+ * HOW ITS ABSENCE WOULD SHOW: in ONE run on a page with an iframe, `Object.freeze(window)` returns the object
+ * and `Object.isExtensible(window)` is then false, while `Object.freeze(frames[0])` throws a TypeError and
+ * `Object.isExtensible(frames[0])` stays true — one page, two answers, split exactly along which of the two
+ * objects a browser would have handed the page. */
 static const JSClassExoticMethods WINDOW_EXOTIC = {
     .get_own_property = win_get_own,
     .get_own_property_names = win_own_names,
@@ -636,10 +662,21 @@ static const JSClassDef WINDOW_CLASS = { "Window", NULL, NULL, NULL, &WINDOW_EXO
    `top`, `document`). Everything else is declared on the prototype, and a page reads the difference: an
    `assert_own_property` on the wrong object, a descriptor test, a `delete window.closed`.
    §7.2.2's WindowProperties object sits between Window.prototype and EventTarget.prototype in the real chain
-   and is what NAMED access (`window.myIframeName`) is declared on. It is not built here, so it is not claimed
-   here either: this chain is two links of the three, and the third arrives with named access. */
+   and is what NAMED access (`window.myIframeName`) is declared on, so the chain is THREE links and not two:
+   window -> Window.prototype -> WindowProperties -> EventTarget.prototype. What stood here said the third link
+   "is not built here, so it is not claimed here either" and that "the third arrives with named access" — named
+   access DID arrive, window_install builds the object below, and the sentence went on describing a shorter
+   chain than the one this file constructs. A comment that says a thing is absent is the stale claim nobody
+   greps, because it reads as a completed decision rather than as a question. */
 
-/* HTML §7.3.3 — NAMED ACCESS ON THE WINDOW OBJECT, and the object it is declared on.
+/* HTML §7.2.2.3 Named access on the Window object — and the object it is declared on.
+ *
+ * THE NUMBER WAS §7.3.3, AT FIVE SITES IN THIS FILE, and §7.3.3 is "Fully active documents". A number that
+ * resolves to a REAL section about something else is the citation failure that reads as authoritative: a
+ * reader who looks it up finds a heading, not an error, and stops. citegen names the replacement outright, but
+ * only once a citation says WHICH STANDARD it belongs to — a bare `§7.3.3` is routed to the file vote and this
+ * file votes html either way, so the five sites sat under an auditor that runs over the whole tree. Hence
+ * `HTML §7.2.2.3` with the section's own title beside it, here and at each of the four below.
  *
  * `window.myFrameName` and `window.someElementId` are not properties of the global and not properties of
  * Window.prototype: Web IDL puts an interface's NAMED PROPERTIES on a separate object one link further up the
@@ -648,7 +685,7 @@ static const JSClassDef WINDOW_CLASS = { "Window", NULL, NULL, NULL, &WINDOW_EXO
  * link by link, so the object is not a formality: without it the chain is short by one and every level below
  * compares against the wrong prototype.
  *
- * THE ORDER IN §7.3.3 IS THE WHOLE ALGORITHM, and each branch is a different kind of answer:
+ * THE ORDER IN §7.2.2.3 IS THE WHOLE ALGORITHM, and each branch is a different kind of answer:
  *   a document-tree child NAVIGABLE with that name wins outright, and answers with its WindowProxy;
  *   a single named ELEMENT that is itself a container with a navigable answers with THAT navigable's proxy —
  *     `window.myIframeName` is the frame's window, not the <iframe> element;
@@ -674,7 +711,8 @@ static JSValue win_named_navigable(JSContext *ctx, const char *name)
     return JS_UNDEFINED;
 }
 
-/* §7.3.3's value for `name`, or JS_UNDEFINED when the name is not supported. Owned on success. */
+/* HTML §7.2.2.3 Named access on the Window object's value for `name`, or JS_UNDEFINED when the name is not
+   supported. Owned on success. */
 static JSValue win_named_value(JSContext *ctx, const char *name)
 {
     JSValue coll, doc, first, second, out = JS_UNDEFINED;
@@ -691,8 +729,8 @@ static JSValue win_named_value(JSContext *ctx, const char *name)
     /* HOW MANY, asked by INDEX rather than by `length`. An HTMLCollection's `length` is an IDL accessor, and
        reaching a getter from C is the one thing this engine refuses — there is no flow base under a C
        activation. The indexed read is the collection's exotic own-property behaviour, which runs no page code
-       and is declared so; and the two indices are all this branch needs, because §7.3.3 only distinguishes
-       none, exactly one, and more than one. */
+       and is declared so; and the two indices are all this branch needs, because HTML §7.2.2.3 Named access on
+       the Window object only distinguishes none, exactly one, and more than one. */
     first  = JS_GetPropertyUint32(ctx, coll, 0);
     second = JS_GetPropertyUint32(ctx, coll, 1);
     if (JS_IsUndefined(first)) {
@@ -706,7 +744,8 @@ static JSValue win_named_value(JSContext *ctx, const char *name)
     JS_FreeValue(ctx, second);
     out = first;
     JS_FreeValue(ctx, coll);
-    /* §7.3.3: a single named element that HAS a content navigable answers with the navigable's WindowProxy —
+    /* HTML §7.2.2.3 Named access on the Window object: a single named element that HAS a content navigable
+       answers with the navigable's WindowProxy —
        `window.myIframeName` is the frame's window, and a page that then reads `.document` off it would get an
        element otherwise. */
     /* ASKED OF THE COMPONENT THAT OWNS THE SLOT, never read off `contentWindow`: that attribute is an IDL
@@ -750,8 +789,26 @@ static int win_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
     return 1;
 }
 
+/* WEB IDL §3.7.4.5 [[PreventExtensions]] — the NAMED PROPERTIES OBJECT's, which is a different section from the
+   §3.9.5 every legacy platform object obeys and says the same thing: "When the [[PreventExtensions]] internal
+   method of a named properties object is called, the following steps are taken: Return false."
+   THIS OBJECT IS THAT ONE. §3.7.4 defines it as existing "for every interface declared with the [Global]
+   extended attribute that supports named properties", which is Window, and §3.7.4's construction sets exactly
+   five overrides — [[GetOwnProperty]], [[DefineOwnProperty]], [[Delete]], [[SetPrototypeOf]] and
+   [[PreventExtensions]] — of which this class now carries two. It is not the Window and it is not a legacy
+   platform object: it is the link between Window.prototype and EventTarget.prototype window_install builds,
+   and a page
+   reaches it with one `Object.getPrototypeOf(Window.prototype)`. Without this hook that one expression handed
+   a page a freeze of the object every unqualified name in the document resolves through. */
+static int win_named_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx; (void)obj;
+    return 0;
+}
+
 static const JSClassExoticMethods WINDOW_PROPS_EXOTIC = {
     .get_own_property = win_named_get_own,
+    .prevent_extensions = win_named_prevent_extensions,
     /* The lookup is a walk of the document tree and a read of content attributes — no page code, by
        construction, which is what lets the engine's own accessor walks run it from C. */
     .get_own_property_no_user_code = true,

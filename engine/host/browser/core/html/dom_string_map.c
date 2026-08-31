@@ -43,7 +43,11 @@ static int       g_ready;
 
 /* The element this map is the dataset OF. The map holds the element's NODE, not a reference to its wrapper:
    the wrapper owns the map (that is what [SameObject] means here), so a map holding the wrapper back would be
-   a cycle the collector has to break. A Lexbor node outlives every flow. */
+   a cycle the collector has to break. A Lexbor node outlives every flow.
+   NEVER NULL ON AN OBJECT OF THIS CLASS, and each hook below asserts it rather than this function, so the
+   abort carries the SITE: dom_string_map_new is the only thing that builds one and it sets the opaque in the
+   same call, and quickjs reaches an exotic hook only through this class's own dispatch — so a NULL here is an
+   object of this class that some other route created, and each hook names what IT would answer wrongly. */
 static lxb_dom_element_t *dsm_element(JSValueConst obj)
 {
     lxb_dom_node_t *n = JS_GetOpaque(obj, g_class);
@@ -128,7 +132,10 @@ static int dsm_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst 
     size_t vlen = 0;
     JSValue t;
 
-    if (!el) return 0;
+    DCHECK(el != NULL, "a DOMStringMap has no element at its [[GetOwnProperty]] — a `return 0` here is Web IDL "
+                       "§3.9.1 [[GetOwnProperty]] reporting P as no supported property name, so every "
+                       "`el.dataset.x` would read `undefined` off the prototype chain and a page that routes "
+                       "on a data-* attribute would take the branch behind the undefined");
     /* THE TAINT SHADOW ANSWERS FIRST, as it does for getAttribute: a source written here came back out of
        Lexbor as plain bytes with its provenance gone, and a sink reading it would look clean. */
     {
@@ -175,7 +182,10 @@ static int dsm_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, 
     uint32_t n = 0, cap = 0;
 
     *ptab = NULL; *plen = 0;
-    if (!el) return 0;
+    DCHECK(el != NULL, "a DOMStringMap has no element at its [[OwnPropertyKeys]] — an empty key list here is "
+                       "§3.9.6's positive statement that this object supports no property names, so "
+                       "`Object.keys(el.dataset)` and every for-in over it would report an element's data-* "
+                       "attributes as absent rather than crashing");
     for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
         size_t alen = 0, plen2 = 0;
         const lxb_char_t *an = lxb_dom_attr_qualified_name(a, &alen);
@@ -213,7 +223,10 @@ static int dsm_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValue
     size_t alen = 0;
 
     (void)flags;
-    if (!el) return 0;
+    DCHECK(el != NULL, "a DOMStringMap has no element at its [[DefineOwnProperty]] — a `return 0` here is Web "
+                       "IDL §3.9.3's \"return false\", which reaches a page as a silently dropped `el.dataset.x "
+                       "= v` in sloppy mode and a TypeError in strict, so the write would be REFUSED rather "
+                       "than the broken object named");
     /* An ACCESSOR cannot be defined on a DOMStringMap — the IDL declares a value setter and nothing else. */
     if (!JS_IsUndefined(getter) || !JS_IsUndefined(setter)) {
         JS_ThrowTypeError(ctx, "dataset properties are values, not accessors");
@@ -253,12 +266,40 @@ static int dsm_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     size_t vlen = 0;
     const lxb_char_t *v;
 
-    if (!el) return true;
+    DCHECK(el != NULL, "a DOMStringMap has no element at its [[Delete]] — a `true` here is Web IDL §3.9.4 "
+                       "[[Delete]]'s final step, reached when the object has no own property with that name, "
+                       "so `delete el.dataset.x` would report success having removed nothing and the attribute "
+                       "would still be there on the next read");
     v = dsm_lookup(ctx, el, prop, &attr, &vlen);
     if (!attr) { JS_FreeValue(ctx, JS_GetException(ctx)); return true; }
     if (v) dom_cow_remove_attribute(el, attr);   /* the removal chokepoint, so it reverts per flow */
     free(attr);
     return true;
+}
+
+/* WEB IDL §3.9.5 [[PreventExtensions]]: "When the [[PreventExtensions]] internal method of a legacy platform
+ * object is called, the following steps are taken: Return false." Its note says why in one sentence — "this
+ * keeps legacy platform objects extensible by making [[PreventExtensions]] fail for them."
+ *
+ * A DOMStringMap IS one, and the IDL at the head of this file is the whole argument: a named property getter,
+ * setter and deleter, and no [Global]. The definition is Web IDL §2.12 Objects implementing interfaces' and
+ * not §3.9's — "Legacy platform objects are platform objects that implement an interface which does not have a
+ * [Global] extended attribute, and which supports indexed properties, named properties, or both" — so the
+ * number that says WHY this class qualifies is not the number that says what it must answer.
+ *
+ * It is the third answer this object owes to one question, beside §3.9.3's refusal to define a shadowing own
+ * property and §3.9.4's delete: this map's property set is the ELEMENT'S ATTRIBUTES and not the page's, and a
+ * successful freeze would have said the opposite about the same object while `setAttribute` went on changing
+ * it underneath.
+ *
+ * IT ASKS NOTHING ABOUT THE OBJECT — every object of this class is a dataset, so there is no per-object
+ * question here the way there is for a CSSRule, which is a legacy platform object only when it is the
+ * `@keyframes` rule. The element is not read, which is also why this is the one hook in the table with no
+ * DCHECK on it: it has nothing to be wrong about. */
+static int dsm_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx; (void)obj;
+    return 0;
 }
 
 static JSClassExoticMethods g_exotic = {
@@ -267,6 +308,7 @@ static JSClassExoticMethods g_exotic = {
     .delete_property = dsm_delete,
     .define_own_property = dsm_define_own,
     .has_property = dsm_has,
+    .prevent_extensions = dsm_prevent_extensions,
     /* The lookup is a name mangle and a read of the element's own attributes. There is no accessor in a Web IDL
        named property getter by construction, which is what lets the engine's accessor walk run it from C. */
     .get_own_property_no_user_code = true,

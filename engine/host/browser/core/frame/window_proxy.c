@@ -2562,20 +2562,38 @@ static int proxy_own_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
     return 0;
 }
 
-/* THE FIVE OF §7.2.3's INTERNAL METHODS THIS OBJECT ANSWERS ITSELF — §7.2.3.1 [[GetPrototypeOf]], §7.2.3.5
-   [[GetOwnProperty]], §7.2.3.6 [[DefineOwnProperty]], §7.2.3.9 [[Delete]] and §7.2.3.10 [[OwnPropertyKeys]],
-   with §7.2.3.7's and §7.2.3.8's same-origin `W.[[X]]` reached through the forward — and one declaration about
-   all of them: no page code, so the engine's own accessor walks may run them from C with no flow base under
-   them. That claim covers the FORWARD as well as the filter, and it still holds — the Window it forwards to
-   declares the same thing of its own hook (window.c's WINDOW_EXOTIC, whose named access is a walk of the
-   document tree), and materializing an initial about:blank Document runs no script because there is none to
-   run. §7.2.3.1 declares it for the plainest reason of the set: 10.1.1 OrdinaryGetPrototypeOf is a slot read. */
+/* HTML §7.2.3.4 [[PreventExtensions]] ( ): "Return false."
+   IT IS THE ONE OF §7.2.3's SET THAT NEEDS NEITHER THE FORWARD NOR THE FILTER. Every other hook below reaches
+   the Window behind this proxy — §7.2.3.5 and §7.2.3.6 through their same-origin arms, §7.2.3.10 through the
+   child-navigable walk — and this one answers out of §7.2.3 itself, for every origin, because a WindowProxy is
+   never the object whose extensibility a page gets to fix. Its twin is §7.2.3.3 [[IsExtensible]] ( ) — "Return
+   true." — which quickjs answers from the `extensible` flag, and which is only STILL true because this refusal
+   is asked BEFORE that flag is cleared: a freeze that succeeded would have made `Object.isExtensible(frames[0])`
+   false, which §7.2.3.3 says it never is. It is also the only entry in the table below that never resolves the
+   [[Window]] slot — every other one opens on proxy_of, proxy_target_window or proxy_realm — which is what makes
+   it the one hook here with nothing to assert and nothing that could reach another agent. */
+static int proxy_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx; (void)obj;
+    return 0;
+}
+
+/* THE SIX OF §7.2.3's INTERNAL METHODS THIS OBJECT ANSWERS ITSELF — §7.2.3.1 [[GetPrototypeOf]], §7.2.3.4
+   [[PreventExtensions]], §7.2.3.5 [[GetOwnProperty]], §7.2.3.6 [[DefineOwnProperty]], §7.2.3.9 [[Delete]] and
+   §7.2.3.10 [[OwnPropertyKeys]], with §7.2.3.7's and §7.2.3.8's same-origin `W.[[X]]` reached through the
+   forward — and one declaration about all of them: no page code, so the engine's own accessor walks may run
+   them from C with no flow base under them. That claim covers the FORWARD as well as the filter, and it still
+   holds — the Window it forwards to declares the same thing of its own hook (window.c's WINDOW_EXOTIC, whose
+   named access is a walk of the document tree), and materializing an initial about:blank Document runs no
+   script because there is none to run. §7.2.3.1 declares it for the plainest reason of the set: 10.1.1
+   OrdinaryGetPrototypeOf is a slot read, and §7.2.3.4's is plainer still: a constant. */
 static const JSClassExoticMethods PROXY_EXOTIC = {
     .get_own_property = proxy_get_own,
     .get_own_property_names = proxy_own_keys,
     .delete_property = proxy_delete,
     .define_own_property = proxy_define_own,
     .get_prototype = proxy_get_prototype,
+    .prevent_extensions = proxy_prevent_extensions,
     .get_own_property_no_user_code = true,
     .forwarded_object = proxy_forwarded_object,
 };

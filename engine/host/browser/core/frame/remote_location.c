@@ -390,6 +390,20 @@ static JSValue rl_get_prototype(JSContext *ctx, JSValueConst obj)
     return JS_NULL;
 }
 
+/* HTML §7.2.4.4 [[PreventExtensions]] ( ): "Return false."
+   IT IS THE ONE INTERNAL METHOD ON THIS OBJECT THAT ASKS NOTHING ABOUT THE ORIGIN. Every other hook in the
+   table below is half of a §7.2.4 branch — §7.2.4.1, .5, .6, .9 and .10 each open on IsPlatformObjectSameOrigin
+   and this file is the arm that answers when it is false — but §7.2.4.4 has no such step, so it is the SAME
+   sentence core/frame/location.c's Location obeys and the two carry one citation between them rather than a
+   cross-origin rule of their own. That is also why it is stated as a fact about Location objects and not as a
+   consequence of the filter: a page that could freeze this one would be freezing an object §7.2.4.3
+   [[IsExtensible]] ( ) — "Return true." — says is always extensible. */
+static int rl_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx; (void)obj;
+    return 0;
+}
+
 /* No page code: the surface read is an own-slot read of an ordinary object this file built, and the throw
    builds a DOMException out of the engine's own intrinsics. That is what lets the engine's own accessor walks
    run these hooks from C with no flow base under them. */
@@ -399,6 +413,7 @@ static const JSClassExoticMethods RL_EXOTIC = {
     .delete_property = rl_delete,
     .define_own_property = rl_define_own,
     .get_prototype = rl_get_prototype,
+    .prevent_extensions = rl_prevent_extensions,
     .get_own_property_no_user_code = true,
 };
 

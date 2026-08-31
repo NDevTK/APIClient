@@ -74,7 +74,19 @@ static JSValue st_slots(JSContext *ctx, JSValueConst obj)
     JSAtom k;
     JSValue slots;
 
-    if (JS_GetClassID(obj) != g_class) return JS_UNDEFINED;
+    /* IT ANSWERS ONLY FOR A STORAGE, AND THE CLASS TEST IS THE ASSERT RATHER THAN A BRANCH. This opened with
+       `if (JS_GetClassID(obj) != g_class) return JS_UNDEFINED;`, and that arm was a SECOND meaning for the
+       return value — "not a Storage" wearing the same JS_UNDEFINED the missing-slot case below aborts on — so
+       every caller had to re-test the result and each of them spelled the re-test as a spec word that means
+       something else. All six callers have already established the class before they get here: four are the
+       exotic hooks below, which quickjs reaches only through this class's own dispatch table; st_brand tests
+       it and throws Web IDL's TypeError; and §12.2.1's broadcast DCHECKs storage_is on every member of the
+       set it walks. So a wrong class here is the engine's own logic being wrong, which is a DCHECK. */
+    DCHECK(JS_GetClassID(obj) == g_class,
+           "st_slots was asked for the slot record of something that is not a Storage — the four exotic hooks "
+           "reach it through this class's dispatch, st_brand tests the class first and throws, and §12.2.1's "
+           "broadcast asserts storage_is over its set, so a fourth route has been added that establishes "
+           "neither");
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "storage: the slot key could not be interned");
     if (JS_GetOwnSlot(ctx, &slots, obj, k) <= 0) slots = JS_UNDEFINED;
@@ -517,7 +529,6 @@ static bool st_named_visible(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVa
 
     if (!st_atom_is_string(ctx, prop)) return false;
     slots = st_slots(ctx, obj);
-    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return false; }
     map = st_map(ctx, slots);
     JS_FreeValue(ctx, slots);
     found = JS_GetOwnSlot(ctx, &v, map, prop) > 0;                       /* step 1: a supported property name */
@@ -581,7 +592,6 @@ static int st_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, J
     uint32_t n = 0, i, k = 0;
 
     *ptab = NULL; *plen = 0;
-    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return 0; }
     map = st_map(ctx, slots);
     JS_FreeValue(ctx, slots);
     if (st_keys(ctx, map, &all, &n) < 0) { JS_FreeValue(ctx, map); return -1; }
@@ -643,7 +653,6 @@ static int st_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueC
                                          "descriptor");
 
     slots = st_slots(ctx, obj);
-    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return 0; }
     map = st_map(ctx, slots);
 
     /* §3.9.7's "let value be the result of converting V to an IDL value of type T", T = DOMString. Unknown
@@ -721,12 +730,36 @@ static int st_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return 1;
 }
 
+/* WEB IDL §3.9.5 [[PreventExtensions]]: "When the [[PreventExtensions]] internal method of a legacy platform
+ * object is called, the following steps are taken: Return false." Its note gives the reason in one sentence —
+ * "this keeps legacy platform objects extensible by making [[PreventExtensions]] fail for them."
+ *
+ * A Storage IS one: §12.2.1's interface declares a named property getter, setter and deleter and carries no
+ * [Global]. The definition lives in Web IDL §2.12 Objects implementing interfaces rather than in §3.9 —
+ * "Legacy platform objects are platform objects that implement an interface which does not have a [Global]
+ * extended attribute, and which supports indexed properties, named properties, or both" — so the section that
+ * says why this class QUALIFIES is not the one that says what it must ANSWER.
+ * So this is the same answer §3.9.3 and §3.9.4 above already give about the same object, one internal method
+ * over: the property set of a Storage is the STORAGE BOTTLE's, not the page's, and a successful freeze would
+ * have said the opposite — that this object's properties are now fixed — while another document's `setItem`
+ * went on adding to it through §12.2.1's broadcast.
+ *
+ * IT IS UNCONDITIONAL, so it asks nothing about the object. There is no per-object question here the way there
+ * is for a CSSRule (a legacy platform object only when it is the `@keyframes` rule): every object of this
+ * class implements Storage, which is why the constant is the whole body and the slot record is not read. */
+static int st_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx; (void)obj;
+    return 0;
+}
+
 static const JSClassExoticMethods STORAGE_EXOTIC = {
     .get_own_property = st_get_own,
     .get_own_property_names = st_own_names,
     .delete_property = st_delete,
     .define_own_property = st_define_own,
     .has_property = st_has,
+    .prevent_extensions = st_prevent_extensions,
     /* The lookup is a map read plus §3.9.7's prototype walk, and neither can reach the page: the map is a
        null-prototype object this component owns, and every prototype on the chain carries only members this
        engine installed. That is what lets the engine's own accessor walks run these hooks from C. */

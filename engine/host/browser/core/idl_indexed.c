@@ -218,8 +218,11 @@ int idl_indexed_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32
 
 /* WEB IDL §3.9.3 [[DefineOwnProperty]] — STEP 1, WHICH IS THE WHOLE OF WHAT A WRITE TO AN INDEX IS HERE.
  *
- * IT REFUSES EVERY ARRAY INDEX, IN RANGE OR NOT, and that is the spec rather than a simplification: step 1 asks
- * only "does O support indexed properties and is P an array index", never whether P is a SUPPORTED index. That
+ * IT REFUSES EVERY ARRAY INDEX, IN RANGE OR NOT, and that is the spec rather than a simplification: Web IDL
+ * §3.9.3's step 1 opens "If O supports indexed properties and P is an array index, then:", and asks nothing
+ * further about P — never whether it is a SUPPORTED index. (The clause used to stand here as a question in
+ * quotation marks, which is not how §3.9.3 words it; the same auditor that found the §3.9.4 gloss below found
+ * this one, in the same run, once both citations named their standard.) That
  * is exactly where it differs from §3.9.1, which asks the second question — and the difference is the defect
  * this method exists to close. An in-range write was already refused without any hook, because §3.9.1's
  * descriptor is non-writable and ECMAScript 10.1.9.2 OrdinarySetWithOwnDescriptor step 2.a returns false on a
@@ -296,8 +299,19 @@ int idl_indexed_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop, c
     DCHECK_DECL(d);
     if (JS_AtomIsIndex(ctx, &i, prop))
         return i >= d->length(ctx, obj);
-    /* Reached only after quickjs's ordinary own-property scan on this object missed, so "not an index" is
-       "there is nothing of this object's own to delete", which §3.9.4's step 4 answers with true. */
+    /* Reached only after quickjs's ordinary own-property scan on this object missed, so "not an index" means
+       this object has no own property with that name — which is Web IDL §3.9.4 [[Delete]]'s step 4, `Return
+       true.`, its two conditional arms and its own-property arm having all been passed.
+       WHAT STOOD HERE WAS A PARAGRAPH IN QUOTATION MARKS THAT §3.9.4 DOES NOT CONTAIN — a plain-English gloss
+       of step 4 rendered as if it were the spec's own sentence, beside a correct section number and a correct
+       step number. The number and the step being right is exactly what made it unfalsifiable: a wrong number
+       sends a reader to the wrong place, where they find out, and a fabricated quotation tells them not to go
+       at all. It is also why the citation now NAMES THE STANDARD. citegen resolves a quotation only where the
+       citation says which standard it belongs to; a bare `§3.9.4` is routed to the file vote and the quote is
+       skipped in silence, which is how this one sat under an auditor that runs over every file in the tree.
+       The gloss is not reproduced above, because a retracted quotation next to a live citation is a finding
+       the tool cannot tell from a real one, and a checker with a false entry in it is a checker nobody reads.
+       §3.9.4's own four steps are listed in the sentence above; read them there. */
     return true;
 }
 

@@ -1243,6 +1243,52 @@ static void loc_assert_cross_origin_surface(JSContext *ctx, JSValueConst loc)
                "right, and the filtered object §7.2.1 describes would expose a setter that does not exist");
 }
 
+/* ---- §7.2.4's own internal methods -------------------------------------------------------------------------
+ *
+ * HTML §7.2.4 The Location interface states the contract for the whole set in one sentence — "The Location
+ * object must use the ordinary internal methods except where it is explicitly specified otherwise below" — and
+ * §7.2.4.4 [[PreventExtensions]] ( ) is one of the exceptions. Its entire body is:
+ *
+ *     Return false.
+ *
+ * UNCONDITIONALLY, with no IsPlatformObjectSameOrigin arm: §7.2.4.1, .5, .6, .7, .8, .9 and .10 all branch on
+ * the origin and this one does not, so it is the SAME answer for this file's same-origin Location and for
+ * core/frame/remote_location.c's filtered one. That is why the hook belongs here and not only there — a
+ * cross-origin Location is the rare object and `window.location` is the one every bundle touches.
+ *
+ * WHAT IT COSTS TO NOT HAVE IT is not a missing throw, it is a Location that STOPS BEING ONE. §7.2.4's members
+ * are installed as own [LegacyUnforgeable] accessors above, so ECMAScript §7.3.15 SetIntegrityLevel ( obj,
+ * level )'s steps 1-2 — "Let status be ? obj.[[PreventExtensions]]()." then "If status is false, return
+ * false." — were the only steps that could refuse: every later step re-defines an already non-configurable
+ * property with the flags it already has and succeeds. So `Object.freeze(location)` returned the object,
+ * cleared `extensible`, and from then on this Location silently rejected every property a page or a shim added
+ * to it, which is exactly the state §7.2.4.3 [[IsExtensible]] ( ) — "Return true." — says a Location is never
+ * in. §20.1.2.6 Object.freeze ( obj ) step 3 is what turns the false into the TypeError a browser throws:
+ * "If status is false, throw a TypeError exception."
+ *
+ * AND THE PAIR IT KEEPS COHERENT IS THE POINT. quickjs's JS_PreventExtensions asks this hook BEFORE it clears
+ * `extensible`, so a refusal leaves the flag alone: §20.1.2.16 Object.isExtensible ( obj ) stays true, which
+ * is §7.2.4.3 verbatim, and §20.1.2.17 Object.isFrozen ( obj ) is §7.3.16 TestIntegrityLevel ( obj, level ),
+ * whose steps 1-2 read that same flag — "Let extensible be ? IsExtensible(obj)." then "If extensible is true,
+ * return false." — and so answer false. Freeze throws, isFrozen is false, isExtensible is true: one object,
+ * three answers that agree.
+ * Without the hook the middle one was still false while the freeze had SUCCEEDED, which is two engine answers
+ * about one object that could not both be true.
+ *
+ * THE CLASS HAD NO EXOTIC TABLE AT ALL, so this one is its first entry. Every other member of
+ * JSClassExoticMethods stays NULL and that is the spec: quickjs dispatches each hook only where the class
+ * supplies it, so a table holding this alone leaves [[Get]], [[Set]], [[Delete]], [[GetOwnProperty]] and
+ * [[OwnPropertyKeys]] ordinary — which is the first half of §7.2.4's sentence above. */
+static int loc_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx; (void)obj;
+    return 0;   /* §7.2.4.4: "Return false." */
+}
+
+static const JSClassExoticMethods LOC_EXOTIC = {
+    .prevent_extensions = loc_prevent_extensions,
+};
+
 /* ---- the declaration and the per-realm install ------------------------------------------------------------ */
 
 /* ONE PROTOTYPE, ONE INTERFACE OBJECT AND ONE LOCATION PER REALM, built WITH the realm — §7.2.4: "Each Window
@@ -1321,7 +1367,7 @@ static void location_install_realm(JSContext *ctx)
 
 void location_init(JSContext *ctx)
 {
-    JSClassDef d = { "Location" };
+    JSClassDef d = { "Location", .exotic = &LOC_EXOTIC };
     static const IdlArgType URL_ARG[] = { IDL_USVSTRING };
     int i;
 
