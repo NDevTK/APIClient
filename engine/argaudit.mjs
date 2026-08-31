@@ -25,11 +25,16 @@
  * DECLARES its argument types beside its body, and idl_concolic_rule is the one function that says which of
  * those cross. Nothing was joining the two.
  *
- * IT IS THE THIRD AXIS, AND THE OTHER TWO ARE BLIND TO IT BY CONSTRUCTION. idlgen.mjs diffs the spec's member
- * LIST against what a component installs — a NAME check, silent about types. The arity audit compares COUNTS,
- * and its own lane wrote the verdict this file is named after: "it compares COUNTS and this is a TYPE, precisely
- * the blindness that let `remove` survive a `length` audit." This one asks only about TYPES, and is equally
- * blind to the other two. Three auditors, three axes; none of them is the gate.
+ * IT IS ONE AXIS AND THE OTHERS ARE BLIND TO IT BY CONSTRUCTION. idlgen.mjs diffs the spec's member LIST
+ * against what a component installs — a NAME check, silent about types. The arity audit compares COUNTS, and
+ * its own lane wrote the verdict this file is named after: "it compares COUNTS and this is a TYPE, precisely
+ * the blindness that let `remove` survive a `length` audit." argtypegate.mjs asks whether the DECLARATION
+ * itself says what the spec's IDL says, which this one takes as GIVEN — a declaration that is wrong about the
+ * spec is internally consistent here and reads clean. This one asks only whether a BODY re-converts what its
+ * own declaration already converted. Four auditors, four axes; none of them is the gate.
+ *
+ * WHAT A DECLARATION SAYS IS READ BY engine/idl_argdecl.mjs, which argtypegate.mjs reads too — one parse of
+ * `idl_method_id*`, because a second copy of it is the copy that drifts.
  *
  * IT IS NOT A BUILD GATE, DELIBERATELY, for citegen.mjs's reason: it reads SOURCE TEXT, so its recall is
  * bounded by what text can say, and a checker that fails a lane for a finding the lane did not introduce gets
@@ -72,6 +77,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { contract, declarations, strip, args, callText, functions, lineOf } from "./idl_argdecl.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE = join(ROOT, "engine/host/browser/core");
@@ -83,106 +89,6 @@ const NUMERIC = /^JS_To(Int32|Uint32|Int64|Uint64|Float64|Number|Index|BigInt|Bi
 const STRINGY = /^JS_To(CString|CStringLen|String|PropertyKey)$/;
 const TOBOOL = /^JS_ToBool$/;
 
-/* ---- reading the contract out of idl_args.h, never restating it -------------------------------------------
- *
- * The set of types that cross is DERIVED from idl_concolic_rule's own switch. idl_args.h's own comment names
- * why: it had TWO statements of this and they DISAGREED, and "a hand-maintained mirror of a hand-maintained
- * list is the defect, not either list". A third copy here would be the same defect with a checker's authority
- * behind it — so this reads the function, and a type it cannot place is a finding rather than an assumption. */
-function contract() {
-  const src = readFileSync(join(CORE, "idl_args.h"), "utf8");
-  const all = new Set();
-  const enumBody = src.match(/typedef enum \{([\s\S]*?)\} IdlArgType;/);
-  if (!enumBody) throw new Error("idl_args.h no longer declares `typedef enum { … } IdlArgType;` — this audit "
-    + "reads the declared types out of that enum, so it cannot run until it is found again");
-  for (const m of strip(enumBody[1]).matchAll(/\b(IDL_[A-Z0-9_]+)\b/g)) all.add(m[1]);
-
-  const fn = src.match(/idl_concolic_rule\(IdlArgType t\)\s*\{([\s\S]*?)\n\}/);
-  if (!fn) throw new Error("idl_args.h no longer defines idl_concolic_rule — that function IS the discriminator "
-    + "this audit joins declarations against, so there is nothing to check without it");
-  const body = strip(fn[1]);
-  const notCrossing = new Set();
-  let pending = [];
-  for (const line of body.split("\n")) {
-    const c = line.match(/case\s+(IDL_[A-Z0-9_]+)\s*:/);
-    if (c) { pending.push(c[1]); continue; }
-    const r = line.match(/return\s+(IDL_CONCOLIC_[A-Z]+)\s*;/);
-    if (r) {
-      if (r[1] !== "IDL_CONCOLIC_CROSSES") for (const t of pending) notCrossing.add(t);
-      pending = [];
-    }
-  }
-  const crosses = new Set([...all].filter((t) => !notCrossing.has(t)));
-  return { all, crosses, notCrossing };
-}
-
-/* Comments and string literals blanked, LINE NUMBERS PRESERVED — a citation lives inside a DCHECK message and a
-   coercion is named in idl_args.h's own contract paragraph, so scanning raw text counts prose as code. */
-function strip(src) {
-  let out = "", i = 0, n = src.length;
-  while (i < n) {
-    const c = src[i], d = src[i + 1];
-    if (c === "/" && d === "*") { const e = src.indexOf("*/", i + 2); const seg = src.slice(i, e < 0 ? n : e + 2);
-      out += seg.replace(/[^\n]/g, " "); i = e < 0 ? n : e + 2; continue; }
-    if (c === "/" && d === "/") { const e = src.indexOf("\n", i); const seg = src.slice(i, e < 0 ? n : e);
-      out += seg.replace(/[^\n]/g, " "); i = e < 0 ? n : e; continue; }
-    if (c === '"' || c === "'") {
-      let j = i + 1;
-      while (j < n && src[j] !== c) { if (src[j] === "\\") j++; j++; }
-      out += src.slice(i, Math.min(j + 1, n)).replace(/[^\n]/g, " "); i = j + 1; continue;
-    }
-    out += c; i++;
-  }
-  return out;
-}
-
-const lineOf = (src, off) => src.slice(0, off).split("\n").length;
-
-/* Split a call's argument text on TOP-LEVEL commas — a type list, a nested call and a compound literal all
-   contain commas that are not argument separators. */
-function args(text) {
-  const out = []; let d = 0, cur = "";
-  for (const ch of text) {
-    if (ch === "(" || ch === "[" || ch === "{") d++;
-    else if (ch === ")" || ch === "]" || ch === "}") d--;
-    if (ch === "," && d === 0) { out.push(cur.trim()); cur = ""; continue; }
-    cur += ch;
-  }
-  if (cur.trim()) out.push(cur.trim());
-  return out;
-}
-
-/* The text between the `(` at `open` and its matching `)`. */
-function callText(src, open) {
-  let d = 0, i = open;
-  for (; i < src.length; i++) {
-    if (src[i] === "(") d++;
-    else if (src[i] === ")") { d--; if (!d) break; }
-  }
-  return { text: src.slice(open + 1, i), end: i };
-}
-
-/* Every function DEFINITION in a file, as name → { from, to }. A definition is a signature at column 0 whose
-   parameter list is followed by `{`; a prototype ends in `;` and is skipped by that same test. */
-function functions(src) {
-  const out = new Map();
-  const re = /\n([A-Za-z_][A-Za-z_0-9 \t*]*?)\b([A-Za-z_][A-Za-z_0-9]*)\s*\(/g;
-  let m;
-  while ((m = re.exec(src))) {
-    const open = m.index + m[0].length - 1;
-    if (/^\s*(if|for|while|switch|return|sizeof)\s*$/.test(m[2])) continue;
-    const { end } = callText(src, open);
-    let j = end + 1;
-    while (j < src.length && /\s/.test(src[j])) j++;
-    if (src[j] !== "{") continue;
-    let d = 0, k = j;
-    for (; k < src.length; k++) { if (src[k] === "{") d++; else if (src[k] === "}") { d--; if (!d) break; } }
-    out.set(m[2], { from: j, to: k, params: src.slice(open + 1, end) });
-    re.lastIndex = k;
-  }
-  return out;
-}
-
 /* ---- the join ---------------------------------------------------------------------------------------------
  *
  * A member's declared types reach a body three ways and all three are read: a named `static const IdlArgType`
@@ -190,44 +96,16 @@ function functions(src) {
  * instead of a body, and that struct's FIRST field is the step function — so the decl table is read too, and a
  * step machine's argv is audited exactly as a plain body's is. */
 function declaredTypes(src, C) {
-  const arrays = new Map();
-  for (const m of src.matchAll(/\b(?:static\s+)?const\s+IdlArgType\s+([A-Za-z_][A-Za-z_0-9]*)\s*\[[^\]]*\]\s*=\s*\{([\s\S]*?)\}\s*;/g))
-    arrays.set(m[1], args(m[2]).map((t) => t.split(/\s+/)[0]));
-
-  const stepFn = new Map();
-  for (const m of src.matchAll(/\b(?:static\s+)?const\s+IdlStepDecl\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*\{([\s\S]*?)\}\s*;/g)) {
-    const first = args(m[2])[0];
-    if (first) stepFn.set(m[1], first.replace(/^&/, "").trim());
-  }
-
-  /* body name → { pos → Set(type) }, unioned over every declaration that names it. */
+  /* body name → { pos → Set(type) }, unioned over every declaration that names it — `magic` picks among them
+     and text cannot follow a magic, so a shared body is judged against the union and the reader must check
+     WHICH declaration a finding belongs to. */
   const decl = new Map();
-  const put = (body, list, variadic) => {
-    if (!body) return;
-    let d = decl.get(body);
-    if (!d) decl.set(body, (d = new Map()));
-    list.forEach((t, i) => { if (!d.has(i)) d.set(i, new Set()); d.get(i).add(t); });
-    if (variadic && list.length) d.set("tail", new Set([list[list.length - 1]]));
-  };
-  const listOf = (expr) => {
-    const inline = expr.match(/\(\s*const\s+IdlArgType\s*\[\s*\]\s*\)\s*\{([\s\S]*)\}/);
-    if (inline) return args(inline[1]).map((t) => t.split(/\s+/)[0]);
-    const name = expr.trim().replace(/^&/, "");
-    return arrays.get(name) || (C.all.has(name) ? [name] : null);
-  };
-
-  for (const m of src.matchAll(/\bidl_(method_id|method_id_ext|method_id_dict|method_id_step|setter_id|setter_id_step)\s*\(/g)) {
-    const kind = m[1];
-    const { text } = callText(src, m.index + m[0].length - 1);
-    const a = args(text);
-    let types = null, body = null, variadic = false;
-    if (kind === "method_id") { types = listOf(a[1] || ""); body = a[3]; }
-    else if (kind === "method_id_ext") { types = listOf(a[1] || ""); variadic = /true/.test(a[3] || ""); body = a[5]; }
-    else if (kind === "method_id_dict") { types = listOf(a[1] || ""); body = a[5]; }
-    else if (kind === "method_id_step") { types = listOf(a[1] || ""); body = stepFn.get((a[5] || "").replace(/^&/, "").trim()); }
-    else if (kind === "setter_id") { types = listOf(a[1] || ""); body = a[3]; }
-    else if (kind === "setter_id_step") { types = listOf(a[1] || ""); body = stepFn.get((a[3] || "").replace(/^&/, "").trim()); }
-    if (types && body) put(body.trim(), types, variadic);
+  for (const d of declarations(src).read(C).decls) {
+    if (!d.body || !d.types) continue;
+    let m = decl.get(d.body);
+    if (!m) decl.set(d.body, (m = new Map()));
+    d.types.forEach((t, i) => { if (!m.has(i)) m.set(i, new Set()); m.get(i).add(t); });
+    if (d.variadic && d.types.length) m.set("tail", new Set([d.types[d.types.length - 1]]));
   }
   return decl;
 }
@@ -317,7 +195,7 @@ const files = [];
 for (const p of (paths.length ? paths.map((p) => resolve(ROOT, p)) : [CORE])) walk(p, files);
 files.sort();
 
-const C = contract();
+const C = contract(join(CORE, "idl_args.h"));
 const findings = [];
 for (const f of files) auditFile(f, C, findings);
 

@@ -805,7 +805,24 @@ static void event_free_subclasses(JSRuntime *rt);
 void event_init(JSContext *ctx)
 {
     JSClassDef d = { "Event" };
-    static const IdlArgType INIT_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_ANY };
+    /* DOM §2.2 Interface Event: `undefined initEvent(DOMString type, optional boolean bubbles = false,
+       optional boolean cancelable = false)`. THE TWO FLAGS ARE `boolean` AND THE DECLARATION SAYS SO, which is
+       not a tidier spelling of IDL_ANY — IDL_BOOLEAN is the one scalar idl_concolic_rule answers
+       IDL_CONCOLIC_FORKS for, and the fork happens INSIDE the conversion. Declared IDL_ANY the value crossed
+       unconverted into this file's own `JS_ToBool(ctx, argv[1])`, and ECMAScript §7.1.2 ToBoolean ( arg ) ends
+       "Return true" over the ordinary Object an unknown wears — so `e.initEvent(t, cfg.bubbles)` was a
+       BUBBLING event in every world and the non-bubbling one was deleted with nothing to say so, which is the
+       collapse idl_args.c's §3.2.3 conversion exists to prevent and states in those words.
+       IT WAS THE ONLY MEMBER LEFT WITH THAT SHAPE, and its siblings are what makes that legible rather than a
+       guess: `initUIEvent`, `initKeyboardEvent`, `initMessageEvent`, `initStorageEvent` and `cloneNode` all
+       declare IDL_BOOLEAN at the positions their IDL calls `boolean`, and Event — the base every one of them
+       inherits — did not. No body changes: after the declaration the position is a real JavaScript boolean (or
+       the `undefined` §3.6 step 15.4.2 places for an absent optional), so the `JS_ToBool` below runs nothing
+       and answers exactly what §3.2.3 already decided. The IDL's `= false` is deliberately NOT declared with
+       `idl_arg_default`: §7.1.2's second step returns false for `undefined`, so the default and the absent
+       optional are the same truth value here and a declared one would state nothing a page could observe —
+       which is also why every sibling init*Event leaves it out. */
+    static const IdlArgType INIT_ARGS[3] = { IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN };
 
     DCHECK(!g_ready, "event_init ran twice — the interface is declared once per AGENT");
     g_key = JS_NewSymbol(ctx, "eventSlots", false);
