@@ -32,6 +32,29 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
    property with no initial value anywhere (a custom property nobody set), which §6.6.1 answers as the empty
    string. Exported for §7's defaulting step, which is the only thing that reaches for it. */
 char *cssom_initial_value(const char *name);
+
+/* CSSOM §2 Terminology's SUPPORTED CSS PROPERTY SET, asked by NAME and answered with the registry's own
+ * spelling of that property, or NULL. The match is ASCII case-insensitive and NOTHING ELSE is normalised — no
+ * trimming, no escape processing — because the one other caller of this set is CSS Conditional Rules 3 §7.5's
+ * `CSS.supports(property, value)`, whose own Note makes `" width"` false for exactly that reason.
+ * IT IS EXPORTED SO THERE IS ONE ANSWER AND NOT TWO. §6.6.1's per-property IDL attributes are built by walking
+ * lexbor's registry and asking this same set per row; a second entry deciding it for §7.5 could disagree, and
+ * a disagreement would read as a page bug — an `el.style.width` that exists beside a
+ * `CSS.supports("width","5px")` that is false. A CUSTOM property is NOT in this set (§2 excludes it by name),
+ * so NULL is the right answer for `--foo` and the caller's own clause is what answers for one.
+ * NOT OWNED: the returned name points into lexbor's static registry. */
+const char *cssom_supported_css_property_named(const char *name);
+
+/* CSSOM §6.7.1 Parsing CSS Values over ONE declaration `name: value`, answered by THE PARSER — the same call
+ * §6.6.1's `setProperty` makes, so what this engine accepts is one fact rather than one per asker. Returns the
+ * canonical serialization of the value, OWNED; NULL when the text is not exactly one declaration of that
+ * property, which §6.7.1's own Note extends to a value carrying `!important`.
+ * `name` IS COMPARED CASE-SENSITIVELY against what came back, so a caller holding a page's spelling resolves
+ * it through cssom_supported_css_property_named first. Exported for CSS Conditional Rules 3 §7.5's
+ * `CSS.supports(property, value)`, whose closing clause — "and value successfully parses according to that
+ * property's grammar" — is this question and whose second Note is §6.7.1's Note said again. */
+char *cssom_parse_a_css_value(const char *name, const char *value);
+
 /* §6.6.1's two prototypes, CSS Fonts 5 §9.1's third and CSSOM §6.4.7's fourth, for ONE realm — declared into
    core/realm.h's list, run once per realm. */
 void cssom_install_proto(JSContext *ctx);

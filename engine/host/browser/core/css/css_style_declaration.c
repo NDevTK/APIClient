@@ -696,7 +696,7 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
  * IT IS A COMPONENT AND NOT AN `if` AT ONE CALLER, because the question has TWO askers and they answered it
  * DIFFERENTLY. The READ path (cssd_decls_from_list, and therefore every style="" attribute, every style rule
  * and every `cssText` assignment) re-judged a `__UNDEF` through cssd_undef_is_declaration and kept it; the
- * WRITE path (cssd_parse_value, and therefore `setProperty`, every §6.6.1 per-property IDL attribute and
+ * WRITE path (cssom_parse_a_css_value, and therefore `setProperty`, every §6.6.1 per-property IDL attribute and
  * `cssFloat`) tested `d->type != LXB_CSS_PROPERTY__UNDEF` and dropped it. Lexbor's value grammar has no math
  * functions AT ALL — no `calc` token exists in its registry — so every math function is a `__UNDEF`, and the
  * consequence was that `el.style.width = "calc(100% - 20px)"` did NOTHING while `el.setAttribute("style",
@@ -2072,12 +2072,22 @@ static void cssd_declarations_write(JSContext *ctx, JSValueConst block, const ch
    the unparseable text instead was not a smaller version of that: the next read dropped the declaration as
    `__UNDEF` and the property came back as UNDECLARED, so the assignment silently removed a value it had no
    business touching.
+   IT HAS A SECOND CALLER OUTSIDE THIS COMPONENT AND THAT IS WHY IT IS EXPORTED. CSS Conditional Rules 3
+   §7.5's two-argument `CSS.supports(property, value)` ends in "and value successfully parses according to that
+   property's grammar", which is this question and not a second reading of it — and its own Note pins the
+   `!important` rule to the same sentence §6.7.1's Note states, so the two members must reach ONE entry or the
+   second Note is obeyed in one place and not the other.
+   IT ANSWERS ABOUT THE NAME IT IS GIVEN, CASE-SENSITIVELY, which is what the strcmp below is: a caller holding
+   a page's spelling must resolve it through cssom_supported_css_property_named first. That is not this entry's
+   business to do — §7.5 matches the property name ASCII case-insensitively against a SET before any parse, and
+   folding the two into one call would make a member that failed the set test indistinguishable from one whose
+   value did not parse.
    IT IS ALSO WHAT KEEPS A PROPERTY NAME FROM CARRYING A DECLARATION OF ITS OWN. This engine's block is TEXT,
    so `setProperty('a;color', 'red')` written into it would parse back as two declarations; the parse here is
    required to produce exactly ONE, named exactly `name`. §6.6.1's note that "value can not include
    !important" is the same check from the other side: a value that parsed as important is not this value.
    OWNED. */
-static char *cssd_parse_value(const char *name, const char *value)
+char *cssom_parse_a_css_value(const char *name, const char *value)
 {
     lxb_css_memory_t *mem = NULL;
     lxb_css_rule_declaration_list_t *list;
@@ -2162,7 +2172,7 @@ static void cssd_decls_set_property(CssDecls *d, const char *name, const char *v
     char *parsed;
     unsigned n, i;
 
-    parsed = cssd_parse_value(name, value);
+    parsed = cssom_parse_a_css_value(name, value);
     if (!parsed) return;
     lh = css_shorthand_longhands(name, &n);
     if (!lh) {
@@ -2468,6 +2478,40 @@ static bool cssom_supported_css_property(uintptr_t id, const lxb_css_entry_data_
            "a lexbor property row's declared length is not its own strlen, so an IDL attribute name derived "
            "from it would be truncated or would read past the row");
     return true;
+}
+
+/* CSSOM §2 Terminology's SUPPORTED CSS PROPERTY SET, ASKED BY NAME — the same question the row predicate above
+ * answers, reached from the other end, and reached through it rather than beside it so this engine has ONE
+ * answer to what it supports. §6.6.1's per-property IDL attributes walk the registry and ask the predicate per
+ * row; CSS Conditional Rules 3 §7.5's `CSS.supports(property, value)` holds a name and asks about that one.
+ * Two entries deciding the same set could disagree, and the disagreement would read as a page bug: an
+ * `el.style.width` that exists beside a `CSS.supports("width","5px")` that is false.
+ *
+ * THE MATCH IS ASCII CASE-INSENSITIVE, which is what §7.5 asks for ("an ASCII case-insensitive match for any
+ * defined CSS property that the UA supports") and what lexbor's own lookup does — its static hash is entered
+ * through the lowercasing probe, so `WIDTH` and `width` reach one row. Nothing else is normalised, which is
+ * the whole of §7.5's first Note: a leading space is not whitespace to be trimmed here, it is part of the name
+ * being matched, so `" width"` is in no registry row and this answers NULL.
+ *
+ * IT RETURNS THE REGISTRY'S OWN SPELLING rather than a boolean, because the caller's next act is a parse and
+ * cssom_parse_a_css_value compares the parsed declaration's name CASE-SENSITIVELY. Handing that entry the
+ * page's `WIDTH` would answer false for a property this one just said is supported — the two-entry
+ * disagreement above, one call apart. NOT OWNED: it points into lexbor's static registry, which outlives every
+ * caller. NULL is "not a supported CSS property", which for a CUSTOM property is the right answer and not a
+ * miss: §2 excludes custom properties from the set by name, and §7.5 asks about them in its own separate
+ * clause. */
+const char *cssom_supported_css_property_named(const char *name)
+{
+    const lxb_css_entry_data_t *e;
+
+    DCHECK(name != NULL, "CSSOM §2's supported CSS property set was asked about no name at all — the empty "
+                         "string is a real question with the answer NO, and the absence of a name is a caller "
+                         "that never took one");
+    e = lxb_css_property_by_name((const lxb_char_t *)name, strlen(name));
+    if (e == NULL || !cssom_supported_css_property(e->unique, e))
+        return NULL;
+    DCHECK(e->name != NULL, "lexbor's property registry answered a supported row with no name");
+    return (const char *)e->name;
 }
 
 /* An IDL attribute name is bounded by the property name it comes from, since §6.6.1's algorithm only ever

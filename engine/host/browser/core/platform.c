@@ -6,6 +6,7 @@
 #include "core/agent_state.h"
 #include "core/console/console.h"
 #include "core/crypto/crypto.h"
+#include "core/css/css_namespace.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
@@ -146,6 +147,7 @@ typedef struct {
 /* ---- the agent half ------------------------------------------------------------------------------------- */
 
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
+static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
 static void d_url(JSContext *c, const PlatformAgent *a) { (void)a; url_init(c); }
 static void d_usp(JSContext *c, const PlatformAgent *a) { (void)a; usp_init(c); }
 static void d_form_data(JSContext *c, const PlatformAgent *a) { (void)a; form_data_init(c); }
@@ -239,6 +241,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 
 static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabilities_free(rt); }
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
+static void r_css_namespace(JSRuntime *rt) { (void)rt; css_namespace_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
@@ -898,6 +901,18 @@ static const PlatformComponent PLATFORM[] = {
     { "dom_rect",            d_dom_rect,            i_dom_rect,  r_dom_rect },
     { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
     { "element",             d_element,             NULL,        r_element },
+    /* CSSOM §8.1 The CSS.escape() Method's `CSS` NAMESPACE and CSS Conditional Rules 3 §7.5 The CSS namespace,
+       and the supports() function's partial namespace on it, AFTER `element` — which is where the whole CSSOM
+       group is declared, and whose cssom_init creates THE AGENT'S ONE CSS PARSER that both of this row's
+       members reach through (§7.5's supports() runs a real declaration parse and a real `<supports-condition>`
+       evaluation; neither is a table of names this row could hold).
+       IT IS ITS OWN ROW AND NOT PART OF THAT GROUP, because what it installs is a GLOBAL rather than anything
+       hanging off an Element: §8.1's own closing paragraph treats the namespace as one several standards
+       extend, and the DOM group is not its owner. Being a row is also what gives it a witness below — `CSS` is
+       a name a page reads off the global, so an install that silently stopped happening is exactly what that
+       column catches. Its namespace object goes on the global through a realm intrinsic, so a child navigable
+       gets its own object with its own two function objects and therefore its own realm. */
+    { "css_namespace",       d_css_namespace,       NULL,        r_css_namespace },
     /* INTERSECTION OBSERVER, AFTER `element` and after the two GEOMETRY rows. After element because its
        declaration brands both `observe(Element target)` and §2.4's `(Element or Document)? root` against the
        Node class, which element_init is what creates (through node_init); after DOMRect because every entry it
@@ -968,6 +983,10 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "structuredClone",       "structured_clone" },
     { "requestAnimationFrame", "animation_frame" },
     { "matchMedia",            "media_query_list" },
+    /* CSSOM §8.1's namespace object. It is on browser/platform_names.h for the reason the three simple-dialog
+       members are, so an install that stopped happening would surface one frame away from the absence —
+       `CSS.escape` reads `undefined` and only the CALL throws. */
+    { "CSS",                   "css_namespace" },
     /* HTML §8.9.1's three members, and the witness matters more than most for the reason Web Storage's two do:
        all three are on browser/platform_names.h, so solver/absent.c's read hook leaves a miss on them ALONE —
        a name the platform owns is a component this engine owes, and that file declines to mint a concolic for

@@ -13,10 +13,29 @@
  * questions about characters, so a byte walk would ask them of a continuation byte. The escapes themselves are
  * all ASCII, which is why the pass-through can be byte-wise once the position questions are answered.
  *
- * A LONE SURROGATE OR AN ILL-FORMED SEQUENCE IS NOT THIS COMPONENT'S TO REPAIR. CSSOMString is a USVString in
- * this engine's binding and the CSS tokenizer's own output is well-formed UTF-8, so what arrives here is
- * already scalar values; the walk asserts that rather than substituting a replacement character, because a
- * substitution here would hide a decoder bug one component away. */
+ * A LONE SURROGATE PASSES THROUGH UNCHANGED, AND THAT IS THE CSSOMString BINDING CHOICE MADE EXPLICIT.
+ *
+ * CSSOM §3 CSSOMString does not decide it: "Most strings in CSSOM interfaces use the CSSOMString type. Each
+ * implementation chooses to define it as either USVString or DOMString", and it states the consequence —
+ * "DOMString would preserve them, whereas USVString would replace them with U+FFFD REPLACEMENT CHARACTER" —
+ * then says outright that "this choice effectively allows implementations to do this replacement, but does not
+ * require it". THIS ENGINE CHOOSES DOMString, and every CSSOM member's argument declaration says so
+ * (IDL_DOMSTRING, never IDL_USVSTRING).
+ *
+ * IT IS NOT A FREE CHOICE IN PRACTICE, WHICH IS WHY IT IS WRITTEN DOWN HERE RATHER THAN LEFT TO EACH MEMBER.
+ * §8.1's own test file asserts `CSS.escape('\uD834')` is `'\uD834'` and `CSS.escape('\uDF06')` is `'\uDF06'` —
+ * a lone surrogate RETURNED UNCHANGED — which the scalar-value conversion Web IDL §3.2.12 USVString performs
+ * would destroy. So a USVString binding is permitted by CSSOM §3 and refuted by the corpus, and the sentence
+ * that stood here claiming this engine had one was wrong about this tree in the direction that reads as
+ * authoritative: the members were right and the claim above them was not.
+ *
+ * SO WHAT ARRIVES HERE IS NOT GUARANTEED TO BE WELL-FORMED UTF-8, and the walk below does not pretend it is.
+ * quickjs encodes a JS string's unmatched surrogate rather than replacing it, so `ED A0 B4` reaches this
+ * component and must leave it byte-identical — which the pass-through arm already does, because §2.1's rules
+ * escape nothing at or above U+0080. The DCHECK is therefore about a TRUNCATED or otherwise unopenable
+ * sequence, which no encoder produces and which would mean a caller handed over a partial buffer; it is not a
+ * surrogate check, and a replacement character substituted here would break §8.1's tests and hide whatever
+ * produced the bytes. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_SERIALIZE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_SERIALIZE_H
 

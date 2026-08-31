@@ -56,10 +56,18 @@ static unsigned cs_next_cp(const char *s, size_t len, size_t i, size_t *plen)
     else if (c < 0xE0)   { n = 2; cp = c & 0x1Fu; }
     else if (c < 0xF0)   { n = 3; cp = c & 0x0Fu; }
     else                 { n = 4; cp = c & 0x07u; }
+    /* A TRUNCATED OR UNOPENABLE SEQUENCE, WHICH IS NOT THE SAME QUESTION AS A LONE SURROGATE. `ED A0 B4` opens
+       and closes inside the buffer, so it passes here and is emitted unchanged — which is what this engine's
+       DOMString binding of CSSOMString requires and what §8.1's own tests read (see css_serialize.h). What
+       cannot arrive is a lead byte with no continuation bytes behind it: neither the CSS tokenizer nor
+       quickjs's encoder produces one, so it means a caller handed over a partial buffer, and the length it
+       passed is the thing that is wrong. Substituting a replacement character would hide that AND would break
+       the surrogate round-trip, which is why this asserts instead of repairing. */
     DCHECK(c >= 0xC2 && i + n <= len,
-           "a CSS string reached §2.1's serializer as ILL-FORMED UTF-8. CSSOMString is a USVString in this "
-           "binding and the CSS tokenizer's own output is well-formed, so what arrives here is already scalar "
-           "values — substituting a replacement character would hide the decoder bug that produced this");
+           "a CSS string reached §2.1's serializer as a TRUNCATED UTF-8 sequence — a multi-byte code point "
+           "that opens inside the buffer and ends outside it, or a continuation byte where a lead byte "
+           "belongs. This is a caller's length, not a surrogate: an unpaired surrogate is well-formed for this "
+           "binding and passes through unchanged");
     if (c < 0xC2 || i + n > len) { *plen = 1; return c; }
     {
         size_t k;

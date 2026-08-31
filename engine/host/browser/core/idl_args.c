@@ -296,8 +296,12 @@ typedef struct {
        only exist while there was a ceiling to derive it from, and that named a position no member had. */
     int        first_optional;
     /* §3.6's LENGTH-DIFFERING OVERLOAD SPLIT, as the two numbers steps 3-4 and step 15.3 need and the
-       declaration's single `first_optional` cannot carry. `split_at` is the position such a split sits at
-       (idl_type_is_length_split), or -1 for the members that declare none — which is all but two of them.
+       declaration's single `first_optional` cannot carry. `split_at` is the LAST POSITION THE SHORTER ENTRY
+       DECLARES, or -1 for the members that declare none — which is nearly all of them. It arrives one of two
+       ways and means the same thing either way: READ OFF THE TYPE LIST where the two entries also differ in
+       TYPE there (idl_type_is_length_split), or STATED by idl_overload_length_split_at where they share it and
+       the type list therefore cannot say. Only the first of those makes step 15.2's type a second question —
+       see the conversion loop's `step4_only_longer`.
        `split_longer_optional` is the LONGER entry's OWN first optional position, declared through
        idl_overload_split_optional_from and asserted present at the seal, because the entry that survives
        steps 3-4 is the one whose optionality step 15.3 reads and the shorter entry's is the wrong list. */
@@ -940,8 +944,9 @@ static bool idl_split_longer_survived(const IdlMember *m, int argc)
 
 /* §3.6 STEP 15.3's OPTIONALITY, READ OFF THE ENTRY THAT SURVIVED — "let optionality be the value at index i in
    the list of optionality values of the REMAINING entry". For every member with no length-differing split
-   there is one entry and the declaration's own number IS that list; for the two that have one, the surviving
-   entry decides. idl_args_seal asserts that such a member declared the longer entry's number, so there is
+   there is one entry and the declaration's own number IS that list; for a member that declares one, the
+   surviving entry decides — however that split was stated, since the removal at steps 3-4 is by argument count
+   in both forms. idl_args_seal asserts that such a member declared the longer entry's number, so there is
    nothing to fall back to here. */
 static int idl_first_optional(const IdlMember *m, int argc)
 {
@@ -953,8 +958,9 @@ static int idl_first_optional(const IdlMember *m, int argc)
     return m->split_longer_optional;
 }
 
-/* THE TWO-SIDED HALF OF THAT DECLARATION, run once when the platform is sealed. A member whose types name a
-   length-differing split and that never said where the LONGER entry's optional arguments begin is a member
+/* THE TWO-SIDED HALF OF THAT DECLARATION, run once when the platform is sealed. A member that declares a
+   length-differing split — by its type list, or by idl_overload_length_split_at where the two entries share
+   the type there — and that never said where the LONGER entry's optional arguments begin is a member
    §3.6 step 15.3 cannot be run for — so it is caught HERE, with every declaration in hand and before any page
    can call one, rather than at whichever arity happens to reach the missing number first. The reverse is
    asserted too: a number declared by a member with no split is a declaration describing an entry that does not
@@ -2704,7 +2710,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            type it could only ever rewrite the split position itself, and the positions AFTER the split went on
            reading the shorter entry's optional index — see idl_overload_split_optional_from. */
         bool longer_survived = idl_split_longer_survived(m, s->hdr.argc);
-        bool step4_only_longer = longer_survived && s->i == m->split_at;
+        /* THE TYPE HALF IS ASKED ONLY WHERE THE TWO ENTRIES' TYPE LISTS DIFFER AT THE SPLIT, which is what the
+           union type at that position IS. The two facts were one test while the only splits in the platform
+           carried both — see idl_overload_length_split_at — and reading them as one would send a split
+           declared by ARITY into idl_split_longer_type with a plain type it has no other arm for. The
+           OPTIONALITY half below is unconditional, because step 15.3 reads it off the surviving entry however
+           that entry was chosen. */
+        bool step4_only_longer = longer_survived && s->i == m->split_at &&
+                                 idl_type_is_length_split(m->types[m->split_at]);
         int  first_opt = idl_first_optional(m, s->hdr.argc);
 
         if (step4_only_longer) t = idl_split_longer_type(t);
@@ -3847,11 +3860,14 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     /* NO OPTIONAL ARGUMENTS, stated in the member's OWN terms: one past its last position. There is nothing
        here to overflow and nothing to keep in step with a ceiling — see idl_optional_from. */
     idl_member(idx)->first_optional = nargs;
-    /* §3.6's LENGTH-DIFFERING SPLIT, READ OFF THE TYPE LIST rather than named a second time by the caller: the
-       position IS in the types the member just declared, so asking for it again would be one fact stated
-       twice and free to disagree. -1 is "this member declares none", which is nearly all of them, and the
-       LONGER entry's optional index stays unset until idl_overload_split_optional_from states it — asserted
-       at the seal, where every declaration exists and none can change again. */
+    /* §3.6's LENGTH-DIFFERING SPLIT, READ OFF THE TYPE LIST WHEREVER THE TYPE LIST CAN SAY — a union type at
+       the split position states the position AND the second entry's type, so asking for the position again
+       would be one fact stated twice and free to disagree. Where the two entries share their type there, the
+       list cannot say and idl_overload_length_split_at does; the loop below leaves `split_at` at -1 for such a
+       member and that declaration sets it, asserting first that this loop found nothing. -1 is "this member
+       declares none", which is nearly all of them, and the LONGER entry's optional index stays unset until
+       idl_overload_split_optional_from states it — asserted at the seal, where every declaration exists and
+       none can change again. */
     idl_member(idx)->split_at = -1;
     idl_member(idx)->split_longer_optional = -1;
     for (k = 0; k < nargs; k++)
@@ -4055,6 +4071,30 @@ void idl_optional_from(int first_optional)
 /* See idl_args.h. Same "names the last declaration" rule as idl_optional_from — and it is an index into the
    SAME type list, because a length-differing split is two entries over ONE declaration: the shorter one ends
    at the split and the longer one runs to `nargs`. */
+void idl_overload_length_split_at(int shorter_last_position)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "an overload split position was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(m->split_at < 0,
+           "a member declared TWO §3.6 length-differing overload splits — its own type list already names one, "
+           "and steps 3-4 remove entries by ONE argument count, so a second is a second answer to the same "
+           "question and every arity would be resolved by whichever was found first");
+    /* THE SHORTER ENTRY DECLARES AT LEAST ONE POSITION AND ENDS BEFORE THE LONGER ONE DOES, which is what
+       makes the two entries differ in LENGTH at all: a split at the member's last position would leave the
+       longer entry with nothing of its own. */
+    DCHECK(shorter_last_position >= 0 && shorter_last_position < m->nargs - 1,
+           "a §3.6 length-differing overload split was declared at a position that is not the SHORTER entry's "
+           "last one — it names the final index that entry declares, so it must be inside the member's list "
+           "and must leave at least one position for the longer entry");
+    m->split_at = shorter_last_position;
+}
+
+/* See idl_args.h. Same "names the last declaration" rule as idl_optional_from — and it is an index into the
+   SAME type list, because a length-differing split is two entries over ONE declaration: the shorter one ends
+   at the split and the longer one runs to `nargs`. */
 void idl_overload_split_optional_from(int longer_first_optional)
 {
     IdlMember *m;
@@ -4064,8 +4104,8 @@ void idl_overload_split_optional_from(int longer_first_optional)
     m = idl_member(g_n - 1);
     DCHECK(m->split_at >= 0,
            "a member that declares no §3.6 length-differing overload split said where its LONGER entry's "
-           "optional arguments begin — the split is read off the type list, so a member with none has no "
-           "second entry for this to describe");
+           "optional arguments begin — a split is either named by the member's own type list or stated with "
+           "idl_overload_length_split_at, and a member with neither has no second entry for this to describe");
     /* THE LONGER ENTRY STARTS PAST THE SPLIT, so its first optional position cannot be at or before it: the
        shorter entry is the one that ENDS there, and a longer entry whose optional arguments began inside the
        shared prefix would be the shorter entry with extra positions rather than a second overload. */

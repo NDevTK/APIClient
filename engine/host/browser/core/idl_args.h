@@ -1016,6 +1016,34 @@ void idl_optional_from(int first_optional);
  * so a member that forgot cannot reach a conversion. */
 void idl_overload_split_optional_from(int longer_first_optional);
 
+/* DECLARE A §3.6 LENGTH-DIFFERING SPLIT WHOSE TWO ENTRIES SHARE THEIR TYPE AT THE SPLIT — the case the type
+ * list cannot state, and which the machinery above could not express because the only two members that had
+ * ever needed one also changed TYPE there.
+ *
+ * THEY ARE TWO FACTS AND THIS SEPARATES THEM. §3.6 steps 3-4 remove entries by ARGUMENT COUNT, and the position
+ * that removal turns on is the last one the SHORTER entry declares; §3.6 step 15.2's "let T be the type at
+ * index i in the type list of the remaining entry" is a different question, and it only has a second answer
+ * where the two entries' type lists differ there. IDL_USVSTRING_OR_DICT and IDL_UNRESTRICTED_DOUBLE_OR_DICT
+ * answer both at once, which is why the position was READ off the type list — correct for them, and an
+ * expressibility hole for every overload distinguished by arity alone.
+ *
+ * CSS Conditional Rules 3 §7.5's `supports` is the member that needs it: `supports(CSSOMString property,
+ * CSSOMString value)` and `supports(CSSOMString conditionText)` are one shared prefix, one type, and two
+ * lengths. Without this the shorter entry's optional index governs at every arity, so §3.6 step 15.4.2 makes
+ * position 1 "missing" for `CSS.supports("(width:1px)", undefined)` — a call whose argument count is 2, whose
+ * surviving entry requires position 1, and which must therefore convert that `undefined` to the string. The
+ * one-argument reading of it answers TRUE where the two-argument reading answers FALSE, so it is not a corner:
+ * it is the same wrong-entry-wins defect idl_overload_split_optional_from was written for, one declaration
+ * further out.
+ *
+ * `shorter_last_position` IS THE LAST POSITION THE SHORTER ENTRY DECLARES, which is what `split_at` means for a
+ * type-declared split too — the union type sits AT the shorter entry's final index. It names the member the
+ * LAST declaration made, as idl_optional_from does, and it must be stated BEFORE
+ * idl_overload_split_optional_from, which asserts a split exists to describe. A member whose type list already
+ * names a split may not also state one here: two answers to "which count removes an entry" is a member whose
+ * every arity is resolved by whichever was found first. */
+void idl_overload_length_split_at(int shorter_last_position);
+
 /* WEB IDL §3.6 Overload resolution algorithm's DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a
    position, beside "the page passed one" and "the argument is absent", and exactly the distinction
    IdlDictDefault already draws for a dictionary member. §3.6's absent rule above is for an optional argument
