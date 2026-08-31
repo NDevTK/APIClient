@@ -226,12 +226,20 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
          declarative shadow roots" is the DOCUMENT'S, a Document's is false initially (DOM §4.5), and only HTML's
          "read html" and §7.4's create-and-initialize set it — neither of which a document_new document reaches.
          So a `<template shadowrootmode>` stays a `<template>`, which core/dom/document.c states by name.
-       - §13.2.6.4.4's INERT script marking is NOT run either, and that is the spec from the other direction:
-         "already started" is set for the FRAGMENT case, and this is a document parse. A `<script>` moved out of
-         a DOMParser document into a live one therefore runs, exactly as it does in a browser. What IS run is
-         §4.12.1.1's other parser stamp, `force async` — that one is unconditional ("set to false by the HTML
-         parser … on script elements they insert") and says nothing about a scripting mode, so the `<script>`
-         that gets moved out carries the same flag it would have carried in any other document. */
+       - §13.2.4.5's INERT script marking is NOT run here, and it does not have to be: this is a DOCUMENT
+         parse, so its `<script>` elements are marked by §4.12.1.1's OWN step 15 at each end tag
+         (core/html/html_script.c's html_script_parser_inserted, which §13.2.6.4.8 'The "text" insertion mode'
+         reaches with no condition on the scripting mode), and step 18 — "If scripting is disabled for el,
+         then return" — is what stops them running. A `<script>` moved out of a DOMParser document into a live
+         one therefore does NOT run, which is what makes parseFromString a laundering-proof primitive.
+         THIS COMMENT SAID THE OPPOSITE AND CITED BROWSERS FOR IT ("therefore runs, exactly as it does in a
+         browser"), and it was false in both halves: §4.12.1.1 puts step 15 THREE STEPS AHEAD of step 18, so
+         the flag is set for exactly the documents whose scripts never run. It read as authoritative and told
+         the reader not to open the section — the one shape of wrong comment that stops the check it fails.
+         What IS run here is §4.12.1.1's other parser stamp, `force async` — that one is unconditional ("set
+         to false by the HTML parser … on script elements they insert") and says nothing about a scripting
+         mode, so the `<script>` that gets moved out carries the same flag it would have carried in any other
+         document. */
     dom_attr_normalize_parsed(root);
     html_script_parsed(ctx, root, /*inert*/false);
     html_style_element_parsed(ctx, root);

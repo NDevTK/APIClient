@@ -1993,10 +1993,22 @@ static void element_moving_steps(JSContext *ctx, lxb_dom_node_t *n, bool is_subt
  * §14.2 "Parsing XML documents"' `script` preparation stays at its own end tag in
  * core/loader/xml_document.c. That is the
  * state §7.5.2's HTML load has always been in, so this makes the two agree rather than narrowing one of them.
- * WHAT THE NEXT DIFF BUILDS: §7.5.1's own order — the agent, realm and Window built BEFORE the Document is
- * handed to a parser — after which a load's parse records like every other write, the LOAD is the machine
- * that drains it, this predicate is true of every connected node, and it and the whole parsed-walk family
- * delete together. HOW ITS ABSENCE WOULD SHOW: a document whose markup writes a `<base href>` AFTER a
+ * WHAT THE NEXT DIFF BUILDS: §7.5.1 "Shared document creation infrastructure"'s own order — step 7.5's realm
+ * and Window and step 9's Document built BEFORE §7.5.2 "Loading HTML documents" step 3 creates the parser and
+ * associates it — after which this predicate is true of every connected node and the LOAD is the machine that
+ * drains what the XML parse records.
+ * THIS CLAUSE ALSO SAID THAT ORDER MAKES A LOAD'S PARSE RECORD LIKE EVERY OTHER WRITE AND DELETES THE WHOLE
+ * PARSED-WALK FAMILY WITH IT, AND BOTH ARE FALSE — recorded here rather than quietly dropped, because the
+ * clause reads as an instruction and the next reader is the one person who acts on it. §7.5.2's HTML load
+ * does not reach DOM §4.2.3 "Mutation algorithms" at all: §13.2.6 "Tree construction" writes through
+ * solver/dom_cow.c's own `lxb_html_tree_dom_cb_t` table, whose insert entries capture for the delta and call
+ * `lxb_dom_node_insert_child` DIRECTLY — they never fire the insertion/removing hook, and that is deliberate
+ * rather than pending, because tree construction is not `insert`. So the parsed-walk family exists because
+ * the HTML parse bypasses the hook, which is a SECOND missing mechanism and not a consequence of the realm's
+ * absence; the ordering above does not touch it and the family does not go with it. What the ordering DOES
+ * deliver is the realm those walks and §4.12.1.1's own end-tag preparation need — see
+ * core/html/html_script.h's residual, which owes the same diff from the `script` side.
+ * HOW ITS ABSENCE WOULD SHOW: a document whose markup writes a `<base href>` AFTER a
  * `<link rel=stylesheet href=relative>` resolves that link against the base, where a browser's tree
  * construction had not yet seen the `<base>` when it fetched the sheet; and, once §4.13.5 "Upgrades"' upgrade
  * can reach a definition that exists during a load, a markup custom element gets no connectedCallback from

@@ -519,6 +519,52 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        `src` does not parse is marked and then abandoned (step 33's own arms return after it), so a page that
        fixes the URL afterwards does NOT get a second run. */
     script_set_already_started(ctx, n);
+    /* STEP 18 — "If scripting is disabled for el, then return", AT STEP 18 AND NOT AT A DOOR.
+     *
+     * IT IS THE ORDER THAT IS THE SPEC HERE. §4.12.1.1 "Processing model" puts this test FOURTEEN STEPS after
+     * step 1 and THREE after step 15, so every script the parser prepares in a document with no browsing
+     * context leaves these steps with `already started` TRUE and runs nothing — which is the whole of why a
+     * `<script>` cannot be laundered through a scripting-disabled document and re-inserted into a live one.
+     * The step's own note names that population: "scripts in XMLHttpRequest's responseXML documents, scripts
+     * in DOMParser-created documents, scripts in documents created by XSLTProcessor's transformToDocument
+     * feature, and scripts that are first inserted by a script into a Document that was created using the
+     * createDocument() API".
+     *
+     * IT WAS ASKED AT ONE CALLER AND NOT AT THE OTHER, WHICH IS ONE MISSING STEP WEARING TWO SHAPES.
+     * `html_script_parser_inserted` asked it at its DOOR — before step 1 — so a parsed script skipped steps 1
+     * through 17 and kept `already started` FALSE; `script_post_connection` did not ask it at all, so a
+     * `<script>` a program appended into a DOMParser document was COMPILED AND RUN in that document's realm.
+     * Both are the same step being somewhere other than step 18, and both are closed by it being here: one
+     * question, one site, N callers, which is what stops the next door from having to remember it.
+     *
+     * §8.1.3.4 "Enabling and disabling scripting" defines it over the NODE DOCUMENT of the object, so that is
+     * what is asked — never `ctx`, which is only the realm the flag above was written through and which any
+     * realm that can reach the node can be. Its clause is "The object implements Node, and object's node
+     * document's browsing context is null", and `document_active_realm_of` answering NULL IS that clause: a
+     * Document that is not the active document of the realm that owns it has no browsing context, which is
+     * exactly the four-way population step 18's own note lists. */
+    {
+        JSContext *bc = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
+
+        if (!bc) return;
+        /* …AND IT IS THE SAME REALM EVERY STEP BELOW USES, WHICH IS STEP 32 ASSERTED RATHER THAN ASSUMED.
+           §4.12.1.1 step 32 is "let settings object be el's node document's relevant settings object" and step
+           34's base URL is that document's, so every destination below — `document_doc(ctx)` for both queues,
+           `script_src_absolute`'s base, `endpoint_record` — must stand in EL'S NODE DOCUMENT's realm and not
+           in whichever realm performed the write. All three callers derive `ctx` that way (`document_realm_of`
+           of the node), and this line is what turns a fourth one that does not into an abort instead of a
+           child's program compiled in its parent's Window: two same-origin documents are ONE agent, so
+           `frame.contentDocument.body.appendChild(s)` reaches these steps from the PARENT's realm about a
+           CHILD's element, which makes the mutating realm a plausible wrong answer rather than an obvious
+           one. This file's own history has it — the children-changed hook took the mutating realm and handed
+           it to `prepare` as if it were step 32's settings object. */
+        DCHECK(bc == ctx,
+               "§4.12.1.1 was prepared with a realm that is not el's node document's — step 32's settings "
+               "object and step 34's base URL are the NODE DOCUMENT's, so a caller passing the realm that "
+               "PERFORMED THE WRITE compiles this element's program in another document's Window and resolves "
+               "its `src` against another document's base URL. Derive it at the call site with "
+               "document_realm_of(el), never from the member's own ctx");
+    }
     /* An UNKNOWN src is a URL this engine cannot fetch, but it is still a request the page makes — recorded so
        it reaches the @H surface as the shape it is, rather than disappearing. */
     t = dom_cow_attr_taint(el, "src");
@@ -674,14 +720,17 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
 
 /* THE REALM THE TWO PARSER ENTRIES BELOW RUN IN — §13.2.6's for both, and §14.2's for the second of them; see
    html_script.h for why it is derived and not passed.
-   TWO QUESTIONS, TWO CALLS, AND THEY ARE DIFFERENT QUESTIONS rather than one answered twice.
+   TWO QUESTIONS, AND ONLY ONE OF THEM IS A DOOR'S TO ASK.
    `document_realm_of` is the realm the DOM's own steps run in, and is what the `already started` slot is
    WRITTEN through: the slot is an own property of the element's wrapper, so it needs A realm and any realm
-   that can reach the node will do. `document_active_realm_of` is §8.1.3.4 "Enabling and disabling scripting"'s
-   browsing context, which is what §4.12.1 step 18 RETURNS on, and it is a strictly narrower answer — a
-   DOMParser document has the first and not the second, which is exactly the population that section's own note
-   lists. Using either for the other's job is the whole difference between marking a flag and running a page's
-   code in a document that has no browsing context to run it in. */
+   that can reach the node will do. That is the question a door asks, because a document no realm has ever
+   reached has nowhere to put the flag. `document_active_realm_of` is §8.1.3.4 "Enabling and disabling
+   scripting"'s browsing context — a strictly narrower answer, which a DOMParser document does not have — and
+   it is §4.12.1.1's STEP 18, so it is asked at step 18, inside `html_script_prepare`, once for every caller.
+   IT USED TO BE ASKED HERE, AT THE DOOR, AND THAT IS AN ORDER BUG RATHER THAN A PLACEMENT PREFERENCE: step 18
+   sits fourteen steps after step 1 and three after step 15, so hoisting it skipped the marking that makes a
+   scripting-disabled document's `<script>` inert once it is moved into a live one. A door that answers a
+   later step's question decides the earlier ones by omission. */
 
 void html_script_end_of_file(lxb_dom_node_t *script)
 {
@@ -714,12 +763,15 @@ void html_script_parser_inserted(lxb_dom_node_t *script)
            "misses means it took the current node at a moment other than before the pop; an XML caller that "
            "misses asked §14.2's question about the wrong end tag, since core/xml/xml_tree.h reports EVERY "
            "element's close and the `script` test is the caller's filter");
-    /* §4.12.1 step 18 — "If scripting is disabled for el, then return", which §8.1.3.4 "Enabling and disabling
-       scripting" defines over the node document's browsing context. Asked as the ACTIVE-document realm because
-       that IS the browsing context here, and answered NULL for every complete parse this engine performs before
-       a Document is given its navigable — whose scripts core/loader/document_scripts.c inventories instead.
-       See html_script.h for why that makes this route the one that reaches a written script and nothing else. */
-    ctx = document_active_realm_of(lxb_dom_interface_node(script->owner_document));
+    /* THE REALM THE FLAG IS WRITTEN THROUGH, WHICH IS NOT THE ONE STEP 18 ASKS ABOUT — see the two-questions
+       note above. §13.2.6.4.8 'The "text" insertion mode' says "prepare the script element script" with no
+       condition on the document's scripting mode at all, so this door performs §4.12.1.1's steps IN ORDER and
+       lets step 18 be reached at step 18. It used to ask step 18 HERE, ahead of step 1, and the cost was step
+       15: a script the parser prepared in a document with no browsing context kept `already started` FALSE,
+       so moving it into a live document ran it — the launder a browser's step ordering forbids.
+       A DOCUMENT NO REALM HAS EVER REACHED still returns, for html_script_end_of_file's reason and not for
+       step 18's: there is no wrapper to write the flag on, and nothing can read it either. */
+    ctx = document_realm_of(script);
     if (!ctx) return;
     {
     ScriptImmediate imm;

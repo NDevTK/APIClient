@@ -250,18 +250,30 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
  * vendored parser and there is no realm on that path to hand over, so asking the element's document is not the
  * loose way to get this — it is the only place the standard says the answer is.
  *
- * AND THE ABSENCE OF ONE IS A POSITIVE STATEMENT, NOT A HOLE. A Document that is no navigable's ACTIVE document
- * has no browsing context, which is §8.1.3.4 "Enabling and disabling scripting"'s own condition — "Scripting is
- * disabled for a platform object object if … the object implements Node, and object's node document's browsing
- * context is null" — and §4.12.1 step 18 returns for exactly that. It is also the state EVERY complete parse in
- * this engine is in: a Document is parsed BEFORE it is given its navigable and its realm, and its scripts are
- * inventoried afterwards by core/loader/document_scripts.c. So this route prepares exactly the scripts nothing
- * else will — a `document.write`'s, into a stream a running flow's document already has open — and the day the
- * active document's own parse is held open across script execution (core/html/html_parse.h and
- * core/html/document_open.c both name that capability) it prepares those too, with nothing here to change.
- * The spec's own list of scripting-disabled documents is this engine's list of parses with no active realm:
- * "scripts in XMLHttpRequest's responseXML documents, scripts in DOMParser-created documents … and scripts
- * that are first inserted by a script into a Document that was created using the createDocument() API". */
+ * THE SCRIPTING-DISABLED QUESTION IS NOT ASKED HERE, AND THAT IS AN ORDER FACT RATHER THAN A DELEGATION.
+ * A Document that is no navigable's ACTIVE document has no browsing context, which is §8.1.3.4 "Enabling and
+ * disabling scripting"'s own condition — "Scripting is disabled for a platform object object if … the object
+ * implements Node, and object's node document's browsing context is null" — and §4.12.1.1 step 18 returns for
+ * exactly that. But step 18 is step EIGHTEEN: steps 1 through 17 run first, and step 15 is "Set el's already
+ * started to true". This entry asked step 18 at its door, so those fourteen steps were skipped for every
+ * document with no browsing context and the flag was never set — which is what lets a `<script>` be parsed in
+ * a scripting-disabled document and RUN when it is moved into a live one, the launder that §4.12.1.1's own
+ * ordering forbids. §13.2.6.4.8 'The "text" insertion mode' states this door's step with no scripting
+ * condition on it at all ("If the active speculative HTML parser is null, then prepare the script element
+ * script"), so the door prepares and `html_script_prepare` reaches step 18 in its place.
+ *
+ * NAMED RESIDUAL. WHAT IS NOT COVERED: a Document this engine LOADS is parsed BEFORE it is given its realm
+ * (core/dom/element.c's tree_steps_can_run states the same inversion for the insertion steps), so at the
+ * moment this door runs there is no realm to write the flag through at all and it returns above — a loaded
+ * document's markup `<script>` elements therefore still leave the parse with `already started` FALSE, and
+ * core/loader/document_scripts.c's inventory is what runs them. WHAT THE NEXT DIFF BUILDS: HTML §7.5.1
+ * "Shared document creation infrastructure" step 9's Document, and step 7.5's realm and Window, existing
+ * BEFORE §7.5.2 "Loading HTML documents" step 3 creates the parser and associates it — after which this door
+ * has a realm, step 15 fires for the markup's own scripts, step 18 answers ENABLED, and the destinations
+ * below become the load's script runner, at which point that inventory has no caller left. HOW ITS ABSENCE
+ * SHOWS: any second reach at a loaded document's own markup `<script>` re-prepares and re-runs it, because
+ * step 1 has nothing to read — a connected insertion before a reference child re-runs every script after it,
+ * and a `<script>` a page moves within its own document runs twice. */
 void html_script_parser_inserted(lxb_dom_node_t *script);
 
 /* HTML §13.2.6.4.8 'The "text" insertion mode' — "An end-of-file token: … If the current node is a script
