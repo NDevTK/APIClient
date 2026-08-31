@@ -3,6 +3,35 @@
 // (methods, params, schemas, findings). Extracted from the offscreen-brain.js monolith (one problem per file);
 // loaded before it, resolves learnFromAstCallSite (lib/learn.js) + grouping/schema at call-time.
 
+/* ONE POOL OF A METHOD'S TEMPLATED-HOLE EXAMPLES, PROJECTED ONTO THE FLAT ENDPOINT RECORD. Called once per
+   pool, with the METHOD PARAMETER'S OWN FIELD NAME, so the two projections cannot differ in anything but
+   which pool they read — a second hand-written loop is how one of them comes to skip a hole the other keeps,
+   and the difference would be invisible: both answers are well-formed lists of real values.
+   `undefined`-or-array IS THE METHOD PARAMETER'S VOCABULARY (lib/learn.js writes each pool's key only where
+   the pool is non-empty), and it is normalised HERE, at the one hop between that record and this one, rather
+   than by the fold — which is `foldValuePools`' own stated boundary: a record's spelling of an empty pool
+   belongs to the record.
+   A HOLE WITH AN EMPTY POOL IS SKIPPED RATHER THAN CARRIED AS `[]`, because lib/send.js requires every entry
+   to carry a value: an entry with none would surface a templated segment as if something had filled it, which
+   is the claim `pathParams: null` exists to be able to deny. */
+function _astPathParamPool(method, poolField) {
+  DCHECK(poolField === "_astValidValues" || poolField === "_astForcedValues",
+         "a path-param pool was projected from `" + poolField + "`, which is neither of lib/learn.js's two " +
+         "pools — the offerable/forced split is spelled as those two field names (lib/endpoint-record.js's " +
+         "`provenanceOffersExample` states why it is a name and not a grade), so a third one reads a field " +
+         "the method record does not have and every hole would project as empty");
+  if (!method || !method.parameters) return null;   // dynamic URL: no method, no path template
+  var out = [];
+  for (var pn in method.parameters) {
+    var pd = method.parameters[pn];
+    if (!pd || pd.location !== "path") continue;
+    var vals = Array.isArray(pd[poolField]) ? pd[poolField] : [];
+    if (!vals.length) continue;
+    out.push({ name: pn, values: vals.slice(0, PATH_PARAM_EXAMPLE_CAP) });
+  }
+  return out.length ? out : null;
+}
+
 /* TWO PARAMETERS ARE GONE AND NEITHER WAS EVER READ. `tabId` was passed by every caller and used by no line
    in this file — the DocView it merges into carries its own `tabId`, so the argument was a second copy of a
    fact the first argument already states, and a caller passing the wrong one would have been believed by
@@ -197,41 +226,33 @@ function mergeASTResultsIntoVDD(tab, results) {
                missing key is "nothing was observed" and becomes null here, and a PRESENT one is asserted to
                be the non-empty record it can only be. */
             requiredHeaders: callSite.headers === undefined ? null : astHeaderRecord(callSite.headers),
-            /* THE PATH-PARAM EXAMPLES, FROM THE RECORD THAT ACTUALLY HOLDS THEM. The rich per-doc method
-               schema is EVICTED after review, so without a copy on the flat endpoint the cumulative moat
-               loses the real learned values — the whole point of the tool. It reads the METHOD lib/learn.js
-               just registered, which now has TWO producers of a `location:"path"` parameter: endpoint.c
-               emits one per `{hole}` the forced execution interpolated into the address, carrying the
-               segment its concolic example computed, and the templated reconcile below folds in the concrete
-               segment of a live request that matched the template — the "orgId=acme-42" case. (Reading
-               `callSite.params` for `p.location === "path"` directly would work now that the producer states
-               it, and is still the wrong source: the values a live request taught belong to the method and
-               never reach the call-site record.) */
-            pathParams: (function () {
-              if (!_learned.method || !_learned.method.parameters) return null;   // dynamic URL: no method, no path template
-              var out = [];
-              for (var _pn in _learned.method.parameters) {
-                var _pd = _learned.method.parameters[_pn];
-                if (!_pd || _pd.location !== "path") continue;
-                /* THE OFFERABLE POOL ALONE, WHICH IS WHAT THIS FIELD IS FOR. `pathParams` is read by
-                   lib/send.js, which unions these into the Send form's value list AND takes `values[0]` as
-                   the prefilled `_exampleValue` — so a hole filled only on a forced arm would arrive as the
-                   address the reviewer sends, which is the exact failure the pool split exists to stop.
-                   NAMED RESIDUAL — a forced-only path example does not reach the FLAT record. WHAT IS NOT
-                   COVERED: this record survives the eviction of the per-document method schema (the comment
-                   above says why it exists at all), so after that eviction a `{hole}` whose every sighting
-                   was forced has no example anywhere, where before this it had one that was reported as
-                   derived. WHAT THE NEXT DIFF BUILDS: a second stated field beside `pathParams` on
-                   lib/endpoint-record.js's own record — its declaration, its absent value, and lib/send.js
-                   reading it into `_astForcedValues` rather than into the prefill. HOW ITS ABSENCE SHOWS: a
-                   templated address whose forced-arm segment is visible in the Send panel while the method
-                   schema is alive and gone from the moat afterwards — a finding that expires. */
-                var _vals = Array.isArray(_pd._astValidValues) ? _pd._astValidValues : [];
-                if (!_vals.length) continue;   // a templated hole nothing has filled yet is not an example
-                out.push({ name: _pn, values: _vals.slice(0, 20) });
-              }
-              return out.length ? out : null;
-            })(),
+            /* THE PATH-PARAM EXAMPLES, FROM THE RECORD THAT ACTUALLY HOLDS THEM — BOTH POOLS, because the
+               flat record is the one that is READ where the method record is not. It reads the METHOD
+               lib/learn.js just registered, which has TWO producers of a `location:"path"` parameter:
+               endpoint.c emits one per `{hole}` the forced execution interpolated into the address, carrying
+               the segment its concolic example computed, and the templated reconcile below folds in the
+               concrete segment of a live request that matched the template — the "orgId=acme-42" case.
+               (Reading `callSite.params` for `p.location === "path"` directly would work now that the
+               producer states it, and is still the wrong source: the values a live request taught belong to
+               the method and never reach the call-site record.)
+               THE SENTENCE THAT STOOD HERE SAID THE METHOD SCHEMA IS "EVICTED AFTER REVIEW", AND IT IS A
+               SCAR. The review-completion reclaim it named is deleted (offscreen-brain.js records why: this
+               zone holds no document bytes any more), the DocData that dies with the session is not what
+               lib/send.js reads, and the moat's own `discoveryDocs` are serialized WITH their doc — so the
+               flat record and the method schema have the same lifetime today. The flat record is still the
+               one this field must be complete on, and for a reason that does not depend on a lifetime: it is
+               what `netdiff --unused` counts, what crosses to the popup, and what lib/send.js falls back to
+               whenever the resolved schema does not DECLARE the hole (a partial path match, an address
+               unioned here from a document whose method lives in another bucket). On every one of those the
+               flat record is the whole statement, and half a statement about a shape is §@H's wrong report.
+               WHICH IS WHY THE FORCED POOL IS ITS OWN FIELD AND NOT A MEMBER OF THIS ONE. `pathParams` is
+               read by lib/send.js, which unions these into the Send form's value list AND takes `values[0]`
+               as the prefilled `_exampleValue`, so a hole filled only on a forced arm must not appear here —
+               it would arrive as the address the reviewer sends, which is the exact failure the pool split
+               exists to stop. It appears in `pathParamsForced` instead, where lib/popup-form.js renders it on
+               its own row as the real observation it is. */
+            pathParams: _astPathParamPool(_learned.method, "_astValidValues"),
+            pathParamsForced: _astPathParamPool(_learned.method, "_astForcedValues"),
             /* (No request body on THIS record. The body surface lands in the doc model: endpoint.c reads the
                request's own payload and lib/learn.js files its fields as `doc.schemas[…Request]` with
                `m.request.$ref` pointing at them, which is what lib/send.js's `requestBody` and the OpenAPI
@@ -328,21 +349,21 @@ function _mergeParamInto(ep, np) {
      is promoted out of our forced pool, and one it could only force is added to ours only where no document
      has computed it otherwise. Unioning the two pools independently would have re-created the defect the
      split exists to remove, in the one place it is invisible from either page — the moat, which is what
-     `netdiff --unused` counts and what a reviewer reads after the per-document schema has been evicted. */
-  const ev = Array.isArray(ep._astValidValues) ? ep._astValidValues : [];
-  const ef = Array.isArray(ep._astForcedValues) ? ep._astForcedValues : [];
-  const nv = Array.isArray(np._astValidValues) ? np._astValidValues : [];
-  const nf = Array.isArray(np._astForcedValues) ? np._astForcedValues : [];
-  for (const x of nv) {
-    const at = ef.indexOf(x);
-    if (at >= 0) ef.splice(at, 1);          // THE FOLD: a value some path computed unforced is not forced.
-    if (ev.indexOf(x) < 0) ev.push(x);
-  }
-  for (const x of nf) if (ev.indexOf(x) < 0 && ef.indexOf(x) < 0) ef.push(x);
-  if (ev.length) ep._astValidValues = ev;
+     `netdiff --unused` counts and what a reviewer reads without the per-document schema in front of it.
+     THE LAW IS NOT SPELLED HERE ANY MORE, AND THAT IS THE CHANGE. It was written out at this merge, again at
+     lib/learn.js's per-sighting merge, and a THIRD copy was about to be written at the flat endpoint records'
+     merge below — three private spellings of one rule, each correct on the day it was written and each free
+     to drift. `foldValuePools` is the one performance of it; what stays here is the one thing that IS this
+     record's own — how a method parameter spells an empty pool, which is an omitted key. */
+  const _folded = foldValuePools(
+    Array.isArray(ep._astValidValues) ? ep._astValidValues : [],
+    Array.isArray(ep._astForcedValues) ? ep._astForcedValues : [],
+    Array.isArray(np._astValidValues) ? np._astValidValues : [],
+    Array.isArray(np._astForcedValues) ? np._astForcedValues : []);
+  if (_folded.valid.length) ep._astValidValues = _folded.valid;
   /* AN EMPTIED FORCED POOL IS DELETED RATHER THAN LEFT AS `[]` — the last promotion out of it is exactly
      where the key would otherwise survive as an empty list, which is a third statement no reader has. */
-  if (ef.length) ep._astForcedValues = ef;
+  if (_folded.forced.length) ep._astForcedValues = _folded.forced;
   else if (Array.isArray(ep._astForcedValues)) delete ep._astForcedValues;
   /* THE EXAMPLE IS A COMPUTED VALUE AND ITS ABSENCE IS A STATEMENT (§RUN, DON'T MATCH: a param known only to
      satisfy a range gate has a SHAPE and no example). So an existing example is never overwritten and an
@@ -531,6 +552,51 @@ function _mergeResourcesInto(eres, nres, docKey) {
     }
   }
 }
+/* AN EMPTY PAIR, NAMED ONCE: what a record that has no such hole contributes to the fold below. */
+const _NO_HOLE_POOLS = Object.freeze({ valid: Object.freeze([]), forced: Object.freeze([]) });
+/* THE FLAT RECORDS' OWN HOLE MERGE — two sightings of ONE address, met at the moat, folded by the ONE law.
+   THIS IS THE THIRD MERGE OF THE SAME PAIR AND IT USED TO BE A PLAIN UNION OF ONE POOL. That was sound only
+   while the record HELD one pool: the union ran over `pathParams`, the forced pool did not exist on this
+   record, and a hole the run could only force reached the moat as a hole nothing had filled. Carrying the
+   second field without carrying the FOLD would have been the worse half of that — `_mergeParamInto` states
+   why in its own words, one record down: "Unioning the two pools independently would have re-created the
+   defect the split exists to remove, in the one place it is invisible from either page". A value one document
+   computed unforced and another could only force would then sit in both lists, and the Send panel would offer
+   it as one the app computes AND label it as one no client sends.
+   NEITHER SIDE'S ABSENCE IS INTERPRETED HERE: `endpointHolePairs` is the one walk that reads what a record
+   says about its holes, and it refuses everything but `null` and a list — so a record an older store wrote
+   short of a field crashes at the door it came through, rather than contributing a silence that reads here
+   exactly like "this document forced nothing".
+   THE RESULT IS RE-CHECKED, because this function WRITES a record the constructor did not build: it is the
+   one place the two lists are composed from two sources, so it is the one place their disjointness can be
+   broken, and `checkEndpointRecord` asserts it where it can still name this merge. */
+function _foldEndpointHolesInto(into, from, key) {
+  /* BOTH RECORDS READ AS PER-NAME PAIRS THROUGH THE ONE WALK (lib/endpoint-record.js), so this merge is a
+     fold of two RECORDS and not of four lists. */
+  const _a = endpointHolePairs(from, "lib/merge.js moat-folding the stored record for " + JSON.stringify(key));
+  const _b = endpointHolePairs(into, "lib/merge.js moat-folding this document's record for " + JSON.stringify(key));
+  const _folded = new Map();
+  /* A HOLE ONLY ONE SIDE HAS STILL GOES THROUGH THE FOLD, against an empty pair — one path, so there is no
+     shortcut in which a single-contributor hole skips the promotion the two-contributor one gets. A Map miss
+     here is not a field absence to interpret: the name came out of the UNION of the two key sets, so a miss
+     is the positive statement "the other record has no such hole", which is what an empty pair says. */
+  for (const name of new Set([..._a.keys(), ..._b.keys()])) {
+    const x = _a.has(name) ? _a.get(name) : _NO_HOLE_POOLS;
+    const y = _b.has(name) ? _b.get(name) : _NO_HOLE_POOLS;
+    _folded.set(name, foldValuePools(x.valid, x.forced, y.valid, y.forced));
+  }
+  const _project = (side) => {
+    const out = [];
+    for (const [name, p] of _folded)
+      if (p[side].length) out.push({ name: name, values: p[side].slice(0, PATH_PARAM_EXAMPLE_CAP) });
+    return out.length ? out : null;
+  };
+  into.pathParams = _project("valid");
+  into.pathParamsForced = _project("forced");
+  checkEndpointRecord(into, "lib/merge.js folding two documents' path-hole examples at the moat, key " +
+                            JSON.stringify(key));
+}
+
 function mergeToGlobal(tab) {
   // Central merge — EVERY analysis result (hot tab + cold frontier) funnels here, so guard the DocView contract
   // once: a malformed tab is a should-never-happen the callers must not construct, not a shape to defend against.
@@ -607,20 +673,7 @@ function mergeToGlobal(tab) {
      landed) never DROPS values a prior emit learned — the moat is monotonic. */
   for (const [k, v] of tab.endpoints) {
     var ge = globalStore.endpoints.get(k);
-    if (ge && (ge.pathParams || v.pathParams)) {
-      var _mp = new Map();
-      for (var _s of [ge.pathParams, v.pathParams]) {
-        // Absent on a side that has no filled path hole: this file writes null for that, and a record
-        // stored before the field existed carries nothing at all. Both mean "no examples from here".
-        if (!_s) continue;
-        for (var _pp of _s) {
-          var _cur = _mp.get(_pp.name) || new Set();
-          for (var _val of _pp.values) _cur.add(_val);
-          _mp.set(_pp.name, _cur);
-        }
-      }
-      v.pathParams = Array.from(_mp, function (e) { return { name: e[0], values: Array.from(e[1]).slice(0, 20) }; });
-    }
+    if (ge) _foldEndpointHolesInto(v, ge, k);
     globalStore.endpoints.set(k, v);
   }
   for (const [k, v] of tab.discoveryDocs) {

@@ -19,8 +19,10 @@
    observed this call attaching no header", which endpoint.c states in those words from its own side — it
    writes the `headers` key only when it has one, "because an endpoint with no learned header must not claim
    an empty requirement, which reads as 'needs nothing' rather than 'nothing was observed'". `pathParams:
-   null` MEANS "no templated hole has been filled with an example yet". `pageUrl: null` MEANS "no document
-   address was known when this was learned". The consumer reads each as itself.
+   null` MEANS "no templated hole has been filled with an OFFERABLE example yet" and `pathParamsForced: null`
+   MEANS "no hole was filled on a forced arm either" — see the pair's own paragraph below for why one field
+   could not state both. `pageUrl: null` MEANS "no document address was known when this was learned". The
+   consumer reads each as itself.
 
    WHAT HAS NO ABSENT VALUE, AND WHY THAT IS THE HALF THAT WAS BEING DEFAULTED. `url`, `method`, `host`,
    `path`, `service`, `source` and `firstSeen` are written on EVERY record by the one producer: `method` is
@@ -53,9 +55,43 @@ const ENDPOINT_ABSENT = Object.freeze({
   requiredHeaders: null,  // {name: {value|opaque}} the bundle was observed attaching; null = NONE OBSERVED,
                           // which is a different claim from `{}` ("this endpoint needs no header") and must
                           // stay distinguishable from it — endpoint.c omits its key for exactly that reason.
-  pathParams: null,       // [{name, values}] examples for the address's templated holes; null = no hole has
-                          // been filled yet. `[]` never reaches here: lib/merge.js writes null for it.
+  pathParams: null,       // [{name, values}] OFFERABLE examples for the address's templated holes; null = no
+                          // hole has been filled yet. `[]` never reaches here: lib/merge.js writes null for it.
+  pathParamsForced: null, // [{name, values}] the same holes at the one grade that must never be offered —
+                          // values EVERY sighting of which stood on a forced arm. null = the run forced
+                          // nothing into a hole. `[]` never reaches here, for the reason above.
 });
+
+/* WHY THE HOLES TAKE TWO FIELDS AND NOT ONE, AND WHY THE SECOND IS NOT A DUPLICATE OF THE FIRST.
+   `pathParams` is this record's only statement about what the run learned for a templated segment, and its
+   declared absence is a POSITIVE one: "no hole has been filled". For a hole every sighting of which stood on
+   a forced arm that statement is FALSE — the run filled it, from a real re-execution, and this record had no
+   way to say so, so it said the opposite. The two consumers acted on the opposite: lib/merge.js's moat union
+   carried nothing forward for that hole across documents or sessions, and lib/send.js's path-param literal
+   stated `_astForcedValues: null`, which lib/popup-form.js renders as "every value learned for this field was
+   computed on a path that stood on no forced arm" — the exact inverse of what was observed, in the surface a
+   reviewer reads. CLAUDE.md §@H calls that a WRONG report rather than a thin one, and it is: a shape that
+   drops one of its two facts is read as the positive claim that the fact is absent.
+
+   THE FIX IS A SECOND FIELD RATHER THAN A GRADE ON EACH ENTRY, which is the same choice `provenanceOffersExample`
+   settles one record down and for the identical reason: a consumer of `pathParams` must not be ABLE to be
+   handed a forced value, and a `{value, grade}` entry makes that a rule each of them has to remember. It is
+   also why the pair cannot collapse into one entry carrying two lists — lib/send.js requires a `pathParams`
+   entry to carry at least one value, precisely so a hole nothing filled cannot surface as if it had, and a
+   forced-ONLY hole has no offerable value to put there. So the hole appears in the second list and in
+   neither of the first's shapes.
+
+   A NAME MAY APPEAR IN BOTH LISTS AND A VALUE MAY NOT. One `{orgId}` legitimately has an offerable example
+   from one path and a forced one from another; the same STRING in both is the per-value fold not having
+   happened, which `checkEndpointRecord` asserts against below and `foldValuePools` is the one place that
+   performs. */
+
+/* HOW MANY EXAMPLES A HOLE CARRIES ON THE FLAT RECORD — one constant, because the two pools truncating at
+   different lengths would make "this pool ran out" and "this pool has no more" different questions with the
+   same appearance. It is a cap over what this record COPIES per hole, never over work: the values themselves
+   are the method parameter's, and dropping the tail of a copy truncates no path the solver would have taken.
+   It was the literal `20`, written twice in lib/merge.js. */
+const PATH_PARAM_EXAMPLE_CAP = 20;
 
 /* NO ABSENT VALUE. An endpoint with no address, no verb, no origin, no path, no service, no provenance or no
    first sighting is not an endpoint — a producer that cannot state one has nothing to register, so these are
@@ -144,6 +180,42 @@ function provenanceOffersExample(p) {
   return p !== "forced";
 }
 
+/* THE PER-VALUE FOLD ITSELF — most-observed, performed as a MOVE BETWEEN POOLS, spelled ONCE.
+   `mostObservedProvenance` folds the one claim a record makes about an ADDRESS. This is the same law over a
+   VALUE, and it is separate because the engine deliberately does not merge its two @H rows for one address:
+   the grade is part of the record's identity there, so the two rows' values meet on this side, in one bag,
+   and something has to decide which pool each lands in.
+   THE LAW: a value some path computed WITHOUT forcing anything is a value the app computes, whatever another
+   path had to force to reach it — so a promotion is one-way, out of the forced pool and into the offerable
+   one, never back. Membership IS the folded grade.
+   IT IS ONE FUNCTION BECAUSE IT IS ONE LAW AT FOUR MERGES, and a fold written per merge is a fold free to
+   disagree per merge. The four: lib/learn.js folding one sighting's values onto a method parameter,
+   lib/merge.js folding one document's parameter into the moat's, lib/merge.js folding two documents' flat
+   endpoint records, and lib/send.js folding the flat record's holes onto a resolved schema. The last two are
+   NEW seams, and the moat is exactly where a fourth private copy would have been invisible from either page.
+   IT RETURNS RATHER THAN MUTATES, because the three record shapes spell an EMPTY pool differently — a method
+   parameter omits the key, a FieldDef writes `null`, this record writes `null` — and that spelling belongs to
+   the record, not to the fold. Each caller writes its own absence; none of them decides the membership. */
+function foldValuePools(valid, forced, inValid, inForced) {
+  DCHECK(Array.isArray(valid) && Array.isArray(forced) && Array.isArray(inValid) && Array.isArray(inForced),
+         "the value-pool fold was handed something that is not a pool — every caller normalises its record's " +
+         "own spelling of an empty pool (an omitted key, `null`, an absent field) to `[]` BEFORE this point, " +
+         "because deciding what an absence means is the record's job and not the fold's, and a fold that " +
+         "guessed would answer for a producer that had gone silent");
+  const v = valid.slice(), f = forced.slice();
+  for (const x of inValid) {
+    const at = f.indexOf(x);
+    if (at >= 0) f.splice(at, 1);          // THE FOLD: most-observed wins, and it wins by MOVING.
+    if (v.indexOf(x) < 0) v.push(x);
+  }
+  /* AND THE OTHER DIRECTION IS NOT SYMMETRIC. An incoming FORCED value joins the forced pool only where no
+     pool already holds it: if the offerable pool has it, some path computed it unforced and the fold has
+     already been decided in that direction. Appending it anyway is how a value comes to sit in both, which
+     renders the same bytes twice under two contradictory claims. */
+  for (const x of inForced) if (v.indexOf(x) < 0 && f.indexOf(x) < 0) f.push(x);
+  return { valid: v, forced: f };
+}
+
 /* WHAT THE ENGINE'S PATH TO A LEARNED METHOD WAS WORTH — one fact, asked in ONE place, because TWO zones ask
    it. lib/popup-send.js asks it to tag the row and to count the methods a bucket reached only by forcing;
    lib/learn.js asks it of the CONCRETE record it is about to dissolve into a templated one, because that
@@ -171,6 +243,43 @@ function methodProvenance(m, where) {
          "`_astInferred` on every call site it registers, so this record has one half of that write and not " +
          "the other and the row would render with no grade, which a reviewer reads as `not forced`");
   return m._astProvenance;
+}
+
+/* THE RECORD'S TEMPLATED HOLES AS PER-NAME PAIRS — the ONE read of the two lists together, because a hole is
+   ONE question and its two pools are one answer. Every consumer that does anything but render needs both
+   sides of it: the moat's cross-document fold, and the Send panel's attach onto a resolved schema. Written
+   twice it would be two walks free to disagree about which list a name is looked up in first, and about what
+   an absent list contributes — and the second is the interesting one, because it is where a `||` would go.
+   `null` CONTRIBUTES AN EMPTY POOL, AND `undefined` IS NOT A SPELLING OF IT. Turning the record's stated
+   absence into `[]` HERE — once, at the record's own reader — is what lets `foldValuePools` refuse anything
+   that is not a pool. It is `null` and nothing else because `checkEndpointRecord` has already refused every
+   other form, including the missing key an older store writes: a walk that also accepted `undefined` would
+   be usable on a record nobody had checked, and would answer for it. */
+function endpointHolePairs(ep, where) {
+  const out = new Map();
+  const take = (field, side) => {
+    const list = ep[field];
+    DCHECK(list === null || Array.isArray(list),
+           "an endpoint's `" + field + "` is neither a list nor its stated absence (" + where + ") — this " +
+           "is the one walk of both hole lists, so every caller hands it a record `checkEndpointRecord` has " +
+           "passed, and a third form here means it did not");
+    if (list === null) return;
+    for (const pp of list) {
+      DCHECK(!!pp && typeof pp.name === "string" && Array.isArray(pp.values) && pp.values.length,
+             "an endpoint's `" + field + "` entry is not {name, values[]} with at least one value (" + where +
+             ") — lib/merge.js builds both lists from the method parameters whose location is \"path\" and " +
+             "SKIPS any hole nothing filled at that grade, so an empty one would surface a templated segment " +
+             "as if a value had been learned for it");
+      let cur = out.get(pp.name);
+      if (!cur) { cur = { valid: [], forced: [] }; out.set(pp.name, cur); }
+      /* CONCAT AND NOT A FOLD: within ONE record the two lists are already disjoint — `checkEndpointRecord`
+         asserts exactly that — so this side composes and the caller's fold is the only place that decides. */
+      cur[side] = cur[side].concat(pp.values);
+    }
+  };
+  take("pathParams", "valid");
+  take("pathParamsForced", "forced");
+  return out;
 }
 
 /* THE KEY — THE NAME THIS RECORD IS FILED UNDER — MINTED HERE AND SPELLED NOWHERE ELSE.
@@ -335,4 +444,36 @@ function checkEndpointRecord(ep, where) {
          "an endpoint record's `pathParams` is neither a list of examples nor a stated absence (" + where +
          ") — null MEANS no templated hole has been filled, which is what §@H forbids being rendered as a " +
          "value the code computed");
+  DCHECK(ep.pathParamsForced === null || Array.isArray(ep.pathParamsForced),
+         "an endpoint record's `pathParamsForced` is neither a list of examples nor a stated absence (" +
+         where + ") — `null` MEANS the run forced nothing into a templated hole, and a record that cannot " +
+         "say that has to say \"nothing was learned\" instead, which is the inverse of what was observed. " +
+         "`undefined` here is the IndexedDB door and not the producer: a store written before this field " +
+         "existed carries no such key, and it must crash rather than be read as the absence, because " +
+         "\"stored by an older build\" and \"this run forced nothing\" are different facts and only one of " +
+         "them is something the moat observed");
+  _checkPathParamPools(ep, where);
+}
+
+/* THE TWO HOLE POOLS ARE DISJOINT PER (NAME, VALUE), AND THAT DISJOINTNESS *IS* THE FOLD — the same
+   assertion lib/field-def.js makes over a FieldDef's two pools, at the one record that outlives the method
+   schema those pools were folded on. A value in both is not a duplicate to tidy: it is `foldValuePools`
+   having been bypassed by a producer that appended where it had to promote, and the Send panel would offer
+   the value as one the app computes AND label it as one no client sends. */
+function _checkPathParamPools(ep, where) {
+  if (ep.pathParams === null || ep.pathParamsForced === null) return;
+  const offerable = new Map();
+  for (const pp of ep.pathParams) offerable.set(pp.name, pp.values);
+  for (const pp of ep.pathParamsForced) {
+    /* A NAME IN ONE LIST AND NOT THE OTHER IS THE ORDINARY CASE and says nothing — a hole reached at one
+       grade only. `has` and not a truthiness test, because a Map miss is the question being asked here. */
+    if (!offerable.has(pp.name)) continue;
+    const other = offerable.get(pp.name);
+    DCHECK(!pp.values.some((v) => other.indexOf(v) >= 0),
+           "an endpoint record carries the same learned value for `" + pp.name + "` in both the offerable " +
+           "and the forced hole pool (" + where + ") — membership of one list or the other IS this record's " +
+           "spelling of the per-value grade fold, so a value in both means a producer unioned the pools " +
+           "independently instead of folding them, which is the defect the split exists to remove in the one " +
+           "place it is invisible from either page");
+  }
 }

@@ -440,25 +440,28 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          producer writes each pool's key only where the pool is NON-EMPTY — which is the vocabulary
          `_astValidValues` already speaks here and which lib/send.js's two literals normalise to `null` on the
          way out. A second spelling would be two rules. */
-      const valid = Array.isArray(target._astValidValues) ? target._astValidValues.slice() : [];
-      const forced = Array.isArray(target._astForcedValues) ? target._astForcedValues.slice() : [];
-      const before = valid.length;
-      for (const vv of validValues) {
-        const s = String(vv);
-        if (_offerable) {
-          const _at = forced.indexOf(s);
-          if (_at >= 0) forced.splice(_at, 1);   // THE FOLD: most-observed wins, and it wins by MOVING.
-          if (valid.indexOf(s) < 0) valid.push(s);
-        } else if (valid.indexOf(s) < 0 && forced.indexOf(s) < 0) {
-          forced.push(s);
-        }
-      }
-      if (valid.length > before) merged = true;
+      /* THE LAW IS NOT SPELLED HERE ANY MORE — `foldValuePools` (lib/endpoint-record.js) performs it, and
+         this was one of THREE private spellings of it, with a fourth about to be written at the flat endpoint
+         records' merge. What stays here is what belongs to THIS record and to this producer: the vocabulary
+         above, and the stringification below. */
+      /* THE INCOMING VALUES ARE COERCED BEFORE THE FOLD AND NOT INSIDE IT. A pool's identity is the STRING —
+         two sightings computing the same bytes are two paths to ONE value, which is why the fold compares by
+         it — and the engine's @H param record carries numbers as well as strings, so the coercion is this
+         producer's own and happens where its values arrive. A fold that coerced would be deciding a record's
+         vocabulary for it, which is exactly what it refuses to do for the empty pool. */
+      const _in = validValues.map(String);
+      const _before = Array.isArray(target._astValidValues) ? target._astValidValues.length : 0;
+      const _f = foldValuePools(
+        Array.isArray(target._astValidValues) ? target._astValidValues : [],
+        Array.isArray(target._astForcedValues) ? target._astForcedValues : [],
+        _offerable ? _in : [], _offerable ? [] : _in);
+      const valid = _f.valid;
+      if (valid.length > _before) merged = true;
       if (valid.length) target._astValidValues = valid;
       /* AN EMPTIED FORCED POOL IS DELETED RATHER THAN LEFT AS `[]`, because the last promotion out of it is
          exactly the case where the key would otherwise survive as an empty list — and an empty list here is
          a THIRD statement beside "no forced value was observed" and "these were", which no reader has. */
-      if (forced.length) target._astForcedValues = forced;
+      if (_f.forced.length) target._astForcedValues = _f.forced;
       else if (Array.isArray(target._astForcedValues)) delete target._astForcedValues;
       // (No `customEnum` test: nothing writes that flag — see _applyStatsToField. An existing `enum` still
       //  wins, which is the real condition, since a declared one is a fact about the API description.)

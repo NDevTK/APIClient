@@ -1936,8 +1936,12 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
        contentTypes. The two branches that stood here guessed past that producer anyway.
        `schema.endpoint.contentType` read a name the endpoint projection DELIBERATELY stopped
        carrying: send.js's own comment lists contentType among five fields it dropped because
-       lib/merge.js — the extension's only `endpoints.set` — writes {url, method, host, path,
-       service, source, pageUrl, requiredHeaders, pathParams, firstSeen} and never a content type.
+       lib/merge.js — the extension's only `endpoints.set` — writes exactly the names
+       lib/endpoint-record.js declares, and a content type is not among them. (The names are not
+       transcribed here: that file's own header records that this list had been hand-copied into
+       seven comments, and a list copied is a list that disagrees with the producer the first time
+       the producer moves. `makeEndpointRecord` refuses any name it does not carry, so the question
+       "does an endpoint have this field" is answered by reading it and never by reading this.)
        So that branch had been reading `undefined` off a six-field allowlist, and the
        "application/json" tail behind it restated send.js's own first substitute where nothing
        could reach it. A reader whose producer was deleted is dead code that reads as a feature;

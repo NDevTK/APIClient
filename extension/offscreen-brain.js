@@ -1811,8 +1811,8 @@ async function buildExportRequest(msg) {
   /* API key: the user's explicit choice from the Send panel's key selector, which the popup posts with every
      export. THERE IS NO ENDPOINT ARM. `else if (ep?.apiKey) { ep.apiKeySource === "url" ? … }` stood here and
      neither field exists on an endpoint record — lib/merge.js, the extension's only `endpoints.set`, writes
-     {url, method, host, path, service, source, pageUrl, requiredHeaders, pathParams, firstSeen} — so the arm
-     could not fire and the whole `ep` lookup existed to feed it. */
+     exactly the names lib/endpoint-record.js declares — so the arm could not fire and the whole `ep` lookup
+     existed to feed it. */
   if (msg.apiKeyOverride && !msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
     if (msg.apiKeyOverride.source === "url") {
       parsedUrl.searchParams.set("key", msg.apiKeyOverride.key);

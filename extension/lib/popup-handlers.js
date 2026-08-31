@@ -130,9 +130,9 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       const svc = ep.service;
       /* THE KEY COMES FROM THE KEY STORE, AND ITS INJECTION POINT IS THE ONE IT WAS OBSERVED IN. `if (ep.apiKey)
          { ep.apiKeySource === "url" ? … : X-Goog-Api-Key }` stood here and NEITHER name exists on an endpoint
-         record: lib/merge.js is the extension's only `endpoints.set` and writes {url, method, host, path,
-         service, source, pageUrl, requiredHeaders, pathParams, firstSeen}. Both reads were undefined on every
-         endpoint, so the probe went out with no key while looking like it was choosing where to put one.
+         record: lib/merge.js is the extension's only `endpoints.set` and writes exactly the names
+         lib/endpoint-record.js declares. Both reads were undefined on every endpoint, so the probe went out
+         with no key while looking like it was choosing where to put one.
          collectKeysForService is the real producer (the search lib/send.js uses), and lib/keys.js records WHERE
          each key was seen — "url" or "header:<name>". A key seen only in a response body has no observed
          injection point and none is invented: a guessed `X-Goog-Api-Key` on a third-party host is a Google

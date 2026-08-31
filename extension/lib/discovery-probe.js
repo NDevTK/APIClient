@@ -727,9 +727,9 @@ async function probeEndpoint(documentId, endpointKey) {
 
   /* THE FIFTH COPY OF A DEAD PAIR. `if (ep.apiKey) { ep.apiKeySource === "url" ? … : X-Goog-Api-Key }` stood
      here and neither name exists on an endpoint record — lib/merge.js is the only `endpoints.set` and writes
-     {url, method, host, path, service, source, pageUrl, requiredHeaders, pathParams, firstSeen}. Both reads
-     were undefined on every endpoint, so this probe went out with no key while looking like it chose where to
-     put one. Same producer and same rule as DISCOVER_SERVICE: collectKeysForService finds the key, lib/keys.js
+     exactly the names lib/endpoint-record.js declares. Both reads were undefined on every endpoint, so this
+     probe went out with no key while looking like it chose where to put one.
+     Same producer and same rule as DISCOVER_SERVICE: collectKeysForService finds the key, lib/keys.js
      recorded WHERE it was seen, and a key with no observed injection point gets none invented — a guessed
      X-Goog-Api-Key on a third-party host is a fabricated request, not a probe. */
   DCHECK(typeof ep.service === "string",

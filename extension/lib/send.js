@@ -291,23 +291,30 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
     }
   }
 
-  // AST-learned PATH-PARAM examples persisted on the endpoint (they survive doc eviction, unlike the rich
-  // per-document method schema resolveEndpointSchema otherwise reads). Surface them so the reviewer sees the
-  // REAL learned values (e.g. orgId=acme-42, the logged-in surface the tool exists to learn) even after the
-  // per-doc schema was evicted — a learned-but-invisible value defeats the point.
-  if (ep && Array.isArray(ep.pathParams) && ep.pathParams.length) {
+  /* AST-LEARNED PATH-HOLE EXAMPLES OFF THE FLAT ENDPOINT RECORD — BOTH POOLS. The rich per-document method
+     schema above is the better source when it declares the hole; this is what the panel has when it does not,
+     which is a real and reachable state rather than a lifetime story: the discovery match is by PATH, so a
+     partial match resolves a method that declares other segments, and an address the moat unioned from
+     another document carries holes whose method lives in a bucket this service's doc does not hold. On every
+     one of those the flat record is the WHOLE statement about what the run learned for the segment.
+     WHICH IS WHY THE FORCED POOL HAD TO REACH HERE, and the sentence that stood here — "they survive doc
+     eviction" — is a scar of a reclaim that is deleted (offscreen-brain.js records it), not the reason. The
+     reason is §@H's: a shape states provenance AND domain, and this block used to state `_astForcedValues:
+     null` for every hole it declared, which lib/popup-form.js renders as "every value learned for this field
+     was computed on a path that stood on no forced arm". For a hole the run could only fill by forcing a gate
+     that is the INVERSE of what was observed — a wrong report, not a thin one — and the value the run did
+     compute reached no reviewer at all. */
+  const _epHoles = ep ? endpointHolePairs(ep, "lib/send.js resolving the Send-panel schema for " +
+                                              JSON.stringify(endpointKey)) : null;
+  if (_epHoles && _epHoles.size) {
     parameters = parameters || {};
-    for (const pp of ep.pathParams) {
-      DCHECK(pp && typeof pp.name === "string" && Array.isArray(pp.values) && pp.values.length,
-             "an endpoint's pathParams entry is not {name, values[]} with at least one value — lib/merge.js " +
-             "builds it from the method parameters whose location is \"path\" and skips any hole nothing has " +
-             "filled, so an empty one would surface a templated segment as if a value had been learned for it");
+    for (const [_hn, _hp] of _epHoles) {
       /* A NAME THE RESOLVED SCHEMA DOES NOT DECLARE IS NOT A HOLE — it is the schema stating it has no such
          parameter, and a templated path segment the engine learned a value for is one the panel must show
-         anyway. So the miss is answered by DECLARING the parameter out of what this `pathParams` entry
-         already states, never by defaulting one into existence behind a `||`: `location` is "path" because
-         that is the list the entry came from, `required` is true because a templated segment with no value
-         does not produce a URL at all, and `type` is "string" because a path segment IS the URL's own bytes.
+         anyway. So the miss is answered by DECLARING the parameter out of what this hole's entry already
+         states, never by defaulting one into existence behind a `||`: `location` is "path" because that is
+         the list the entry came from, `required` is true because a templated segment with no value does not
+         produce a URL at all, and `type` is "string" because a path segment IS the URL's own bytes.
          Each is a fact about a path parameter rather than a guess about this one — §RUN, DON'T MATCH: what
          is surfaced is what merge.js observed plus what the URL grammar determines. */
       /* AND IT DECLARES THE WHOLE RECORD, NOT THE FIVE FIELDS IT HAS AN INTERESTING ANSWER FOR. This literal
@@ -323,30 +330,23 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          NULL IS A POSITIVE STATEMENT AND IT IS THE TRUE ONE. A path parameter's domain is not unknown, it is
          EMPTY: nothing observed a discovery declaration for this segment, so there is no enum, no format, no
          range, no ordering bound and no disproved-value list to report — the same `null` lib/merge.js writes
-         for a claim nothing has filled. `_astValidValues` is deliberately not here: the loop below assigns it
-         unconditionally out of `pp.values`, and pre-declaring it would only give that assignment something to
-         overwrite. */
-      const declared = Object.prototype.hasOwnProperty.call(parameters, pp.name);
-      const cur = declared ? parameters[pp.name]
-                           : { name: pp.name, customName: false, number: null, type: "string", location: "path",
+         for a claim nothing has filled. BOTH POOLS ARE PRE-DECLARED AND NEITHER IS SPECIAL: the fold below
+         reads each one back before it writes it, so a literal that named only one of them would be a producer
+         that speaks half this record's vocabulary — which is the asymmetry that stood here, and it was the
+         half the endpoint had no way to fill. */
+      const declared = Object.prototype.hasOwnProperty.call(parameters, _hn);
+      const cur = declared ? parameters[_hn]
+                           : { name: _hn, customName: false, number: null, type: "string", location: "path",
                                required: true, description: "AST-learned path segment",
                                format: null, enum: null,
                                _requiredConfidence: null, _detectedEnum: false,
                                _defaultValue: null, _defaultConfidence: null, _range: null,
                                _exampleValue: null, _exampleValueSource: null,
                                _excludedValues: null, _bounds: null, _predicates: null,
-                               /* `_astForcedValues` IS PRE-DECLARED AND `_astValidValues` IS NOT, and the
-                                  asymmetry is the loop below: it assigns the offerable pool unconditionally
-                                  out of `pp.values` (pre-declaring it would only give that assignment
-                                  something to overwrite), while nothing here fills the forced pool — the
-                                  flat endpoint record does not carry one yet, which lib/merge.js's
-                                  `pathParams` names as its residual. `null` is the true statement for this
-                                  producer meanwhile, and it is STATED rather than left absent so both
-                                  literals speak one vocabulary. */
                                _astForcedValues: null,
                                _astValidValues: null };
       DCHECK(cur && typeof cur === "object",
-             "the resolved schema declares `" + pp.name + "` as something that is not a parameter record — " +
+             "the resolved schema declares `" + _hn + "` as something that is not a parameter record — " +
              "resolveEndpointSchema builds this map out of parameter declarations, so a non-object here is " +
              "that build broken and a learned path value is about to be attached to it");
       /* `null` IS "NOTHING HAS BEEN LEARNED FOR THIS PARAMETER YET", AND IT IS THE ONLY SPELLING OF IT.
@@ -361,17 +361,29 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          Two spellings of one fact with an assert that knew one of them is the defaulted-field defect turned
          inside out: not a hole silently filled, but a legitimate value refused. The record now says `null`
          from both producers, so `undefined` here means a producer stopped writing the field. */
-      const priorVals = cur._astValidValues;
-      DCHECK(priorVals === null || Array.isArray(priorVals),
-             "a parameter's `_astValidValues` is neither null nor an array — resolveEndpointSchema's two " +
-             "parameter literals both write it (null when nothing was observed, the union otherwise), so a " +
-             "third spelling is one of them broken and the panel would render a learned-value list nobody " +
-             "observed");
-      const vals = priorVals === null ? [] : priorVals.slice();
-      for (const val of pp.values) if (vals.indexOf(val) < 0) vals.push(val);
-      cur._astValidValues = vals;
-      if ((cur._exampleValue === undefined || cur._exampleValue === null) && vals.length) { cur._exampleValue = vals[0]; cur._exampleValueSource = "ast"; }
-      parameters[pp.name] = cur;
+      const priorVals = cur._astValidValues, priorForced = cur._astForcedValues;
+      DCHECK((priorVals === null || Array.isArray(priorVals)) &&
+             (priorForced === null || Array.isArray(priorForced)),
+             "a parameter's `_astValidValues`/`_astForcedValues` is neither null nor an array — " +
+             "resolveEndpointSchema's two parameter literals both write both (null when nothing was observed, " +
+             "the pool otherwise), so a third spelling is one of them broken and the panel would render a " +
+             "learned-value list nobody observed, or a forced one as offerable");
+      /* THE ATTACH IS A FOLD AND NOT TWO UNIONS, which is the whole reason `foldValuePools` exists. This is
+         the FOURTH place two sightings of one value meet — the schema's pools, from the method record, and
+         the endpoint's, from a record that may have been unioned across documents and sessions — and the two
+         can legitimately disagree about a value's grade. Unioning each pool into its namesake would then put
+         the same string in both, which lib/field-def.js's own disjointness DCHECK rejects at makeFieldDef and
+         which the panel would render as one value offered as the app's and labelled as no client's. */
+      const _f = foldValuePools(priorVals === null ? [] : priorVals,
+                                priorForced === null ? [] : priorForced, _hp.valid, _hp.forced);
+      /* AN EMPTY POOL IS WRITTEN `null`, WHICH IS THIS MAP'S ONE SPELLING OF "nothing was learned at this
+         grade" — the same one both literals above declare. A forced-only hole therefore leaves
+         `_astValidValues: null` rather than `[]`, and there is nothing for the prefill below to take, which
+         is exactly right: §@H permits a domain-annotated shape with no example and forbids inventing one. */
+      cur._astValidValues = _f.valid.length ? _f.valid : null;
+      cur._astForcedValues = _f.forced.length ? _f.forced : null;
+      if ((cur._exampleValue === undefined || cur._exampleValue === null) && _f.valid.length) { cur._exampleValue = _f.valid[0]; cur._exampleValueSource = "ast"; }
+      parameters[_hn] = cur;
     }
     if (source === "none") source = "ast";
   }
@@ -386,7 +398,8 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
     contentTypes,
     chains,
     /* WHAT AN ENDPOINT RECORD ACTUALLY HAS. lib/merge.js holds the only `endpoints.set` in the extension and
-       writes {url, method, host, path, service, source, pageUrl, requiredHeaders, pathParams, firstSeen}.
+       writes exactly the names lib/endpoint-record.js declares — read them THERE, because that file's header
+       records what transcribing them costs and `makeEndpointRecord` refuses anything else.
        Five more names were projected here — apiKey, apiKeySource, origin, referer, contentType — and no
        producer writes any of them onto an endpoint: lib/response-decode.js does read those four headers off
        a live request, but it puts them on the REQUEST LOG entry, which is a different record. So the panel
