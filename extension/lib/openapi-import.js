@@ -244,13 +244,23 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
     } else {
       rootUrl = `${scheme}://${host}${basePath}`;
     }
-  } else if (openapi.servers && openapi.servers.length > 0) {
-    rootUrl = openapi.servers[0].url || "";
+  } else if (fdDocRecord(fdDocList(openapi.servers) === null ? null : openapi.servers[0]) !== null) {
+    /* `servers: [null]` READ `.url` OFF NULL — a TypeError out of the trusted zone on a handed file. A
+       non-record server entry describes no server, so the whole branch is refused and the `else` below
+       resolves the root against the URL the spec was fetched from, which is what a document naming no
+       server has said. */
+    const server = openapi.servers[0];
+    const serverUrl = fdDocString(server.url);
+    rootUrl = serverUrl === null ? "" : serverUrl;
     // Interpolate server URL variables with their defaults
-    const vars = openapi.servers[0].variables;
-    if (vars) {
-      for (const [vName, vDef] of Object.entries(vars)) {
-        rootUrl = rootUrl.split(`{${vName}}`).join(vDef.default || vName);
+    const vars = fdDocRecord(server.variables);
+    if (vars !== null) {
+      for (const [vName, rawV] of Object.entries(vars)) {
+        // `variables: {v: null}` names a variable and describes it not at all; its own name is then the
+        // only thing the document said about it, which is what the existing fallback already substitutes.
+        const vDef = fdDocRecord(rawV);
+        const vDefault = vDef === null ? null : fdDocString(vDef.default);
+        rootUrl = rootUrl.split(`{${vName}}`).join(vDefault === null ? vName : vDefault);
       }
     }
     // Resolve relative server URLs against source URL
@@ -268,13 +278,20 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
   // Normalize: ensure trailing slash for consistent URL construction
   if (!rootUrl.endsWith("/")) rootUrl += "/";
 
+  /* THE INFO BLOCK IS THE HANDED FILE'S TOO. `info: {title: 7}` called `.toLowerCase()` on a number and
+     threw out of the trusted zone; refused, a document that titled itself with a non-string has titled
+     itself with nothing, and the names below are what this converter calls a document that said none. */
+  const info = fdDocRecord(openapi.info) === null ? {} : openapi.info;
+  const infoTitle = fdDocString(info.title);
+  const infoVersion = fdDocString(info.version);
+  const infoDesc = fdDocString(info.description);
   const doc = {
     kind: "discovery#restDescription",
     name:
-      openapi.info?.title?.toLowerCase().replace(/[^a-z0-9]/g, "_") || "api",
-    version: openapi.info?.version || "v1",
-    title: openapi.info?.title || "Universal API",
-    description: openapi.info?.description || "Converted from OpenAPI",
+      (infoTitle === null ? "" : infoTitle.toLowerCase().replace(/[^a-z0-9]/g, "_")) || "api",
+    version: infoVersion === null ? "v1" : infoVersion,
+    title: infoTitle === null ? "Universal API" : infoTitle,
+    description: infoDesc === null ? "Converted from OpenAPI" : infoDesc,
     rootUrl,
     servicePath: "",
     baseUrl: rootUrl,
@@ -338,10 +355,16 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
   }
 
   // Convert paths to methods, grouped by tag or path prefix
-  for (const [path, pathDef] of Object.entries(openapi.paths || {})) {
-    const pathParams = pathDef.parameters || [];
+  /* `paths` AND EACH PATH ITEM ARE THE HANDED FILE'S. `paths: {"/p": null}` read `.parameters` off null and
+     threw out of the trusted zone; a non-record path item describes no operations, so it is skipped, which
+     is what that document states about that path. */
+  const paths = fdDocRecord(openapi.paths) === null ? {} : openapi.paths;
+  for (const [path, rawPathDef] of Object.entries(paths)) {
+    const pathDef = fdDocRecord(rawPathDef);
+    if (pathDef === null) continue;
+    const pathParams = pathDef.parameters;
 
-    for (const [method, opDef] of Object.entries(pathDef)) {
+    for (const [method, rawOpDef] of Object.entries(pathDef)) {
       // OpenAPI's spec-defined verbs: get/put/post/delete/options/head/patch/trace.
       // The previous restriction to 5 silently dropped HEAD/OPTIONS/TRACE
       // methods on import, causing method count drift on roundtrip.
@@ -353,13 +376,27 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
         continue;
       }
 
+      /* `get: null` IS A VERB NAMING NO OPERATION — refused rather than read through. */
+      const opDef = fdDocRecord(rawOpDef);
+      if (opDef === null) continue;
+
+      /* THE METHOD'S NAME AND ITS RESOURCE ARE BOTH THE HANDED FILE'S TEXT, AND BOTH WERE TAKEN RAW.
+         `operationId: {}` became the method literally KEYED "[object Object]" — a name no document wrote,
+         stringified into the discovery doc where it reads exactly like one that did. `tags: [7]` and
+         `tags: [{}]` called `.toLowerCase()` on the value and threw out of the trusted zone instead.
+         Refused, both fall to the answer that was always beneath them: the path's own first segment names
+         the resource, and verb_path names the operation, which is what this converter calls an operation a
+         document did not name. */
+      const opId = fdDocString(opDef.operationId);
       let methodName =
-        opDef.operationId ||
+        (opId === null ? "" : opId) ||
         `${method.toLowerCase()}_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
       // Group by first tag or first path segment
+      const tagList = fdDocList(opDef.tags);
+      const firstTag = tagList === null || tagList.length === 0 ? null : fdDocString(tagList[0]);
       const tag =
-        (opDef.tags && opDef.tags[0]) ||
+        (firstTag === null ? "" : firstTag) ||
         path.split("/").filter(Boolean)[0] ||
         "default";
       const resourceName = tag.toLowerCase().replace(/[^a-z0-9_]/g, "_");
@@ -376,18 +413,21 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
       // If the export added an x-operation discriminator to disambiguate
       // multiple ops on the same (path, verb), prefer x-original-path so
       // the resulting discovery doc keeps the real URL path.
-      let realPath;
-      if (opDef["x-original-path"]) {
-        realPath = opDef["x-original-path"];
-      } else {
+      /* `x-original-path: 7` REACHED `.startsWith` AND THREW. It is our OWN export's extension key, but it
+         arrives on a file anyone may have edited, so it is refused like every other read here — and a
+         non-string one names no path, which leaves the real path the one this entry is keyed by. */
+      const origPath = fdDocString(opDef["x-original-path"]);
+      const realPath = origPath !== null && origPath !== ""
+        ? origPath
         // Strip any `?x-operation=…` synthetic suffix from the path.
-        realPath = path.replace(/[?&]x-operation=[^&]*/g, "").replace(/\?$/, "");
-      }
+        : path.replace(/[?&]x-operation=[^&]*/g, "").replace(/\?$/, "");
+      const opDesc = fdDocString(opDef.description);
+      const opSummary = fdDocString(opDef.summary);
       const m = {
         id: methodName,
         path: realPath.startsWith("/") ? realPath.substring(1) : realPath,
         httpMethod: method.toUpperCase(),
-        description: opDef.description || opDef.summary || "",
+        description: (opDesc === null ? "" : opDesc) || (opSummary === null ? "" : opSummary) || "",
         parameters: {},
         request: null,
         response: null,
