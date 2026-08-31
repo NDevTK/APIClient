@@ -51,18 +51,37 @@ static int g_set_value_id = -1, g_item_id = -1, g_contains_id = -1, g_add_id = -
    name, and the CONTENT ATTRIBUTE that member is a view over. `classList` was the only one and its attribute
    was hardcoded inside list_owner, which is a second implementation of this file waiting to be written: a
    `relList` is the SAME object over `rel`, and `sandbox` the same over `sandbox`. A member and its attribute
-   cannot drift because installing a member resolves it through this list. */
+   cannot drift because installing a member resolves it through this list.
+   `htmlFor` IS ONE OF THESE AND WAS A `DOMString` MIRROR ON HTMLOutputElement — a wrong VALUE and not a lenient
+   reading, because HTML §4.10.12 The output element declares `[SameObject, PutForwards=value, Reflect="for"]
+   readonly attribute DOMTokenList htmlFor`, so `o.htmlFor.add("x")` threw a TypeError on a string and
+   `o.htmlFor.contains(t)` answered by SUBSTRING where §7.1 answers by token. The two `htmlFor` members are not
+   one member read twice: §4.10.4 The label element's is `[CEReactions, Reflect="for"] attribute DOMString`, a
+   plain mirror over the same attribute NAME, so a table keyed on the member name alone would have to choose
+   one answer for both interfaces. That is why an interface's row list is what decides, and why the label's row
+   stays in core/html/html_element.c's R_LABEL. */
 #define TOKEN_LIST_REFLECTIONS(X) \
     X(TL_CLASS,   "classList", "class")   \
     X(TL_REL,     "relList",   "rel")     \
     X(TL_SIZES,   "sizes",     "sizes")   \
-    X(TL_SANDBOX, "sandbox",   "sandbox")
+    X(TL_SANDBOX, "sandbox",   "sandbox") \
+    X(TL_FOR,     "htmlFor",   "for")
 #define TL_ID(id, member, attr)     id,
 #define TL_MEMBER(id, member, attr) member,
 #define TL_ATTR(id, member, attr)   attr,
+#define TL_UNSET(id, member, attr)  -1,
 enum { TOKEN_LIST_REFLECTIONS(TL_ID) TL_N };
 static const char *const TL_MEMBERS[TL_N] = { TOKEN_LIST_REFLECTIONS(TL_MEMBER) };
 static const char *const TL_ATTRS[TL_N] = { TOKEN_LIST_REFLECTIONS(TL_ATTR) };
+/* WEB IDL §3.3.10 [PutForwards]'s setter, ONE PER REFLECTION rather than one shared: §3.7.6 Attributes' step
+   4.5.8.1 is `Let Q be ? Get(jsValue, id)` and `id` is the MEMBER'S OWN name, so a single declaration would
+   forward every one of these through whichever member it happened to be declared for — `iframe.sandbox = "x"`
+   reading `iframe.classList` and setting the CLASS. Sized off TL_N so the day a sixth reflection joins the list
+   above there is no second count to keep in step. Declared once per AGENT, like every other id here, and it
+   starts at the SAME -1 the scalar ids above do — a static int array would start at 0, which is a VALID pool
+   id, so the install's "was this declared?" DCHECK would read a member declared before init ran as one that
+   was. The unset row expands off the one list for the same reason the count does. */
+static int g_put_forwards_id[TL_N] = { TOKEN_LIST_REFLECTIONS(TL_UNSET) };
 
 /* ONE [SameObject] CACHE SLOT PER REFLECTION, because `a.relList === a.relList` and `a.classList ===
    a.classList` are two identities on the same element and one slot would hand the second reader the first
@@ -676,9 +695,19 @@ void dom_token_list_install_reflection(JSContext *ctx, JSValueConst proto, const
        said so — and naming the table cell instead said, to anything reading this line, that a call installs all
        four of §7.1's reflections on whichever prototype it was handed. Which member and which prototype are
        both the CALLER's, and an install a reader cannot attribute is an install a reader cannot review. */
+    /* AND IT IS INSTALLED WITH A SETTER, because every one of these is `[PutForwards=value]` and a `readonly`
+       IDL attribute carrying that extended attribute HAS one — Web IDL §3.7.6 Attributes' create-an-attribute-
+       setter takes its 4.5.8 branch for exactly this case. Installing `-1` made `el.classList = "a b"` a SILENT
+       NO-OP on a non-strict page and a TypeError on a strict one, where a browser sets the list's `value` and
+       therefore the content attribute; the same was true of `relList`, `sizes` and `sandbox`. The forwarding is
+       core/idl_args.c's ONE machine parameterised by the (id, forwardId) pair — nothing about it is this
+       component's algorithm — and the pair is (this member's name, "value") for all five. */
     for (i = 0; i < TL_N; i++)
         if (!strcmp(TL_MEMBERS[i], member)) {
-            idl_install_accessor(ctx, proto, member, js_el_token_list, i, -1);
+            DCHECK(g_put_forwards_id[i] >= 0,
+                   "a token-list reflection was installed before dom_token_list_init declared its "
+                   "[PutForwards=value] setter — §3.7.6's 4.5.8 branch is the member's whole write half");
+            idl_install_accessor(ctx, proto, member, js_el_token_list, i, g_put_forwards_id[i]);
             return;
         }
     DFAIL("an interface asked for a token-list reflection §7.1 does not name — the member name and the content "
@@ -695,6 +724,10 @@ void dom_token_list_init(JSContext *ctx)
         for (i = 0; i < TL_N; i++) {
             g_key[i] = JS_NewSymbol(ctx, TL_MEMBERS[i], false);
             CHECK(!JS_IsException(g_key[i]), "a DOMTokenList [SameObject] slot key could not be allocated");
+            /* §3.3.10 [PutForwards=value] — the pair is (this member's name, "value") and the machine is
+               core/idl_args.c's. Declared in the SAME loop as the slot key so a reflection added to the list
+               above cannot gain an identity slot and miss its write half. */
+            g_put_forwards_id[i] = idl_setter_id_put_forwards(ctx, TL_MEMBERS[i], "value");
         }
     }
     g_owner_key = JS_NewSymbol(ctx, "tokenListOwner", false);
@@ -805,7 +838,13 @@ void dom_token_list_free(JSRuntime *rt)
     if (!g_ready) return;
     {
         int i;
-        for (i = 0; i < TL_N; i++) { JS_FreeValueRT(rt, g_key[i]); g_key[i] = JS_UNDEFINED; }
+        /* The pool ids are ints the IDL pool owns, so nothing is handed back — they are RESET for the same
+           reason core/html/html_base_element.c resets its one: a second runtime in one process would install
+           a member out of a pool that no longer holds it, and -1 is what the install's DCHECK reads. */
+        for (i = 0; i < TL_N; i++) {
+            JS_FreeValueRT(rt, g_key[i]); g_key[i] = JS_UNDEFINED;
+            g_put_forwards_id[i] = -1;
+        }
     }
     JS_FreeValueRT(rt, g_owner_key);
     JS_FreeValueRT(rt, g_which_key);

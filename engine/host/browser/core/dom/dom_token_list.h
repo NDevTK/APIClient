@@ -14,11 +14,15 @@ void dom_token_list_free(JSRuntime *rt);
 void dom_token_list_install(JSContext *ctx, JSValueConst global);
 /* Install `classList` on Element.prototype — §4.9 puts it there and nowhere else. */
 void dom_token_list_install_element(JSContext *ctx, JSValueConst element_proto);
-/* Install ONE `[SameObject] readonly attribute DOMTokenList` reflection on the interface prototype that
-   DECLARES it — `relList` on HTMLAnchorElement/HTMLAreaElement/HTMLLinkElement/HTMLFormElement, `sizes` on
-   HTMLLinkElement, `sandbox` on HTMLIFrameElement. The member NAME is what a caller names, because the content
-   attribute it views is this component's to know and a caller that passed one could pass the wrong one; a name
-   §7.1 does not define is a DFAIL rather than a list over an attribute nothing writes. */
+/* Install ONE `[SameObject, PutForwards=value] readonly attribute DOMTokenList` reflection on the interface
+   prototype that DECLARES it — `relList` on HTMLAnchorElement/HTMLAreaElement/HTMLLinkElement/HTMLFormElement,
+   `sizes` on HTMLLinkElement, `sandbox` on HTMLIFrameElement, `htmlFor` on HTMLOutputElement. The member NAME
+   is what a caller names, because the content attribute it views is this component's to know and a caller that
+   passed one could pass the wrong one; a name §7.1 does not define is a DFAIL rather than a list over an
+   attribute nothing writes.
+   `readonly` DOES NOT MEAN "no setter" HERE: every one of these carries `[PutForwards=value]`, so Web IDL
+   §3.7.6 Attributes' create-an-attribute-setter takes its 4.5.8 branch and the member has a real write half —
+   `el.classList = "a b"` sets the list's `value`, and therefore the content attribute. */
 void dom_token_list_install_reflection(JSContext *ctx, JSValueConst proto, const char *member);
 
 #endif

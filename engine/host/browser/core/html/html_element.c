@@ -245,6 +245,21 @@ static const ElReflect R_IMG[] = {
     { "loading", "loading", REFLECT_ENUM, .en = &LAZY_LOADING_ATTRIBUTE },
     { "decoding", "decoding", REFLECT_ENUM, .en = &DECODING_ATTR }, { "isMap", "ismap", REFLECT_BOOL },
 };
+/* `srcdoc` IS A REFLECT_STRING ROW AND STAYS ONE, WHICH IS WORTH WRITING DOWN BECAUSE ITS IDL SAYS OTHERWISE.
+   §4.8.5 The iframe element spells the member's steps out instead of declaring it `[Reflect]`, and the IDL type
+   is the union `(TrustedHTML or DOMString)` — so an audit that reads the IDL flags this row, and the flag is a
+   false one in BOTH directions. The getter steps ARE §2.6.1's `DOMString` getter, verbatim: "Let attribute be
+   the result of getting an attribute by namespace and local name given null, srcdoc's local name, and this. If
+   attribute is null, then return the empty string. Return attribute's value." The setter steps are "Let
+   compliantString be the result of invoking the get trusted type compliant string algorithm with TrustedHTML,
+   this's relevant global object, the given value, "HTMLIFrameElement srcdoc", and "script". Set an attribute
+   value given this, srcdoc's local name, and compliantString" — which is what js_el_reflect_set already does
+   for every row, through core/html/trusted_types.c's §3.8 table, whose (html, iframe, srcdoc) entry carries
+   that same sink name. WHAT THE UNION WOULD BUY IS AN ARGUMENT TYPE, AND IT HAS NOTHING TO DISTINGUISH: §2's
+   TrustedHTML object is honestly absent from this agent, so every value the member can be handed crosses
+   `DOMString`, which is exactly what the row declares. The day TrustedHTML exists this row becomes a component
+   — its setter must brand-check before stringifying, and IDL_DOMSTRING would run the page's `toString` on a
+   TrustedHTML and hand §3.4 a plain string it then refuses. */
 static const ElReflect R_IFRAME[] = {
     { "src", "src", REFLECT_URL }, { "srcdoc", "srcdoc", REFLECT_STRING },
     { "name", "name", REFLECT_STRING }, { "allow", "allow", REFLECT_STRING },
@@ -339,7 +354,12 @@ static const ElReflect R_EMBED[]  = { { "src", "src", REFLECT_URL }, { "type", "
    every page actually sets, in both directions and silently; core/html/html_style_element.c owns it now.
    `blocking` is a `[SameObject] DOMTokenList` and is absent rather than mis-spelled as a string. */
 static const ElReflect R_STYLE[]  = { { "media", "media", REFLECT_STRING } };
-static const ElReflect R_OUTPUT[] = { { "name", "name", REFLECT_STRING }, { "htmlFor", "for", REFLECT_STRING } };
+/* NO `htmlFor` HERE, and the row that used to be is why the note is: §4.10.12 The output element declares
+   `[SameObject, PutForwards=value, Reflect="for"] readonly attribute DOMTokenList htmlFor`, so it is a §7.1
+   token list beside `relList` and `sandbox` and not a string mirror. §4.10.4 The label element's member of the
+   SAME NAME over the SAME ATTRIBUTE is `[CEReactions, Reflect="for"] attribute DOMString`, and its row below
+   is correct — which is the whole reason a reflection is declared per INTERFACE and never per member name. */
+static const ElReflect R_OUTPUT[] = { { "name", "name", REFLECT_STRING } };
 static const ElReflect R_FIELDSET[] = { { "name", "name", REFLECT_STRING }, { "disabled", "disabled", REFLECT_BOOL } };
 static const ElReflect R_OPTGROUP[] = { { "label", "label", REFLECT_STRING }, { "disabled", "disabled", REFLECT_BOOL } };
 static const ElReflect R_MAP[]    = { { "name", "name", REFLECT_STRING } };
@@ -362,7 +382,23 @@ static const ElReflect R_TD[]     = {
    answers 1 — the thirteenth member found by diffing declared kinds against the IDL rather than by the audit,
    which counted it installed. */
 static const ElReflect R_COL[]    = { { "span", "span", REFLECT_ULONG, 1, true, 1, 1000, true } };
-static const ElReflect R_CANVAS[] = { { "width", "width", REFLECT_STRING }, { "height", "height", REFLECT_STRING } };
+/* §4.12.5 The canvas element: "The `width` and `height` IDL attributes must reflect the respective content
+   attributes of the same name, with the same defaults." The defaults are the section's own two numbers —
+   "The `width` attribute defaults to 300, and the `height` attribute defaults to 150" — and they are the whole
+   of what a `[ReflectDefault]` carries here: the IDL declares `[CEReactions] attribute unsigned long` with NO
+   `[ReflectRange]`, so §2.6.1's minimum stays 0 and its maximum stays 2147483647 and there is no clamp arm.
+   BOTH ROWS WERE REFLECT_STRING, and that is a wrong VALUE in both directions rather than a lenient reading of
+   one. The getter answered the attribute's bytes, so `<canvas>` read "" where a browser reads the NUMBER 300
+   and `<canvas width="640">` read the STRING "640" — a page doing `c.width / 2` got NaN from the first and 320
+   from the second, and `typeof c.width` was "string" for every canvas there has ever been. The setter wrote
+   whatever it was handed, so `c.width = "640px"` stored those five characters where §2.6.1's unsigned long
+   setter writes the DEFAULT (the given value is not in [0, 2147483647] once §3.2.4 has crossed it), and the
+   getter then agreed with the attribute instead of with the browser. A member-presence audit scores both rows
+   COMPLETE — the names are installed — and only the declared KIND says what value they answer with. */
+static const ElReflect R_CANVAS[] = {
+    { "width",  "width",  REFLECT_ULONG, 300, true },
+    { "height", "height", REFLECT_ULONG, 150, true },
+};
 static const ElReflect R_DIALOG[] = { { "open", "open", REFLECT_BOOL } };
 static const ElReflect R_DETAILS[]= { { "name", "name", REFLECT_STRING }, { "open", "open", REFLECT_BOOL } };
 static const ElReflect R_SLOT[]   = { { "name", "name", REFLECT_STRING } };
@@ -953,6 +989,12 @@ void html_element_install_protos(JSContext *ctx)
             dom_token_list_install_reflection(ctx, p, "sizes");
         if (!strcmp(HTML_IFACE[i].iface, "HTMLIFrameElement"))
             dom_token_list_install_reflection(ctx, p, "sandbox");
+        /* §4.10.12 The output element's `htmlFor`, which is a TOKEN LIST and was a string row in R_OUTPUT. It
+           is installed here and not there for the reason the four above are, and the reason it was missed for
+           as long as it was is that HTMLLabelElement declares a member of the same name over the same content
+           attribute whose type really is `DOMString` — so the pair reads as one member until the IDL is. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLOutputElement"))
+            dom_token_list_install_reflection(ctx, p, "htmlFor");
         /* HTML §4.3.1 The body element's `HTMLBodyElement includes WindowEventHandlers` and §16.3.2 Frames'
            `HTMLFrameSetElement includes WindowEventHandlers` — the eighteen of §8.1.8.2's third table, which
            "must be supported by Window objects … and with corresponding event handler content attributes and
