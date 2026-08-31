@@ -3186,7 +3186,11 @@ static void node_declare_walkers(JSContext *ctx)
     g_w_normalize = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NODE_NORM_STEP, 0);
     /* `[CEReactions] Node cloneNode(optional boolean subtree = false)`. ToBoolean is total and runs none of the
        page's code, but the argument still crosses CONVERTED — a body handed the raw value would have to
-       remember to coerce it, which is the per-body mistake one declaration exists to have none of. */
+       remember to coerce it, which is the per-body mistake one declaration exists to have none of.
+       AND OVER UNKNOWN EXTERNAL INPUT THE DECLARATION IS WHAT FORKS IT. §7.1.2 ToBoolean's last step is
+       "Return true", so `cloneNode(cfg.deep)` read from a plain body would copy the subtree in every world
+       and the shallow clone would never exist; IDL_BOOLEAN is IDL_CONCOLIC_FORKS, so the coercion is asked at
+       the branch seam at the boundary and both documents are explored. */
     g_w_clone = idl_method_id_step(ctx, ONE_BOOL, 1, NULL, 0, &NODE_CLONE_STEP, 0);
     idl_optional_from(0);   /* §4.4: `cloneNode(optional deep = false)` */
 }

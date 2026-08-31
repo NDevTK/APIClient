@@ -101,7 +101,20 @@ typedef enum {
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
        what the IDL states. */
     IDL_STRING_UNLESS_CALLABLE,
-    IDL_BOOLEAN,          /* ToBoolean. The conversion runs nothing; the READ that precedes it is the page's */
+    /* `boolean` — Web IDL §3.2.3 boolean, whose whole algorithm is "Let x be the result of computing
+       ToBoolean(V)" and "Return the IDL boolean value that is the one that represents the same truth value as
+       the JavaScript Boolean value x". The conversion runs none of the page's code (ECMAScript §7.1.2
+       ToBoolean ( arg ) has no ToPrimitive step); the READ that precedes it is the page's.
+       OVER UNKNOWN EXTERNAL INPUT IT IS A FORK, WHICH IS WHY IT IS NOT A CROSSING TYPE. ECMAScript §7.1.2
+       ToBoolean ( arg )'s last step is "Return true", so a concolic — which wears an ordinary Object —
+       coerces to `true` and nothing says so.
+       Crossing does not help here the way it helps a string: a DOMString's bytes are CARRIED to a sink and the
+       body asks the value for them, while a boolean's only consumer is CONTROL FLOW, so a crossed one has
+       nowhere to go but a `JS_ToBool` in some body that answers `true` for every unknown there has ever been.
+       Both truth values are feasible and the member's algorithm observes different worlds for them, so the
+       conversion asks §7.1.2 at the BRANCH seam at its own site, where it is one gate with every `if` the
+       page writes over the same value — see idl_concolic_rule. */
+    IDL_BOOLEAN,
     /* `object?` — §3.2.16's object type with §3.2.20's nullable wrapper. undefined and null become the IDL
        value null; an Object crosses as itself; ANYTHING ELSE IS A TypeError, which is the whole content of the
        type and the reason it cannot be IDL_ANY with a test in the body. The Console Standard §1.1.10's
@@ -469,12 +482,25 @@ typedef enum {
        node carries, the attribute taint shadow for a value parked in the DOM). It is the answer
        JSON.stringify gives an opaque field: yield the opaque, never a de-tainting placeholder. */
     IDL_CONCOLIC_CROSSES,
-    /* §3.2.25's ARM IS A TEST OF THE VALUE — step 11 "If V is an Object" against step 12 "If V is a Boolean"
-       and step 18 "If types includes boolean". Over unknown input BOTH clauses are feasible, and the arms
-       differ in what the member's own algorithm then observes, so the arm is neither crossed nor picked: it is
-       an OUTCOME FORK, asked at the type's own resolution site through the conversion machine's
-       step_fork_run, so both worlds run. A type is only ever this when the SITE that resolves it asks that
-       fork — the two assert against each other. */
+    /* THE CONVERSION'S ANSWER OVER UNKNOWN INPUT IS A SET OF FEASIBLE WORLDS THE MEMBER'S ALGORITHM TELLS
+       APART — so it is neither crossed nor picked but FORKED, asked at the type's own resolution site so both
+       worlds run. A type is only ever this when the SITE that resolves it asks that fork — the two assert
+       against each other.
+       TWO SHAPES REACH IT, THEY ARE NOT THE SAME QUESTION, AND THEY ASK DIFFERENT SEAMS — which is why this
+       row is stated as the ANSWER and no longer as a §3.2.25 arm alone:
+         - A UNION ARM THAT IS A TEST OF THE VALUE — Web IDL §3.2.25 Union types step 11 "If V is an Object"
+           against step 12 "If V is a Boolean" and step 18 "If types includes boolean". No `if` a page writes
+           asks that, so it is the machine asking which of its OWN completions it reaches: the OUTCOME seam,
+           quickjs-step.h's step_fork_run, numbered by that site.
+         - Web IDL §3.2.3 boolean ITSELF, whose one step is ToBoolean and whose answer for a concolic is
+           decided by ECMAScript §7.1.2 ToBoolean ( arg )'s last step ("Return true") rather than by anything
+           about the page's value. That is the SAME PREDICATE `if (p)` asks, so it is the BRANCH seam —
+           step_tobool_run — and `if (cfg.on)` and a member taking `cfg.on` are ONE gate with one constraint
+           entry, one pin and one domain. Nothing is numbered, because a truth value has two completions and
+           the branch seam computes which one a real session takes from the value's own example.
+       Written as an ARM that is a test of the value, this row read as being about unions alone, and the
+       boolean type sat under `default:` at CROSSES for as long as that wording stood — a type whose conversion
+       DECIDES a world, filed with the types whose conversion merely coerces bytes a body still holds. */
     IDL_CONCOLIC_FORKS,
 } IdlConcolicRule;
 
@@ -501,6 +527,22 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        leaves it at "start", and those are two different scroll positions rather than two spellings of one, so
        neither arm may be picked for a value nothing is known about. */
     case IDL_BOOL_OR_DICT:
+    /* Web IDL §3.2.3 boolean — the type whose CONVERSION is the fork, where the two rows above are unions
+       whose ARM is. ECMAScript §7.1.2 ToBoolean ( arg )'s last step is "Return true" and a concolic wears an
+       ordinary Object, so a crossing
+       boolean is not an unconverted value a body still holds: it is a value every `JS_ToBool` in every body
+       answers `true` for, which is the collapse crossing exists to prevent, arriving one type below the union
+       that had it. Both truth values are feasible and the algorithms behind this boundary observe different
+       worlds for them — `cloneNode(deep)` copies a subtree or does not, `open(m, u, async)` is a synchronous
+       XHR or an asynchronous one, `toggle(t, force)` adds a class or removes it — so neither may be picked.
+       THE ARGUMENT BOUNDARY IS WHAT THIS ANSWERS FOR, and the DICTIONARY-MEMBER half of §3.2.3 is a different
+       site with its own answer rather than a gap here: idl_dict_walk_run crosses every unknown member as
+       itself, idl_dict_bool CRASHES on one read through the plain C reader, and a member that needs a C bool
+       out of an unknown forks at the READ under its own algorithm's name (DOM §2.7's flatten more options is
+       the worked example, and its ask is still the outcome seam's). The argument side is the branch seam's —
+       see the conversion — so a page that writes `if (cfg.on)` and then passes `cfg.on` to a member files ONE
+       constraint entry rather than two that can contradict each other. */
+    case IDL_BOOLEAN:
         return IDL_CONCOLIC_FORKS;
     default:
         return IDL_CONCOLIC_CROSSES;

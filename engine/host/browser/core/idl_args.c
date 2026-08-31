@@ -3300,11 +3300,69 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             goto placed;
         }
         if (t == IDL_BOOLEAN) {
-            /* ToBoolean runs nothing, but the ARGUMENT still crosses converted: `toggle(t, 1)` forces on, and a
-               body that got the 1 would have to remember to coerce it. */
+            int res = 0;
+
+            /* Web IDL §3.2.3 boolean: "Let x be the result of computing ToBoolean(V)" then "Return the IDL
+               boolean value that is the one that represents the same truth value as the JavaScript Boolean
+               value x". ToBoolean runs none of the page's code, but the ARGUMENT still crosses CONVERTED:
+               `toggle(t, 1)` forces on, and a body that got the 1 would have to remember to coerce it.
+               AND OVER UNKNOWN EXTERNAL INPUT §3.2.3 IS A FORK, NOT A COERCION — this position is the ONE
+               place that fact can be acted on, which is why it is here and not in the forty-odd bodies that
+               read a boolean argument. ECMAScript §7.1.2 ToBoolean ( arg ) ends "Return true", and a concolic
+               wears an ordinary Object (solver/concolic.c installs one so a method on an unknown yields
+               another unknown instead of throwing), so the coercion answered `true` for every unknown there
+               has ever been — `el.hidden = flags.beta`, `node.cloneNode(cfg.deep)`, `xhr.open(m, u, cfg.sync)`
+               each ran one world and deleted the other with nothing to say so. That is the SAME defect
+               §3.2.25's arm had three hundred lines up, one type below it: a conversion answering from the
+               REPRESENTATION rather than from the page's value, which is not a coarse answer but a DECIDED
+               one.
+               CROSSING IS NOT THE CURE HERE, AND THAT IS WHAT SEPARATES THIS TYPE FROM EVERY STRING AND
+               NUMBER ABOVE. A crossed DOMString reaches a body that asks it for its bytes and carries the
+               taint to a sink; a boolean's only consumer is CONTROL FLOW, so a crossed one has nowhere to go
+               but a `JS_ToBool` in some body — the collapse moved, not removed. See idl_args.h's
+               IDL_CONCOLIC_FORKS.
+               IT IS THE BRANCH SEAM AND NOT THE OUTCOME SEAM, WHICH IS WHY THIS IS step_tobool_run AND NOT THE
+               step_fork_run THE UNION ARM ABOVE USES. quickjs-step.h states the rule at both: a ToBoolean is
+               the SAME PREDICATE `if (p)` asks about, keyed by the value's own branch identity, so
+               `if (cfg.on)` and `el.classList.toggle(t, cfg.on)` are ONE gate and one constraint entry. Asked
+               at the outcome seam this would file a second, independent entry over one predicate — a flow that
+               had already pinned `cfg.on` would fork again and stand on two arms contradicting each other —
+               and it would record NONE of what a branch records, so an @H parameter the page had gated would
+               print with no domain at all. The union arm above is genuinely the other question: which of the
+               conversion's OWN completions this position reaches, which no `if` in the page ever asks.
+               NOTHING IS NUMBERED HERE, and that is a consequence of the seam rather than an omission. A truth
+               value has exactly two completions and the arm a real session takes is computed by the branch
+               seam out of the value's own example, so this site declares neither an ordering nor a `real`;
+               step_tobool_run hands back 0 or 1 and they mean false and true.
+               A VALUE THE PAGE DETERMINED TAKES §7.1.2 ITSELF, inside that same call, with no request and no
+               fork — so there is no `concolic_is` predicate at this call site, because there is no second path
+               for one to select. */
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            *slot = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
+            /* THE SITE AND THE RULE ARE TWO HALVES OF ONE STATEMENT, and this is the half that can still be
+               checked — asked only on the unknown path it could never fire, because a boolean whose rule said
+               CROSSES would be swallowed by the pass-through hundreds of lines up and this branch would simply
+               go unvisited. Asked here it fires on the FIRST boolean conversion of any kind, which is what
+               makes a header edit that puts IDL_BOOLEAN back under `default:` a crash rather than a silent
+               return to pinning every unknown flag to `true`. */
+            DCHECK(idl_concolic_rule(IDL_BOOLEAN) == IDL_CONCOLIC_FORKS,
+                   "§3.2.3's conversion asks §7.1.2 ToBoolean at the branch seam for unknown input while "
+                   "idl_args.h no longer declares IDL_BOOLEAN as a type that forks — the pass-through above "
+                   "would then cross an unknown boolean as itself, this ask would never be reached, and every "
+                   "`JS_ToBool` in every body that reads a boolean argument would answer `true` again with "
+                   "nothing to say so");
+            /* §3.6 step 15.4.2's "missing" is placed rather than coerced, and it is placed BEFORE the coercion
+               because it is not a value: a required position handed `undefined` is what §3.2.3 converts (to
+               false, which is what every body's own `JS_ToBool` of the placed undefined already answers), and
+               an ABSENT one is what a body tells apart with its `argc` test. */
+            if (JS_IsUndefined(a)) { *slot = JS_UNDEFINED; goto placed; }
+            r = step_tobool_run(ctx, &s->hdr, a, "Web IDL §3.2.3 boolean", &res);
+            if (r) return r;
+            DCHECK(res == 0 || res == 1,
+                   "§3.2.3's conversion came back with something that is neither of the two truth values a "
+                   "boolean has — the two worlds a flag names are all there are, and a third is a world "
+                   "nothing can be in");
+            *slot = JS_NewBool(ctx, res);
             goto placed;
         }
         if (t == IDL_OBJECT_NULLABLE) {

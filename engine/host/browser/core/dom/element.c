@@ -1450,11 +1450,17 @@ int element_declare_reflections(JSContext *ctx, const ElReflect *r, int n)
            kind added without one is exactly the kind whose setter then runs the wrong conversion.
            §2.6.2 states each pairing as a requirement of the extended attribute — `[ReflectURL]` "must only
            appear on attributes with a type of USVString", so a URL reflection declares IDL_USVSTRING and its
-           §3.2.12 scalar-value conversion happens before the setter's one step is reached. A boolean's value is
-           ToBoolean, total and running none of the page's code; a `DOMString?` turns null AND undefined into
-           the IDL null so the body never sees the word. */
+           §3.2.12 scalar-value conversion happens before the setter's one step is reached. A `DOMString?` turns
+           null AND undefined into the IDL null so the body never sees the word.
+           A BOOLEAN REFLECTION DECLARES IDL_BOOLEAN, AND IT USED TO DECLARE IDL_ANY on the ground that
+           "ToBoolean is total and runs none of the page's code" — a sentence that is true of the CONVERSION
+           and says nothing about the VALUE. §7.1.2 ToBoolean ends "Return true" and unknown external input
+           wears an ordinary Object, so `el.hidden = flags.beta` set the attribute in every world there has
+           ever been and the cleared document was never explored. IDL_BOOLEAN is IDL_CONCOLIC_FORKS, so the
+           declaration is what asks §7.1.2 ToBoolean at the BRANCH seam, at the boundary these forty-odd
+           reflected setters share; IDL_ANY crosses it and leaves js_el_reflect_set's own `JS_ToBool` to decide. */
         switch (r[i].kind) {
-        case REFLECT_BOOL:            t = IDL_ANY; break;
+        case REFLECT_BOOL:            t = IDL_BOOLEAN; break;
         case REFLECT_STRING:          t = IDL_DOMSTRING; break;
         case REFLECT_STRING_NULLABLE: t = IDL_DOMSTRING_NULLABLE; break;
         case REFLECT_URL:             t = IDL_USVSTRING; break;
@@ -2516,7 +2522,14 @@ static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_close
 void element_init(JSContext *ctx)
 {
     static const IdlArgType ADJ_ANY[2] = { IDL_DOMSTRING, IDL_ANY };
-    static const IdlArgType TOGGLE[2] = { IDL_DOMSTRING, IDL_ANY };   /* `optional boolean force` is ToBoolean */
+    /* §4.9's `boolean toggleAttribute(DOMString qualifiedName, optional boolean force)`. The second position
+       was declared IDL_ANY on the ground that "ToBoolean is total and runs nothing, so the body can coerce it"
+       — TRUE of every value the page determines and FALSE of unknown external input, which §7.1.2 ToBoolean's
+       last step ("Return true") pins to the set arm. IDL_BOOLEAN is IDL_CONCOLIC_FORKS, so the declared type
+       is what makes `toggleAttribute(n, cfg.on)` explore the removed document as well; IDL_ANY crosses and
+       leaves the body's `JS_ToBool` to decide it. Declaring what the IDL declares is also what makes the
+       position visible to the argument-type audits, which read the declaration and never the body. */
+    static const IdlArgType TOGGLE[2] = { IDL_DOMSTRING, IDL_BOOLEAN };
     /* `(DOMString? namespace, DOMString localName)` — §4.9's namespace-keyed argument list, and the one that
        carries `getAttributeNodeNS`'s and `removeAttributeNS`'s too. */
     static const IdlArgType NS_LOCAL[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING };

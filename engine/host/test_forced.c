@@ -1714,6 +1714,33 @@ static const char *HTML =
     "bpar.addEventListener('unkcap', function(e){ fetch('/api/aelunk?v='"
     " + (e.eventPhase === 1 ? 'aelcapturing' : 'aelbubbling')); }, state.listen);"
     "bkid.dispatchEvent(new Event('unkcap', { bubbles: true }));"
+    /* …AND THE SAME COLLAPSE ONE LAYER OUT, AT A `boolean` ARGUMENT RATHER THAN A DICTIONARY MEMBER. The row
+       above is DOM §2.7's flattening reading `capture` off an options bag; these are Web IDL §3.2.3 boolean
+       at a DECLARED POSITION, which is a different site with a different mechanism — the conversion in
+       core/idl_args.c, shared by every member and every reflected setter that declares IDL_BOOLEAN.
+       ECMAScript §7.1.2 ToBoolean ( arg ) ends "Return true" and unknown external input wears an ordinary
+       Object, so before this conversion forked, EVERY one of these ran exactly the true world: the class was
+       always added, the attribute was always set, the clone was always deep. Both values of each pair is the
+       whole claim, and each pair is a DIFFERENT ROUTE to the same conversion, which is what makes three of
+       them rather than one:
+         - `toggle(token, force)` is an ARGUMENT declared IDL_BOOLEAN in the type list — DOM §7.1 Interface
+           DOMTokenList writes `[CEReactions] boolean toggle(DOMString token, optional boolean force)`.
+         - `hidden` is a `[Reflect] boolean` CONTENT ATTRIBUTE, whose setter takes its type from element.c's
+           reflection registry — the route that used to declare IDL_ANY and hand the raw value to a body.
+         - `cloneNode(deep)` is an argument on a STEP MACHINE rather than a plain body, so it proves the fork
+           reaches a member whose own conversion parks.
+       AND THE FOURTH IS THE NEGATIVE CONTROL, which is what tells a working fork from one that fires on
+       everything: `toggle('bctl', true)` is a value the PAGE determined, so §3.2.3 runs the real coercion and
+       must NOT fork — exactly one value may appear under `/api/boolctl`. Without it, an engine that forked
+       every boolean argument would pass the three positive rows and be wrong. */
+    "cll.toggle('bfork', state.beta);"
+    "fetch('/api/boolarg?v=' + (cll.contains('bfork') ? 'boolon' : 'booloff'));"
+    "bpar.hidden = state.beta2;"
+    "fetch('/api/boolattr?v=' + (bpar.hasAttribute('hidden') ? 'attrset' : 'attrclear'));"
+    "fetch('/api/boolclone?v='"
+    " + (cl.cloneNode(state.beta3).childNodes.length ? 'clonedeep' : 'cloneshallow'));"
+    "cll.toggle('bctl', true);"
+    "fetch('/api/boolctl?v=' + (cll.contains('bctl') ? 'ctlon' : 'ctloff'));"
     /* §2.7's dedup key is (type, callback, CAPTURE), so ONE function registered both ways is TWO listeners —
        and removing it with the wrong flag removes neither. */
     "var dupn = 0; var dupf = function(){ dupn++; };"
@@ -6383,6 +6410,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        arm fork above it half-useless. */
     int aelunk_tt = (strstr(js, "\"/api/aelunk\"")
                      && strstr(js, "aelcapturing") && strstr(js, "aelbubbling"));
+    /* WEB IDL §3.2.3 boolean AT A DECLARED ARGUMENT POSITION, which is the row above's defect one layer out
+       and at a different site: not a dictionary member the flattening reads, but the CONVERSION every member
+       and every reflected setter declaring IDL_BOOLEAN shares. ECMAScript §7.1.2 ToBoolean ( arg ) ends
+       "Return true" and a concolic wears an ordinary Object, so a single value per row is the collapse —
+       and it is always the TRUE one, which is what makes the false marker the measurement rather than the
+       endpoint's existence. Three routes reach the one conversion (a type-list argument, a `[Reflect]`ed
+       boolean content attribute's setter, an argument on a step machine) and each must show BOTH.
+       `boolctl` IS THE NEGATIVE CONTROL AND IT ASSERTS AN ABSENCE: `toggle('bctl', true)` is a value the page
+       determined, so §3.2.3 runs the real coercion and no fork happens — `ctloff` appearing at all would mean
+       the conversion forks concrete values too, which passes every positive row above while being wrong. */
+    int boolarg_tt   = (strstr(js, "\"/api/boolarg\"")
+                        && strstr(js, "boolon") && strstr(js, "booloff"));
+    int boolattr_tt  = (strstr(js, "\"/api/boolattr\"")
+                        && strstr(js, "attrset") && strstr(js, "attrclear"));
+    int boolclone_tt = (strstr(js, "\"/api/boolclone\"")
+                        && strstr(js, "clonedeep") && strstr(js, "cloneshallow"));
+    int boolctl_tt   = (strstr(js, "\"/api/boolctl\"")
+                        && strstr(js, "ctlon") && !strstr(js, "ctloff"));
     /* THE BITWISE/SHIFT FAMILY OVER UNKNOWN INPUT. Both arms present is the whole claim: a `&` whose result
        collapsed to a bare number (or to NaN) decides the branch and the sibling is never reached, which is
        precisely the coverage §Re-execution means by "opacity SURVIVES numeric coercion". `bwhash` asserts only
@@ -7053,6 +7098,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "cl-unknown", clunk_tt, "/api/clunknown", SESS_EXPLORE },
         { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE },
         { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE },
+        /* WEB IDL §3.2.3 boolean OVER UNKNOWN INPUT — one row per ROUTE to the one conversion, plus the
+           control that says the fork is not firing on values the page determined. */
+        { "bool-arg", boolarg_tt, "/api/boolarg", SESS_EXPLORE },
+        { "bool-reflect", boolattr_tt, "/api/boolattr", SESS_EXPLORE },
+        { "bool-stepmachine", boolclone_tt, "/api/boolclone", SESS_EXPLORE },
+        { "bool-concrete", boolctl_tt, "/api/boolctl", SESS_EXPLORE },
         { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE },
         { "bitwise-chain", bwhash_tt, "/api/bwhash", SESS_EXPLORE },
         { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE },

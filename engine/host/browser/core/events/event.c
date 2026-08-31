@@ -687,8 +687,11 @@ static JSValue js_event_composed_path(JSContext *ctx, JSValueConst this_val, int
 }
 
 /* §2.2 initEvent(type, bubbles, cancelable) — the legacy initializer, and it is NOT a no-op: it re-initialises
-   an event that is not currently being dispatched. The booleans are ToBoolean, which is total and runs none of
-   the page's code, so only `type` is a coercion and the shared machine performs it. */
+   an event that is not currently being dispatched. Only `type` is a coercion that can run the page's code
+   (§7.1.2 ToBoolean has no ToPrimitive step), and the shared machine performs all three: an unknown `bubbles`
+   or `cancelable` is not coerced here at all but FORKED at the boundary, because IDL_BOOLEAN is
+   IDL_CONCOLIC_FORKS and §7.1.2's "Return true" would otherwise make every unknown a bubbling event. What
+   arrives in this body is therefore always a real boolean, on one arm or the other. */
 /* §2.2's initialise-an-existing-event steps, without the receiver check — a DERIVED interface's legacy
    initialiser (`initMessageEvent`) runs exactly these and then its own, so they are ONE implementation rather
    than a second copy that drifts. Returns false when the dispatch flag says the walk owns the event right now,

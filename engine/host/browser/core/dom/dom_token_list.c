@@ -511,12 +511,15 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
         if (token_check(ctx, a[i].s, a[i].len) < 0) { result = JS_EXCEPTION; goto out; }
     if (magic == 2 && argc > 1 && !JS_IsUndefined(argv[1])) {
         force_given = true;
-        /* NAMED RESIDUAL — `force` is read CONCRETELY. §7.1 toggle's steps 3-5 branch on it, and an
-           IDL_BOOLEAN position is IDL_CONCOLIC_CROSSES, so `toggle(t, x)` over unknown input decides here
-           instead of forking. NOT COVERED: an unknown `force`. NEXT DIFF: fork the two arms at this read, the
-           way a predicate over unknown input forks anywhere else, so both the added and the removed document
-           are explored. HOW ITS ABSENCE SHOWS: a bundle whose `toggle(cls, flags.beta)` gates a panel yields
-           exactly one arm, and the class the other arm would have set never appears in any flow's DOM. */
+        /* §7.1 toggle's steps 3-5 branch on `force`, and this read is a plain coercion of a value that is
+           ALREADY a real boolean: an IDL_BOOLEAN position is IDL_CONCOLIC_FORKS, so the conversion in
+           core/idl_args.c asked §7.1.2 ToBoolean of it at the BRANCH seam before this body was entered — the
+           same gate `if (flags.beta)` would ask, filed under the same key — and placed one truth value per
+           world. `toggle(cls, flags.beta)` over unknown input therefore reaches here twice, in two
+           flows, one adding the class and one removing it — which is what this line used to name as the
+           residual it could not build. It is NOT a body's own fork and must not become one: the ask belongs to
+           the boundary, where forty-odd members share it, and a second one here would fork a value that has
+           already been decided. */
         force = JS_ToBool(ctx, argv[1]);
     }
     v = list_value(el, attr, &vlen);

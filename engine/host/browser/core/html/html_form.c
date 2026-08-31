@@ -2099,7 +2099,12 @@ void html_form_declare(JSContext *ctx)
     g_id_val_input = idl_setter_id(ctx, IDL_DOMSTRING, false, js_input_set_value, 0);
     g_id_val_textarea = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_TEXTAREA);
     g_id_val_option = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctrl_set_value, CTRL_OPTION);
-    g_id_checked = idl_setter_id(ctx, IDL_ANY, false, js_ctrl_set_checked, 0);   /* `boolean checked` is ToBoolean */
+    /* §4.10.5's `boolean checked`, declared as what the IDL declares. IDL_ANY was here on the ground that
+       "ToBoolean is total", which is true of the conversion and silent about the value: §7.1.2's last step
+       ("Return true") made `input.checked = cfg.on` the checked world for every unknown, and the body's own
+       `JS_NewBool(JS_ToBool(val))` destroyed the taint one line later, so the crossing bought nothing it was
+       kept for. IDL_BOOLEAN is IDL_CONCOLIC_FORKS and both worlds are submitted. */
+    g_id_checked = idl_setter_id(ctx, IDL_BOOLEAN, false, js_ctrl_set_checked, 0);
 }
 
 void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,

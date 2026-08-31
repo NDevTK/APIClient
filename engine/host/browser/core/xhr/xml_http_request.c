@@ -2488,8 +2488,24 @@ static const IdlStepDecl XHR_CTOR_DECL = {
 
 /* ---- install -------------------------------------------------------------------------------------------------- */
 
+/* XHR's `XMLHttpRequest` interface declares two `open` overloads and the longer one writes
+   `undefined open(ByteString method, USVString url, boolean async, optional USVString? username = null,
+   optional USVString? password = null)` — so `async` is a `boolean` and is declared as one.
+   IT WAS IDL_ANY, WHICH LEFT THE BODY TO COERCE IT, AND THE BODY CANNOT. §7.1.2 ToBoolean's last step is
+   "Return true" and unknown external input wears an ordinary Object, so `xhr.open(m, u, cfg.sync)` was an
+   asynchronous request in every world and the SYNCHRONOUS one — which §3.5.1 step 9 makes observable, since
+   `async` false with a non-zero timeout is an "InvalidAccessError" — was never explored. (Step 9 counted with
+   list DEPTH tracked: step 8's host branch holds a nested list whose two items are ITS sub-steps, and a flat
+   `<li>` count promotes them to peers and reports this one as step 11.) IDL_BOOLEAN is
+   IDL_CONCOLIC_FORKS, so §7.1.2 ToBoolean is asked at the branch seam at the boundary.
+   The step-7 reading below is UNCHANGED by that, and it is why this position may be declared a boolean at all:
+   §3.5.1 step 7 is "If the async argument is omitted, set async to true, and set username and password to
+   null", with the note "Unfortunately legacy content prevents treating the async argument being undefined
+   identical from it being omitted" — so the ARGUMENT COUNT decides omission, and an explicit `undefined` is a
+   value §3.2.3 converts to false. The conversion places `undefined` for the absent position and the body's
+   `argc > 2` is what tells the two apart. */
 static const IdlArgType OPEN_ARGS[5] = {
-    IDL_BYTESTRING, IDL_USVSTRING, IDL_ANY, IDL_USVSTRING_NULLABLE, IDL_USVSTRING_NULLABLE
+    IDL_BYTESTRING, IDL_USVSTRING, IDL_BOOLEAN, IDL_USVSTRING_NULLABLE, IDL_USVSTRING_NULLABLE
 };
 static const IdlArgType SET_HEADER_ARGS[2] = { IDL_BYTESTRING, IDL_BYTESTRING };
 static const IdlArgType GET_HEADER_ARGS[1] = { IDL_BYTESTRING };
