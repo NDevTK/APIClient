@@ -243,20 +243,57 @@ function _isScriptLike(d) {
   return d === "audioworklet" || d === "paintworklet" || d === "script" ||
     d === "serviceworker" || d === "sharedworker" || d === "worker";
 }
-// AND EVERY CALLER MUST STATE ONE — the read is a DCHECK and not a `|| ""`, because
-// those two spellings differ exactly where it matters. Fetch §2.2.5's default IS the
-// empty string, so a caller CAN legitimately answer "" and mean data; what must not
-// happen is a caller that never thought about it reading as though it had, since the
-// arm it silently takes is "not script-like" and the bytes it silently accepts are a
-// cross-origin body a compiler is about to be handed. That is the shape this file
-// already had once under another name, when the class rode a keyword a caller could
-// forget. A destination is a property of a request, so every request has one.
+// FETCH §2.2.5 "Requests"' DESTINATION TYPE, ENUMERATED — "A destination type is one
+// of: the empty string, `audio`, `audioworklet`, `document`, `embed`, `font`, `frame`,
+// `iframe`, `image`, `json`, `manifest`, `object`, `paintworklet`, `report`, `script`,
+// `serviceworker`, `sharedworker`, `style`, `text`, `track`, `video`, `webidentity`,
+// `worker`, or `xslt`." It lives HERE, beside the script-like predicate that is a
+// SUBSET of it, because this file is the one that decides from the value; a second
+// table in a zone that only relays the field would be a copy that goes stale.
+var _DESTINATION_TYPES = ["", "audio", "audioworklet", "document", "embed", "font", "frame", "iframe",
+                          "image", "json", "manifest", "object", "paintworklet", "report", "script",
+                          "serviceworker", "sharedworker", "style", "text", "track", "video",
+                          "webidentity", "worker", "xslt"];
+// AND EVERY CALLER MUST STATE ONE, AND IT MUST BE ONE §2.2.5 DEFINES — a `CHECK`, and
+// both halves of that are the same sentence rather than two rules. Fetch §2.2.5's
+// default IS the empty string, so a caller CAN legitimately answer "" and mean data;
+// what must not happen is a value this file cannot serve READING as though it had been
+// answered, because `_isScriptLike` says false for everything it does not recognise —
+// so an ABSENT destination and a MISSPELLED one take the identical arm, and it is the
+// permissive one: the bytes it silently accepts are a cross-origin body a compiler is
+// about to be handed. That is the shape this file already had once under another name,
+// when the class rode a keyword a caller could forget.
+//
+// WHY IT IS A `CHECK` AND NOT A `DCHECK`, WHICH IS WHAT IT WAS. The discriminator is
+// SECURITY.md's own, stated for `opts.pageUrl` one bullet over: a DCHECK is right where
+// "release must still be able to PROCEED, and it can" — with the check compiled out an
+// unparseable principal still classifies as public and private targets are still
+// blocked, so the release behaviour is unchanged. This field FAILS that test in the
+// opposite direction. With the check compiled out, `undefined` reaches `_isScriptLike`,
+// answers false, and the CORB gate — which SECURITY.md assigns to this file by name —
+// is skipped for a code load. Fail-open on a security boundary is what CLAUDE.md's
+// `CHECK` is for ("a security/authorization boundary … we must not PROCEED even in
+// production"), and it is what `_statedFacts` is a CHECK for one zone over.
+//
+// AND THE VALUE CROSSES FROM THE UNTRUSTED ZONE, WHICH IS THE OTHER HALF. The engine
+// states the destination at each park and the engine is attacker-controlled
+// (SECURITY.md §The QuickJS/WASM sandbox); its own join and splitter assert §2.2.5's
+// enumeration with DCHECKs, which are compiled out on the far side of a mojo boundary
+// in the zone this one does not trust. So "the producer refuses to emit a value outside
+// the enumeration" is not a check this zone holds. `bridge.js` already CHECKs the
+// INITIATOR and the PROVENANCE of that same line — the two fields nothing decides an
+// ingestion from — and the field the ingestion IS decided from was the one taken on the
+// producer's word. Refusing here closes it for BOTH hosts at once, which is the reason
+// it belongs at the chokepoint rather than in either host's splitter.
 function _destinationOf(opts) {
-  DCHECK(typeof opts.destination === "string",
-         "safeFetch was called without a DESTINATION — Fetch §2.2.5 \"Requests\" gives every request one " +
-         "(\"unless stated otherwise it is the empty string\") and this file decides the CORB class from it. " +
-         "A caller that omits it takes the `not script-like` arm by silence, which is how a code load gets " +
-         "fetched as data; state \"\" and mean it, or state what the request is for");
+  CHECK(typeof opts.destination === "string" && _DESTINATION_TYPES.indexOf(opts.destination) >= 0,
+        "safeFetch was called with a DESTINATION that is not one Fetch §2.2.5 \"Requests\" enumerates: " +
+        JSON.stringify(opts.destination) + " — §2.2.5 gives every request one (\"unless stated otherwise it " +
+        "is the empty string\") and this file decides the CORB class from it by asking §2.2.5's own " +
+        "script-like predicate. A value that predicate does not recognise — absent, misspelled, or invented " +
+        "by a compromised renderer — takes the `not script-like` arm, which is how a code load gets fetched " +
+        "as data and a cross-origin HTML or JSON body reaches a compiler; state \"\" and mean it, or state " +
+        "what the request is for");
   return opts.destination;
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
@@ -339,9 +376,11 @@ function _isPrivateHost(host) {
 //               engine parked (solver/engine.h puts it on the pending line). A
 //               SCRIPT-LIKE one ("script", "worker", …) -> + CORB (cross-origin must
 //               be JS-typed); every other value, "" included, is data and takes no
-//               CORB. Absent is NOT a synonym for data — the assert at the rule says
-//               so, because a caller that does not state a destination is a caller
-//               whose code load would be fetched as data.
+//               CORB. Absent is NOT a synonym for data, and neither is UNRECOGNISED:
+//               both take the `not script-like` arm silently, so `_destinationOf`
+//               refuses anything outside §2.2.5's enumeration with a CHECK — fatal in
+//               release too, because the arm a bad value falls through to is the
+//               permissive one and the value crosses from the untrusted engine.
 //   answers:    computedType — the ONE type decision made about this response, the
 //               same one CORB was decided from, stamped on the record for the
 //               renderer so no downstream zone repeats it.

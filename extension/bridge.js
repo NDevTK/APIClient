@@ -3232,10 +3232,16 @@ function pendingRequest(line) {
      the native host, and its narrowness is stated there rather than copied here.
      THE MEMBERSHIP CHECKS ARE THE CONTRACT'S READER and fire the day a vocabulary drifts — for the two fixed
      token fields, whose vocabularies are two and three values long. The DESTINATION's is Fetch §2.2.5's own
-     enumeration of two dozen, and it is NOT restated here: the engine refuses to emit a value outside it (its
-     join and its splitter both assert it against one table) and `safe-fetch.js` asks the only question this
-     zone puts to it — §2.2.5's script-like predicate, which is stated once, where the CORB decision is. A
-     fourth copy of a spec table in a zone that does not decide from it is a table that goes stale. */
+     enumeration of two dozen and it is not restated here either, but the REASON this comment used to give for
+     that was WRONG and is the hole it left. It said "the engine refuses to emit a value outside it (its join
+     and its splitter both assert it against one table)" — and both of those are DCHECKs, compiled out in
+     release, in the zone SECURITY.md calls attacker-controlled, on the far side of a mojo boundary. So this
+     zone held no check at all on the one field of this line an INGESTION is decided from, while holding two on
+     the fields nothing is decided from. The enumeration is asserted where the decision is instead:
+     `safe-fetch.js`'s `_destinationOf` refuses anything outside §2.2.5 with a CHECK, before the request goes
+     out, because `_isScriptLike` answers false for every value it does not recognise — so an invented token
+     and an absent one take the identical, permissive arm. Asserting it there rather than here is what makes it
+     one check for BOTH hosts: `engine/trusted.mjs` loads that file verbatim and reads the same line. */
   CHECK(initiator === "parser" || initiator === "script",
         "GetPending stated an initiator this zone does not know: `" + initiator + "` — solver/engine.h " +
         "declares exactly `parser` and `script`, and a third value would be answered by whichever arm a " +
