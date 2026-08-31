@@ -2254,12 +2254,22 @@ static int proxy_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVal
            arrives carrying JS_PROP_THROW_STRICT, which that test does not read, so ECMAScript §6.2.5.6
            PutValue step 3.e — "If succeeded is false and refRecord.[[Strict]] is true, throw a TypeError
            exception" — never fired.
-           HTML §7.2.3.8 [[Set]] ( P , V , Receiver ) step 3.1 reaches the same answer one internal method
-           earlier — "If P is an array index property name, then return false" — so an assignment is refused
-           whether or not the index is in range. THIS hook is where an OUT-OF-RANGE index lands: HTML §7.2.3.5
-           [[GetOwnProperty]] ( P ) leaves `value` undefined there and returns undefined for a same-origin W,
-           so proxy_get_own reports no own property and ECMAScript §10.1.9.2 OrdinarySetWithOwnDescriptor step
-           2.d.ii's CreateDataProperty arrives here instead. */
+           RESIDUAL — §7.2.3.8's OWN REFUSAL IS NOT BUILT, AND THIS HOOK IS WHERE ITS ABSENCE IS PAID FOR.
+           HTML §7.2.3.8 [[Set]] ( P , V , Receiver ) step 3.1 refuses an index one internal method EARLIER
+           than this one — "If P is an array index property name, then return false" — and does it BEFORE
+           OrdinarySet, so a browser consults nothing else. This class declares no `set_property`, so an
+           assignment takes the ordinary route and arrives at THIS hook by two different roads: in range,
+           §7.2.3.5's non-writable descriptor stops it at ECMAScript §10.1.9.2 OrdinarySetWithOwnDescriptor
+           step 2.a; out of range, §7.2.3.5 leaves `value` undefined and returns undefined for a same-origin W,
+           so proxy_get_own reports no own property and step 2.d.ii's CreateDataProperty lands here. Both roads
+           end in `false`, which is why the code is right rather than unfinished.
+           WHAT IS NOT COVERED: the ordinary route WALKS THE PROTOTYPE CHAIN before it reaches either road, and
+           §7.2.3.8 step 3.1 never does.
+           WHAT THE NEXT DIFF BUILDS: a `set_property` entry in PROXY_EXOTIC answering §7.2.3.8 — its step 2
+           access-report, step 3.1's refusal, step 3.2's OrdinarySet on W, and step 4's CrossOriginSet.
+           HOW ITS ABSENCE WOULD SHOW: define an index-named SETTER on Object.prototype and assign to that
+           index on a WindowProxy. A browser refuses at step 3.1 and the setter never runs; here the prototype
+           walk finds it and CALLS it, so the page observes a side effect no browser produces. */
         return JS_RefuseOrThrowTypeError(ctx, flags,
                                          "cannot define an indexed property on a WindowProxy");
     }
