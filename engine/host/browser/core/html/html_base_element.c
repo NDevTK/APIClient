@@ -379,7 +379,7 @@ static lxb_dom_node_t *base_receiver(JSContext *ctx, JSValueConst this_val, cons
  * itself.)" So `<base href="a/"><base href="b/">`'s SECOND element reports the document address plus `b/`,
  * where §2.6.1's URL reflection would have reported the FIRST element's frozen base plus `b/`.
  *
- * A CONCOLIC ATTRIBUTE VALUE STAYS CONCOLIC, the shape core/dom/element.c's el_reflect_url uses: the REAL parse
+ * A CONCOLIC ATTRIBUTE VALUE STAYS CONCOLIC, the shape core/dom/element.c's element_reflect_url_get uses: the REAL parse
  * runs on the concrete example and the answer is DERIVED from it, so an attacker string a flow stashed in a
  * `<base href>` survives the round trip instead of being stringified away at the one member that reads it back. */
 static JSValue js_base_href(JSContext *ctx, JSValueConst this_val, int magic)

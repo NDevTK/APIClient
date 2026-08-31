@@ -1222,7 +1222,7 @@ static int       g_reflect_n;
  * shape, and wrapping it aborted on that assert. It also gave every URL reflection of one element the same
  * identity, so a branch on one would have decided another. `member` is the reflection's IDL name, which is what
  * tells those derivations apart. */
-static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw, const char *member)
+JSValue element_reflect_url_get(JSContext *ctx, lxb_dom_element_t *el, JSValue raw, const char *member)
 {
     JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
     const char *base = document_base_url_of(lxb_dom_interface_node(el)->owner_document);
@@ -1282,7 +1282,7 @@ static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw
  * exactly as 4000 does. Calling it a parse failure would answer the DEFAULT — 1 where a browser says 1000.
  *
  * THE ANSWER IS A NUMBER, so a concolic attribute keeps its provenance THROUGH the parse: the real rules run on
- * the concrete example and the numeric result is re-wrapped, the shape el_reflect_url uses. */
+ * the concrete example and the numeric result is re-wrapped, the shape element_reflect_url_get uses. */
 static JSValue el_reflect_ulong(JSContext *ctx, const ElReflect *r, JSValue raw)
 {
     JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
@@ -1392,7 +1392,7 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     if (g_reflect[magic].kind == REFLECT_ULONG)
         return el_reflect_ulong(ctx, &g_reflect[magic], r);   /* both the present and the absent value */
     if (!JS_IsNull(r))
-        return g_reflect[magic].kind == REFLECT_URL ? el_reflect_url(ctx, el, r, g_reflect[magic].idl) : r;
+        return g_reflect[magic].kind == REFLECT_URL ? element_reflect_url_get(ctx, el, r, g_reflect[magic].idl) : r;
     /* §2.6.1's two string models differ EXACTLY here: `DOMString` reads an absent attribute as the empty
        string, `DOMString?` reads it as null. A page tests one against the other (`el.ariaLabel === null`), so
        answering "" for a nullable member is a wrong value and not a lenient one. */

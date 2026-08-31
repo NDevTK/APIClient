@@ -56,6 +56,7 @@
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_base_element.h"
+#include "core/html/form_submission_attributes.h"   /* §4.10.19.6's `action` and `formAction` */
 #include "core/html/nonce_attribute.h"   /* §2.5.6's `nonce`, whose getter is not a reflection */
 #include "core/html/html_meter.h"
 #include "core/html/html_progress.h"
@@ -272,8 +273,14 @@ static const ElReflect R_IFRAME[] = {
     { "loading", "loading", REFLECT_ENUM, .en = &LAZY_LOADING_ATTRIBUTE },
     { "allowFullscreen", "allowfullscreen", REFLECT_BOOL },
 };
+/* NO `action` AND NO `formAction` IN THESE THREE TABLES. HTML §4.10.19.6 Form submission attributes
+   states a getter algorithm for each — an absent-or-empty attribute answers the node document's URL and
+   a present one is encoding-parsed-and-serialized against that document — so they are
+   core/html/form_submission_attributes.c and not mirrors. All three were REFLECT_STRING rows answering
+   the raw attribute, which reported `/x` where a browser reports the absolute URL a page is about to
+   post to, and "" where it reports the document's own address. The section's other four members ARE
+   rows and stay below: each answers from the attribute alone, which is core/dom/element.h's test. */
 static const ElReflect R_FORM[] = {
-    { "action", "action", REFLECT_STRING },
     { "method", "method", REFLECT_ENUM, .en = &HTML_FORM_METHOD_ATTRIBUTE },
     { "name", "name", REFLECT_STRING }, { "target", "target", REFLECT_STRING },
     { "enctype", "enctype", REFLECT_ENUM, .en = &HTML_FORM_ENCTYPE_ATTRIBUTE },
@@ -289,7 +296,6 @@ static const ElReflect R_INPUT[] = {
     { "pattern", "pattern", REFLECT_STRING }, { "accept", "accept", REFLECT_STRING },
     { "autocomplete", "autocomplete", REFLECT_STRING }, { "min", "min", REFLECT_STRING },
     { "max", "max", REFLECT_STRING }, { "step", "step", REFLECT_STRING },
-    { "formAction", "formaction", REFLECT_STRING },
     { "formMethod", "formmethod", REFLECT_ENUM, .en = &HTML_FORM_FORMMETHOD_ATTRIBUTE },
     { "formEnctype", "formenctype", REFLECT_ENUM, .en = &HTML_FORM_FORMENCTYPE_ATTRIBUTE },
     { "formTarget", "formtarget", REFLECT_STRING },
@@ -300,7 +306,7 @@ static const ElReflect R_INPUT[] = {
 };
 static const ElReflect R_BUTTON[] = {
     { "name", "name", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
-    { "value", "value", REFLECT_STRING }, { "formAction", "formaction", REFLECT_STRING },
+    { "value", "value", REFLECT_STRING },
     { "formMethod", "formmethod", REFLECT_ENUM, .en = &HTML_FORM_FORMMETHOD_ATTRIBUTE },
     { "disabled", "disabled", REFLECT_BOOL },
 };
@@ -797,6 +803,8 @@ void html_element_init(JSContext *ctx)
     }
     /* §2.5.6's `nonce` setter, declared beside the reflections it is deliberately not one of. */
     nonce_attribute_init(ctx);
+    /* §4.10.19.6's two `[ReflectSetter]` setters, declared beside them for the same reason. */
+    form_submission_attributes_init(ctx);
     /* EVERY REFLECTION DECLARED ONCE, here, with the base index each row's install names them by. */
     g_html_refl_base = element_declare_reflections(ctx, "HTMLElement", R_HTML,
                                                   (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
@@ -980,6 +988,15 @@ void html_element_install_protos(JSContext *ctx)
            §4.12.1's `async` is. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLBaseElement"))
             html_base_element_install(ctx, p);
+        /* §4.10.19.6 Form submission attributes' two URL-valued members, each on the interfaces whose IDL
+           declares it — `action` on HTMLFormElement, `formAction` on HTMLInputElement and HTMLButtonElement.
+           Handed the prototype for the reason §4.2.3's `href` above is: this file owns the table of which
+           interface a tag wears, that one owns the algorithm behind the member. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLFormElement"))
+            form_submission_attributes_install(ctx, p, "action");
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLInputElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLButtonElement"))
+            form_submission_attributes_install(ctx, p, "formAction");
         /* §4.10.14's six numbers and §4.10.13's three, each an algorithm over the element's attributes rather
            than a mirror of one — handed the prototype for the reason §4.12.1's `async` is. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLMeterElement"))
@@ -1175,6 +1192,7 @@ void html_element_free(JSRuntime *rt)
     event_target_set_handler_target_terms(NULL);
     dom_string_map_free(rt);
     nonce_attribute_free();   /* §2.5.6's setter id, reset like core/html/html_base_element.c's */
+    form_submission_attributes_free();   /* §4.10.19.6's two, likewise */
     global_attributes_free();
     declarative_shadow_free();
     html_form_free(rt);

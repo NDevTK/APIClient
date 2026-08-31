@@ -160,6 +160,23 @@ void    element_attr_set_value(JSContext *ctx, JSValueConst el, const char *name
 char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name);
 void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value);
 
+/* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE URL MODEL'S RESOLVING HALF, for the
+ * members whose getter is §2.6.1's steps 2-3 under a DIFFERENT step 1.
+ *
+ * §2.6.2's `[ReflectURL]` getter is three steps: an absent attribute answers the empty string; a present one is
+ * encoding-parsed-and-serialized against the element's node document; a parse failure answers the attribute as
+ * a scalar value string. Only the FIRST of those is peculiar to the reflection — and it is exactly the step
+ * §4.10.19.6 Form submission attributes replaces, in both of the algorithms it states: "If attribute is null or
+ * attribute's value is the empty string, then return this's node document's URL", where §2.6.1 returns "". The
+ * remaining two steps are word for word the same, which is why they are EXPORTED rather than copied: a second
+ * parse-and-serialize is a second place for the base to be wrong (the node document's base URL, not the running
+ * realm's, and its BASE rather than its address), and that exact mistake has been made in this tree twice.
+ * `raw` is the attribute's value and is CONSUMED; it must NOT be JS_NULL — the null case is step 1's, and step
+ * 1 is the caller's whole reason for being here. `member` NAMES THE DERIVATION for a concolic attribute value,
+ * the same way the reflection registry passes the row's IDL name: a source stashed in `formaction` comes back
+ * carrying its provenance, and the name is what tells two members' derivations apart. */
+JSValue element_reflect_url_get(JSContext *ctx, lxb_dom_element_t *el, JSValue raw, const char *member);
+
 /* HTML §2.6.1 "Reflecting content attributes in IDL attributes" — THE `double` MODEL, both directions, for the
  * members the enum above deliberately does not carry.
  *

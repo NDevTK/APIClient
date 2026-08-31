@@ -63,7 +63,7 @@ static bool meter_receiver(JSContext *ctx, JSValueConst this_val, const char *me
 
 /* §4.10.14's "parse the … attributes using the rules for parsing floating-point number values", over ONE
    attribute value that may carry unknown external input: the REAL rules run on the concrete example, which is
-   the same shape core/dom/element.c's el_reflect_ulong and el_reflect_url use. Answers whether a value could be
+   the same shape core/dom/element.c's el_reflect_ulong and element_reflect_url_get use. Answers whether a value could be
    parsed out of it — which is the exact phrase every one of the six points below branches on. */
 static bool meter_parsed(JSContext *ctx, JSValueConst raw, double *out)
 {
