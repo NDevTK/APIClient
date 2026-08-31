@@ -69,8 +69,15 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    `bounds` IS THE SAME FACT OVER AN ORDERED DOMAIN — what this endpoint's own ORDERING gates proved the value
    must be greater or less than, on every observed path — and it is emitted in JSON Schema Validation 2020-12
    §6.2 Validation Keywords for Numeric Instances (number and integer)'s own vocabulary: at most one of
-   §6.2.4 "minimum" / §6.2.3's exclusive twin "exclusiveMinimum", and at most one of §6.2.2 "maximum" /
-   §6.2.3 "exclusiveMaximum". Each value is a JSON NUMBER, spelled as the page's own literal.
+   §6.2.4 "minimum" / §6.2.5 "exclusiveMinimum", and at most one of §6.2.2 "maximum" / §6.2.3
+   "exclusiveMaximum". Each value is a JSON NUMBER, spelled as the page's own literal.
+   THE INTERVAL IS ONLY AN ASSERTION IF THE RECORD ALSO SAYS THE VALUE IS A NUMBER. §6.2.5's text is "If the
+   instance is a number, then the instance is valid only if it has a value strictly greater than (not equal
+   to) exclusiveMinimum" — so all four keywords assert NOTHING against a non-number instance, and a consumer
+   that carries this interval beside a `string` type has emitted the domain and erased it in one record.
+   That the value IS compared as a number is stated by this very field: concolic_rel_hook records a bound
+   only for a finite Number operand, and ECMAScript §7.2.12 IsLessThan step 3 takes the string comparison
+   only when BOTH sides are Strings. lib/learn.js is where that is read.
    BOTH SIDES CAN BE PRESENT, because `if (x > 5 && x < 100)` is TWO observations of one parameter and a
    record holding only one of them is a wrong report by this rule's own terms.
    It carries NO member of the interval: §@H forbids inventing `6` for `x > 5`, so a value appears in

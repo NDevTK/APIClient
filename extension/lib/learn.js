@@ -310,17 +310,38 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
      being defaulted into looking like one. If click-through is wanted, the engine has to carry the site's
      position on the endpoint record first. */
 
-  // Type inference helper: pick from the first valid value's runtime type.
-  // Not a guess — this is the literal the forced execution computed. Default "string" when there are no
-  // observations (neutral; no false precision). It takes ONLY validValues: the engine's param record is
-  // {name, validValues} and has never carried a `defaultValue`, so the second argument this read was a
-  // permanent `undefined` deciding a branch that could not be taken.
-  const _inferType = (validValues) => {
-    const sample = Array.isArray(validValues) && validValues.length ? validValues[0] : null;
-    if (sample == null) return "string";
-    if (typeof sample === "number") return "number";
-    if (typeof sample === "boolean") return "boolean";
-    return "string";
+  /* THE TYPE THE RUN OBSERVED, WHICH IS THE THIRD THING A DOMAIN STATES AND THE ONE THAT DECIDES WHETHER THE
+     OTHER TWO SURVIVE THE REPORT.
+     What stood here read `validValues[0]` and branched on its `typeof` for "number" and "boolean". Every
+     value on that array is a JSON STRING by construction — endpoint.c writes each one through
+     `json_buf_str`, and `_mergeAstValues` below re-stringifies whatever it is handed — so neither branch
+     could ever be taken and this helper answered "string" for EVERY parameter the forced execution ever
+     learned. That is the read-with-no-writer defect with the writer on the other side of the ABI: two
+     branches describing a producer that does not exist, and nothing to say so, because "string" is also the
+     right answer for most parameters.
+     IT IS A WRONG REPORT AND NOT A THIN ONE, WHICH IS WHY IT IS FIXED HERE RATHER THAN DELETED. A parameter
+     carrying `bounds` is one the page compared against a NUMBER: concolic_rel_hook records a bound only for
+     a finite Number operand, and ECMAScript §7.2.12 IsLessThan step 3 takes the string comparison only when
+     BOTH sides are Strings, so a Number on the concrete side puts the comparison on the numeric path
+     whatever the unknown turns out to be. Typed "string", that observation is then ERASED at the last hop:
+     JSON Schema Validation 2020-12 §6.2.5 "exclusiveMinimum" asserts "If the instance is a number, then the
+     instance is valid only if …", so `{"type":"string","exclusiveMinimum":5}` — which is exactly what
+     lib/openapi-export.js emitted — asserts NOTHING, and every validator silently drops the only domain the
+     run proved.
+     THE POPUP IS NOT WHERE THIS SHOWED, WHICH IS WHY IT SURVIVED. lib/popup-form.js renders `_bounds` as its
+     own badge and as the input's placeholder whatever the type says, so on screen the interval was visible
+     the whole time and only the box it sat beside was the wrong kind. The export is the surface where a
+     domain either asserts or does not, and it is the surface nobody reads by eye.
+     IT INVENTS NOTHING. `bounds` present is a fact this run observed, exactly as a pin is; the line §@H
+     draws is whether a VALUE was determined, and no value is determined by naming the type of the
+     comparison the page performed. Absence of `bounds` still answers "string", which is this record's
+     stated absence and not a default — a parameter nothing ordered has no type observation to report. */
+  const _paramType = (p) => {
+    DCHECK(p.validValues.every((v) => typeof v === "string"),
+           "an @H param's validValues holds something that is not a string — endpoint.c writes every entry " +
+           "through json_buf_str, so a non-string here is that producer having grown a second vocabulary " +
+           "and this helper answering the type of a value it cannot have been handed");
+    return p.bounds ? "number" : "string";
   };
 
   // Merge AST-observed valid values onto a target (param or schema prop).
@@ -421,6 +442,19 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
            "number for all four keywords, and concolic_rel_hook records a bound only for a finite Number " +
            "operand, so a string or an Infinity here is the two ends disagreeing about what a bound is");
     widenBoundsInto(target, p.bounds);
+    /* AND THE TYPE OBSERVATION THE SAME BOUND CARRIES, WHICH IS WHY IT IS WRITTEN HERE AND NOT ONLY AT THE
+       MINT. A parameter's record is created by its FIRST sighting and merged by every later one, so a run
+       that reached the request with no ordering gate and then reached it again through one would leave the
+       type at the mint's "string" and the second sighting's whole interval vacuous — the erasure this rule
+       exists to stop, arriving one sighting late instead of at creation.
+       IT IS PROMOTED FROM THIS SIGHTING'S OWN `p.bounds`, NEVER FROM THE MERGED `target._bounds`, and the
+       two are different facts. The merged interval is the claim EVERY observed path obeyed, so a later path
+       that ordered nothing ERASES it (widenBoundsInto above); "the page compares this parameter as a
+       number" is not disproved by a path that never compared it at all, so the type accumulates the way
+       `_astValidValues` does and is never taken back.
+       ONLY OVER A TYPE THIS FILE ITSELF INFERRED. A parameter a Google Discovery document DECLARED carries
+       its server's own statement about the type, which is not ours to overrule from a client-side run. */
+    if (target._astInferred && target.type === "string") target.type = _paramType(p);
   };
 
   /* WHERE EACH VALUE LANDED IS THE PRODUCER'S STATEMENT, NEVER THIS FILE'S DEFAULT. endpoint.c writes
@@ -440,7 +474,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     if (p.location === "body") { _bodyParams.push(p); continue; }
     if (!m.parameters[p.name]) {
       m.parameters[p.name] = {
-        type: _inferType(p.validValues),
+        type: _paramType(p),
         location: p.location,
         description: p.location === "path"
           ? "Learned from a forced-execution call site (path template)"
@@ -548,7 +582,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     if (!schema.properties) schema.properties = {};
     for (const bp of _bodyParams) {
       if (!schema.properties[bp.name]) {
-        schema.properties[bp.name] = { type: _inferType(bp.validValues), _astInferred: true };
+        schema.properties[bp.name] = { type: _paramType(bp), _astInferred: true };
       }
       _mergeAstValues(schema.properties[bp.name], bp.validValues);
       /* A BODY FIELD'S DOMAIN IS THE SAME FACT AS A QUERY PARAM'S. endpoint.c reads the request body in the

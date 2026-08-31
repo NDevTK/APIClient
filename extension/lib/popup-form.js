@@ -84,12 +84,24 @@ function buildFormFields(schema, initialData = null) {
                (`e` → `owner`) on this label and nothing has ever written the field — no engine emits a
                source-map name — so the rename has never been applied to a parameter. `displayName` itself is
                real and stays: lib/popup-gql.js writes it for a GraphQL alias, which createFieldInput renders. */
-            type:
-              param.type === "integer"
-                ? "int32"
-                : param.type === "boolean"
-                  ? "bool"
-                  : "string",
+            /* THE ONE SPELLING OF THIS MAPPING, WHICH IS `mapJsonSchemaType` AND LIVES IN lib/discovery.js.
+               A three-branch ternary stood here — integer -> int32, boolean -> bool, everything else ->
+               string — and it was a second, shorter copy of that function with two facts missing. It
+               dropped `number` entirely, so a parameter typed `number` rendered as a text box; and it read
+               no `format`, so a document declaring `{"type":"string","format":"int64"}` or
+               `{"type":"integer","format":"uint32"}` rendered as the type its format narrows.
+               THE `number` HALF IS WHAT lib/learn.js NOW STATES. It types a parameter `number` exactly
+               where the run OBSERVED the page comparing it against a Number, which is the same observation
+               `_bounds` is made of; collapsing that back to `string` here would put a proved interval
+               beside a free-text box and would drop the fact before lib/openapi-export.js could read it off
+               the record. The panel is NOT where that erasure showed — `_bounds` renders as its own badge
+               and as the placeholder whatever the type says (createFieldInput below), so what was wrong
+               here was the KIND of box, and the export is where the same wrong type made the interval
+               assert nothing at all.
+               `mapJsonSchemaType` speaks exactly the vocabulary the switch in createFieldInput below reads
+               (int32/int64/double/float/bool/bytes/enum/string), so this is a delegation and not a
+               translation. */
+            type: mapJsonSchemaType(param),
             required: param.required,
             description: param.description,
             label: param.required ? "required" : "optional",
