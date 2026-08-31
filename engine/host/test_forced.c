@@ -5673,6 +5673,50 @@ static int emitted_record_has(const char *js, const char *url, const char *needl
     return 0;
 }
 
+/* ONE RECORD LOCATED BY AN ADDRESS PREFIX — for the statement whose LAST SEGMENT is the thing under test, so
+   the row cannot name the whole address without writing the answer into the question. `/api/addnum/v1000000`
+   and `/api/addnum/v19200998080` are the two spellings §13.15.3 step 1.c decides between, and path_scan
+   re-spells whichever one it got into a template whose hole it NAMES out of the concolic's display shape — a
+   name nothing outside a run can predict. So the prefix is the only part of the address a row may state.
+   THE ONE-RECORD CHECK IS THE WHOLE OF WHAT MAKES IT A LOCATOR AND NOT A `strstr`. A prefix that matches two
+   records names a SET, and a question asked of a set is answered by whichever member happens to carry the
+   bytes — the defect this file's readers exist to refuse, arriving through the one reader that admits a
+   partial address. It is asserted here rather than declared at the call, for the reason the `probegate:prefix`
+   marker is CHECKED rather than obeyed: the day a second endpoint shares the prefix, the row must stop
+   answering instead of quietly widening. */
+static const char *emitted_record_prefixed(const char *js, const char *prefix, size_t *span) {
+    char pat[160];
+    const char *e, *end;
+    int k = snprintf(pat, sizeof pat, "\"url\":\"%s", prefix);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "an endpoint row's url PREFIX pattern did not fit its buffer — a truncated prefix matches a shorter "
+          "address than the row named, which is a wider set and not a smaller one");
+    DCHECK(span != NULL, "an endpoint record was located by prefix with nowhere to put its bounds");
+    if (!(e = strstr(js, pat))) return NULL;
+    DCHECK(strstr(e + 1, pat) == NULL,
+           "an address PREFIX matched two endpoint records, so the row asking through it names a SET rather "
+           "than a statement — every question below it would be answered by whichever member carries the "
+           "bytes. Name the records apart or ask the whole address");
+    e += (size_t)k;
+    end = strstr(e, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
+    *span = end ? (size_t)(end - e) : strlen(e);
+    return e;
+}
+
+/* Does the one record at `prefix` carry `needle` — the scoped form of what a bare prefix `strstr` beside a
+   bare value `strstr` was standing in for. The two clauses named no record between them: the prefix said an
+   address like this exists, the value said those bytes exist, and nothing said they were the same record. */
+static int emitted_record_prefix_has(const char *js, const char *prefix, const char *needle) {
+    size_t span, n = strlen(needle);
+    const char *e = emitted_record_prefixed(js, prefix, &span), *p;
+
+    if (!e || span < n) return 0;
+    for (p = e; p + n <= e + span; p++)
+        if (memcmp(p, needle, n) == 0) return 1;
+    return 0;
+}
+
 /* ONE ENDPOINT'S REQUEST METHOD — the one field of a record that no reader above can reach, because it is the
    one field that sits BEFORE the address. `endpoint_json_array` writes `{"method":..,"url":..,"params":[..`
    (solver/endpoint.c), and `emitted_record_span` deliberately begins PAST the url because an address is not an
@@ -7620,20 +7664,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `v19200998080` — the quoted match is exact, so the old answer cannot satisfy it, which is why the
        constant is one the two arms spell differently. `addstr` is the string arm, required to stay byte-for-
        byte what it was: a String on either side takes step 1.c whatever the other side's example is. */
-    /* THE TWO PATH-PREFIX NEEDLES BELOW ARE DELIBERATELY OPEN AT THE RIGHT, AND SAY SO AT THE CALL. The
-       endpoint's LAST SEGMENT is the value under test (`/api/addnum/v1000000` vs `/api/addnum/v19200998080`),
-       so the row must match the prefix and let the quoted value clause decide the rest — a whole-token needle
-       here would be the answer written into the question. `engine/probegate.mjs` reports a needle a document
-       token contains, and these two are contained by `/api/addnum/v` and `/api/addstr/r`; the marker says the
-       containment is the intended match. It is CHECKED rather than obeyed: the gate still reddens the day a
-       SECOND endpoint shares the prefix, which is the day the row stops naming one statement. */
+    /* THE TWO ROWS BELOW ARE THE ONLY ONES WHOSE ADDRESS IS A PREFIX, and that is a fact about the STATEMENT
+       rather than a licence: the endpoint's LAST SEGMENT is the value under test (`/api/addnum/v1000000` vs
+       `/api/addnum/v19200998080`), so naming the whole address writes the answer into the question, and the
+       hole path_scan mints is named out of the concolic's display shape, which nothing outside a run predicts.
+       THEY WERE A PREFIX `strstr` BESIDE A VALUE `strstr` AND NAMED NO RECORD BETWEEN THEM — the first said an
+       address like this exists, the second said those bytes exist somewhere, and a run that put `v1000000` on
+       any other endpoint satisfied the pair exactly as the right one does. A declared-prefix marker made the
+       CONTAINMENT axis stop reporting them and could say nothing about the join, which is the two axes being
+       independent exactly as this file's banner states. `emitted_record_prefixed` is the locator that closes
+       it, and its own DCHECK carries what the marker was for: a prefix matching two records names a SET, and
+       the row must stop answering rather than quietly widen. */
     const char *addfork_why = NULL; int addfork_tt = 1;
     FORK_ROW(js, &addfork_tt, &addfork_why, "/api/addfork", "v",
              "§13.15.3 step 1.c keeping the SUM unknown — an arm that answered with a bare number would "
              "decide the branch and lose one of the two endpoints",
              "addpos", "addneg");
-    int addnum_tt   = (strstr(js, "/api/addnum/") /*probegate:prefix*/    && strstr(js, "\"v1000000\""));
-    int addstr_tt   = (strstr(js, "/api/addstr/") /*probegate:prefix*/    && strstr(js, "\"r1920\""));
+    const char *addnum_why = NULL; int addnum_tt = 1;
+    fold_row(&addnum_tt, &addnum_why, emitted_record_prefix_has(js, "/api/addnum/", "\"v1000000\""),
+             "§6.1.6.1.7 Number::add ( x, y ) did not leave `v1000000` on the /api/addnum/ record: either "
+             "there is no such record at all (the statement never ran) or the segment came back "
+             "`v19200998080`, which is what a STRING concatenation leaves when `num` did not cancel");
+    const char *addstr_why = NULL; int addstr_tt = 1;
+    fold_row(&addstr_tt, &addstr_why, emitted_record_prefix_has(js, "/api/addstr/", "\"r1920\""),
+             "§13.15.3 step 1.c's STRING arm did not leave `r1920` on the /api/addstr/ record — a String on "
+             "either side takes step 1.c whatever the other side's example is, so this must not move");
     /* §4.12.1.1's "immediately execute the script element" AT A POSITION INSIDE THE DOCUMENT'S OWN SEQUENCE.
        The match is EXACT and the near-miss is the whole point: `ABXC` is the injected program at the slot after
        the <script> that injected it, and `ABC` is that same program pushed to the TAIL — the only place a
@@ -8036,9 +8091,29 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `%3C` and parses as text — and must still be REPORTED, as a parked search carrying the encode set that
        defeated it. Asserting only "no PoC" would also pass if the sink were never detected, which is the false
        negative this half exists to catch; asserting the parked entry says the sink WAS reached and searched. */
-    int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"" LOCATION_HASH_SRC "\",\"search\":\"parked\"")
-              && s_field(ss, "innerHTML", LOCATION_HASH_SRC, "\"sourceEncodes\":\" \\\"<>`\"")
-              && !strstr(ss, "\"source\":\"" LOCATION_HASH_SRC "\",\"poc\":\"<");
+    /* THE PARKED CLAUSE WAS A WHOLE-DOCUMENT `strstr` STANDING BESIDE A RECORD-SCOPED ONE, which is the shape
+       that reads as joined and is not. It happened to be anchored on `"sink":"…","source":"…"`, so nothing
+       else could answer it — but the anchoring is a property of the bytes the needle spells rather than of
+       the question being asked, and the next field added between `source` and `search` breaks it silently.
+       `s_field` asks the same thing INSIDE the record's own bounds, which is the reader that exists for it.
+       THE NEGATIVE STAYS WHOLE-DOCUMENT and is the one clause here that should be: a PoC from this source
+       into a markup sink anywhere is the finding, and a superstring or a neighbouring record can only make an
+       absence fail EARLY. */
+    const char *s_park_why = NULL; int s_park = 1;
+    fold_row(&s_park, &s_park_why, s_field(ss, "innerHTML", LOCATION_HASH_SRC, "\"search\":\"parked\""),
+             "the innerHTML <- location.hash search is not recorded as PARKED — either the sink was never "
+             "detected (which is the false negative the whole row exists to catch, and `s-loc-park-stage` is "
+             "the rung that says which) or the entry carries a `poc` and the row below it is the finding");
+    fold_row(&s_park, &s_park_why,
+             s_field(ss, "innerHTML", LOCATION_HASH_SRC, "\"sourceEncodes\":\" \\\"<>`\""),
+             "the parked entry does not carry the fragment set that defeated it: without the DECLARATION the "
+             "park says a search stopped and not WHY, so nothing distinguishes an encode-blocked source from "
+             "a derivation that simply had not run");
+    fold_row(&s_park, &s_park_why, !strstr(ss, "\"source\":\"" LOCATION_HASH_SRC "\",\"poc\":\"<"),
+             "a MARKUP breakout was reported through the raw fragment: the fragment set encodes `<`, so every "
+             "HTML candidate arrives as `%3C` and parses as text — a PoC here is one a real browser would not "
+             "reproduce. Deliberately asked of the WHOLE document, because such a PoC on any entry of this "
+             "source is the finding");
     /* AND THE MEASURED HALF OF THAT CONSTRAINT, which is what makes the negative a MEASUREMENT rather than an
        absence. `sourceEncodes` is the DECLARATION — what location.c states the browser percent-encodes — and a
        page that ran `decodeURIComponent` over its own fragment would receive every one of those bytes anyway,
@@ -8229,9 +8304,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        hex and came back through park_unhex, the sink class crossed as a NAME and was re-bound to solve.c's own
        table pointer by solve_resume_candidate, the flow replayed its recorded arms over the segments cold_resume
        rebuilt, re-reached the eval sink and X9 FIRED there — which §@S says is the only thing that proves a PoC.
-       A session that rebuilt its flows and then went nowhere reports nothing here. */
-    int cold_fired = (strstr(js, "\"sink\":\"eval\"") && strstr(js, "{state}.code")
-                      && strstr(js, "';X9()//")) ? 1 : 0;
+       A session that rebuilt its flows and then went nowhere reports nothing here.
+       AND IT WAS THREE LOOSE `strstr`s FOR A CLAIM THAT IS ONE RECORD. The sink class, the source shape and
+       the payload text were asked of the whole document independently, so three DIFFERENT records answered
+       them between them — and the record that answers all three is the one `s-eval` already asserts a few
+       hundred lines up (`s_poc(ss, "eval", "{state}.code", "';X9()//")`), which is an EXPLORE row. A resume
+       whose replay went nowhere while an exploring flow in the same document fired the same sink satisfied
+       this row exactly as the round trip does. `s_poc` is that same join, spelled once: the record shape
+       solve.h declares, in order, with the payload anchored to its own `poc` key, so a candidate list cannot
+       answer it and neither can another sink's entry. */
+    int cold_fired = s_poc(js, "eval", "{state}.code", "';X9()//");
     /* ─── THE THREE OPERAND-SHAPE STATEMENTS (script id=stk) ───────────────────────────────────────────────
        Each is TWO rows, never one, because each has two independent ways to be wrong and a folded row would
        name neither: whether the path RAN, and whether the operand stack was where the next opcode expected it
@@ -8431,8 +8513,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
         { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
         { "add-fork", addfork_tt, "/api/addfork", SESS_EXPLORE, addfork_why },
-        { "add-number", addnum_tt, "/api/addnum", SESS_EXPLORE },
-        { "add-string", addstr_tt, "/api/addstr", SESS_EXPLORE },
+        { "add-number", addnum_tt, "/api/addnum", SESS_EXPLORE, addnum_why },
+        { "add-string", addstr_tt, "/api/addstr", SESS_EXPLORE, addstr_why },
         { "script-order", scriptorder_tt, "/api/scriptorder", SESS_EXPLORE, scriptorder_why },
         { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE, cscurrent_why },
         { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE, csrestore_why },
@@ -8502,7 +8584,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-html", s_html, "state.html", SESS_EXPLORE },
         { "s-url", s_url, "state.next", SESS_EXPLORE },
         { "s-loc", s_loc, "location.hash", SESS_EXPLORE },
-        { "s-park", s_park, "location.hash", SESS_EXPLORE },
+        { "s-park", s_park, "location.hash", SESS_EXPLORE, s_park_why },
         /* THE MEASURED CONSTRAINT BEHIND THE NEGATIVE, and the POSITIVE it is the counterpart of. */
         { "s-park-nodeliver", s_nodeliver, "location.hash", SESS_EXPLORE },
         { "s-attr", s_attr, "location.hash", SESS_EXPLORE },

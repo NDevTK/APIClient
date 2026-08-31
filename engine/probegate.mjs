@@ -21,7 +21,11 @@
  * defect the row exists to catch. Every needle can be unique in the whole document and the join still
  * unstated, which is why the rows converted in this fixture kept reporting 0 findings before and after: what
  * was wrong in them was never on axis 1. A clause's SCOPE is its record key; two clauses are joined when
- * their scopes are equal and non-empty; a bare `strstr` has no scope and joins with nothing, itself included.
+ * their scopes are equal and non-empty; a bare POSITIVE `strstr` has no scope and joins with nothing, itself
+ * included. A bare NEGATIVE one is not unscoped, it is WHOLE-DOCUMENT, and the two are opposites here: every
+ * finding on this axis is a way for a row to PASS when it should fail, and an absence cannot be satisfied by
+ * another record at all — a neighbour can only make it fail EARLY. It is the same exemption axis 1 already
+ * grants a negative needle, for the same reason, and leaving it out reported a row the fixture is RIGHT about.
  *
  * BOTH SIDES ARE DERIVED FROM THE CODE THAT OWNS THEM — CLAUDE.md §an-auditor-derives-the-rule-it-checks.
  *   - the NEEDLES are the `strstr(<doc>, "…")` literals of the audited file, with C comments blanked first
@@ -34,6 +38,19 @@
  *     `static const char *const T[][K] = { … }`, because a loop over a table is how one `strstr` line becomes
  *     a hundred probe terms and reporting it as one unresolved needle understates the surface by the table's
  *     own length;
+ *   - a NEEDLE SPELLED WITH A MACRO is a literal too, because that is what the preprocessor makes of it. An
+ *     object-like `#define` whose body is a run of string literals and other such macros is resolved from the
+ *     `#define` itself, in the audited file AND in every header it includes transitively — the sources whose
+ *     `#include "…"` this scan can resolve to exactly one file under the audited file's own directory, with
+ *     the ones it cannot NAMED. Without it the @S rows' whole SOURCE identity was outside every check here,
+ *     and a needle that is one is not a needle this scan looked at;
+ *   - a ROW SPELLED AS A FUNCTION-LIKE MACRO is a call site of the reader that macro expands to, and the
+ *     argument mapping is read off the macro's own body: an argument of the reader call that is exactly one
+ *     of the macro's parameters IS that parameter, and a variadic tail poured into a `const char *const A[]`
+ *     arrives wherever `A` does. A hand-written block naming one macro and its argument positions by number
+ *     stood here and is gone — it was a second copy of a `#define`, it knew nothing about the second such
+ *     macro in the same file, and the reader whose needle it could not reach reported "NO call site passes
+ *     the document by name (a macro fills it)", which was every two-world row in the fixture at once;
  *   - the DOCUMENT TOKENS are read out of the fixture's own document literals, found by their SHAPE (a
  *     file-scope `static const char *X =` whose concatenated text is an HTML document with a `<script` in it),
  *     so a fourth fixture document added tomorrow is audited without editing this file;
@@ -55,7 +72,9 @@
  *     both of the needle's own quote bytes are token boundaries in the emitted JSON;
  *   - a needle in a NEGATIVE position (`!strstr(...)`) can only be made unable to PASS by a superstring, never
  *     unable to FAIL, so a collision there is a false RED — a reading somebody checks — and the whole-document
- *     form is deliberate there;
+ *     form is deliberate there. THE SAME EXEMPTION IS THE JOIN AXIS'S, and it took a measured false finding to
+ *     put it there: this line had stood for one axis while the other counted the identical needle as a row
+ *     asserting nothing, so the report asked an author to scope a clause that is stronger unscoped;
  *   - a DECLARED PREFIX (`/*probegate:prefix*\/` at the site) is a needle whose only superstrings are the
  *     intended match. The declaration is CHECKED rather than obeyed: it holds only while every containing
  *     token still extends the needle to the right, and a second endpoint sharing the prefix re-reddens it.
@@ -65,6 +84,11 @@
  * template, an error message, a census field name, a value built by concatenating a loop counter — is outside
  * it, and a needle contained by one of those is invisible here. The one synthesised family that IS covered is
  * the concolic source shape, because the fixture declares its roots in C and concolic.h owns the composition.
+ * THE MACRO LAYER HAS ITS OWN EDGE AND PRINTS IT: a `#define` whose body runs onto a second line is left
+ * unresolved rather than half-read, because half a string constant is a concrete needle for bytes nothing
+ * emits — this scan minting the very defect it exists to find — and an `#include` matching no single file
+ * under the audited file's directory is a whole header's constants missing from the universe, so the count
+ * and the names are printed rather than absorbed into a smaller, prettier number.
  * A needle this scan cannot resolve to a literal at all is printed with the `snprintf` FORMAT that fills it,
  * for the same reason: "5 needles composed at runtime" is a number, and `"\"url\":\"%s\""` is a reader being
  * able to see that the needle is anchored on both sides by JSON structure and decide for themselves.
@@ -76,7 +100,8 @@
  * IT IS NOT A BUILD GATE, for `citegen.mjs`'s reason: a fixture edit must not be able to stop every lane, and
  * a finding count that becomes a noise floor is a finding count nobody reads. */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 
 const args = process.argv.slice(2);
 const ALL = args.includes("--all");
@@ -119,6 +144,194 @@ function blankComments(src) {
     return out.join("");
 }
 
+/* ---------------------------------------------------------- the macro layer
+ *
+ * A NEEDLE SPELLED WITH A MACRO IS A LITERAL THIS SCAN COULD NOT SEE, AND IT REPORTED THAT AS A RESIDUE RATHER
+ * THAN AS A ZERO — which was right, and is the reason it is now closed rather than left. `LOCATION_HASH_SRC`
+ * and `ATTR_SRC` are the SOURCE identity of every @S row in the audited file, so a `strstr` naming one, and
+ * every composed needle whose `src` argument is one, resolved to nothing: twelve of the @S terms were outside
+ * every check here while the report said "NOT RESOLVED where src is not a literal" and named the argument.
+ *
+ * IT IS A DERIVATION AND NOT A TABLE OF NAMES, for §an-auditor-derives-the-rule-it-checks. An object-like
+ * `#define` whose body is a run of string literals and other such macros IS a string constant, and that is
+ * read off the `#define` itself. `PROBE_MAX 320` resolves to nothing and stays nothing; a function-like macro
+ * is excluded by its own `(`, which the pattern cannot match.
+ *
+ * AND THE DEFINITION IS USUALLY NOT IN THE AUDITED FILE, which is why this follows includes. `ATTR_SRC` is
+ * declared in the fixture and composed OVER `LOCATION_HASH_SRC`, which belongs to the component that owns the
+ * source — a header — so resolving only the audited file's own macros would resolve neither of them. The
+ * headers are found from the file's OWN `#include "…"` list, resolved against an index of the tree the audited
+ * file sits in: no configured include path, and a name that matches two files is left unresolved rather than
+ * guessed at, because the wrong header's macro is a concrete needle that reads plausible. */
+
+/* THE RESOLVED STRING MACROS OF THE FILE BEING AUDITED. It is module-scoped and reassigned once per file
+ * because every literal reader below needs it and threading it through fifteen signatures would put the same
+ * fact in fifteen places — the second-copy failure this file refuses everywhere else. The audit loop is
+ * sequential and sets it before the first read, which is the whole of the contract. */
+let MACROS = new Map();
+
+function fileIndex(rootDir) {
+    const byRel = new Map();
+    const walk = d => {
+        let ents;
+        try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+        for (const e of ents) {
+            const p = join(d, e.name);
+            if (e.isDirectory()) { if (e.name !== ".git" && e.name !== "out") walk(p); }
+            else if (/\.h$/.test(e.name)) {
+                const rel = relative(rootDir, p);
+                if (byRel.has(rel)) byRel.set(rel, null); else byRel.set(rel, p);
+            }
+        }
+    };
+    walk(rootDir);
+    return byRel;
+}
+
+/* Every header the audited file reaches through `#include "…"`, transitively, as {path, blank}. A `#include`
+ * this cannot resolve to exactly one file in the tree is SKIPPED and counted, never guessed. */
+function includedSources(path, blank) {
+    const root = dirname(path);
+    const index = fileIndex(root);
+    const keys = [...index.keys()];
+    const out = [], seen = new Set([path]);
+    const unresolved = [];
+    const queue = [blank];
+    while (queue.length) {
+        const src = queue.shift();
+        const re = /^[ \t]*#[ \t]*include[ \t]+"([^"]+)"/gm;
+        let m;
+        while ((m = re.exec(src)) !== null) {
+            const want = m[1];
+            const hits = keys.filter(k => k === want || k.endsWith("/" + want));
+            if (hits.length !== 1 || index.get(hits[0]) === null) { unresolved.push(want); continue; }
+            const p = index.get(hits[0]);
+            if (seen.has(p)) continue;
+            seen.add(p);
+            let text;
+            try { text = blankComments(readFileSync(p, "utf8")); } catch { unresolved.push(want); continue; }
+            out.push({ path: p, blank: text });
+            queue.push(text);
+        }
+    }
+    return { headers: out, unresolved: [...new Set(unresolved)] };
+}
+
+/* The object-like macros that ARE string constants, resolved to their text. A body continued onto another line
+ * is left unresolved: `.*$` would take half of it, and half a string constant is a concrete needle for bytes
+ * nothing emits — the plausible-datum failure, minted by the scan itself. */
+function collectStringMacros(sources) {
+    const raw = new Map();
+    for (const s of sources) {
+        const re = /^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+(.*)$/gm;
+        let m;
+        while ((m = re.exec(s.blank)) !== null) if (!raw.has(m[1])) raw.set(m[1], m[2].trim());
+    }
+    const out = new Map();
+    const resolve = (name, seen) => {
+        if (out.has(name)) return out.get(name);
+        if (seen.has(name)) return null;
+        seen.add(name);
+        const body = raw.get(name);
+        if (body === undefined || /\\$/.test(body)) return null;
+        let i = 0, text = "", any = false;
+        while (i < body.length) {
+            while (i < body.length && /\s/.test(body[i])) i++;
+            if (i >= body.length) break;
+            if (body[i] === '"') {
+                const start = ++i;
+                while (i < body.length && body[i] !== '"') i += body[i] === "\\" ? 2 : 1;
+                if (body[i] !== '"') return null;
+                text += decodeCString(body.slice(start, i)); i++; any = true; continue;
+            }
+            const w = /^\w+/.exec(body.slice(i));
+            if (!w) return null;
+            const sub = resolve(w[0], seen);
+            if (sub === null) return null;
+            text += sub; i += w[0].length; any = true;
+        }
+        if (!any) return null;
+        out.set(name, text);
+        return text;
+    };
+    for (const n of raw.keys()) resolve(n, new Set());
+    return out;
+}
+
+/* A FUNCTION-LIKE MACRO THAT CALLS A MODELLED READER IS A CALL SITE OF THAT READER, and until this existed it
+ * was a call site of nothing. `fork_row_impl`'s own needle reported "NO call site passes the document by name
+ * (a macro fills it)" — an honest non-check, and a non-check over every two-world row in the fixture, because
+ * the macro is how all of them are spelled.
+ *
+ * THE MAPPING IS READ OFF THE MACRO'S BODY, never typed here: an argument of the reader call that is EXACTLY
+ * one of the macro's own parameters (its parens stripped) is that parameter's position, and everything else is
+ * the macro's own local. That is the same derivation the reader model performs on C functions, applied to the
+ * one construct the preprocessor hides from it.
+ *
+ * AND THE VARIADIC TAIL IS DERIVED TOO, THROUGH THE ARRAY IT IS POURED INTO. A `static const char *const A[] =
+ * { __VA_ARGS__ };` in the body makes `A` the tail, and the reader argument whose text is `A` is where the
+ * tail arrives. Those elements CANNOT be a record key: a key parameter is a `const char *` the reader model
+ * already found, and this one is an ARRAY, so what an element can be is the payload the reader looks for
+ * inside the record it located. That is why the tail's kind falls out of the shape rather than being asserted
+ * — the same reason the reader model can say which of a locator's own keys narrows. */
+function collectReaderMacros(blank, model) {
+    const out = new Map();
+    const re = /^[ \t]*#[ \t]*define[ \t]+(\w+)\(([^)]*)\)/gm;
+    let m;
+    while ((m = re.exec(blank)) !== null) {
+        const params = m[2].split(",").map(s => s.trim());
+        const variadic = params[params.length - 1] === "...";
+        /* the macro's extent: lines while each ends in a backslash */
+        let end = m.index;
+        for (;;) {
+            const nl = blank.indexOf("\n", end);
+            const line = blank.slice(end, nl < 0 ? blank.length : nl);
+            end = nl < 0 ? blank.length : nl + 1;
+            if (nl < 0 || !/\\[ \t]*$/.test(line)) break;
+        }
+        const body = blank.slice(m.index, end);
+        const va = /\b(\w+)\s*\[\s*\]\s*=\s*\{\s*__VA_ARGS__\s*\}/.exec(body);
+        for (const [rn, r] of model) {
+            const cre = new RegExp(`\\b${rn}\\s*\\(`, "g");
+            const x = cre.exec(body);
+            if (!x) continue;
+            const a = callArgs(body, x.index + x[0].length - 1).map(s => s.trim());
+            const map = new Map();
+            let varPos = -1;
+            a.forEach((t, q) => {
+                const bare = t.replace(/^\(+/, "").replace(/\)+$/, "").trim();
+                const p = params.indexOf(bare);
+                if (p >= 0) map.set(q, p);
+                else if (va && bare === va[1]) varPos = q;
+            });
+            if (map.size) out.set(m[1], { reader: rn, name: m[1], map, varPos,
+                                          nfixed: variadic ? params.length - 1 : params.length });
+            break;
+        }
+    }
+    return out;
+}
+
+/* Every call site of a reader-macro, as the reader argument list it stands for. An argument the mapping does
+ * not reach comes back `undefined`, which is exactly what a reader call with a missing argument looks like to
+ * every consumer here, so nothing downstream needs to know a macro was involved. */
+function macroCallSites(blank, macros, docNames) {
+    const sites = [];
+    for (const [name, mac] of macros) {
+        const re = new RegExp(`\\b${name}\\s*\\(`, "g");
+        let m;
+        while ((m = re.exec(blank)) !== null) {
+            const open = m.index + m[0].length - 1;
+            const call = callArgs(blank, open);
+            const args = [];
+            for (const [q, p] of mac.map) args[q] = call[p];
+            if (args[0] === undefined || !isDocument(docNames, args[0].trim(), m.index)) continue;
+            sites.push({ at: m.index, mac, args, tail: call.slice(mac.nfixed) });
+        }
+    }
+    return sites;
+}
+
 function decodeCString(lit) {
     let s = "";
     for (let i = 0; i < lit.length; i++) {
@@ -135,18 +348,33 @@ function decodeCString(lit) {
 }
 
 /* Read a run of adjacent string literals starting at `i` (C concatenation), returning the decoded text and the
- * offset just past the last one. Returns null when `i` is not at a string literal. */
-function readLiteralRun(src, i) {
+ * offset just past the last one. Returns null when `i` is not at a string literal.
+ * A STRING MACRO IS ONE OF THE ADJACENT LITERALS, because that is what the preprocessor makes of it — so a run
+ * may begin with one, end with one, or be one. Only a name `macros` actually resolved is consumed; an ordinary
+ * identifier still ends the run, which is what keeps `param_value_is(js, url, …)` from reading `url` as text. */
+function readLiteralRun(src, i, macros = MACROS) {
     let text = "";
     const parts = [];
     for (;;) {
         while (i < src.length && /\s/.test(src[i])) i++;
-        if (src[i] !== '"') break;
-        const start = ++i;
-        while (i < src.length && src[i] !== '"') i += src[i] === "\\" ? 2 : 1;
-        const seg = decodeCString(src.slice(start, i));
-        parts.push(seg); text += seg;
-        i++;
+        if (src[i] === '"') {
+            const start = ++i;
+            while (i < src.length && src[i] !== '"') i += src[i] === "\\" ? 2 : 1;
+            const seg = decodeCString(src.slice(start, i));
+            parts.push(seg); text += seg;
+            i++;
+            continue;
+        }
+        if (macros) {
+            const w = /^\w+/.exec(src.slice(i));
+            if (w && macros.has(w[0])) {
+                const seg = macros.get(w[0]);
+                parts.push(seg); text += seg;
+                i += w[0].length;
+                continue;
+            }
+        }
+        break;
     }
     return parts.length === 0 ? null : { text, end: i, parts };
 }
@@ -183,11 +411,12 @@ function callArgs(src, open) {
     return args;
 }
 
-/* The decoded value of an argument that is exactly a string literal, else null. */
-function argLiteral(a) {
+/* The decoded value of an argument that is exactly a string literal run — a string MACRO being one of the
+ * literals, so `s_poc(js, "eval", LOCATION_HASH_SRC, "';X9()//")` has three literal arguments and not two. */
+function argLiteral(a, macros = MACROS) {
     const t = a.trim();
-    if (!t.startsWith('"')) return null;
-    const run = readLiteralRun(t, 0);
+    if (t.length === 0) return null;
+    const run = readLiteralRun(t, 0, macros);
     return run && run.end === t.length ? run.text : null;
 }
 
@@ -715,7 +944,7 @@ function documentTokens(doc, roots, bare, add) {
  * WHICH READERS STATE A TOKEN, AND WHICH ARGUMENT OF EACH DOES, IS NOT TYPED HERE — it is the reader model,
  * which reads it off the audited file's own signatures. A list of two or three names in this position is
  * exactly what let a renamed reader stop contributing tokens with nothing anywhere to say so. */
-function expectedTokens(blank, tables, model, docName, add) {
+function expectedTokens(blank, tables, model, docName, macroSites, add) {
     const lit = a => argLiteral(a) ?? (tableNeedles(a, tables) || null);
     const each = (v, kind) => { if (typeof v === "string") add(v, kind, "row");
                                 else if (Array.isArray(v)) for (const s of v) add(s, kind, "row"); };
@@ -730,15 +959,16 @@ function expectedTokens(blank, tables, model, docName, add) {
             for (const p of r.strPos) if (a[p] !== undefined) each(lit(a[p]), r.kind.get(p));
         }
     }
-    const re = /\bFORK_ROW\s*\(/g;
-    let m;
-    while ((m = re.exec(blank)) !== null) {
-        const a = callArgs(blank, m.index + m[0].length - 1);
-        if (a.length < 8) continue;                       /* js, row, why, url, pname, subject, w0, w1 … */
-        const url = argLiteral(a[3]), pname = argLiteral(a[4]);
-        if (url) add(url, "path", "row");
-        if (pname) add(pname, "param", "row");
-        for (let k = 6; k < a.length; k++) { const w = argLiteral(a[k]); if (w) add(w, "value", "row"); }
+    /* AND THE SAME LOOP OVER THE ROWS SPELLED AS A READER-MACRO. A HAND-WRITTEN BLOCK NAMING `FORK_ROW` AND
+     * ITS ARGUMENT POSITIONS BY NUMBER STOOD HERE and is gone: it was a second copy of a fact the audited file
+     * declares in its own `#define`, it had to be edited whenever that macro's parameter list moved, and it
+     * knew nothing about a second such macro. The kinds come from the READER the macro expands to, exactly as
+     * for a direct call; the VARIADIC tail arrives at an argument the reader declares as an ARRAY rather than
+     * a `const char *`, so it is in no key position the model found and its elements can only be payload. */
+    for (const s of macroSites) {
+        const r = model.get(s.mac.reader);
+        for (const p of r.strPos) if (s.args[p] !== undefined) each(lit(s.args[p]), r.kind.get(p));
+        if (s.mac.varPos >= 0) for (const t of s.tail) each(lit(t), "value");
     }
 }
 
@@ -783,10 +1013,19 @@ function collectStatements(blank) {
  * Scope and payload arguments are resolved to literals where they are literals and kept as their own source
  * text where they are not — an unresolved key is still a key, and two clauses passing the SAME expression are
  * still about the same record. */
-function collectClauses(src, blank, model, docNames, tables) {
+function collectClauses(src, blank, model, docNames, tables, macroSites) {
     const out = [];
     const lit = a => { const v = argLiteral(a); if (v !== null) return JSON.stringify(v);
-                       const t = tableNeedles(a, tables); return t ? `[${t.join("")}]` : a.trim(); };
+                       const t = tableNeedles(a, tables); return t ? `[${t.join("")}]` : a.trim(); };
+    /* the literal each key parameter actually holds at this site, by POSITION — what a needle inside a reader
+     * further down the chain is substituted with */
+    const push = (at, name, r, a) => {
+        const bind = new Map();
+        for (const p of r.strPos) { const v = a[p] === undefined ? null : argLiteral(a[p]); if (v !== null) bind.set(p, v); }
+        out.push({ at, line: lineOf(src, at), fn: name, bind, negative: false,
+                   scope: r.scope.filter(p => a[p] !== undefined).map(p => lit(a[p])),
+                   payload: r.payload.filter(p => a[p] !== undefined).map(p => lit(a[p])) });
+    };
     for (const [name, r] of model) {
         const re = new RegExp(`\\b${name}\\s*\\(`, "g");
         let m;
@@ -794,22 +1033,31 @@ function collectClauses(src, blank, model, docNames, tables) {
             if (m.index >= r.start && m.index < r.end) continue;
             const a = callArgs(blank, m.index + m[0].length - 1);
             if (a[0] === undefined || !isDocument(docNames, a[0].trim(), m.index)) continue;
-            /* the literal each key parameter actually holds at this site, by POSITION — what a needle inside
-             * a reader further down the chain is substituted with */
-            const bind = new Map();
-            for (const p of r.strPos) { const v = a[p] === undefined ? null : argLiteral(a[p]); if (v !== null) bind.set(p, v); }
-            out.push({ at: m.index, line: lineOf(src, m.index), fn: name, bind,
-                       scope: r.scope.filter(p => a[p] !== undefined).map(p => lit(a[p])),
-                       payload: r.payload.filter(p => a[p] !== undefined).map(p => lit(a[p])) });
+            push(m.index, name, r, a);
         }
     }
+    /* A ROW SPELLED AS A READER-MACRO IS A CLAUSE OF THAT READER, and until the macro layer existed it was a
+     * clause of nothing — so every two-world row in the audited file sat outside this axis entirely, in
+     * neither the findings nor the denominator. They are scoped by construction, which is an answer this axis
+     * should REPORT rather than a question it never asked. */
+    for (const s of macroSites) push(s.at, s.mac.reader, model.get(s.mac.reader), s.args);
     const re = /\bstrstr\s*\(/g;
     let m;
     while ((m = re.exec(blank)) !== null) {
         const a = callArgs(blank, m.index + m[0].length - 1);
         if (a.length < 2 || !isDocument(docNames, a[0].trim(), m.index)) continue;
+        /* THE SIGN IS PART OF THE CLAUSE, and leaving it out made this axis report a row the audited file is
+         * RIGHT about. A negative whole-document needle cannot be answered by another record: a superstring or
+         * a neighbouring statement can only make an absence fail EARLY, never pass — so it states something
+         * STRICTLY STRONGER than a scoped clause would, and scoping it would weaken the row. That is the
+         * audited file's own rule ("scope every positive world clause, and leave the negatives whole"), and it
+         * is the same argument the containment axis already accepts for the same reason. Measured: a row whose
+         * two clauses were BOTH negative was reported UNJOINED, which asked its author to make it worse. */
+        let j = m.index - 1, bangs = 0;
+        while (j >= 0 && /\s/.test(blank[j])) j--;
+        while (j >= 0 && blank[j] === "!") { bangs++; j--; while (j >= 0 && /\s/.test(blank[j])) j--; }
         out.push({ at: m.index, line: lineOf(src, m.index), fn: null, bind: new Map(),
-                   scope: [], payload: [lit(a[1])] });
+                   negative: (bangs & 1) === 1, scope: [], payload: [lit(a[1])] });
     }
     return out.sort((x, y) => x.at - y.at);
 }
@@ -826,7 +1074,13 @@ function collectClauses(src, blank, model, docNames, tables) {
  * REPEATED   two clauses identical in reader, scope AND payload. One question asked twice reads as two facts,
  *            and the second answer is the first one. */
 function classifyRow(cl) {
-    const unscoped = cl.filter(c => c.scope.length === 0);
+    /* A NEGATIVE BARE NEEDLE IS NOT AN UNSCOPED CLAUSE, IT IS A WHOLE-DOCUMENT ONE, and the difference is the
+     * direction it can be wrong in. Every finding on this axis is "some OTHER record satisfies this clause",
+     * which is a way for a row to PASS when it should fail; an absence cannot be satisfied by another record
+     * at all — a superstring or a neighbour makes it fail EARLY, which is a false red somebody reads. So a
+     * negative is immune to this axis by the same argument the containment axis already accepts, and counting
+     * one here reported a row the audited file is right about. */
+    const unscoped = cl.filter(c => c.scope.length === 0 && !c.negative);
     const scoped = cl.filter(c => c.scope.length > 0);
     const full = c => `${c.fn ?? "strstr"}(${c.scope.join("")}|${c.payload.join("")})`;
     const seen = new Map(), repeated = [];
@@ -848,8 +1102,14 @@ for (const path of FILES) {
     const docName = documentParamName(blank);
     if (!docName) { unaudited++; console.log(`${path}: no emitted-document reader found — nothing audited.`); continue; }
     const docNames = documentAliases(blank, docName);
+    /* THE MACROS FIRST, because every literal read below goes through them: a needle spelled with one is not a
+     * literal until they are resolved, and a table entry or a document segment can be spelled with one too. */
+    const inc = includedSources(path, blank);
+    MACROS = collectStringMacros([{ path, blank }, ...inc.headers]);
     const tables = collectTables(blank);
     const model = collectReaderModel(blank, docName);
+    const readerMacros = collectReaderMacros(blank, model);
+    const macroSites = macroCallSites(blank, readerMacros, docNames);
 
     const docs = collectDocuments(src, blank);
     const { roots, bare } = collectConcolicRoots(blank);
@@ -860,7 +1120,7 @@ for (const path of FILES) {
         e.kinds.add(kind); e.docs.add(doc); if (rec !== undefined) e.recs.add(rec);
     };
     for (const d of docs) documentTokens(d, roots, bare, add);
-    expectedTokens(blank, tables, model, docName, add);
+    expectedTokens(blank, tables, model, docName, macroSites, add);
 
     const { sites, foreign } = collectNeedles(src, blank, docNames, tables);
 
@@ -868,7 +1128,7 @@ for (const path of FILES) {
      * an ordinary needle this scan checks. What cannot be substituted stays in `sites` as itself, so the
      * unresolved count is what is genuinely unresolved rather than what was never attempted. */
     /* the join axis: one statement is one row, and a row with a single clause has no join to state */
-    const allClauses = collectClauses(src, blank, model, docNames, tables);
+    const allClauses = collectClauses(src, blank, model, docNames, tables, macroSites);
     const bind = keyBindings(model, allClauses);
 
     const composed = [];
@@ -967,6 +1227,24 @@ for (const path of FILES) {
      * is why each direction gets its own line rather than one number that could be read as either. A table
      * subscript is ONE call and N terms; a scan over something that is not the emitted document is a call and
      * NO term, and used to leave no trace at all. */
+    /* THE MACRO LAYER STATES WHAT IT RESOLVED AND WHAT IT DID NOT, for the reason every other non-check here
+     * is printed: a needle spelled with a macro this could not resolve is not a needle this scan checked, and
+     * an unresolvable `#include` is a whole header's worth of constants missing from the universe. Both used
+     * to be invisible — the composed-needle line said "NOT RESOLVED where src is not a literal", which named
+     * the argument and not the reason, and there was nothing at all for a header. */
+    console.log(`  STRING MACROS: ${MACROS.size} resolved, from this file and the ${inc.headers.length} ` +
+                `header(s) it includes transitively` +
+                (inc.unresolved.length
+                    ? `; ${inc.unresolved.length} include(s) matched no single file under ` +
+                      `${dirname(path)} and were SKIPPED: ${inc.unresolved.slice(0, 6).join(", ")}` +
+                      (inc.unresolved.length > 6 ? ", …" : "")
+                    : "; every include resolved to exactly one file"));
+    console.log(`  READER MACROS: ${readerMacros.size} function-like macro(s) expand to a modelled reader, ` +
+                `${macroSites.length} call site(s) —`);
+    for (const [, mc] of readerMacros)
+        console.log(`               ${mc.name} → ${mc.reader}(` +
+                    `${[...mc.map].map(([q, p]) => `arg${q}=macro arg${p}`).join(", ")})` +
+                    (mc.varPos >= 0 ? `, variadic tail → arg${mc.varPos} (payload)` : ", no variadic tail"));
     console.log(`  NOT A PROBE: ${foreign.length} strstr call(s) whose subject is not the emitted document ` +
                 `(${[...new Set(foreign.map(f => f.subject))].join(", ") || "none"}).`);
     /* COMPOSED NEEDLES, RESOLVED OR NAMED. A count on its own was a silent zero in the denominator of every
