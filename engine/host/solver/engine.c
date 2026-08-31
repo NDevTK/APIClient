@@ -7382,6 +7382,25 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     return 1;
 }
 
+/* THE SEAM BETWEEN TWO VOCABULARIES FOR ONE FACT, which is the whole of what this is and why it is not a
+   `?:` at the install below. `core/html/unhandled_rejection.h` names the two SPEC steps it reports from
+   (§8.1.4.7 step 4.1.3 and §8.1.6.4 step 7.4); `solver/result.h` names the two things its console DOES with
+   them (a report stands, a report is taken back). Neither header may speak the other's words — a browser
+   component that included a solver header would be the layering violation, and a solver console that spoke in
+   section numbers would be answering a question it does not own — so the translation happens here, in the file
+   whose job is already installing the edges. EXHAUSTIVE AND CRASHING, not defaulting: a third edge added to
+   that enum is a fact this console has not been told what to do with, and silently reporting it as one of the
+   two would be the plausible datum §Architecture opens with. */
+static void engine_rejection_console(JSContext *ctx, JSValueConst reason, RejectionReportEdge edge) {
+    switch (edge) {
+    case REJECTION_REPORTED:  result_page_error_value(ctx, reason); return;
+    case REJECTION_RETRACTED: result_page_error_value_retract(ctx, reason); return;
+    }
+    DFAIL("§8.1.4.7/§8.1.6.4 reported a rejection edge this console has no answer for — every edge either "
+          "records an occurrence or takes one back, so a third one is a step of those algorithms that nothing "
+          "here has been taught to render");
+}
+
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
                         lxb_dom_element_t **els, int n, int forking, const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
@@ -7535,7 +7554,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        not at a lifetime — which is what its message now says, and what it used to send them away from. */
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
-    unhandled_rejection_set_report_hook(result_page_error_value);
+    unhandled_rejection_set_report_hook(engine_rejection_console);
     /* AND THE SAME SENTENCE ONE SECTION UP — HTML §8.1.4.6 step 7.3, "the user agent may report exception to a
        developer console", reached only when step 7's notHandled is true. `pageErrors` IS that console: one
        line per distinct message, carried out of the run, which is exactly what a console is for a host whose

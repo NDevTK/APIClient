@@ -113,7 +113,13 @@ char *result_swap_json(void);
    the forcing function that names an unbuilt capability — but the name was invisible: the flow simply stopped
    and the document reported the surface it had reached, with nothing to say a script had died. Recording it
    makes the capability the page needed READABLE, which is the difference between "this page yields little" and
-   "this page needs Element.matches". Deduped; the document carries them as `pageErrors`. */
+   "this page needs Element.matches". Deduped; the document carries them as `pageErrors`.
+   A ROW IS A PAIR AND A COUNT, AND THE COUNT IS WHAT MAKES THE REPORT REVOCABLE. Keyed on (message, throw
+   site) and deduped, one row stood for any number of occurrences, so there was no operation that could take
+   ONE of them back: a retraction keyed the same way would have erased a report belonging to an occurrence
+   nobody retracted. The row therefore carries how many occurrences STAND and how many were TAKEN BACK, and a
+   retraction decrements the first and increments the second — arithmetic on one row rather than a delete of
+   it, which is the whole of why `result_page_error_retract` can exist at all. */
 /* `filename` IS §8.1.4.6 "Runtime script errors"'s OWN FIELD — the throw site the extract-error-information
    algorithm derives, asked of core/events/report_exception.h so one component owns the derivation. It is
    REQUIRED and never NULL: "" is the positive answer for a thrown value that carries no backtrace (every
@@ -125,6 +131,36 @@ void result_page_error(const char *msg, const char *filename);
    them only when they are already strings. A diagnostic that runs the page's code to describe the page's crash
    is a second crash. */
 void result_page_error_value(JSContext *ctx, JSValueConst err);
+
+/* ---- TAKING ONE BACK ---------------------------------------------------------------------------------------
+ *
+ * A REPORT THIS ENGINE MADE ABOUT A PAGE THAT TURNED OUT TO HAVE DONE NOTHING WRONG. HTML §8.1.4.7 "Unhandled
+ * promise rejections" step 4.1.3 reports a rejection to a developer console at the checkpoint that noticed it,
+ * and §8.1.6.4 "HostPromiseRejectionTracker(promise, operation)" step 7.4 is the standard's own admission that
+ * the report can turn out to be wrong: a bundle that attaches `.catch` in a LATER task handles a rejection this
+ * console already named, and the page fires `rejectionhandled` to say so. Without a retraction that report
+ * stands for the life of the run — a fabricated finding about the page under analysis, which is the one thing
+ * this surface exists to prevent rather than produce.
+ *
+ * IT DECREMENTS AN OCCURRENCE, IT DOES NOT DELETE A ROW. See the row's own paragraph above: two promises can
+ * reject with the same message from the same script and only one of them be caught, and a delete would take
+ * the other's report with it.
+ *
+ * A RETRACTION THAT FINDS NO STANDING OCCURRENCE IS A NO-OP AND THAT IS A POSITIVE ANSWER, NOT A MISSED ONE.
+ * §8.1.4.7's step 4.1 has FOUR substeps and the two that matter here are gated on DIFFERENT things: 4.1.3
+ * reports only "if notCanceled is true", while 4.1.4 appends to the outstanding rejected promises weak set if
+ * "p.[[PromiseIsHandled]] is false" — cancellation is not mentioned. So a page that calls preventDefault() on
+ * `unhandledrejection` is never reported AND is still appended, and §8.1.6.4 step 7.4 will later fire
+ * `rejectionhandled` for it. That retraction has nothing to take back, and it must not manufacture a row
+ * saying it did. The same sentence covers a page that mutated the reason's `name`/`message` between the two
+ * events so the description no longer matches: that is page-controlled input, where an assert is banned.
+ *
+ * The value form derives the pair from the reason exactly as `result_page_error_value` derives it from the
+ * thrown value — the SAME derivation, or the two would key on different strings and no retraction would ever
+ * find its report. It runs no page code, for the reason stated above. */
+void result_page_error_retract(const char *msg, const char *filename);
+void result_page_error_value_retract(JSContext *ctx, JSValueConst reason);
+
 /* THE SAME DESCRIPTION, INTO THE CALLER'S BUFFER, because a thrown value has to be readable somewhere other
    than the findings document. An assert that names a failure and DISCARDS the exception describing it names a
    problem nobody can act on: `flow_step: a page <script> did not COMPILE` was measured on five of eleven real
@@ -156,11 +192,36 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
    uncaught error and a regression that raises the same message elsewhere are then one line. The document's
    `pageErrors` is still one line per distinct MESSAGE (report_exception.c calls it a developer console and
    that is what a console is); the stream carries the pair, because a stream is one line per occurrence and is
-   the half a per-script reader reads. */
-void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename));
+   the half a per-script reader reads.
+   AND THE TWO ROUTES RETRACT DIFFERENTLY, WHICH IS THE DESIGN AND NOT AN INCONVENIENCE. The document is
+   COMPOSED — `pageErrors` is built from the rows that stand at the instant a document is rendered, so a
+   withdrawal is simply a row that no longer contributes, and the fact that it was reported and taken back is
+   carried by the sibling `pageErrorsRetracted`. A STREAM HAS ALREADY PRINTED THE LINE. A printed line has no
+   withdrawal; the only operation a stream has is to APPEND, so its retraction is a CORRECTION LINE, and the
+   two routes then carry the same information in the two forms their outputs have. What is NOT allowed is the
+   third shape: a stream that silently cannot retract while the document can is two behaviours behind one
+   name, and a host would have no way to know which one it had.
+   SO THE EDGE RIDES THE ONE HOOK RATHER THAN A SECOND ONE A HOST COULD DECLINE TO REGISTER. A separate
+   retraction hook makes silence the default for every host that never thought about it — the exact defect the
+   declared-route paragraph above this one exists to end, re-created one level down. One hook, both edges, and
+   an enum rather than a flag so a host's handling of them is exhaustive and a third edge cannot be added
+   without every printer being made to answer for it.
+   IT IS THE PAIR'S LATCH AND NOT EACH OCCURRENCE. STANDS fires when the pair goes from standing NOWHERE to
+   standing somewhere (which for a pair that is never retracted is exactly the once-per-distinct-pair above),
+   and RETRACTED fires when its last standing occurrence is taken back. A correction printed while another
+   occurrence of the same pair still stands would be false, and a second STANDS after a correction is
+   REQUIRED — otherwise the stream's last word on that pair is a withdrawal of a report that has since been
+   made again. */
+typedef enum {
+    RESULT_PAGE_ERROR_STANDS = 0,      /* this (message, throw site) now stands — nothing of it stood before */
+    RESULT_PAGE_ERROR_RETRACTED = 1    /* …and its last standing occurrence has been taken back */
+} ResultPageErrorEdge;
+void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename, ResultPageErrorEdge edge));
 /* The other half of that declaration: this host PUBLISHES result_json unconditionally and reads `pageErrors`
-   out of it. Say it where the host states its other edges, beside WHO answers the network and WHO evaluates a
-   string handler — a page error's reader is an edge of exactly that kind. */
+   out of it — and `pageErrorsRetracted` beside it, which is what tells a page that raised nothing from a page
+   that raised errors and handled every one of them. Say it where the host states its other edges, beside WHO
+   answers the network and WHO evaluates a string handler — a page error's reader is an edge of exactly that
+   kind. */
 void result_page_errors_ride_the_document(void);
 
 #endif

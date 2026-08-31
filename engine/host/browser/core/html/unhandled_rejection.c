@@ -50,24 +50,24 @@
  * none before its 126th census, while the seam this now rides carried one in 178 — and no flow FINISHED in
  * any census of any run, which is the drain the old position was waiting for.
  *
- * NAMED RESIDUAL — THE EVENT IS FIRED AND THE CONSOLE STILL SAYS THE OLD THING. §8.1.6.4 step 7.4's
- * `rejectionhandled` now reaches the page, and a page that ships a reporter learns of the retraction and can
- * withdraw its own entry. What has NOT moved is this engine's OWN console: step 4.1.3 reported through
- * `g_report` into solver/result.h's `pageErrors`, and nothing takes that back, so a bundle that catches in a
- * later task still leaves a finding about a page that did nothing wrong.
- * IT IS NOT A LINE TO ADD HERE, AND THAT IS THE POINT OF NAMING IT: the store cannot express the operation.
- * `pageErrors` is keyed on (message, throw site) and DEDUPED ON INSERT, so one row can stand for any number of
- * occurrences, and a retraction keyed the same way would erase a report belonging to a rejection nobody
- * handled. The row has to carry an occurrence count before a retraction can decrement one — that is a
- * capability of solver/result.c and it is the next diff, not a `||` here. AND IT IS ONLY HALF EXPRESSIBLE
- * EVEN THEN: result.h declares two routes for a page error and a host picks one, and the STREAM route has
- * already PRINTED the line — a printed line has no retraction, only a second line saying so. The document
- * route (result_page_errors_ride_the_document, which is what main.c takes) composes `pageErrors` at the end
- * and can withdraw a row outright.
+ * BOTH EDGES GO THROUGH ONE HOOK, WHICH IS WHY A REPORT THIS COMPONENT MADE CAN BE TAKEN BACK. §8.1.4.7 step
+ * 4.1.3 reports a rejection; §8.1.6.4 step 7.4 is the standard's own admission that the report can turn out to
+ * have been about a page that did nothing wrong, because attaching `.catch` in a LATER task is ordinary correct
+ * code. The page hears that as `rejectionhandled`; this engine's console hears it as a RETRACTION on the same
+ * `g_report` edge, carrying `RejectionReportEdge` (see the header for why one hook rather than two).
+ * WHAT MADE IT EXPRESSIBLE IS ARITHMETIC ON THE OTHER SIDE OF THE SEAM AND NOT A LINE HERE: solver/result.c's
+ * rows count their OCCURRENCES, so the retraction decrements one rather than deleting a row that may also
+ * stand for a rejection nobody handled. That is also why nothing here decides what a retraction MEANS — a host
+ * whose output is a document withdraws the row, a host whose output is a stream appends a correction line, and
+ * both of those are result.h's to state.
  * WHAT THE SPEC ITSELF LEAVES UNRETRACTABLE, so it is not mistaken for the same gap: a handler attached by an
  * `unhandledrejection` listener DURING the fire. Step 4.1.3 has already reported by then and step 4.1.4
  * declines to append, so no `rejectionhandled` is ever owed. That is the standard's own accepted cost and not
  * a hole in this component.
+ * AND THE MIRROR OF IT, WHICH IS A RETRACTION OWED FOR A REPORT THAT NEVER HAPPENED: step 4.1.3 is gated on
+ * notCanceled and step 4.1.4's append is gated on [[PromiseIsHandled]] alone, so a page that calls
+ * preventDefault() is never reported and IS appended, and step 7.4 will fire for it. The consumer sees a
+ * retraction with nothing to take back — a legitimate no-op there, never a missed report.
  *
  * THE EVENT IS THE PAGE'S CHANCE TO ANSWER, and it is CANCELABLE, so the report is not this component's to
  * make: §8.1.4.7 fires `unhandledrejection` at the global and reports only if nothing called preventDefault.
@@ -154,9 +154,10 @@ static int g_notify_slot = -1, g_notify_stepid = -1;
    own header is about. It is per realm for the same reason the notify driver is, and it is ALSO the marker
    §8.1.3.3's weak set is spelled with — see g_out_key. */
 static int g_handled_slot = -1, g_handled_stepid = -1;
-static void  (*g_report)(JSContext *ctx, JSValueConst reason);
+static void  (*g_report)(JSContext *ctx, JSValueConst reason, RejectionReportEdge edge);
 
-void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason)) { g_report = fn; }
+void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason,
+                                                    RejectionReportEdge edge)) { g_report = fn; }
 
 static uint32_t list_len(JSContext *ctx)
 {
@@ -436,7 +437,7 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
        that reporter posts to is learned either way. Gated on the CANCEL and not on handled-ness, which is why
        step 4.1.4 below can still decline to append a promise this line has already reported. */
     if (s->not_canceled && g_report)
-        g_report(ctx, reason);
+        g_report(ctx, reason, REJECTION_REPORTED);
     /* Step 4.1.4: "If p.[[PromiseIsHandled]] is FALSE, then append p to global's outstanding rejected promises
        weak set." Checked AGAIN, after the listeners ran: one of them may have attached a handler, and a promise
        that leaves this task handled is not owed a `rejectionhandled` — it is the one case where the spec
@@ -498,6 +499,20 @@ static int js_reject_handled_step(JSContext *ctx, void *st, JSValue cb_result, J
     if (s->hdr.stage == HANDLED_EVENT) {
         s->ev = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        /* THE CONSOLE'S OWN WITHDRAWAL, AND IT IS NOT A STEP OF §8.1.6.4. The standard says only that this
+           global tells the PAGE, because a browser's console is a scrollback a person reads and a line already
+           printed there is a line already read. This engine's console is a DOCUMENT that is composed after the
+           fact and reported as a finding, so a report it never takes back is a fabricated finding about a page
+           that did nothing wrong — which is worth more than the fidelity of leaving it standing.
+           BEFORE THE FIRE, NOT AFTER IT, and the difference is not stylistic. The fact this withdraws on was
+           established by step 7.3 — the promise was REMOVED from the outstanding rejected promises weak set,
+           which is what committed this task — so it does not depend on the page's `rejectionhandled`
+           listeners running, or on the event minting below succeeding. Putting it after the dispatch would
+           make an abrupt completion in a listener leave the false entry standing, which is the one outcome
+           this exists to prevent. §8.1.4.7 step 4.1.3's report is after ITS fire for the opposite reason: that
+           event is cancelable and the report is gated on the cancel, so it has something to wait for. */
+        if (g_report)
+            g_report(ctx, reason, REJECTION_RETRACTED);
         STEP_GOTO(s->hdr.stage, HANDLED_FIRE, &s->fphase, NULL);
         /* NO re-check of [[PromiseIsHandled]] here, and its absence is the spec's: §8.1.6.4 step 7.3 REMOVED
            the promise from the set before queueing this, so the fire is already committed. The flag is a

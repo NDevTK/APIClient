@@ -24,8 +24,23 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global);
 
 /* WHAT AN UNREPORTED REJECTION MEANS is the SOLVER's answer, not this component's: the browser half fires
    `unhandledrejection` and honours preventDefault, and whatever survives that is handed here. Installed once,
-   like the document-load hook. */
-void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason));
+   like the document-load hook.
+   AND SO IS WHAT A HANDLED ONE MEANS, ON THE SAME HOOK. §8.1.6.4 "HostPromiseRejectionTracker(promise,
+   operation)" step 7.4 is the standard's own statement that a report made at §8.1.4.7 step 4.1.3 can turn out
+   to have been about a page that did nothing wrong — a bundle attaching `.catch` in a later task. A SECOND
+   hook for that edge would let a consumer register the report and never the retraction, so a false entry
+   would stand by default in exactly the consumer that had not thought about it; one hook carrying the edge
+   makes the pair impossible to take apart. The enum rather than a flag so the consumer's handling is
+   exhaustive.
+   THE VOCABULARY IS THIS SECTION'S AND NOT THE CONSUMER'S. The solver's own console has its own two edges and
+   its own words for them; this component names the two SPEC steps, and whoever installs the hook is the seam
+   where the two vocabularies meet. That is what keeps a browser component from including a solver header. */
+typedef enum {
+    REJECTION_REPORTED = 0,    /* §8.1.4.7 step 4.1.3 — reported, the `unhandledrejection` fire not cancelled */
+    REJECTION_RETRACTED = 1    /* §8.1.6.4 step 7.4 — the promise has since been handled; take that report back */
+} RejectionReportEdge;
+void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason,
+                                                    RejectionReportEdge edge));
 
 /* §8.1.4.7 Unhandled promise rejections' "notify about rejected promises": for every rejection still
    unhandled, queue the `unhandledrejection`

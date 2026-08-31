@@ -2291,13 +2291,35 @@ for (const { file: f, kind, variant } of runs) {
                     (kind ? "" : "testharness reported a subtest status this gate does not know — ") +
                     (t.message || (kind === "TIMEOUT" ? "the subtest never settled" : "")).slice(0, 200));
     }
-    const err = out.match(/^@WPTERR (.*)$/m);
+    /* THE FIRST UNCAUGHT ERROR THAT IS STILL STANDING — and "still standing" is the whole of what this loop
+       adds. A stream cannot withdraw a line it has printed, so solver/result.c corrects one by APPENDING
+       `@WPTERR-RETRACTED` with the same payload: HTML §8.1.6.4 "HostPromiseRejectionTracker(promise,
+       operation)" step 7.4 fires when the page attaches a handler in a LATER task, and the rejection this
+       runner already reported turns out to be about a file that did nothing wrong. Quoting it as the reason a
+       file errored is a diagnosis of something that did not happen, which is worse than no diagnosis.
+       PAIRED IN ORDER, NOT SET-SUBTRACTED, because the producer's latch re-announces a pair after correcting
+       it — reported, retracted, reported again stands ONCE, and set arithmetic would say zero. An unmatched
+       correction is a BROKEN PRODUCER CONTRACT and throws: result.c prints RETRACTED only on the falling edge
+       of a pair it announced, so an unmatched one means that latch is gone and this column has stopped
+       meaning anything. (A killed run truncates the TAIL, so it cannot produce one.) */
+    const standingErrs = [];
+    for (const m of out.matchAll(/^@WPTERR(-RETRACTED)? (.*)$/gm)) {
+      if (!m[1]) { standingErrs.push(m[2]); continue; }
+      const k = standingErrs.indexOf(m[2]);
+      if (k < 0)
+        throw new Error("[wpt] an @WPTERR-RETRACTED line names a page error no @WPTERR line reported — " +
+                        "solver/result.c prints the retraction only when the last STANDING occurrence of a " +
+                        "(message, throw site) pair it already announced is taken back, so an unmatched one " +
+                        "means that latch is broken: " + m[2].slice(0, 200));
+      standingErrs.splice(k, 1);
+    }
+    const err = standingErrs.length ? standingErrs[0] : null;
     if (!abortedHere && err && !filePass && !fileFail && !fileNotrun) {
       /* NOT AN ABORT. The file ran and threw before registering a subtest — a result about the PAGE, where an
          abort is a capability the engine does not have. Folding it in is the very thing the column rule above
          forbids, and it is what made that column exceed the run count. */
       errored++; area.errored++;
-      failures.push(`  ERROR   ${rel}\n         ${err[1].slice(0, 200)}`);
+      failures.push(`  ERROR   ${rel}\n         ${err.slice(0, 200)}`);
       continue;
     }
     /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT — and the two used to read alike, which is a
@@ -2327,7 +2349,7 @@ for (const { file: f, kind, variant } of runs) {
              `all ${started.size} of its subtest(s) reached a result and the harness STILL never completed — ` +
              "testharness's completion path did not reach this runner's report hook, which is this gate's own bug"]
         : err
-          ? ["nodone", `it registered no subtest at all and threw on the way: ${err[1].slice(0, 200)}`]
+          ? ["nodone", `it registered no subtest at all and threw on the way: ${err.slice(0, 200)}`]
           : ["nodone",
              "it registered no subtest and never completed — testharness.js itself never ran, or the report hook " +
              "is not installed in this run's programs"];

@@ -2312,10 +2312,23 @@ static char   g_variant[256];   /* "" or the "?…"/"#…" this run is */
    `/resources/` and from its own directory, so "which file threw" and "which test was running" are different
    questions and this line used to answer only the second. §8.1.4.6 "Runtime script errors"'s `filename` is ""
    for a thrown value with no backtrace, which is that algorithm's own answer and is printed as `-`. */
-static void wpt_page_error(const char *msg, const char *filename)
+/* AND THE RETRACTION, WHICH ON A STREAM CAN ONLY BE A SECOND LINE — see solver/result.h. The `@WPTERR` above
+   is already in the report by the time §8.1.6.4 step 7.4 says the page handled that rejection after all, so
+   there is nothing to withdraw and the correction APPENDS under its own token. A distinct token rather than a
+   field, so a reader that consumed the first line matches the second to it by the pair. */
+static void wpt_page_error(const char *msg, const char *filename, ResultPageErrorEdge edge)
 {
-    fprintf(report_out(), "@WPTERR %s at=%s: %s\n", g_test_url[0] ? g_test_url : "<document>",
-            filename && *filename ? filename : "-", msg);
+    /* A SWITCH AND NOT A TERNARY, so an edge added to that enum is a COMPILER error here rather than a line
+       printed under the wrong token — a retracted error reading as an uncaught one for the rest of a corpus
+       run is exactly the wrong-but-plausible output this pair exists to end. */
+    const char *doc = g_test_url[0] ? g_test_url : "<document>";
+    const char *at = filename && *filename ? filename : "-";
+    switch (edge) {
+    case RESULT_PAGE_ERROR_STANDS:
+        fprintf(report_out(), "@WPTERR %s at=%s: %s\n", doc, at, msg); break;
+    case RESULT_PAGE_ERROR_RETRACTED:
+        fprintf(report_out(), "@WPTERR-RETRACTED %s at=%s: %s\n", doc, at, msg); break;
+    }
 }
 
 /* THIS DOCUMENT'S PROGRAM SEQUENCE — what a session is opened over (engine.h). Each entry is its own program

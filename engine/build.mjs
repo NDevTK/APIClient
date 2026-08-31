@@ -2165,21 +2165,50 @@ const runNumbers = (t) =>
    `-` IS §8.1.4.6'S OWN ANSWER for a thrown value with no backtrace and is reported as its own population,
    because "raised from nowhere nameable" is a fact about the throw and not a hole in this reader.
    REPORTED AND NEVER A VERDICT: a page error is evidence, not a failure. */
+/* AND THE CORRECTIONS, SUBTRACTED — because a stream cannot withdraw a line it has printed. `@PAGEERR` says a
+   (message, throw site) pair now stands; `@PAGEERR-RETRACTED` says its last standing occurrence was taken back,
+   which HTML §8.1.6.4 "HostPromiseRejectionTracker(promise, operation)" step 7.4 raises when the page attaches
+   a handler in a later task. A reader that counted only the first would report an UNSTAGED UNCAUGHT PAGE ERROR
+   for a page that did nothing wrong — the fabricated finding the retraction exists to remove, surviving in the
+   one place a person actually reads the run.
+   PAIRED IN ORDER AND NOT SET-SUBTRACTED, because the producer's latch can re-announce a pair after correcting
+   it (result.h): a message reported, retracted, and reported again stands ONCE at the end, and set arithmetic
+   would say it stands zero times. A correction that matches no standing report is a BROKEN PRODUCER CONTRACT
+   and throws rather than being ignored — result.c fires RETRACTED only on the falling edge of a pair it has
+   already announced, so an unmatched one means that latch has stopped holding and the count on either side of
+   it has stopped meaning anything. */
 function pageErrorText(out) {
   const staged = new Set([...out.matchAll(/^@PAGEERR-STAGED (\S+)$/gm)].map((m) => m[1]));
-  const errs = [...out.matchAll(/^@PAGEERR at=(\S+) (.*)$/gm)]
-    .map((m) => ({ at: m[1], msg: m[2].trim() }))
-    .filter((e) => e.msg);
-  if (!errs.length) return "";
+  const errs = [];
+  let retracted = 0;
+  for (const m of out.matchAll(/^@PAGEERR(-RETRACTED)? at=(\S+) (.*)$/gm)) {
+    const e = { at: m[2], msg: m[3].trim() };
+    if (!e.msg) continue;
+    if (!m[1]) { errs.push(e); continue; }
+    const k = errs.findIndex((s) => s.at === e.at && s.msg === e.msg);
+    if (k < 0)
+      throw new Error("[build] an @PAGEERR-RETRACTED line names a (message, throw site) pair no @PAGEERR line " +
+                      "announced — solver/result.c prints the retraction only when the last STANDING " +
+                      "occurrence of a pair it already announced is taken back, so an unmatched one means " +
+                      "that latch is broken and every page-error count in this report is wrong: " +
+                      JSON.stringify(e.msg.slice(0, 160)) + " at " + e.at);
+    errs.splice(k, 1);
+    retracted++;
+  }
+  /* SAID EVEN WHEN NOTHING STANDS, because it is the difference between a run whose page raised nothing and a
+     run whose page raised errors and handled every one of them — §Testing's absent-count-versus-zero-count on
+     the stream route, exactly as `pageErrorsRetracted` is on the document route. */
+  const retractedText = retracted ? ` (plus ${retracted} reported and retracted, handled in a later task)` : "";
+  if (!errs.length) return retracted ? ` — 0 standing page error(s)${retractedText}` : "";
   const known = errs.filter((e) => staged.has(e.at));
   const rogue = errs.filter((e) => !staged.has(e.at));
   /* THE STAGED COUNT IS CARRIED EVEN WHEN NOTHING IS WRONG, because its DISAPPEARANCE is the other direction
      this line can report: a run in which the document staged two errors and produced one is a run whose
      fixture stopped exercising something, and a reader shown only the rogue population would see silence. */
   const stagedText = `${known.length} from the ${staged.size} address(es) it declares`;
-  if (!rogue.length) return ` — ${errs.length} page error(s), all staged: ${stagedText}`;
+  if (!rogue.length) return ` — ${errs.length} page error(s), all staged: ${stagedText}${retractedText}`;
   const q = (e) => `${JSON.stringify(e.msg.slice(0, 160))} at ${e.at === "-" ? "no throw site (§8.1.4.6's own answer for a value with no backtrace)" : e.at}`;
-  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (plus ${stagedText}), first: ${q(rogue[0])}` +
+  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (plus ${stagedText}${retractedText}), first: ${q(rogue[0])}` +
          (rogue.length > 1 ? ` (+${rogue.length - 1} more, deduped by solver/result.c on (message, throw site))` : "");
 }
 

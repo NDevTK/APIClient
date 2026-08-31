@@ -30,16 +30,39 @@
    THE PAIR. Keyed on the message alone, two different scripts raising one error are one entry, which is the
    one collapse a reader cannot afford: a document that stages an uncaught error on purpose and a regression
    raising the same message somewhere else become a single indistinguishable line. `at` is "" for a thrown
-   value with no backtrace, which is §8.1.4.6's own answer and not an absent field. */
-static char **g_errs; static char **g_errs_at; static int g_errs_n, g_errs_cap;
+   value with no backtrace, which is §8.1.4.6's own answer and not an absent field.
+   AND THE ROW COUNTS ITS OCCURRENCES, which is what makes a report revocable — see result.h. `standing` is
+   how many occurrences of this pair have been reported and NOT taken back; `retracted` is how many were.
+   Their SUM is how many times the pair was reported, and neither is derivable from the other: a row at
+   standing 0 with retracted 3 is a pair this engine named three times and withdrew three times, which is a
+   different fact from a pair that was never recorded (no row at all) and must not read like it anywhere.
+   ONE ARRAY OF ROWS AND NOT FOUR PARALLEL COLUMNS. The message and the throw site were two `char **` grown by
+   two reallocs, and the comment on that growth had to say out loud that a half-grown pair misfiles a row the
+   dedupe then reads across. Two more columns would be two more chances at exactly that; one row is one
+   allocation and the failure has nowhere to be partial. */
+typedef struct {
+    char *msg;
+    char *at;
+    int   standing;
+    int   retracted;
+} PageErrorRow;
+static PageErrorRow *g_errs; static int g_errs_n, g_errs_cap;
+
+/* The row for this pair, or NULL. The ONE place the (message, throw site) key is spelled, so the report and
+   the retraction cannot come to disagree about what identifies a row. */
+static PageErrorRow *errs_find(const char *msg, const char *filename) {
+    for (int i = 0; i < g_errs_n; i++)
+        if (!strcmp(g_errs[i].msg, msg) && !strcmp(g_errs[i].at, filename)) return &g_errs[i];
+    return NULL;
+}
 
 /* WHO PRINTS ONE AS IT HAPPENS, AND THE FACT THAT A HOST ANSWERED THE QUESTION AT ALL — see result.h. The
    second is not bookkeeping for the first: a NULL hook USED to mean "this host publishes the document", so a
    host that had considered where an uncaught page error is read and a host that never had made the identical
    call, and the one that never had was the fixture whose whole job is naming unbuilt capabilities. */
-static void (*g_err_hook)(const char *msg, const char *filename);
+static void (*g_err_hook)(const char *msg, const char *filename, ResultPageErrorEdge edge);
 static int g_err_route_declared;
-void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename)) {
+void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename, ResultPageErrorEdge edge)) {
     DCHECK(fn != NULL,
            "a host declared a page-error STREAM and handed it no printer. Clearing the hook is not how a host "
            "says it publishes the document — result_page_errors_ride_the_document is — so this would restore "
@@ -71,27 +94,65 @@ void result_page_error(const char *msg, const char *filename) {
            "unconditionally and `pageErrors` is in it). A host that renders the document only at the END of a "
            "run is the FIRST of those, not the second: a run that is killed before it drains publishes "
            "nothing, and the throw that ended a <script> is then the one fact its report cannot state");
-    for (int i = 0; i < g_errs_n; i++)
-        if (!strcmp(g_errs[i], msg) && !strcmp(g_errs_at[i], filename)) return;
-    /* routing between the two declared answers, never a default past one */
-    if (g_err_hook) g_err_hook(msg, filename);
+    {
+        /* AN OCCURRENCE, NOT A DUPLICATE TO DROP. The pair is still the dedupe key for what a reader SEES —
+           the document is a console and the stream is one line per pair — but the row now counts what it
+           stands for, so a later retraction has one occurrence to take back rather than a whole row to
+           erase. This early return used to lose the second occurrence entirely. */
+        PageErrorRow *row = errs_find(msg, filename);
+        if (row) {
+            /* THE PAIR'S LATCH, RISING — see result.h. Silent while it already stands, because the line
+               announcing it is still true; announced again after a correction, because that correction was
+               the stream's last word on this pair and it has stopped being true. */
+            int was_standing = row->standing;
+            row->standing++;
+            if (!was_standing && g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
+            return;
+        }
+    }
+    /* routing between the two declared answers, never a default past one. BEFORE the row is committed, so an
+       allocation failure below loses the row and not the announcement: the line is true either way, and the
+       stream is the route whose whole purpose is saying so at the moment it happens. */
+    if (g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
     if (g_errs_n >= g_errs_cap) {
         int c = g_errs_cap ? g_errs_cap * 2 : 8;
-        char **a = realloc(g_errs, (size_t)c * sizeof(char *));
-        char **b = realloc(g_errs_at, (size_t)c * sizeof(char *));
-        /* BOTH COLUMNS OR NEITHER — a half-grown pair is a row whose message is at an index its throw site is
-           not, which the dedupe above would then read across. A lost diagnostic is not worth failing a run
-           over; a MISFILED one is worse than a lost one. */
-        if (a) g_errs = a;
-        if (b) g_errs_at = b;
-        if (!a || !b) return;
+        PageErrorRow *a = realloc(g_errs, (size_t)c * sizeof(*g_errs));
+        /* ONE ALLOCATION, so there is no half-grown row to misfile — the two `char **` columns this replaced
+           needed a paragraph here saying a MISFILED row is worse than a lost one. A lost diagnostic is still
+           not worth failing a run over. */
+        if (!a) return;
+        g_errs = a;
         g_errs_cap = c;
     }
-    g_errs[g_errs_n] = strdup(msg);
-    g_errs_at[g_errs_n] = strdup(filename);
-    if (g_errs[g_errs_n] && g_errs_at[g_errs_n]) { g_errs_n++; return; }
-    free(g_errs[g_errs_n]); free(g_errs_at[g_errs_n]);
-    g_errs[g_errs_n] = NULL; g_errs_at[g_errs_n] = NULL;
+    g_errs[g_errs_n].msg = strdup(msg);
+    g_errs[g_errs_n].at = strdup(filename);
+    g_errs[g_errs_n].standing = 1;
+    g_errs[g_errs_n].retracted = 0;
+    if (g_errs[g_errs_n].msg && g_errs[g_errs_n].at) { g_errs_n++; return; }
+    free(g_errs[g_errs_n].msg); free(g_errs[g_errs_n].at);
+    g_errs[g_errs_n].msg = NULL; g_errs[g_errs_n].at = NULL;
+}
+
+/* TAKING ONE BACK — result.h states the algorithm this serves and why a no-op is a positive answer here. */
+void result_page_error_retract(const char *msg, const char *filename) {
+    PageErrorRow *row;
+    if (!msg || !*msg) return;   /* the same description `result_page_error` declines to record */
+    DCHECK(filename != NULL,
+           "a page error was retracted with no throw-site field at all — the retraction keys on the same "
+           "(message, throw site) pair the report does, so a null one cannot name the row it means to take "
+           "back and would silently retract nothing");
+    row = errs_find(msg, filename);
+    /* NO ROW, OR A ROW WITH NOTHING STANDING: §8.1.4.7 step 4.1.4 appends promises step 4.1.3 declined to
+       report (the append is gated on [[PromiseIsHandled]], the report on notCanceled), so a page that cancels
+       `unhandledrejection` is still owed a `rejectionhandled` this console never reported. There is nothing
+       to take back and nothing to record — a row minted here would say this engine had named an error it
+       never named, which is the fabrication the retraction exists to remove. */
+    if (!row || !row->standing) return;
+    row->standing--;
+    row->retracted++;
+    /* THE PAIR'S LATCH, FALLING. A correction printed while another occurrence still stands would withdraw a
+       line that is still true of this run. */
+    if (!row->standing && g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_RETRACTED);
 }
 
 /* Describe a thrown value WITHOUT running any of the page's code — see result.h. An own slot that is already a
@@ -157,16 +218,34 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
     JS_FreeValue(ctx, stk);
 }
 
-void result_page_error_value(JSContext *ctx, JSValueConst err) {
-    char buf[320];
+/* THE PAIR A THROWN VALUE KEYS ON, DERIVED ONCE FOR BOTH EDGES. The report and its retraction must compose the
+   identical (message, throw site) or no retraction would ever find the row it means to take back, and two
+   copies of this derivation is exactly how they would come to differ. */
+static void page_error_key(JSContext *ctx, JSValueConst err, char *buf, size_t bufsz, char **at) {
     /* §8.1.4.6 "Runtime script errors"'s THROW SITE, asked of the component that owns the derivation
        (core/events/report_exception.h) rather than re-parsed out of the rendered frame `result_error_text`
        appends. Two parsers of one backtrace disagree the first time either is corrected, and the answer here
        is the one a reader partitions a run's errors by. */
     uint32_t line = 0, col = 0;
-    char *at = report_exception_position(ctx, err, &line, &col);
-    result_error_text(ctx, err, buf, sizeof buf);
+    *at = report_exception_position(ctx, err, &line, &col);
+    result_error_text(ctx, err, buf, bufsz);
+}
+
+void result_page_error_value(JSContext *ctx, JSValueConst err) {
+    char buf[320];
+    char *at;
+    page_error_key(ctx, err, buf, sizeof buf, &at);
     result_page_error(buf, at);   /* an empty description is dropped by result_page_error's own first line */
+    free(at);
+}
+
+/* §8.1.6.4 step 7.4's edge, keyed by the same derivation as the report — result.h states why a page that
+   mutated the reason between the two events is a legitimate miss rather than something to assert on. */
+void result_page_error_value_retract(JSContext *ctx, JSValueConst reason) {
+    char buf[320];
+    char *at;
+    page_error_key(ctx, reason, buf, sizeof buf, &at);
+    result_page_error_retract(buf, at);
     free(at);
 }
 
@@ -208,18 +287,43 @@ static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
    is the one place the two shapes part: a message raised from two scripts is two rows there and one line
    here, and the per-script fact is carried by the STREAM (result.h), which is where a reader that needs it
    reads. The skip is written out rather than folded into the record because collapsing it at the record would
-   put the document's shape back into the dedupe and lose the pair again. */
-static char *errs_json_array(void) {
+   put the document's shape back into the dedupe and lose the pair again.
+   TWO ARRAYS AND THEY ARE DISJOINT, WHICH IS WHAT MAKES AN EMPTY ONE READABLE. A message with any STANDING
+   occurrence is in `pageErrors` — the page raised it and nothing took it back. A message with no standing
+   occurrence anywhere and at least one retracted one is in `pageErrorsRetracted`: this engine named it and
+   then withdrew it, because HTML §8.1.6.4 step 7.4 told it the page had handled the rejection after all. A
+   message in NEITHER was never recorded. Those are three different facts about a page and, before the second
+   array, the last two were the same absence — which is precisely §Testing's "an absent count and a zero count
+   are different facts" wearing a name instead of a number.
+   DISJOINT AND NOT OVERLAPPING, BECAUSE THE OVERLAP WOULD CONTRADICT ITSELF ON ONE SCREEN. A message that
+   still stands at one script and was retracted at another DID go wrong, so it belongs in the console; listing
+   it in both would render one message twice under two opposite claims. The per-site half of that fact is the
+   STREAM's, exactly as the per-site half of the report is — the routes differ in form, never in what they
+   know.
+   A RETRACTED ROW IS STILL A CAPABILITY THE PAGE REACHED FOR, which is why the second array carries the
+   MESSAGE rather than merely a count of withdrawals. `Element.matches is not a function` names an unbuilt
+   engine capability whether or not the bundle caught the rejection it arrived in — the retraction says the
+   page did nothing wrong, never that the engine has nothing to build. */
+static char *errs_json_array_where(int want_standing) {
     char *b = NULL; size_t cap = 0, len = 0;
     int emitted = 0;
     errs_raw(&b, &cap, &len, "[");
     for (int i = 0; i < g_errs_n; i++) {
-        int seen = 0;
-        for (int j = 0; j < i; j++) if (!strcmp(g_errs[j], g_errs[i])) { seen = 1; break; }
+        int seen = 0, stands_somewhere = 0, retracted_somewhere = 0;
+        /* BY MESSAGE, ACROSS EVERY ROW THAT CARRIES IT, because the two arrays are decided per MESSAGE while
+           the rows are per pair: a message standing at one throw site is not retracted just because another
+           site withdrew it. */
+        for (int j = 0; j < g_errs_n; j++) {
+            if (strcmp(g_errs[j].msg, g_errs[i].msg)) continue;
+            if (j < i) seen = 1;
+            if (g_errs[j].standing) stands_somewhere = 1;
+            if (g_errs[j].retracted) retracted_somewhere = 1;
+        }
         if (seen) continue;
+        if (want_standing ? !stands_somewhere : (stands_somewhere || !retracted_somewhere)) continue;
         if (emitted++) errs_raw(&b, &cap, &len, ",");
         errs_raw(&b, &cap, &len, "\"");
-        errs_append(&b, &cap, &len, g_errs[i]);
+        errs_append(&b, &cap, &len, g_errs[i].msg);
         errs_raw(&b, &cap, &len, "\"");
     }
     errs_raw(&b, &cap, &len, "]");
@@ -784,7 +888,11 @@ char *result_heap_json(JSContext *ctx) {
 char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
-    char *errs = errs_json_array();
+    char *errs = errs_json_array_where(/*want_standing*/ 1);
+    /* AND THE ONES THIS ENGINE TOOK BACK — see errs_json_array_where. Composed beside `pageErrors` and never
+       folded into it: a run in which the page raised nothing and a run in which it raised errors and handled
+       every one of them are two different pages, and one empty array was the evidence for both. */
+    char *errsRetracted = errs_json_array_where(/*want_standing*/ 0);
     /* THE ORDERING, ON THE ONE SURFACE THAT CROSSES THE ABI — see result.h. Composed here rather than by a
        host, because the host that had it is a driver the production entry does not call. */
     char *wfq = result_wfq_json();
@@ -811,17 +919,22 @@ char *result_json(JSContext *ctx) {
     size_t n;
     char *out;
 
-    if (!eps || !sinks || !errs || !wfq || !cold || !heap || !swap || !forkAt || !quantum) {
-        free(eps); free(sinks); free(errs); free(wfq);
+    if (!eps || !sinks || !errs || !errsRetracted || !wfq || !cold || !heap || !swap || !forkAt || !quantum) {
+        free(eps); free(sinks); free(errs); free(errsRetracted); free(wfq);
         free(cold); free(heap); free(swap); free(forkAt); free(quantum);
         return NULL;
     }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 578 with its conversion specifiers
-       and 500 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
-       longs at 20), so the worst case is 876 against this 928. The TEN `%s` contribute nothing to that
+       and stated so the count can be re-done: the format's fixed bytes are 603 with its conversion specifiers
+       and 523 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
+       longs at 20), so the worst case is 899 (523 + 375 + the NUL) against this 1024. The ELEVEN `%s`
+       contribute nothing to that
        figure and everything to the sum above it — each is a composed surface whose real length is added by
-       `strlen`, which is why a census joining the document costs a term in `n` and 11 bytes of literal here. It was 192 for a shape whose widest form was
+       `strlen`, which is why a census joining the document costs a term in `n` and 11 bytes of literal here.
+       `pageErrorsRetracted` is the eleventh: 25 bytes of literal, a `strlen` term, and nothing added to the
+       widest form. THE MARGIN IS RAISED RATHER THAN SPENT, and the reason is not comfort: the DCHECK below is
+       a DCHECK, so it is compiled out at `-DAPICLIENT_DEV=0` and a release build has the arithmetic and
+       nothing else standing between it and a lost closing brace. It was 192 for a shape whose widest form was
        already 197 — inside only because the real numbers are small — then 384 against a worst case the arrival
        census took to 454, then 512 against 488, then 640 against the routed-delivery pair's 566, then 768.
        THAT 768 WAS ALREADY 50 BYTES SHORT WHEN THIS COUNT WAS RE-DONE, and the prose above it was the reason
@@ -838,8 +951,9 @@ char *result_json(JSContext *ctx) {
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(wfq) + strlen(cold_park_json()) +
-        strlen(cold) + strlen(heap) + strlen(swap) + strlen(forkAt) + strlen(quantum) + 928;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(errsRetracted) + strlen(wfq) +
+        strlen(cold_park_json()) +
+        strlen(cold) + strlen(heap) + strlen(swap) + strlen(forkAt) + strlen(quantum) + 1024;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -892,6 +1006,11 @@ char *result_json(JSContext *ctx) {
         engine_orphan_census(&orphansDriven, &orphansAsked);
         engine_routed_task_census(routedEnds);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
+                             /* THE ONES THIS ENGINE NAMED AND THEN TOOK BACK — beside `pageErrors` because
+                                the two are read together and disjoint: neither array can say on its own
+                                whether an empty console means the page raised nothing or handled everything
+                                it raised. errs_json_array_where states the three facts they keep apart. */
+                             "\"pageErrorsRetracted\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,\"_unitsDone\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
@@ -920,7 +1039,8 @@ char *result_json(JSContext *ctx) {
                                 decides whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
                              "\"_quantum\":%s,\"_park\":%s}",
-                     eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
+                     eps, sinks, errs, errsRetracted,
+                     engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
@@ -929,8 +1049,8 @@ char *result_json(JSContext *ctx) {
                      orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, quantum,
                      cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED, AND IT IS THE ONLY THING THAT WAS STILL RIGHT. It was
-           192 bytes for three counters and now carries twenty-one, whose widest form is 375 digits beside 500
-           bytes of literal — and the previous 768 did not cover that, which nothing noticed because the prose
+           192 bytes for three counters and now carries twenty-one, whose widest form is 375 digits beside 523
+           bytes of literal — and a previous 768 did not cover that, which nothing noticed because the prose
            stating the count had been adjusted instead of re-derived (see the arithmetic above). A truncation
            here does not lose a digit, it loses the closing brace: the host gets a document that will not parse
            and reports NOTHING for the page, which is the loudest possible consequence arriving as the quietest
@@ -941,6 +1061,7 @@ char *result_json(JSContext *ctx) {
     free(eps);
     free(sinks);
     free(errs);
+    free(errsRetracted);
     free(wfq);
     free(cold);
     free(heap);

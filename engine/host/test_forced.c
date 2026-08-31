@@ -4991,8 +4991,17 @@ static int g_id_host_read, g_id_append_child;   /* declared once per agent — a
  * fixture's own claims — and they are ASSERTED elsewhere, by NODE_ALGOS rows over the result document, so the
  * declaration below suppresses nothing: it says which addresses are expected to appear, never that an absent
  * one is acceptable. */
-static void tf_page_error(const char *msg, const char *filename) {
-    printf("@PAGEERR at=%s %s\n", filename && *filename ? filename : "-", msg);
+/* AND WHAT A RETRACTION IS ON A STREAM — see solver/result.h. This host's output IS the lines it has already
+ * printed, so there is no `@PAGEERR` to withdraw: the only operation an appended stream has is to APPEND, and
+ * the correction is a second line naming the same pair. It is a DISTINCT TOKEN and not a field on the first
+ * one, because a reader that has already consumed the report has to be able to match the correction to it by
+ * the pair rather than to re-read a line it has passed. */
+static void tf_page_error(const char *msg, const char *filename, ResultPageErrorEdge edge) {
+    const char *at = filename && *filename ? filename : "-";
+    switch (edge) {
+    case RESULT_PAGE_ERROR_STANDS:    printf("@PAGEERR at=%s %s\n", at, msg); break;
+    case RESULT_PAGE_ERROR_RETRACTED: printf("@PAGEERR-RETRACTED at=%s %s\n", at, msg); break;
+    }
     fflush(stdout);
 }
 

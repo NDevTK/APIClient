@@ -115,6 +115,19 @@ function assertResultDocument(r) {
   DCHECK(Array.isArray(r.pageErrors),
          "the engine's result document carries no pageErrors array — it is the engine's own record of what " +
          "went wrong while running the page, and the analysis reports it as the run's resolverErrors");
+  /* THE OTHER HALF OF THAT RECORD, AND IT IS WHAT MAKES AN EMPTY `pageErrors` READABLE. result.c emits both
+     arrays from the SAME snprintf and they are disjoint: a message that still stands anywhere is in
+     `pageErrors`, a message this engine reported and then took back — HTML §8.1.6.4
+     "HostPromiseRejectionTracker(promise, operation)" step 7.4, a bundle attaching `.catch` in a later task —
+     is in this one, and a message in neither was never recorded. Without it, "the page raised nothing" and
+     "the page raised errors and handled every one of them" are the same empty array, which is §Testing's
+     absent-count-versus-zero-count with names instead of numbers. Asserted rather than defaulted for the
+     reason every field on this seam is: a `|| []` here would make the engine's retraction edge going silent
+     look exactly like a page that never retracted anything. */
+  DCHECK(Array.isArray(r.pageErrorsRetracted),
+         "the engine's result document carries no pageErrorsRetracted array — result.c composes it beside " +
+         "pageErrors in the same snprintf, so its absence is that composition changed under this reader and " +
+         "a page whose rejections were all handled would be indistinguishable from one that raised nothing");
   /* THE COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
      which five arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
      is emitted atomically is not a weaker check, it is a check on the wrong thing: it passes for exactly the
@@ -633,8 +646,19 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        `replyExample` as constant `null`s: offscreen-brain dropped `replyExample` on the way through, no
        renderer ever read either, and the engine has no source-text or reply to state for a page error in the
        first place (result.c's pageErrors are strings). Three comments — here, in lib/serialize.js and in
-       popup.js — named `snippet` as part of the contract the popup reads; it was read nowhere. */
-    resolverErrors: (result ? result.pageErrors.map((e) => ({ context: "page", message: String(e) })) : []).concat(extraErrors),
+       popup.js — named `snippet` as part of the contract the popup reads; it was read nowhere.
+       AND THE ONES THE ENGINE TOOK BACK, ON THE SAME RELAY UNDER THEIR OWN `context`. They are not findings
+       about the page — the page handled the rejection, which is what §8.1.6.4 step 7.4 told the engine — but
+       they are still the engine's record of a capability the page REACHED FOR, and that is the whole value of
+       this list: "Element.matches is not a function" names something unbuilt whether or not the bundle caught
+       the rejection it arrived in. A separate array would have needed its own path through the brain, the
+       serializer and the popup to reach the one surface a reviewer reads, and would have arrived saying
+       exactly what a `context` says. `page-retracted` is a single token like every other value on this axis
+       ("page", "engine", "why", "result-parse"), so nothing downstream has to learn a new shape. */
+    resolverErrors: (result
+        ? result.pageErrors.map((e) => ({ context: "page", message: String(e) }))
+            .concat(result.pageErrorsRetracted.map((e) => ({ context: "page-retracted", message: String(e) })))
+        : []).concat(extraErrors),
     /* NO probeResults ON THIS SEAM. The engine issues no request, so it receives no rejection and has no
        error-derived schema to relay; the record the Send panel reads is written by the two systems that DO
        probe — lib/req2proto.js (driven by lib/discovery-probe.js and lib/response-decode.js) — straight into
