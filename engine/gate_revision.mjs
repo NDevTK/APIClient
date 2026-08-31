@@ -35,7 +35,7 @@
  * producer's field. A run that could not ask git and a run that asked and got an answer must not read alike.
  */
 import { spawnSync } from "node:child_process";
-import { statSync, readFileSync, writeFileSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const ENGINE = import.meta.dirname;
@@ -43,11 +43,51 @@ const ROOT = dirname(ENGINE);            /* the superproject */
 const QJS = join(ENGINE, "qjs");         /* the submodule */
 const SUBMODULE_PATH = "engine/qjs";     /* how the superproject's tree names it */
 
-/* THE ANSWER OR THE FAILURE, never neither. `status !== 0` is kept verbatim so it prints as itself. */
+/* IS THIS DIRECTORY A REPOSITORY OF ITS OWN — asked once per directory per run, because a directory does not
+   stop being one under a gate. `--show-toplevel` is the only question that answers it: `--is-inside-work-tree`
+   says yes for every subdirectory of every repository, which is the exact confusion this guards against. Both
+   sides are realpath'd because a snapshot reached through a symlink is still the same directory. */
+const IS_REPO_ROOT = new Map();
+function isRepoRoot(cwd) {
+  if (!IS_REPO_ROOT.has(cwd)) {
+    const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+    const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
+    const top = r.status === 0 ? real(r.stdout.trim()) : null;
+    const self = real(cwd);
+    IS_REPO_ROOT.set(cwd, top !== null && self !== null && top === self);
+  }
+  return IS_REPO_ROOT.get(cwd);
+}
+
+/* THE ANSWER OR THE FAILURE, never neither. `status !== 0` is kept verbatim so it prints as itself.
+ *
+ * AND THE QUESTION MUST REACH THE REPOSITORY IT NAMES, WHICH IS A SECOND CONTRACT AND THE ONE THAT WAS BROKEN.
+ * git resolves its repository by walking UPWARD from cwd, so a question put to a directory that is not itself a
+ * repository is answered by whichever repository CONTAINS it — successfully, with status 0, about a different
+ * program. `status !== 0` cannot see that, because there is no failure to keep: this is the "one fact answered
+ * from the wrong place" defect, and it wears the shape of an answer rather than of a gap.
+ * MEASURED, IN THE VERY ARRANGEMENT THIS FILE'S OWN TEXT RECOMMENDS. A snapshot made with
+ * `git clone --shared <root> <dir>` has an EMPTY `engine/qjs` until the submodule is cloned too, and every ask
+ * of it was then answered from the superproject: `rev-parse HEAD` returned the SUPERPROJECT's sha wearing the
+ * submodule's name, so the banner printed THE SUBMODULE IS NOT THE ONE THIS COMMIT RECORDS against the real
+ * pin; `status --porcelain -- .` answered clean, so the same banner called the cone "CLEAN at that revision"
+ * about a directory with nothing in it; and `ls-tree -r HEAD` listed the superproject UNDER THAT PREFIX, which
+ * is a gitlink rather than a tree, so it answered EMPTY and 590 `#include "quickjs.h"` lines were published as
+ * includes "no commit provides" under THIS REVISION DOES NOT COMPILE. One wrong repository, three confident
+ * false statements, and not one failed ask anywhere to notice. So the repository is ESTABLISHED before the
+ * question is put, and a directory that is not one of its own returns the failure it always should have. */
 function ask(cwd, ...a) {
+  if (!isRepoRoot(cwd))
+    return `<git ${a.join(" ")} failed: ${cwd} is not a git repository of its own, so git would have answered ` +
+           `from whichever repository contains it, about a different tree>`;
   const r = spawnSync("git", a, { cwd, encoding: "utf8" });
   return r.status === 0 ? r.stdout.trim() : `<git ${a.join(" ")} failed: ${(r.stderr || "").trim()}>`;
 }
+
+/* DID AN ASK ANSWER. `ask` returns the failure verbatim rather than throwing, so every consumer that compares
+   two of its answers must first know that they ARE answers — comparing two failure strings, or a failure
+   against a sha, is how "could not ask" gets published as "differs". */
+const answered = (v) => typeof v === "string" && v !== "" && !v.startsWith("<git ");
 
 /* THE SAME CONTRACT AS `ask`, FOR A QUESTION PUT TO THE BUILD RATHER THAN TO GIT — the answer or the failure,
    never neither, and never a remembered answer standing in for a failed one. The build is asked because it is
@@ -104,16 +144,36 @@ function dirtyIn(cwd, cone) {
  *
  * Resolution mirrors the build's own `-I` list (`engine/host`, `engine/host/browser`, `engine/qjs`) plus the
  * including file's own directory, because that is what the compiler will do. A path resolving into the
- * submodule is asked of the submodule: the superproject's tree does not list a gitlink's contents. */
+ * submodule is asked of the submodule: the superproject's tree does not list a gitlink's contents.
+ *
+ * ONE SHAPE ON EVERY PATH, AND THIS FUNCTION HAD THREE. The two-field split below — `dangling` for what the
+ * audit FOUND, `unaudited` for the audit that could not be PUT — was introduced for the manifest ask and never
+ * carried back to the git asks above it, which went on returning the pre-split BARE ARRAY. `gateRevision`
+ * spreads this result into its record, and spreading an array into an object literal is silent: it contributes
+ * an index key and NO `dangling` key at all, so the record came back missing the field its own reporter reads.
+ * The cost was not a wrong number, it was that `revisionLines` threw `Cannot read properties of undefined` at
+ * the `rev.dangling.length` line — BEFORE returning any of the lines it had already composed, including the
+ * THE CONE'S STATE COULD NOT BE ASKED block written for precisely this case. So the one arrangement whose
+ * diagnostic this file wrote out in full was the one arrangement in which it could not be printed: a
+ * `git archive` snapshot has no `.git`, the first ask here fails, and every gate that names `engine/host` in
+ * its cone died with a stack trace where its explanation should have been. A dead fallback path is worse than
+ * an absent one, because the prose reads as though the case is handled. */
+function auditUnputtable(why) { return { dangling: [], unaudited: [why] }; }
 function danglingIncludes(rev) {
   const out = ask(ROOT, "grep", "-n", "-e", '^[[:space:]]*#[[:space:]]*include[[:space:]]*"',
                   rev, "--", "engine/host/*.c", "engine/host/*.h");
-  if (out.startsWith("<git ")) return [out];
+  if (out.startsWith("<git ")) return auditUnputtable(out);
   const listed = ask(ROOT, "ls-tree", "-r", "--name-only", rev, "--", "engine/host");
-  if (listed.startsWith("<git ")) return [listed];
+  if (listed.startsWith("<git ")) return auditUnputtable(listed);
   const tracked = new Set(listed.split("\n").filter(Boolean));
+  /* THE SUBMODULE'S TREE IS A PRECONDITION OF THE ANSWER, NOT AN OPTIONAL ENRICHMENT, and treating it as one
+     is what produced the 590-include false red above. This line used to substitute an EMPTY SET for a failed
+     ask, which is the strongest possible negative claim — "the submodule provides no header at all" — derived
+     from the one state in which nothing is known; 590 of this cone's includes resolve only through it. A
+     failed ask is not a finding about the tree, so it leaves by the same door as the manifest's. */
   const qjsListed = ask(QJS, "ls-tree", "-r", "--name-only", "HEAD");
-  const inQjs = new Set(qjsListed.startsWith("<git ") ? [] : qjsListed.split("\n").filter(Boolean));
+  if (qjsListed.startsWith("<git ")) return auditUnputtable(qjsListed);
+  const inQjs = new Set(qjsListed.split("\n").filter(Boolean));
   /* NO `-h`, DELIBERATELY, AND THIS WAS WRONG ONCE. Searching a REVISION rather than the worktree, git grep
      prefixes `<rev>:<path>:<lineno>:`, and `-h` suppresses the path — which is the one field that names the
      OWNER of a bad include. With `-h` this parser matched nothing and the check passed for every tree there
@@ -145,7 +205,7 @@ function danglingIncludes(rev) {
      reporter states them as different sentences. Refusing the fallback is still right; reporting the refusal
      as a compile failure was not. */
   const manifest = askJson(ROOT, ["engine/build.mjs", "--list-include-roots"]);
-  if (typeof manifest === "string") return { dangling: [], unaudited: [manifest] };
+  if (typeof manifest === "string") return auditUnputtable(manifest);
   const bad = [];
   const setsFor = (owner) => {
     const named = manifest.filter((g) => g.sources.includes(owner));
@@ -304,13 +364,38 @@ function stalerThan(artifact, cone) {
  * submodule differs", and which of its files differ is a question only the submodule can answer.
  *
  * `artifact` is the PREBUILT program a non-building gate runs, or null for a gate that links its own. */
+/* THE RECORD'S SHAPE IS ASSERTED WHERE IT IS BUILT, WHICH IS THE ONLY PLACE THE ANSWER IS. §Offensive
+   programming: a consumer never defaults a producer's field, it asserts the field's presence — and the assert
+   goes at the ORIGIN, because the reader is a hundred lines away and its `.length` names the symptom rather
+   than the producer. The list is exactly what `revisionLines` and `revisionMoved` read, so a field added to the
+   record without being added here is a field nothing states a contract about, and a field the record stops
+   carrying crashes HERE with its own name in the message instead of there with none. */
+const REVISION_FIELDS = {
+  head: "string", branch: "string", qjsPinned: "string?", qjsHead: "string?",
+  dirty: "array", unasked: "array", dangling: "array", unaudited: "array", cone: "array",
+};
+function checkedRevision(rev) {
+  for (const [k, kind] of Object.entries(REVISION_FIELDS)) {
+    const v = rev[k];
+    const ok = kind === "array" ? Array.isArray(v)
+             : kind === "string?" ? (v === null || typeof v === "string")
+             : typeof v === "string";
+    if (!ok)
+      throw new Error(`[rev] gateRevision built a record whose \`${k}\` is ${JSON.stringify(v)} and not a ` +
+                      `${kind} — a producer in engine/gate_revision.mjs returned a shape this record does not ` +
+                      `state. Absence is not one of this contract's values: a question that could not be put ` +
+                      `is an EMPTY \`${k}\` beside a non-empty \`unasked\`/\`unaudited\`, never a missing key.`);
+  }
+  return rev;
+}
+
 export function gateRevision(cone, artifact = null) {
   const superDirty = dirtyIn(ROOT, cone.filter((p) => p !== SUBMODULE_PATH));
   const wantsQjs = cone.includes(SUBMODULE_PATH);
   const qjsDirty = wantsQjs ? dirtyIn(QJS, ["."]) : { lines: [], unasked: [] };
   const inQjs = (l) => l + "   (in " + SUBMODULE_PATH + ")";
   const stamp = artifact ? readStamp(artifact) : null;
-  return {
+  return checkedRevision({
     head: ask(ROOT, "rev-parse", "HEAD"),
     branch: ask(ROOT, "rev-parse", "--abbrev-ref", "HEAD"),
     /* THE COMMIT THE SUPERPROJECT RECORDS versus THE COMMIT THAT IS CHECKED OUT. Two facts, and the whole
@@ -335,7 +420,7 @@ export function gateRevision(cone, artifact = null) {
        that build and link. A cone without engine/host asks neither question, so both are empty. */
     ...(cone.includes("engine/host") ? danglingIncludes("HEAD") : { dangling: [], unaudited: [] }),
     cone,
-  };
+  });
 }
 
 const short = (h) => (h && !h.startsWith("<") ? h.slice(0, 8) : h);
@@ -349,7 +434,16 @@ export function revisionLines(rev) {
   const out = [];
   out.push(`[rev] engine ${short(rev.head)} (${rev.branch})` +
            (rev.qjsHead ? `   qjs ${short(rev.qjsHead)}` : ""));
-  if (rev.qjsHead && rev.qjsPinned && rev.qjsHead !== rev.qjsPinned)
+  /* AN UNANSWERED ASK IS NOT A MISMATCH, and the comparison below cannot tell them apart on its own: `ask`
+     returns its failure as a string, and two strings are unequal whatever they say. Without this branch a
+     snapshot whose submodule is not a repository of its own printed THE SUBMODULE IS NOT THE ONE THIS COMMIT
+     RECORDS — the file's loudest line — with a failure message where a sha belongs. */
+  if (rev.qjsHead && !(answered(rev.qjsHead) && answered(rev.qjsPinned)))
+    out.push(`[rev] THE SUBMODULE'S IDENTITY COULD NOT BE ASKED — ${SUBMODULE_PATH} is in this gate's cone and ` +
+             `one of the two commits that identify it did not answer, so whether the checkout matches what ` +
+             `${short(rev.head)} pins is UNKNOWN. That is not a finding that they differ and not a finding ` +
+             `that they agree. Checked out: ${rev.qjsHead}. Pinned: ${rev.qjsPinned}.`);
+  else if (rev.qjsHead && rev.qjsPinned && rev.qjsHead !== rev.qjsPinned)
     out.push(`[rev] THE SUBMODULE IS NOT THE ONE THIS COMMIT RECORDS — ${SUBMODULE_PATH} is checked out at ` +
              `${short(rev.qjsHead)} and ${short(rev.head)} pins ${short(rev.qjsPinned)}. The program measured ` +
              `below is NOT the program this superproject revision describes, and a fix committed against ` +
@@ -363,11 +457,17 @@ export function revisionLines(rev) {
              `above. That is NOT a finding that they differ and NOT a finding that they agree: the number ` +
              `below is unattributable either way until the ask succeeds.`);
     for (const l of rev.unasked) out.push(`[rev]   ${l}`);
-    out.push(`[rev] a snapshot made with \`git archive\` carries no \`.git\`, so every ask fails here and the ` +
-             `one arrangement whose cone is guaranteed clean reports as unknown. Freeze with a repository ` +
-             `instead — \`git clone --shared <root> <dir> && git -C <dir> checkout --detach <rev>\`, plus the ` +
-             `same for \`${SUBMODULE_PATH}\` at \`<rev>:${SUBMODULE_PATH}\` — which leaves the gate able to ` +
-             `answer this question about itself.`);
+    /* THE HINT NAMES THE CAUSES IT KNOWS AND CLAIMS NEITHER, because the reason is in the failure above and a
+       hint that asserts one cause reads as a diagnosis. There are two, and they need different halves of the
+       same remedy: a `git archive` export carries no `.git` at all, and a `git clone --shared` snapshot carries
+       one for the superproject only until the submodule is cloned too — the second half of the recipe below,
+       which is the half that gets skipped. */
+    out.push(`[rev] a snapshot exported with \`git archive\` carries no \`.git\` at all, and a cloned one whose ` +
+             `\`${SUBMODULE_PATH}\` was never cloned carries none for the submodule — either way the arrangement ` +
+             `whose cone is guaranteed clean reports as unknown. Freeze with repositories on BOTH halves — ` +
+             `\`git clone --shared <root> <dir> && git -C <dir> checkout --detach <rev>\`, plus the same for ` +
+             `\`${SUBMODULE_PATH}\` at \`<rev>:${SUBMODULE_PATH}\` — which leaves the gate able to answer this ` +
+             `question about itself.`);
   } else if (rev.dirty.length) {
     out.push(`[rev] THE COMPILED CONE IS DIRTY — ${rev.dirty.length} path(s) below differ from that revision, ` +
              `so this run measures a tree NO REVISION CONTAINS and the number cannot be quoted against a ` +
