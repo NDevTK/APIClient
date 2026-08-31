@@ -308,7 +308,7 @@ bool origin_is_serialized_tuple(const Origin *o, const char *serialized)
     return !strcmp(origin_serialized(o), serialized);
 }
 
-/* ---- URL §4.7's ORIGIN OF A URL ---------------------------------------------------------------------------
+/* ---- URL §4.7 "Origin"'s ORIGIN OF A URL --------------------------------------------------------------
  *
  * "The origin of a URL url is the origin returned by running these steps, switching on url's scheme:
  *    `blob`   — 1. If url's blob URL entry is non-null, then return url's blob URL entry's environment's

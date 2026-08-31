@@ -269,8 +269,9 @@ void event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target)
 
 /* DOM §2.2's SET THE CANCELED FLAG — see event.h for why it is one function and not three spellings.
    "if event's cancelable attribute value is true and event's in passive listener flag is unset, then set
-   event's canceled flag to true". A passive listener's cancel does NOTHING, whichever of the three spellings
-   it reached for; that is the whole of the guarantee `{passive:true}` gives the user agent. */
+   event's canceled flag, and do nothing otherwise". That trailing clause is the guarantee itself: a passive
+   listener's cancel does NOTHING, whichever of the three spellings it reached for, which is the whole of what
+   `{passive:true}` gives the user agent. */
 void event_set_the_canceled_flag(JSContext *ctx, JSValueConst ev)
 {
     if (event_read_flag(ctx, ev, "cancelable") && !event_read_flag(ctx, ev, "inPassive"))

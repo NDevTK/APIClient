@@ -53,11 +53,12 @@ void opener_policy_obtain(OpenerPolicy *out, const HeaderList *headers, bool sec
     if (sf_header_item(headers, "cross-origin-opener-policy", &it)) {
         if (it.item.kind == SF_TOKEN) {
             if (!strcmp(it.item.text, "same-origin")) {
-                /* §7.1.3 step 4.1: "let coep be the result of obtaining a cross-origin embedder policy from
-                   response and reservedEnvironment; if coep's value is COMPATIBLE WITH CROSS-ORIGIN
-                   ISOLATION, then set policy's value to `same-origin-plus-COEP`; otherwise set it to
-                   `same-origin`." This is the whole reason the two headers cannot be read separately: a page
-                   sending only COOP is `same-origin`, and the SAME page with a `require-corp` beside it is the
+                /* HTML §7.1.3.1 "The headers" steps 4.1.1-4.1.3: "let coep be the result of obtaining a
+                   cross-origin embedder policy from response and reservedEnvironment; if coep's value is
+                   COMPATIBLE WITH CROSS-ORIGIN ISOLATION, then set policy's value to
+                   `same-origin-plus-COEP`; otherwise set it to `same-origin`." This is the whole reason the
+                   two headers cannot be read separately: a page sending only COOP is `same-origin`, and the
+                   SAME page with a `require-corp` beside it is the
                    value that makes §7.1.3.2 mark the new group cross-origin isolated. */
                 EmbedderPolicy coep;
                 embedder_policy_obtain(&coep, headers, secure_context);
@@ -78,12 +79,12 @@ void opener_policy_obtain(OpenerPolicy *out, const HeaderList *headers, bool sec
         sf_item_free(&it);
     }
 
-    /* Step 5-6: the REPORT-ONLY header, whose branch list is DELIBERATELY SHORTER — §7.1.3 gives it
+    /* Step 5-6: the REPORT-ONLY header, whose branch list is DELIBERATELY SHORTER — §7.1.3.1 gives it
        `same-origin` and `same-origin-allow-popups` and NOT `noopener-allow-popups`. Reproduced as written. */
     if (sf_header_item(headers, "cross-origin-opener-policy-report-only", &it)) {
         if (it.item.kind == SF_TOKEN) {
             if (!strcmp(it.item.text, "same-origin")) {
-                /* §7.1.3 step 6.1, and it is NOT the same test as step 4.1's: report-only COOP takes
+                /* §7.1.3.1 step 6.1, and it is NOT the same test as step 4.1's: report-only COOP takes
                    `same-origin-plus-COEP` when the COEP's value OR ITS REPORT-ONLY VALUE is compatible with
                    cross-origin isolation. The standard's own note says why — "this allows developers more
                    freedom in the order of deployment of COOP and COEP" — so the asymmetry is the feature. */

@@ -67,7 +67,7 @@ bool    event_canceled(JSContext *ctx, JSValueConst ev);        /* the canceled 
 void    event_set_canceled(JSContext *ctx, JSValueConst ev, bool on);
 /* DOM §2.2 Interface Event's SET THE CANCELED FLAG — the ALGORITHM the line above is deliberately not: "To set
    the canceled flag, given an event event, if event's cancelable attribute value is true and event's in passive
-   listener flag is unset, then set event's canceled flag to true."
+   listener flag is unset, then set event's canceled flag, and do nothing otherwise."
    THREE ALGORITHMS PERFORM IT AND NONE OF THEM MAY SPELL IT AGAIN. §2.2's preventDefault() ("The
    preventDefault() method steps are to set the canceled flag with this"), §2.2's legacy returnValue setter
    ("set the canceled flag with this if the given value is false"), and HTML §8.1.8.1's event handler processing

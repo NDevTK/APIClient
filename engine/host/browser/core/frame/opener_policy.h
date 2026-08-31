@@ -53,9 +53,9 @@ typedef struct {
 void opener_policy_init(OpenerPolicy *p);
 void opener_policy_free(OpenerPolicy *p);
 
-/* §7.1.3's "obtain an opener policy given a response `response` and an environment `reservedEnvironment`",
- * over the response's HEADER LIST — which, with the environment's secure-context answer, is the whole of what
- * the algorithm reads.
+/* HTML §7.1.3.1 "The headers"'s "obtain an opener policy given a response `response` and an environment
+ * `reservedEnvironment`", over the response's HEADER LIST — which, with the environment's secure-context
+ * answer, is the whole of what the algorithm reads.
  *
  * `secure_context` is step 2's "if reservedEnvironment is a NON-SECURE CONTEXT, then return policy", the same
  * question §7.1.4's obtain asks and answered from the same place (core/frame/secure_context.h over the
