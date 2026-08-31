@@ -682,7 +682,23 @@ const DROP = new Map([
      converges, because the schedule chooses it. THE ARGUMENT IS BY CONSTRUCTION AND NOT FROM A MEASUREMENT,
      which is stated rather than implied: this is a classification made before the false red rather than after
      one, so nobody should read the row as evidence that a `turns` mismatch was ever observed here. */
-  [".securitySinks[]", new Set(["tried", "turns"])],
+  /* `substituted` AND `sinkStrings` ARE THE SAME ROW AS `turns`, AND FOR THE SAME REASON READ ONE LEVEL IN.
+     Both are OBSERVATION COUNTS rather than observations: solve.c raises `substituted` at every substitution
+     concolic_deliver performs and `sinkStrings` at every string a code-execution sink is handed while one is
+     live. What makes them schedule-chosen is not preemption — a preempted flow RESUMES and delivers nothing
+     twice — it is the RESTART: concolic_clear_pins clears the component's delivered flag when a flow is
+     entered fresh, and cold.c drops the candidate's ladder on a park deliberately so a resumed candidate
+     re-proves itself (solver/flow.h says so at `cand_surv`/`cand_rung`). The `park` schedule therefore replays
+     a candidate that has already delivered, and it delivers again — so the same document reports a different
+     count under a schedule that parks than under one that does not, on healthy code.
+     THEIR NEIGHBOURS STAY COMPARED AND THE LINE IS THE ONE THE ROW ABOVE DRAWS: `reached`, `survived`/
+     `survivedOf`, `escaped` and `fires` are what a re-execution GOT THROUGH the page, and on a frontier that
+     drains each converges to a fact about the document; a count of how many times the work was performed
+     never converges, because the schedule chooses how many times it is performed.
+     BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated for the reason the row above states it: this
+     classification was made when the two fields were added, before any run, so nobody may read it as evidence
+     that a mismatch in either was ever observed here. */
+  [".securitySinks[]", new Set(["tried", "turns", "substituted", "sinkStrings"])],
 ]);
 function canonStr(v, path) {
   if (Array.isArray(v)) {

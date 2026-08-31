@@ -3,6 +3,7 @@
 #include "solver/concolic.h"
 #include "solver/absent.h"
 #include "solver/flow.h"
+#include "solver/solve.h"     /* …and the SEARCH is told a substitution happened — see concolic_deliver */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include <stdarg.h>
@@ -1412,6 +1413,21 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            flow_observe_rung's early return is what makes the re-delivery cost nothing. Same event, two
            quantities with opposite reset rules — the ledger/comparator split of §@S(ii) one level down. */
         flow_observe_rung(f, FLOW_RUNG_DELIVERED);
+        /* AND THE SAME EVENT AT THE THIRD ACCOUNTING UNIT — the SEARCH's, which is the only one a reader ever
+           sees. The three are not copies and none of them can be derived from the others: `g_cand_delivered`
+           above is the COMPONENT's live answer for THIS replay and is cleared when a flow is entered fresh;
+           the rung is the flow's COMPARATOR, monotone and re-earned across a park, which the WFQ reads at the
+           pick; and this is a COUNT on the search, which orders nothing, outlives every flow that produced it
+           and is what the parked report is written out of.
+           IT IS WHAT MAKES THE REPORT'S BOTTOM STATE SAYABLE. Every other number a parked entry carries is
+           observed AT a sink, so a search whose candidates ended before their own source read reported
+           `turns:N,reached:0,survived:0` — byte-identical to one whose bytes DID enter the program and never
+           reached a sink, and to one whose sinks all ran carrying none of them. Three opposite instructions
+           under one reading, which is §@S's named tell (a rung whose absence and whose zero read alike); the
+           count that separates them can only be taken here, because this is the site.
+           NOT A CREDIT: solve.c raises a counter and touches no rung, no crossing and no frontier generation,
+           so nothing about the ordering moves on this line. */
+        solve_observe_substitution(f);
     }
     for (i = 0; i < g_srcs_n; i++)
         if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }
@@ -1819,8 +1835,9 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *to
     sf[0] = src;
     kf[0] = "s"; kf[1] = tok;   /* the token is a string literal by construction here */
     /* AND IT IS THE **STRICT** SPELLING, WHICH IS WHAT MAKES THIS ONE ENTRY WITH THE PAGE'S OWN TEST. The
-       specs that define these members define them as strict equalities of strings — HTML §6.2 "the `hidden`
-       attribute" is `visibilityState` being `"hidden"` — so a page that writes the comparison out writes
+       specs that define these members define them as strict equalities of strings — HTML §6.2 "Page
+       visibility" states this one as "The `hidden` getter steps are to return true if this's visibility state
+       is "hidden", otherwise false" — so a page that writes the comparison out writes
        `===`, reaches concolic_cmp_hook with JS_CONCOLIC_EQ_STRICT, and composes `===` there. Spelling `==`
        here would make the component's own member and the page's own test two predicates over one source, each
        forking the other's settled gate. A component whose IDL member is a LOOSE comparison does not exist and

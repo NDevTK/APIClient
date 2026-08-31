@@ -113,6 +113,18 @@ int  solve_candidate_count(void);
    same nothing. They are costs and not findings: the same document under a different schedule legitimately
    reaches a sink a different number of times, so the differential must not compare them. */
 void solve_arrival_census(long *reached, long *tainted, long *suppressed);
+/* THIS SEARCH'S BYTES JUST ENTERED THE PAGE'S OWN PROGRAM — reported by the component that performs the
+   substitution (solver/concolic.c's concolic_deliver), because that is the only site on the runway that can
+   state it: every other number a parked entry carries is observed AT a sink, and §@S(i) wants an observation
+   strictly before the thing it is a distance to.
+   IT IS THE REPORT'S COUNT AND NOT THE FLOW'S RUNG. flow_observe_rung records the same event as
+   FLOW_RUNG_DELIVERED — the COMPARATOR, monotone per flow, re-earned across a park, read at the pick; this is
+   a COUNT on the SEARCH, which orders nothing, outlives the flows that produced it, and is the only one of the
+   two a reader ever sees. §@S(ii) is why they are two quantities and not one.
+   CALLING IT IS NOT OPTIONAL FOR A SECOND SUBSTITUTION DOOR: solve.c's two sink entries assert that a search
+   measuring bytes in a sink's string has recorded at least one substitution, so a door that does not report
+   here fires there rather than making the report quietly say the runway was never left. */
+void solve_observe_substitution(struct Flow *f);
 void solve_flow_begin(struct Flow *f);
 void solve_flow_end(struct Flow *f);
 
@@ -156,7 +168,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
                       [,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,
+                      "substituted":D,"sinkStrings":X,"survived":S,
                       "survivedOf":L[,"survivedAt":A,"survivedTo":O],"escaped":E[,"fires":F][,"witnessed":W]
                       ,"probes":P,"payloads":[..],
                       "survivedBy":[..],"withdrawn":[..]
@@ -212,6 +225,28 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    and `tried:2,reached:0,turns:900` is one whose flows have run and have not got as far as the sink. The first
    is a scheduling question and the second a distance-through-the-document one, they take opposite actions, and
    with two numbers they were the same report.
+   `substituted` AND `sinkStrings` SPLIT THAT SECOND FACT INTO THE THREE IT WAS STILL SAYING AT ONCE, and they
+   are the two OBSERVATION COUNTS beside the best-so-far quantities below. A ratchet reports the furthest
+   anything got and is structurally silent about how many times it LOOKED, so `turns:900,reached:0,survived:0`
+   was one number over three opposite instructions:
+     `substituted:0`                — the runs ended before their own SOURCE READ, so the bytes never entered
+                                      the page's program at all. A question about the PATH in front of the
+                                      source: a gate is turning these flows away. Neither the payload, the
+                                      filter nor the sink is implicated, and no field could say this before.
+     `substituted:D,sinkStrings:0`  — the bytes DID enter the program and no code-execution sink has run while
+                                      they were live. The distance-through-the-document question.
+     `sinkStrings:X,survived:0`     — X sinks EXECUTED and not one byte of the candidate was in any string
+                                      they were handed. A question about the PAYLOAD, and the opposite work
+                                      from the line above it.
+   §@S names that tell exactly — a rung whose ABSENCE and whose ZERO read alike — and `survived:0` was both.
+   `substituted` IS OBSERVED AT THE SOURCE READ and is the only number on this entry whose site is not a sink,
+   which is what §@S(i) asks for; `sinkStrings` is observed where the survival fraction is, class-independently,
+   so it counts every code-execution sink write during this search's candidate runs and not only its own class's.
+   BOTH ARE COUNTS AND NEITHER IS A RUNG: nothing about the WFQ moves at either write, so §@S(ii)'s ledger and
+   the flow's comparator are untouched. `substituted` counts SUBSTITUTIONS rather than distinct candidates (a
+   page that reads its source in a loop delivers many times in one run) and `sinkStrings` counts STRINGS rather
+   than arrivals — `reached` is the one that counts a breakout arriving at its own sink. In both the ZERO is
+   what is load-bearing, which is why both are emitted unconditionally and neither has an absent form.
    `survived`/`survivedOf` AND `escaped` ARE THE TWO MIDDLE RUNGS, and they are the fields that make the other
    three actionable rather than merely different. §@S says the search is "DISTANCE-DIRECTED (a fitness of
    {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)"; only the second and fourth
@@ -221,10 +256,13 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    re-execution handed ANY code-execution sink, and `survivedOf` is the length of the candidate that achieved
    it — held as a pair rather than a ratio because the card has to be able to say WHICH numbers. A run and not
    a tally: an escape is a SEQUENCE, so twelve of its bytes scattered are worth nothing and four adjacent are
-   worth something. It answers the question `reached:0` could not: `turns:900,reached:0,survived:0` is a
-   document nobody has explored far enough, and `turns:900,reached:0,survived:11,survivedOf:14` is the page's
-   own FILTER eating the candidate eleven-fourteenths of the way in. They took opposite work and were one
-   report. §@S(2)'s other forms — dropped, escaped, re-encoded — are not separate numbers here on purpose: a
+   worth something. It answers the question `reached:0` could not: `turns:900,reached:0,survived:11,
+   survivedOf:14` is the page's own FILTER eating the candidate eleven-fourteenths of the way in, where
+   `reached:0` alone said only that no whole breakout arrived. They took opposite work and were one report.
+   ITS OWN ZERO IS NOT A THIRD READING OF THAT KIND, and this paragraph used to give it one ("a document
+   nobody has explored far enough"). A best-so-far cannot say how many times it looked, so `survived:0` is
+   read with `substituted` and `sinkStrings` above or not at all — the sentence it used to carry alone is one
+   of the three those two separate, and it was the wrong one for the other two. §@S(2)'s other forms — dropped, escaped, re-encoded — are not separate numbers here on purpose: a
    byte the page re-encoded cannot break a sink out of its context, so for a FITNESS it is exactly "did not
    survive", and reporting `&lt;` as a surviving `<` is the false-PoC direction.
    `survivedAt`/`survivedTo` ARE WHERE THAT RUN IS, AND THEY ARE THE HALF THE PAIR ABOVE STRUCTURALLY CANNOT

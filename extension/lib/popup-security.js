@@ -128,8 +128,20 @@ function _encodeSentence(item) {
 //   * `turns:0` — the WFQ has never once given this search the thread. Nothing has RUN, so "N breakouts run"
 //     was itself false: `tried` is raised where a candidate is SEEDED (solve_seed_candidates), `turns` where
 //     one is switched in (solve_flow_begin). This is a scheduling question.
-//   * `turns:N, reached:0, survived:0` — the candidates have held the thread and NONE of their bytes has been
-//     seen at any sink at all. A distance-through-the-document question, and the opposite action from above.
+//   * `turns:N, substituted:0` — the candidates have held the thread and NOT ONE of them reached its own
+//     SOURCE READ, so their bytes never entered the page's program at all. A question about the PATH in front
+//     of the source: a gate is turning these flows away. Nothing here is about the payload, the filter or the
+//     sink, and no field could say it before — every other number on the record is observed AT a sink.
+//   * `substituted:D, sinkStrings:0` — their bytes ARE in the page's program and no code-execution sink has
+//     run at all while they were live. A distance-through-the-document question, and the opposite action.
+//   * `sinkStrings:X, survived:0` — X sinks EXECUTED and not one byte of the candidate was in any string they
+//     were handed. A question about the PAYLOAD's own transform or routing, and the opposite instruction to
+//     the line above it.
+// THOSE THREE WERE ONE SENTENCE, and it was the middle one said for all of them: "the flows run and do not
+// get this far through the document". It is a confident wrong instruction for the first (the flows did not
+// get as far as the READ, which is a different distance and a different fix) and for the third (the flows DID
+// get that far; the bytes did not). §@S's tell exactly — a rung whose ABSENCE and whose ZERO read alike —
+// which is what `survived:0` was, because a best-so-far ratchet is silent about how many times it looked.
 //   * `turns:N, reached:0, survived:S>0` — their bytes DID get through the page's own transforms, S of L of
 //     them, and no whole breakout arrived. The page's FILTER is what is eating the candidate: a question about
 //     the BYTES, arriving long before the sink, and until `survived` existed it printed as the line above it.
@@ -207,6 +219,21 @@ function _parkedProgress(item) {
     return 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
          + (item.tried === 1 ? " is" : "s are") + ' seeded and queued and NOTHING has run yet, so this is a '
          + 'scheduling state and not a search that failed';
+  // THE RUNWAY STATE, CHECKED BEFORE EVERY SINK ONE BECAUSE ALL OF THEM ARE WRONG ABOUT IT — INCLUDING THE
+  // PROBE BRANCH BELOW. `substituted` is the only number on this record whose observation site is not a sink
+  // (solve.h): it is raised where the page's own source read hands back the candidate's bytes. A zero here is
+  // not a thinner reading of the distance question further down, it is a DIFFERENT question — about the path
+  // in front of the SOURCE — and every sentence below names the wrong distance for it. It also subsumes the
+  // probe branch's own `witnessed === 0` arm rather than competing with it: a context is READ off a string a
+  // real run handed the sink, so a search that has never substituted cannot have witnessed one, and the arm
+  // that would otherwise fire says "the probes have not got this far through the document" when what happened
+  // is that they never got as far as the read.
+  if (item.substituted === 0)
+    return held + ' and NOT ONE of them reached its own SOURCE READ — the substitution is performed where the '
+         + 'page reads the attacker source, and it has never once happened for this search, so these bytes '
+         + 'have never been in the page\'s program at all. That is a question about the PATH in front of the '
+         + 'source: a gate is turning these flows away before they get to the read. Nothing here is about the '
+         + 'payload, the page\'s own filter or the sink';
   // THE STATE THE OTHER FOUR CANNOT SAY, AND IT IS CHECKED BEFORE THEM BECAUSE THEY ARE WRONG ABOUT IT. When
   // every candidate this search has run is an inert probe, no breakout has been CONSTRUCTED — so `reached:0`
   // is not a distance question and not a filter question, and the two branches below state both of those as
@@ -256,9 +283,19 @@ function _parkedProgress(item) {
          + 'search reporting that the bytes an escape needs cannot reach this sink through this source. That '
          + 'is neither a scheduling nor a filter question: it is answered by a decode, or by another source';
   }
+  if (item.reached === 0 && item.sinkStrings === 0)
+    return held + ', their bytes entered the page\'s own program ' + item.substituted + ' time'
+         + (item.substituted === 1 ? "" : "s") + ', and NO code-execution sink has run at all while they were '
+         + 'live — so the flows get past the source read and do not get as far as a sink. A distance question, '
+         + 'and not one about the payload';
   if (item.reached === 0 && item.survived === 0)
-    return held + ' and NONE of their bytes has been seen at any sink — the flows run and do not get this far '
-         + 'through the document, so this is still a distance question and not one about the payload';
+    return held + ', their bytes entered the page\'s own program ' + item.substituted + ' time'
+         + (item.substituted === 1 ? "" : "s") + ', and ' + item.sinkStrings + ' string'
+         + (item.sinkStrings === 1 ? " was" : "s were") + ' handed to a code-execution sink with NOT ONE BYTE '
+         + 'of the candidate in ' + (item.sinkStrings === 1 ? "it" : "any of them") + '. The sinks RAN and the '
+         + 'flows got there; what did not is the payload — the page transformed it past recognition or never '
+         + 'routes this value to a sink at all. A question about the PAYLOAD, and the opposite of a distance '
+         + 'one';
   if (item.reached === 0)
     return held + ' and ' + got + ' survived the page\'s own transforms to a sink' + alsoUnseen
          + ', but no whole breakout has ARRIVED at this sink. A candidate that has never been seen at a sink '
@@ -354,8 +391,23 @@ function renderSecurityPanel() {
          — which is exactly what a search making progress without seeding a new candidate looks like — landed
          on the early return below and never re-rendered. Same defect as the `cspBlocks` one above: the cache
          in front of the fix.
-     So the key is built from exactly the fields a card's claim is computed from. It is not a change detector
-     over rendered HTML: each name here is one the card reads. */
+     SO THE KEY IS THE RECORD, AND IT IS NO LONGER A LIST OF NAMES. Every incident above is the same one — a
+     field the card reads and the key does not — and the list was corrected five times, each time by adding
+     the one name that had just gone wrong. That is a SECOND COPY of "what a card is computed from", kept by
+     hand beside the cards themselves, and CLAUDE.md §Architecture names the failure exactly: a restated rule
+     drifts, and the copy that drifts is the one nobody runs against reality. It had drifted again by the time
+     this was written — `survived`, `survivedOf`, `survivedAt`, `survivedTo`, `escaped` and `survivedBy` are
+     all read by _parkedProgress and NONE of them was in the key, so a search whose ratchet improved (a better
+     run of the payload observed at a sink, moving no count) went on rendering the previous sentence, which is
+     the sixth instance of the recorded defect standing in the fix for the fifth.
+     A record is what the engine emitted, so stringifying it cannot omit a field the card reads: there is
+     nothing left to keep in step. It is still not a change detector over rendered HTML — it is the INPUT the
+     cards are a pure function of, which is the one thing that can be compared without restating them.
+     THE COST IS A CACHE HIT AND NOT A CORRECTNESS PROPERTY. Fields that move on every engine report (`turns`,
+     and now `substituted`/`sinkStrings`) were already in the key, so a search making progress already
+     re-rendered; what changes is that a search making progress in a field nobody listed does too. A panel
+     that re-renders more often is a cost; a panel showing a sentence the record has already refuted is the
+     confident wrong instruction these cards exist to end. */
   const fpParts = [];
   for (let i = 0; i < findings.length; i++) {
     // lib/merge.js pushes `securitySinks: secSinks` straight from the analysis it has already DCHECKed is an
@@ -368,37 +420,17 @@ function renderSecurityPanel() {
     const sinks = findings[i].securitySinks;
     for (let j = 0; j < sinks.length; j++) {
       const s = sinks[j];
-      // JSON, not a delimiter-joined string: a `poc` is an attacker payload and may hold any byte this file
-      // would use as a separator, so a hand-rolled key is one the PAGE picks collisions in — and `payloads`
-      // goes in WHOLE for the same reason, since it is a list of attacker payloads and any join over it is
-      // that same collision one level down. `fires` is carried as itself, not as a boolean: absent (the eval
-      // class, which queues nothing) and 0 (arrived, nothing executable) are the two statements the parked
-      // card renders differently, and `!!s.fires` collapses them onto each other.
-      // `probes` RIDES ALONG BECAUSE THE CARD'S FIRST SENTENCE IS COMPUTED FROM IT. A search whose derivation
-      // finally builds an escape moves `payloads` too, so the pair is usually redundant — but a single-context
-      // class seeds its written-down vectors with `probes:0` from the start, and a derived one that gains a
-      // probe without gaining an escape (a delivery probe pushed after the context probe) moves ONLY this. A
-      // key missing a field the card reads is the cache in front of the fix, which is the defect the comment
-      // above records twice.
-      // `withdrawn` RIDES ALONG FOR THE SAME REASON AND IT IS THE ONE THAT CAN MOVE ALONE. A search's measured
-      // delivery table narrowing withdraws candidates already in `payloads` — the list does not change, `tried`
-      // does not change (a withdrawn candidate is never seeded), and the card's own sentence about them flips
-      // from "never been seen at a sink" to "withdrawn before running". A key without it is the cache in front
-      // of exactly the correction this column was added to make.
-      // `witnessed` RIDES ALONG AND IS THE SECOND THAT CAN MOVE ALONE — and unlike `withdrawn` it flips the
-      // card's FIRST sentence between two opposite instructions. A deriving class whose context probe finally
-      // reaches the sink and whose derivation builds nothing moves this field and NOTHING else: `payloads`
-      // does not grow (nothing was built), `tried` does not (no candidate was seeded), `reached` stays 0 (a
-      // probe carries no marker), and `turns` need not, since the arrival happens inside a turn a previous
-      // partial already counted. That is precisely the moment "the probes have not got this far yet" becomes
-      // "the bytes an escape needs cannot reach this sink through this source", and a key without it is the
-      // cache in front of that correction — the same defect the comment above records three times. Carried as
-      // itself for the reason `fires` is: absent (a single-context class) and 0 (a deriving class whose probe
-      // has not arrived) are two statements this card renders differently.
-      fpParts.push([findings[i].sourceUrl, s.sink, s.source, s.search, s.tried, s.poc,
-                    !!s.cspBlocks, !!s.trustedTypes,
-                    s.reached, s.turns, s.fires === undefined ? null : s.fires, s.probes, s.payloads,
-                    s.withdrawn, s.witnessed === undefined ? null : s.witnessed]);
+      // THE WHOLE RECORD, and JSON rather than a delimiter-joined string for the reason the field list used
+      // to give about `poc` and `payloads`: those are attacker payloads and may hold any byte this file would
+      // use as a separator, so a hand-rolled key is one the PAGE picks collisions in.
+      // ABSENCE SURVIVES THE KEY, which the list could not manage without a per-field `=== undefined ? null`
+      // and got wrong wherever it forgot one. `fires` absent (the eval class queues nothing) and `fires:0`
+      // (arrived, nothing executable) are two statements the parked card renders differently, and so are
+      // `witnessed` absent (a single-context class) and `witnessed:0`; JSON.stringify keeps an absent key
+      // absent and a 0 as 0 with nothing to remember.
+      // THE SOURCE URL IS NOT PART OF THE RECORD, so it is carried beside it: the same sink on two pages is
+      // two cards, and the engine's record does not name the page it was observed on.
+      fpParts.push([findings[i].sourceUrl, s]);
     }
   }
   const fp = JSON.stringify(fpParts);
@@ -474,7 +506,8 @@ function renderSecurityPanel() {
 
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
-    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns, survived,
+    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns,
+    // substituted, sinkStrings, survived,
     // survivedOf, escaped, fires?, probes, payloads, survivedBy, withdrawn, sourceEncodes?, delivery?,
     // deliveryPrefix?}
     // for a parked one. This card used to read `shape`,
@@ -624,6 +657,33 @@ function renderSecurityPanel() {
         + "the card is about to state WHICH question this search is stuck on out of numbers it does not have "
         + "(sink=" + pit.sink + " source=" + pit.source + " reached=" + JSON.stringify(pit.reached)
         + " turns=" + JSON.stringify(pit.turns) + ")");
+      // THE TWO OBSERVATION COUNTS ARE ASSERTED BESIDE THEM, AND THE IMPLICATIONS BETWEEN THEM ARE THE POINT.
+      // `substituted` and `sinkStrings` are what split `turns:N,reached:0,survived:0` into the three opposite
+      // instructions it was giving at once (solve.h), so a DEFAULT here is the worst possible failure of this
+      // card: `substituted || 0` would print "a gate in front of the source read is turning these flows away"
+      // — a confident, specific, wrong instruction — about a search whose bytes reached a sink four hundred
+      // times. Presence is asserted because solve_json_array writes both UNCONDITIONALLY on the parked shape:
+      // 0 is the load-bearing reading of each, so neither has an absent form to read positively.
+      // THE ORDER IS THE ASSERTION AND NOT ONLY THE TYPES. The three counts are nested observations of one
+      // run — bytes enter the program, then a sink is handed a string, then a run of those bytes is found in
+      // it — so `sinkStrings > 0` implies `substituted > 0` and `survived > 0` implies `sinkStrings > 0`.
+      // solve.c asserts the first at both of its sink entries, at the origin; asserted again here because a
+      // relay that drops or reorders a field produces exactly a violated implication, and this card states
+      // WHICH question the search is stuck on out of the three numbers together.
+      DCHECK(typeof pit.substituted === "number" && typeof pit.sinkStrings === "number"
+             && pit.substituted >= 0 && pit.sinkStrings >= 0,
+        "a parked @S record reached the popup without substituted/sinkStrings — solve_json_array emits both "
+        + "unconditionally on every parked entry and 0 is the load-bearing reading of each, so absence is "
+        + "that serializer or the relay broken, and the card is about to name a gate in front of the source "
+        + "read out of a number it does not have (sink=" + pit.sink + " source=" + pit.source
+        + " substituted=" + JSON.stringify(pit.substituted) + " sinkStrings=" + JSON.stringify(pit.sinkStrings)
+        + ")");
+      DCHECK((pit.sinkStrings === 0 || pit.substituted > 0) && (pit.reached === 0 || pit.substituted > 0),
+        "a parked @S record reports a sink observation or an arrival over a search that has never recorded a "
+        + "substitution — bytes enter the program before any sink can be handed a string carrying them, and "
+        + "solve.c asserts the same at both of its sink entries, so this pair was measured on two different "
+        + "searches (sink=" + pit.sink + " substituted=" + pit.substituted + " sinkStrings=" + pit.sinkStrings
+        + " reached=" + pit.reached + ")");
       // THE TWO MIDDLE RUNGS ARE ASSERTED LIKE THE OTHERS AND FOR THE SAME REASON. solve_json_array writes
       // `survived`, `survivedOf` and `escaped` unconditionally on the parked shape, and 0 is a real value each
       // of them must be able to say — so an `|| 0` here would turn "this relay dropped the field" into "the
@@ -638,6 +698,16 @@ function renderSecurityPanel() {
         + "WHICH question this search is stuck on out of numbers that are not measurements (sink=" + pit.sink
         + " survived=" + JSON.stringify(pit.survived) + " survivedOf=" + JSON.stringify(pit.survivedOf)
         + " escaped=" + JSON.stringify(pit.escaped) + ")");
+      // …AND THE LAST LEG OF THE NESTING, ASKED HERE BECAUSE `survived` IS ONLY NOW KNOWN TO BE A NUMBER. A
+      // surviving run is found IN a string a code-execution sink was handed, so a run recorded over
+      // `sinkStrings:0` is the ratchet and its observation counter having been measured on different searches
+      // — and it is the one direction that would make the card read the page's own text as the candidate's.
+      DCHECK(pit.survived === 0 || pit.sinkStrings > 0,
+        "a parked @S record reports a surviving run for a search no code-execution sink has ever been "
+        + "observed to run under — the run is measured IN the string a sink was handed and the counter is "
+        + "raised at the same entry, above the improvement test, so a run without one means the ratchet and "
+        + "its observation count came apart (sink=" + pit.sink + " survived=" + pit.survived
+        + " sinkStrings=" + pit.sinkStrings + ")");
       // …AND WHERE THAT RUN IS, WHICH IS THE HALF THE PAIR ABOVE CANNOT STATE. solve.c emits `survivedAt` and
       // `survivedTo` exactly when a run has been recorded and omits BOTH when it has not, because 0 is a real
       // and common offset — so their presence is the biconditional asserted here rather than a `!== undefined`

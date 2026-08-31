@@ -124,18 +124,60 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    as a LEDGER quantity it would be a 0->1 crossing paid to the first candidate of the search to reach its own
    source read and to none of the rest — §@S(ii)'s defect exactly, and the search learns nothing from the
    second delivery that it did not learn from the first. So the comparator carries it and the ledger does not.
-   RESIDUAL — WHAT IS NARROWER THAN THE SPEC AND WHAT THE NEXT DIFF BUILDS. The REPORT still cannot tell the
-   two zeroes apart: with `reached:0` and `surv_run:0` the popup says the same thing about a search whose
-   candidates never got their bytes into the page as about one whose candidates were sanitized at the sink, and
-   §@S names those as different states taking opposite actions. The next diff adds the search-side counter of
-   candidates OBSERVED TO DELIVER (a count, not a crossing — the ledger's rungs stay unpaid) and renders it in
-   extension/lib/popup-security.js beside `survivedBy`. It is not done here because that file is the consumer
-   and a field written with no reader is the defect §Architecture names; the two halves land together or not
-   at all. ITS ABSENCE SHOWS as a search reported `tried:N, reached:0, 0 of L bytes survived` for which no
-   column anywhere says whether the substitution ever happened — the state the flow-side rung can now
-   distinguish and the report still cannot. */
+   SO THE REPORT COUNTS THE TWO EVENTS THE RUNGS ARE OBSERVED AT, AND NEITHER COUNT IS A RUNG. `substituted`
+   and `sink_strings` below are REPORT counters in exactly the sense `reached` and `escaped` are: nothing about
+   the WFQ moves at either write, no crossing is latched and no ledger is paid, so §@S(ii)'s separation is
+   untouched and the comparator on the flow stays the only thing that orders live candidates. What they add is
+   the half a BEST-SO-FAR ratchet structurally cannot state — whether the observation was ever MADE. A ratchet
+   reports the furthest anything got and is therefore silent about how many times it looked, so `surv_run:0`
+   was two opposite readings under one number: no code-execution sink ran while this search's bytes were live,
+   and N of them ran and not one byte of the candidate was in any of them. §@S names that tell exactly — a rung
+   whose ABSENCE and whose ZERO read alike — and the two take opposite work, the first a distance question and
+   the second a question about the payload's own transform.
+   AND `substituted` IS THE ONE BELOW BOTH OF THEM, for the reason FLOW_RUNG_DELIVERED is the flow's bottom
+   rung: it is observed at the SOURCE READ, in the component that performs the substitution, so `substituted:0`
+   beside `turns:N` is the positive statement that these runs ended before reaching the read itself — a
+   question about the PATH in front of the source, which is neither of the two above and which no field here
+   could say at all. It is a count of substitutions and not of candidates: the flow-side rung already dedups
+   per flow (flow.c's flow_observe_rung early-returns), and a second dedup here would need a latch this file
+   does not own and an ordering contract between two components to keep it honest. */
 typedef struct {
     char *src; char *root; int sink; int tried; int reached; int turns; int fires;
+    /* HOW MANY TIMES THIS SEARCH'S BYTES HAVE ENTERED THE PAGE'S OWN PROGRAM — the report's bottom rung, and
+       the ONE fact here whose observation site is not a sink. Written from solve_observe_substitution, which
+       solver/concolic.c calls at the moment it performs the substitution, so it is strictly before every other
+       number on this entry and it is the only one that can be about a candidate still on the runway.
+       `substituted:0` BESIDE `turns:N` IS A POSITIVE STATEMENT AND THE WHOLE REASON THE FIELD EXISTS: these
+       candidates have held the thread and not one of them reached its own SOURCE READ, so the question is
+       about the PATH in front of the source — a gate turning the flows away — and not about the payload, the
+       filter or the sink. Without it that state was reported as `turns:N,reached:0,survived:0`, which is
+       byte-identical to a candidate whose bytes DID enter the program and never reached a sink, and the popup
+       stated the second for both: "the flows run and do not get this far through the document", which is a
+       confident wrong instruction for a flow that never got as far as the read.
+       A COUNT OF SUBSTITUTIONS, NOT OF CANDIDATES, and the name says so. A page that reads its source in a
+       loop delivers many times in one run; deduping to distinct flows would need a per-flow latch this file
+       does not own, and reaching for the flow's own rung to supply one would make the count depend on being
+       written before flow_observe_rung — an ordering contract between two components, which is exactly the
+       kind of seam that goes wrong silently. The zero is what is load-bearing here, and no dedup changes it.
+       NOT A RUNG AND NOT A CREDIT. Nothing about the WFQ moves at the write: §@S(ii)'s ledger keeps its
+       crossings, the flow's comparator keeps FLOW_RUNG_DELIVERED, and this is the REPORT's copy of the same
+       event — the third accounting unit, and the only one a reader ever sees. */
+    int substituted;
+    /* …AND HOW MANY STRINGS A CODE-EXECUTION SINK WAS HANDED WHILE THEY WERE LIVE — the observation COUNT that
+       `surv_run` is the best of, and the half a ratchet cannot state. A best-so-far records the furthest
+       anything got and says nothing about how often it looked, so `surv_run:0` meant either "no sink ran at
+       all during a candidate run of this search" or "N of them ran and not one byte of the candidate was in
+       any of them". Those are §@S's ABSENCE and ZERO reading alike, and they take opposite work: the first is
+       a distance-through-the-document question, the second says the sinks EXECUTED and the page's own
+       transform or routing left nothing of the payload in what they executed.
+       CLASS-INDEPENDENT, exactly like the fraction it counts the observations of (filter_survived's own
+       comment): the question is whether ANY code-execution sink ran with this flow's substitution live, so a
+       candidate for the eval sink whose bytes turn up at a markup write is counted here. Attributed to the
+       RUNNING FLOW'S search and never to the sink's, for the same reason the fraction is.
+       A COUNT OF STRINGS AND NOT OF ARRIVALS — `reached` is the arrival of a BREAKOUT at its OWN sink, and
+       this counts every string any code-execution sink was handed, whether or not a byte of the candidate was
+       in it. Those differ by exactly the population the field exists to describe. */
+    int sink_strings;
     /* THE LEDGER'S OWN LATCH FOR THE ARRIVAL RUNG, AND IT IS SPLIT OFF `reached` BECAUSE ONE NUMBER WAS
        ANSWERING TWO QUESTIONS AND ONE OF THE ANSWERS STOPPED BEING TRUE. `reached` is a REPORT counter — how
        many times ANY breakout's bytes turned up at this sink — and it was ALSO the WFQ's 0->1 crossing. Those
@@ -616,6 +658,13 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e->reach_credited = 0;
     e->turns = 0;
     e->fires = 0;
+    /* THE TWO OBSERVATION COUNTS TAKE THE SAME LINE AS EVERY FIELD AROUND THEM, and the reason is sharper for
+       these two than for a ratchet: the array is realloc'd and never zeroed, and BOTH of these are read as
+       "was this observation ever made". A garbage nonzero does not merely misreport a quantity — it states
+       that a substitution happened, or that a sink ran, for a search that has never once been given the
+       thread, which is the confident-wrong-instruction direction this pair exists to remove. */
+    e->substituted = 0;
+    e->sink_strings = 0;
     /* THE TWO NEW RUNGS TAKE THE SAME LINE AS THE OTHER FOUR, and the comment above this block is why: the
        array is realloc'd and never zeroed, so a field left out here reads whatever the allocator held. For a
        best-so-far ratchet that is not merely a wrong report — a garbage `surv_len` makes the first real
@@ -1132,6 +1181,15 @@ static void breakout_arrived(Cand *e) {
            "an @S breakout was recorded as ARRIVING for a flow whose payload has not entered the program — "
            "the marker these bytes were found by is the page's own, so the ladder is about to advance a "
            "candidate for a string it never produced");
+    /* …AND THE SAME QUESTION ASKED OF THIS FILE'S OWN RECORD, for the reason filter_survived states about its
+       copy: the line above is the COMPONENT's live answer and this is whether the event was ever reported
+       here, so a second door into the substitution shows up as an arrival standing over `substituted:0`
+       rather than as a report that quietly says the runway was never left. */
+    DCHECK(e->substituted > 0,
+           "an @S breakout arrived at its own sink for a search that has never recorded a substitution — the "
+           "bytes got here, so they entered the program, and concolic_deliver reports every entry to "
+           "solve_observe_substitution; the parked card would state that these runs never reached their own "
+           "source read");
     /* §@S's SECOND FITNESS RUNG, WRITTEN TO BOTH QUANTITIES — "the search is DISTANCE-DIRECTED (a fitness of
        {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)". A candidate flow records
        no endpoints by design (endpoint_suppress), so before this rung existed the ONLY thing that could ever
@@ -1245,6 +1303,30 @@ static void filter_survived(const char *out) {
            "so the flow's fitness, the search's ratchet and the report's surviving-byte count would all be "
            "readings of text the attacker never supplied. The sink entry that reached here did not ask "
            "concolic_candidate_delivered");
+
+    /* THE OBSERVATION IS COUNTED BEFORE IT IS MADE, which is the whole of what separates its ABSENCE from its
+       ZERO. Everything below this line is a best-so-far: the fraction is taken, the ratchet keeps it only if
+       it improves, and a run of zero returns without writing anything anywhere — so a search that has watched
+       four hundred sink writes go by carrying none of its bytes reported exactly what one that has never seen
+       a sink reports. §@S names that tell by name. Raised HERE, above the `run == 0` return and above every
+       improvement test, because the fact being recorded is that a code-execution sink RAN while this search's
+       substitution was live, which is true of the zero observation exactly as much as of the best one.
+       NOT A CREDIT AND NOT A RUNG: flow_credit_emit is not called, no crossing is latched, and the flow's own
+       comparator is written further down by flow_observe_survival. This is the REPORT's counter, and §@S(ii)
+       is why it is a different quantity in a different place from both of them.
+       AND IT ASSERTS THE COUNT BELOW IT, which is what keeps the delivery report from going missing. A string
+       reaches this line only with the substitution live in THIS replay, and every substitution is performed at
+       concolic_deliver, which reports it to solve_observe_substitution — so a sink observation standing over
+       `substituted:0` is a second door into the substitution that never told this file, and the parked card
+       would then state that these runs never reached their own source read about bytes it is measuring inside
+       a sink's own string. `concolic_candidate_delivered` above asks the COMPONENT for its live answer; this
+       asks whether the event was ever RECORDED here, and neither implies the other. */
+    e->sink_strings++;
+    DCHECK(e->substituted > 0,
+           "an @S candidate's bytes reached a code-execution sink for a search that has never recorded a "
+           "substitution — every delivery runs through concolic_deliver and is reported to "
+           "solve_observe_substitution, so this is a second door into the substitution that does not report "
+           "one, and the parked card is about to state that these runs never reached their own source read");
 
     /* AND THE DELIVERY PROBE IS READ HERE, at the same class-independent point and for the same reason this
        function already gives about its own rung: the observation is about the RUNNING FLOW'S OWN bytes, so it
@@ -1960,6 +2042,40 @@ int solve_seed_candidates(JSContext *ctx) {
    The scheduler calls this on EVERY switch-in, so the fix is for it to install the incoming flow's state
    unconditionally — a flow with no candidate installs "no candidate", which is the clearing that was missing.
    There is then no close to forget, and no ordering between two calls to get wrong. */
+/* THIS SEARCH'S BYTES JUST ENTERED THE PAGE'S OWN PROGRAM — the REPORT's bottom rung, written from the one
+   site that can state it. §@S(i) requires every rung to have an observation site strictly before the thing it
+   is a distance to, and every other number on a parked entry reports AT a sink; this one reports at the SOURCE
+   READ, which is the only observation available on the runway that is not a claim about where the bytes have
+   got to (that would need a taint tracker, which §Re-execution bans).
+   IT IS THE REPORT'S COPY OF THE EVENT flow_observe_rung RECORDS AS FLOW_RUNG_DELIVERED, and the two are
+   deliberately separate quantities at separate accounting units — §@S(ii). The flow's rung is the COMPARATOR:
+   monotone, per flow, re-earned across a park, read at the pick, and it orders live candidates. This is a
+   COUNT on the SEARCH: it never orders anything, it survives the flows that produced it, and it is the only
+   one of the two a reader ever sees. Neither can be derived from the other — a search whose every candidate
+   has been paged out still reports what its runs did, and a flow's rung says nothing about how many runs there
+   were.
+   NOT A CREDIT AND NOT A CROSSING. Nothing here calls flow_credit_emit, latches a rung or moves the frontier
+   generation, so the WFQ cannot see this write at all. Recorded as a ledger quantity it would be a 0->1
+   crossing paid to the first candidate of the search to reach its own source read and to none of the rest,
+   which is §@S(ii)'s defect exactly — the second delivery teaches the search nothing the first did not.
+   THE TRIPLE IS `CHECK`ED AND NOT ONLY `DCHECK`ED because both halves of it are dereferenced immediately:
+   solve.c states the same rule about filter_survived's own three, and a flow carrying half a substitution is
+   an assembly that went round the seeder and the cold tier's rebuild rather than a recoverable state. */
+void solve_observe_substitution(Flow *f) {
+    Cand *e;
+
+    CHECK(f != NULL && f->cand_src != NULL && f->cand_sink != NULL,
+          "solve: an @S substitution was performed for a flow carrying no source or no sink class — a search "
+          "is the pair, and both are dereferenced immediately below, so a flow holding half of one is a "
+          "candidate assembled outside solve_seed_candidates and solve_resume_candidate");
+    e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+    CHECK(e != NULL,
+          "solve: an @S substitution was performed for a search this session has no entry for — a candidate "
+          "exists only because detection opened one and a cold-resumed one re-registers before it runs an "
+          "opcode, so an absent entry is a search dropped under a live flow");
+    e->substituted++;
+}
+
 void solve_flow_begin(Flow *f) {
     concolic_set_candidate(f ? f->cand_src : NULL, f ? f->cand_payload : NULL);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
@@ -2189,11 +2305,43 @@ char *solve_json_array(JSContext *ctx) {
            and have not got as far as the sink. One is a WFQ question and the other is a distance question. */
         json_buf_raw(&b, ","); json_buf_key(&b, "turns");
         snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_raw(&b, t);
+        /* …AND THE TWO OBSERVATION COUNTS, WHICH ARE WHAT SPLIT `turns:N,reached:0,survived:0` INTO THE THREE
+           STATES IT HAS ALWAYS BEEN. `turns` made `reached:0` readable by separating a search the WFQ has
+           never served from one whose flows have run; these separate the second of those into the three things
+           it was still saying at once, each taking different work:
+             `substituted:0`                      — the runs ended before their own SOURCE READ. A question
+                                                    about the PATH: a gate in front of the source is turning
+                                                    these flows away, and nothing here is about the payload.
+             `substituted:D, sinkStrings:0`       — the bytes entered the program and no code-execution sink
+                                                    ran at all while they were live. The distance question.
+             `sinkStrings:S, survived:0`          — S sinks EXECUTED and not one byte of the candidate was in
+                                                    any of the strings they were handed. A question about the
+                                                    PAYLOAD's own transform or routing, which is the opposite
+                                                    instruction to the line above it.
+           BOTH ARE UNCONDITIONAL AND 0 IS A REAL VALUE EACH MUST BE ABLE TO SAY — the zero is the load-bearing
+           reading in both cases, so there is no absence here to read positively and an omission would be the
+           defect rather than a statement. Neither is a rung: nothing about the WFQ moves at either write, and
+           §@S(ii)'s ledger and the flow's comparator are untouched by both.
+           `sinkStrings` COUNTS STRINGS AND NOT ARRIVALS, which is the difference between it and `reached`:
+           `reached` is a BREAKOUT of this search turning up at its OWN sink, and this counts every string any
+           code-execution sink was handed while this search's substitution was live, whether or not a byte of
+           the candidate was in it. A reader that took one for the other would read `sinkStrings:400` as four
+           hundred arrivals. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "substituted");
+        snprintf(t, sizeof t, "%d", g_pending[i].substituted); json_buf_raw(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "sinkStrings");
+        snprintf(t, sizeof t, "%d", g_pending[i].sink_strings); json_buf_raw(&b, t);
         /* …AND THE TWO MIDDLE RUNGS, WHICH IS WHAT SPLITS `reached:0` AND `reached:N` INTO THE FOUR STATES THEY
            REALLY ARE. `survived`/`survivedOf` is the FURTHEST any candidate of this search has got its own
-           bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:0` is a
-           document nobody has explored far enough and `turns:900,reached:0,survived:11,survivedOf:14` is a
-           FILTER eating the candidate eleven-fourteenths of the way in — the same report before, opposite work.
+           bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:11,
+           survivedOf:14` is a FILTER eating the candidate eleven-fourteenths of the way in — the same report
+           before, opposite work.
+           `survived:0` IS NOT "A DOCUMENT NOBODY HAS EXPLORED FAR ENOUGH", WHICH IS WHAT THIS PARAGRAPH USED
+           TO SAY AND WHAT THE PAIR ABOVE NOW REFUTES. A best-so-far is silent about how many times it looked,
+           so a zero here is read WITH `substituted` and `sinkStrings` or not at all: `substituted:0` is a path
+           that never reached the source read, `sinkStrings:0` is the distance reading this sentence claimed
+           for all three, and `sinkStrings:X,survived:0` is X sinks that executed carrying none of the payload
+           — a question about the payload, and the opposite instruction.
            `escaped` is how many arrivals reached an EXECUTABLE position, which `reached` could not say and
            which `fires` only approximates: `fires` counts every auto-firing handler in the parse INCLUDING the
            page's own markup, so a card reading it alone stated "none reached an executable position" as a fact
