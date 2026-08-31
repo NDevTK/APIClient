@@ -2194,9 +2194,9 @@ function consoleSeverityText(out) {
    with dialogs in it is a run whose later findings sit behind a question somebody was asked, and the count is
    how a reader sees that without reading the log.
    NEITHER FIELD IS DEFAULTED, for the reason the @LOG reader above states about `level`: simple_dialogs.c
-   writes `kind` and `message` on every line it prints, so a line missing either is that emitter and this
+   writes `dialog` and `message` on every line it prints, so a line missing either is that emitter and this
    reader having come apart — and a dropped line is indistinguishable from a dialog that never happened once
-   the answer is a number. An UNKNOWN `kind` throws for the same reason the @FORKAT census throws on an
+   the answer is a number. An UNKNOWN `dialog` throws for the same reason the @FORKAT census throws on an
    unknown member: §8.9.1 has exactly three, they are the three strings the algorithm hands to WebDriver BiDi
    user prompt opened, and a fourth is a producer this reader has not been told about. */
 function dialogText(out) {
@@ -2205,16 +2205,16 @@ function dialogText(out) {
   for (const m of out.matchAll(/^@DIALOG (\{.*\})$/gm)) {
     let v;
     try { v = JSON.parse(m[1]); } catch { continue; }   /* a truncated tail is not a finding about the page */
-    if (typeof v.kind !== "string" || typeof v.message !== "string")
-      throw new Error("[build] an @DIALOG line carries no string `kind` or no string `message` — " +
+    if (typeof v.dialog !== "string" || typeof v.message !== "string")
+      throw new Error("[build] an @DIALOG line carries no string `dialog` or no string `message` — " +
                       "browser/core/html/simple_dialogs.c writes both on every line it prints (HTML §8.9.1's " +
                       "own name for the dialog, and the message after normalize newlines), so a line without " +
                       "one is that emitter having changed under this reader.");
-    if (!(v.kind in n))
-      throw new Error(`[build] an @DIALOG line carries the kind ${JSON.stringify(v.kind)} — HTML §8.9.1 ` +
+    if (!(v.dialog in n))
+      throw new Error(`[build] an @DIALOG line carries the dialog name ${JSON.stringify(v.dialog)} — HTML §8.9.1 ` +
                       `Simple dialogs defines three (alert, confirm, prompt) and simple_dialogs.c writes ` +
                       `those three literals, so a fourth is a producer this reader has not been told about.`);
-    n[v.kind]++;
+    n[v.dialog]++;
     if (!first) first = m[1].slice(0, 160);
   }
   const total = n.alert + n.confirm + n.prompt;

@@ -57,6 +57,7 @@
 #include "core/html/domparser.h"
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
+#include "core/html/simple_dialogs.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/html/xml_serializer.h"
 #include "core/indexeddb/idb_connection.h"
@@ -225,6 +226,7 @@ static void d_intersection_observer(JSContext *c, const PlatformAgent *a) { (voi
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
+static void d_simple_dialogs(JSContext *c, const PlatformAgent *a) { (void)a; simple_dialogs_init(c); }
 static void d_domparser(JSContext *c, const PlatformAgent *a) { (void)a; domparser_init(c); }
 static void d_xml_serializer(JSContext *c, const PlatformAgent *a) { (void)a; xml_serializer_init(c); }
 /* ECMAScript §16.2.1.10 HostLoadImportedModule is the RUNTIME's hook, which is what an agent is.
@@ -600,6 +602,7 @@ static void r_nav_history_entry(JSRuntime *rt) { navigation_history_entry_free(r
    here. */
 static void r_page_reveal(JSRuntime *rt) { page_reveal_free(rt); }
 static void r_media_query_list(JSRuntime *rt) { media_query_list_free(rt); }
+static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -633,6 +636,7 @@ static void i_unhandled_rejection(JSContext *c, JSValueConst g, const PlatformDo
 static void i_animation_frame(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; animation_frame_install(c, g); }
 static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; page_reveal_install(c, g); }
 static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; media_query_list_install(c, g); }
+static void i_simple_dialogs(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; simple_dialogs_install(c, g); }
 static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; fetch_install(c, g); }
 static void i_abort(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; abort_install(c, g); }
 static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
@@ -907,6 +911,12 @@ static const PlatformComponent PLATFORM[] = {
        and not to any JSContext — which means nothing frees it when a realm goes. */
     { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },
     { "document",            d_document,            i_document,  r_document },
+    /* HTML §8.9.1's SIMPLE DIALOGS, AFTER `document` for the reason the row below is: its install needs
+       nothing (three methods on the global) but every one of its members opens on §8.9.1's "we cannot show
+       simple dialogs", whose only forced step reads the Document's ACTIVE SANDBOXING FLAG SET — so the
+       component that owns Documents is what these members are declared against, and this list's order is
+       where that is said. */
+    { "simple_dialogs",      d_simple_dialogs,      i_simple_dialogs, r_simple_dialogs },
     /* HTML §8.5.1's DOMParser, AFTER `document` — not because its install needs one (it puts an interface
        object on the global and nothing else) but because that is what this list's order MEANS: every member of
        this interface builds a second Document through core/dom/document.h's `document_new`, so the component
@@ -958,6 +968,15 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "structuredClone",       "structured_clone" },
     { "requestAnimationFrame", "animation_frame" },
     { "matchMedia",            "media_query_list" },
+    /* HTML §8.9.1's three members, and the witness matters more than most for the reason Web Storage's two do:
+       all three are on browser/platform_names.h, so solver/absent.c's read hook leaves a miss on them ALONE —
+       a name the platform owns is a component this engine owes, and that file declines to mint a concolic for
+       one. An install that silently stopped happening therefore reports itself one frame away from the member
+       that is missing — `window.confirm` answers `undefined` and only the CALL throws — which is exactly the
+       distance this column exists to close. */
+    { "alert",                 "simple_dialogs" },
+    { "confirm",               "simple_dialogs" },
+    { "prompt",                "simple_dialogs" },
     { "URL",                   "url" },
     { "URLSearchParams",       "url_search_params" },
     { "FormData",              "form_data" },
