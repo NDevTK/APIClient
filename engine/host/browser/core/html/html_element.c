@@ -305,7 +305,11 @@ static const ElReflect R_INPUT[] = {
     { "defaultChecked", "checked", REFLECT_BOOL }, { "formNoValidate", "formnovalidate", REFLECT_BOOL },
 };
 static const ElReflect R_BUTTON[] = {
-    { "name", "name", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
+    /* NO `type` HERE: §4.10.6 The button element gives it getter steps that read the SUBMIT-BUTTON
+       predicate — the `command` and `commandfor` attributes and the PARENT — so it answers from more than
+       this attribute and is core/html/html_form.c's beside that predicate. The mirror read "" for
+       `<button>` where a browser reads "submit". */
+    { "name", "name", REFLECT_STRING },
     { "value", "value", REFLECT_STRING },
     { "formMethod", "formmethod", REFLECT_ENUM, .en = &HTML_FORM_FORMMETHOD_ATTRIBUTE },
     { "disabled", "disabled", REFLECT_BOOL },
@@ -321,8 +325,11 @@ static const ElReflect R_SELECT[] = {
     { "disabled", "disabled", REFLECT_BOOL }, { "multiple", "multiple", REFLECT_BOOL },
     { "required", "required", REFLECT_BOOL },
 };
+/* NO `label` HERE: §4.10.10 The option element's getter falls through an absent attribute to the element's
+   TEXT, so the mirror read "" for `<option>Blue</option>` where a browser reads "Blue". §4.10.9 The optgroup
+   element's member of the same name over the same attribute IS a plain `[CEReactions, Reflect]` mirror and
+   its row in R_OPTGROUP is correct — the same two-interfaces-one-name shape as `htmlFor`. */
 static const ElReflect R_OPTION[] = {
-    { "label", "label", REFLECT_STRING },
     { "disabled", "disabled", REFLECT_BOOL }, { "defaultSelected", "selected", REFLECT_BOOL },
 };
 static const ElReflect R_LABEL[]  = { { "htmlFor", "for", REFLECT_STRING } };
@@ -1082,8 +1089,10 @@ void html_element_install_protos(JSContext *ctx)
     {
         JSValue f = html_iface_proto(ctx, "HTMLFormElement"), in = html_iface_proto(ctx, "HTMLInputElement");
         JSValue ta = html_iface_proto(ctx, "HTMLTextAreaElement"), op = html_iface_proto(ctx, "HTMLOptionElement");
-        html_form_install(ctx, f, in, ta, op);
+        JSValue bt = html_iface_proto(ctx, "HTMLButtonElement");
+        html_form_install(ctx, f, in, ta, op, bt);
         JS_FreeValue(ctx, f); JS_FreeValue(ctx, in); JS_FreeValue(ctx, ta); JS_FreeValue(ctx, op);
+        JS_FreeValue(ctx, bt);
     }
 
     /* §4.11.4's `returnValue` goes on HTMLDialogElement and nowhere else, handed the prototype for the same

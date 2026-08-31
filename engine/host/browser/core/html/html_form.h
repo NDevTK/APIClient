@@ -13,7 +13,8 @@
 /* Declared once per AGENT; html_form_install then names the cached ids for each realm's prototypes. */
 void html_form_declare(JSContext *ctx);
 void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,
-                       JSValueConst textarea_proto, JSValueConst option_proto);
+                       JSValueConst textarea_proto, JSValueConst option_proto,
+                       JSValueConst button_proto);
 void html_form_free(JSRuntime *rt);
 /* `document.forms` — a Document member, so document.c installs it on its prototype. */
 
@@ -110,6 +111,14 @@ HtmlInputState html_form_input_state(const lxb_dom_node_t *n);
    CANONICAL KEYWORD of the state, which the enum above cannot spell. Sharing the definition is what stops the
    reflection becoming a twenty-third spelling of the keyword list. */
 extern const EnumeratedAttribute HTML_INPUT_TYPE_ATTRIBUTE;
+
+/* §4.10.6 The button element's `type` AS §2.3.3 DEFINES IT — `submit`, `reset` and `button`, with the AUTO
+   state (which no keyword names) as both the missing and the invalid value default. Exported for the same
+   reason `input`'s is, plus one this element makes sharper: §4.10.6 defines "a submit button" over this
+   attribute's STATE and its `type` getter over the state's CANONICAL KEYWORD, so a second reading of the
+   keyword list is two answers about one element. There was one — three case-insensitive comparisons inside
+   html_form_is_submit_button — and the getter's own assert is what now holds the two together. */
+extern const EnumeratedAttribute HTML_BUTTON_TYPE_ATTRIBUTE;
 
 /* §4.10.19.6's FOUR FORM SUBMISSION ATTRIBUTES, as TWO keyword tables and FOUR definitions — which is the shape
    the section itself states: "The method and formmethod content attributes are enumerated attributes with the

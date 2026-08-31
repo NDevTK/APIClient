@@ -31,6 +31,7 @@
 #include "core/dom/document.h"
 #include "core/frame/sandboxing.h"
 #include "core/dom/node.h"
+#include "core/dom/element.h"   /* the attribute WRITE the two `[ReflectSetter]` setters below make */
 #include "core/dom/text_content.h"   /* §4.10.11's "its child text content", which is DOM §4.11's */
 #include "core/encoding/encoding.h"
 #include "core/events/event.h"
@@ -195,11 +196,41 @@ bool html_form_is_button(JSContext *ctx, JSValueConst wrap)
            st == INPUT_STATE_RESET  || st == INPUT_STATE_BUTTON;
 }
 
+/* §4.10.6 The button element's `type` AS §2.3.3 DEFINES IT. The section says "It is an enumerated attribute
+   with the following keywords and states" and then gives a TABLE, which is why the three rows below are set
+   out rather than quoted — submit maps to Submit Button, reset to Reset Button, button to Button — and then
+   states in its own words: "The attribute's missing value default and invalid value default are both the Auto
+   state."
+   THE AUTO STATE HAS NO KEYWORD, which is why it is an enum value the table below never names rather than
+   core/html/enumerated_attribute.h's no-state sentinel: Auto IS one of the attribute's four states — the one
+   two of the three special positions point at — and §2.6.1's "in a state ... with no associated keyword value"
+   is a real branch of the getter rather than an error. `empty` is `invalid` because §4.10.6 declares no empty
+   value default, which enumerated_attribute.h states is exactly what §2.3.3's step 3 reduces to.
+   IT IS SHARED RATHER THAN RESTATED. The predicate below used to spell the keyword list a second time, as three
+   `ascii_ci_is` comparisons — the bare-strcasecmp shape core/html/enumerated_attribute.c's own header names —
+   and §4.10.6's `type` getter needs the CANONICAL KEYWORD of the state, which a comparison chain cannot hand
+   back. Two readings of one keyword list is the copy that drifts; there is now one. */
+enum { BUTTON_TYPE_SUBMIT = 0, BUTTON_TYPE_RESET, BUTTON_TYPE_BUTTON, BUTTON_TYPE_AUTO };
+static const EnumeratedKeyword BUTTON_TYPE_KEYWORDS[] = {
+    { "submit", BUTTON_TYPE_SUBMIT },
+    { "reset",  BUTTON_TYPE_RESET },
+    { "button", BUTTON_TYPE_BUTTON },
+    { NULL,     0 }
+};
+const EnumeratedAttribute HTML_BUTTON_TYPE_ATTRIBUTE = {
+    BUTTON_TYPE_KEYWORDS, BUTTON_TYPE_AUTO, BUTTON_TYPE_AUTO, BUTTON_TYPE_AUTO
+};
+
+static int button_type_state(lxb_dom_node_t *n)
+{
+    return enumerated_attribute_state(lxb_dom_interface_element(n), "type",
+                                      HTML_BUTTON_TYPE_ATTRIBUTE.keywords, HTML_BUTTON_TYPE_ATTRIBUTE.missing,
+                                      HTML_BUTTON_TYPE_ATTRIBUTE.empty, HTML_BUTTON_TYPE_ATTRIBUTE.invalid);
+}
+
 bool html_form_is_submit_button(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
-    size_t tlen = 0;
-    const char *t;
 
     (void)ctx;
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
@@ -209,14 +240,64 @@ bool html_form_is_submit_button(JSContext *ctx, JSValueConst wrap)
         return st == INPUT_STATE_SUBMIT || st == INPUT_STATE_IMAGE;
     }
     if (!tag_is(n, "button")) return false;
-    /* §4.10.6: a `button` is a submit button if its `type` is in the Submit Button state, or in the AUTO state
-       (missing or invalid) with neither `command` nor `commandfor` present and a parent that is not a select. */
-    t = attr_of(lxb_dom_interface_element(n), "type", &tlen);
-    if (ascii_ci_is(t, tlen, "submit")) return true;
-    if (ascii_ci_is(t, tlen, "reset") || ascii_ci_is(t, tlen, "button")) return false;
-    return !has_attr(lxb_dom_interface_element(n), "command") &&
-           !has_attr(lxb_dom_interface_element(n), "commandfor") &&
-           !tag_is(n->parent, "select");
+    /* §4.10.6: "A button element is said to be a submit button if any of the following are true: the type
+       attribute is in the Auto state, both the command and commandfor content attributes are not present, and
+       the parent node is not a select element; or the type attribute is in the Submit Button state." */
+    switch (button_type_state(n)) {
+    case BUTTON_TYPE_SUBMIT:
+        return true;
+    case BUTTON_TYPE_AUTO:
+        return !has_attr(lxb_dom_interface_element(n), "command") &&
+               !has_attr(lxb_dom_interface_element(n), "commandfor") &&
+               !tag_is(n->parent, "select");
+    default:
+        return false;
+    }
+}
+
+/* §4.10.6's `type` GETTER STEPS, which are NOT a reflection and were a `REFLECT_STRING` row: "If this is a
+ * submit button, then return "submit". Let state be this's type attribute. Assert: state is not in the Submit
+ * Button state. If state is in the Auto state, then return "button". Return the keyword value corresponding to
+ * state."
+ *
+ * THE MIRROR WAS WRONG FOR EVERY MARKUP A PAGE ACTUALLY WRITES. `<button>` read "" where a browser reads
+ * "submit" — the default that decides whether clicking it submits the form — `<button type=BANANA>` read
+ * "banana" where a browser reads "submit" (Auto, no command/commandfor, parent not a select), and
+ * `<button type=RESET>` read "RESET" where §2.3.3's canonical keyword is "reset". A page branching on
+ * `btn.type === "submit"` took the wrong arm in all three.
+ *
+ * STEP 2'S ASSERT IS THE SECTION'S OWN and is written as one: step 1 has already returned for every element
+ * whose state is Submit Button, so reaching step 2 in that state means the two answers disagree — which can
+ * only be the submit-button predicate above and this getter reading different keyword tables, the exact defect
+ * sharing HTML_BUTTON_TYPE_ATTRIBUTE removed. */
+static JSValue js_button_type(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    int state;
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "button"))
+        return JS_ThrowTypeError(ctx, "HTMLButtonElement.type was reached on something that is not a button");
+    if (html_form_is_submit_button(ctx, this_val)) return JS_NewString(ctx, "submit");
+    state = button_type_state(n);
+    DCHECK(state != BUTTON_TYPE_SUBMIT,
+           "§4.10.6's `type` getter reached step 2 with the attribute in the Submit Button state — step 1 "
+           "returns for every submit button, so this is html_form_is_submit_button and this getter disagreeing "
+           "about one element, which they cannot do while both read HTML_BUTTON_TYPE_ATTRIBUTE");
+    if (state == BUTTON_TYPE_AUTO) return JS_NewString(ctx, "button");
+    return JS_NewString(ctx, enumerated_attribute_canonical_keyword(HTML_BUTTON_TYPE_ATTRIBUTE.keywords, state));
+}
+
+/* §2.6.2's `[ReflectSetter]` half of the same member: the setter reflects and writes the content attribute. */
+static JSValue js_button_set_type(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "button"))
+        return JS_ThrowTypeError(ctx, "HTMLButtonElement.type was reached on something that is not a button");
+    element_attr_set_value(ctx, this_val, "type", val);
+    return JS_UNDEFINED;
 }
 
 bool html_form_is_form_element(JSValueConst v)
@@ -295,6 +376,58 @@ static JSValue option_collect_text(JSContext *ctx, lxb_dom_node_t *root)
     r = JS_NewStringLen(ctx, b.s ? b.s : "", w);
     free(b.s);
     return r;
+}
+
+/* §4.10.10 The option element's `label` GETTER STEPS, which are NOT a reflection and were a `REFLECT_STRING`
+ * row: "Let attribute be this's label attribute. If attribute is null, then return this's label. Return
+ * attribute's value." — over the section's own definition of the noun: "The label of an option element is the
+ * value of the label content attribute, if there is one and its value is not the empty string, or, otherwise,
+ * the value of the element's text IDL attribute."
+ *
+ * SO AN ABSENT ATTRIBUTE ANSWERS THE OPTION'S TEXT, and the mirror answered "". `<option>Blue</option>.label`
+ * read the empty string where every browser reads "Blue" — the string a `<select>`'s options are IDENTIFIED by,
+ * so a page choosing an option by label matched nothing and a solver reading the choices back learned none of
+ * them. The two branches compose to the attribute when it is present and the element's text otherwise: the
+ * definition's non-empty test cannot be reached from the getter, because a present-and-empty attribute is
+ * returned by step 3 before this's label is ever consulted, which is why `<option label="">` is "" and
+ * `<option>` is not.
+ *
+ * IT IS NOT §4.10.9 The optgroup element's MEMBER OF THE SAME NAME. That one is `[CEReactions, Reflect]` over
+ * the same attribute name and its row in core/html/html_element.c is correct — the same two-interfaces-one-name
+ * shape as §4.10.12's `htmlFor` against §4.10.4's, and the same reason a reflection is declared per INTERFACE.
+ *
+ * `text` IS COLLECT OPTION TEXT. §4.10.10's `text` getter steps are "return the result of collect option text
+ * given this and false", which is the function directly above and the same one the element's VALUE falls back
+ * to — one implementation, asked twice, rather than a second walk that could strip whitespace differently. */
+static JSValue js_option_label(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    JSValue attribute;
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "option"))
+        return JS_ThrowTypeError(ctx, "HTMLOptionElement.label was reached on something that is not an option");
+    /* Step 1 takes the attribute as a VALUE and not as bytes: an attacker string a flow stashed in `label`
+       reaches this member with its provenance, and step 3 hands back that same value. */
+    attribute = element_attr_get_value(ctx, this_val, "label");
+    if (JS_IsException(attribute)) return attribute;
+    if (!JS_IsNull(attribute)) return attribute;   /* step 3: "Return attribute's value." */
+    /* Step 2: "If attribute is null, then return this's label" — and with no attribute at all, the definition's
+       first arm cannot apply, so its "otherwise" is the whole of the answer. */
+    JS_FreeValue(ctx, attribute);
+    return option_collect_text(ctx, n);
+}
+
+/* §2.6.2's `[ReflectSetter]` half: the setter reflects and writes the content attribute. */
+static JSValue js_option_set_label(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+
+    (void)magic;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "option"))
+        return JS_ThrowTypeError(ctx, "HTMLOptionElement.label was reached on something that is not an option");
+    element_attr_set_value(ctx, this_val, "label", val);
+    return JS_UNDEFINED;
 }
 
 /* ---- a control's VALUE state -----------------------------------------------------------------------------
@@ -2163,7 +2296,7 @@ JSValue html_form_selected_options(JSContext *ctx, JSValueConst select)
 
 /* Declared once per AGENT, installed per realm — see hyperlink.c for why the split exists at all. */
 static int g_id_submit = -1, g_id_reqsubmit = -1, g_id_val_input = -1, g_id_val_textarea = -1,
-           g_id_val_option = -1, g_id_checked = -1;
+           g_id_val_option = -1, g_id_checked = -1, g_id_button_type = -1, g_id_option_label = -1;
 
 void html_form_declare(JSContext *ctx)
 {
@@ -2222,10 +2355,16 @@ void html_form_declare(JSContext *ctx)
        `JS_NewBool(JS_ToBool(val))` destroyed the taint one line later, so the crossing bought nothing it was
        kept for. IDL_BOOLEAN is IDL_CONCOLIC_FORKS and both worlds are submitted. */
     g_id_checked = idl_setter_id(ctx, IDL_BOOLEAN, false, js_ctrl_set_checked, 0);
+    /* §4.10.6's `type` and §4.10.10's `label` — both `[CEReactions, ReflectSetter] DOMString`, so each
+       setter is §2.6.1's one step and each getter is its own section's algorithm. Declared here because
+       §4.10 is declared here, and installed below on the prototypes core/html/html_element.c hands over. */
+    g_id_button_type = idl_setter_id(ctx, IDL_DOMSTRING, false, js_button_set_type, 0);
+    g_id_option_label = idl_setter_id(ctx, IDL_DOMSTRING, false, js_option_set_label, 0);
 }
 
 void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,
-                       JSValueConst textarea_proto, JSValueConst option_proto)
+                       JSValueConst textarea_proto, JSValueConst option_proto,
+                       JSValueConst button_proto)
 {
     DCHECK(g_id_submit >= 0, "§4.10's members were installed before they were declared");
     DCHECK(JS_IsObject(form_proto), "the form members were installed with no HTMLFormElement.prototype");
@@ -2236,6 +2375,11 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     idl_install_accessor(ctx, textarea_proto, "value", js_ctrl_get_value, CTRL_TEXTAREA, g_id_val_textarea);
     idl_install_accessor(ctx, option_proto, "value", js_ctrl_get_value, CTRL_OPTION, g_id_val_option);
     idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, g_id_checked);
+    /* §4.10.6's `type` and §4.10.10's `label`, each on the interface whose IDL declares it. Neither is a
+       reflection row: both getters read state the attribute alone does not decide — the submit-button
+       predicate's `command`/`commandfor`/parent for one, the option's collected text for the other. */
+    idl_install_accessor(ctx, button_proto, "type", js_button_type, 0, g_id_button_type);
+    idl_install_accessor(ctx, option_proto, "label", js_option_label, 0, g_id_option_label);
     constraint_validation_install(ctx, input_proto, textarea_proto);
     input_value_install(ctx, input_proto);   /* §4.10.5.4's `files`, on the prototype §4.10 owns */
     input_picker_install(ctx, input_proto);  /* §4.10.5.4's `showPicker()`, on the same prototype */
