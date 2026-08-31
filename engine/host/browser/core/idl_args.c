@@ -2551,26 +2551,33 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
          * `fetch.call(crossOriginFrame, "/")`, and it is why this check must be INSIDE the try rather than at
          * whatever minted the function.
          *
-         * THE RESIDUAL IS THE PLAIN-C GETTER, AND IT IS NAMED HERE BECAUSE THIS IS THE SITE IT WOULD REACH.
-         * idl_install_accessor takes an `IdlGetter` — a raw JS_CFUNC_getter_magic with NO pool entry — so an
-         * attribute whose read runs none of the page's code never arrives at this machine, and NEITHER of
-         * §3.7's two steps is performed for it: not §3.5's "getter" security check and not step 3's brand. The
-         * §7.2.2 The Window object attributes core/frame/window.c installs are every one of them that shape
-         * (`name`, `opener`, `status`, `closed`, `frameElement`, `isSecureContext` — grep idl_install_accessor
-         * there). AND EVERY INTERFACE CONVERTED TO idl_this_iface LEAVES EXACTLY ITS ATTRIBUTE GETTERS BEHIND,
-         * which is why this names the SHAPE and not a list of them: converting a component deletes its
-         * operations' and setters' own brand tests and cannot touch its getters', so each conversion adds
-         * members to this residual rather than retiring it. `grep -l idl_this_iface` names the components that
-         * have been converted; the brand helper still standing in each of them is what is left.
-         * WHAT THE NEXT DIFF BUILDS: a pool entry
-         * for a plain getter — `idl_mint_accessor` takes a STEP id and asks the pool for it, so there is no
-         * entry to route an `IdlGetter` through and one has to be minted for it, at idl_define_accessor, the
-         * one place every plain getter is created. HOW ITS ABSENCE SHOWS: WPT
-         * html/browsers/origin/cross-origin-objects/cross-origin-objects.html's "Cross-origin access to
-         * methods and getters/setters" fails every `desc.get.bind(otherObj)` assertion for a name outside
-         * windowAllowlists.getters while passing every method assertion beside it; and
-         * `Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "name").get.call({})` throws from the
-         * body's own test rather than from this one. */
+         * THE RESIDUAL IS THE PLAIN-C GETTER ON AN INTERFACE PROTOTYPE, AND IT IS NAMED HERE BECAUSE THIS IS
+         * THE SITE IT WOULD REACH. idl_install_accessor takes an `IdlGetter` — a raw JS_CFUNC_getter_magic with
+         * NO pool entry — so an attribute whose read runs none of the page's code never arrives at this
+         * machine, and neither of §3.7's two steps is performed for it: not §3.5's "getter" security check and
+         * not step 3's brand.
+         * WHAT IS NOT COVERED IS NOW THE PROTOTYPE HALF ONLY. A plain getter installed as an own property of
+         * the realm's [Global] object HAS both steps: idl_mint_plain_getter routes it through §3.7.6's own
+         * opening steps, because there the TARGET settles the interface (Window is this engine's only [Global]
+         * interface) with nothing for the member to state. On a PROTOTYPE the interface is the member's to
+         * declare and this machine is where it would be asked, which is what leaves the shape standing.
+         * AND EVERY INTERFACE CONVERTED TO idl_this_iface LEAVES EXACTLY ITS ATTRIBUTE GETTERS BEHIND, which is
+         * why this names the SHAPE and not a list of them: converting a component deletes its operations' and
+         * setters' own brand tests and cannot touch its getters', so each conversion adds members to this
+         * residual rather than retiring it. `grep -l idl_this_iface` names the components that have been
+         * converted; the brand helper still standing in each of them is what is left.
+         * WHAT THE NEXT DIFF BUILDS: a pool entry for a plain getter — `idl_mint_accessor` takes a STEP id and
+         * asks the pool for it, so there is no entry to route an `IdlGetter` through and one has to be minted
+         * for it, at idl_mint_plain_getter, which is the one place a plain getter is created. THAT CLAUSE USED
+         * TO NAME idl_define_accessor AND IT WAS WRONG ABOUT THIS TREE: there were TWO such mints, and the
+         * other one — idl_install_replaceable's readonly form — is what installs CSSOM VIEW §4's thirteen
+         * Window members and HTML §7.2.2.4's `parent` and `length`, so a diff obeying the clause as written
+         * would have left fifteen global attributes unrouted and believed itself finished. The two mints have
+         * since been made one; the clause names that one.
+         * HOW ITS ABSENCE SHOWS: `Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "name").get
+         * .call({})` throws from the body's own test rather than from this one, and an unconverted prototype
+         * attribute answers `desc.get.call(crossOriginWindowProxy)` out of the reading realm instead of
+         * throwing "SecurityError". */
         if (idl_implementation_check(ctx, m, s->hdr.this_val) < 0) {
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_ABRUPT;
@@ -4761,6 +4768,28 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr)
 /* The ONE mint and its §3.7.6 Attributes form, defined beside idl_step_function below because that is where
    every other minting form lives; declared here because the accessor installs reach them first. */
 static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, int expect);
+/* And the ONE mint for an attribute whose getter is a plain C function — defined beside §3.7.6's receiver
+   machinery below, because routing a global attribute's read through it is the whole of what it decides. */
+static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const char *name,
+                                     IdlGetter getter, int getter_magic);
+
+/* IS THIS INSTALL PUTTING AN OWN PROPERTY ON THE REALM'S [Global] OBJECT? Web IDL §3.7.6's opening prose —
+   "Regular attributes are exposed on the interface prototype object, unless the attribute is unforgeable or if
+   the interface was declared with the [Global] extended attribute, in which case they are exposed on every
+   object that implements the interface" — is what makes this question answer "which interface is `target`":
+   Window is the only [Global] interface this engine has, so an own property of the global is a Window member.
+   IT COMPARES THE REALM'S GLOBAL AND NEVER READS A `globalThis` PROPERTY. The binding is a writable data
+   property a page may reassign, so a receiver or a target taken from it is not necessarily the Window;
+   JS_GetGlobalObject answers the realm's own object, which is the value §3.7.6 means by "realm's global
+   object". Side-effect-free: the reference it takes is given straight back. */
+static bool idl_target_is_realm_global(JSContext *ctx, JSValueConst target)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    bool same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(target);
+
+    JS_FreeValue(ctx, g);
+    return same;
+}
 
 /* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — the step every mint in this file used to
  * skip, and the reason it went unseen for as long as it did.
@@ -4897,23 +4926,28 @@ static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char 
     DCHECK(setter_stepid < 0 || idl_declared_before_seal(setter_stepid), name);
     JSAtom a = JS_NewAtom(ctx, name);
     JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
-    char nb[IDL_ACCESSOR_NAME_MAX];
 
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
     DCHECK(getter != NULL || !no_user_code,
            "a no-user-code declaration was made for an attribute that has no getter — the claim is about what a "
            "GETTER'S BODY reaches, and a write-only member has no body to make it about");
     if (getter) {
-        /* §3.7.6's create an attribute getter: the property is keyed by `a` (the identifier) and the FUNCTION
-           carries the composed name. The two differ, and only this line knows it. */
-        g = JS_NewCFunction2(ctx, (JSCFunction *)getter,
-                             idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_GET), 0,
-                             JS_CFUNC_getter_magic, getter_magic);
+        g = idl_mint_plain_getter(ctx, target, name, getter, getter_magic);
         /* THE DECLARATION RIDES THE MINTED OBJECT, which is what makes it PER MEMBER. A shared C body reached
            through several magics (js_rule_get is one) is several function objects, so one arm of it saying this
            says nothing about the others — the granularity a per-function-pointer exemption would not have. */
-        if (no_user_code)
+        if (no_user_code) {
+            /* AND A GLOBAL ATTRIBUTE'S GETTER IS NOT THAT OBJECT ANY MORE. On the realm's global the mint
+               above returns §3.7.6's opening steps wrapped around the member's body, so the claim would be
+               about window_proxy_security_check and window_proxy_this_object as well — which nothing has
+               established. No member combines the two today; the day one does, establish it for those two
+               halves and declare it on the wrapper, rather than on a body the read no longer reaches first. */
+            DCHECK(!idl_target_is_realm_global(ctx, target),
+                   "a no-user-code declaration was made for an attribute installed on the realm's GLOBAL — its "
+                   "read now runs Web IDL §3.7.6's opening steps first, so the claim is about those and not "
+                   "only about the member's body");
             JS_DeclareCFunctionNoUserCode(g);
+        }
     }
     /* The GETTER here is a plain C function with no pool entry (this is the form for an attribute whose read
        runs none of the page's code), but the SETTER is a step member exactly like any other, so it is minted
@@ -4974,34 +5008,207 @@ int idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, J
     return r;
 }
 
-/* WEB IDL §3.7.6's `jsValue`, FOR THE TWO ACCESSORS THIS FILE MINTS ITSELF — resolved and brand-checked.
+/* WEB IDL §3.7.6 Attributes' `jsValue`, FOR EVERY ACCESSOR THIS FILE INSTALLS ON A [Global] OBJECT — resolved,
+ * security-checked and brand-checked, in the standard's own order.
  *
- * §3.7.6 puts BOTH of these steps in "creating an attribute getter" and "creating an attribute setter" — the
- * spec's own names for the two algorithms, as define the regular attributes invokes them — ahead of
- * the member's own getter/setter steps: "Let jsValue be the this value, if it is not null or undefined, or
- * realm's global object otherwise", and then "If jsValue does not implement target ... throw a TypeError".
- * They are the ACCESSOR MACHINERY'S work, not the member's — which is why they belong here, and why every
+ * §3.7.6 gives create an attribute getter and create an attribute setter the SAME three opening steps ahead of
+ * the member's own getter/setter steps. Getter, step 1's try-list (step 1 holds TWO lists — the try-list and
+ * the "if an exception E was thrown" list — so the list is named rather than left to a bare sub-number):
+ *   1.1.2.1 "Let jsValue be the this value, if it is not null or undefined, or realm's global object
+ *            otherwise."
+ *   1.1.2.2 "If jsValue is a platform object, then perform a security check, passing jsValue, attribute's
+ *            identifier, and \"getter\"."
+ *   1.1.2.3 "If jsValue does not implement target, then:" … 1.1.2.3.2 "Otherwise, throw a TypeError."
+ * The setter's are 4.5.1, 4.5.2 (with "setter") and 4.5.3/4.5.4 ("Let validThis be true if jsValue implements
+ * target, or false otherwise" / "If validThis is false and attribute was not specified with the
+ * [LegacyLenientThis] extended attribute, then throw a TypeError"). §3.5's third input is the ONE thing that
+ * differs between the two, so it is what the caller states — the same fact the pool states at a step member's
+ * mint as `sec_kind`, asked here at the one call because a plain-C accessor has no pool entry to carry it.
+ *
+ * THEY ARE THE ACCESSOR MACHINERY'S WORK, NOT THE MEMBER'S — which is why they belong here, and why every
  * member minted here had them missing TOGETHER: the [Replaceable] setter handed its raw `this` straight to the
  * define, and the held-value getter opened with `(void)this_val`. A MISSING receiver and a FOREIGN one reached
  * the same answer, which is the two facts a default confuses, written out in the loudest possible form.
  * The setter's own §7.2.2.4 spelling of this — `opener`'s, in window.c — already resolved its receiver by
  * hand through these same two window_proxy.c halves; the shared mechanism underneath it did not.
  *
- * THE INTERFACE IS Window FOR EVERY MEMBER THAT REACHES HERE, and that is ASSERTED AT THE INSTALL rather than
- * assumed at the read: every idl_install_replaceable / _replaceable_value / _value_attribute call site targets
- * the realm's global, so `target` is Window and window_proxy.c owns the test. A brand parameter every existing
- * caller would pass identically is a field nobody would notice going wrong; IDL_CHECK_GLOBAL_TARGET below is
- * what names the brand this file has to be TOLD the day a component declares one of these attributes on some
- * other interface.
+ * AND 1.1.2.2 IS NOT A REFINEMENT OF 1.1.2.3 — IT IS THE STEP THAT RUNS FIRST AND REFUSES A DIFFERENT SET.
+ * A cross-origin WindowProxy IMPLEMENTS Window, so the brand alone lets every one of this engine's global
+ * attributes answer a foreign document's read: `Object.getOwnPropertyDescriptor(window, "crypto").get
+ * .call(otherWindow)` reached the reading realm's Crypto with nothing between. §7.2.1.3.1 CrossOriginProperties
+ * is what says `crypto` is not on that list at all, and window_proxy_security_check is where the list
+ * lives. A page tells the two refusals apart by name — "SecurityError" against TypeError — which is exactly
+ * what cross-origin-objects.html asserts.
  *
- * Returns the resolved jsValue OWNED, or JS_EXCEPTION with §3.7.6's TypeError pending. */
-static JSValue idl_attribute_this(JSContext *ctx, JSValueConst this_val, const char *name)
+ * THE INTERFACE IS Window FOR EVERY MEMBER THAT REACHES HERE, and that is ASSERTED AT THE INSTALL rather than
+ * assumed at the read: every call site that routes here targets the realm's global, so `target` is Window and
+ * window_proxy.c owns the test. A brand parameter every existing caller would pass identically is a field
+ * nobody would notice going wrong; IDL_CHECK_GLOBAL_TARGET below is what names the brand this file has to be
+ * TOLD the day a component declares one of these attributes on some other interface.
+ *
+ * Returns the resolved jsValue OWNED, or JS_EXCEPTION with §3.7.6's TypeError or §3.5's SecurityError pending. */
+static JSValue idl_attribute_this(JSContext *ctx, JSValueConst this_val, const char *name,
+                                  WindowProxySecurityType type)
 {
-    JSValue js = window_proxy_this_object(ctx, this_val);   /* §3.7.6's first clause, written once */
+    JSValue js = window_proxy_this_object(ctx, this_val);   /* 1.1.2.1 / 4.5.1, written once */
 
-    if (window_proxy_implements_window(js)) return js;
+    /* 1.1.2.2 / 4.5.2. window_proxy_security_check's own step 1 is "If platformObject is not a Window or
+       Location object, then return", so handing it a plain object is the standard's own no-op and not a
+       widening of what gets checked. */
+    if (window_proxy_security_check(ctx, js, name, type) < 0) {
+        JS_FreeValue(ctx, js);
+        return JS_EXCEPTION;
+    }
+    if (window_proxy_implements_window(js)) return js;   /* 1.1.2.3 / 4.5.3 */
     JS_FreeValue(ctx, js);
     return JS_ThrowTypeError(ctx, "'%s' called on an object that does not implement interface Window", name);
+}
+
+/* ---- WEB IDL §3.7.6's OPENING STEPS FOR A PLAIN-C ATTRIBUTE GETTER ---------------------------------------
+ *
+ * A plain-C getter is an `IdlGetter` — a raw JS_CFUNC_getter_magic with no pool entry — so it reaches neither
+ * js_idl_args_step's implementation-check nor idl_attribute_this above, and NEITHER of §3.7.6's opening steps
+ * was performed for any of them. On a PROTOTYPE that is the residual js_idl_args_step names by shape; on the
+ * [Global] object it is decidable HERE, because the target settles the interface: Window is the only [Global]
+ * interface this engine has (idl_args.h's §3.3.7 note states the same thing from the other side), so an
+ * accessor installed as an own property of the realm's global is a Window attribute and `target` is Window.
+ * That is a fact about the INSTALL, which is why the routing is made there and not asked at the read.
+ *
+ * THE MEMBER TRAVELS WITH THE OPERATION. One shared body serves every global attribute, so a DCHECK or a
+ * TypeError written in it would name this file and none of the ~20 components that install one — the shape
+ * §AN-ASSERT-THAT-NAMES-A-REMEDY is about. The member's own getter, its magic and its IDENTIFIER are captured
+ * at the install and reached through the wrapper's magic, so every message below names the member a page
+ * actually touched.
+ *
+ * IT IS A DECLARATION TABLE AND NOT PER-REALM STATE. The three fields are compile-time facts about the member
+ * — a C function pointer, its magic, and the identifier its declaration owns — none of which can differ
+ * between realms, so there is nothing here for a realm to answer differently. What IS per realm is the
+ * FUNCTION OBJECT: idl_mint_plain_getter runs inside each realm's own intrinsic install, so js_call_c_function
+ * sets `ctx` to the realm that minted it and §3.7.6's "realm's global object" is that realm's. A module static
+ * holding a JSValue would be the defect this table is arranged to avoid.
+ *
+ * The pointer is NOT stored in a JSCFunctionType and NOT boxed into a JSValue: both are the strict-aliasing
+ * shape §C-stack names, which passes at -O0 and segfaults a directory at -O1. It rides an INDEX, the way every
+ * other magic in this file does. */
+typedef struct {
+    IdlGetter   getter;   /* §3.7.6 step 1.1.3's "getter steps of attribute", run with jsValue as this */
+    int         magic;    /* the member's own magic, which the wrapper's has displaced */
+    const char *name;     /* the identifier 1.1.2.2 passes to the security check and 1.1.2.3.2's TypeError names */
+} IdlGlobalAttr;
+static IdlGlobalAttr *g_gattr;
+static int            g_gattr_n, g_gattr_cap;
+
+/* THE SAME MEMBER IS INSTALLED ONCE PER REALM, so the entry is found rather than appended after the first —
+   which is what keeps the table the size of the platform's global attribute list rather than of the session's
+   realm count.
+   THE IDENTIFIER IS PART OF THE KEY AND NOT A FIELD CHECKED AGAINST IT, because TWO MEMBERS LEGITIMATELY SHARE
+   ONE BODY AND ONE MAGIC. HTML §7.2.2 The Window object's IDL declares `readonly attribute Navigator
+   navigator;` and, on the next line, `[Replaceable] readonly attribute Navigator clientInformation; // legacy
+   alias of .navigator` — two members answering out of one C body at magic 0, and they differ in their
+   extended attribute as well as their name, which is why core/frame/navigator.c installs them through two
+   different forms on consecutive lines. Keying on (getter, magic) alone
+   would have made them one entry, and then §3.7.6 step 1.1.2.2's security check would be passed the wrong
+   identifier and 1.1.2.3.2's TypeError would name the wrong member. They are DISTINCT members of the
+   interface, so they are distinct entries. */
+static int idl_global_attr_declare(IdlGetter getter, int magic, const char *name)
+{
+    int i;
+
+    DCHECK(getter != NULL, "a §3.7.6 global attribute was declared with no getter steps to run");
+    DCHECK(name != NULL && *name,
+           "a §3.7.6 global attribute was declared with no identifier — its step 1.1.2.2 passes the identifier "
+           "to §7.2.1.1 Integration with IDL, which matches it against CrossOriginProperties by name, so a "
+           "member reaching there unnamed would be refused every cross-origin read the list permits");
+    for (i = 0; i < g_gattr_n; i++)
+        if (g_gattr[i].getter == getter && g_gattr[i].magic == magic && strcmp(g_gattr[i].name, name) == 0)
+            return i;
+    if (g_gattr_n == g_gattr_cap) {
+        int cap = g_gattr_cap ? g_gattr_cap * 2 : 32;
+        IdlGlobalAttr *t = realloc(g_gattr, (size_t)cap * sizeof *t);
+        CHECK(t != NULL, "idl: OOM recording a §3.7.6 global attribute — a member that cannot be installed is "
+                         "an API the page cannot read");
+        g_gattr = t;
+        g_gattr_cap = cap;
+    }
+    /* THE MAGIC IS 16 BITS AND THIS INDEX BECOMES ONE. JS_NewCFunction2 stores it in `u.cfunc.magic`, so an
+       index past that is a member silently answering as some other member. It is asserted at the DECLARATION,
+       where the count is, rather than at the read, where the damage would already be a wrong answer. */
+    DCHECKF(g_gattr_n < 32767,
+            "the §3.7.6 global attribute table passed what a C function's magic can carry at '%s' — the index "
+            "is stored in u.cfunc.magic, which is 16 bits, so the next entry would answer as an earlier member",
+            name);
+    g_gattr[g_gattr_n] = (IdlGlobalAttr){ getter, magic, name };
+    return g_gattr_n++;
+}
+
+/* THE WRAPPER — §3.7.6 step 1.1.2's three steps, then step 1.1.3's "running the getter steps of attribute with
+   idlObject as this". idlObject is the IDL value 1.1.2.5 sets from jsValue, which for this engine is jsValue
+   itself, so the member's body receives the RESOLVED receiver and never the raw one. That is the whole of the
+   behaviour change a member sees: a body that used to be handed `undefined` for a bare `window.crypto` read is
+   now handed this realm's global, and a body that used to be handed a foreign document's proxy is not reached
+   at all.
+
+   NAMED RESIDUAL — A MEMBER WHOSE GETTER STEPS IGNORE idlObject. WHAT IS NOT COVERED: this machine performs
+   §3.7.6's opening steps and hands the member the receiver they resolved; what the member's own step 1.1.3
+   does with it is the MEMBER'S declaration, and several global attributes answer out of the realm the getter
+   was installed in rather than out of idlObject's navigable (the shape is `(void)this_val;` followed by
+   `realm_value_get(ctx, slot)`). For every receiver that IS this realm's Window or its WindowProxy those are
+   the same answer, which is every read a page makes by writing the member's name; they part company only for a
+   receiver applied by hand across navigables, and then the reading realm's object is returned for a question
+   about a window that is not it. THIS MACHINE CANNOT SEE THE DIFFERENCE: the members that read the navigable
+   (§7.2.2's `closed`, `name`, `opener`, `frameElement`) answer a foreign receiver CORRECTLY and must not be
+   refused, so a receiver-is-own-realm test here would abort on the members that already work. WHAT THE NEXT
+   DIFF BUILDS: those getter steps read idlObject's navigable — the way §7.2.2.4's `closed` already does
+   through window_proxy_this_navigable — so that the answer is a fact about the receiver and the realm the
+   accessor was minted in stops being consulted at all; the DCHECK idl_held_value_get carries is the same
+   statement for the form whose value is fixed at install time. HOW ITS ABSENCE SHOWS:
+   `Object.getOwnPropertyDescriptor(window, "location").get.call(frames[0])` returns THIS document's Location
+   where HTML §7.2.1.3.1 CrossOriginProperties lists `location` with [[NeedsGetter]] and a browser returns the
+   child's; the same call for "history" and "crypto" returns this realm's object instead of the child's. */
+static JSValue idl_global_attribute_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    const IdlGlobalAttr *a;
+    JSValue js, r;
+
+    DCHECK(magic >= 0 && magic < g_gattr_n,
+           "a §3.7.6 global attribute getter ran at an index this table never made — the index rides the "
+           "function object's magic and is written only by idl_global_attr_declare");
+    a = &g_gattr[magic];
+    js = idl_attribute_this(ctx, this_val, a->name, WP_SEC_GETTER);
+    if (JS_IsException(js)) return JS_EXCEPTION;
+    r = a->getter(ctx, js, a->magic);   /* step 1.1.3, with idlObject as this */
+    JS_FreeValue(ctx, js);
+    return r;
+}
+
+/* THE ONE PLACE A PLAIN-C ATTRIBUTE GETTER IS MINTED. It was two — idl_define_accessor and
+   idl_install_replaceable each built their own JS_NewCFunction2 — and a residual in js_idl_args_step named the
+   first of them as "the one place every plain getter is created", which was true of one of the two mints and
+   therefore false of this tree: [Replaceable]'s readonly form (`parent`, `length`, `navigation`,
+   `visualViewport`, `clientInformation`, and CSSOM VIEW §4's thirteen Window members) is a plain getter on the
+   global that the other mint would have left unrouted. One mint is what makes the routing below unforgettable
+   rather than remembered twice.
+   §3.7.6's composed name and its length of 0 are the SECTION's constants and are unchanged here. */
+static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const char *name,
+                                     IdlGetter getter, int getter_magic)
+{
+    char nb[IDL_ACCESSOR_NAME_MAX];
+    bool on_global = idl_target_is_realm_global(ctx, target);
+    JSValue f;
+
+    DCHECK(getter != NULL, "a plain-C attribute getter was minted with no getter steps");
+    /* §3.7.6's create an attribute getter: the property is keyed by the identifier and the FUNCTION carries
+       the composed name. The two differ, and only this mint knows it. */
+    if (on_global)
+        f = JS_NewCFunction2(ctx, (JSCFunction *)idl_global_attribute_get,
+                             idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_GET), 0,
+                             JS_CFUNC_getter_magic, idl_global_attr_declare(getter, getter_magic, name));
+    else
+        f = JS_NewCFunction2(ctx, (JSCFunction *)getter,
+                             idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_GET), 0,
+                             JS_CFUNC_getter_magic, getter_magic);
+    CHECK(!JS_IsException(f), "an IDL attribute's getter could not be allocated");
+    return f;
 }
 
 static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
@@ -5020,7 +5227,7 @@ static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int ar
        spelling and of no other: it aborted the engine on a call the spec defines. */
     name = JS_ToCString(ctx, data[0]);   /* the function's own data: a string this file put there */
     if (!name) return JS_EXCEPTION;
-    js = idl_attribute_this(ctx, this_val, name);
+    js = idl_attribute_this(ctx, this_val, name, WP_SEC_SETTER);   /* §3.7.6 steps 4.5.1-4.5.4 */
     if (JS_IsException(js)) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
     r = idl_replace_with_value(ctx, js, name, argv[0]);
     JS_FreeValue(ctx, js);
@@ -5047,7 +5254,7 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
     (void)argc; (void)argv; (void)magic;
     name = JS_ToCString(ctx, data[1]);
     if (!name) return JS_EXCEPTION;
-    js = idl_attribute_this(ctx, this_val, name);
+    js = idl_attribute_this(ctx, this_val, name, WP_SEC_GETTER);   /* §3.7.6 step 1's try-list, 1.1.2.1-1.1.2.3 */
     JS_FreeCString(ctx, name);
     if (JS_IsException(js)) return JS_EXCEPTION;
     DCHECK(window_proxy_receiver_is_own_realm(ctx, js),
@@ -5080,11 +5287,7 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
 #if APICLIENT_DEV
 static void idl_check_global_target(JSContext *ctx, JSValueConst target, const char *name, const char *form)
 {
-    JSValue g = JS_GetGlobalObject(ctx);
-    bool same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(target);
-
-    JS_FreeValue(ctx, g);   /* balanced, so the check observes nothing */
-    if (same) return;
+    if (idl_target_is_realm_global(ctx, target)) return;
     DFAILF("the %s attribute `%s` was installed on something that is not the realm's global object — its "
            "accessor applies Web IDL §3.7.6's TypeError against the Window brand, which is right only "
            "because Window is the only [Global] interface in this engine. Give the install the interface's "
@@ -5120,18 +5323,15 @@ static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const ch
     JS_FreeAtom(ctx, a);
 }
 
+/* THE READONLY [Replaceable] FORM'S GETTER IS A PLAIN-C GETTER LIKE ANY OTHER, so it is minted by the one mint.
+   It used to have a JS_NewCFunction2 of its own, which is how CSSOM VIEW §4's thirteen Window members and
+   HTML §7.2.2.4's `parent` and `length` came to be global attributes reading an unresolved receiver while the
+   SETTER installed one line later resolved one. */
 void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *name,
                              IdlGetter getter, int getter_magic)
 {
-    JSValue g;
-    char nb[IDL_ACCESSOR_NAME_MAX];
-
     DCHECK(getter != NULL, "a replaceable attribute with no getter — it is READONLY, so the read is all it has");
-    g = JS_NewCFunction2(ctx, (JSCFunction *)getter,
-                         idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_GET), 0,
-                         JS_CFUNC_getter_magic, getter_magic);
-    CHECK(!JS_IsException(g), "a replaceable attribute's getter could not be allocated");
-    idl_define_replaceable(ctx, target, name, g);
+    idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic));
 }
 
 /* THE HELD-VALUE GETTER'S DATA IS TWO VALUES, and the second is the member's own NAME. §3.7.6's TypeError
@@ -5640,6 +5840,12 @@ void idl_args_pool_free(void)
     free(g_step2mem);
     g_step2mem = NULL;
     g_step2mem_cap = 0;
+    /* AND §3.7.6's GLOBAL ATTRIBUTE TABLE, for the same reason: it is malloc'd, holds no JSValue and no atom,
+       and its entries name a previous agent's members. It goes back HERE rather than with the atoms above,
+       because the function objects that carry indices into it are the realms', released with the runtime. */
+    free(g_gattr);
+    g_gattr = NULL;
+    g_gattr_n = g_gattr_cap = 0;
     g_sealed = false;
     g_sealed_at = 0;
 }

@@ -956,23 +956,18 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     /* `self` is [Replaceable], not [LegacyUnforgeable] — `window` is the unforgeable one. A page may
        overwrite `self` and the IDL says so; a fixed own value said it could not. */
     idl_install_replaceable_value(ctx, g, "self", JS_DupValue(ctx, global));
-    /* §7.2.2.4 marks `top` [LegacyUnforgeable] — an OWN property — but its VALUE is the navigable's, and `top`
-       is a WALK of the parent chain, so a grandchild answers with the top-level traversable rather than with
-       itself. An own ACCESSOR, not an own value frozen at install time. */
-    {
-        /* THE ATOM IS BORROWED BY THE DEFINE, NOT CONSUMED BY IT. JS_DefinePropertyGetSet frees the getter and
-           the setter it is handed and leaves `prop` alone, so an atom minted inline into the argument list has
-           nobody to give it back — `top` was named by JS_FreeRuntime's atom walk on 118 files of `css/cssom`.
-           Every other JS_DefinePropertyGetSet in this engine (abort.c, idl_args.c, html_element.c) already
-           holds the atom in a local and frees it; this was the one call site that did not. */
-        JSAtom a = JS_NewAtom(ctx, "top");
-        CHECK(a != JS_ATOM_NULL, "§7.2.2.4's `top` could not be interned");
-        JS_DefinePropertyGetSet(ctx, g, a,
-                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_win_top, "get top", 0,
-                                                     JS_CFUNC_getter_magic, 0),
-                                JS_UNDEFINED, JS_PROP_ENUMERABLE);
-        JS_FreeAtom(ctx, a);
-    }
+    /* §7.2.2's IDL marks `top` `[LegacyUnforgeable] readonly attribute WindowProxy? top;` — an OWN property —
+       but its VALUE is the navigable's, and `top` is a WALK of the parent chain, so a grandchild answers with
+       the top-level traversable rather than with itself. An own ACCESSOR, not an own value frozen at install
+       time — which is exactly what idl_install_accessor_unforgeable defines, at the same [[Enumerable]]: true /
+       [[Configurable]]: false Web IDL §3.7.6 gives an unforgeable attribute.
+       IT WAS A HAND-ROLLED JS_DefinePropertyGetSet, and that is why it is written here now: idl_args.c mints
+       every plain-C attribute getter at ONE point so that a getter installed on the realm's global gets
+       §3.7.6's opening steps — the receiver resolution, §3.5's "getter" security check and the Window brand —
+       without any member having to remember them. A define that goes around that mint is a member that silently
+       does not have them, and `top` is on HTML §7.2.1.3.1 CrossOriginProperties with [[NeedsGetter]] true, so
+       it is one of the names for which that check has an answer other than "refuse". */
+    idl_install_accessor_unforgeable(ctx, g, "top", js_win_top, 0, -1);
     idl_install_replaceable_value(ctx, g, "frames", JS_DupValue(ctx, global));   /* [Replaceable] */
     /* §7.2.2.4's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
        rather than answered here. They were two FIXED values behind two comments explaining why an embedder

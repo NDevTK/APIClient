@@ -1540,7 +1540,14 @@ typedef enum {
  * this declaration has no callers left and goes. HOW ITS ABSENCE SHOWS: a member added at a raw site keeps
  * §3.7.6's [[Enumerable]]/[[Configurable]] pair and its name under whoever wrote that line, so it can differ
  * from every installed member without any gate saying so — which is how `content` came to answer
- * `Object.getOwnPropertyDescriptor(HTMLTemplateElement.prototype,"content").get.name` with "content". */
+ * `Object.getOwnPropertyDescriptor(HTMLTemplateElement.prototype,"content").get.name` with "content".
+ * AND THE DESCRIPTOR IS NO LONGER THE ONLY THING A RAW SITE DECIDES FOR ITSELF. The installers mint every
+ * plain-C attribute getter at one point, and that mint is what gives an attribute installed on the realm's
+ * [Global] object §3.7.6's opening steps — the receiver resolution, §3.5's "getter" security check and the
+ * Window brand. HTML §8.1.8.1's event handlers ARE Window attributes and are defined at the raw site, so the
+ * whole family is installed on the global without them: `Object.getOwnPropertyDescriptor(window, "onload")
+ * .get.call(crossOriginWindowProxy)` answers out of the reading realm where `onload` is absent from HTML
+ * §7.2.1.3.1 CrossOriginProperties and a browser throws "SecurityError". */
 #define IDL_ACCESSOR_NAME_MAX 96
 typedef enum { IDL_ACCESSOR_GET, IDL_ACCESSOR_SET } IdlAccessorKind;
 const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessorKind kind);
