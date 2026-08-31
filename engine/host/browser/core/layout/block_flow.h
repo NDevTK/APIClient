@@ -49,7 +49,8 @@
  *     list that forcing produces — each maximal run of inline-level children wrapped in one anonymous block
  *     box whose height is §10.6.3's over line_box.h's line boxes and whose every other property is a constant
  *     the section fixes ("the margins will be 0"). That generation is a box-tree step and lives at the top of
- *     this walk, where the same list css-display §3's `contents` flattening will one day be spliced into.
+ *     this walk, where the same list css-display-3 §2.5 "Box Generation: the none and contents keywords"'
+ *     `contents` flattening will one day be spliced into.
  *   - A FLOAT in the formatting context is §9.5's own placement, and it is not enough to note that §10.6.3
  *     ignores floats: §9.5.2's `clear` on a LATER sibling introduces CLEARANCE, which §8.3.1 makes
  *     non-adjoining, so one float invalidates every collapse below it.
@@ -123,6 +124,52 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
    choose between §9.4.1 and §9.4.2, and a second copy of it would be one document with two box trees, free to
    disagree about whether a run of white space is content (§9.2.2.1, the predicate above). */
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
+
+/* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' OTHER SHAPE OF §9.4.2's CONTEXT — the one with no element to name
+   it. §9.2.1.1: "if a block container box (such as that generated for the DIV above) has a block-level box
+   inside it (such as the P above), then we force it to have only block-level boxes inside it", and the boxes
+   that forcing generates are one per MAXIMAL RUN of inline-level children, each holding an inline formatting
+   context of its own.
+   ONE BOX, AND EVERY FIELD OF IT IS THE SECTION'S OWN CONSTANT OR THE STACK'S OWN NUMBER. "The properties of
+   anonymous boxes are inherited from the enclosing non-anonymous box …. Non-inherited properties have their
+   initial value. For example, the font of the anonymous box is inherited from the DIV, but the margins will be
+   0." So there is no margin, no border and no padding on it: its content box, its border box and its MARGIN
+   box are ONE rectangle, which is why a single origin and a single extent describe all three.
+   ITS INLINE-AXIS EDGES ARE NOT REPORTED, and that is a derivation rather than an omission. `width` has the
+   initial value `auto` and both margins are zero, so CSS 2.1 §10.3.3's constraint equation leaves the whole of
+   the containing block's content width to `width` — the anonymous box's two inline margin edges are exactly its
+   container's two CONTENT edges, and CSS 2 §8.1 "Box dimensions" nests those inside the padding edge every
+   caller of this entry has already folded. A number for them would be one an extreme cannot see. */
+typedef struct {
+    lxb_dom_node_t *first;   /* the run's first child, INCLUSIVE — core/layout/line_box.h's `first` */
+    lxb_dom_node_t *end;     /* one past its last, EXCLUSIVE; NULL is "to the end of the child list" */
+    CssPx content_x;         /* its content box origin as an OFFSET from the container's own content box
+                                origin — zero on the inline axis, by the derivation above */
+    CssPx content_y;         /* … and on the block axis, which is where §9.4.1's stack put it */
+    CssPx height;            /* its border-box height — §10.6.3's first bullet over its own line boxes */
+} BlockFlowAnonBox;
+
+/* `el`'s ANONYMOUS BLOCK BOXES, in tree order. Answers the count and stores a newly allocated array of that
+   many at `*out`, WHICH THE CALLER OWNS AND MUST FREE; a count of zero stores NULL.
+   ZERO IS A POSITIVE ANSWER AT EVERY ELEMENT THAT GETS IT, never a shrug. §9.2.1.1 generates a box only where
+   a BLOCK CONTAINER holds a block-level box AND inline-level content, so: a container with no block-level box
+   establishes ONE inline formatting context with its OWN element to name it (the predicate above, and the run
+   is then the whole child list); a container with no inline-level content has nothing to wrap; and an element
+   that is not a block container at all is outside the section's sentence — an inline box's inline content is
+   on its ANCESTOR's lines, and a flex or grid container's is css-flexbox §4's anonymous flex ITEM, which is a
+   different box this engine does not build. A caller that needs the difference asks the predicate above too.
+   IT IS A SECOND ENTRY BESIDE THAT PREDICATE BECAUSE §9.2.1's TWO SHAPES OF ONE CONTEXT ARE REACHED
+   DIFFERENTLY, and the header states why the predicate deliberately does not answer for this one: a MIXED
+   container answers FALSE there, because the contexts inside it belong to boxes the ELEMENT TREE DOES NOT
+   CONTAIN. So a caller that wants to reach every inline formatting context under an element — CSSOM VIEW §2
+   "Terminology"'s scrolling area is the one that must, since §9.2.2.1's anonymous inline boxes around a text
+   run are "descendants' boxes" wherever they sit — asks the predicate for the shape that has an element and
+   this entry for the shape that does not.
+   THE POSITION COMES OUT OF §9.4.1's OWN STACK AND IS NOT RE-DERIVED, which is the whole reason this lives
+   here: the offset reported is the same running position the walk reads out for an ELEMENT that asks
+   `block_flow_child_top`, taken at the same point, so an anonymous box and its block-level siblings cannot
+   come to disagree about where a margin collapsed. */
+size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out);
 
 /* CSS 2.1 §10.6.3's (and, for a box that establishes a block formatting context, §10.6.7's) CONTENT-BASED
    HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that BEHAVES AS AUTO (css-sizing-3

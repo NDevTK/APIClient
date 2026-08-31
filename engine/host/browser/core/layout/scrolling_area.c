@@ -29,6 +29,23 @@ static bool sa_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
+/* CSS 2.1 §9.2.1 "Block-level elements and block boxes"' BLOCK CONTAINER BOX, for this file's one caller of it
+   — core/layout/block_flow.h owns the list and is asked, so the two cannot disagree about whether an
+   `inline-block` is one. It is a separate question from `block_flow_establishes_inline_context`, which is that
+   list AND §9.4.2's own condition over the child list: a MIXED container answers FALSE there and TRUE here,
+   and telling those apart is exactly what the text-run check below needs. */
+static bool sa_is_block_container(lxb_dom_element_t *el)
+{
+    char *d = css_computed_value(el, "display");
+    bool container;
+
+    DCHECK(d != NULL, "the cascade produced no computed `display` for an element — the UA layer answers "
+                      "`inline` for every element it does not name, so this cannot be unset");
+    container = block_flow_display_is_block_container(d);
+    free(d);
+    return container;
+}
+
 /* §2's OVERFLOW DIRECTIONS, reduced to the one bit each axis needs: does the ENDING edge of the scrolling area
    sit at the larger coordinate on this axis. "A scrolling box of a viewport or element has two overflow
    directions, which are the block-end and inline-end directions for that viewport or element", and
@@ -125,19 +142,59 @@ static CssPx sa_content_origin(lxb_dom_element_t *b, bool vertical)
    of its lines the content grows from and `el`'s decides which end of the SCROLLING AREA is the ending one:
    a `rtl` block inside a `ltr` scroller overflows toward the LOWER coordinate, which is `el`'s BEGINNING edge.
    §2's two rows are then one expression rather than a case per combination. */
-static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx best)
+static CssPx sa_fold_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end, CssPx origin,
+                          bool vertical, bool ending_at_hi, CssPx best)
 {
-    CssPx origin, lo, hi;
+    CssPx lo, hi;
 
-    if (!block_flow_establishes_inline_context(b)) return best;
-    origin = sa_content_origin(b, vertical);
-    line_box_content_span(b, lxb_dom_interface_node(b)->first_child, NULL, vertical, &lo, &hi);
+    line_box_content_span(style, first, end, vertical, &lo, &hi);
     DCHECK(css_px_sub(hi, lo).px >= 0.0,
            "CSS 2.2 §9.4.2's line boxes reported a span whose ENDING edge is before its BEGINNING edge. The "
            "two are a maximum and a minimum over the same set of boxes seeded at the same corner, so an "
            "inverted pair is the two edges having been derived from different lines");
     if (ending_at_hi) return css_px_max(best, css_px_add(origin, hi));
     return css_px_min(best, css_px_add(origin, lo));
+}
+
+static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx best)
+{
+    if (!block_flow_establishes_inline_context(b)) return best;
+    return sa_fold_span(b, lxb_dom_interface_node(b)->first_child, NULL, sa_content_origin(b, vertical),
+                        vertical, ending_at_hi, best);
+}
+
+/* §9.2.1.1's ANONYMOUS BLOCK BOXES of one block container, folded in. This is the OTHER shape of §9.4.2's
+   context — the one with no element to be asked about — and it is reached through core/layout/block_flow.h's
+   own enumeration rather than by this file delimiting runs for itself, because the run's boundaries and the
+   box's POSITION are two halves of one derivation: the position is a distance down §9.4.1's stack, which is
+   the walk that generated the run in the first place, and a second copy here could disagree with it about
+   where a margin collapsed.
+   THE BOX'S OWN MARGIN EDGE IS FOLDED BESIDE ITS CONTENT'S, AND THAT IS NOT DOUBLE COUNTING. §2's extreme is
+   over "the … margin edge of all of the element's descendants' boxes", and an anonymous block box IS one of
+   them — a real box in the box tree, unlike CSS 2.2 §10.8's STRUT, which core/layout/line_box.h excludes from
+   its span for exactly that reason. So its top edge and its bottom edge are both operands, and where its own
+   line boxes are taller than anything on them (a large `line-height`) the box reaches further than its content
+   does. §9.2.1.1's initial values are what make those two edges derivable from one number: no margin, no
+   border and no padding, so the content box, the border box and the margin box are one rectangle.
+   ITS INLINE-AXIS EDGES ARE NOT OPERANDS and block_flow.h states why: `width: auto` with zero margins puts
+   them exactly on the container's own CONTENT edges, which CSS 2 §8.1 nests inside the padding edge this
+   file's caller has already seeded the extreme with. */
+static CssPx sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx best)
+{
+    BlockFlowAnonBox *v;
+    size_t n = block_flow_anonymous_boxes(b, &v), i;
+    CssPx content = sa_content_origin(b, vertical);
+
+    for (i = 0; i < n; i++) {
+        CssPx origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
+
+        best = sa_fold_span(b, v[i].first, v[i].end, origin, vertical, ending_at_hi, best);
+        if (!vertical) continue;
+        if (ending_at_hi) best = css_px_max(best, css_px_add(origin, v[i].height));
+        else              best = css_px_min(best, origin);
+    }
+    free(v);
+    return best;
 }
 
 /* THE EXTREME OVER EVERY DESCENDANT'S BOX, in tree order. WHICH NODES HAVE A BOX IS TWO QUESTIONS AND NOT ONE,
@@ -158,9 +215,14 @@ static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool
    THOSE BOXES ARE FOLDED PER FORMATTING CONTEXT AND NOT PER TEXT NODE, which CSS 2.2 §9.4.2 forces: its
    distribution is stated over the whole context, so which line box a run's fragments land on is a function of
    every character before them and a per-node question has no answer at all. The walk therefore asks
-   core/layout/line_box.h once at each element that ESTABLISHES a context — `el` included, since the anonymous
-   inline boxes in `el`'s own context hold `el`'s descendant TEXT NODES and are their boxes — and then asks
-   §9.2.2.1's rule about each text node only to check that some context has already covered it.
+   core/layout/line_box.h once per CONTEXT, and CSS 2.2 §9.2.1 gives a block container exactly TWO ways to hold
+   one — "either contains only block-level boxes or establishes an inline formatting context" — so the walk
+   asks both at every element and there is no third: the element's own context where it establishes one (`el`
+   included, since the anonymous inline boxes in `el`'s own context hold `el`'s descendant TEXT NODES and are
+   their boxes), and §9.2.1.1's ANONYMOUS BLOCK BOXES where the container is mixed, each of which is a real box
+   in the box tree with a run of its own and a position of its own down §9.4.1's stack. §9.2.2.1's rule is then
+   asked about each text node only to CHECK that one of the two has already covered it, and the crash below
+   names which box is missing rather than restating that one is.
    THIS IS NOT THE HEIGHT WALK ASKED TWICE — that walk never sees the contents of a box with a declared height
    (core/layout/block_flow.c's `bf_height_needs_content`), and a text run overflowing a declared-height box is
    exactly the case this member exists for.
@@ -174,11 +236,14 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                                     bool vertical, bool ending_at_hi, CssPx seed)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(el), *n = root->first_child;
-    /* `el`'s OWN formatting context first. `el` is not one of its own descendants and this is not a special
-       case for it: the boxes folded here are the anonymous inline boxes around `el`'s child TEXT NODES, which
-       are descendants, and the element establishing the context is simply where §9.4.2 can be asked about
-       them. `el` has a box — the caller's own precondition — so there is no second existence test. */
-    CssPx best = sa_inline_context_extreme(el, vertical, ending_at_hi, seed);
+    /* `el`'s OWN TWO SHAPES OF §9.4.2's CONTEXT first, in the same pair and the same order the walk asks them
+       in below. `el` is not one of its own descendants and this is not a special case for it: the boxes folded
+       here are the anonymous inline boxes around `el`'s descendant TEXT NODES, which ARE descendants, and the
+       box establishing the context they sit on — `el` itself, or one of §9.2.1.1's anonymous block boxes
+       inside it — is simply where §9.4.2 can be asked about them. `el` has a box (the caller's own
+       precondition) so there is no second existence test, and its own subtree is rendered with it. */
+    CssPx best = sa_anon_block_boxes_extreme(el, vertical, ending_at_hi,
+                                             sa_inline_context_extreme(el, vertical, ending_at_hi, seed));
 
     while (n != NULL) {
         /* css-display-3 §2.5's `none` is the one answer that reaches past this node — see the banner. */
@@ -200,6 +265,7 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                     best = ending_at_hi ? css_px_max(best, e) : css_px_min(best, e);
                 }
                 best = sa_inline_context_extreme(d, vertical, ending_at_hi, best);
+                best = sa_anon_block_boxes_extreme(d, vertical, ending_at_hi, best);
             }
         } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
             lxb_dom_element_t *parent;
@@ -209,33 +275,38 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                    "element and descends only through its children, so a text node here belongs to one");
             parent = lxb_dom_interface_element(n->parent);
             /* §9.2.2.1's rule answers whether the run is a box at all; collapsible white space is not and
-               contributes nothing. A run that IS a box has already been folded above IF its parent is the
-               element establishing the context it is on — which is every case except the one below. */
-            if (block_flow_text_child_generates_box(parent, n) &&
-                !block_flow_establishes_inline_context(parent))
+               contributes nothing. A run that IS a box is on a line box of ONE of the two contexts folded
+               above, and CSS 2.2 §9.2.1 is what makes that exhaustive for a BLOCK CONTAINER: it "either
+               contains only block-level boxes or establishes an inline formatting context", and §9.2.1.1's
+               forcing is what makes the sentence true of a container holding both, by wrapping each maximal
+               run of inline-level children in a box of its own. So the parent being a block container IS the
+               guarantee — the run is either on the element's own context or inside one of its anonymous block
+               boxes, and both were folded when the walk reached it. */
+            if (block_flow_text_child_generates_box(parent, n) && !sa_is_block_container(parent))
                 DFAIL("CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "
-                      "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1) "
-                      "holding this text run — but the element this run is a child of does NOT establish the "
-                      "inline formatting context the run is flowed into, so there is no element to ask "
-                      "core/layout/line_box.h about and the run has not been folded in. THE MEASUREMENT AND "
-                      "THE PLACEMENT ARE BOTH BUILT and neither is what is missing: `line_box_content_span` "
-                      "answers where a context's boxes reach on either axis, and this walk folds it at every "
-                      "element that establishes one. WHAT IS MISSING IS THE BOX THAT ESTABLISHES *THIS* "
-                      "CONTEXT, and CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" says why it has no element: "
-                      "\"if a block container box … has a block-level box inside it …, then we force it to "
-                      "have only block-level boxes inside it\", each maximal run of inline-level children "
-                      "wrapped in an ANONYMOUS BLOCK BOX. This run is inside one of those, so its context's "
-                      "line boxes are `[first, end)` of the parent's children rather than the whole child "
-                      "list — the run `block_flow.c`'s `bf_anon_run_end` delimits and hands to "
-                      "`line_box_content_height` already — and its content box's origin is the anonymous "
-                      "box's, which is a distance down §9.4.1's stack that the same walk computes and keeps "
-                      "to itself. BUILD an entry beside `block_flow_establishes_inline_context` that reports "
-                      "the anonymous block boxes of one container — each run's `[first, end)` and the offset "
-                      "of its content box from the container's own — and fold each of them here exactly as "
-                      "the whole-child-list case is folded. THE OTHER SHAPE THAT REACHES THIS LINE is a run "
-                      "whose parent is an INLINE box (`<div>a<span>b</span></div>`), and that one is already "
-                      "named one crash earlier: the `span`'s own box is placed by §9.4.2 and "
-                      "core/layout/flow_position.c aborts for it before this walk descends into its text");
+                      "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1 "
+                      "\"Anonymous inline boxes\") holding this text run — but the element this run is a child "
+                      "of is NOT A BLOCK CONTAINER BOX, so neither of the two shapes CSS 2.2 §9.2.1 "
+                      "\"Block-level elements and block boxes\" gives an inline formatting context is here to "
+                      "be asked, and the run has not been folded in. THREE THINGS REACH THIS LINE AND EACH "
+                      "NAMES A DIFFERENT MISSING BOX. (1) An INLINE box parent (`<div>a<span>b</span></div>`): "
+                      "§9.2.2.1's own sentence is that \"any text that is DIRECTLY contained inside a block "
+                      "container element (not inside an inline element) must be treated as an anonymous inline "
+                      "element\", so this run's boxes are on the lines of the nearest block container ANCESTOR "
+                      "and are already covered there — what is missing is the `span`'s own contribution, which "
+                      "core/layout/line_box.h answers as `line_box_inline_fragments` and this walk does not "
+                      "ask for; BUILD the fragment fold beside the element's margin edge above, and this arm "
+                      "goes. (2) A `display: contents` parent, whose children css-display-3 §2.5 \"Box "
+                      "Generation: the none and contents keywords\" splices into the grandparent's box list — "
+                      "\"the element must be treated as if it had been replaced in the element tree by its "
+                      "contents\" — so this run's context is the grandparent's and the splice is what is "
+                      "missing; core/layout/block_flow.c's own child walk names the same absence. (3) A FLEX "
+                      "or GRID container parent, whose text is not §9.2.1.1's box at all: css-flexbox-1 §4 "
+                      "\"Flex Items\" says \"each child text sequence is wrapped in an ANONYMOUS BLOCK "
+                      "CONTAINER FLEX ITEM\", css-grid-2 §6 \"Grid Items\" says the same with `grid item` for "
+                      "`flex item`, and both add that a sequence of only white space \"is instead not "
+                      "rendered\" — a different box, generated by a different rule, laid out by a different "
+                      "algorithm. Which of the three this is, is the parent's computed `display`");
         }
         if (descend && n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;

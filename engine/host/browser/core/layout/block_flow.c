@@ -390,15 +390,21 @@ static BfBox bf_box(lxb_dom_element_t *el);
    sentence is that an inline formatting context "is established by a block container box THAT CONTAINS NO
    BLOCK-LEVEL BOXES". So the question is answered over the WHOLE child list, ONCE, before either algorithm
    runs — never per child, which is what a walk that classified as it stacked would be doing.
-   A MIXED CONTAINER IS NOT A THIRD ANSWER, and that is the whole content of §9.2.1.1 "Anonymous block boxes":
-   "if a block container box (such as that generated for the DIV above) has a block-level box inside it (such
-   as the P above), then we FORCE IT TO HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT". So the presence of one
-   block-level child settles it for the container — §9.4.1's stack, below — and what the inline-level children
-   get is not a formatting context for the CONTAINER but a box of their own inside it. */
+   A MIXED CONTAINER IS NOT A THIRD ANSWER TO §9.2.1's QUESTION, and that is the whole content of §9.2.1.1
+   "Anonymous block boxes": "if a block container box (such as that generated for the DIV above) has a
+   block-level box inside it (such as the P above), then we FORCE IT TO HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT".
+   So the presence of one block-level child settles the CONTAINER's formatting context — §9.4.1's stack, below —
+   and what the inline-level children get is not a formatting context for the container but a box of their own
+   inside it.
+   IT IS STILL A FOURTH ANSWER TO THIS CLASSIFICATION'S QUESTION, because the forcing has to be RUN and only a
+   mixed child list runs it. A walk that folded MIXED into BLOCK answered §9.2.1 correctly and then could not
+   say whether §9.2.1.1 had generated anything — which is exactly what a caller enumerating those boxes needs
+   to know before it walks a child list at all. */
 typedef enum {
     BF_CONTENT_NONE = 0,   /* no in-flow children: §10.6.3's fourth bullet, and §9.4.2 creates no line box */
-    BF_CONTENT_BLOCK,      /* §9.4.1's block formatting context: the walk below */
-    BF_CONTENT_INLINE      /* §9.4.2's inline formatting context: core/layout/line_box.h */
+    BF_CONTENT_BLOCK,      /* ONLY block-level boxes: §9.4.1's stack below, and §9.2.1.1 generates nothing */
+    BF_CONTENT_INLINE,     /* NO block-level box: §9.4.2's context, established by this ELEMENT's own box */
+    BF_CONTENT_MIXED       /* both: §9.4.1's stack below, over the box list §9.2.1.1's forcing produces */
 } BfContent;
 
 static BfContent bf_content_kind(lxb_dom_element_t *el)
@@ -413,7 +419,7 @@ static BfContent bf_content_kind(lxb_dom_element_t *el)
         case BF_CHILD_INLINE: inl = true; break;
         }
     }
-    if (block) return BF_CONTENT_BLOCK;
+    if (block) return inl ? BF_CONTENT_MIXED : BF_CONTENT_BLOCK;
     if (inl) return BF_CONTENT_INLINE;
     return BF_CONTENT_NONE;
 }
@@ -470,6 +476,36 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
    non-anonymous ancestor box is used instead." core/layout/used_value.c's containing-block walk steps over
    ELEMENTS, and an anonymous block box is not one, so the closest non-anonymous ancestor is the only box it
    can reach. The day that walk iterates boxes instead, the rule becomes a step in it. */
+
+/* §9.2.1.1's BOXES, COLLECTED AS §9.4.1's STACK GENERATES THEM — see block_flow.h for the entry's contract and
+   for why the position reported is the stack's own running offset rather than a second derivation of it. A
+   NULL sink is the walk running for one of its other two answers, which is every caller but that entry. */
+typedef struct {
+    BlockFlowAnonBox *v;
+    size_t n, cap;
+} BfAnonSink;
+
+static void bf_anon_record(BfAnonSink *s, lxb_dom_node_t *first, lxb_dom_node_t *end, CssPx top, CssPx height)
+{
+    if (s == NULL) return;
+    if (s->n == s->cap) {
+        size_t cap = s->cap != 0 ? s->cap * 2 : 4;
+        BlockFlowAnonBox *v = realloc(s->v, cap * sizeof(*v));
+
+        CHECK(v != NULL, "the anonymous block boxes of one block container could not be allocated");
+        s->v = v;
+        s->cap = cap;
+    }
+    s->v[s->n].first = first;
+    s->v[s->n].end = end;
+    /* §9.2.1.1's "the margins will be 0" with §10.3.3's constraint equation over an initial `width: auto` puts
+       this box's content box's inline-start edge exactly on its container's — see block_flow.h. A literal zero
+       and not a measured one, so it carries no environment fact for css_length.h to union. */
+    s->v[s->n].content_x = css_px(0.0);
+    s->v[s->n].content_y = top;
+    s->v[s->n].height = height;
+    s->n++;
+}
 
 /* One past the LAST child of the run starting at `first` that generates an inline-level box — the exclusive
    end of §9.2.1.1's anonymous block box. `first` must itself generate one. */
@@ -566,7 +602,8 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_d
    box's own contribution, and on the way it hands the caller the offset of `want`'s top border edge from this
    box's top CONTENT edge — the same running position read out at the child that asked for it, which is why
    there is one walk and not two. */
-static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *want_top, bool *found)
+static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *want_top, bool *found,
+                       BfAnonSink *anon)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
     /* §8.3.1's THIRD and FOURTH adjoining pairs are different conditions and were one flag here, which got
@@ -654,6 +691,9 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
     while (c != NULL) {
         BfChildKind kind = bf_child_kind(el, c);
         lxb_dom_element_t *ce = NULL;
+        /* The run this iteration's box holds, meaningful for the ANONYMOUS box alone — `ce == NULL` is what
+           says which box this is, and it is the same test the placement below already makes. */
+        lxb_dom_node_t *anon_first = NULL, *anon_end = NULL;
         BfBox b;
 
         if (kind == BF_CHILD_NO_BOX) { c = c->next; continue; }
@@ -665,6 +705,8 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                    "anonymous block box for ever. The run starts at a child that generates an inline-level "
                    "box and therefore always contains at least that one");
             b = bf_anon_box(el, c, end);
+            anon_first = c;
+            anon_end = end;
             c = end;
         } else {
             ce = lxb_dom_interface_element(c);
@@ -686,10 +728,16 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                exists at all: "the top border edge position is only required for laying out DESCENDANTS of these
                elements" — and CSSOM VIEW §7's `offsetTop` on an empty `div` is a page asking for exactly
                that. */
+            CssPx through_top = escaping ? pos : css_px_add(pos, bf_run_value(run));
+
             if (ce != NULL && ce == want) {
-                *want_top = escaping ? pos : css_px_add(pos, bf_run_value(run));
+                *want_top = through_top;
                 *found = true;
             }
+            /* §9.2.1.1's box reaches here when every line box in it is one §9.4.2 says "must be treated as NOT
+               EXISTING for any other purpose", and the note above is what gives it a top border edge anyway.
+               It is still a BOX — zero-height, at that edge — so it is reported like every other one. */
+            if (ce == NULL) bf_anon_record(anon, anon_first, anon_end, through_top, b.border_h);
             run = bf_run_merge(run, b.bottom);
             continue;
         }
@@ -703,12 +751,17 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
         } else {
             pos = css_px_add(pos, bf_run_value(run));
         }
-        /* §9.2.1.1's anonymous block box is never the box asked for — it has no element, so no caller can name
-           it — and `bf_anon_run_end` has already crashed for a `want` that is INSIDE one. */
+        /* §9.2.1.1's anonymous block box is never the box asked for BY ELEMENT — it has no element, so no
+           `want` can name it — and `bf_anon_run_end` has already crashed for a `want` that is INSIDE one. It is
+           REPORTED here instead, at the same running position and out of the same `pos`, which is what keeps an
+           anonymous box and its block-level siblings from disagreeing about where a margin collapsed. The box
+           has no border and no padding (§9.2.1.1's initial values), so this top BORDER edge is also its top
+           content edge and its top MARGIN edge. */
         if (ce != NULL && ce == want) {
             *want_top = pos;
             *found = true;
         }
+        if (ce == NULL) bf_anon_record(anon, anon_first, anon_end, pos, b.border_h);
         pos = css_px_add(pos, b.border_h);
         run = b.bottom;
         placed = true;
@@ -809,7 +862,7 @@ static BfBox bf_box(lxb_dom_element_t *el)
         b.border_h = used_value_border_edge_px(el, true);
         return b;
     }
-    b = bf_layout(el, NULL, &sink, &sunk);
+    b = bf_layout(el, NULL, &sink, &sunk, NULL);
     DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
     if (b.collapse_through) return b;
     /* A box whose height BEHAVES AS AUTO (css-sizing-3 §3.2.1) is the one whose border-box height is this
@@ -854,7 +907,7 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
               "context' — so there is no block formatting context inside it for this walk to run over. The "
               "caller is core/layout/used_value.c, which classifies the box type before asking, so the two "
               "lists have come apart");
-    b = bf_layout(el, NULL, &unused, &found);
+    b = bf_layout(el, NULL, &unused, &found, NULL);
     DCHECK(!found, "the content-height walk reported placing the box it was not looking for");
     return b.content_h;
 }
@@ -878,7 +931,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
            "own reasons — a `display: contents` ancestor, whose children css-display §3 splices into the "
            "grandparent's box list, and an ancestor that generates no block container box at all — so the walk "
            "below would raise one of those messages a step late. Decide it HERE, where the discrepancy is");
-    (void)bf_layout(cb, el, &top, &found);
+    (void)bf_layout(cb, el, &top, &found, NULL);
     if (!found)
         DFAIL("CSS 2 §9.4.1's walk over this box's containing block placed every in-flow block-level child it "
               "found and NEVER REACHED THIS BOX, so there is no position to report. The walk skips exactly what "
@@ -889,4 +942,46 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
               "come apart, and reporting a coordinate for a box that is not in this formatting context would be "
               "a number in the right units for a box that is not there");
     return top;
+}
+
+size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
+{
+    BfAnonSink sink;
+    CssPx unused = css_px(0.0);
+    bool found = false;
+    char *d;
+    bool container;
+
+    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with no element");
+    DCHECK(out != NULL,
+           "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with nowhere to put them. A count alone "
+           "names no run and no position, so a caller holding one would know that a box exists and have no way "
+           "to reach the formatting context inside it — which is the only thing this entry is asked for");
+    sink.v = NULL;
+    sink.n = 0;
+    sink.cap = 0;
+    *out = NULL;
+    /* §9.2.1.1's sentence has TWO conjuncts — "if a BLOCK CONTAINER BOX … HAS A BLOCK-LEVEL BOX INSIDE IT" —
+       and both are asked here rather than left to the walk, because a zero is that sentence ANSWERING. See
+       block_flow.h for what each shape of zero means; every one of them is a positive statement about which
+       box holds this element's inline-level content, never this component declining to look. */
+    d = bf_computed(el, "display");
+    container = block_flow_display_is_block_container(d);
+    free(d);
+    if (!container) return 0;
+    if (bf_content_kind(el) != BF_CONTENT_MIXED) return 0;
+    /* §9.4.1's STACK IS RUN, because that is where §9.2.1.1's boxes are generated and where their positions
+       come from. It is run whatever this container's `height` says — `bf_height_needs_content` decides whether
+       a box's own content decides ITS SIZE, which is a different question from where the boxes inside it are,
+       and a container with a declared height is exactly the one whose text can overflow it. */
+    (void)bf_layout(el, NULL, &unused, &found, &sink);
+    DCHECK(!found, "the anonymous-box walk reported placing a box it was not looking for");
+    DCHECK(sink.n > 0,
+           "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "
+           "holds BOTH a block-level box and inline-level content. Those are the section's own two conjuncts, "
+           "the classification above and the walk decide them over the same child list with the same "
+           "per-child predicate, and the walk wraps every maximal inline-level run it meets — so an empty "
+           "answer is one classification having been asked twice and answered differently");
+    *out = sink.v;
+    return sink.n;
 }
