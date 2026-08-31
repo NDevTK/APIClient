@@ -834,6 +834,20 @@ void engine_unload_document(uint32_t doc);
  * holds because a parser-inserted script's address came out of bytes the trusted zone itself fetched
  * (solver/pending.h's FLOW_PENDING_DOCSCRIPT). Nothing this door serves has that conjunct available: it is
  * asked where code RAN.
+ *   RESIDUAL — CORRECT AND NARROWER, NAMED RATHER THAN CRASHED ON, because the code is right for what it does
+ * and there is no case here to abort on. NOT COVERED: a child navigable whose `<iframe src>` came out of the
+ * PARSER of bytes the trusted zone itself fetched. §4.12.1's argument reaches it exactly as it reaches a
+ * parser-inserted `<script src>` — a real load of this document makes precisely that request — and it is
+ * answered `derived` here, which under-claims. WHAT THE NEXT DIFF BUILDS: the parser-inserted conjunct as a
+ * PARAMETER of this function, stated at the one site that knows it and threaded rather than inferred —
+ * core/html/html_iframe.c's `iframe_document_parsed` is the parser's walk and is one of exactly TWO callers of
+ * `iframe_create_navigable` (the other is core/dom/element.c's insertion steps, which is the script route), so
+ * the bit travels `iframe_create_navigable` → `navigable_create` → `navigable_load_enqueue` beside the address
+ * it belongs to. HOW ITS ABSENCE WOULD SHOW: the day any host treats the two words differently for a
+ * NAVIGATION — a per-origin setting that fires derived navigations rather than only observed ones, or a report
+ * that separates what a real load reaches from what only forced execution does — every parser-inserted child
+ * navigable lands on the wrong side of it. Both hosts navigate `observed` and `derived` identically today,
+ * which is also why building the distinction before it has a reader would be a computed writer with none.
  *
  * NO RUNNING FLOW IS A POSITIVE ANSWER AND NOT A DEFAULT. A path that does not exist has stood on no
  * contradicted arm, so the answer is `derived` — which is also the direction a provenance is allowed to be
