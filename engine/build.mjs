@@ -2421,8 +2421,6 @@ if (LIST_INCLUDE_ROOTS) {
      * AND ASKING THE QUESTION RAN EMCC. A gate that only wanted to print its revision banner spent a full
        lexbor compile doing it, on the shared four-core box CLAUDE.md §Testing prices every build against.
    Both are one fact: a mode whose whole contract is "answer and exit" had a compiler under it. */
-buildLexbor(process.argv[2] === "lexbor");
-if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
 /* TAKEN AND SAID HERE: after BOTH question-answering modes have exited — a list with a revision block in front
    of it is not a list, and `--list-include-roots` emits JSON a consumer parses — and before the first compiler
@@ -2552,6 +2550,22 @@ if (NATIVE) {
   report([runChild("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", bin, MIN ? ["--min"] : [],
                    "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault")]);
 }
+
+/* THE WASM LEXBOR, AND IT SITS BELOW `native` FOR THE REASON THE HEADER TWO SCREENS UP ALREADY GIVES.
+   That header records this same call being moved below `--list-sources` and `--list-include-roots` because "a
+   mode whose whole contract is 'answer and exit' had a compiler under it". `native` is the third such mode and
+   was missed: it links LEXBOR_NATIVE out of WORK/lexbor-native, names no emscripten anything, and ends in a
+   `report()` that always exits — so it never reached the emcc link below and never wanted this archive. It
+   still could not START without emsdk, because this line built lexbor TO WASM before the branch was tested.
+   The symptom was the one that rule predicts: `node engine/build.mjs native cold`, on a machine with a native
+   archive sitting ready, died on `emcc not found` after a full 213-source lexbor compile — an emscripten
+   dependency reported as the native target's, at a site the native target does not use.
+   It is the same defect as the lazy `requireEmcc()` below and not a repeat of that fix: that one made the
+   toolchain CHECK lazy, and this line ran the toolchain regardless of whether the check was ever consulted.
+   The invariant that now holds is one sentence — NOTHING COMPILES ABOVE THE BRANCH THAT DECIDES WHAT TO
+   COMPILE — and every target that exits on its own is above it. */
+buildLexbor(process.argv[2] === "lexbor");
+if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
 /* THE EXPORTS THE BRIDGE ccalls — and the previous sentence here ("emscripten drops anything not named") is
    DELETED, because it is not the mechanism and stating a wrong one is how a check gets skipped as redundant.
