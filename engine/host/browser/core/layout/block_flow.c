@@ -488,6 +488,10 @@ typedef struct {
 static void bf_anon_record(BfAnonSink *s, lxb_dom_node_t *first, lxb_dom_node_t *end, CssPx top, CssPx height)
 {
     if (s == NULL) return;
+    DCHECK(first != NULL && first != end,
+           "CSS 2.2 §9.2.1.1's anonymous block box was reported over an EMPTY run. The section generates one "
+           "only to wrap inline-level content, and the walk sets this run at the child that starts it — so an "
+           "empty one here is the placement having reported a box the generation above it did not make");
     if (s->n == s->cap) {
         size_t cap = s->cap != 0 ? s->cap * 2 : 4;
         BlockFlowAnonBox *v = realloc(s->v, cap * sizeof(*v));

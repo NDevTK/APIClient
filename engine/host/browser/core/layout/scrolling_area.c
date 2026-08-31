@@ -183,8 +183,14 @@ static CssPx sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bo
 {
     BlockFlowAnonBox *v;
     size_t n = block_flow_anonymous_boxes(b, &v), i;
-    CssPx content = sa_content_origin(b, vertical);
+    CssPx content;
 
+    /* THE CONTAINER'S OWN CONTENT ORIGIN IS ASKED FOR ONLY WHERE THERE IS A BOX TO MEASURE FROM IT, and that
+       is a crash surface and not a saving: core/layout/flow_position.h ABORTS for every positioning scheme it
+       does not implement, so reading an origin for a container that generates none of §9.2.1.1's boxes would
+       raise a float's or an out-of-flow box's crash at an element this fold has nothing to say about. */
+    if (n == 0) { free(v); return best; }
+    content = sa_content_origin(b, vertical);
     for (i = 0; i < n; i++) {
         CssPx origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
 
