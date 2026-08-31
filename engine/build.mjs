@@ -569,7 +569,22 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        never order that document at all; on a several-family frontier it is one instant's
                        coincidence that the next charge moves. "Structurally an offset" is the finding that
                        says stop looking. The reader states it now instead of assuming it. */
-                    "families"];
+                    "families",
+                    /* AND WHAT THE ORDER IS COSTING THE JOB QUEUE, which the cold line's `jobs` could never
+                       say. One number read the same whether the scheduler was broken or merely mis-scaled, and
+                       solver/result.c splits it by WHAT EACH JOB WAITS ON: the host (`jobsOwed` — the pick
+                       refuses it), the member finishing its own program (`jobsFramed` — HTML §8.1.4.4 "Calling
+                       scripts"' clean up after running script step 3 forbids running it while the JavaScript
+                       execution context stack is non-empty, which is a SPEC PRECONDITION and not an ordering
+                       problem), or RANK ALONE (`jobsReady`). Only the last is the WFQ's to move, so only the
+                       last is a finding about the order — and `jobWGap`, the distance from the front of the
+                       queue to the best ready holder in the order's own points, is what says whether it is
+                       outranked at all. Those two take opposite work and read identically without each other.
+                       `visZero` is the count `visMin` cannot give: how many members have completed NO unit of
+                       work, which is the population whose optimism bonus is at its undecayed maximum. It is
+                       NOT `unrun` — that row is `cpu == 0`, which flow_credit_emit RESETS, so a member that
+                       has run and emitted is in `unrun` with visits to its name. */
+                    "visZero", "jobsReady", "jobsFramed", "jobsOwed", "jobWGap"];
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -663,6 +678,32 @@ function wfqReading(out) {
                       `exist; a renamed field must be renamed here rather than silently compared as ` +
                       `undefined. A census with \`members: ${w.members}\` states that there WAS an order, so ` +
                       `this is not the empty-frontier shape handled above.`);
+  /* THE CENSUS AGAINST ITSELF, on the two pairs whose rows are one fact twice over. The engine DCHECKs the
+     first at flow_wfq_census and that check is compiled out of a release build, where this reader still runs;
+     the second is not asserted anywhere, because it spans two rows that are computed in one walk and nothing
+     downstream had ever read both. A gap the pick and the census measure with different comparators, or a
+     visit count that disagrees with the population it is the extremum of, makes every job sentence below a
+     reading of the disagreement rather than of the run. */
+  if (!(w.jobWGap >= 0))
+    throw new Error(`[build] the @WFQ census reports jobWGap ${w.jobWGap} — it is \`wTop\` minus the best ` +
+                    `READY job holder's weight, and the front of the order cannot be behind a member of it, ` +
+                    `so a negative gap is the pick and the census reading two different comparators.`);
+  /* THE IMPLICATION AND NOT THE BICONDITIONAL, WHICH IS A CORRECTION THE EXERCISE MADE RATHER THAN A CAUTION.
+     Written as `(ready === 0) !== (gap === 0)` this refused the state solver/result.c names by name — "0 with
+     `jobsReady > 0` is the top of the queue holding a runnable job and no ordering problem at all" — so the
+     assert would have fired on the healthiest reading the pair can produce, on real bytes, and been reported
+     as an engine defect. Only one direction is the producer's claim: with no ready holder there is nothing to
+     measure a distance to. */
+  if (w.jobsReady === 0 && w.jobWGap !== 0)
+    throw new Error(`[build] the @WFQ census reports no job waiting on rank and a gap of ${w.jobWGap} — the ` +
+                    `gap is measured to the best READY holder, so with none there is nothing to measure to ` +
+                    `and solver/result.c states the row is 0 by construction. A distance to a holder the ` +
+                    `census did not count is the pick and the census disagreeing about who is waiting.`);
+  if (w.visZero < 0 || w.visZero > w.members || (w.visZero === w.members) !== (w.visMax === 0))
+    throw new Error(`[build] the @WFQ census reports visZero ${w.visZero} of ${w.members} members with ` +
+                    `visMax ${w.visMax} — those are one walk's two answers about the same visit counts, so ` +
+                    `"every member has completed no unit of work" and "the largest visit count is zero" are ` +
+                    `the same statement and disagree only if the composer lost a member.`);
   /* EACH TERM OF flow_weight AGAINST THE SPREAD IT COULD ORDER — the reading that says which term is deciding
      this run, rather than which one is largest. A term's magnitude and a term's RANGE take opposite actions:
      an aging term of 856 points whose two ends are identical orders nothing at all and is a common offset.
@@ -717,10 +758,54 @@ function wfqReading(out) {
           `thread time fixes`
         : `candidates are being served (${w.candSvcMax} notches at the most) and are progressing — the ` +
           `deepest stands on ${w.candDecMax} gates, so what limits this search is DISTANCE rather than turns`;
+  /* WHAT THE ORDER IS COSTING THE JOB QUEUE, WHICH IS A QUESTION ABOUT ONE THIRD OF IT. Two of the three
+     classes are not the WFQ's to move — an OWED job waits on a reply the host has not sent, and a FRAMED one
+     is forbidden to run by HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3 while the
+     JavaScript execution context stack is non-empty, which is a spec precondition and not a backlog. Reporting
+     a total is what made those indistinguishable from the one class an ordering change can reach.
+     AND THE READY CLASS HAS TWO OPPOSITE READINGS THAT THE COUNT ALONE CANNOT SEPARATE, which is why the gap
+     is read beside it and never after it: a large ready count at the FRONT of the order is a queue being
+     served and no finding at all, and the same count buried behind the reward spread is the order costing the
+     run its job backlog. THE YARDSTICK IS THE CENSUS'S OWN AND NOT A CONSTANT — solver/result.c states it
+     ("a gap on the scale of `valMax - valMin` is the reward spread burying the backlog"), so the comparison is
+     against this frontier's reward spread and against the aging term's own notch, both of which this reader
+     already prices. A fixed threshold here would be a number true of one fixture. */
+  const jobsTotal = w.jobsReady + w.jobsFramed + w.jobsOwed;
+  const jobNotches = AGE_QUANTUM > 0 ? Math.ceil(w.jobWGap / AGE_QUANTUM) : null;
+  const jobs = jobsTotal === 0
+    ? `no job is queued at all, so this order is costing the job queue nothing`
+    : w.jobsReady === 0
+      ? `${jobsTotal} queued job(s) and NOT ONE waits on rank — ${w.jobsFramed} on its member finishing its ` +
+        `own program (HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: a spec ` +
+        `precondition, not an ordering problem) and ${w.jobsOwed} on the host. None of it is the WFQ's to move`
+      : `${w.jobsReady} of ${jobsTotal} queued job(s) wait on RANK ALONE (${w.jobsFramed} framed, ` +
+        `${w.jobsOwed} owed by the host)` +
+        (w.jobWGap === 0
+          ? `, and the front of the order is holding one — the backlog is NOT outranked, so nothing the ` +
+            `ordering can do would run these sooner`
+          : rangeVal > 0 && w.jobWGap >= rangeVal
+            ? `, standing ${w.jobWGap.toFixed(3)} points behind the front — at or beyond this frontier's ` +
+              `whole reward spread (${rangeVal.toFixed(3)}), so the backlog IS outranked and it is the ` +
+              `REWARD spread burying it` +
+              (jobNotches === null ? `` : `; the aging term would need ${jobNotches} quanta of silence to ` +
+                                          `close that, which is what "inside a session" has to mean`)
+            : `, standing ${w.jobWGap.toFixed(3)} points behind the front — inside this frontier's reward ` +
+              `spread (${rangeVal.toFixed(3)}), so the backlog is behind but not buried` +
+              (jobNotches === null ? `` : ` (${jobNotches} quanta of silence for the aging term to close)`));
+  /* AND WHO CARRIES THE OPTIMISM TERM AT ITS MAXIMUM. `visMin`/`visMax` give the term's RANGE and cannot say
+     how much of the frontier sits at the top of it; `visZero` is that population, and where it is the WHOLE
+     frontier the bonus is one flat maximum and orders nothing — which is the same arithmetic as `rangeUcb: 0`
+     and the reading a range alone leaves the reader to guess at. It is not `unrun`: flow.h says that row is
+     `cpu == 0` and flow_credit_emit RESETS it, so a member that has run and emitted is counted there with
+     visits to its name, and taking the two for one population reads a busy frontier as an idle one. */
+  const ucb = w.visZero === w.members
+    ? `every member has completed no unit of work, so all carry the same undecayed maximum bonus and the ` +
+      `optimism term orders nothing here`
+    : `${w.visZero} of ${w.members} members have completed no unit of work and carry the bonus undecayed`;
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
-                `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}`;
+                `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}; ${ucb}`;
   /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
      one the verdict's own sentence makes a claim about. `selfEmit` counts members with `val > val_born` — the
      ones that emitted something THEMSELVES — so the difference is how many are ranked entirely on an ancestor's
@@ -760,7 +845,7 @@ function wfqReading(out) {
           `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread; ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
           `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate; ` +
-          `${cand}; ` + terms,
+          `${cand}; ${jobs}; ` + terms,
   };
 }
 
