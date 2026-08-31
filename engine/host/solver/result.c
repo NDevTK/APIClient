@@ -269,18 +269,41 @@ static char *errs_json_array(void) {
    at the front of the order that the pick is not returning — which is starvation rather than ordering, and is
    a defect in the dispatch rather than in the weight. Neither half is a reading alone.
 
+   AND `topSvc`/`topSvcFam`/`nonrewardMax` ARE WHAT TURN `valTop` FROM A DIGIT INTO A STATEMENT ABOUT THE
+   LEADER. `valTop` is the front flow's fork FAMILY's ledger, and a ledger only climbs — so a reward that has
+   not moved between two censuses reads exactly like one being earned slowly, and "is the leading account still
+   producing" is precisely the question the row cannot answer alone. The silence is the half an emission RESETS
+   (flow_credit_emit zeroes the account's `fam_us`), so `topSvcFam` climbing IS the leading account being
+   silent, and `topSvcFam` at or near zero is its aging being forgiven. READ `topSvc` FOR ANYTHING ABOUT A GAP
+   AND NEVER `topSvcFam`: every arm of one family reads one `fam_us`, so on a `families: 1` frontier that half
+   is charged to the leader and to every member behind it in the same instant and cancels out of
+   `neverPickedGap` entirely, while the OWN half is charged only to the flow being dispatched. A leader
+   genuinely monopolising the thread shows `topSvc` climbing monotonically and the gaps closing behind it; a
+   front being REFILLED by freshly-minted arms shows `topSvc` low or sawtoothing with the same gaps standing,
+   and no amount of waiting closes those because the flow being charged is never the flow at the front. Those
+   two take opposite work and no other row here separates them — `svcMax` and `svcMin` are the frontier's ends
+   and the leader need be neither. `nonrewardMax` is flow.c's FLOW_NONREWARD_MAX carried out so a reader
+   DERIVES the bound it judges the gaps by instead of restating it: a weight is an account's reward plus a
+   non-reward sum that function bounds, so `(valTop - valMin) + nonrewardMax` is the largest gap a NON-NEGATIVE
+   non-reward sum can produce, and a gap above it says the trailing member's own terms are already net negative
+   — behind by AGING, which nothing bounded reaches, rather than behind by LIFT, which one term reading
+   differently would close. On a one-family frontier the reward half of that is identically zero.
+
    THE ARITHMETIC, DONE RATHER THAN ESTIMATED, and it is the reason the buffer is this size: the format's fixed
-   bytes are 345 without its conversion specifiers, and the thirty numbers' widest forms are 3240
-   (fourteen longs and seven int64s at 20, three `%.1f` doubles at 312 and six `%.3f` at 314 — a double's
+   bytes are 384 without its conversion specifiers, and the thirty-three numbers' widest forms are 3594
+   (fourteen longs and nine int64s at 20, three `%.1f` doubles at 312 and seven `%.3f` at 314 — a double's
    widest decimal form is 309 integer digits plus sign, point and fraction, which is what makes this buffer two
-   orders larger than the counter documents in this file). 345 + 3240 + 1 = 3586 against this 3712. RE-DO IT
+   orders larger than the counter documents in this file). 384 + 3594 + 1 = 3979 against this 4096. RE-DO IT
    WHEN YOU ADD A ROW; the DCHECK below catches the arithmetic being re-done wrong, and is not a substitute for
    doing it. The starvation pair added 33 fixed bytes (`,"neverPicked":` at 15 and `,"neverPickedGap":` at 18)
-   and 334 of conversion (one more long, one more `%.3f`), which is where 312/2906/3328 became these. */
+   and 334 of conversion (one more long, one more `%.3f`), which is where 312/2906/3328 became 345/3240/3586;
+   the leader triple then added 39 fixed (`"topSvc":` at 9, `,"topSvcFam":` at 13 and `,"nonrewardMax":` at 16,
+   the leading comma of the group being the one the previous row already ended on) and 354 of conversion (two
+   more int64s at 20 and one more `%.3f` at 314), which is where those became these. */
 char *result_wfq_json(void) {
     WfqCensus w;
     char *out;
-    size_t n = 3712;
+    size_t n = 4096;
     int m;
 
     flow_wfq_census(&w);
@@ -300,6 +323,7 @@ char *result_wfq_json(void) {
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
                      "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
+                     "\"topSvc\":%lld,\"topSvcFam\":%lld,\"nonrewardMax\":%.3f,"
                      "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f}",
                      w.members, w.val_min, w.val_max, w.val_top,
                      w.val_zero, w.self_emit, w.unrun,
@@ -309,6 +333,7 @@ char *result_wfq_json(void) {
                      (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,
                      w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
                      w.dist_max, w.w_top, w.w_min, w.cand_w_max,
+                     (long long)w.top_svc, (long long)w.top_svc_fam, w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap);
     DCHECK(m > 0 && (size_t)m < n,
            "the WFQ census did not fit its buffer — a truncation here does not lose a digit, it loses the "

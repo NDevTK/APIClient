@@ -1297,6 +1297,59 @@ typedef struct {
     double w_min;         /* the lowest weight in the frontier — the other end of the same order */
     double cand_w_max;    /* the best weight any @S candidate can offer against `w_top` */
 
+    /* THE TWO HALVES OF THE LEADER'S OWN SILENCE, READ OFF THE ONE MEMBER flow_best RETURNED — the pair without
+       which `val_top` is a reward nobody can say is being EARNED or merely REMEMBERED. `val_top` is the front
+       flow's FAMILY's ledger (flow_reward), so a reward that stops climbing is the leading account having gone
+       quiet; but a ledger is monotone, so a FROZEN one and a SLOWLY-EARNING one are the same digit at any single
+       census and only differ across a stream. The silence is the half that is not monotone — flow_credit_emit
+       zeroes an account's `fam_us` on any arm's emission — so these two rows are what turn "the leading family's
+       reward did not move" from an observation into a statement about whether its aging is being FORGIVEN.
+       THEY ARE THE TWO HALVES SEPARATELY AND NEVER THEIR SUM, because on the ordinary frontier only one of them
+       can order anything and it is not the one a reader reaches for. Every arm of one family reads the identical
+       `fam_us` through one pointer (flow_fork_inherit joins the parent's account) and a real page's whole
+       frontier is one family, so the family half is a COMMON OFFSET there: it is charged to the leader and to
+       every member standing behind it in the same instant, and it therefore cancels out of `never_picked_gap`
+       and out of every other difference between two members of one account. `top_svc_fam` climbing on a
+       `families: 1` frontier says the leading account is silent and says NOTHING about anyone catching up.
+       `top_svc` IS THE ONE THAT MOVES A GAP, and reading it across a stream is what separates two states that a
+       count of starved members reads identically. flow_age_running charges the RUNNING flow's own `cpu`, and a
+       member that is never dispatched is never charged, so a starved member's own silence is frozen while the
+       leader's is not: a genuinely monopolising front sinks, and `top_svc` climbs monotonically as it does. A
+       front that is instead being REFILLED — new arms minted at low inherited silence, each taking a turn at the
+       head and being replaced by a fresher one — shows `top_svc` staying low or sawtoothing while the same gap
+       stands, and no amount of waiting closes it because the flow being charged is not the flow at the front.
+       Those two take opposite work (re-price the aging, versus stop the mint from outranking the tail) and
+       nothing else in this struct tells them apart: `svc_max` is the largest in the frontier and the leader need
+       not be it, and `svc_min` is the smallest and the leader need not be that either.
+       IN NOTCHES, exactly as `svc_max`/`svc_fam_max` are, so the three are one unit and a reader multiplying by
+       FLOW_AGE_QUANTUM gets points in every row. They are not `flow_silence_notch`, which is a floor of the SUM
+       and is therefore not the sum of these two — that function is what the WEIGHT charges, and these are what a
+       reader ATTRIBUTES it to; the discrepancy is at most one notch and it is why the halves are reported rather
+       than the total the weight uses. Bounded by the extrema above by construction (the leader is one of the
+       members this same scan walks) and asserted there, so a value outside them is the census and the pick
+       having stopped walking one population. */
+    int64_t top_svc;
+    int64_t top_svc_fam;
+    /* THE MOST EVERY TERM OF THE ORDER EXCEPT THE REWARD CAN LIFT ONE MEMBER — flow.c's FLOW_NONREWARD_MAX,
+       carried out of the engine rather than restated by whoever reads the gaps. It is the bound `flow_nonreward`
+       asserts on every weight it computes, so it is the number that decides whether a member standing behind the
+       front is behind by LIFT (a bounded term reading differently could put it there) or behind by AGING (its
+       non-reward sum is negative, and nothing bounded reaches it — only the leader sinking).
+       IT IS EMITTED RATHER THAN GREPPED BECAUSE IT IS A DERIVATION AND NOT A NUMBER. build.mjs reads plain
+       `#define`s straight out of the host (`hostDefine`), and this one folds three terms together — the optimism
+       ceiling, the fitness ladder over FLOW_RUNGS_N, and the aging's zero — so a reader that re-derived it would
+       be the second copy of a rule §Architecture's auditor sentence forbids, and it would go stale the day a
+       rung is added beneath the ladder without anything saying so. Emitted, the day the ladder changes the
+       bound changes with it and no reader has to know.
+       WHAT A READER DOES WITH IT is stated once, here, so the two ends cannot drift: a member's weight is its
+       ACCOUNT's reward plus its non-reward sum, so a difference between two members' weights is at most their
+       reward difference plus this — and `val_top - val_min` bounds that reward difference over the members this
+       scan walks. So `(val_top - val_min) + nonreward_max` is the largest gap that a non-negative non-reward
+       sum can produce, and a gap ABOVE it is the arithmetic saying the trailing member's own terms are already
+       net negative. On a one-family frontier the reward difference is identically zero (every member reads one
+       account), and the bound is this row alone. */
+    double nonreward_max;
+
     /* THE JOB BACKLOG, SPLIT BY WHAT EACH JOB IS WAITING ON — three states that the cold census's `jobs` total
      * reports as one number, and the three take OPPOSITE actions.
      *

@@ -600,7 +600,31 @@ const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmi
                        was never handed the thread did nothing that could — and `neverPickedGap` is how far the
                        best of that population stands behind the weight the pick returned, which is the same
                        count/distance pair as `jobsReady`/`jobWGap` and is read the same way. */
-                    "neverPicked", "neverPickedGap"];
+                    "neverPicked", "neverPickedGap",
+                    /* AND THE FRONT'S OWN SILENCE, WHICH IS WHAT MAKES THE PAIR ABOVE A DIAGNOSIS RATHER THAN A
+                       SYMPTOM. `neverPickedGap` says how far the most-favoured starved member stands behind the
+                       leader, and the obvious next question — is the leader keeping its place by EARNING it, or
+                       is the gap simply not closing — has no row: `valTop` is the leading account's ledger and a
+                       ledger only climbs, so a frozen reward and a slowly-earned one are the same digit at any
+                       one census. The silence is the half an emission RESETS, so `topSvcFam` climbing IS the
+                       leading account being silent and `topSvcFam` near zero is its aging being forgiven.
+                       `topSvc` IS THE HALF THAT CAN MOVE A GAP AND `topSvcFam` IS NOT, which is the reading
+                       that matters and the one a reader gets backwards. Every arm of a family reads one
+                       `fam_us`, so on a `families: 1` frontier the family charge lands on the leader and on
+                       every member behind it at the same instant and cancels out of the difference entirely;
+                       only the OWN half is charged to the flow being dispatched. So a leader genuinely
+                       monopolising the thread shows `topSvc` climbing and the gap closing behind it, while a
+                       front being REFILLED by freshly-minted arms shows `topSvc` low or sawtoothing with the
+                       same gap standing — and those two take opposite work while looking identical in every
+                       other row here, because `svcMax`/`svcMin` are the frontier's ends and the leader need be
+                       neither of them.
+                       `nonrewardMax` is flow.c's FLOW_NONREWARD_MAX, carried out of the engine for the same
+                       reason `ageQuantum` is read from it: it is the bound `flow_nonreward` asserts, it folds
+                       three terms together (the optimism ceiling, the fitness ladder over FLOW_RUNGS_N and the
+                       aging's zero), and a reader that re-derived it would be a second copy that goes stale the
+                       day a rung is added. It is EMITTED rather than grepped because `hostDefine` reads plain
+                       numeric defines and this one is an expression. */
+                    "topSvc", "topSvcFam", "nonrewardMax"];
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
    for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
@@ -731,6 +755,29 @@ function wfqReading(out) {
                     `with a gap of ${w.neverPickedGap} — the population is counted over the members this ` +
                     `walk visits and the gap is measured to the best of it, so with none there is nothing to ` +
                     `measure to and solver/result.c states the row is 0 by construction.`);
+  /* THE LEADER AGAINST THE FRONTIER IT LEADS — the same shape as the two pairs above, and the same reason for
+     stating it here as well as in C: the engine's DCHECK is compiled out of a release build and this reader
+     still runs on that build's bytes. The extrema come from the census walk and the leader's own rows come from
+     flow_best's return, which are two traversals of what must be ONE population; a leader outside its own
+     frontier's range is the walk and the pick disagreeing about who is standing, and every attribution made
+     below from `topSvc` would then be a statement about a member that is not in the picture. */
+  if (w.topSvc < w.svcMin || w.topSvc > w.svcMax || w.topSvcFam < w.svcFamMin || w.topSvcFam > w.svcFamMax)
+    throw new Error(`[build] the @WFQ census reports the front of the order at own silence ${w.topSvc} ` +
+                    `(frontier ${w.svcMin}..${w.svcMax}) and family silence ${w.topSvcFam} (frontier ` +
+                    `${w.svcFamMin}..${w.svcFamMax}) — the leader is one of the members the same walk ` +
+                    `enumerated, so a reading outside those extrema is the census and flow_best no longer ` +
+                    `walking one frontier.`);
+  /* AND THE BOUND ITSELF, WHICH IS THE ONE ROW THIS READER JUDGES BY AND THEREFORE THE ONE IT MAY NOT ACCEPT
+     UNREAD. It is a property of flow_weight's formula and not of the run, so it is the same number on every
+     census of every build; a zero or a negative would mean the optimism ceiling and the fitness ladder had both
+     gone, which is not a frontier state but an edit — and a reader that divided by it or compared against it
+     regardless would report every member as behind by AGING, which is the verdict that says stop looking. */
+  if (!(w.nonrewardMax > 0) || !Number.isFinite(w.nonrewardMax))
+    throw new Error(`[build] the @WFQ census reports nonrewardMax ${w.nonrewardMax} — it is flow.c's ` +
+                    `FLOW_NONREWARD_MAX, the bound flow_nonreward asserts on every weight, and it is a fact ` +
+                    `about the formula rather than about this run. A non-positive or non-finite value is an ` +
+                    `edit that removed the optimism ceiling and the fitness ladder, not a state of the ` +
+                    `frontier, and this reader will not judge a gap against it.`);
   if (w.visZero < 0 || w.visZero > w.members || (w.visZero === w.members) !== (w.visMax === 0))
     throw new Error(`[build] the @WFQ census reports visZero ${w.visZero} of ${w.members} members with ` +
                     `visMax ${w.visMax} — those are one walk's two answers about the same visit counts, so ` +
@@ -843,20 +890,81 @@ function wfqReading(out) {
      1.0 is the most any single emission can be worth and therefore the natural unit for "can this be closed by
      something happening" — a starved member within one bonus of the front is one turn away, and one many
      bonuses behind is genuinely last in a queue that is ordering it. */
+  /* THE BOUND IS DERIVED FROM THE ENGINE'S OWN AND IS NOT A `1` SOMEBODY REMEMBERED. This read `<= 1` beside
+     the reasoning that "1.0 is the most any single emission can be worth and therefore the natural unit for
+     'can this be closed by something happening'". The unit is right and the number was a restatement, which is
+     the second copy §Architecture's auditor sentence forbids: what a gap has to be measured against is not one
+     emission, it is the most EVERY non-reward term TOGETHER can lift one member, and that is the quantity
+     `flow_nonreward` already asserts as FLOW_NONREWARD_MAX and the census now carries out. The two differ by
+     the whole fitness ladder — a candidate at the top rung carries a full extra point that no reader here can
+     see — so the remembered 1 called a candidate one bonus behind the front "genuinely outranked" when a single
+     rung would have put it at the head, and the day a rung is added beneath the ladder the restatement would
+     have gone on reporting the old range with nothing to say so.
+     AND THE REWARD SPREAD IS THE OTHER HALF OF IT, because a weight is an ACCOUNT's reward plus that sum: two
+     members can differ by their accounts as well as by their terms, and `valTop - valMin` bounds that over the
+     members this walk saw. It is identically zero on a one-family frontier, where every member reads one
+     account, so this degenerates to the engine's bound exactly where a real page's frontier lives. */
+  const liftBound = (w.valTop - w.valMin) + w.nonrewardMax;
+  /* WHAT THE FRONT ITSELF IS DOING, which is the half `neverPickedGap` cannot supply and without which a
+     standing gap has two causes and one reading. See solver/flow.h: `topSvcFam` is the leading ACCOUNT's
+     silence and is what an emission resets, so it says whether that account's aging is being forgiven; `topSvc`
+     is the leader's OWN, and on a one-family frontier it is the only half that can move a gap at all. */
+  const leadAging = ((w.topSvc + w.topSvcFam) * AGE_QUANTUM);
+  const leader =
+    `the front carries ${leadAging.toFixed(3)} points of aging (${w.topSvc} notches of its own silence, ` +
+    `${w.topSvcFam} of its family's), so the leading account ` +
+    (w.topSvcFam === 0
+      ? `emitted within the last quantum and its aging is being forgiven as fast as it is charged`
+      : `has been silent for ${w.topSvcFam} quanta`) +
+    (w.families === 1
+      ? `; this frontier is ONE family, so that family charge lands on every member in the same instant and ` +
+        `cancels out of every gap above — only the ${(w.topSvc * AGE_QUANTUM).toFixed(3)} points of the ` +
+        `leader's OWN silence can close one. Read \`topSvc\` across the census stream and not at one instant: ` +
+        `climbing monotonically is a single member monopolising the thread and the gaps behind it are closing; ` +
+        `staying low or sawtoothing while a gap stands is a front being REFILLED by freshly-minted arms, and ` +
+        `no amount of waiting closes that, because the flow being charged is never the flow at the front`
+      : `; across ${w.families} families both halves order, so either can move a gap between accounts`);
   const starved = w.neverPicked === 0
     ? `every member has been handed the thread at least once`
     : `${w.neverPicked} of ${w.members} members have NEVER been handed the thread, the best of them standing ` +
       `${w.neverPickedGap.toFixed(3)} points behind the front` +
-      (w.neverPickedGap <= 1
-        ? ` — within one emission's worth of it, so they are not being outranked and this is the razor's ` +
-          `STARVES rather than an ordering that has not reached them yet`
-        : ` — more than one emission's worth, so they are genuinely outranked and the aging term is what ` +
-          `reaches them`);
+      /* THREE ARMS AND NOT TWO, WHICH IS THE DISTINCTION THE BOUND'S TWO SUMMANDS ALREADY CARRY AND WHICH A
+         SINGLE COMPARISON THREW AWAY. A weight is an ACCOUNT's reward plus a non-reward sum, and a member can
+         be behind on either — but those are not the same finding and they do not take the same work. Within
+         `nonrewardMax` the member is behind by LIFT: every term it is behind on is bounded and one of them
+         reading differently puts it at the front, so the ordering is a hair from returning it. Between that
+         and the reward spread it is behind by its ACCOUNT, which no term reads and no waiting moves — an
+         account closes that gap by EMITTING, and a member that is never dispatched cannot emit, which is the
+         loop worth naming rather than filing under the same verdict. Beyond the whole bound its own terms are
+         already net negative and it is behind by AGING, which nothing bounded reaches at all. On a one-family
+         frontier the middle arm is unreachable by construction (one account, so the spread is identically
+         zero) and this is the two-way reading it was — which is why collapsing them looked right. */
+      (w.neverPickedGap <= w.nonrewardMax
+        ? ` — within the ${w.nonrewardMax.toFixed(3)} that every non-reward term of flow_weight together can ` +
+          `lift one member, so the best of them is behind by LIFT alone and one bounded term reading ` +
+          `differently would put it at the front: this is the razor's STARVES rather than an ordering that ` +
+          `has not reached them yet`
+        : w.neverPickedGap <= liftBound
+        ? ` — beyond the ${w.nonrewardMax.toFixed(3)} every non-reward term can lift it but inside the ` +
+          `${(w.valTop - w.valMin).toFixed(3)} of reward spread between the ${w.families} accounts standing, ` +
+          `so the best of them is behind by its ACCOUNT and not by any term: no term reads that away and no ` +
+          `silence moves it, an account closes it only by EMITTING, and a member that is never handed the ` +
+          `thread cannot emit — which is the loop, and it is neither a lift problem nor an aging one`
+        : ` — beyond the ${liftBound.toFixed(3)} that its account's reward and every non-reward term together ` +
+          `could give it, so the best of them already carries a NET NEGATIVE non-reward sum and is behind by ` +
+          `AGING, which no bounded term reaches. Nothing that member can do closes this; only the leader ` +
+          `sinking does, which is what the front's own silence beside this says`);
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
                 `of ${spread.toFixed(3)} and an aging term ${agingPts.toFixed(1)} points deep; ${fam}; ` +
-                `${ucb}; ${starved}`;
+                /* THE FRONT IS RENDERED ON EVERY CENSUS AND NOT ONLY WHERE A GAP IS WIDE, which is a decision
+                   about who reads it rather than about when it matters. Computed on one arm of a verdict and
+                   dropped on the others it would be an observation with a writer and no reader on most runs —
+                   the mirror of the defect this reader's own field list exists to stop — and it is the row a
+                   reader needs BEFORE a gap opens, because the discriminator it carries is a shape across the
+                   stream and a stream is only assembled from censuses that all state it. */
+                `${ucb}; ${starved}; ${leader}`;
   /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
      one the verdict's own sentence makes a claim about. `selfEmit` counts members that have emitted something
      THEMSELVES, so the difference is how many stand on an account some other arm of their fork family filled.

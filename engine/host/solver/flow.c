@@ -2858,6 +2858,12 @@ void flow_wfq_census(WfqCensus *out) {
     out->dec_max = 0;
     out->dist_max = 0.0;
     out->w_top = out->w_min = out->cand_w_max = 0.0;
+    out->top_svc = out->top_svc_fam = 0;
+    /* THE BOUND THE GAP ROWS ARE READ AGAINST, TAKEN FROM THE MACRO flow_nonreward ITSELF ASSERTS — not a
+       constant this scan chose, and not one a reader re-derives. It is unconditional because it is a property of
+       the FORMULA and not of the frontier: it is the same number on an empty scan as on a full one, which is
+       exactly why it can be trusted as the denominator of a reading about members. */
+    out->nonreward_max = FLOW_NONREWARD_MAX;
     out->jobs_ready = out->jobs_framed = out->jobs_owed = out->vis_zero = 0;
     out->job_w_gap = 0.0;
     for (i = 0; i < g_flows_n; i++) {
@@ -3009,10 +3015,53 @@ void flow_wfq_census(WfqCensus *out) {
         }
     }
     top = flow_best();
-    /* …AND THE FRONT OF THE ORDER, READ IN THE SAME QUANTITY THE ORDER IS: the reward flow_queue_weight reads,
-       which is the top flow's fork FAMILY's. `top->val` would be one member's own ledger and would report the
-       front of the queue in a quantity the pick never consults. */
-    if (top) { out->val_top = flow_reward(top); out->w_top = flow_weight(top); }
+    /* A NON-EMPTY FRONTIER HAS A FRONT, AND SAYING SO IS WHAT MAKES THE ROWS BELOW HONEST. flow_best is
+       flow_pick with no seed, no exclusion and `runnable_only` OFF, so its loop skips nothing and takes the
+       first member unconditionally — a NULL here with members standing would mean the pick had acquired a filter
+       that hides part of the frontier from its own maximum. That matters more than it looks: every row derived
+       from `top` is left at its zero when there is no top, and a zero silence notch is a perfectly ordinary
+       reading for a leader that has just been forgiven — so "no front" and "a front at zero" would be the same
+       digits, which is the defaulted-field defect performed inside the instrument that exists to find it. With
+       this asserted, the zeros below can only mean an empty frontier, which result.c renders as `members: 0` and
+       nothing else. The `if` stays because it is what keeps these reads out of a NULL dereference in a RELEASE
+       build, where this DCHECK is compiled out — the guard and the assert are answering two different questions
+       and neither replaces the other. */
+    DCHECK(top != NULL || g_flows_n == 0,
+           "the WFQ census walked a non-empty frontier and flow_best returned no front — flow_best takes every "
+           "member with no filter, so this is the pick having gained one that hides a member from its own "
+           "maximum, and every row this census derives from the top would silently read as an unforgiven zero");
+    if (top) {
+        /* …AND THE FRONT OF THE ORDER, READ IN THE SAME QUANTITY THE ORDER IS: the reward flow_queue_weight
+           reads, which is the top flow's fork FAMILY's. `top->val` would be one member's own ledger and would
+           report the front of the queue in a quantity the pick never consults. */
+        out->val_top = flow_reward(top);
+        out->w_top = flow_weight(top);
+        /* …AND THE TWO HALVES OF THE FRONT'S OWN SILENCE, WHICH IS THE ONE THING `val_top` BESIDE THEM CANNOT
+           SAY. A ledger only climbs, so a reward that has not moved between two censuses is the same digit as
+           one earned slowly; the silence is what an emission RESETS, so `top_svc_fam` is the row that says
+           whether the leading account's aging is being forgiven or accumulating. `top_svc` is the half that can
+           actually move a difference between two members of one family — see flow.h for why the family half
+           cancels there and this one does not. Read through the same notch functions the aging term reads, so
+           the census and the weight cannot disagree about the unit. */
+        out->top_svc = flow_service_notch(top);
+        out->top_svc_fam = flow_family_notch(top);
+    }
+
+    /* THE FRONT IS ONE OF THE MEMBERS THIS SCAN ALREADY WALKED, SO ITS SILENCE LIES INSIDE THE EXTREMA IT
+       COLLECTED — asserted because it is the one statement that ties the two readings together. The extrema come
+       from the loop above and these come from flow_best's return, which are two different traversals of what
+       must be one population; a leader outside its own frontier's range is the census reading a member the walk
+       never visited, or flow_best returning a departed flow, and either would make every attribution below a
+       statement about a member that is not in the picture. It is not a range check on the notch functions — they
+       are asked identically in both places — it is a check that the two places are asking about one set. */
+    DCHECK(!top || (out->top_svc >= out->svc_min && out->top_svc <= out->svc_max),
+           "the WFQ census reports the front of the order standing outside the own-silence range its own walk "
+           "collected — flow_best returns a member of the frontier this scan just enumerated, so the leader "
+           "cannot be outside its extrema unless the two are reading different populations");
+    DCHECK(!top || (out->top_svc_fam >= out->svc_fam_min && out->top_svc_fam <= out->svc_fam_max),
+           "the WFQ census reports the front of the order's FAMILY standing outside the family-silence range "
+           "its own walk collected — the leader's account is one of the accounts this scan reached through its "
+           "members, so a reading outside the extrema means the walk and flow_best disagree about the frontier");
 
     /* HOW FAR THE JOB BACKLOG STANDS BEHIND THE FRONT OF THE QUEUE — see flow.h. Taken here and not in the
        scan because it is a difference against a top the scan cannot know, and left at 0 when nothing is
