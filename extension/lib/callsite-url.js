@@ -29,9 +29,11 @@ var _AST_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.\-]*:/;
 /* DOES THIS ADDRESS HOLD A HOLE AT ALL — the question "is it concretely fetchable", asked in path_scan's own
    grammar: a hole's name may hold anything except `{`, `}` and `/`. bridge.js asked it as `/\{[a-z]*\}/`, which
    answers NO for every shape this engine actually emits — `{arg0}` has a digit, `{location.hash}` a dot,
-   `{orphan3.arg0.replace()}` all three — so the gate that exists to keep an undetermined address away from
-   safeFetch matched only `{}` and `{id}`, and the rest went out to somebody's server as a percent-encoded
-   literal path. */
+   `{orphan3a153db70eec69f2.arg0.replace()}` all three — so the gate that exists to keep an undetermined
+   address away from safeFetch matched only `{}` and `{id}`, and the rest went out to somebody's server as a
+   percent-encoded literal path. The orphan spelling here is the LOCATOR one engine_orphan_call actually
+   mints; it read `{orphan3.arg0…}` — the ordinal that the cross-session name retired — which is a shape no
+   producer writes, i.e. exactly the criticism this paragraph levels at `${` and `(dynamic)` two comments up. */
 function astAddressHasHole(s) {
   return typeof s === "string" && /\{[^{}\/]*\}/.test(s);
 }

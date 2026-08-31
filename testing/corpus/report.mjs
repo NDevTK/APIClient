@@ -40,7 +40,13 @@ const passes = files.map((f) => {
               nothing to ask (every row fatal). A pass with no measured rows is not evidence either way and
               must not be reported as an old instrument. */
            arrival: measured.length === 0 ? 'nothing-measured'
-             : measured.some((r) => 'sourceReads' in r) ? 'carried' : 'predates' };
+             : measured.some((r) => 'sourceReads' in r) ? 'carried' : 'predates',
+           /* AND THE SAME QUESTION ASKED SEPARATELY OF THE ORPHAN PAIR, because the two censuses were added
+              to site.mjs at different times and a pass can carry one and not the other — folding them into
+              one `arrival` state would report an instrument that could not ask about drives as one that
+              could, in whichever direction the @S half happened to answer. */
+           orphan: measured.length === 0 ? 'nothing-measured'
+             : measured.some((r) => 'orphansAsked' in r) ? 'carried' : 'predates' };
 });
 /* THE LIST THIS CENSUS MEASURED, NAMED AND THEN CHECKED AGAINST THE ROWS. This file used to read `sites.tsv`
    unconditionally and look every row's id up in it — and the app-page census walks twelve ids that appear in
@@ -200,6 +206,18 @@ for (const p of passes) for (const r of p.rows) {
        as unforgeable -- so the column says WHERE the zero starts, and a corpus-wide `sinks: 0` stops being
        one number with three opposite meanings. site.mjs carries these off the run record bridge.js writes. */
     src: r.sourceReads, reach: r.sinkReached, taint: r.sinkTainted, sup: r.sinkSuppressed,
+    /* THE ORPHAN PAIR, WHICH IS THE HEADLINE SURFACE AND HAD NO COLUMN AT ALL. §What-the-tool-produces makes
+       the drive of code the bundle shipped and never ran the whole proposition — "a sniffer shows what FIRED;
+       this shows what the bundle CAN do but didn't" — and every layer between the engine and this line was
+       already carrying it: solver/result.c emits `_orphansDriven`/`_orphansAsked` in the cost snprintf,
+       bridge.js asserts both are numbers and forwards them onto every run record, site.mjs writes both into
+       every census row under a comment saying they are read BOTH OR NEITHER. This file, the one that RANKS
+       the corpus, was the consumer that never asked — so the pair was computed, asserted, relayed, stored,
+       and rendered by nothing, which is the write-with-no-reader half of the contract site.mjs's own comment
+       names one hop earlier ("harder to see, because the value is real and asserted and consumed by
+       nothing"). It is the third time this row has been that consumer; `candidates` and `unitsDone` were the
+       first two, and both of those have their own comments above saying so. */
+    oask: r.orphansAsked, odrv: r.orphansDriven,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -253,6 +271,13 @@ const table = [...seen.entries()].map(([id, ms]) => ({
      and only the shouted line under the table tells them apart: the pass's INSTRUMENT could not answer (its
      rows carry no such field at all), or its RUNS carried no counters. */
   arrival: ['src', 'reach', 'taint', 'sup'].map((k) => spread(ms, k)).join('>'),
+  /* `ask>drv` READ LEFT TO RIGHT IS WHERE ORPHAN-DRIVING GOT TO, in the order the mechanism travels — a flow
+     runs out of work and ASKS whether the page shipped code nothing called, and a body is then DRIVEN. That
+     order is what makes the zero readable, and it is the whole reason the pair is one column: `0>0` is a
+     frontier that never reached the question (a scheduling result to act on), `N>0` is a walk that ran and
+     found the heap empty (a fact about the page), and only the two together tell them apart. Printed as one
+     spread per number rather than as a ratio, because a ratio of two spreads is a number nobody measured. */
+  orphans: ['oask', 'odrv'].map((k) => spread(ms, k)).join('>'),
   epMax: Math.max(-1, ...ms.map((m) => m.endpoints).filter((x) => typeof x === 'number')),
   epAnswered: ms.filter((m) => typeof m.endpoints === 'number').length,
   sigs: [...new Set(ms.flatMap((m) => m.sigs))],
@@ -265,11 +290,13 @@ const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 console.log(`${passes.length} pass(es): ${passes.map((p) => p.label + '(' + p.rows.length + ')').join(' ')}`);
 console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measured here)`);
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
-  pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('flows', 12) + pad('switches', 12) +
+  pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
+  pad('flows', 12) + pad('switches', 12) +
   pad('load', 10) + 'signature');
 for (const t of table)
   console.log(pad(t.id, 20) + pad(t.outcome, 20) + pad(t.abortedPasses + '/' + t.n, 8) +
     pad(t.finishedPasses + '/' + t.n, 7) + pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
+    pad(t.orphans, 13) +
     pad(t.fl, 12) + pad(t.sw, 12) + pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
 /* WHICH PASSES COULD ANSWER THE @S ARRIVAL QUESTION AT ALL, printed where the column is read. `n/N` above
@@ -286,6 +313,20 @@ if (predates.length)
     ' PASS(ES) — ' + predates.join(', ') + ' predate(s) those counters entirely (the rows carry no such ' +
     'field), so a `-` there is this instrument being unable to ask, NOT a page with no attacker sources. ' +
     'Every other column is over all ' + passes.length + '. ***');
+
+/* AND THE SAME SHOUT FOR `ask>drv`, ASKED SEPARATELY. It is not decoration on the line above: the two
+   censuses entered site.mjs at different commits, so a pass can carry one and predate the other, and a
+   single shout covering both would report one instrument's silence as the other's answer. It matters more
+   here than there, because the orphan column's `-` and its `0>0` are the two readings this project is most
+   likely to conflate — "the frontier never reached the question" and "this file could not ask" — and only
+   this line separates them. */
+const oPredates = passes.filter((p) => p.orphan === 'predates').map((p) => p.label);
+const oCarried = passes.filter((p) => p.orphan === 'carried').map((p) => p.label);
+if (oPredates.length)
+  console.log('\n*** THE `ask>drv` COLUMN IS OVER ' + oCarried.length + ' OF ' + passes.length +
+    ' PASS(ES) — ' + oPredates.join(', ') + ' predate(s) the orphan census entirely (the rows carry no ' +
+    '`orphansAsked` field), so a `-` there is this instrument being unable to ask, NOT a frontier that ' +
+    'never reached the question and NOT a bundle that ships no uncalled code. ***');
 
 /* THE WORK QUEUE. A DFAIL's reason names what to build, so it is printed rather than summarised -- but only
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this

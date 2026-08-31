@@ -8761,10 +8761,19 @@ void solver_agent_free(JSContext *ctx)
            "html_link_free, which html_element_free calls and core/dom/element.c drives from platform.h's "
            "release column, and that column runs in full before this one");
     /* THE ORPHAN COUNTERS AND THE GENERATION THEY LAST WALKED AT, given back with the frontier they describe.
-       The ordinal names an argument's source identity ({orphan7.arg0}) and the generation is a fact about ONE
-       runtime's heap, so an agent that started a second session on top of the first would mint identities that
-       collide with the previous session's constraints and would skip a walk over a heap that is not the one it
-       walked. All are single words: the release is what makes them a session's rather than a process's.
+       THE ARGUMENT THAT USED TO JUSTIFY `g_orphans_driven`'S RESET IS RETIRED AND ITS REPLACEMENT IS NOT THE
+       SAME SENTENCE. It read: the ordinal names an argument's source identity ({orphan7.arg0}), so a second
+       session on top of the first would mint identities that collide with the previous session's constraints.
+       Every clause of that is now false in the direction that MATTERS — engine_orphan_call names each unknown
+       `{orphan<locator>.argN}` from JS_OrphanHash, which is a fact about the BUNDLE, so this counter names
+       nothing at all, and §ONE-global-frontier is explicit that two drives of one body SHARING the name is
+       correct rather than the aliasing an ordinal was avoiding. A reader who re-derived the retired reason
+       would conclude the opposite of the design, which is why it is rewritten here rather than deleted.
+       WHAT SURVIVES IS THE SENTENCE `g_orphan_asks` ALREADY HAD, and it covers both: they are per-SESSION
+       numbers that the result document spells per document. The GENERATION is a different fact and keeps its
+       own reason — it is a memo about ONE runtime's heap, so a second agent that kept it would skip a walk
+       over a heap it never walked. All are single words: the release is what makes them a session's rather
+       than a process's.
        `g_orphan_asks` IS ON THIS LINE AND WAS NOT, which was a defect in the commit that introduced it rather
        than an omission with no consequence. The hosts that take a runtime down and bring another up per file
        run many sessions in one process, so a counter left standing reports the PROCESS's total under a name
