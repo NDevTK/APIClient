@@ -1107,10 +1107,12 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
            "\"a single opaque box\" that is never split across line boxes — so §6's step 3 count is ONE and its "
            "border area is composed the ordinary way, from CSS 2.1 §10.3.2's used width and §10.6.2's used "
            "height (core/layout/used_value.h) plus the box's own position, exactly as core/layout/"
-           "scrolling_area.c already composes it for the same element. core/dom/element_view.h's fragment kind "
-           "is what decides that, and reaching here means it read the `display` without asking HTML §15.4 — "
-           "which is the same pair of conjuncts core/layout/used_value.c asserts over, and the two have come "
-           "apart");
+           "scrolling_area.c already composes it for the same element. EVERY CALLER DECIDES THAT BEFORE ASKING "
+           "— core/dom/element_view.c's fragment kind and core/layout/flow_position.c's inline-box predicate "
+           "both test the pair of conjuncts CSS 2.1 §10.3.1's and §10.6.1's titles are written over ('Inline, "
+           "NON-REPLACED elements'), which is the same pair core/layout/used_value.c asserts over — so "
+           "reaching here means one of them read the `display` without asking HTML §15.4, and the answers have "
+           "come apart");
     /* HTML §15.3.4 "Phrasing content"'s `br { display-outside: newline; }` and `wbr { display-outside:
        break-opportunity; }` reach this component as plain `display: inline` boxes carrying a fact the cascade
        cannot answer for (core/layout/phrasing_break.h), and `lb_child` puts them on the line as a FORCED BREAK

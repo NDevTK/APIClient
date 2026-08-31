@@ -14,6 +14,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/line_box.h"
+#include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
 
 static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
@@ -144,7 +145,17 @@ static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
  * decides box existence and this one disagree. */
 static bool fp_is_inline_box(lxb_dom_element_t *el)
 {
-    return fp_computed_is(el, "display", "inline");
+    /* BOTH HALVES OF "NON-REPLACED INLINE BOX", because the arm this predicate selects is §9.4.2's placement of
+       a box that is SPLIT across line boxes and a replaced element is not one. HTML §15.4 "Replaced elements"
+       makes an `img`, an `iframe`, a `video` or an `input` replaced while its computed `display` stays
+       `inline`, and CSS 2.1 §9.2.2 makes such a box an atomic inline-level box that "participate[s] in [its]
+       inline formatting context as a single opaque box" — css-text-3 §5.5 names it in the same breath as an
+       `inline-block` ("each replaced element or other atomic inline"). It is still INLINE-LEVEL, so §9.4.1's
+       two rules do not place it either; it leaves through `fp_require_placeable`'s own arm below.
+       IT IS THE SAME PAIR core/layout/used_value.c ASSERTS OVER (§10.3.1's and §10.6.1's titles are "Inline,
+       NON-REPLACED elements") and the same predicate core/layout/scrolling_area.c splits on — one fact, and
+       this was one of the places that answered it with half the question. */
+    return fp_computed_is(el, "display", "inline") && !replaced_element_of(el).replaced;
 }
 
 /* CSS 2 §9.4.2 "Inline formatting contexts"' PLACEMENT of a non-replaced inline box — "boxes are laid out
@@ -250,6 +261,31 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "table objects' generates — the row groups, rows and cells a UA inserts around whatever the "
               "author wrote — and then §17.5.2's and §17.5.3's algorithms over it, which core/layout/"
               "used_value.c already crashes for when a table's EXTENT is asked. BUILD §17.2.1, then §17.5");
+    /* HTML §15.4's REPLACED ELEMENT IS INLINE-LEVEL WITH A COMPUTED `display` OF `inline`, so it reaches this
+       classification through `fp_is_inline_box`'s second conjunct rather than through the list above — and it
+       is on the SAME side of §9.4.1 as that list. It is asked after `d` is freed and reads none of it: HTML
+       §15.4.1 and §15.4.2 decide it from the element's nature and its image request state, not from a
+       `display`. */
+    if (replaced_element_of(el).replaced)
+        DFAIL("HTML §15.4 \"Replaced elements\" makes this a REPLACED ELEMENT with a computed `display` of "
+              "`inline`, which CSS 2.1 §9.2.2 makes an ATOMIC INLINE-LEVEL box — \"a single opaque box\" — so "
+              "§9.4.2 places it on a LINE BOX and §9.4.1's two rules, which are written about a block-level "
+              "box in a block formatting context, say nothing about it. ITS CONTRIBUTION TO THE RUN IS BUILT "
+              "AND IS NOT WHAT THIS WAITS FOR: core/layout/line_box.c collects it as css-text-3 §5.5's atomic "
+              "inline (a margin-box inline size plus the U+FFFC whose [UAX14] class CB is the soft wrap "
+              "opportunity before and after it), the fill distributes it, and CSS 2 §10.8's step 1 takes its "
+              "margin box height. WHAT IS MISSING IS THE FRAGMENT — CSSOM VIEW §6's step 3 rectangle for a box "
+              "the run holds as ONE ITEM rather than as a pair of edges. `line_box_inline_fragments` delimits "
+              "a fragment by an inline box's opening and closing EDGE items and this box has neither, which is "
+              "why it asserts against a replaced element rather than answering; its `br` arm names the same "
+              "absent shape for the same reason. BUILD the single-item fragment there: the inline axis is "
+              "`text_run_measure_line_offset` at the item's own index and at index+1, less the box's two "
+              "margins to reach §6's BORDER area; the block axis hangs from the line's baseline, where "
+              "`lb_atomic_extent` already puts this box's BOTTOM MARGIN EDGE (CSS 2.2 §10.8's `vertical-align` "
+              "`baseline`: \"if the box does not have a baseline, align the bottom margin edge with the "
+              "parent's baseline\"), so the border area is that baseline less `margin-bottom` and less "
+              "core/layout/used_value.h's border-edge extent. Then `fp_inline_box_origin` above turns it into "
+              "this coordinate unchanged and this arm deletes");
     if (inline_level)
         DFAIL("CSS 2.1 §9.2.2 'Inline-level elements and inline boxes' makes this an ATOMIC INLINE-LEVEL box — "
               "`inline-block`, `inline-table`, or css-display §2's `inline flex` and `inline grid` — which "
@@ -263,17 +299,21 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "that makes a `text-align` declaration reach it), and `line_box_inline_fragments` composes them "
               "into a fragment rectangle that `fp_inline_box_origin` above turns into this very coordinate for "
               "a `display: inline` box. Following this line as it stood would have built all of that a second "
-              "time. WHAT IS MISSING IS THIS BOX'S OWN CONTRIBUTION TO THE RUN, and core/layout/line_box.c "
-              "crashes for it by name at the same arm of the same walk: an atomic inline puts a SOFT WRAP "
-              "OPPORTUNITY before and after itself (css-text-3 §5.5 \"Line Breaking Details\": \"for "
-              "Web-compatibility there is a soft wrap opportunity before and after each replaced element or "
-              "other atomic inline\"), so how many line boxes there are becomes a function of this box's own "
-              "USED WIDTH — and core/layout/text_run.h has no item kind that carries one: a CHAR is sized by an "
-              "advance measure, an EDGE introduces no break, and a FORCED BREAK has no width. BUILD that item "
-              "kind, fill it from core/layout/used_value.c (§10.3.9 for an inline-block, its own module for an "
-              "inline-flex or inline-grid), and take CSS 2 §10.8's step 1 over its MARGIN BOX rather than its "
-              "`line-height` (\"for replaced elements, inline-block elements, and inline-table elements, this "
-              "is the height of their margin box\"). Then this box reaches the line and this arm deletes");
+              "time. THE RUN ITEM IS BUILT TOO AND IS NO LONGER WHAT THIS WAITS FOR: core/layout/text_run.h "
+              "carries css-text-3 §5.5's atomic inline as a kind of its own — a margin-box inline size plus "
+              "the U+FFFC whose [UAX14] class CB is \"a soft wrap opportunity before and after each replaced "
+              "element or other atomic inline\" — and core/layout/line_box.c emits one for a REPLACED element "
+              "already. WHAT IS LEFT IS THIS BOX'S OWN BASELINE, which is where an `inline-block` and a "
+              "replaced element part company: CSS 2 §10.8's `vertical-align` definition gives this box one "
+              "(\"the baseline of an 'inline-block' is the baseline of its last line box in the normal flow, "
+              "unless it has either no in-flow line boxes or if its 'overflow' property has a computed value "
+              "other than 'visible'\"; \"the baseline of an 'inline-table' is the baseline of the first row\"), "
+              "so §10.8's step 1 splits its margin box at that line rather than putting all of it above the "
+              "baseline the way `lb_atomic_extent` does for a box that has none. BUILD the inner baseline and "
+              "the used inline size for the box types CSS 2.1 §10 does not own (an `inline-flex` and an "
+              "`inline-grid` are css-flexbox §9's and css-grid §11's, and `uv_box_kind` classifies neither), "
+              "which is what core/layout/line_box.c's own atomic arm names. Then this box reaches the line and "
+              "this arm deletes");
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
        what the two rules below are written about. A `table` is one of them and stays on this path: §17.4
        'Tables in the visual formatting model' says the table wrapper box is block-level for `display: table`
