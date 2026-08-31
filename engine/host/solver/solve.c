@@ -8,6 +8,7 @@
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/document.h"
+#include "core/dom/node.h"             /* node_next_in — the one pre-order successor; see its own comment */
 #include "solver/concolic.h"
 #include "solver/decide.h"
 #include "solver/endpoint.h"
@@ -1856,8 +1857,8 @@ JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler) {
    executable JS in an auto-firing position. innerHTML does NOT run <script>, so those never fire (correct). */
 /* THE TREE'S DEPTH IS THE CANDIDATE'S DATA — a breakout that nests `<div>` a million times is exactly the kind
    of input this walk exists to run — so descending by C frame made the oracle's own depth attacker-controlled.
-   Lexbor's nodes carry `parent`, so the traversal needs no stack at all: descend to first_child, else take
-   `next`, else climb until a `next` exists, never above the level the walk started at. */
+   Lexbor's nodes carry `parent`, so a pre-order traversal needs no stack and no allocation at all, which is
+   what `node_next_in` is and why this walk uses it rather than descending. */
 /* …AND IT ANSWERS §@S's CONTEXT-ESCAPED RUNG ON THE WAY, because the walk is already standing exactly where
    the question is decided. HTML §8.1.1 Introduction lists the mechanisms that "cause author-provided
    executable code to run" and "event handler content attributes" is one of them, so a handler attribute whose
@@ -1868,12 +1869,16 @@ JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler) {
    only handlers the breakout's own bytes are in. A page whose innerHTML template already contains an
    `<img onerror=…>` raises `fires` for a candidate that escaped nothing, which is precisely the reading the
    parked-search card used to state as a fact about the payload. */
+/* THE WALK IS `node`'S OWN SUBTREE, through the engine's one pre-order successor. It used to carry its own
+   advance, bounded by `node->parent` and testing that bound only on the CLIMB — which admits `node`'s following
+   siblings and is the shape that, elsewhere, walked out of an inserted subtree and ran DOM §4.2.3 "Mutation
+   algorithms"' post-connection steps over the rest of the document. Harmless here only because the one caller
+   passes a document element, whose siblings are comments; stated as the subtree it always meant. */
 static int html_fire_walk(Cand *e, lxb_dom_node_t *node) {
-    lxb_dom_node_t *top = node->parent;   /* the level the walk must not climb above */
-    lxb_dom_node_t *n = node;
+    lxb_dom_node_t *n;
     int at_exec = 0;
 
-    while (n) {
+    for (n = node; n; n = node_next_in(n, node)) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *el = lxb_dom_interface_element(n);
             static const char *H[] = { "onload", "onerror", NULL };   /* AUTO-firing only (onmouseover needs interaction) */
@@ -1892,12 +1897,6 @@ static int html_fire_walk(Cand *e, lxb_dom_node_t *node) {
                 }
             }
         }
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) {
-            n = n->parent;
-            if (n == top) n = NULL;
-        }
-        if (n) n = n->next;
     }
     return at_exec;
 }
