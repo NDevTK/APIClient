@@ -385,8 +385,10 @@ void fetch_reply_set_body(JSContext *ctx, JSValueConst reply, const uint8_t *byt
         JSValue had = JS_GetPropertyStr(ctx, reply, "body");
         DCHECK(JS_IsUndefined(had),
                "the host's reply record already carried a `body` — the bytes cross BESIDE that JSON and never "
-               "inside it, so a record that arrived with one is a producer still running Fetch §5.4's `text()` "
-               "(a UTF-8 decode, whatever the response's charset says) in a zone that does not own decodes");
+               "inside it, so a record that arrived with one is a producer still running Fetch §5.3 Body "
+               "mixin's `text()` (a UTF-8 decode, whatever the response's charset says) in a zone that does "
+               "not own decodes — §5.4 stood on this sentence and is Request class, which includes the mixin "
+               "rather than defining it");
         JS_FreeValue(ctx, had);
     }
 #endif

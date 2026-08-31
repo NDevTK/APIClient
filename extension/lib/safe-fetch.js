@@ -61,8 +61,11 @@
 // therefore never sniffs and never re-parses a raw header for a type of its own.
 //
 // THE BODY IS BYTES, AND THAT IS A LAYERING RULE RATHER THAN A TYPE PREFERENCE.
-// It was `await resp.text()`, which is Fetch §5.2's `text()`: "run consume body
-// with this and UTF-8 DECODE". A decode is a SEMANTIC, and CLAUDE.md §Architecture
+// It was `await resp.text()`, which is Fetch §5.3 "Body mixin"'s `text()`, whose
+// steps are "to return the result of running consume body with this and UTF-8
+// decode". (§5.2 stood here and is "BodyInit unions", which EXTRACTS a body rather
+// than consuming one, so the number named the opposite direction.)
+// A decode is a SEMANTIC, and CLAUDE.md §Architecture
 // puts every semantic in the C engine and leaves this zone a BRIDGE, never logic —
 // so this chokepoint was running an algorithm that is not its, and running the
 // WRONG one: UTF-8 always, the response's charset ignored. HTML §8.1.4.2's "fetch a
@@ -812,8 +815,10 @@ async function safeFetch(url, opts) {
   /* §2.2.5's BODY, READ AS THE BYTE SEQUENCE IT IS — after both SSRF checks (the
      initial URL above, and the post-redirect final URL immediately above this), which
      is where they were and where they must stay: nothing internal is ingested before
-     the target is judged. `arrayBuffer()` is Fetch §5.2's "consume body" with NO
-     decode after it, which is the whole difference from the `text()` this used to be:
+     the target is judged. `arrayBuffer()` is Fetch §5.3 "Body mixin"'s "consume
+     body" with NO decode after it — §5.3 defines that algorithm and both methods over
+     it, and §5.2 "BodyInit unions", which stood here, is the EXTRACT that runs in the
+     other direction — which is the whole difference from the `text()` this used to be:
      what the engine receives is what the server sent, and every standard that has an
      opinion about how those bytes become characters gets to hold it. */
   var body = new Uint8Array(await resp.arrayBuffer());

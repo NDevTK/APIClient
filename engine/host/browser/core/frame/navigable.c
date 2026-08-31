@@ -1266,8 +1266,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            the shape that let two of the three entries that build a Document out of a response never ask this
            question at all. */
         /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
-           field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
-           run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
+           field the trusted zone had built with Fetch §5.3 "Body mixin"'s `text()` — a UTF-8 decode run before
+           HTML could run its own (§5.2 stood on this sentence and is "BodyInit unions", which EXTRACTS a body
+           rather than consuming one, so the number named the opposite direction while reading as checked)
+           — so a document served in any other encoding reached lexbor already replaced with U+FFFD
            and the algorithm that decides its encoding had nothing left to decide. §2.2.5's body is a byte
            sequence and the host now hands one over (core/fetch/fetch.h), and HTML §13.2.3.2 "Determining the
            character encoding" runs on it in nav_create_begin — the BOM sniff, then the transport layer's

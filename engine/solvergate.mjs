@@ -318,7 +318,8 @@ async function child(docPath, schedName) {
     const str = (f, ...a) => String(M.ccall(f, "string", a.map(() => "number"), a.map(cs)) ?? "");
     /* §2.2.5's BODY, INTO THE INSTANCE'S LINEAR MEMORY — beside the record's JSON, never inside it. JSON
        cannot say a byte sequence, and each way of making it able to is an algorithm run by the zone that
-       FETCHED: that is what Fetch §5.2's `text()` was doing in safe-fetch.js, and it is why HTML §8.1.4.2's
+       FETCHED: that is what Fetch §5.3 "Body mixin"'s `text()` was doing in safe-fetch.js (§5.2 stood here and
+       is "BodyInit unions", which EXTRACTS a body rather than consuming one), and it is why HTML §8.1.4.2's
        classic-script decode had never once seen the bytes whose charset it exists to honour. The mock body is
        written as source text here, so this is an ENCODE. */
     /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers

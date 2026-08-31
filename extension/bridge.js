@@ -3317,7 +3317,8 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      does. A bare string could not say `null` for a network error without it being the four characters "null",
      and could not carry the URL list, the status or the headers at all. Its BODY crosses as BYTES beside it,
      because JSON can say none of the 256 values a byte has without first running an algorithm over them, and
-     the algorithm this zone used to run (Fetch §5.2's `text()`, a UTF-8 decode) destroyed exactly the evidence
+     the algorithm this zone used to run (Fetch §5.3 "Body mixin"'s `text()`, a UTF-8 decode — §5.2 stood here
+     and is "BodyInit unions", the EXTRACT that runs the other way) destroyed exactly the evidence
      HTML §8.1.4.2's classic-script decode exists to read. */
   /* THERE IS ONE OWED LIST AND IT CARRIES ITS OWN CLASS. This loop used to read a SECOND list beside it —
      `GetChunks`, the module loader's register of specifiers — to decide which replies were CODE, and the

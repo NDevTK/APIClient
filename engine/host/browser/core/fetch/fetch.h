@@ -121,7 +121,9 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
  * on this record, at every producer, and that is not a representation choice — it is a DECODE, run by whoever
  * built the record, before any standard's own decode could run:
  *
- *   • the extension's trusted zone ran Fetch §5.4's `text()` — "run consume body with this and UTF-8 decode" —
+ *   • the extension's trusted zone ran Fetch §5.3 "Body mixin"'s `text()`, whose steps are "to return the
+ *     result of running consume body with this and UTF-8 decode" (§5.4 stood here and is "Request class",
+ *     which INCLUDES the mixin rather than defining it, so the number named a caller for a definition),
  *     so a script served `charset=windows-1252` arrived already mangled and HTML §8.1.4.2's classic decode
  *     (core/loader/script_fetch.h), whose whole job is to honour that label, was handed the wrong bytes;
  *   • `fetch_reply_new` ran `JS_NewStringLen`, which is quickjs's own UTF-8 decode, so EVERY C host destroyed

@@ -17,7 +17,9 @@ void form_data_free(JSContext *ctx);
    without going through the interface's own members. The list is COPIED. */
 JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries);
 
-/* Fetch §5.2's `multipart/form-data` PARSER, which `.formData()` runs when the Content-Type says so. Returns
+/* Fetch §5.3 "Body mixin"'s `multipart/form-data` PARSER, which `.formData()` runs when the Content-Type says
+   so — the parse is §5.3's own `formData()` method steps, delegating the grammar to RFC 7578. (§5.2 "BodyInit
+   unions" stood here and names multipart only as the ENCODING an extract runs, the inverse of this.) Returns
    the FormData, or JS_EXCEPTION with the TypeError the spec's FAILURE makes the promise reject with. It builds
    the object rather than filling a list because a part with a `filename` is a FILE entry, and a File is a
    JSValue only this component can put in an entry. The boundary is the Content-Type's own parameter and is the
@@ -25,7 +27,8 @@ JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries);
 JSValue form_data_parse_multipart(JSContext *ctx, const char *body, size_t len,
                                   const char *boundary, size_t blen);
 
-/* IS THIS A FormData — the brand test Fetch §5.1's BodyInit union performs. */
+/* IS THIS A FormData — the brand test Fetch §5.2 "BodyInit unions" performs, FormData being one arm of
+   `XMLHttpRequestBodyInit`. (§5.1 stood here and is "Headers class", which declares no union.) */
 bool form_data_is(JSValueConst v);
 /* The CLASS a `FormData`-typed Web IDL position brands against — §4.10.22.1's `required FormData formData`
    member is the first, and the brand is part of the TYPE rather than something a body re-tests. */

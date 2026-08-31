@@ -174,7 +174,13 @@ JSValue form_data_clone(JSContext *ctx, JSValueConst src)
     return obj;
 }
 
-/* ---- Fetch §5.2's multipart/form-data parser --------------------------------------------------------------
+/* ---- Fetch §5.3 "Body mixin"'s multipart/form-data parser -------------------------------------------------
+ *
+ * The parse is §5.3's `formData()` method steps, whose "multipart/form-data" arm says to "parse bytes, using
+ * the value of the `boundary` parameter from mimeType, per the rules set forth in Returning Values from Forms:
+ * multipart/form-data" — so the SHAPE is RFC 7578's and the OBLIGATION to run it is §5.3's. (§5.2 "BodyInit
+ * unions" stood on this heading; the only multipart it names is the ENCODING algorithm the FormData arm of an
+ * extract runs, which is this parser's inverse and lives in HTML, so the number named the opposite direction.)
  *
  * The shape is fixed by the spec and by RFC 7578: `--boundary CRLF` then the part's headers, then `CRLF CRLF`,
  * then its body, then `CRLF --boundary`, and the last part's boundary carries a trailing `--`. Every

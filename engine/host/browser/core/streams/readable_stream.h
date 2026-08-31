@@ -16,18 +16,24 @@ void readable_stream_free(JSContext *ctx);
    what "a byte sequence" means when there is nothing left to arrive. */
 JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len);
 
-/* §4.2's `disturbed` flag, which Fetch §5.2 defines `bodyUsed` over: a body is used when its stream has been
-   READ FROM, not when the stream was merely handed out. Returns false for a value that is not a stream. */
+/* §4.2's `disturbed` flag, which Fetch §5.3 "Body mixin" defines `bodyUsed` over — "the bodyUsed getter steps
+   are to return true if this's body is non-null and this's body's stream is disturbed": a body is used when its
+   stream has been READ FROM, not when the stream was merely handed out. (§5.2 stood here and is "BodyInit
+   unions", which EXTRACTS a body; nothing in it is about a body already consumed.) Returns false for a value
+   that is not a stream. */
 bool readable_stream_disturbed(JSValueConst v);
 
-/* IS THIS A ReadableStream? Fetch §5.1's BodyInit union names one as an arm, and a union's arms are brand
-   tests — `new Response(stream)` took the USVString arm and stringified to "[object ReadableStream]" while
-   this was missing, which is the same bug the Blob arm had before it existed. */
+/* IS THIS A ReadableStream? Fetch §5.2 "BodyInit unions" names one as an arm — `BodyInit`'s FIRST arm — and a
+   union's arms are brand tests. `new Response(stream)` took the USVString arm and stringified to "[object
+   ReadableStream]" while this was missing, which is the same bug the Blob arm had before it existed. (§5.1
+   stood here and is "Headers class", which declares no union at all.) */
 bool readable_stream_is(JSValueConst v);
 
-/* THE OPERATIONS A HOST PERFORMS ON A STREAM, as the function objects this component installed. Fetch §5.2's
-   "fully read" acquires a reader and reads to the end, and it performs the ABSTRACT operations — a page that
-   rebinds ReadableStreamDefaultReader.prototype.read must not thereby change what `response.text()` does.
+/* THE OPERATIONS A HOST PERFORMS ON A STREAM, as the function objects this component installed. Fetch §2.2.4
+   "Bodies"'s "fully read" acquires a reader and reads to the end, and it performs the ABSTRACT operations — a
+   page that rebinds ReadableStreamDefaultReader.prototype.read must not thereby change what `response.text()`
+   does. (§5.2 stood here and is "BodyInit unions"; "fully read a body" is defined in §2.2.4 beside "clone a
+   body", and §5.3's "consume body" is the caller that reaches it, not the definition site.)
    BORROWED; the caller calls them as it would any function, which is what keeps them suspendable. */
 typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL,
                /* §4.2's `tee`, which is how Fetch §2.2.4 "Bodies"'s "clone a body" is DEFINED — the body's stream is
