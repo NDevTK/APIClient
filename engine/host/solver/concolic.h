@@ -293,7 +293,9 @@ void        concolic_declare_source(const char *component, const char *src, cons
  * and SUPPRESSES the finding. The forgeable half needs nothing here, and that is the point of splitting them:
  * a prefix or substring predicate PINS NOTHING (concolic_cmp answers OPCMP_NONE for it), so it never reaches
  * this rule and the search proceeds — which is the correct verdict for it and is reached by the pin's own
- * semantics rather than by a second test that would have to enumerate the string builtins.
+ * semantics rather than by a second test that would have to enumerate the string builtins. What the forgeable
+ * half DOES state is its DOMAIN, and that is concolic_strpred_file below, which reaches it without enumerating
+ * one either — the sentence above is about the PRINCIPAL rule and never about the report.
  *
  * IT IS A PROPERTY OF THE SOURCE AND NOT OF THE SINK, which is why it is declared beside the delivery and not
  * asked at the emission: the same fact decides every finding rooted there, and a consumer that re-derived it
@@ -505,6 +507,104 @@ int         concolic_bound_read(const char *hole, ConcolicBound *out);
    absent (see concolic_rel_hook for the two ways that happens and why each is the honest answer).
    All four are ONE observation, written together at the mint and asserted together here. */
 RelOp       concolic_rel(JSValueConst v, const char **ptok, double *pnum, const char **psubj);
+
+/* THE THIRD PREDICATE CLASS — A METHOD CALL OVER AN UNKNOWN WHOSE RESULT A BRANCH TESTS, AND THE HEADLINE
+ * SHAPE §@H NAMES (`{startsWith:/api}`).
+ *
+ * An equality determines a VALUE on one arm; an ordering determines a BOUND on both; a call determines
+ * NEITHER and still narrows — `if (!path.startsWith("/api")) return;` proves, of the arm that reaches the
+ * request, that the page's own `startsWith("/api")` answered true of it, and proves the negation of exactly
+ * that on the sibling. Both are facts the run OBSERVED, in the same sense a pin is: the method name is the
+ * atom the page read, the arguments are the literals the page passed, and the arm is the arm this flow took.
+ * §@H's line is whether a VALUE was determined, never whether a constraint was, so nothing here is invented
+ * and nothing is a member of anything.
+ *
+ * IT ENUMERATES NO BUILTIN, WHICH IS WHAT KEEPS IT ON THE RIGHT SIDE OF §RUN-DON'T-MATCH. The record does not
+ * ask what `startsWith` MEANS and no consumer of it re-implements one: what is carried is the page's own
+ * predicate, spelled, plus the answer the run got. A test that had to recognise the string builtins is what
+ * the principal rule at the top of this header declines to build, for the same reason, and this is the other
+ * half of that sentence — the forgeable half needs no recogniser HERE either.
+ *
+ * IT DOES NOT TRAVEL THROUGH A DERIVATION, exactly as concolic_exclude and concolic_bound do not, and here
+ * that is the whole distance between this and the recorded transform-expression §Re-execution forbids.
+ * `x.slice(1).startsWith("/api")` is a fact about `x.slice(1)` — a different hole with a different key — and
+ * carrying it up onto `x` would be an INVERSION of `slice`, which is the banned thing under its own name.
+ * Nothing composes, nothing is inverted, nothing derives a value: one predicate is observed, filed under the
+ * receiver it was called on, and read once at the emission.
+ *
+ * A PINNED RECEIVER NEVER REACHES HERE, which is CONCRETIZE-ON-PIN doing its own work rather than a case this
+ * has to handle: concolic_exotic_get answers a pinned source with the real bytes, so `x.startsWith("/api")`
+ * on a pinned `x` runs the REAL §22.1.3.23 builtin over a real String and the branch does not fork at all.
+ *
+ * RESIDUAL — `if (!x.startsWith("/api"))` RECORDS NOTHING, AND THE LOSS IS NOT IN THIS MECHANISM. It is the
+ * shape a real bundle writes most often, so it is stated here rather than left to be rediscovered, and it is
+ * a residual rather than an assert because everything on this side is CORRECT for what reaches it — the crash
+ * would fire on a branch this file never sees.
+ *   WHAT IS NOT COVERED: a branch whose condition is the LOGICAL NEGATION of a concolic. `!` compiles to
+ *   OP_lnot, whose interpreter body takes JS_ToBoolFree of its operand, and JS_ToBoolFree answers `true` for
+ *   every JS_TAG_OBJECT — a concolic is one — so `!unknown` is the concrete `false` before OP_if_false runs
+ *   and solver_decide is never asked. It is NOT specific to a call predicate: `if (!(x === "a"))` and
+ *   `if (!(x > 5))` lose their forks identically, so `excludes` and `bounds` have the same hole. `&&` and `||`
+ *   are unaffected — the compiler branches on the operand itself (OP_if_false / OP_if_true) with no OP_lnot
+ *   between — which is why a conjunction of gates records both of them.
+ *   WHAT THE NEXT DIFF BUILDS: a `lnot` entry on quickjs.h's JSConcolicHooks (the struct declares add, cmp,
+ *   is, absent, present, publish, rel, type_of, arith, to_str and key_read, and no negation among them),
+ *   consulted at OP_lnot, plus its host half here — which mints a predicate carrying the operand's own
+ *   observation NEGATED (an equality's OPCMP_EQ/NE swapped, an ordering's relation through rel_op_negate, a
+ *   call predicate's `holds` flipped), so decide.c files the same three facts off the same three readers with
+ *   no new case. What it must also settle, and what makes it a diff of its own rather than a line: the
+ *   negation's constraint KEY. Composing a fresh `("!", operand)` identity makes `if (p)` and `if (!p)` two
+ *   entries, so one flow testing both forks twice over one predicate — sound, since it only over-explores,
+ *   and a real loss of the feasible-refinement this file exists to keep.
+ *   HOW ITS ABSENCE WOULD SHOW: in testing/fixtures/h_predicates.html's own terms — write a case
+ *   `if (!f.x.startsWith("/api")) fetch("/x1?page=" + f.x); else fetch("/x2?page=" + f.x);` and exactly ONE
+ *   request is emitted (`/x2`, the else arm, taken concretely), carrying no `predicates` key, while the
+ *   `if`/`else` spelling of the identical gate two lines above emits BOTH with `holds:true` and
+ *   `holds:false`. One gate, two spellings, two requests versus one. */
+typedef struct {
+    const char *method;         /* the property NAME the page read off the unknown — an atom, never a guess */
+    const char *const *args;    /* every argument, each as the page's own §7.1.19 ToString of it */
+    int nargs;                  /* …and how many; 0 is a real answer (`x.trim()` tested as a condition) */
+    const char *subject;        /* the HOLE KEY of the RECEIVER — what the emission looks a domain up by */
+} ConcolicCallPred;
+/* What a CALL RESULT records about the predicate it IS — the twin of concolic_rel, read at the branch.
+   Returns 1 and fills `*out` when this value is a call over an unknown whose method, receiver-hole and EVERY
+   argument this engine could spell; 0 with `*out` cleared otherwise, which is a POSITIVE statement: an
+   argument that is a plain object or a function has no spelling, so the predicate is unnameable and the
+   branch forks with no domain rather than filing a claim missing one of its operands. All of it is ONE
+   observation, written together at the mint and asserted together there. Borrowed from the value. */
+int         concolic_strpred(JSValueConst v, ConcolicCallPred *out);
+/* ONE SUCH PREDICATE, AS THE FLOW'S CONSTRAINT HOLDS IT. `holds` is the arm — 1 where the page's own call
+   answered true on this path, 0 where it answered false — and the false one is not an absence but the half
+   forced multi-path produces at exactly the same rate as the true one. */
+typedef struct { char *method; char **args; int nargs; signed char holds; } ConcolicPred;
+/* IS `p` THE SAME OBSERVATION AS (method, args, holds)? Method, arm and EVERY argument — `x.startsWith("/api")`
+   beside `x.startsWith("/admin")` is two gates and not one repeat, and the true and false arms of one gate are
+   two facts and not one. ONE SPELLER, because it is asked at both ends of the pipeline and they would
+   otherwise be free to disagree about which two predicates are one: this file dedups a repeat WITHIN a flow,
+   endpoint.c intersects sets ACROSS sightings, and an intersection using a stricter rule than the dedup drops
+   from the record a claim every observed path obeyed. */
+int         concolic_pred_same(const ConcolicPred *p, const char *method, const char *const *args, int nargs,
+                               int holds);
+/* WHAT ONE ROW OWNS, COPIED AND RELEASED BY ONE PAIR OF LINES EACH. Three holders keep a set of these — the
+   flow's constraint head, its copy-up from an inherited segment, and endpoint.c's per-request row and merged
+   param — so a field added to the struct creates an obligation at every one of them, and the only way to make
+   that impossible to miss is for there to be nowhere else it could be written. `concolic_pred_copy` deep-copies
+   INTO an uninitialised `*dst`; `concolic_pred_release` frees what a row holds and leaves the row itself to
+   whoever owns the array it sits in — which is what a mid-array `free()` would get wrong. */
+void        concolic_pred_copy(ConcolicPred *dst, const ConcolicPred *src);
+void        concolic_pred_release(ConcolicPred *p);
+/* FILE ONE — the twin of concolic_bound, keyed by the HOLE KEY for concolic_cmp_subject's reason. Within one
+   flow the observations CONJOIN and accumulate (`x.startsWith("/api") && !x.includes("..")` is two facts
+   about one parameter, and a record holding one of them is a wrong report by this header's own rule); an
+   exact repeat is idempotent. Across sightings of one endpoint the merge is the OPPOSITE and lives in
+   endpoint.c, for the reason stated there. */
+void        concolic_strpred_file(const char *hole, const char *method, const char *const *args, int nargs,
+                                  int holds);
+/* WHAT THIS FLOW'S OWN CALLS PROVED ABOUT `hole` — borrowed, valid until the running flow's constraint next
+   grows, `*n` 0 with a NULL return when the flow proved nothing. That zero is a POSITIVE statement (no call
+   over this value was branched on along the path that built this request), never a hole a caller may fill. */
+const ConcolicPred *concolic_strpred_read(const char *hole, int *n);
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
    branch records its outcome under `key` — which decide.c composes from the IDENTITY of the value the branch

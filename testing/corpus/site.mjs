@@ -94,13 +94,19 @@ const PROBE = `(() => ({
      forever, and the reading is a property of the container rather than of the engine. The exclusions and
      bounds a branch narrowed live one map over, under the learned discovery doc, per parameter.
      ABSENT AND ZERO ARE KEPT APART, which is the whole point of the column: \`null\` means the probe could
-     not reach a \`parameters\` object at all, and {params:N, withExcl:0, withBnd:0} means it reached them
-     and none carried a domain. Collapsing those two is the defect this column exists to detect, performed
-     inside the instrument built to detect it. Every level of the walk is optional in the producer, so each
-     is tested rather than chained — a naive \`?.\` chain yields null for a shape that is present-but-empty
-     and cannot tell the two readings apart either. */
+     not reach a \`parameters\` object at all, and {params:N, withExcl:0, withBnd:0, withPred:0} means it
+     reached them and none carried a domain. Collapsing those two is the defect this column exists to detect,
+     performed inside the instrument built to detect it. Every level of the walk is optional in the producer,
+     so each is tested rather than chained — a naive \`?.\` chain yields null for a shape that is
+     present-but-empty and cannot tell the two readings apart either.
+     THERE ARE THREE DOMAIN COLUMNS BECAUSE THERE ARE THREE WAYS A GATE NARROWS ONE, and they must be counted
+     apart or a page whose only gates are prefix checks reads as a page with no gates. An equality determines
+     a value and fills \`withExcl\`; an ordering determines an interval and fills \`withBnd\`; a METHOD CALL
+     determines neither and fills \`withPred\` — CLAUDE.md §@H's own headline shape (\`{startsWith:/api}\`).
+     Summing them would hide exactly the case each column exists to find, which is a page gated only by the
+     third. */
   domains: (() => {
-    let params = 0, withExcl = 0, withBnd = 0, reached = false;
+    let params = 0, withExcl = 0, withBnd = 0, withPred = 0, reached = false;
     for (const svc of globalStore.discoveryDocs.values()) {
       const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
                    && svc.doc.resources.learned.methods;
@@ -112,10 +118,11 @@ const PROBE = `(() => ({
           params++;
           if (p && Array.isArray(p._excludedValues) && p._excludedValues.length) withExcl++;
           if (p && p._bounds && Object.keys(p._bounds).length) withBnd++;
+          if (p && Array.isArray(p._predicates) && p._predicates.length) withPred++;
         }
       }
     }
-    return reached ? { params, withExcl, withBnd } : null;
+    return reached ? { params, withExcl, withBnd, withPred } : null;
   })(),
 }))()`;
 
@@ -309,8 +316,9 @@ const row = {
   distinctEndpoints: new Set(mine.flatMap(d => d.sites)).size,
   pageErrors: [...new Set(mine.flatMap(d => d.errs))].slice(0, 40),
   globalEndpoints: (cur.global || []).length,
-  /* `null` = the probe reached no `parameters` object; {params,withExcl,withBnd} = it did. NOT defaulted to
-     an empty object: absence and zero are different facts here and the column exists to keep them apart. */
+  /* `null` = the probe reached no `parameters` object; {params,withExcl,withBnd,withPred} = it did. NOT
+     defaulted to an empty object: absence and zero are different facts here and the column exists to keep
+     them apart. */
   domains: cur.domains === undefined ? null : cur.domains,
   /* THE ENGINE'S OWN RECORD FIRST, THE CONSOLE ONLY AS A SUPPLEMENT. A console scrape is the wrong surface by
      construction -- the renderer does not tee its stdout -- so a run whose abort reached the result document

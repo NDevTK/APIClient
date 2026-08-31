@@ -263,6 +263,26 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
                    matching endpoint.c's own omission rule. */
                 ...(Array.isArray(pDef._excludedValues) && pDef._excludedValues.length
                     ? { not: { enum: pDef._excludedValues.slice() } } : {}),
+                /* AND THE CALL GATES, AS AN ANNOTATION AND DELIBERATELY NOT AS AN ASSERTION — the same
+                   `x-observed-range` shape above, reached for the opposite reason. That one is annotated
+                   because writing it as a keyword would assert MORE than the run observed; this one because
+                   the only keyword that could carry it asserts something the run cannot state at all.
+                   JSON Schema Validation 2020-12 §6.3.3 "pattern" is that keyword — "The value of this
+                   keyword MUST be a string. This string SHOULD be a valid regular expression, according to
+                   the ECMA-262 regular expression dialect. A string instance is considered valid if the
+                   regular expression matches the instance successfully. Recall: regular expressions are not
+                   implicitly anchored." — and turning `startsWith("/api")` into `^/api` would mean DECIDING
+                   WHAT THE METHOD MEANS, per method, which is the recogniser CLAUDE.md §RUN-DON'T-MATCH
+                   forbids and which the engine refused to build for that reason. It could not carry
+                   `holds:false` under any spelling short of `not`, and the quoted sentence about anchoring
+                   plus a page literal holding regex metacharacters is a third way to be quietly wrong.
+                   So the transcript is exported as a transcript: method, arguments, and the arm each answered.
+                   A validator ignores it, a reviewer reads it, and nothing here claims a semantics.
+                   Emitted only where the claim survived every observed path — lib/learn.js writes `[]` where
+                   another path disproved it, which is why this is a length test and not a `||`. */
+                ...(Array.isArray(pDef._predicates) && pDef._predicates.length
+                    ? { "x-observed-predicates": pDef._predicates.map(
+                          (q) => ({ method: q.method, arguments: q.arguments.slice(), holds: q.holds })) } : {}),
               };
               /* NO DEFAULT. `endpoint.c` emits a `location` per param and `learn.js` writes it onto every
                  parameters entry, so an absent one means a record older than that producer — a stale IDB

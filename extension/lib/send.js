@@ -186,6 +186,13 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                sample. Written like `_exampleValue` rather than with a `||`, because lib/learn.js writes
                `null` to mean a claim that was DISPROVED and `undefined` to mean nothing was ever observed. */
             _bounds: fdDocRecord(pd._bounds),
+            /* …AND THE THIRD OF THE THREE — the METHOD-CALL gates the bundle's own code ran on this value and
+               the arm each answered. An equality gives `_excludedValues`, an ordering `_bounds`, and a call
+               neither, so a projection carrying the first two and not this one leaves a parameter gated only
+               by `startsWith("/api")` rendering exactly like one nothing had ever tested. Written like
+               `_excludedValues` rather than with a `||` for the reason stated there: `[]` is a claim another
+               path DISPROVED and must not arrive as "nothing was observed". */
+            _predicates: fdDocList(pd._predicates),
             /* NO `_sourceMapName` AND NO `_astValueSource`. The first promised a declared name recovered
                from the page's source map (minified `e` shown as `owner`); nothing in engine/host has ever
                emitted one and lib/learn.js's copy of it read a field the engine's param record does not
@@ -298,8 +305,8 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
       /* AND IT DECLARES THE WHOLE RECORD, NOT THE FIVE FIELDS IT HAS AN INTERESTING ANSWER FOR. This literal
          and the discovery-doc literal above are the map's TWO producers, and they were writing two different
          shapes: everything the doc-derived branch says about a parameter's domain — `enum`, `format`,
-         `_range`, `_bounds`, `_excludedValues`, the three confidences, the example and its source — was
-         simply absent here. The consumers papered over the disagreement rather than reporting it
+         `_range`, `_bounds`, `_excludedValues`, `_predicates`, the three confidences, the example and its
+         source — was simply absent here. The consumers papered over the disagreement rather than reporting it
          (`param.enum || null`, `param._range || null`, `param._defaultValue ?? null` in lib/popup-form.js),
          which is the §Architecture defect exactly: a default is what stops a producer's silence being a
          crash, and here the silence was STRUCTURAL — one of the two producers had never written the field
@@ -319,7 +326,8 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                                _requiredConfidence: null, _detectedEnum: false,
                                _defaultValue: null, _defaultConfidence: null, _range: null,
                                _exampleValue: null, _exampleValueSource: null,
-                               _excludedValues: null, _bounds: null, _astValidValues: null };
+                               _excludedValues: null, _bounds: null, _predicates: null,
+                               _astValidValues: null };
       DCHECK(cur && typeof cur === "object",
              "the resolved schema declares `" + pp.name + "` as something that is not a parameter record — " +
              "resolveEndpointSchema builds this map out of parameter declarations, so a non-object here is " +

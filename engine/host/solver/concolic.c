@@ -74,7 +74,53 @@ typedef struct {
     char *rel_tok;      /* the concrete side SPELLED — the page's own §6.1.6.1.20 Number::toString */
     double rel_num;     /* …and its value, which is what a merge orders two bounds by */
     char *rel_subj;     /* …and the HOLE KEY of the unknown side. All four written and asserted together. */
+    /* THE PROPERTY NAME THIS VALUE WAS READ UNDER — written by concolic_exotic_get and by nothing else, so it
+       is present exactly on a MEMBER READ of an unknown and NULL on every other derivation. It exists because
+       the call handler below needs to name the method the page invoked, and the only honest source for that
+       is the ATOM the read went through: recovering it from the display shape would be a parse of a string
+       this file composed for a human, and a `.` in a property name would decide it wrong. */
+    char *member;
+    /* …AND THE CALL PREDICATE'S OWN FOUR FIELDS — the third class, for the reason the ordering's three are not
+       the equality's. A call determines neither a value nor an interval and still narrows, so it can share
+       neither group without answering a question it was not asked. All four are written together at
+       pred_set_strpred and read together by concolic_strpred; `sp_meth` is the presence test, exactly as
+       `rel_op != REL_NONE` is the ordering's. */
+    char *sp_meth;      /* the method the page called on the unknown — c->member of the CALLEE */
+    char **sp_args;     /* every argument SPELLED, all of them or (when one is unspellable) none at all */
+    int   sp_nargs;
+    char *sp_subj;      /* …and the HOLE KEY of the RECEIVER, which is what the emission looks a domain up by */
 } Concolic;
+
+/* ONE DISPOSER FOR ONE SPELLED ARGUMENT LIST, because two records hold one — the value's `sp_args` and the
+   constraint's ConcolicPred — and a list freed at one site only is a leak the runtime's own GC walk cannot
+   see, since these are C strings and not GC objects. */
+static void strpred_args_free(char **args, int n) {
+    int i;
+    for (i = 0; i < n; i++) free(args[i]);
+    free(args);
+}
+
+void concolic_pred_copy(ConcolicPred *dst, const ConcolicPred *src) {
+    int k;
+    dst->method = strdup(src->method);
+    CHECK(dst->method, "concolic: OOM copying the method a flow's own gate called");
+    dst->nargs = src->nargs;
+    dst->holds = src->holds;
+    dst->args = NULL;
+    if (!src->nargs) return;
+    dst->args = malloc((size_t)src->nargs * sizeof(char *));
+    CHECK(dst->args, "concolic: OOM copying a gate's argument list");
+    for (k = 0; k < src->nargs; k++) {
+        dst->args[k] = strdup(src->args[k]);
+        CHECK(dst->args[k], "concolic: OOM copying an argument a flow's own gate passed");
+    }
+}
+
+void concolic_pred_release(ConcolicPred *p) {
+    free(p->method);
+    strpred_args_free(p->args, p->nargs);
+    p->method = NULL; p->args = NULL; p->nargs = 0;
+}
 
 /* ── THE ONE ENCODING ───────────────────────────────────────────────────────────────────────────────────────
  * Every identity this file composes and every constraint key decide.c builds is a TAG plus a sequence of
@@ -265,6 +311,12 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
               at the same rate; without this the second of the two flows knew nothing it could report about
               its own parameter. It is keyed by the HOLE KEY rather than by a source's `src` — the two differ
               for every derived value (see concolic_hole_key) and the emission has only the hole.
+     pred  — the CALL PREDICATES this flow branched on over this HOLE, each as the page's own method name, the
+              arguments it passed and the ARM this flow took. It is the third of the three ways a gate narrows
+              a domain and shares a record with neither of the others for the reason they do not share one
+              with each other: an equality determines a value, an ordering an interval, and a call neither.
+              Within one flow they CONJOIN and accumulate, like the interval's two sides and unlike anything
+              across flows, and an exact repeat adds nothing.
      bnd   — the INTERVAL an ordering gate over this HOLE narrowed it to, which is the exclusion's twin over an
               ORDERED domain and the second-most-frequent gate class in real minified bundles. It is a pointer
               rather than six inline fields because an entry either holds a domain over an ordered value or it
@@ -276,7 +328,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
               (max for the lower, min for the upper) as the flow observes more gates, and a tie between an
               inclusive and an exclusive bound at the same number keeps the EXCLUSIVE one, which is the
               tighter fact.
-   All five are per-flow and travel together, which is why they are ONE entry rather than five maps that a
+   All six are per-flow and travel together, which is why they are ONE entry rather than six maps that a
    fork, a suspend and a resume would each have to remember to carry. */
 /* One side of an interval, and the SPELLING beside the number. The number is what a merge orders two bounds
    by; the text is the page's own §6.1.6.1.20 Number::toString of the literal it wrote, kept so nothing
@@ -284,6 +336,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
 typedef struct { double num; char *txt; signed char present; signed char inclusive; } BoundSide;
 typedef struct { BoundSide lo, hi; } Bound;
 typedef struct { char *key; char *val; char **excl; int nexcl; Bound *bnd;
+                 ConcolicPred *pred; int npred;
                  signed char truth; signed char pinned_root; signed char ex_contra; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
@@ -310,6 +363,8 @@ static void cons_entry_free(Cons *e) {
     for (i = 0; i < e->nexcl; i++) free(e->excl[i]);
     free(e->excl);
     if (e->bnd) { bound_side_free(&e->bnd->lo); bound_side_free(&e->bnd->hi); free(e->bnd); }
+    for (i = 0; i < e->npred; i++) concolic_pred_release(&e->pred[i]);
+    free(e->pred);
 }
 /* …and one measurement, for the same reason: the freeze's byte census reads exactly the fields the free above
    disposes of, so a field that grows the entry is counted where it is counted for every other. */
@@ -322,6 +377,13 @@ static long cons_entry_bytes(const Cons *e) {
         n += (long)sizeof(Bound);
         if (e->bnd->lo.txt) n += (long)strlen(e->bnd->lo.txt) + 1;
         if (e->bnd->hi.txt) n += (long)strlen(e->bnd->hi.txt) + 1;
+    }
+    n += (long)e->npred * (long)sizeof(ConcolicPred);
+    for (i = 0; i < e->npred; i++) {
+        int k;
+        n += (long)strlen(e->pred[i].method) + 1;
+        n += (long)e->pred[i].nargs * (long)sizeof(char *);
+        for (k = 0; k < e->pred[i].nargs; k++) n += (long)strlen(e->pred[i].args[k]) + 1;
     }
     return n;
 }
@@ -462,6 +524,20 @@ static Cons *cons_entry(const char *key) {
         bound_side_copy(&nb->lo, &below->bnd->lo);
         bound_side_copy(&nb->hi, &below->bnd->hi);
         g_pins[g_pins_n].bnd = nb;
+    }
+    /* …AND THE CALL PREDICATES, for exactly the reason the two above copy up. A flow that observed
+       `path.startsWith("/api")`, was preempted, and resumed to build its request would otherwise report a
+       parameter nothing had ever tested — the fact lost to a context switch rather than to anything the
+       program did, which is the defect this whole entry is a list of. */
+    g_pins[g_pins_n].pred = NULL;
+    g_pins[g_pins_n].npred = 0;
+    if (below && below->npred) {
+        int k;
+        g_pins[g_pins_n].pred = malloc((size_t)below->npred * sizeof(ConcolicPred));
+        CHECK(g_pins[g_pins_n].pred, "concolic: OOM copying an inherited call-predicate set");
+        for (k = 0; k < below->npred; k++)
+            concolic_pred_copy(&g_pins[g_pins_n].pred[k], &below->pred[k]);
+        g_pins[g_pins_n].npred = below->npred;
     }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
     /* INHERITED WITH THE REST OF THE ENTRY. A principal demand this flow made before its last freeze is still
@@ -665,6 +741,84 @@ int concolic_bound_read(const char *hole, ConcolicBound *out) {
     return 1;
 }
 
+/* THE CONSTRAINT KEY A CALL-PREDICATE SET LIVES UNDER — its OWN tag, for the reason bnd_key states of its
+   own: `≠ "admin"`, `> 5` and `startsWith("/api")` are three claims about one hole, and filing any two of
+   them together would make a consumer that reads one see another's shape. Caller frees. */
+static char *strp_key(const char *hole) {
+    const char *f[1];
+    f[0] = hole;
+    return concolic_ident_compose("strpred", f, 1);
+}
+
+int concolic_pred_same(const ConcolicPred *p, const char *method, const char *const *args, int nargs,
+                       int holds) {
+    int i;
+    if (p->holds != (signed char)(holds ? 1 : 0) || p->nargs != nargs || strcmp(p->method, method)) return 0;
+    for (i = 0; i < nargs; i++) if (strcmp(p->args[i], args[i])) return 0;
+    return 1;
+}
+
+void concolic_strpred_file(const char *hole, const char *method, const char *const *args, int nargs,
+                           int holds) {
+    Cons *c;
+    ConcolicPred *a;
+    char *key;
+    int i;
+
+    DCHECK(hole && *hole,
+           "a call predicate was recorded against no HOLE — the receiver is what the emission looks the "
+           "domain up by, so a nameless one is a constraint stored where nothing can read it and a parameter "
+           "that renders as untested while this flow has proved otherwise");
+    DCHECK(method && *method,
+           "a call predicate was recorded with no METHOD — the name is the whole of what the page's own test "
+           "WAS, and a domain that cannot say which predicate held is a claim nobody made");
+    DCHECK(nargs == 0 || args != NULL,
+           "a call predicate was recorded with an argument COUNT and no arguments — the two are written by "
+           "one line at the mint, so a count without a list is an argument this run cannot spell arriving "
+           "as one it can");
+    DCHECK(holds == 0 || holds == 1,
+           "a call predicate was recorded for an arm that is neither taken nor not-taken — the arm IS the "
+           "fact here (a page's own test answered true, or it answered false), so a third value is a "
+           "decision seam that answered something else");
+    key = strp_key(hole);
+    CHECK(key, "concolic: the call-predicate key could not be composed — a hole is a real string, so the only "
+               "way this fails is allocation, and a lost constraint reports an untested parameter");
+    c = cons_entry(key);
+    free(key);
+    for (i = 0; i < c->npred; i++)
+        if (concolic_pred_same(&c->pred[i], method, args, nargs, holds)) return;  /* the same gate, again */
+    a = realloc(c->pred, (size_t)(c->npred + 1) * sizeof(ConcolicPred));
+    CHECK(a, "concolic: OOM recording a predicate this flow's own run proved of its input");
+    c->pred = a;
+    {   /* THE ONE DEEP COPY, asked of the same pair every other holder asks — see concolic_pred_copy. The
+           borrowed row is assembled on the stack first so the copy has exactly one shape to take, which is
+           what keeps a field added to ConcolicPred from having a fourth place it could be forgotten. */
+        ConcolicPred in;
+        in.method = (char *)method;
+        in.args = (char **)args;
+        in.nargs = nargs;
+        in.holds = (signed char)(holds ? 1 : 0);
+        concolic_pred_copy(&c->pred[c->npred], &in);
+    }
+    c->npred++;
+}
+
+const ConcolicPred *concolic_strpred_read(const char *hole, int *n) {
+    const Cons *c = NULL;
+
+    DCHECK(n != NULL, "the call-predicate set was asked for with nowhere to put its SIZE — a borrowed array "
+                      "with no count is an array the caller has to guess the end of");
+    if (hole) {
+        char *key = strp_key(hole);
+        CHECK(key, "concolic: the call-predicate key could not be composed at the read");
+        c = cons_lookup(key);
+        free(key);
+    }
+    if (!c || !c->npred) { *n = 0; return NULL; }
+    *n = c->npred;
+    return c->pred;
+}
+
 void concolic_constrain_branch(const char *key, int truth) {
     cons_entry(key)->truth = (signed char)(truth ? 1 : 0);
 }
@@ -816,6 +970,10 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->cmp_subj_ident);
     free(c->rel_tok);
     free(c->rel_subj);
+    free(c->member);
+    free(c->sp_meth);
+    strpred_args_free(c->sp_args, c->sp_nargs);
+    free(c->sp_subj);
     JS_FreeValueRT(rt, c->example);
     free(c);
 }
@@ -1422,6 +1580,28 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        identity at all — but it is not a datum that arrives by a different route: whatever carried the object's
        bytes in carried this field's, and a report has to say so. */
     r = concolic_alloc(ctx, shape, shape, c->root, ident, example_member(ctx, c->example, atom));
+    /* THE NAME THIS READ WENT THROUGH, KEPT ON THE VALUE — the one honest source for the method name the call
+       handler below reports, and the reason it is stamped here rather than parsed out of the shape: a page may
+       name a property anything at all, `.` included, so recovering it from `{x}.a.b` would answer `b` for a
+       property literally called `a.b`. The atom cannot be wrong about itself.
+       IT IS RE-ASKED RATHER THAN REUSED because `field` was already given back above — the mint is what may
+       fail and the free follows it, so this asks the atom again for the four bytes it costs instead of moving
+       a lifetime. A name that would not convert leaves this NULL, which is the same positive statement the
+       identity above makes for it: the call over it states no predicate and both arms of every branch stay. */
+    {
+        const char *name = JS_AtomToCString(ctx, atom);
+        if (name) {
+            Concolic *rc = JS_GetOpaque(r, g_concolic_class);
+            DCHECK(rc != NULL, "a member read was minted as something that is not a concolic value");
+            DCHECK(rc->member == NULL,
+                   "a member read was given a second property name — a value is read under ONE name, so a "
+                   "second write is two reads wearing one value and the call over it would report whichever "
+                   "of the two landed last");
+            rc->member = strdup(name);
+            CHECK(rc->member, "concolic: OOM recording the name a member read went through");
+            JS_FreeCString(ctx, name);
+        }
+    }
     free(shape);
     return r;
 }
@@ -1529,6 +1709,34 @@ static void pred_set_bound(JSValueConst pred, RelOp rel, const char *tok, double
     CHECK(c->rel_subj, "concolic: OOM recording the hole an ordering is a fact about");
 }
 
+/* THE CALL PREDICATE'S OBSERVATION, STAMPED ON THE RESULT concolic_call HAS JUST MINTED. It is a second call
+   for pred_set_bound's reason exactly: only ONE minting path has a call predicate to state, and a signature
+   every other caller has to spell `NULL, NULL, 0, NULL` into is a signature that invites a caller to spell it
+   wrong. The four facts are written HERE, together, so the assert that they are one observation has one site.
+   `args` is CONSUMED — the array and every string in it — because the caller has just built the only copy and
+   two owners of one list is the lifetime rule this file refuses to keep true by hand. */
+static void pred_set_strpred(JSValueConst v, const char *method, char **args, int nargs, const char *subj) {
+    Concolic *c = JS_GetOpaque(v, g_concolic_class);
+
+    DCHECK(c != NULL, "a call predicate was stamped on something that is not a concolic value");
+    DCHECK(method != NULL && subj != NULL,
+           "a call predicate's method and subject were not both present at the one line that writes them — "
+           "decide.c reads them together to state a domain, so a result carrying one of them is a constraint "
+           "that can be observed and never reported");
+    DCHECK(nargs == 0 || args != NULL,
+           "a call predicate was stamped with an argument COUNT and no list — the caller builds both or "
+           "neither, so a count alone is an unspellable argument arriving as a spellable one");
+    DCHECK(c->sp_meth == NULL,
+           "a call result was given a second call predicate — a call is one method over one receiver, so a "
+           "second write is two predicates wearing one identity");
+    c->sp_meth = strdup(method);
+    CHECK(c->sp_meth, "concolic: OOM recording the method a gate called on an unknown");
+    c->sp_args = args;   /* consume */
+    c->sp_nargs = nargs;
+    c->sp_subj = strdup(subj);
+    CHECK(c->sp_subj, "concolic: OOM recording the hole a call predicate is a fact about");
+}
+
 /* A COMPARISON-RESULT bool carrying `src <op> tok`, for a component whose IDL member IS a comparison over its
    own source (HTML §6.2's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
    page's own `x === tok` composes for the same source and token, which is what makes the two ONE constraint
@@ -1604,6 +1812,27 @@ RelOp concolic_rel(JSValueConst v, const char **ptok, double *pnum, const char *
     if (pnum)  *pnum  = c->rel_num;
     if (psubj) *psubj = c->rel_subj;
     return c->rel_op;
+}
+
+int concolic_strpred(JSValueConst v, ConcolicCallPred *out) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    DCHECK(out != NULL, "a call predicate was asked for with nowhere to put it — a predicate returned only as "
+                        "a yes/no is a constraint the caller cannot state");
+    out->method = NULL; out->args = NULL; out->nargs = 0; out->subject = NULL;
+    if (!c || !c->sp_meth) return 0;
+    DCHECK(c->sp_subj != NULL,
+           "a call result carries a method with no subject — the two are one observation, written together at "
+           "the mint, so a result holding only one is a predicate whose own producer cannot say what it is "
+           "about");
+    DCHECK(c->sp_nargs == 0 || c->sp_args != NULL,
+           "a call result carries an argument COUNT with no list — the mint writes both or neither, so a "
+           "count alone is a predicate the emission would print with an argument it does not have");
+    out->method = c->sp_meth;
+    out->args = (const char *const *)c->sp_args;
+    out->nargs = c->sp_nargs;
+    out->subject = c->sp_subj;
+    return 1;
 }
 
 const char *concolic_cmp_subject(JSValueConst v) {
@@ -1783,8 +2012,17 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     JSValue r;
     int i;
 
-    (void)this_val; (void)flags;
     DCHECK(c != NULL, "the concolic call handler ran on something that is not a concolic value");
+    /* `this_val` IS THE RECEIVER, AND THIS IS WHAT MAKES THAT TRUE. quickjs.h's JSClassDef states that under
+       JS_CALL_FLAG_CONSTRUCTOR this parameter is new.target instead, and that a constructor call happens only
+       where the object's constructor bit is set — which this class never sets. So the invariant holds by
+       construction and is asserted rather than branched on: a guard that silently declined the constructor
+       case would be a narrowing nobody could find, while the day something sets the bit this names the exact
+       line that has to learn the difference. */
+    DCHECK(!(flags & JS_CALL_FLAG_CONSTRUCTOR),
+           "a concolic value was called as a CONSTRUCTOR — this class never sets the constructor bit, so "
+           "`this_val` here is the receiver and nothing else, and a new.target arriving in that slot would "
+           "be filed as the object a page's own predicate tested");
     shape = shapef("%s()", c->shape ? c->shape : "{}");
     /* THE ARGUMENTS ARE PART OF THE CALL'S IDENTITY. `x.startsWith("/api")` and `x.startsWith("javascript:")`
        are two gates over one source, and a call identity that dropped its arguments made the second DECIDED by
@@ -1803,6 +2041,48 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
        so a candidate substitutes at the call — and it is NOT new bytes: whatever carried the callee's bytes in
        carried these. This is the derivation the reported defect walked through (`{location.hash}.slice()`). */
     r = concolic_derived(ctx, shape, shape, c->root, ident, JS_UNDEFINED);
+    /* AND THE PREDICATE THE PAGE JUST WROTE, IF THIS RESULT CAN NAME ONE. `if (path.startsWith("/api"))` is
+       a gate over `path` exactly as `path === "/api"` is; it determines no VALUE, so it pins nothing and
+       carries no bound, and until this line it carried nothing at all — a parameter a prefix check gated
+       rendered with the same bytes as one nothing had ever tested, which §Solver-half calls a wrong report
+       rather than a partial one. (The `!`-spelled gate reaches no branch at all, for a reason one opcode
+       upstream of this file — concolic.h's residual at concolic_strpred names it.)
+       The three facts that make it nameable are asked for here and each absence is
+       a positive statement: no `member` on the callee means the page called the unknown ITSELF rather than a
+       method of it (`x("/api")`, whose receiver is undefined and about which nothing is claimed); a receiver
+       that is not an unknown, or whose shape is the unnameable `{}`, has no hole a report could print it
+       under; and an argument this engine cannot spell — a plain object, a function — makes the whole
+       predicate absent, exactly as an unspellable member makes an identity absent, because a claim missing
+       one of its operands is a different claim.
+       IT DOES NOT LOOK AT WHAT THE METHOD IS. Nothing here knows or asks what `startsWith` means, and no
+       consumer of the record re-implements one: what travels is the name the page wrote, the arguments it
+       passed and the answer the run got. That is the line between this and the recorded transform-expression
+       §Re-execution forbids — a transform is a rule for COMPUTING a value, and this is a predicate that was
+       EVALUATED. */
+    /* A CANDIDATE RE-FIRE IS ASKED FIRST, and it is the reason this tests `r` and not just its operands.
+       concolic_derived hands back the attacker's PAYLOAD — a real String — where this call's identity is the
+       source under substitution, so the value there is not a concolic and has no predicate to carry. Stamping
+       one would DCHECK on a NULL opaque during exactly the run @S exists to perform. It is also the right
+       answer rather than a guard: the domain is what an @H record states about a parameter, and a verify run
+       is not building one (endpoint.c suppresses its requests wholesale for the same reason). */
+    if (concolic_is(r) && c->member && concolic_is(this_val)) {
+        char *subj = concolic_hole_key(concolic_shape_c(this_val));
+        if (subj) {
+            char **spelled = NULL;
+            int ok = 1;
+            if (argc) {
+                spelled = reclaim_calloc((size_t)argc, sizeof *spelled);
+                CHECK(spelled, "concolic: OOM spelling the arguments a gate passed over an unknown");
+                for (i = 0; i < argc; i++) {
+                    spelled[i] = literal_tok(ctx, argv[i]);
+                    if (!spelled[i]) { ok = 0; break; }
+                }
+            }
+            if (ok) pred_set_strpred(r, c->member, spelled, argc, subj);   /* consumes `spelled` */
+            else strpred_args_free(spelled, argc);
+            free(subj);
+        }
+    }
     free(shape);
     return r;
 }

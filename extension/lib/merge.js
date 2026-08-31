@@ -330,6 +330,13 @@ function _mergeParamInto(ep, np) {
      parameter no engine run ever touched wipe every domain the engine emits. */
   if (Array.isArray(np._excludedValues)) intersectExcludedValues(ep, np._excludedValues);
   if ("_bounds" in np) widenBoundsInto(ep, np._bounds);
+  /* …AND THE CALL PREDICATES, WHICH ARE THE THIRD FACT OF THE SAME KIND AND MERGE BY THE SAME LAW. They spell
+     "proved nothing" the way `_excludedValues` does — as the empty array — so presence as an array is the
+     whole test here too, and a parameter no engine run ever touched contributes nothing rather than wiping
+     what the engine emitted. Leaving them out would repeat, one fact later, exactly the error the paragraph
+     above records: a second document that reached the request without testing `startsWith("/api")` is a path
+     that disproves the claim, and the moat would go on rendering it. */
+  if (Array.isArray(np._predicates)) intersectPredicates(ep, np._predicates);
 }
 
 /* THE PER-METHOD STATS UNION — `lib/stats.js`'s `mergeParamStats`, WHICH HAD NO CALLER.

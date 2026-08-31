@@ -142,6 +142,13 @@ function buildFormFields(schema, initialData = null) {
                from `_range` above: `_range` is what live traffic's values happened to span, this is what the
                bundle's own predicates REQUIRE on every path the engine saw reach the request. */
             _bounds: param._bounds === undefined ? null : param._bounds,
+            /* …and the CALL gate's, which is the third fact of the same kind and the one §@H names in its
+               headline example. `_range` is a statistic over traffic, `_bounds` an interval the code
+               requires, and this is a PREDICATE the code ran — three measurements a reviewer must be able to
+               tell apart, so the projection carries all three or the panel's silence about one of them reads
+               as the positive statement "anything goes". `undefined` and `null` are one statement here for
+               the reason they are one on the two lines above. */
+            _predicates: param._predicates === undefined ? null : param._predicates,
           }, "lib/popup-form.js URL parameter `" + name + "`"),
           "param",
           0,
@@ -312,6 +319,23 @@ function boundsPhrase(b) {
   return parts.join(" and ");
 }
 
+/* THE CALL GATES, AS THE PAGE'S OWN CODE WROTE THEM — `startsWith("/api")`, `!includes("..")`. It is a
+   TRANSCRIPT and never an interpretation: nothing here asks what `startsWith` means, so a minified method the
+   bundle defined itself renders as honestly as a spec builtin does, and no reader of this file has to be
+   right about a semantics the engine deliberately refused to enumerate (CLAUDE.md §RUN-DON'T-MATCH).
+   THE FALSE ARM IS A LEADING `!` AND NOT A SEPARATE VOCABULARY, because it is the same predicate with the
+   other answer — forced multi-path proves it at exactly the rate it proves the true one, and the arm the
+   shipped bundle did not take is the one this tool exists to explore.
+   The arguments are printed as the engine spelled them (§7.1.19 ToString of each literal the page passed),
+   quoted so an empty argument is visible as one and so `f("a, b")` cannot read as `f("a", "b")`. Returns ""
+   when there is nothing to state, which every caller reads as the positive statement it is. */
+function predicatesPhrase(ps) {
+  if (!Array.isArray(ps) || !ps.length) return "";
+  return ps.map((p) => (p.holds ? "" : "!") + String(p.method) +
+                       "(" + p.arguments.map((a) => JSON.stringify(String(a))).join(", ") + ")")
+           .join(" and ");
+}
+
 // Form-builder iterative driver. The three public entry points
 // (createFieldInput, _buildRepeatedMessageItem, _buildMessageGroup)
 // each seed a build queue, build the root wrapper synchronously, and
@@ -441,6 +465,16 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   const _bp = boundsPhrase(fieldDef._bounds);
   if (_bp) {
     labelHtml += ` <span class="field-stat badge-bounds" title="the interval the forced execution proved this parameter obeys, on every observed path to this request — a constraint the code stated, never a value it computed">${esc(_bp)}</span>`;
+  }
+  /* …AND THE CALL GATE'S HALF, WHICH IS THE THIRD OF THE THREE AND THE ONE §@H NAMES BY EXAMPLE. An equality
+     gives `_excludedValues`, an ordering `_bounds`, and a method call neither — so a parameter whose only
+     gate was `path.startsWith("/api")` rendered exactly like a parameter nothing had ever tested, which
+     §Solver-half calls a wrong report rather than a partial one. It renders a CONSTRAINT and never a value:
+     `startsWith("/api")` is not something a reviewer can mistake for a key to send, which is the whole reason
+     @H may state it where inventing `/api/users` is forbidden. */
+  const _pp = predicatesPhrase(fieldDef._predicates);
+  if (_pp) {
+    labelHtml += ` <span class="field-stat badge-predicates" title="the predicates the bundle's own code ran on this parameter, and the answer each got, on every observed path to this request — a leading ! is a test the run PROVED false. A constraint the code stated, never a value it computed">${esc(_pp)}</span>`;
   }
   // A PREFILLED BOX ALWAYS CARRIES ITS PROVENANCE. The badge is driven by the SAME resolvePrefill() the input
   // reads, so the box can never show a value the label does not attribute — which is what happened for a
@@ -851,6 +885,12 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       inp.placeholder = (Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0)
         ? (type || "value") + " other than " + fieldDef._excludedValues.map(String).join(", ")
         : boundsPhrase(fieldDef._bounds) ? (type || "value") + " " + boundsPhrase(fieldDef._bounds)
+        /* …and the CALL gate last of the three, because a box states one thing and the two above are the
+           narrower statements: a set of forbidden tokens and an interval each say what the value may BE,
+           while a predicate says what it must SATISFY. All three are on the label as their own badges, so
+           the order here decides which is repeated in the box and never which is reported. */
+        : predicatesPhrase(fieldDef._predicates)
+          ? (type || "value") + " satisfying " + predicatesPhrase(fieldDef._predicates)
         : (type || "value");
       if (pf.value !== null) {
         inp.value =

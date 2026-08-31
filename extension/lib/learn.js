@@ -129,6 +129,37 @@ function widenBoundsInto(target, observed) {
   target._bounds = Object.keys(out).length ? out : null;
 }
 
+/* WHICH TWO CALL PREDICATES ARE ONE — method, arm and EVERY argument, which is the identity the engine's own
+   dedup and its own intersection both use (solver/concolic.h `concolic_pred_same`). It is a composed key and
+   not a `JSON.stringify` of the record, because the field ORDER of an object literal would then decide
+   equality: two producers writing the same three facts in two orders would compose two keys, and the
+   intersection would drop a claim every observed path obeyed. The length prefix is the engine's own encoding
+   rule for the same reason it uses one — no argument's contents can spell an argument boundary, so a
+   `["a","b"]` and an `["a b"]` can never collide. */
+function _predKey(p) {
+  const parts = [String(p.method), p.holds ? "1" : "0"];
+  for (const a of p.arguments) parts.push(String(a).length + ":" + String(a));
+  return parts.map((s) => s.length + ":" + s).join("");
+}
+
+/* Call predicates: INTERSECT, which is `intersectExcludedValues`' rule and not a second one — a predicate
+   belongs on the record only where EVERY observed path obeyed it, so a sighting that reached the request
+   without testing it DISPROVES the claim. There is no hull and no widening because the domain is unordered:
+   `startsWith("/api")` and `startsWith("/admin")` do not weaken to a common predicate, and inventing one that
+   covered both would mean deciding what the method MEANS, which is the recogniser CLAUDE.md §RUN-DON'T-MATCH
+   forbids arriving inside a merge rule.
+   `observed` is the array this sighting proved (empty = this sighting proved nothing). A target that has never
+   carried the field takes the sighting whole — it has no claim to intersect against. */
+function intersectPredicates(target, observed) {
+  DCHECK(Array.isArray(observed),
+         "a call-predicate merge was handed something that is not an array — a sighting either proved a set " +
+         "of predicates or proved none, and `none` is the EMPTY array rather than a missing argument, because " +
+         "the empty set is what erases a claim an earlier path had made");
+  if (!Array.isArray(target._predicates)) { target._predicates = observed.slice(); return; }
+  const seen = observed.map(_predKey);
+  target._predicates = target._predicates.filter((p) => seen.indexOf(_predKey(p)) >= 0);
+}
+
 function astHeaderRecord(headers) {
   DCHECK(headers && typeof headers === "object" && !Array.isArray(headers) && Object.keys(headers).length,
          "astHeaderRecord was handed something that is not a non-empty header record — endpoint.c omits the " +
@@ -457,6 +488,41 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     if (target._astInferred && target.type === "string") target.type = _paramType(p);
   };
 
+  /* THE THIRD OF THE THREE WAYS A GATE NARROWS A DOMAIN, and the one CLAUDE.md §@H names in its own headline
+     example (`{startsWith:/api}`). An equality determines a VALUE and its negation, an ordering an INTERVAL,
+     and a METHOD CALL neither — so `if (!path.startsWith("/api")) return;` had nothing to arrive through, and
+     a parameter a prefix check gated rendered with the same bytes as one nothing had ever tested. The RULE —
+     intersect, because a claim belongs on the record only where every observed path obeyed it — is
+     `intersectPredicates` at module scope, beside the exclusion rule it is the unordered spelling of. What
+     stays here is what is true of THIS caller: the DCHECKs are on the ENGINE's vocabulary (solver/endpoint.h
+     states the record), so they belong at the boundary the engine's record crosses and nowhere else.
+     NOTHING HERE RE-IMPLEMENTS A METHOD. `p.method` is a name the page wrote and this file never asks what it
+     means; it is carried, intersected and rendered as the transcript it is. A consumer that turned
+     `startsWith("/api")` into a prefix test would be the recogniser §RUN-DON'T-MATCH forbids, moved one hop
+     downstream of the engine that refused to build it. */
+  const _mergePredicates = (target, p) => {
+    /* A CALL SITE IS ALWAYS AN OBSERVATION, so the no-key arm passes the EMPTY array rather than returning —
+       endpoint.c omits `predicates` exactly where no call predicate survived every observed path to this
+       request, so its absence is the positive statement "this run proved nothing here" and the intersection
+       is what turns that into the erasure of an earlier path's claim. */
+    if (!("predicates" in p)) { intersectPredicates(target, []); return; }
+    DCHECK(Array.isArray(p.predicates) && p.predicates.length > 0,
+           "an @H param carries a `predicates` that is not a non-empty array — endpoint.c omits the key " +
+           "entirely where no call predicate held on every observed path, so an empty or non-array one here " +
+           "is the engine stating a domain it does not have");
+    DCHECK(p.predicates.every((q) => q && typeof q === "object" && !Array.isArray(q) &&
+                                    typeof q.method === "string" && q.method.length > 0 &&
+                                    Array.isArray(q.arguments) &&
+                                    q.arguments.every((a) => typeof a === "string") &&
+                                    typeof q.holds === "boolean"),
+           "an @H call predicate is not {method:<non-empty string>, arguments:[<string>...], holds:<boolean>} " +
+           "— endpoint.c writes the method through json_buf_str, every argument through json_buf_str, and " +
+           "`holds` as a bare JSON true/false, so anything else is that producer having changed shape under a " +
+           "reader that would carry the wrong half of the observation. `arguments` may be EMPTY (a page can " +
+           "branch on `x.trim()`), which is why its length is not asserted and its element type is");
+    intersectPredicates(target, p.predicates);
+  };
+
   /* WHERE EACH VALUE LANDED IS THE PRODUCER'S STATEMENT, NEVER THIS FILE'S DEFAULT. endpoint.c writes
      `location` on every param — "path" for a `{hole}` the code interpolated into the address (its example
      value aligned out of the concolic's concrete URL), "query" for the display URL's query string, "body"
@@ -486,6 +552,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     _mergeAstValues(m.parameters[p.name], p.validValues);
     _mergeExcludes(m.parameters[p.name], p);
     _mergeBounds(m.parameters[p.name], p);
+    _mergePredicates(m.parameters[p.name], p);
   }
 
   // Reverse cross-doc reconcile: if THIS method is templated ({hole} path
@@ -594,6 +661,10 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          predicates a query param is, and a projection that carried one fact and not the other would make the
          report's silence mean two different things in two halves of one record. */
       _mergeBounds(schema.properties[bp.name], bp);
+      /* …and the call gate's, for the third time and the same reason. A body field the page POSTs is gated by
+         `startsWith` exactly as a query param is, and a projection carrying two of the three facts would make
+         the report's silence mean two different things in two halves of one record. */
+      _mergePredicates(schema.properties[bp.name], bp);
     }
     if (!m.request) m.request = { $ref: schemaName };
   }

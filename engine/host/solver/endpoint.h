@@ -53,7 +53,8 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 /* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
    JS-object round-trip.
    `[ {"method":..,"url":..,"params":[{"name":..,"location":..,"validValues":[..],"excludes":[..],
-      "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N}}]}, ... ]`.
+      "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
+      "predicates":[{"method":..,"arguments":[..],"holds":true|false}]}]}, ... ]`.
    Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
    it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
    AND EVERY PARAM STATES BOTH OF THE TWO FACTS A SHAPE IS MADE OF. `validValues` is PROVENANCE-and-example —
@@ -83,6 +84,25 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    It carries NO member of the interval: §@H forbids inventing `6` for `x > 5`, so a value appears in
    `validValues` only where the code COMPUTED one. `bounds` is omitted entirely where no ordering gate's claim
    survived every observed path, and that absence is the statement, exactly as `excludes`' is.
+   `predicates` IS THE THIRD OF THE THREE WAYS A GATE NARROWS A DOMAIN, and the one §@H names in its own
+   headline example (`{startsWith:/api}`). An equality determines a VALUE on one arm, an ordering an INTERVAL
+   on both, and a METHOD CALL neither — so `if (!path.startsWith("/api")) return;` recorded nothing at all
+   through the first two, and a parameter a prefix check gated rendered with the same bytes as one nothing had
+   ever tested. Each entry is `{"method":<string>,"arguments":[<string>...],"holds":<boolean>}`: the property
+   NAME the page read off the unknown, every argument as the page's own §7.1.19 ToString of it, and WHICH ARM
+   this run took. `holds:false` is a fact and not a modifier — forced multi-path runs both arms of every gate,
+   so the proved negation arrives at the same rate as the proof, and it is the arm the shipped bundle did not
+   take. `arguments` may legitimately be EMPTY (`x.trim()` tested as a condition) and is always present.
+   IT IS THE ENGINE'S OWN VOCABULARY ON PURPOSE. JSON Schema Validation 2020-12 §6.3.3 "pattern" is the only
+   keyword that could carry one of these and it can carry only the true arm, only for a method whose meaning
+   something decided, and only through a regex translation of the page's literal — three ways to be silently
+   wrong where this record is merely a transcript. endpoint.c's emit states the same at the line that writes
+   it. Nothing downstream re-implements a method either: lib/learn.js merges these by INTERSECTION (the rule
+   `excludes` follows, because a predicate is a claim about the ENDPOINT and only one every observed path
+   obeyed belongs on the record) and lib/popup-form.js renders them as a constraint badge.
+   IT INVENTS NOTHING AND STAYS A SHAPE: no string satisfying the predicate is ever emitted, exactly as no
+   member of `bounds`' interval is. `predicates` is omitted where no call predicate survived every observed
+   path, and that absence is the statement.
    It is an array and not a document
    because the DOCUMENT is one thing the host reads once (result.h): a surface that wrapped itself could not
    be composed with the others without a host-side splice, which is the host owning structure again. */

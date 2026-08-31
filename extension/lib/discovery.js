@@ -304,6 +304,11 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
     _excludedValues: fdDocList(prop._excludedValues),
     /* …and the ordering gate's interval beside it, for the same reason and by the same rule. */
     _bounds: fdDocRecord(prop._bounds),
+    /* …and the CALL gate's predicates, third of the three and by the same rule again. A body field the page
+       POSTs is gated by `startsWith` exactly as a query param is, and a producer that spoke about two of the
+       three facts would make the panel's silence about the third mean two different things depending on
+       which of the two producers built the record — the STRUCTURAL silence makeFieldDef exists to prevent. */
+    _predicates: fdDocList(prop._predicates),
   }, "lib/discovery.js _buildDiscoveryFieldShell, property `" + name + "`");
 }
 

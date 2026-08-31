@@ -1520,6 +1520,37 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
             concolic_bound(rsubj, arm ? rel : rel_op_negate(rel), rnum, rtok);
         }
     }
+    /* AND THE THIRD CLASS — a METHOD CALL over an unknown whose RESULT is the boolean this branch tests, which
+       is §@H's own headline shape (`{startsWith:/api}`) and was the one gate class that recorded nothing at
+       all. It is a sibling of the two above rather than a third case of them, and not an `else`, for the
+       reason the ordering is not: a condition is an equality, an ordering or a call result and never two, and
+       writing that as an `else` would make the mutual exclusion an accident of ordering instead of a property
+       the asserts state.
+       THE ARM *IS* THE FACT, which is why it is carried and not folded into the predicate the way an
+       ordering's is. `rel_op_negate` exists because §13.10.1 pairs `<` with `>=`; a method call has no paired
+       method, and inventing one would mean deciding what the method MEANS — the recogniser §RUN-DON'T-MATCH
+       forbids, arriving as a convenience at the one line that could most easily hide it. So the false arm is
+       recorded as the false arm: `startsWith("/api")` answered false is a fact, stated as one.
+       IT INVENTS NOTHING. The method is the name the page wrote, the arguments are the literals the page
+       passed, and the arm is the arm this run took — §@H's line is whether a VALUE was determined, and no
+       value is determined by a predicate answering true. */
+    {
+        ConcolicCallPred sp;
+        if (concolic_strpred(cond, &sp)) {
+            DCHECK(op == OPCMP_NONE,
+                   "one condition answered as an equality AND as a call predicate — an equality result is "
+                   "minted by the comparison hook and a call result by the call handler, so a value carrying "
+                   "both is one predicate whose two records would state two different domains for one hole");
+            DCHECK(concolic_rel(cond, NULL, NULL, NULL) == REL_NONE,
+                   "one condition answered as an ordering AND as a call predicate — the same two-records "
+                   "defect the equality assert above names, reached from the other side");
+            DCHECK(arm == 0 || arm == 1,
+                   "a call predicate was about to be recorded for an arm that is neither taken nor "
+                   "not-taken — the arm IS the fact here, so an undecided one would file `startsWith` held "
+                   "under a path that may have proved it did not");
+            concolic_strpred_file(sp.subject, sp.method, sp.args, sp.nargs, arm);
+        }
+    }
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 

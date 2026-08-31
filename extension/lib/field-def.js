@@ -98,6 +98,12 @@ const FIELD_DEF_ABSENT = Object.freeze({
                             // 2020-12 §6.2's keys, carried unrenamed from endpoint.c); null = none proved.
   _excludedValues: null,    // values the forced execution PROVED this field is not; null = nothing proved,
                             // `[]` = a claim that was disproved. Two different facts, both preserved.
+  _predicates: null,        // the METHOD-CALL gates the bundle's own code ran on this field and the ARM each
+                            // answered — [{method,arguments,holds}], the engine's record carried unrenamed
+                            // from endpoint.c. It is the third of the three ways a gate narrows a domain (an
+                            // equality determines a value, an ordering an interval, a call neither), and the
+                            // one §@H names in its headline example. null = nothing proved, `[]` = a claim a
+                            // later path disproved — the same two facts `_excludedValues` keeps apart.
   _astValidValues: null,    // values the bundle was observed setting this field to; null = none observed.
   _detectedEnum: false,     // the `enum` above was inferred from observations, not declared.
   _defaultValue: null,      // an observed default; null = none.
@@ -176,7 +182,8 @@ function makeFieldDef(parts, where) {
          "verbatim from an imported spec's `x-field-numbers`, which fdDocKey refuses when it is not one, " +
          "so anything else here is that refusal bypassed");
   DCHECK(_fdNullOrList(fd.children) && _fdNullOrList(fd.enum) && _fdNullOrList(fd.enumDescriptions) &&
-         _fdNullOrList(fd._excludedValues) && _fdNullOrList(fd._astValidValues),
+         _fdNullOrList(fd._excludedValues) && _fdNullOrList(fd._astValidValues) &&
+         _fdNullOrList(fd._predicates),
          "a FieldDef carries a list-or-nothing in a third form (" + where + ") — `children: null` means NOT " +
          "a message and `children: []` means a message with no fields, and a consumer that cannot tell them " +
          "apart renders one as the other");

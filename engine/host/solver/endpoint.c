@@ -33,9 +33,17 @@ static const char *const ep_loc_name[] = { "query", "path", "body" };
    is a path that disproves it.
    WITHIN ONE FLOW THE OPPOSITE HOLDS AND IT IS NOT A CONTRADICTION: `if (x > 5 && x < 100)` conjoins, because
    both gates are on ONE path. concolic.c owns that half; this file owns the across-paths half. */
+/* `pred` IS THE SAME KIND OF FACT AS `excl` AND `bnd` OVER A DOMAIN NEITHER OF THEM CAN STATE — what this
+   endpoint's own METHOD-CALL gates proved, `path.startsWith("/api")` being the shape §@H names. An equality
+   determines a value, an ordering an interval, and a call neither, so it is a third field for the reason the
+   first two are two. ITS MERGE IS THE SAME CLAIM AS THEIRS AND THEREFORE AN INTERSECTION: a predicate belongs
+   on the record only where EVERY observed path obeyed it, so a sighting that reached the request without
+   testing it is a path that DISPROVES it and the claim goes. There is no hull here and no widening — the
+   domain is unordered, so intersecting the sets IS the rule, exactly as it is for `excl`. */
 typedef struct { int has_lo, has_hi; double lo, hi; int lo_incl, hi_incl; char *lo_txt, *hi_txt; } ParamBound;
 typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
-                 char **excl; int nexcl; ParamBound bnd; } Param;
+                 char **excl; int nexcl; ParamBound bnd;
+                 ConcolicPred *pred; int npred; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
 /* `is_asset` IS WHAT THE RESOURCE AT THIS ADDRESS TURNED OUT TO BE, and it can only be written after the
    record exists. §Attacker sources: "Static assets are NEVER endpoints (magic-byte + content-type, not URL
@@ -122,8 +130,42 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    to keep true across every future edit to the two producers below. Copying makes it unbreakable. */
 /* …and `bnd` for the same reason, one step further: concolic_bound_read hands back BORROWED spellings that
    live in the flow's constraint head, which the very next narrowing reallocs. */
-typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; ParamBound bnd; } KV;
+/* …and `pred` for the reason both of those are copied: concolic_strpred_read hands back a BORROWED row that
+   lives in the flow's constraint head, which the very next narrowing reallocs. */
+typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; ParamBound bnd;
+                 ConcolicPred *pred; int npred; } KV;
 typedef struct { KV *e; int n, cap; } KvBuf;
+
+/* ONE COPY AND ONE DISPOSER FOR A SET OF THEM. What a single ROW owns is concolic.c's to say
+   (concolic_pred_copy / concolic_pred_release) and is never re-spelled here — a field added to ConcolicPred
+   must have exactly one place it is copied and one where it is released, or one of the four holders silently
+   keeps half a fact. What THIS file owns is the ARRAY around the rows, which is the part that differs between
+   a holder and the constraint. */
+static ConcolicPred *param_pred_copy(const ConcolicPred *src, int n) {
+    ConcolicPred *out;
+    int i;
+
+    if (n <= 0) return NULL;
+    out = malloc((size_t)n * sizeof(ConcolicPred));
+    CHECK(out, "endpoint: OOM taking a param's observed call predicates off the flow");
+    for (i = 0; i < n; i++) concolic_pred_copy(&out[i], &src[i]);
+    return out;
+}
+
+static void param_pred_free(ConcolicPred *p, int n) {
+    int i;
+    for (i = 0; i < n; i++) concolic_pred_release(&p[i]);
+    free(p);
+}
+
+/* WHICH TWO PREDICATES ARE ONE is asked at both ends — concolic.c dedups a repeat within a flow, this file
+   intersects across sightings — so it is asked of ONE speller (concolic_pred_same) and never re-derived here.
+   Two spellings of it are two rules free to disagree, and the direction they would disagree in is the one
+   that matters: an intersection that thought two identical predicates were different would drop, from the
+   record, a claim every observed path obeyed. */
+static int param_pred_same(const ConcolicPred *a, const ConcolicPred *b) {
+    return concolic_pred_same(a, b->method, (const char *const *)b->args, b->nargs, b->holds);
+}
 
 /* `hole` is the value's HOLE KEY — the name the flow's own equality gates recorded their domain under — or
    NULL when this param's value is a concrete one the code computed and there is no domain to look up. It is
@@ -190,6 +232,21 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
             }
         }
     }
+    /* …AND THE CALL PREDICATES, off the SAME flow at the SAME instant, for the same reason again. A param
+       whose only gate was `path.startsWith("/api")` and one nothing ever tested render with identical bytes
+       without this, and §@H calls that a WRONG report rather than a thin one — the silence about the gate is
+       read as the positive statement "anything goes". It is also the gate class §@H names in its own headline
+       example, and the one an equality's pin and an ordering's interval both structurally miss. */
+    b->e[b->n].pred = NULL;
+    b->e[b->n].npred = 0;
+    if (hole) {
+        int npr = 0;
+        const ConcolicPred *pr = concolic_strpred_read(hole, &npr);
+        if (npr > 0) {
+            b->e[b->n].pred = param_pred_copy(pr, npr);
+            b->e[b->n].npred = npr;
+        }
+    }
     b->n++;
 }
 
@@ -206,6 +263,7 @@ static void kv_free(KvBuf *b) {
         for (int k = 0; k < b->e[i].nexcl; k++) free(b->e[i].excl[k]);
         free(b->e[i].excl);
         param_bound_free(&b->e[i].bnd);
+        param_pred_free(b->e[i].pred, b->e[i].npred);
     }
     free(b->e); b->e = NULL; b->n = b->cap = 0;
 }
@@ -506,6 +564,34 @@ static void param_widen_bound(ParamBound *d, const ParamBound *s) {
     }
 }
 
+/* THE CALL PREDICATES' FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
+static void param_set_pred(Param *p, const ConcolicPred *src, int n) {
+    DCHECK(p->npred == 0 && p->pred == NULL,
+           "an endpoint param's call-predicate set was seeded twice — the first sighting takes the set and "
+           "every later one INTERSECTS it, so a second seed would replace a constraint that had already been "
+           "narrowed by another path and state, of this endpoint, something no run of the program obeyed");
+    if (n <= 0) return;
+    p->pred = param_pred_copy(src, n);
+    p->npred = n;
+}
+
+/* …AND EVERY LATER ONE NARROWS IT — `param_intersect_excl`'s claim over a set of predicates instead of a set
+   of tokens, and the SAME rule rather than a second one. A predicate the record still carries is one EVERY
+   observed path to this endpoint obeyed; one this flow did not test is one some path did not obey, and the
+   claim goes. There is no hull because there is no order: `startsWith("/api")` and `startsWith("/admin")` do
+   not weaken to a common predicate, and inventing one that covered both would mean deciding what the method
+   MEANS — the recogniser §RUN-DON'T-MATCH forbids, arriving inside a merge rule. */
+static void param_intersect_pred(Param *p, const ConcolicPred *src, int n) {
+    int i, j, k = 0;
+    for (i = 0; i < p->npred; i++) {
+        int keep = 0;
+        for (j = 0; j < n; j++) if (param_pred_same(&p->pred[i], &src[j])) { keep = 1; break; }
+        if (keep) p->pred[k++] = p->pred[i];
+        else concolic_pred_release(&p->pred[i]);   /* the ROW's strings; the array is this param's */
+    }
+    p->npred = k;
+}
+
 static void param_add_val(Param *p, const char *v) {   /* merge a validValue (dedup, skip empty) */
     if (!v || !v[0]) return;
     for (int i = 0; i < p->nvals; i++) if (!strcmp(p->vals[i], v)) return;
@@ -554,6 +640,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                 param_add_val(&g_eps[i].params[j], kvb.e[j].val);
                 param_intersect_excl(&g_eps[i].params[j], kvb.e[j].excl, kvb.e[j].nexcl);
                 param_widen_bound(&g_eps[i].params[j].bnd, &kvb.e[j].bnd);
+                param_intersect_pred(&g_eps[i].params[j], kvb.e[j].pred, kvb.e[j].npred);
             }
             /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
                with nothing for it. An endpoint's IDENTITY is method + path + param names AND locations
@@ -587,6 +674,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         param_add_val(&e->params[e->np], kvb.e[j].val);
         param_set_excl(&e->params[e->np], kvb.e[j].excl, kvb.e[j].nexcl);
         param_set_bound(&e->params[e->np].bnd, &kvb.e[j].bnd);
+        param_set_pred(&e->params[e->np], kvb.e[j].pred, kvb.e[j].npred);
         e->np++;
     }
     /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
@@ -707,6 +795,50 @@ char *endpoint_json_array(void) {
                 }
                 json_buf_raw(&b, "}");
             }
+            /* …AND THE CALL PREDICATES, IN THE ENGINE'S OWN VOCABULARY AND DELIBERATELY NOT JSON SCHEMA'S.
+               JSON Schema Validation 2020-12 §6.3 Validation Keywords for Strings has one keyword that could
+               carry a prefix test — §6.3.3 "pattern", whose text is "The value of this keyword MUST be a
+               string. This string SHOULD be a valid regular expression, according to the ECMA-262 regular
+               expression dialect. A string instance is considered valid if the regular expression matches the
+               instance successfully. Recall: regular expressions are not implicitly anchored." — and it is
+               the wrong shape here for three reasons that all point the same way. It cannot state the FALSE
+               arm at all, and forced multi-path produces that arm at exactly the rate it produces the true
+               one, so half of every observation would be dropped — which is §@H's wrong-report-not-a-partial-
+               one, arriving through a vocabulary choice. Writing `^/api` out of `startsWith("/api")` means
+               DECIDING WHAT THE METHOD MEANS, which is the recogniser §RUN-DON'T-MATCH forbids and which
+               would have to enumerate the string builtins. And the translation itself is a place to be
+               silently wrong: the quoted sentence says a pattern is not anchored and the page's literal may
+               hold regex metacharacters, so the emission would owe an escaping rule nobody checks.
+               So what is emitted is what was OBSERVED: the method the page named, the arguments it passed,
+               and the answer the run got. `holds` is the arm, not a modifier — `false` is a fact this flow
+               PROVED, and it is exactly the arm the shipped bundle did not take.
+               THE ABSENCE IS THE STATEMENT, as it is for `excludes` and `bounds`: no key at all where no call
+               predicate survived every observed path to this request, never an empty array, which a consumer
+               could not tell apart from a param nothing tested.
+               IT STAYS A SHAPE. Nothing here picks a string that would satisfy the predicate; §@H forbids
+               inventing `/api/x` for `startsWith("/api")` exactly as it forbids inventing `6` for `x > 5`. */
+            if (e->params[j].npred) {
+                json_buf_raw(&b, ","); json_buf_key(&b, "predicates"); json_buf_raw(&b, "[");
+                for (int k = 0; k < e->params[j].npred; k++) {
+                    const ConcolicPred *pr = &e->params[j].pred[k];
+                    if (k) json_buf_raw(&b, ",");
+                    json_buf_raw(&b, "{"); json_buf_key(&b, "method"); json_buf_str(&b, pr->method);
+                    json_buf_raw(&b, ","); json_buf_key(&b, "arguments"); json_buf_raw(&b, "[");
+                    for (int a = 0; a < pr->nargs; a++) {
+                        if (a) json_buf_raw(&b, ",");
+                        json_buf_str(&b, pr->args[a]);
+                    }
+                    json_buf_raw(&b, "]");
+                    DCHECK(pr->holds == 0 || pr->holds == 1,
+                           "a call predicate reached the emission for an arm that is neither taken nor "
+                           "not-taken — the arm IS the fact this record carries, so a third value would be "
+                           "written as one of the two and the consumer could not tell which");
+                    json_buf_raw(&b, ","); json_buf_key(&b, "holds");
+                    json_buf_raw(&b, pr->holds ? "true" : "false");
+                    json_buf_raw(&b, "}");
+                }
+                json_buf_raw(&b, "]");
+            }
             json_buf_raw(&b, "}");
         }
         json_buf_raw(&b, "]");
@@ -744,6 +876,7 @@ void endpoint_free(void) {
             for (int k = 0; k < g_eps[i].params[j].nexcl; k++) free(g_eps[i].params[j].excl[k]);
             free(g_eps[i].params[j].excl);
             param_bound_free(&g_eps[i].params[j].bnd);
+            param_pred_free(g_eps[i].params[j].pred, g_eps[i].params[j].npred);
         }
         free(g_eps[i].params);
         for (int j = 0; j < g_eps[i].nh; j++) { free(g_eps[i].hdrs[j].name); free(g_eps[i].hdrs[j].value); }
