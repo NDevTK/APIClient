@@ -317,6 +317,26 @@ static int wc_reset_queue(JSContext *ctx, WsCtrlData *c)
     return 0;
 }
 
+/* Streams §5.5.4 Default controllers' WritableStreamDefaultControllerClearAlgorithms — four steps, one per
+   algorithm slot, and this component had NONE of it. The standard calls it from four places (ProcessClose step
+   6, ProcessWrite step 5.1, §5.4.4's [[AbortSteps]] step 2 and ControllerError step 3) and annotates it as a
+   memory measure, but it is OBSERVABLE and the observation is a page's own function being CALLED: §5.5.3's
+   WritableStreamDefaultWriterWrite performs GetChunkSize at step 4, BEFORE the state refusals at steps 7-9, so
+   `w.close(); w.write(c)` reaches the size algorithm on a stream whose close is already in flight. With the
+   slots cleared, §5.5.4's GetChunkSize step 1 returns 1 and the page's `size` is never entered; without them
+   it ran, on a chunk no sink would ever receive.
+   IT LANDS AS UNDEFINED BECAUSE THAT IS ALREADY THIS COMPONENT'S SPELLING OF THE DEFAULT ALGORITHM — an
+   undefined `size_fn` is the implicit one-per-chunk strategy at S_SIZE, and an undefined write/close/abort is
+   the accept-everything-and-answer-at-once algorithm at S_SINK_WRITE and S_ERR_ABORT — so the post-clear
+   behaviour the standard describes is exactly what these slots already mean. */
+static void wc_clear_algorithms(JSContext *ctx, WsCtrlData *c)
+{
+    wc_set(ctx, c, &c->write_fn, JS_UNDEFINED);
+    wc_set(ctx, c, &c->close_fn, JS_UNDEFINED);
+    wc_set(ctx, c, &c->abort_fn, JS_UNDEFINED);
+    wc_set(ctx, c, &c->size_fn, JS_UNDEFINED);
+}
+
 static double wc_desired(WsCtrlData *c) { return c->hwm - c->queue_total; }
 static bool   wc_backpressure(WsCtrlData *c) { return wc_desired(c) <= 0; }
 
@@ -403,7 +423,8 @@ static void ws_take_pair(JSValue slot[2], JSValue out[2])
     slot[0] = slot[1] = JS_UNDEFINED;
 }
 
-/* §5.2's AddWriteRequest: a capability on the list, and its promise handed back. */
+/* Streams §5.5.2 Interfacing with controllers' WritableStreamAddWriteRequest: a capability on the list, and its
+   promise handed back. */
 static JSValue ws_add_write_request(JSContext *ctx, WsData *d)
 {
     JSValue funcs[2];
@@ -420,7 +441,7 @@ static JSValue ws_add_write_request(JSContext *ctx, WsData *d)
 
 enum {
     W_IDLE = 0,
-    W_REJECT_WRITES,               /* §5.2: EVERY queued write request, with w->err */
+    W_REJECT_WRITES,               /* §5.5.2 FinishErroring step 6: EVERY queued write request, with w->err */
     W_CLOSED_REJ, W_CLOSED_RES, W_READY_REJ, W_READY_RES,
     W_ABORT_RES, W_ABORT_REJ,
     W_CLOSE_REQ_REJ,
@@ -475,7 +496,8 @@ static int wr_settle_run(JSContext *ctx, StreamWork *w, WsWriterData *wr, int wh
            if/otherwise, so it is performed on both arms; …EnsureReadyPromiseRejected is the same three steps
            over `ready`. Marking only the replacement was the pending arm reporting the STREAM'S OWN
            bookkeeping as the page's unhandled rejection: `ready` and `closed` start pending, so the pending
-           arm is the COMMON one — every §5.5.2 WritableStreamRejectCloseAndClosedPromiseIfNeeded on a writer
+           arm is the COMMON one — every §5.5.2 Interfacing with controllers'
+           WritableStreamRejectCloseAndClosedPromiseIfNeeded on a writer
            acquired before the failure took it, and so did §5.5.1 Working with writable streams'
            SetUpWritableStreamDefaultWriter, whose "erroring" and "errored" arms mint a capability and reject it
            on the next line.  A page that never reads `closed` — which is every page that only writes — then
@@ -518,7 +540,8 @@ static int ws_settle_run(JSContext *ctx, StreamWork *w, JSValueConst stream, JSV
     wr = JS_IsUndefined(d->writer) ? NULL : wr_of(d->writer);
 
     if (w->settle == W_REJECT_WRITES) {
-        /* §5.2 rejects EVERY queued write request. Answering only the first silently abandons the rest. */
+        /* Streams §5.5.2 Interfacing with controllers' WritableStreamFinishErroring step 6 rejects EVERY queued
+           write request. Answering only the first silently abandons the rest. */
         for (;;) {
             if (w->phase == 0) {
                 JSValue pair[2];
@@ -616,51 +639,58 @@ enum {
 #define WS_STAGES(X) \
     X(S_ENTRY, "Streams §5 (this invocation's entry: the receiver's brand, its stream and controller records, " \
                "and which §5 operation the fifteen entry points name)") \
-    X(S_SIGNAL, "Streams §5.2 WritableStreamAbort step 2 (signal abort on the controller's AbortController — " \
-                "the signal's abort algorithms and its `abort` event are the page's code)") \
-    X(S_ABORT_SETUP, "Streams §5.2 WritableStreamAbort steps 3-11 (the state RE-READ after that author code, " \
-                     "the pending abort request, and StartErroring)") \
-    X(S_SIZE, "Streams §5.4 WritableStreamDefaultControllerGetChunkSize steps 2-3 (the strategy's size " \
-              "algorithm over the chunk; a throw errors the stream and the size is 1)") \
-    X(S_WRITE_QUEUE, "Streams §5.3 WritableStreamDefaultWriterWrite steps 5-11 and §5.4 " \
-                     "WritableStreamDefaultControllerWrite steps 1-5 (the state refusals, EnqueueValueWithSize, " \
-                     "then the backpressure update)") \
-    X(S_ERROR, "Streams §5.2 WritableStreamDealWithRejection steps 1-4 (StartErroring for a writable stream, " \
-               "FinishErroring for one already erroring)") \
-    X(S_FINISH_ERR, "Streams §5.2 WritableStreamFinishErroring steps 1-5 (nothing in flight and the controller " \
-                    "started, then the stream is errored and the queue reset)") \
-    X(S_ERR_WRITES, "Streams §5.2 WritableStreamFinishErroring steps 6-7 (reject every write request with the " \
-                    "stored error)") \
-    X(S_ERR_ABORT, "Streams §5.2 WritableStreamFinishErroring steps 8-12 (the pending abort request: rejected " \
-                   "with the stored error when it was already erroring, otherwise the sink's abort algorithm)") \
-    X(S_ERR_CLOSE, "Streams §5.2 WritableStreamRejectCloseAndClosedPromiseIfNeeded step 2 (reject the close " \
-                   "request with the stored error)") \
-    X(S_ERR_CLOSED, "Streams §5.2 WritableStreamRejectCloseAndClosedPromiseIfNeeded step 3 (reject the " \
-                    "writer's `closed` with the stored error)") \
-    X(S_ADVANCE, "Streams §5.4 WritableStreamDefaultControllerAdvanceQueueIfNeeded steps 2-10 (finish " \
-                 "erroring, or process the close sentinel, or process the head chunk)") \
-    X(S_SINK_WRITE, "Streams §5.4 WritableStreamDefaultControllerProcessWrite step 3 (the sink's write " \
-                    "algorithm over the chunk)") \
-    X(S_SINK_CLOSE, "Streams §5.4 WritableStreamDefaultControllerProcessClose step 5 (the sink's close " \
-                    "algorithm)") \
-    X(S_SINK_REACT, "Streams §5.4 ProcessWrite step 4 / ProcessClose step 7 / FinishErroring step 13 " \
-                    "(PromiseResolve over what the sink returned, then its two reactions)") \
-    X(S_WRITE_DONE, "Streams §5.4 WritableStreamDefaultControllerProcessWrite steps 4.4-4.6 (dequeue the " \
-                    "chunk, update backpressure, advance the queue)") \
-    X(S_CLOSE_DONE, "Streams §5.2 WritableStreamFinishInFlightClose step 6 (a stream that was erroring: the " \
-                    "stored error is dropped and the pending abort request resolved)") \
-    X(S_CLOSE_DONE2, "Streams §5.2 WritableStreamFinishInFlightClose steps 7-9 (the stream is closed and the " \
-                     "writer's `closed` resolves)") \
-    X(S_CLOSE_ERR2, "Streams §5.2 WritableStreamFinishInFlightCloseWithError steps 4-5 (reject the pending " \
-                    "abort request, then DealWithRejection)") \
-    X(S_RELEASE, "Streams §5.3 WritableStreamDefaultWriterRelease step 6 (EnsureClosedPromiseRejected with " \
-                 "the released TypeError)") \
-    X(S_RELEASE2, "Streams §5.3 WritableStreamDefaultWriterRelease steps 7-8 (detach the writer from the " \
-                  "stream)") \
+    X(S_SIGNAL, "Streams §5.5.1 Working with writable streams' WritableStreamAbort step 2 (signal abort on the " \
+                "controller's AbortController — the signal's abort algorithms and its `abort` event are the " \
+                "page's code)") \
+    X(S_ABORT_SETUP, "Streams §5.5.1 Working with writable streams' WritableStreamAbort steps 3-11 (the state " \
+                     "RE-READ after that author code, the pending abort request, and StartErroring)") \
+    X(S_SIZE, "Streams §5.5.4 Default controllers' WritableStreamDefaultControllerGetChunkSize steps 2-3 (the " \
+              "strategy's size algorithm over the chunk; a throw errors the stream and the size is 1)") \
+    X(S_WRITE_QUEUE, "Streams §5.5.3 Writers' WritableStreamDefaultWriterWrite steps 5-11 and §5.5.4 Default " \
+                     "controllers' WritableStreamDefaultControllerWrite steps 1-5 (the state refusals, §8.1 " \
+                     "Queue-with-sizes' EnqueueValueWithSize, then the backpressure update)") \
+    X(S_ERROR, "Streams §5.5.2 Interfacing with controllers' WritableStreamDealWithRejection steps 1-4 " \
+               "(StartErroring for a writable stream, FinishErroring for one already erroring)") \
+    X(S_FINISH_ERR, "Streams §5.5.2 Interfacing with controllers' WritableStreamFinishErroring steps 1-5 " \
+                    "(nothing in flight and the controller started, then the stream is errored and the queue " \
+                    "reset)") \
+    X(S_ERR_WRITES, "Streams §5.5.2 Interfacing with controllers' WritableStreamFinishErroring steps 6-7 " \
+                    "(reject every write request with the stored error)") \
+    X(S_ERR_ABORT, "Streams §5.5.2 Interfacing with controllers' WritableStreamFinishErroring steps 8-12 (the " \
+                   "pending abort request: rejected with the stored error when it was already erroring, " \
+                   "otherwise the sink's abort algorithm)") \
+    X(S_ERR_CLOSE, "Streams §5.5.2 Interfacing with controllers' " \
+                   "WritableStreamRejectCloseAndClosedPromiseIfNeeded step 2 (reject the close request with " \
+                   "the stored error)") \
+    X(S_ERR_CLOSED, "Streams §5.5.2 Interfacing with controllers' " \
+                    "WritableStreamRejectCloseAndClosedPromiseIfNeeded steps 3-4 (find the writer, then reject " \
+                    "its `closed` with the stored error)") \
+    X(S_ADVANCE, "Streams §5.5.4 Default controllers' WritableStreamDefaultControllerAdvanceQueueIfNeeded " \
+                 "steps 2-10 (finish erroring, or process the close sentinel, or process the head chunk)") \
+    X(S_SINK_WRITE, "Streams §5.5.4 Default controllers' WritableStreamDefaultControllerProcessWrite step 3 " \
+                    "(the sink's write algorithm over the chunk)") \
+    X(S_SINK_CLOSE, "Streams §5.5.4 Default controllers' WritableStreamDefaultControllerProcessClose steps 5-6 " \
+                    "(the sink's close algorithm, then ClearAlgorithms)") \
+    X(S_SINK_REACT, "Streams §5.5.4 ProcessWrite steps 4-5 / ProcessClose steps 7-8 / §5.5.2 FinishErroring " \
+                    "steps 13-14 (PromiseResolve over what the sink returned, then its two reactions)") \
+    X(S_WRITE_DONE, "Streams §5.5.4 Default controllers' WritableStreamDefaultControllerProcessWrite steps " \
+                    "4.4-4.6 (dequeue the chunk, update backpressure, advance the queue)") \
+    X(S_CLOSE_DONE, "Streams §5.5.2 Interfacing with controllers' WritableStreamFinishInFlightClose step 6 (a " \
+                    "stream that was erroring: the stored error is dropped and the pending abort request " \
+                    "resolved)") \
+    X(S_CLOSE_DONE2, "Streams §5.5.2 Interfacing with controllers' WritableStreamFinishInFlightClose steps 7-9 " \
+                     "(the stream is closed and the writer's `closed` resolves)") \
+    X(S_CLOSE_ERR2, "Streams §5.5.2 Interfacing with controllers' WritableStreamFinishInFlightCloseWithError " \
+                    "steps 5-6 (reject the pending abort request, then DealWithRejection)") \
+    X(S_RELEASE, "Streams §5.5.3 Writers' WritableStreamDefaultWriterRelease step 6 " \
+                 "(EnsureClosedPromiseRejected with the released TypeError)") \
+    X(S_RELEASE2, "Streams §5.5.3 Writers' WritableStreamDefaultWriterRelease steps 7-8 (detach the writer " \
+                  "from the stream)") \
     X(S_SETTLE, "Streams §5 (settling the promise the step before this one named — the resolving function's " \
                 "27.5.1.3 step 2.f `then` read is the page's code)") \
-    X(S_RESULT, "Streams §5 (settling this member's OWN capability, for the short-circuit answers §5.2 " \
-                "abort step 1, close step 2 and §5.3 write step 5 return)") \
+    X(S_RESULT, "Streams §5 (settling this member's OWN capability, for the short-circuit answers §5.2.4 " \
+                "abort() step 1, close() step 2 and §5.5.3 Writers' WritableStreamDefaultWriterWrite step 5 " \
+                "return)") \
     X(S_DONE, "Streams §5 (the operation is complete; its promise, where it has one, is this machine's result)")
 enum { WS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_ws_steps[] = { WS_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -673,7 +703,9 @@ typedef struct {
     JSValue    chunk;
     JSValue    promise;    /* what a member hands back */
     JSValue    funcs[2];   /* its capability, when the member settles its own answer */
-    AbortSignalWork sig;   /* §3.2 "signal abort"'s own record, while the controller's signal is aborting */
+    AbortSignalWork sig;   /* DOM §3.2 Interface AbortSignal's signal abort — its own record, while the
+                              controller's signal is aborting. NAMING THE STANDARD IS LOAD-BEARING: a bare
+                              §3.2 in this file resolves onto Streams, whose §3.2 is nothing of the kind. */
     uint8_t    next;       /* the stage S_SETTLE returns to */
     uint8_t    tail;       /* where the erroring chain ends */
     uint8_t    is_close;   /* the sink call in flight is the CLOSE, not a write */
@@ -712,28 +744,51 @@ static int ws_react(JSContext *ctx, JSValueConst promise, JSValueConst ctrl, int
     return stream_react(ctx, promise, g_op_stepid[ok], g_op_stepid[err], data, 1);
 }
 
-/* §5.2's StartErroring, minus the settle its caller runs: the state moves, and §5.4's ErrorSteps drop the queue
-   and tell the sink through its signal. The writer's `ready` rejection is a stage, because it is a call. */
+/* Streams §5.5.2 Interfacing with controllers' WritableStreamStartErroring, minus the settle its caller runs:
+   its steps 5-6 move the state, and its step 4's controller — reached through §5.5.2's FinishErroring step 4 —
+   runs §5.4.4 Internal methods' [[ErrorSteps]], whose ONE step is ResetQueue. It does not touch the signal:
+   only §5.5.1's WritableStreamAbort signals, for the reason spelled out at S_ERROR below. The writer's `ready`
+   rejection is a stage, because it is a call. */
 static void ws_start_erroring(JSContext *ctx, WsData *d, JSValueConst reason)
 {
-    WsCtrlData *c = JS_IsUndefined(d->controller) ? NULL : wc_of(d->controller);
+    /* Its steps 1-2 and 4 are asserts, and they are asserts HERE rather than early returns: this operation has
+       one caller (S_ERROR, which has already tested the state), so a false one is this machine having reached a
+       place §5.5.2 says it cannot, not an input to be tolerated. */
+    DCHECK(d->state == WS_WRITABLE, "§5.5.2's WritableStreamStartErroring step 2 ran on a stream that is not "
+                                    "writable");
+    DCHECK(JS_IsUndefined(d->stored_error), "§5.5.2's WritableStreamStartErroring step 1 ran on a stream that "
+                                            "already carries a stored error");
+    DCHECK(!JS_IsUndefined(d->controller), "§5.5.2's WritableStreamStartErroring step 4 ran on a stream with no "
+                                           "controller");
     d->state = WS_ERRORING;
     ws_set(ctx, d, &d->stored_error, JS_DupValue(ctx, reason));
-    if (c) wc_reset_queue(ctx, c);
+    /* THE QUEUE IS NOT DROPPED HERE. §5.5.2's StartErroring has no such step; the drop is §5.4.4's
+       [[ErrorSteps]], which §5.5.2's FinishErroring step 4 reaches — and FinishErroring is the step AFTER an
+       in-flight operation finishes, so dropping early emptied the queue under a write the sink still held.
+       That was unobservable and one step from not being: S_WRITE_DONE dequeues on the fulfilment, and a dequeue
+       from an emptied queue reads `undefined` as its size, so `queue_total` became NaN and every later
+       `desiredSize` and backpressure test off it answered from a NaN. */
 }
 
-/* §5.2's UpdateBackpressure, minus its settle. Returns the sequence the change calls for, or W_IDLE. */
+/* Streams §5.5.2 Interfacing with controllers' WritableStreamUpdateBackpressure, minus its settle. Returns the
+   sequence the change calls for, or W_IDLE. Its steps 1-2 are ASSERTS, and both callers below establish them —
+   S_WRITE_QUEUE by the state refusals §5.5.3's WritableStreamDefaultWriterWrite steps 7-9 make, S_WRITE_DONE by
+   the very condition §5.5.4's ProcessWrite step 4.5 states. So they are asserts here too, not an early return
+   that would let a caller added later skip a backpressure update and leave `ready` pending for ever. */
 static int ws_update_backpressure(JSContext *ctx, WsData *d, WsCtrlData *c)
 {
     bool bp = wc_backpressure(c);
     WsWriterData *wr = JS_IsUndefined(d->writer) ? NULL : wr_of(d->writer);
 
-    if (d->state != WS_WRITABLE || ws_close_queued_or_in_flight(d)) return W_IDLE;
+    DCHECK(d->state == WS_WRITABLE, "§5.5.2's WritableStreamUpdateBackpressure step 1 ran on a stream that is "
+                                    "not writable");
+    DCHECK(!ws_close_queued_or_in_flight(d), "§5.5.2's WritableStreamUpdateBackpressure step 2 ran on a stream "
+                                             "whose close is queued or in flight");
     if (bp == (d->backpressure != 0)) return W_IDLE;
     d->backpressure = (uint8_t)bp;
     if (!wr) return W_IDLE;
     if (!bp) return W_READY_RES;
-    /* §5.3: backpressure returning gives the writer a NEW pending `ready`. */
+    /* §5.5.2's UpdateBackpressure step 4: backpressure returning gives the writer a NEW pending `ready`. */
     {
         JSValue funcs[2];
         JSValue p = JS_NewPromiseCapability(ctx, funcs);
@@ -841,7 +896,8 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             STEP_GOTO(s->hdr.stage, S_ADVANCE, &s->w.phase, NULL);
             break;
         case OP_START_ERR:
-            /* §5.4: a start that rejects errors the stream, even with nothing written. */
+            /* Streams §5.5.4 Default controllers' SetUpWritableStreamDefaultController step 18: a start that
+               rejects errors the stream, even with nothing written. */
             c->started = 1;
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
@@ -850,7 +906,8 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         case OP_WRITE_OK: {
             JSValue pair[2];
             ws_take_pair(d->in_flight_write, pair);
-            DCHECK(!JS_IsUndefined(pair[0]), "§5.2 finished a write that was never in flight");
+            DCHECK(!JS_IsUndefined(pair[0]), "§5.5.2's WritableStreamFinishInFlightWrite step 1 ran with no "
+                                             "write in flight");
             JS_FreeValue(ctx, s->w.func);
             s->w.func = pair[0];
             JS_FreeValue(ctx, pair[1]);
@@ -863,8 +920,13 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         }
         case OP_WRITE_ERR: {
             JSValue pair[2];
+            /* §5.5.4's ProcessWrite step 5.1, which runs BEFORE step 5.2's FinishInFlightWriteWithError and
+               only while the stream is still writable — a stream already erroring keeps its algorithms,
+               because §5.5.2's FinishErroring step 12 still has [[AbortSteps]] to perform with them. */
+            if (d->state == WS_WRITABLE) wc_clear_algorithms(ctx, c);
             ws_take_pair(d->in_flight_write, pair);
-            DCHECK(!JS_IsUndefined(pair[1]), "§5.2 finished a write that was never in flight");
+            DCHECK(!JS_IsUndefined(pair[1]), "§5.5.2's WritableStreamFinishInFlightWriteWithError step 1 ran "
+                                             "with no write in flight");
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             JS_FreeValue(ctx, s->w.func);
@@ -880,7 +942,8 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         case OP_CLOSE_OK: {
             JSValue pair[2];
             ws_take_pair(d->in_flight_close, pair);
-            DCHECK(!JS_IsUndefined(pair[0]), "§5.2 finished a close that was never in flight");
+            DCHECK(!JS_IsUndefined(pair[0]), "§5.5.2's WritableStreamFinishInFlightClose step 1 ran with no "
+                                             "close in flight");
             JS_FreeValue(ctx, s->w.func);
             s->w.func = pair[0];
             JS_FreeValue(ctx, pair[1]);
@@ -894,7 +957,8 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
         case OP_CLOSE_ERR: {
             JSValue pair[2];
             ws_take_pair(d->in_flight_close, pair);
-            DCHECK(!JS_IsUndefined(pair[1]), "§5.2 finished a close that was never in flight");
+            DCHECK(!JS_IsUndefined(pair[1]), "§5.5.2's WritableStreamFinishInFlightCloseWithError step 1 ran "
+                                             "with no close in flight");
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             JS_FreeValue(ctx, s->w.func);
@@ -921,7 +985,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             break;
 
         case OP_WS_ABORT: case OP_WR_ABORT:
-            /* §5.2's WritableStreamAbort. */
+            /* Streams §5.5.1 Working with writable streams' WritableStreamAbort. */
             if (d->state == WS_CLOSED || d->state == WS_ERRORED) {
                 if (ws_short(ctx, s, 0, JS_UNDEFINED) < 0) return JS_STEP_ABRUPT;
                 break;
@@ -932,7 +996,7 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             break;
 
         case OP_WS_CLOSE: case OP_WR_CLOSE:
-            /* §5.2's WritableStreamClose. */
+            /* Streams §5.5.1 Working with writable streams' WritableStreamClose. */
             if (d->state == WS_CLOSED || d->state == WS_ERRORED || ws_close_queued_or_in_flight(d)) {
                 JS_ThrowTypeError(ctx, "this stream cannot be closed");
                 if (ws_short(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
@@ -940,13 +1004,15 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             }
             s->promise = JS_NewPromiseCapability(ctx, d->close_request);
             if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-            /* §5.2 step 7: a writer waiting on backpressure is released by the close — nothing more is coming,
-               so `ready` resolves rather than staying pending forever. */
+            /* §5.5.1's WritableStreamClose step 8 — its step 7 only NAMES the writer: a writer waiting on
+               backpressure is released by the close, nothing more is coming, so `ready` resolves rather than
+               staying pending forever. */
             STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
             s->next = S_ADVANCE;
             s->w.settle = (!JS_IsUndefined(d->writer) && d->backpressure && d->state == WS_WRITABLE)
                         ? W_READY_RES : W_IDLE;
-            /* §5.4's Close: the sentinel goes on the tail, so it is taken after every queued chunk. */
+            /* Streams §5.5.4 Default controllers' WritableStreamDefaultControllerClose step 1: the sentinel
+               goes on the tail, so it is taken after every queued chunk. */
             wc_enqueue(ctx, c, JS_UNDEFINED, 0);
             c->close_queued = 1;
             if (s->w.settle == W_IDLE) STEP_GOTO(s->hdr.stage, S_ADVANCE, &s->w.phase, NULL);
@@ -959,8 +1025,9 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
             break;
 
         case OP_WR_RELEASE:
-            /* §5.3's release: `ready` and `closed` both reject with a TypeError, and a promise that had
-               already settled is REPLACED so the identity change is visible. */
+            /* Streams §5.5.3 Writers' WritableStreamDefaultWriterRelease steps 4-6 — §5.3.3's `releaseLock()`
+               performs it: `ready` and `closed` both reject with a TypeError, and a promise that had already
+               settled is REPLACED so the identity change is visible. */
             JS_ThrowTypeError(ctx, "this writer was released while it was still in use");
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_GetException(ctx);
@@ -971,7 +1038,15 @@ static int js_ws_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out
 
         default:
             DCHECK(op == OP_WC_ERROR, "a §5 machine ran with an operation this component does not have");
+            /* §5.5.4's WritableStreamDefaultControllerErrorIfNeeded is the whole of this test, and its step 1
+               is why `error()` on a stream that is not writable does nothing rather than throwing. */
             if (d->state != WS_WRITABLE) return JS_STEP_DONE;
+            /* §5.5.4's WritableStreamDefaultControllerError step 3, which runs BEFORE its step 4's
+               StartErroring — this is the one entry that clears while the stream is still writable, and the
+               reason [[abortAlgorithm]] is never wanted afterwards is that an abort() arriving from here on
+               finds the state erroring, so §5.5.1's WritableStreamAbort step 8 makes it was-already-erroring
+               and §5.5.2's FinishErroring step 11 answers it without reaching step 12. */
+            wc_clear_algorithms(ctx, c);
             JS_FreeValue(ctx, s->w.err);
             s->w.err = JS_DupValue(ctx, step_arg(&s->hdr, 0));
             STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
@@ -994,7 +1069,8 @@ run:
         }
 
         if (s->hdr.stage == S_SIGNAL) {
-            /* §5.2 abort step 2: "signal abort on the controller's AbortController with reason". The WHOLE DOM
+            /* §5.5.1's WritableStreamAbort step 2: signal abort on the controller's AbortController with
+               reason. The WHOLE DOM
                operation, as a request — it runs the signal's abort algorithms and then fires `abort` at it, and
                both of those run code, which is why the state the stream is in is re-read in the next stage
                rather than remembered across this one. */
@@ -1015,7 +1091,7 @@ run:
                 continue;
             }
             if (d->abort_pending) {
-                /* §5.2 step 5: a second abort() answers the FIRST one's promise. */
+                /* §5.5.1's WritableStreamAbort step 5: a second abort() answers the FIRST one's promise. */
                 JS_FreeValue(ctx, s->promise);
                 s->promise = JS_DupValue(ctx, d->abort_p);
                 STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
@@ -1046,8 +1122,9 @@ run:
         }
 
         if (s->hdr.stage == S_SIZE) {
-            /* §5.4's GetChunkSize. A `size` that THROWS errors the stream and the size is 1 — the throw does
-               not propagate, and the state checks below are what then reject this write. */
+            /* Streams §5.5.4 Default controllers' WritableStreamDefaultControllerGetChunkSize steps 2-3. A
+               `size` that THROWS errors the stream through step 3's ErrorIfNeeded and the size is 1 — the
+               throw does not propagate, and the state checks below are what then reject this write. */
             if (JS_IsUndefined(c->size_fn)) {
                 s->size = 1;
                 STEP_GOTO(s->hdr.stage, S_WRITE_QUEUE, &s->w.phase, NULL);
@@ -1061,6 +1138,10 @@ run:
                 if (JS_IsException(out)) {
                     JS_FreeValue(ctx, s->w.err);
                     s->w.err = JS_GetException(ctx);
+                    /* Step 3's ErrorIfNeeded is ControllerError when the stream is writable, so its step 3
+                       clears the algorithms before StartErroring — including the very `size` that just threw,
+                       which is why a second write does not reach it again. */
+                    if (d->state == WS_WRITABLE) wc_clear_algorithms(ctx, c);
                     STEP_GOTO(s->hdr.stage, d->state == WS_WRITABLE ? S_ERROR : S_WRITE_QUEUE, &s->w.phase, NULL);
                     s->tail = S_WRITE_QUEUE;
                     continue;
@@ -1090,12 +1171,17 @@ run:
             }
             s->promise = ws_add_write_request(ctx, d);
             if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-            /* §5.4's EnqueueValueWithSize: a size that is not a finite non-negative number errors the stream
-               instead of being queued, and the write request then rejects through the erroring chain. */
+            /* EnqueueValueWithSize is Streams §8.1 Queue-with-sizes, NOT §5's — its steps 2-3 are what
+               §5.5.4's ControllerWrite step 1 performs: a size that is not a finite non-negative number errors
+               the stream (through step 2's ErrorIfNeeded) instead of being queued, and the write request then
+               rejects through the erroring chain. */
             if (!(s->size >= 0) || s->size != s->size || s->size > 1.7976931348623157e308) {
                 JS_ThrowRangeError(ctx, "a queuing strategy's size must be a finite, non-negative number");
                 JS_FreeValue(ctx, s->w.err);
                 s->w.err = JS_GetException(ctx);
+                /* ControllerWrite step 2's ErrorIfNeeded, which the state refusals above have already
+                   established reaches ControllerError, whose step 3 clears the algorithms. */
+                wc_clear_algorithms(ctx, c);
                 STEP_GOTO(s->hdr.stage, S_ERROR, &s->w.phase, NULL);
                 continue;
             }
@@ -1107,10 +1193,11 @@ run:
         }
 
         if (s->hdr.stage == S_ERROR) {
-            /* §5.2's DealWithRejection: a stream still WRITABLE starts erroring; one already erroring only has
-               to check whether it can finish. */
+            /* Streams §5.5.2 Interfacing with controllers' WritableStreamDealWithRejection: a stream still
+               WRITABLE starts erroring; one already erroring only has to check whether it can finish. */
             if (d->state == WS_WRITABLE) {
-                /* StartErroring does NOT touch the AbortSignal. Only §5.2's WritableStreamAbort signals it, and
+                /* StartErroring does NOT touch the AbortSignal. Only §5.5.1's WritableStreamAbort signals it,
+                   and
                    the difference is the whole point of the signal: a sink watches it to learn that someone
                    ASKED to abort, not that a write of its own happened to fail. Signalling here told every sink
                    its own thrown error was an abort request. */
@@ -1124,7 +1211,8 @@ run:
         }
 
         if (s->hdr.stage == S_FINISH_ERR) {
-            /* §5.2's FinishErroring runs only when NOTHING is in flight: the sink is still busy otherwise, and
+            /* §5.5.2's WritableStreamFinishErroring runs only when NOTHING is in flight (its step 2): the sink
+               is still busy otherwise, and
                reporting the stream errored while the page's own write promise is pending is exactly the
                reordering the erroring state exists to prevent. */
             if (d->state != WS_ERRORING || ws_in_flight(d) || !c->started) {
@@ -1148,8 +1236,9 @@ run:
         if (s->hdr.stage == S_ERR_ABORT) {
             if (!d->abort_pending) { STEP_GOTO(s->hdr.stage, S_ERR_CLOSE, &s->w.phase, NULL); continue; }
             if (d->abort_was_erroring) {
-                /* §5.2 step 10: an abort that arrived while the stream was already failing rejects with the
-                   stream's own reason rather than getting the sink asked a second time. */
+                /* §5.5.2's FinishErroring step 11 — its step 10 only clears the slot: an abort that arrived
+                   while the stream was already failing rejects with the stream's own reason rather than
+                   getting the sink asked a second time. */
                 JS_FreeValue(ctx, s->w.err);
                 s->w.err = JS_DupValue(ctx, d->stored_error);
                 s->w.settle = W_ABORT_REJ;
@@ -1158,6 +1247,9 @@ run:
                 continue;
             }
             if (JS_IsUndefined(c->abort_fn)) {
+                /* §5.4.4 Internal methods' [[AbortSteps]] step 2's ClearAlgorithms runs on this arm too: its
+                   step 1 performed the DEFAULT abort algorithm, which answers at once. */
+                wc_clear_algorithms(ctx, c);
                 s->w.settle = W_ABORT_RES;
                 STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
                 s->next = S_ERR_CLOSE;
@@ -1169,8 +1261,19 @@ run:
                                   out_cb, out_argc);
                 if (r > 0) return r;
                 cb_result = JS_UNDEFINED;
-                /* §5.4 builds the abort algorithm with PromiseCall, so a throwing `abort` becomes a rejected
-                   promise and takes the same reaction path a rejecting one does. */
+                /* PromiseCall IS NOT AN OPERATION THIS STANDARD HAS — the name stood here for years and comes
+                   from an edition that predates the move to Web IDL callbacks, and an operation nobody can
+                   look up is a citation with nothing behind it: it reads as authoritative and cannot be
+                   checked. What actually makes a throwing `abort` a rejected promise is two facts. Streams
+                   §5.5.4 Default controllers' SetUpWritableStreamDefaultControllerFromUnderlyingSink step 9
+                   sets the abort algorithm to one that INVOKES the page's `abort`; §5.2.3 The underlying sink
+                   API declares UnderlyingSinkAbortCallback returning Promise<undefined>, and Web IDL §3.12
+                   Invoking callback functions' last step says that for a callback whose return type is a
+                   promise type an abrupt completion is returned as a promise rejected with it. So the throw
+                   arrives here already a rejection and takes the same reaction path a rejecting one does. */
+                /* §5.4.4 Internal methods' [[AbortSteps]] step 2, which sits between its step 1's call and its
+                   step 3's return — after the call, so `c->abort_fn` is still the function that was invoked. */
+                wc_clear_algorithms(ctx, c);
                 JS_FreeValue(ctx, s->w.value);
                 s->is_close = 2;   /* the ABORT arm of the shared react stage */
                 if (JS_IsException(out)) {
@@ -1208,12 +1311,13 @@ run:
         }
 
         if (s->hdr.stage == S_ADVANCE) {
-            /* §5.4's AdvanceQueueIfNeeded. */
+            /* Streams §5.5.4 Default controllers' WritableStreamDefaultControllerAdvanceQueueIfNeeded. */
             if (!c->started || ws_in_flight(d)) { STEP_GOTO(s->hdr.stage, s->tail, &s->w.phase, NULL); continue; }
             if (d->state == WS_ERRORING) { STEP_GOTO(s->hdr.stage, S_FINISH_ERR, &s->w.phase, NULL); continue; }
             if (wc_queued(ctx, c) == 0) { STEP_GOTO(s->hdr.stage, s->tail, &s->w.phase, NULL); continue; }
             if (c->close_queued && wc_queued(ctx, c) == 1) {
-                /* §5.4's ProcessClose: the sentinel is taken and dequeued at once. */
+                /* §5.5.4's WritableStreamDefaultControllerProcessClose steps 2-3: the sentinel is taken and
+                   dequeued at once. */
                 JSValue pair[2];
                 wc_dequeue(ctx, c);
                 c->close_queued = 0;
@@ -1222,13 +1326,15 @@ run:
                 d->in_flight_close[1] = pair[1];
                 STEP_GOTO(s->hdr.stage, S_SINK_CLOSE, &s->w.phase, NULL);
             } else {
-                /* §5.4's ProcessWrite PEEKS: the chunk stays on the queue while the write is in flight, so
-                   `desiredSize` still counts it, and the fulfilment is what dequeues. */
+                /* §5.5.4's AdvanceQueueIfNeeded step 8 PEEKS and step 10 hands the chunk to ProcessWrite: the
+                   chunk stays on the queue while the write is in flight, so `desiredSize` still counts it, and
+                   ProcessWrite step 4.4 — the fulfilment — is what dequeues. */
                 JSValue pair[2];
                 JS_FreeValue(ctx, s->chunk);
                 s->chunk = wc_peek(ctx, c);
                 ws_take_write(ctx, d, pair);
-                DCHECK(!JS_IsUndefined(pair[0]), "§5.4 advanced onto a chunk with no write request behind it");
+                DCHECK(!JS_IsUndefined(pair[0]), "§5.5.4's AdvanceQueueIfNeeded reached a chunk with no write "
+                                                 "request behind it");
                 d->in_flight_write[0] = pair[0];
                 d->in_flight_write[1] = pair[1];
                 STEP_GOTO(s->hdr.stage, S_SINK_WRITE, &s->w.phase, NULL);
@@ -1239,14 +1345,16 @@ run:
             int is_close = (s->hdr.stage == S_SINK_CLOSE);
             JSValueConst args[2];
             JSValueConst fn = is_close ? c->close_fn : c->write_fn;
-            /* §5.4 SetUpWritableStreamDefaultControllerFromUnderlyingSink gives each algorithm its OWN argument
+            /* Streams §5.5.4 Default controllers' SetUpWritableStreamDefaultControllerFromUnderlyingSink steps
+               7-9 give each algorithm its OWN argument
                list, and they are not the same list: write is « chunk, controller », abort is « reason », and
                CLOSE IS EMPTY. The controller is what `start` was handed, so a close that also received it would
                be a second, undocumented way to reach it — and `close(){ arguments.length }` sees the difference. */
             args[0] = is_close ? JS_UNDEFINED : (JSValueConst)s->chunk;
             args[1] = s->ctrl;
             if (JS_IsUndefined(fn)) {
-                /* §5.4's default algorithms accept everything and answer at once. */
+                /* §5.5.4's SetUpWritableStreamDefaultControllerFromUnderlyingSink steps 3-5: the default
+                   algorithms accept everything and answer at once. */
                 out = JS_UNDEFINED;
             } else {
                 r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), fn, c->sink, is_close ? 0 : 2, args,
@@ -1254,6 +1362,10 @@ run:
                 if (r > 0) return r;
             }
             cb_result = JS_UNDEFINED;
+            /* §5.5.4's ProcessClose step 6 — after step 5's call and before steps 7-8's reactions, and ONLY
+               on the close arm: ProcessWrite clears at its step 5.1, on the rejection, not here. `fn` is
+               borrowed from the slot this releases, and is not read again. */
+            if (is_close) wc_clear_algorithms(ctx, c);
             s->is_close = (uint8_t)is_close;
             JS_FreeValue(ctx, s->w.value);
             if (JS_IsException(out)) {
@@ -1284,7 +1396,7 @@ run:
         }
 
         if (s->hdr.stage == S_WRITE_DONE) {
-            /* §5.4's ProcessWrite fulfilment: the chunk leaves the queue now, not when the sink took it. */
+            /* §5.5.4's ProcessWrite step 4.4: the chunk leaves the queue now, not when the sink took it. */
             wc_dequeue(ctx, c);
             s->w.settle = (!ws_close_queued_or_in_flight(d) && d->state == WS_WRITABLE)
                         ? ws_update_backpressure(ctx, d, c) : W_IDLE;
@@ -1294,8 +1406,9 @@ run:
         }
 
         if (s->hdr.stage == S_CLOSE_DONE) {
-            /* §5.2's FinishInFlightClose: a stream that was ERRORING when its close succeeded is CLOSED all
-               the same — the abort it was carrying is answered and the error discarded. */
+            /* §5.5.2's WritableStreamFinishInFlightClose step 6: a stream that was ERRORING when its close
+               succeeded is CLOSED all the same — the abort it was carrying is answered and the error
+               discarded. */
             if (d->state == WS_ERRORING) {
                 ws_set(ctx, d, &d->stored_error, JS_UNDEFINED);
                 if (d->abort_pending) {
@@ -1317,8 +1430,8 @@ run:
         }
 
         if (s->hdr.stage == S_CLOSE_ERR2) {
-            /* FinishInFlightCloseWithError also rejects a pending abort with the same reason: the abort is
-               what the close was serving. */
+            /* §5.5.2's WritableStreamFinishInFlightCloseWithError step 5 also rejects a pending abort with the
+               same reason: the abort is what the close was serving. */
             if (d->abort_pending) {
                 s->w.settle = W_ABORT_REJ;
                 STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
@@ -1330,7 +1443,8 @@ run:
         }
 
         if (s->hdr.stage == S_RELEASE) {
-            /* §5.3 release step 5, the SECOND of the two rejections. It is its own stage rather than a
+            /* §5.5.3's WritableStreamDefaultWriterRelease step 6, the SECOND of the two rejections — step 5 is
+               the FIRST, `ready`, which S_SETTLE has just run. It is its own stage rather than a
                re-entry of this one testing `settle`, because S_SETTLE clears `settle` to W_IDLE when the
                sequence finishes — so the test could never be true and `closed` was never rejected at all. A
                stage that decides what to do next by reading a variable the step before it has just reset is a
@@ -1343,7 +1457,8 @@ run:
 
         if (s->hdr.stage == S_RELEASE2) {
             WsWriterData *wr = wr_of(s->hdr.this_val);
-            DCHECK(wr != NULL, "a §5.3 release lost its writer between two of its own stages");
+            DCHECK(wr != NULL, "a §5.5.3 WritableStreamDefaultWriterRelease lost its writer between two of its "
+                               "own stages");
             ws_set(ctx, d, &d->writer, JS_UNDEFINED);
             wr_set(ctx, wr, &wr->stream, JS_UNDEFINED);
             STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
@@ -1369,7 +1484,8 @@ run:
 
 #define WS_DEF(i) { sizeof(JSWsState), js_ws_step, js_ws_fini, (i), \
                     .catches_abrupt = 1, .visit = js_ws_visit, \
-                    .algorithm = "Streams §5 WritableStream (the shared machine over §5.2-§5.4's operations)", \
+                    .algorithm = "Streams §5 Writable streams (the shared machine over §5.2-§5.4's classes and " \
+                                 "§5.5 Abstract operations' own)", \
                     .steps = js_ws_steps }
 static const JSTrampStepDef js_ws_defs[OP_N] = {
     WS_DEF(0),  WS_DEF(1),  WS_DEF(2),  WS_DEF(3),  WS_DEF(4),  WS_DEF(5),  WS_DEF(6),  WS_DEF(7),
@@ -1424,18 +1540,20 @@ static JSValue js_illegal_ctor(JSContext *ctx, JSValueConst nt, int argc, JSValu
     return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
-/* ---- §5.3's set-up, which is `getWriter()` and the writer's constructor both ------------------------------- */
+/* ---- §5.5.1's SetUpWritableStreamDefaultWriter, which `getWriter()` and the writer's constructor both reach - */
 
 enum { GW_SELF = 0, GW_CTOR };
-/* WHERE THIS MACHINE RESTS. §5.3's SetUpWritableStreamDefaultWriter decides in step 5-8 which of the writer's
-   two promises starts already settled, and SETTLING one is the page's code — so each settle is its own stage
-   and the set-up before them is one. */
+/* WHERE THIS MACHINE RESTS. Streams §5.5.1 Working with writable streams' SetUpWritableStreamDefaultWriter
+   decides in steps 5-8 which of the writer's two promises starts already settled, and SETTLING one is the
+   page's code — so each settle is its own stage and the set-up before them is one. */
 #define GW_STAGES(X) \
     X(GWS_START = IDL_STEP_FIRST, \
-      "Streams §5.3 SetUpWritableStreamDefaultWriter steps 1-8 (the lock, the two capabilities, and which of " \
-      "them the stream's state says starts settled)") \
-    X(GWS_A, "Streams §5.3 SetUpWritableStreamDefaultWriter step 5.2/6.1/7.1/8.1 (settling `ready`)") \
-    X(GWS_B, "Streams §5.3 SetUpWritableStreamDefaultWriter step 7.2/8.2 (settling `closed`)") \
+      "Streams §5.5.1 Working with writable streams' SetUpWritableStreamDefaultWriter steps 1-8 (the lock, the " \
+      "two capabilities, and which of them the stream's state says starts settled)") \
+    X(GWS_A, "Streams §5.5.1 Working with writable streams' SetUpWritableStreamDefaultWriter step " \
+             "5.2/6.1/7.1/8.1 (settling `ready`)") \
+    X(GWS_B, "Streams §5.5.1 Working with writable streams' SetUpWritableStreamDefaultWriter step 7.2/8.2 " \
+             "(settling `closed`)") \
     X(GWS_DONE, "Streams §5.2 getWriter() step 1 (the writer AcquireWritableStreamDefaultWriter answered)")
 enum { GW_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const GW_STEPS[] = { GW_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -1505,8 +1623,9 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
         wr->ready = JS_NewPromiseCapability(ctx, wr->ready_funcs);
         if (JS_IsException(wr->ready)) return -1;
 
-        /* §5.3's set-up: WHICH of the two promises starts already settled depends on the state the writer
-           arrived at. A stream that has already failed hands over a writer whose `ready` is rejected. */
+        /* §5.5.1's SetUpWritableStreamDefaultWriter steps 5-8: WHICH of the two promises starts already
+           settled depends on the state the writer arrived at. A stream that has already failed hands over a
+           writer whose `ready` is rejected. */
         s->ready_kind = s->closed_kind = W_IDLE;
         switch (d->state) {
         case WS_WRITABLE:
@@ -1521,7 +1640,8 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
             s->closed_kind = W_CLOSED_RES;
             break;
         default:
-            DCHECK(d->state == WS_ERRORED, "a §5.3 writer was set up on a stream in no state");
+            DCHECK(d->state == WS_ERRORED, "§5.5.1's SetUpWritableStreamDefaultWriter step 8 asserts the state is "
+                                   "errored, and this stream is in no state at all");
             s->ready_kind = W_READY_REJ;
             s->closed_kind = W_CLOSED_REJ;
             break;
@@ -1557,7 +1677,8 @@ static int js_gw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
 }
 
 static const IdlStepDecl js_gw_decl = { js_gw_step, sizeof(JSGetWriterState), js_gw_visit, NULL,
-    "Streams §5.3 SetUpWritableStreamDefaultWriter (getWriter() and the writer constructor both)",
+    "Streams §5.5.1 Working with writable streams' SetUpWritableStreamDefaultWriter (getWriter() and the "
+    "writer constructor both)",
     GW_STEPS };
 
 /* ---- §5.2's constructor ------------------------------------------------------------------------------------- */
@@ -1571,25 +1692,28 @@ static const IdlDictMember QUEUING_STRATEGY[] = {
 /* UnderlyingSink's members, in the order Web IDL reads them. */
 enum { SNK_ABORT = 0, SNK_CLOSE, SNK_START, SNK_TYPE, SNK_WRITE, SNK_N };
 
-/* WHERE THIS MACHINE RESTS. §5.2's constructor is seven steps, and four of them can run the page's code: the
-   new.target `prototype` read Web IDL §3.7.1 performs, each UnderlyingSink member read, `start` itself, and
-   the PromiseResolve over what `start` returned. */
+/* WHERE THIS MACHINE RESTS. §5.2.4's constructor is seven steps, and four of them can run the page's code: the
+   new.target `prototype` read Web IDL §3.8 Platform objects implementing interfaces performs, each
+   UnderlyingSink member read, `start` itself, and the PromiseResolve over what `start` returned. */
 #define WSC_STAGES(X) \
     X(WSC_START = IDL_STEP_FIRST, \
       "Streams §5.2 new WritableStream(underlyingSink, strategy) steps 1-2 (the sink is null when missing and " \
-      "must be an object; Web IDL §3.7.1's `new` requirement precedes them)") \
-    X(WSC_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — the read that makes " \
+      "must be an object; Web IDL §3.7.1 Interface object's `new` requirement precedes them)") \
+    X(WSC_PROTO, "Web IDL §3.8 Platform objects implementing interfaces (internally create a new object " \
+                 "implementing the interface reads Get(newTarget, prototype) — the read that makes " \
                  "`class S extends WritableStream {}` produce an S)") \
     X(WSC_READ, "Streams §5.2 step 2 (converting underlyingSink to an UnderlyingSink: one [[Get]] per member, " \
-                "in the order Web IDL §3.2.17 reads them)") \
+                "in the order Web IDL §3.2.17 Dictionary types reads them)") \
     X(WSC_BUILD, "Streams §5.2 steps 3-7 (the reserved `type`, InitializeWritableStream, ExtractSizeAlgorithm, " \
-                 "ExtractHighWaterMark, and §5.4's SetUpWritableStreamDefaultController up to its step 15)") \
-    X(WSC_CALL, "Streams §5.4 SetUpWritableStreamDefaultController step 15 (the start algorithm — the sink's " \
-                "own `start`, invoked directly so a throw propagates out of the constructor)") \
-    X(WSC_RESOLVE, "Streams §5.4 SetUpWritableStreamDefaultController step 16 (a promise resolved with " \
-                   "startResult — 27.5.1.3 step 2.f's `then` read is the page's)") \
-    X(WSC_THEN, "Streams §5.4 SetUpWritableStreamDefaultController steps 17-18 (the start promise's two " \
-                "reactions are attached and the stream is the constructor's result)")
+                 "ExtractHighWaterMark, and §5.5.4 Default controllers' SetUpWritableStreamDefaultController " \
+                 "up to its step 15)") \
+    X(WSC_CALL, "Streams §5.5.4 Default controllers' SetUpWritableStreamDefaultController step 15 (the start " \
+                "algorithm — the sink's own `start`, invoked with exception behavior rethrow so a throw " \
+                "propagates out of the constructor)") \
+    X(WSC_RESOLVE, "Streams §5.5.4 Default controllers' SetUpWritableStreamDefaultController step 16 (a " \
+                   "promise resolved with startResult — 27.5.1.3 step 2.f's `then` read is the page's)") \
+    X(WSC_THEN, "Streams §5.5.4 Default controllers' SetUpWritableStreamDefaultController steps 17-18 (the " \
+                "start promise's two reactions are attached and the stream is the constructor's result)")
 enum { WSC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const WSC_STEPS[] = { WSC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -1647,8 +1771,9 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     }
 
     if (hdr->stage == WSC_PROTO) {
-        /* Web IDL §3.7.1: the object is created from `? Get(newTarget, "prototype")` when that is an Object,
-           and from the interface prototype object otherwise — which is the whole of what makes
+        /* Web IDL §3.8 Platform objects implementing interfaces: `internally create a new object implementing
+           the interface` builds it from `? Get(newTarget, "prototype")` when that is an Object, and from
+           §3.7.3's interface prototype object otherwise — which is the whole of what makes
            `class S extends WritableStream {}` produce an S. It is a REQUEST because new.target can be any
            constructor a `Reflect.construct` names, so the read is the page's own accessor. */
         JSAtom a = JS_NewAtom(ctx, "prototype");
@@ -1714,14 +1839,15 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_FreeValue(ctx, size_fn);
         }
         if (JS_IsException(s->stream)) return -1;
-        /* §3.7.1's prototype, applied to the object CreateWritableStream just built: the operation makes a
-           WritableStream and the CONSTRUCTOR decides which one a subclass gets. */
+        /* Web IDL §3.8's prototype, applied to the object §5.5.1's CreateWritableStream just built: the
+           operation makes a WritableStream and the CONSTRUCTOR decides which one a subclass gets. */
         if (JS_IsObject(s->proto) && JS_SetPrototype(ctx, s->stream, s->proto) < 0) return -1;
         s->ctrl = JS_DupValue(ctx, ws_of(s->stream)->controller);
         c = wc_of(s->ctrl);
-        DCHECK(c != NULL, "CreateWritableStream answered a stream with no controller");
-        /* The SINK is the receiver §5.4 invokes the page's methods on — CreateWritableStream has no sink at
-           all, so it is set here rather than inside the operation. */
+        DCHECK(c != NULL, "§5.5.1's CreateWritableStream answered a stream with no controller");
+        /* The SINK is the callback this value §5.5.4's SetUpWritableStreamDefaultControllerFromUnderlyingSink
+           invokes the page's methods with — §5.5.1's CreateWritableStream has no sink at all, so it is set
+           here rather than inside the operation. */
         wc_set(ctx, c, &c->sink, JS_DupValue(ctx, sink));
         s->start_fn = s->snk[SNK_START];  s->snk[SNK_START] = JS_UNDEFINED;
         s->w.value = JS_UNDEFINED;
@@ -1735,8 +1861,13 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), s->start_fn, s->sink, 1, &arg, cb_result, &res,
                           out_cb, out_argc);
         if (r > 0) return r;
-        /* §5.4 invokes `start` directly rather than through PromiseCall, so a throw propagates out of the
-           constructor — which is why this machine does not declare catches_abrupt. */
+        /* `start` IS THE ONE THAT RETHROWS, and it is a difference the standard states rather than one this
+           engine chose. Streams §5.5.4 Default controllers' SetUpWritableStreamDefaultControllerFromUnderlying-
+           Sink step 6 invokes it with exception behavior "rethrow"; steps 7-9 invoke `write`, `close` and
+           `abort` with none, and §5.2.3 The underlying sink API declares those three returning
+           Promise<undefined>, which Web IDL §3.12 Invoking callback functions turns into a rejected promise on
+           an abrupt completion. So a throwing `start` propagates out of the constructor — which is why this
+           machine does not declare catches_abrupt — and a throwing `write` does not. */
         JS_FreeValue(ctx, s->w.value);
         s->w.value = res;
         cb_result = JS_UNDEFINED;
@@ -1764,15 +1895,23 @@ static const IdlStepDecl js_ws_ctor_decl = {
     "Streams §5.2 new WritableStream(underlyingSink, strategy)", WSC_STEPS
 };
 
-/* §5.4's CreateWritableStream — a stream whose ALGORITHMS are the caller's function objects rather than a
-   page's underlying sink. It is the operation §6's TransformStream is built out of: a transform stream's
-   writable half has no sink object at all, only closures over the transform stream itself.
+/* A stream whose ALGORITHMS are the caller's function objects rather than a page's underlying sink — which is
+   TWO Streams operations wearing one shape, and naming only one of them was a claim about the callers that was
+   half wrong. Streams §5.5.1 Working with writable streams' CreateWritableStream is what §6 Transform streams
+   builds a transform stream's writable half out of, because that half has no sink object at all, only closures
+   over the transform stream itself. Streams §9.2.1 Creation and manipulation's `set up` is the other, and File
+   System §2.5 The FileSystemWritableFileStream interface is its caller. THE DIFFERENCE IS TWO THINGS AND
+   NEITHER IS VISIBLE IN THIS SIGNATURE: CreateWritableStream takes a startAlgorithm and mints the stream
+   itself, while `set up` declares a start algorithm that returns undefined and is handed an object its caller
+   already minted via Web IDL. So a `set up` caller re-parents what this minted to its own interface prototype,
+   and the START ALGORITHM IS NOT HERE for either — starting is a separate operation because the caller decides
+   what the start promise is and when it settles; see writable_stream_start. Until it runs the controller is
+   not started, which is the state §5.5.4's SetUpWritableStreamDefaultController leaves a stream in between its
+   step 7 and its step 17 while the start algorithm is outstanding.
    The three algorithms are called with the arguments the matching underlying-sink member takes — `write(chunk)`,
-   `close()`, `abort(reason)` — and with `this` = the sink, which for this operation is undefined. `size_fn` may
-   be undefined for the implicit one-per-chunk strategy. All four are BORROWED.
-   THE START ALGORITHM IS NOT HERE. Starting is a separate operation because the caller decides what the start
-   promise is and when it settles; see writable_stream_start. Until it runs the controller is not started, which
-   is exactly the state §5.4 wants a stream to be in while its start algorithm is outstanding. */
+   `close()`, `abort(reason)` — and with `this` = the sink, which for both operations is undefined. `size_fn`
+   may be undefined for the implicit one-per-chunk strategy §9.2.1's `set up` defaults to and that
+   ExtractSizeAlgorithm produces for a strategy with no `size`. All four are BORROWED. */
 JSValue writable_stream_proto(JSContext *ctx)
 {
     JSValue proto;
@@ -1843,7 +1982,9 @@ JSValue writable_stream_create(JSContext *ctx, JSValueConst write_fn, JSValueCon
     c->abort_fn = JS_DupValue(ctx, abort_fn);
     c->size_fn = JS_DupValue(ctx, size_fn);
     c->hwm = hwm;
-    /* §5.2 step 6: the stream starts with backpressure exactly when its mark is already met. */
+    /* §5.5.4's SetUpWritableStreamDefaultController steps 13-14: the stream starts with backpressure exactly
+       when its mark is already met. It is set DIRECTLY rather than through ws_update_backpressure, because
+       step 14's UpdateBackpressure only settles a WRITER's `ready` and this stream has none yet. */
     d->backpressure = (uint8_t)wc_backpressure(c);
     return obj;
 

@@ -14,25 +14,35 @@ void writable_stream_free(JSContext *ctx);
 bool writable_stream_is(JSValueConst v);
 
 /* THE OPERATIONS A HOST PERFORMS ON A WRITABLE STREAM, as the function objects this component installed — the
-   §5 half of what readable_stream.h already exposes, and for the same reason: §4.2.4's pipeTo performs the
-   ABSTRACT operations, so a page that rebinds WritableStreamDefaultWriter.prototype.write must not thereby
-   change what a pipe does. BORROWED; the caller calls them, which is what keeps them suspendable. */
+   §5 half of what readable_stream.h already exposes, and for the same reason: §4.2.4's pipeTo() has one step,
+   and Streams §4.9.1 Working with readable streams' ReadableStreamPipeTo is what it performs — the ABSTRACT
+   operations, so a page that rebinds WritableStreamDefaultWriter.prototype.write must not thereby change what a
+   pipe does. BORROWED; the caller calls them, which is what keeps them suspendable. */
 typedef enum {
     WS_OP_GET_WRITER = 0,   /* on the STREAM */
     WS_OP_WRITE, WS_OP_CLOSE, WS_OP_ABORT, WS_OP_RELEASE,   /* on the WRITER */
-    WS_OP_STREAM_ABORT,     /* on the STREAM — §4.2.4's abort algorithm aborts the stream, not through a writer */
-    WS_OP_CTRL_ERROR,       /* on the CONTROLLER — and it IS §5.4's ErrorIfNeeded: `error` already returns
-                               without doing anything unless the stream is still writable */
+    WS_OP_STREAM_ABORT,     /* on the STREAM — §4.9.1's ReadableStreamPipeTo shuts down with an action of
+                               WritableStreamAbort(dest, …), which aborts the stream and not through a writer */
+    WS_OP_CTRL_ERROR,       /* on the CONTROLLER — and it IS Streams §5.5.4 Default controllers'
+                               WritableStreamDefaultControllerErrorIfNeeded: `error` already returns without
+                               doing anything unless the stream is still writable */
     WS_OP_N
 } WritableStreamOp;
 /* THIS REALM'S copy of a §5 abstract operation. OWNED: the caller frees. */
 JSValue writable_stream_op(JSContext *ctx, WritableStreamOp which);
 
-/* §5.4's CreateWritableStream, and the START that is deliberately not part of it — see writable_stream.c.
+/* THE SHAPE TWO STREAMS OPERATIONS SHARE, and this component's two callers use one each — see
+   writable_stream.c. Streams §5.5.1 Working with writable streams' CreateWritableStream is what §6 Transform
+   streams builds a transform stream's writable half out of, because that half has no sink object at all, only
+   closures over the transform stream; Streams §9.2.1 Creation and manipulation's `set up` is what a derived
+   interface uses, and File System §2.5 The FileSystemWritableFileStream interface is that caller. They differ
+   in one argument and one duty — CreateWritableStream takes a startAlgorithm and mints the stream, `set up`
+   declares a start algorithm that returns undefined and is handed an object its caller already minted — and
+   THE START IS DELIBERATELY NOT PART OF EITHER HERE (see writable_stream_start), which is what lets one helper
+   answer both; a `set up` caller re-parents what this minted to its own interface prototype.
    The three algorithms are the CALLER's function objects, called with the arguments the matching
-   underlying-sink member takes and with `this` = undefined; §6's TransformStream is built out of exactly this,
-   because a transform stream's writable half has no sink object at all. All four values are BORROWED, and the
-   answer is the stream (owned) with its controller already attached. */
+   underlying-sink member takes and with `this` = undefined. All four values are BORROWED, and the answer is
+   the stream (owned) with its controller already attached. */
 JSValue writable_stream_create(JSContext *ctx, JSValueConst write_fn, JSValueConst close_fn,
                                JSValueConst abort_fn, double hwm, JSValueConst size_fn);
 
@@ -50,7 +60,8 @@ bool writable_stream_query(JSValueConst v, WritableStreamState *pstate, bool *pl
 /* THIS REALM'S WritableStream.prototype — for an interface that INHERITS from §5's, which File System §2.5's
    `interface FileSystemWritableFileStream : WritableStream` does. Reached through this rather than through a
    class id the other component would have to be handed, because the prototype is what inheritance is about and
-   the class id is an implementation detail of where §3.7's per-realm slot lives. OWNED. */
+   the class id is an implementation detail of where Web IDL §3.7.3 Interface prototype object's per-realm slot
+   lives — that section is why there MUST be one of these in every realm. OWNED. */
 JSValue writable_stream_proto(JSContext *ctx);
 
 /* §5.4's controller for a stream this component built. BORROWED. */
