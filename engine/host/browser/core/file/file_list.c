@@ -19,9 +19,14 @@
  * parks with it. A malloc'd C vector of JSValues would revert a POINTER on a context switch and leave the
  * Files reachable from nothing.
  *
- * IT IS NOT SERIALIZABLE YET, honestly: §5's serialization steps are sub-serializations of each File, and the
- * File arm of structured clone does not exist. A shape-only entry in the clone table would be the stub the
- * IDL audit exists to expose. */
+ * IT IS NOT SERIALIZABLE YET, honestly: File API §5's serialization steps — HTML §2.7.1 Serializable objects
+ * is what declares that concept — are sub-serializations of each File, and the File arm of structured clone
+ * does not exist. A shape-only entry in the clone table would be the stub the IDL audit exists to expose.
+ * BOTH STANDARDS ARE NAMED IN THAT SENTENCE and neither used to be, which is what made every bare `§5` in this
+ * file unattributable: `serialization steps` is an HTML term, so this ONE site read as naming HTML §5 — which
+ * is Microdata — and the whole file's bare numbers were then inferred off it. It is the same defect
+ * core/css/media_list.c carried at its own indexed-getter comment, and the fix is the same: a file whose
+ * convention is one standard still has to say so at any site where a term belongs to another. */
 #include <stdlib.h>
 
 #include "check.h"
