@@ -194,7 +194,13 @@ const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                      "resumed", "resumedSegs", "resumedFlows", "resumedCands", "resumedWorlds",
                      "orphanClaims", "orphanClaimsMet", "orphanClaimsUnmet",
                      "hostAsked", "hostAnswered", "hostAnswersExtra", "hostAnswersLate", "hostTerminated",
-                     "pagedReqs",
+                     /* `pagedAsks` IS TO `sold` WHAT `resumed` IS TO THE THREE orphanClaims ROWS, and it is
+                        listed here for the same reason they are: `sold: 0` reads identically for a run whose
+                        frontier FITTED (the allocator never refused), one whose refusal arrived where the
+                        reclaim safepoint is not armed, and one asked at the floor holding nothing but the
+                        running flow — three states, opposite work, one number. The three rows partition the
+                        asks against `sold` (`unarmed + floor + sold == asks`), checked below. */
+                     "pagedReqs", "pagedAsks", "pagedUnarmed", "pagedFloor",
                      "decEntries", "decKiB", "headEntries", "headKiB",
                      "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendKiB",
                      "miscKiB", "perFlowKiB",
@@ -236,6 +242,9 @@ function coldPartition(c, total, parts, where) {
 function retiredReading(c) {
   coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
   coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
+  /* AND THE PAGER'S OWN PARTITION, which is what makes the `sold` arm below a reading rather than a zero.
+     engine_reclaim_tail leaves by exactly three doors and each counts itself on the line it leaves by. */
+  coldPartition(c, "pagedAsks", ["pagedUnarmed", "pagedFloor", "sold"], "engine_frontier_census");
   return `retired: ${c.finished} (${c.finishedFlows} exploration flow(s), ` +
          `${c.finishedCands} @S candidate session(s))` +
          (c.finished === 0
@@ -254,7 +263,26 @@ function retiredReading(c) {
                  `\`cand_rung\` are readings of a re-execution and do not cross the cold tier), so those ` +
                  `${c.soldCands} cost the search a measured distance the exploration sales did not`
                : ``)
-           : ``);
+           /* THE ZERO ARM IS A SENTENCE AND NOT A BLANK, because `sold 0` was the one row here a reader could
+              take three incompatible ways. `pagedAsks` is the positive statement: 0 asks means the allocator
+              never refused this instance anything, so nothing was paged because nothing NEEDED to be — the RAM
+              floor was not met and the pager is unexercised rather than broken. Asks with no sale is the loud
+              case and splits again: refusals declined OUTSIDE the reclaim safepoint are pressure the frontier
+              was never consulted about (arming, not paging, is what is short), while refusals answered at the
+              FLOOR are the pager consulted and holding nothing but the running flow, which is the physical end
+              of paging and the point at which the allocator's NULL is the honest answer. */
+           : `; sold 0 of ${c.pagedAsks} allocator refusal(s)` +
+             (c.pagedAsks === 0
+               ? ` — the allocator never refused this instance anything, so the RAM floor was NOT met in this ` +
+                 `run and the pager is unexercised rather than failing; the reclaim edge's write half ` +
+                 `(engine_reclaim_tail, solver/reclaim.c) has had nothing to answer`
+               : ` — ${c.pagedUnarmed} declined outside the reclaim safepoint and ${c.pagedFloor} answered at ` +
+                 `the frontier's floor` +
+                 (c.pagedFloor > 0
+                   ? `; a floor answer is the pager holding nothing but the running flow, which is where ` +
+                     `paging genuinely runs out`
+                   : `; not one refusal reached the frontier at all, so every one of them arrived where the ` +
+                     `safepoint is down — what is short here is ARMING and not members to sell`)));
 }
 /* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
    chain of gates produces rows in a geometric series and the last site in program order is always the biggest

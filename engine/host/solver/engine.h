@@ -1071,6 +1071,14 @@ typedef struct {
      * hostTerminated` is what is genuinely outstanding. */
     long host_terminated;    /* rendezvous ids WITHDRAWN — Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
+    /* …AND WHETHER THE ALLOCATOR'S REFUSAL EDGE WAS ASKED AT ALL, WHICH `sold` CANNOT STATE. A zero `sold` is
+     * three runs at once — the frontier fitted and nothing refused, a refusal arrived where the safepoint is
+     * not armed, or the pager was asked at the floor and held nothing but the running flow — and they take
+     * opposite work. This is `host_asked`'s service to `host_answered` performed for the pager, and the four
+     * rows are an exact partition (`unarmed + floor + sold == asks`), asserted at engine_frontier_census. */
+    long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
+    long paged_unarmed;      /* …declined because the reclaim safepoint was not armed (outside the flow step) */
+    long paged_floor;        /* …answered at the frontier's floor: no member but the flow that is running */
 } EngineFrontierCensus;
 void engine_frontier_census(EngineFrontierCensus *out);
 

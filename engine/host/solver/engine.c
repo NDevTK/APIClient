@@ -631,6 +631,25 @@ static long g_flows_sold;
    deliberately do not cross the tier), so selling one costs the search a measured distance that selling an
    exploration flow does not cost. One counter said neither. */
 static long g_flows_sold_flows, g_flows_sold_cands;
+/* …AND WHETHER THE REFUSAL EDGE WAS EVER ASKED, WHICH `sold` STRUCTURALLY CANNOT SAY. `sold: 0` is produced by
+   three runs that take OPPOSITE work and it reads identically for all of them: one that never met the RAM
+   floor (no pressure — the frontier fits), one whose refusal arrived OUTSIDE the safepoint (the reclaim is
+   armed only across the flow step, so an allocation refused anywhere else is declined here and the frontier is
+   never consulted), and one that met the floor holding nothing but the running flow (the pager's honest end,
+   and the only one of the three in which paging has actually run out). Three states behind one answer is what
+   CLAUDE.md's @S rule names, and the cure is the one this document already uses twice: `host_asked` is what
+   makes `host_answered` readable, and solver/result.c's `resumed` row was added one field over for exactly
+   this — a zero that meant BOTH "no residue was handed to this session" and "a rebuild carried nothing". The
+   seam states that it was CONSULTED, so its answer stops being readable as its absence.
+   THE FOUR ARE AN EXACT PARTITION, WHICH IS WHY THIS IS THREE ROWS AND NOT A FLAG. Every call to
+   engine_reclaim_tail returns after exactly one of the two refusals or the sale below, and a sale gives back
+   exactly one flow, so `asks == unarmed + floor + sold` holds by construction — asserted at
+   engine_frontier_census, where all four are in one hand, so an arm added to that hook later without a counter
+   fires there instead of silently re-labelling one of these.
+   THEY ARE THE INSTANCE'S TOTALS like `g_flows_sold` beside them, never a session's: the pressure a run met is
+   a fact about the instance, and a count that restarted would answer "did this session meet the floor" to a
+   reader asking whether the edge has ever fired at all. */
+static long g_reclaim_asks, g_reclaim_unarmed, g_reclaim_floor;
 
 int engine_take_paged_owed(void) {
     /* BELOW ZERO IS THE IMPOSSIBLE STATE, and it is the only one this function can see. The credit is a count
@@ -7055,8 +7074,14 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     Flow *tail;
 
     (void)opaque; (void)wanted;
-    if (!g_reclaim_allowed)
+    /* THE ASK IS COUNTED BEFORE IT IS JUDGED. The question this row answers is whether the allocator ever
+       reached this engine at all, and a refusal counted only where it is HONOURED reports the same 0 as no
+       pressure — which is the whole reason the three counters exist. */
+    g_reclaim_asks++;
+    if (!g_reclaim_allowed) {
+        g_reclaim_unarmed++;
         return 0;
+    }
     /* THE HOOK IS INSTALLED WITH THE SESSION AND REMOVED WITH IT, so reaching here without one would mean the
        runtime kept a pointer into a scheduler that no longer has a frontier to sell. */
     DCHECK(g_sess_live, "the runtime asked this engine to page out a flow with no live session — the hook is "
@@ -7069,8 +7094,14 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        its blob and its delta is applied to the heap, which is exactly what cold_park_flow and flow_release both
        refuse. Everything else in the frontier is a snapshot and can be written down. */
     tail = flow_worst(flow_running());
-    if (!tail)
-        return 0;   /* the floor: nothing here but the flow that is running */
+    if (!tail) {
+        /* THE FLOOR, AND IT IS A READING RATHER THAN A FAILURE — the frontier held nothing but the flow this
+           allocation is for, so paging has genuinely run out and the allocator's NULL is the physical answer.
+           Counted apart from the unarmed refusal above because the two take opposite work: this one says the
+           pager was consulted and had nothing, that one says it was consulted where it may not act. */
+        g_reclaim_floor++;
+        return 0;
+    }
     /* AND THE SHARPER STATEMENT, WHICH THE SOLVER'S OWN ALLOCATIONS MADE NECESSARY. "Not the flow the
        scheduler is switched into" is how flow_worst is CONSTRUCTED; what has to be true at this line is that
        the flow being sold is not the flow this allocation is FOR. Since the engine's own allocations now ask
@@ -7274,7 +7305,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "reported as the host's pairing being off");
     /* NOT RESET: g_host_asked/g_host_answered/g_host_answers_extra/g_host_answers_late/g_host_terminated are
        the INSTANCE's totals, not a session's — an instance opens one session, and a rate that restarted would
-       be a level again (see g_host_asked).
+       be a level again (see g_host_asked). g_reclaim_asks/g_reclaim_unarmed/g_reclaim_floor are on this list
+       for the same reason and are named rather than left off it: they partition against g_flows_sold, which
+       the assert above already requires to CARRY, so resetting three terms of that identity and not the fourth
+       would break it at the next census rather than at the line that did it.
        AND THIS LINE IS WHY "A COUNTER SURVIVED A SESSION BOUNDARY" IS NOT A HYPOTHESIS THE CENSUS'S PAIRING
        ASSERT CAN BE ANSWERED WITH. All of them are on this list together, so a total carried into a second
        session carries every term of the inequality and preserves its ORDER; there is no reading of a survival
@@ -8386,6 +8420,9 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_answers_late  = g_host_answers_late;
     out->host_terminated    = g_host_terminated;
     out->paged_reqs         = g_paged_reqs;
+    out->paged_asks         = g_reclaim_asks;
+    out->paged_unarmed      = g_reclaim_unarmed;
+    out->paged_floor        = g_reclaim_floor;
     /* THE PAYMENT PAIR IS AN INEQUALITY AND IT IS ASSERTED HERE, at the one place both halves are read
        together. `answered` counts the asks this session SETTLED; `asked` counts the ids it minted. A settled
        count above the minted count is not a large number, it is the two counters having stopped describing one
@@ -8425,6 +8462,22 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "it, so a sale path that reads it afterwards gets freed memory rather than a wrong count and this "
             "is where that shows",
             out->sold_flows, out->sold_cands, out->sold);
+    /* AND THE REFUSAL EDGE'S OWN PARTITION, which is the row that makes a zero `sold` READABLE. Every call to
+       engine_reclaim_tail leaves by exactly one of three doors — declined because the safepoint is not armed,
+       answered at the frontier's floor, or a sale that gives back exactly one flow — so the three arms are the
+       whole of the asks by construction. WHAT IT CATCHES is a fourth door added to that hook without a
+       counter: the reading composed from these rows would then attribute its refusals to one of the three that
+       did not happen, which is worse than the single ambiguous zero they replaced, because each arm would
+       still look like a measurement. `asks` is also the only row here that can distinguish "the allocator
+       never refused" from "the pager was consulted and could do nothing", and those are the two states a
+       reader of `sold: 0` has been unable to tell apart. */
+    DCHECKF(out->paged_unarmed + out->paged_floor + out->sold == out->paged_asks,
+            "the frontier census's reclaim rows do not partition the asks the allocator made (%ld unarmed + "
+            "%ld at the floor + %ld sold against %ld asked) — engine_reclaim_tail returns through exactly "
+            "three doors and each counts itself on the line it leaves by, so a difference is a fourth exit "
+            "added without a counter and every reading of the pager's behaviour is now attributing those "
+            "refusals to a door they did not go through",
+            out->paged_unarmed, out->paged_floor, out->sold, out->paged_asks);
     DCHECKF(out->host_answered <= out->host_asked,
             "the frontier census was taken with more host answers (%ld) than host asks (%ld) — the two count "
             "one population (an id this instance minted, and the ONE delivery that settled it), so "

@@ -509,7 +509,7 @@ char *result_swap_json(void) {
 char *result_cold_json(void) {
     /* The format string's widest expansion, as terms rather than as a sum somebody typed. `COLD_LITERAL` is the
        string with every conversion specifier removed. */
-    enum { COLD_LITERAL = 669, COLD_LONGS = 45, COLD_INTS = 4 };
+    enum { COLD_LITERAL = 712, COLD_LONGS = 48, COLD_INTS = 4 };
     ColdCensus c;
     /* THE PER-ARM HISTOGRAM, COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Its width is
        STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens this
@@ -593,6 +593,7 @@ char *result_cold_json(void) {
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,\"pagedReqs\":%ld,"
+                 "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                  "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                  "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
@@ -608,6 +609,7 @@ char *result_cold_json(void) {
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  e.paged_reqs,
+                 e.paged_asks, e.paged_unarmed, e.paged_floor,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                  c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                  c.pend_bytes / 1024, c.misc_bytes / 1024,
