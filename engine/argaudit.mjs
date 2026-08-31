@@ -95,12 +95,12 @@ const TOBOOL = /^JS_ToBool$/;
  * array, an inline compound literal, and a setter's single type. `idl_method_id_step` names an IdlStepDecl
  * instead of a body, and that struct's FIRST field is the step function — so the decl table is read too, and a
  * step machine's argv is audited exactly as a plain body's is. */
-function declaredTypes(src, C) {
+function declaredTypes(src, raw, C) {
   /* body name → { pos → Set(type) }, unioned over every declaration that names it — `magic` picks among them
      and text cannot follow a magic, so a shared body is judged against the union and the reader must check
      WHICH declaration a finding belongs to. */
   const decl = new Map();
-  for (const d of declarations(src).read(C).decls) {
+  for (const d of declarations(src, raw).read(C).decls) {
     if (!d.body || !d.types) continue;
     let m = decl.get(d.body);
     if (!m) decl.set(d.body, (m = new Map()));
@@ -114,7 +114,7 @@ function auditFile(path, C, findings) {
   const raw = readFileSync(path, "utf8");
   const src = strip(raw);
   const rel = relative(ROOT, path);
-  const decl = declaredTypes(src, C);
+  const decl = declaredTypes(src, raw, C);
   const fns = functions(src);
 
   /* Which function each offset is inside — the innermost definition containing it. */

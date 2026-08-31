@@ -48,6 +48,7 @@
 #include "core/events/input_device_capabilities.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/ui_event.h"
+#include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -244,8 +245,12 @@ static JSValue js_ke_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
  *
  * The four modifier arguments arrive ctrl, ALT, SHIFT, meta — not the order KE_MODIFIER is written in, so the
  * pairing is stated once, below. */
+/* `optional Window? viewArg = null` IS A DECLARED TYPE and it was IDL_ANY, so §3.2.15's brand test and
+   §3.2.20's null rule were both the body's, run by hand through ui_event_view_of. `Window` is one of the
+   interfaces no JSClassID names (the realm's own global OR a WindowProxy), so the position states its
+   interface as idl_arg_iface's PREDICATE rather than as a class. */
 static const IdlArgType KE_INIT_KB_ARGS[10] = {
-    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY /* Window? — ui_event_view_of */,
+    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_INTERFACE_NULLABLE,
     IDL_DOMSTRING, IDL_UNSIGNED_LONG,
     IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN,
 };
@@ -267,10 +272,12 @@ static JSValue js_ke_init_keyboard_event(JSContext *ctx, JSValueConst this_val, 
     /* Only `typeArg` is required, and §3.6 step 5's check for it is the declaration's. */
     DCHECK(argc >= 1, "initKeyboardEvent's body ran with no typeArg");
     /* `Window?` is a CONVERSION, so it runs — and throws — before the algorithm's first step and before the
-       dispatch-flag early return. */
-    view = ui_event_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
-    if (JS_IsException(view))
-        return view;
+       dispatch-flag early return. It is the DECLARATION's: what arrives is the IDL null or a Window, and §3.6
+       step 16.1 places §6.1.2's own `= null` for a call that never reached the position. `view` is CONSUMED by
+       ui_event_reinit, so it is dup'd. */
+    DCHECK(argc > 3, "initKeyboardEvent's `viewArg` declares §6.1.2's own `= null`, so §3.6 step 16.1 extends "
+                     "the conversion to it and the body is handed the position for every call");
+    view = JS_DupValue(ctx, argv[3]);
     /* `= ""` is the IDL's default for an absent keyArg, and it is also this attribute's un-initialized value.
        It is built HERE, before anything is written, because an allocation that fails after the event is half
        re-initialized leaves a state neither the old nor the new one. What a PRESENT keyArg holds is whatever
@@ -375,6 +382,11 @@ void keyboard_event_init(JSContext *ctx)
     g_modifier_state_id = idl_method_id(ctx, MODIFIER_STATE_ARGS, 1, js_ke_get_modifier_state, 0);
     g_init_kb_id = idl_method_id(ctx, KE_INIT_KB_ARGS, 10, js_ke_init_keyboard_event, 0);
     idl_optional_from(1);   /* §6.1.2: every argument but `typeArg` is optional */
+    /* UI Events §6.1.2 Initializers for interface KeyboardEvent: `optional Window? viewArg = null`. The
+       predicate is core/frame/window_proxy.h's, which owns what a Window IS in this engine; the default is the
+       IDL's own, so §3.6 step 16.1 places it rather than the body deciding what an absent `viewArg` means. */
+    idl_arg_iface(3, window_proxy_is_window, "Window");
+    idl_arg_default(3, IDL_DEFAULT_NULL, NULL);
     g_ctor_stepid = idl_method_id_dict(ctx, KE_CTOR_ARGS, 2, KE_INIT,
                                        (int)(sizeof(KE_INIT) / sizeof(KE_INIT[0])), js_ke_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional KeyboardEventInit eventInitDict = {})` */

@@ -115,6 +115,7 @@
 #include "core/events/mouse_event.h"
 #include "core/events/ui_event.h"
 #include "core/frame/viewport.h"
+#include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -406,11 +407,19 @@ static JSValue js_md_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
  * `short buttonArg` is declared IDL_UNSIGNED_SHORT and folded, for the reason md_button_fold gives: the pool
  * declares no `short`, and Web IDL §3.2.4.3's two halves are the modulo (the declaration's) and the signed fold (this
  * file's), so the member is declared with the WIDTH it has. */
+/* THE TWO INTERFACE POSITIONS ARE TWO DIFFERENT INTERFACES, which is what a single brand per declaration
+   cannot say and why idl_arg_iface exists: `viewArg` is `Window?` at 3 and `relatedTargetArg` is
+   `EventTarget?` at 14. Both were IDL_ANY, so both crossed unconverted and the body ran §3.2.15's brand test
+   by hand — twice, in argument order, to keep the order Web IDL's left-to-right conversion already states.
+   NEITHER INTERFACE IS A CLASS. A Window is the realm's own global OR a WindowProxy; an EventTarget is every
+   Node, every Window, every MessagePort, every AbortSignal and every `new EventTarget()`. So each position
+   states the PREDICATE its owning component already publishes, which is what §3.2.15's word "implements"
+   means for an interface anything inherits from. */
 static const IdlArgType MD_INIT_MOUSE_ARGS[15] = {
-    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY /* Window? — ui_event_view_of */, IDL_LONG,
+    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_INTERFACE_NULLABLE /* Window? */, IDL_LONG,
     IDL_LONG, IDL_LONG, IDL_LONG, IDL_LONG,
     IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN, IDL_BOOLEAN,
-    IDL_UNSIGNED_SHORT /* `short`, folded below */, IDL_ANY /* EventTarget? — event_target_nullable_of */,
+    IDL_UNSIGNED_SHORT /* `short`, folded below */, IDL_INTERFACE_NULLABLE /* EventTarget? */,
 };
 
 /* WHICH ARGUMENT SETS WHICH KEY MODIFIER — the spec's list order paired with this file's own modifier table,
@@ -430,19 +439,19 @@ static JSValue js_md_init_mouse_event(JSContext *ctx, JSValueConst this_val, int
         return JS_ThrowTypeError(ctx, "initMouseEvent called on something that is not a MouseEvent");
     /* Only `typeArg` is required, and §3.6 step 5's check for it is the declaration's. */
     DCHECK(argc >= 1, "initMouseEvent's body ran with no typeArg");
-    /* THE TWO UNION-TYPED POSITIONS ARE CONVERSIONS, so they run BEFORE the algorithm's first step and in
+    /* THE TWO INTERFACE-TYPED POSITIONS ARE CONVERSIONS, so they run BEFORE the algorithm's first step and in
        ARGUMENT ORDER — `viewArg` is argument 4 and `relatedTargetArg` argument 15, and a call that gets both
-       wrong reports the first one, which is what Web IDL's left-to-right conversion means. Both throw ahead of
-       the dispatch-flag early return below for the same reason: a conversion is not a step of the algorithm. */
-    view = ui_event_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
-    if (JS_IsException(view))
-        return view;
-    related = event_target_nullable_of(ctx, argc > 14 ? argv[14] : JS_UNDEFINED,
-                                       "a MouseEvent's `relatedTarget`");
-    if (JS_IsException(related)) {
-        JS_FreeValue(ctx, view);
-        return related;
-    }
+       wrong reports the first one, which is what Web IDL's left-to-right conversion means. Both of those are
+       now the DECLARATION's: the machine converts positions left to right and throws there, ahead of this body
+       and therefore ahead of the dispatch-flag early return below, which is the same order for the same reason
+       — a conversion is not a step of the algorithm. What arrives is the IDL null or a value implementing the
+       declared interface, and §3.6 step 16.1 places §16.1's own `= null` at both for a call that reached
+       neither. `view` and `related` are both CONSUMED below, so both are dup'd. */
+    DCHECK(argc > 14, "initMouseEvent's `viewArg` and `relatedTargetArg` both declare Pointer Events 4 §16.1's "
+                      "own `= null`, so §3.6 step 16.1 extends the conversion to the last of them and the body "
+                      "is handed every position for every call");
+    view = JS_DupValue(ctx, argv[3]);
+    related = JS_DupValue(ctx, argv[14]);
     /* "the same behavior as UIEvent.initUIEvent()" — §2.2's initialise-an-existing-event and `view`, with its
        early return: an event being dispatched is left exactly as it is, in every half. */
     if (!ui_event_reinit(ctx, this_val, argv[0], md_arg_bool(ctx, argc, argv, 1),
@@ -550,6 +559,15 @@ void mouse_event_init(JSContext *ctx)
     g_modifier_state_id = idl_method_id(ctx, MODIFIER_STATE_ARGS, 1, js_md_get_modifier_state, 0);
     g_init_mouse_id = idl_method_id(ctx, MD_INIT_MOUSE_ARGS, 15, js_md_init_mouse_event, 0);
     idl_optional_from(1);   /* every argument but `typeArg` is optional */
+    /* Pointer Events 4 §16.1 Initializers for interface MouseEvent: `optional Window? viewArg = null` and
+       `optional EventTarget? relatedTargetArg = null`. TWO interfaces in one argument list, so each position
+       states its own — the case idl_iface_brand's one-class-per-declaration walks past. Each predicate is the
+       owning component's, and each default is the IDL's own so §3.6 step 16.1 places it rather than the body
+       deciding what an absent position means. */
+    idl_arg_iface(3, window_proxy_is_window, "Window");
+    idl_arg_default(3, IDL_DEFAULT_NULL, NULL);
+    idl_arg_iface(14, event_target_is_value, "EventTarget");
+    idl_arg_default(14, IDL_DEFAULT_NULL, NULL);
     g_ctor_stepid = idl_method_id_dict(ctx, MD_CTOR_ARGS, 2, MD_INIT,
                                        (int)(sizeof(MD_INIT) / sizeof(MD_INIT[0])), js_md_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional MouseEventInit eventInitDict = {})` */

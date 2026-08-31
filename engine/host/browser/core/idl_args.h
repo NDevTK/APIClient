@@ -549,6 +549,36 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     }
 }
 
+/* WHICH DECLARED TYPES ASK FOR Web IDL §3.2.15 Interface types' BRAND — "If V implements I, then return … Throw
+ * a TypeError", whose `I` a declaration has to state or there is nothing to test against.
+ *
+ * IT IS ONE STATEMENT BECAUSE IT WAS FIVE. The set lived as the `t ==` chain of each conversion arm that reads
+ * a brand plus the DCHECK standing over each of them, and a set written once per reader is the second copy
+ * CLAUDE.md names — the one that drifts is the copy nobody runs against reality, and idl_concolic_rule directly
+ * above is here for exactly that reason and in exactly this shape. Every reader asks THIS: the three conversion
+ * arms, idl_arg_iface's position check, and the seal's sweep over the whole platform, so a type added to the
+ * enum that needs a brand is a type all five learn about at once.
+ *
+ * IDL_INTERFACE_NULLABLE and IDL_SEQUENCE_INTERFACE_NULLABLE are here even though §3.2.20's null rule collapses
+ * them to their un-nullable type before any brand is read: the DECLARATION is what the seal and idl_arg_iface
+ * see, and a `T?` position whose brand was never stated is a position whose non-null values reach §3.2.15 with
+ * nothing to test. The `?` decides whether null is admitted, never whether an interface was named. */
+static inline bool idl_type_brands_interface(IdlArgType t)
+{
+    switch (t) {
+    case IDL_INTERFACE:
+    case IDL_INTERFACE_NULLABLE:
+    case IDL_SEQUENCE_INTERFACE:
+    case IDL_SEQUENCE_INTERFACE_NULLABLE:
+    /* The union's ARM is the brand test itself — `(Node or DOMString)` picks the object arm exactly when the
+       value implements the interface — so a declaration with no brand cannot even choose an arm. */
+    case IDL_STRING_UNLESS_IFACE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
    `required` (an absent required member is a TypeError, and for a dictionary `undefined` IS absent). A member
    with no `required` written is optional, which is what leaving the field off an initialiser gives. */
@@ -1037,6 +1067,44 @@ void idl_iface_brand(JSClassID iface);
    reason the brand is part of the type. Set after the declaration, naming the member the LAST one made, as
    idl_iface_brand and idl_optional_from do. */
 void idl_iface_narrow(bool (*is)(JSValueConst v));
+
+/* DECLARE §3.2.15's `I` AT ONE POSITION — "If V implements I, then return … Throw a TypeError" — for a member
+ * the two declarations above cannot describe. It OVERRIDES them at the position it names and at no other, which
+ * is the same shape and the same reason IdlDictMember::iface has: one statement per declaration is everything a
+ * member whose interface-typed positions are all one interface needs, and the members that walk past it need
+ * the fact to be about the POSITION.
+ *
+ * TWO SHAPES OF MEMBER NEED IT AND THEY ARE DIFFERENT PROBLEMS.
+ *   - MORE THAN ONE INTERFACE IN ONE ARGUMENT LIST. Pointer Events 4 §16.1 Initializers for interface
+ *     MouseEvent declares `initMouseEvent(… optional Window? viewArg = null, … optional EventTarget?
+ *     relatedTargetArg = null)` — fifteen positions, two interfaces, and one brand per declaration can name at
+ *     most one of them. Declared IDL_ANY instead, BOTH positions crossed unconverted and the body ran the two
+ *     conversions by hand, which is the brand test written out in a body that a declared type exists to
+ *     replace.
+ *   - AN INTERFACE NO CLASS ID NAMES. §3.2.15's word is "implements", and idl_iface_brand's `JSClassID` answers
+ *     it only for an interface whose values are exactly one class. `EventTarget` is implemented by every Node,
+ *     every Window, every MessagePort, every AbortSignal and every `new EventTarget()`; `Window` is the
+ *     realm's own global OR a WindowProxy (see core/frame/window_proxy.h, which states why those are one type
+ *     test and not two). For those the class-plus-narrowing pair has no class to start from — the narrowing
+ *     runs AFTER a class check that has already refused the value — so the whole test has to be the predicate,
+ *     which is the same conclusion idl_this_iface below reaches for the receiver and for the same sentence of
+ *     the spec.
+ *
+ * IT TAKES A JSContext AND idl_iface_narrow DOES NOT, because an interface reached through a PROTOTYPE CHAIN is
+ * a per-realm fact: "does this object implement EventTarget" is answered by looking for THIS realm's
+ * EventTarget.prototype on its chain, and a predicate with no realm would have to reach for a remembered one —
+ * the one-fact-answered-from-one-place defect CLAUDE.md names. The ctx the conversion passes is the MEMBER's
+ * realm (js_call_c_function sets it), which is the realm whose interface object the call went through.
+ *
+ * `iface` is the interface's IDL identifier and it is NOT decoration: it is the subject of the TypeError, so a
+ * page that passes the wrong thing is told which interface it failed rather than that "the declared interface"
+ * was not implemented. It must outlive the declaration, so every caller passes a static.
+ *
+ * Set after the declaration, naming the member the LAST one made, exactly as idl_iface_brand and
+ * idl_optional_from do. The position must be one the declaration listed and its type must be one
+ * idl_type_brands_interface answers true for, both asserted here; idl_args_seal asserts the other direction
+ * over the whole platform — every branding position has a brand, stated here or by idl_iface_brand. */
+void idl_arg_iface(int index, bool (*is)(JSContext *ctx, JSValueConst v), const char *iface);
 
 /* DECLARE THE INTERFACE THIS MEMBER'S *RECEIVER* MUST IMPLEMENT — Web IDL §3.7 Interfaces' implementation-check
  * an object, step 3: "If object does not implement interface, then throw a TypeError."

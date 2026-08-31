@@ -120,10 +120,23 @@ export function contract(idlArgsHeaderPath) {
      THIS REPLACES, and the cost of the list was measured: it omitted `idl_variadic`, which composes with every
      declaration form, so two members that state their variadic tail correctly were reported as omitting it —
      a checker inventing work at the one place it claims authority. The set is read; a modifier a consumer
-     cannot interpret is REPORTED by that consumer rather than ignored, so the next one added says so. */
+     cannot interpret is REPORTED by that consumer rather than ignored, so the next one added says so.
+     THE PARAMETER LIST IS READ AS ONE BALANCED GROUP AND ITS NESTED ONES ARE REMOVED BEFORE THE `JSContext`
+     TEST, and both halves of that were wrong in the same direction. `[^)]*` stops at the FIRST `)`, so a
+     modifier taking a FUNCTION POINTER is read with its parameter list cut in half; and the token `JSContext`
+     inside that pointer's own parameters is not this function being handed a realm, which is the rule the
+     comment above states. Both together made `idl_arg_iface(int, bool (*)(JSContext *, JSValueConst), const
+     char *)` invisible — the drift this derivation exists to prevent, arriving through the READING rather than
+     through a list, and silently, since a modifier nobody sees is a modifier no consumer reports. */
   const modifiers = new Set();
-  for (const m of strip(src).matchAll(/\bvoid\s+idl_([a-z_0-9]+)\s*\(([^)]*)\)\s*;/g))
-    if (!/\bJSContext\b/.test(m[2])) modifiers.add(m[1]);
+  const stripped = strip(src);
+  for (const m of stripped.matchAll(/\bvoid\s+idl_([a-z_0-9]+)\s*\(/g)) {
+    const { text, end } = callText(stripped, m.index + m[0].length - 1);
+    if (!/^\s*;/.test(stripped.slice(end + 1))) continue;   /* a definition, not a prototype */
+    let own = text, prev;
+    do { prev = own; own = own.replace(/\([^()]*\)/g, " "); } while (own !== prev);
+    if (!/\bJSContext\b/.test(own)) modifiers.add(m[1]);
+  }
   if (!modifiers.has("optional_from"))
     throw new Error("idl_args.h no longer declares `void idl_optional_from(int)` with no JSContext — the "
       + "post-declaration modifiers are read by that shape, so the read has stopped finding them");
@@ -156,10 +169,21 @@ const DECL_RE = /\bidl_(method_id|method_id_ext|method_id_dict|method_id_step|se
    drift, and exported so a consumer can say which of a declaration's modifiers it took no account of — the
    difference between "there was nothing there" and "there was something this did not read". */
 export const INTERPRETED_MODS = new Set(["optional_from", "overload_split_optional_from", "variadic",
-                                         "iface_brand", "arg_default"]);
+                                         "iface_brand", "arg_default", "arg_iface"]);
 
-export function declarations(strippedSrc) {
+/* THE RAW SOURCE IS A SECOND, REQUIRED PARAMETER AND NOT AN OPTIONAL ONE. `strip` blanks a string literal to
+   spaces of the SAME LENGTH, so a declaration's own string arguments — the identifier `idl_arg_iface` names its
+   interface with — survive only at the same offsets in the unstripped text. Reading them means holding both,
+   and holding both means they must be the same program: an optional parameter here would let a consumer that
+   forgot it read every identifier as the empty string, which is the absent-versus-zero confusion this file
+   already fixed once for a type list. The length check is the whole of what makes "the same program" checkable,
+   and it is exactly what `strip`'s own contract guarantees. */
+export function declarations(strippedSrc, rawSrc) {
   const src = strippedSrc;
+  if (typeof rawSrc !== "string" || rawSrc.length !== src.length)
+    throw new Error("idl_argdecl: declarations() needs the STRIPPED source and the RAW source of the same file "
+      + "— `strip` preserves length, so a length that differs (or a missing second argument) means the two are "
+      + "not one program and every offset read out of one is meaningless in the other");
 
   const arrays = new Map();
   for (const m of src.matchAll(/\b(?:static\s+)?const\s+IdlArgType\s+([A-Za-z_][A-Za-z_0-9]*)\s*\[[^\]]*\]\s*=\s*\{([\s\S]*?)\}\s*;/g))
@@ -222,6 +246,7 @@ export function declarations(strippedSrc) {
           lhs: asg ? asg[1].replace(/\s+/g, "") : null,
           at: m.index, end, mods: new Map(),
           optionalFrom: null, optionalFromExpr: null, splitOptionalFrom: null, brand: null, defaults: [],
+          argIfaces: [],
         });
       }
 
@@ -232,6 +257,10 @@ export function declarations(strippedSrc) {
         const open = k.index + k[0].length - 1;
         const { text } = callText(src, open);
         const a = args(text);
+        /* The SAME call, read out of the raw source — same offsets, because `strip` preserves length. This is
+           the only place a modifier's string literal can come from, and it is split by the same splitter so
+           the two argument lists index alike. */
+        const rawArgs = args(rawSrc.slice(open + 1, open + 1 + text.length));
         let owner = null;
         for (const d of out) if (d.end < k.index && (!owner || d.end > owner.end)) owner = d;
         if (!owner) { orphans.push({ mod: k[1], at: k.index }); continue; }
@@ -242,6 +271,14 @@ export function declarations(strippedSrc) {
         else if (k[1] === "overload_split_optional_from") owner.splitOptionalFrom = num(a[0]);
         else if (k[1] === "variadic") owner.variadic = true;
         else if (k[1] === "iface_brand") owner.brand = (a[0] || "").trim();
+        /* §3.2.15's `I` at ONE position, and the IDL IDENTIFIER it names — which is the half a consumer can
+           check, because the spec states the interface at that position and the declaration states it again.
+           The string literal is blanked by `strip`, so what survives is its quotes; the identifier is read
+           back out of them rather than out of the raw source, since a consumer reading raw text here would be
+           reading a different program from the one every other field came from. */
+        else if (k[1] === "arg_iface") owner.argIfaces.push({ index: num(a[0]), pred: (a[1] || "").trim(),
+                                                              iface: rawArgs[2] === undefined ? null
+                                                                   : (rawArgs[2].match(/"([^"]*)"/) || [])[1] ?? null });
         else if (k[1] === "arg_default") owner.defaults.push({ index: num(a[0]), kind: (a[1] || "").trim(),
                                                               str: (a[2] || "").trim() });
       }

@@ -40,12 +40,18 @@
  *     helper's parameter is UNJOINED — named with its file and line, never dropped and never guessed.
  *   - A MEMBER INSTALLED FROM ONE FILE AND DECLARED IN ANOTHER is joined only when the declaration's
  *     assignment target is unique corpus-wide; where two files declare the same identifier it is UNJOINED.
+ *   - IT COMPARES A POSITION'S NAMED INTERFACE ONLY WHERE THE DECLARATION NAMES ONE. `idl_iface_brand` states
+ *     a CLASS ID and no identifier, so a member branded that way has nothing for the spec's interface name to
+ *     be compared against and the IFACE axis is silent about it — which is most of the platform. That silence
+ *     is this audit's reach, not a clean bill.
  *   - IT ASKS ABOUT ARGUMENTS AND NOTHING ELSE. A wrong RETURN type, a missing [CEReactions], a getter's
  *     value: none of them are visible here, and a clean run says nothing about them.
  *   - IT DOES NOT COMPARE DECLARED DEFAULTS. `idl_arg_default` states §3.6's third state at a position and the
  *     IDL states it with `= …`, so the join exists — but the two disagree wherever the declared type's
  *     conversion of `undefined` ALREADY IS the IDL's default (§7.1.2's second step makes `optional boolean
- *     x = false` such a case, and every init*Event in this tree leaves it out for that reason), so a diff of
+ *     x = false` such a case, and the legacy initializers leave `= false` out at their boolean positions for
+ *     that reason while STATING `= null` at their interface positions, where §3.6's absent-optional arm runs
+ *     ahead of §3.2.20's null rule and the body would otherwise be handed `undefined`), so a diff of
  *     the two lists is mostly rows a page cannot observe. Checking it means asking whether the default and the
  *     absent-optional conversion differ, which is a question about the TYPE's conversion and not about the
  *     declaration — the axis after this one, not a gap in it.
@@ -159,9 +165,10 @@ const declByLhs = new Map();        /* "file\0lhs" -> decl */
 const declByLhsGlobal = new Map();  /* lhs -> [ {file, decl} … ] */
 const stripped = new Map();
 for (const path of cFiles) {
-  const src = strip(env.sources.get(path).orig);
+  const raw = env.sources.get(path).orig;
+  const src = strip(raw);
   stripped.set(path, src);
-  const { decls } = declarations(src).read(C);
+  const { decls } = declarations(src, raw).read(C);
   for (const d of decls) {
     if (!d.lhs) continue;
     d.file = path;
@@ -312,6 +319,37 @@ for (const rec of world.records) {
     push("TYPE", { at, who, why: `position ${i} (\`${arg.name}\`) is ${typeText(arg)}, which idl_args.h declares `
       + `as \`${want}\`, and the declaration at ${dat} states \`${got}\`` });
   }
+
+  /* (5) AND WHICH INTERFACE A POSITION THAT NAMES ONE SAYS IT IS. `idl_arg_iface` states §3.2.15's `I` as a
+     PREDICATE plus the interface's IDL identifier, and the identifier is the subject of the TypeError the
+     conversion throws — so it is a claim about the spec that the spec can answer, and one no other axis here
+     sees: the type check above compares `IDL_INTERFACE_NULLABLE` against `IDL_INTERFACE_NULLABLE` and is
+     satisfied whichever interface the position meant. Without this the identifier is a string nobody verifies,
+     which is the same fact stated in two places with only one of them checked. */
+  for (const ai of decl.argIfaces) {
+    if (ai.index == null || ai.index >= spec.n) {
+      push("UNJOINED", { at, who, why: `idl_arg_iface at ${dat} names position \`${ai.index}\`, which is not a `
+        + `position the IDL's ${spec.n} argument(s) list` });
+      continue;
+    }
+    const t = resolveTypedef(op.arguments[ai.index].idlType);
+    const base = t && !t.union && !t.generic && typeof t.idlType === "string" ? t.idlType : null;
+    if (ai.iface == null || base == null) {
+      push("UNPLACEABLE", { at, who, why: `idl_arg_iface at ${dat} states position ${ai.index}'s interface and `
+        + `${ai.iface == null ? "this reader could not read the identifier it named"
+                              : `the IDL's type there (${typeText(op.arguments[ai.index])}) names no single interface`}` });
+      continue;
+    }
+    if (base === ai.iface) {
+      push("CONFIRMED", { at, who, why: `position ${ai.index} (\`${op.arguments[ai.index].name}\`) brands `
+        + `against \`${ai.iface}\` (${ai.pred})` });
+      continue;
+    }
+    push("IFACE", { at, who, why: `position ${ai.index} (\`${op.arguments[ai.index].name}\`) is `
+      + `${typeText(op.arguments[ai.index])}, and idl_arg_iface at ${dat} names the interface \`${ai.iface}\` — `
+      + "the identifier is the subject of the TypeError §3.2.15 throws, so a page is told it failed an "
+      + "interface the IDL does not declare there" });
+  }
 }
 
 function typeText(arg) {
@@ -331,8 +369,9 @@ console.log(`declaration-against-spec argument audit — ${cFiles.length} .c fil
   + `${world.records.length} install record(s)`);
 console.log(`${considered} installed operation(s) the corpus declares; ${joined} joined to a C declaration\n`);
 
-const ORDER = ["TYPE", "ARITY", "VARIADIC", "LENGTH", "UNJOINED", "UNPLACEABLE", "OVERLOADED", "MODIFIER", "CONFIRMED"];
-const JUDGED = new Set(["TYPE", "ARITY", "VARIADIC", "LENGTH"]);
+const ORDER = ["TYPE", "IFACE", "ARITY", "VARIADIC", "LENGTH", "UNJOINED", "UNPLACEABLE", "OVERLOADED",
+               "MODIFIER", "CONFIRMED"];
+const JUDGED = new Set(["TYPE", "IFACE", "ARITY", "VARIADIC", "LENGTH"]);
 for (const kind of ORDER) {
   const rows = findings.filter((f) => f.kind === kind);
   if (!rows.length) continue;

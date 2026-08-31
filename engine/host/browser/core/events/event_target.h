@@ -109,6 +109,14 @@ JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b);
    TypeError, because the one thing a page needs from it is which value it handed over was wrong.
    Answers JS_NULL / an owned dup, or JS_EXCEPTION with the TypeError live. */
 JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what);
+/* THE TYPE TEST ALONE — Web IDL §3.2.15's "If V implements I", with no null rule and no throw, which is what a
+   DECLARED argument position asks for: the argument machine resolves §3.2.20's `?` before any brand is read
+   and throws the TypeError itself, so a position declared `EventTarget?` states this predicate through
+   idl_arg_iface and nothing else. `EventTarget` is one of the interfaces no JSClassID can name — see the
+   paragraph above — so this is stated as a predicate rather than as a class, and it takes a JSContext because
+   the answer is a walk to THIS realm's EventTarget.prototype. Side-effect-free: it touches no Proxy, so it
+   runs none of the page's code. */
+bool event_target_is_value(JSContext *ctx, JSValueConst v);
 /* §2.7's INTERFACE PROTOTYPE OBJECT, where addEventListener, removeEventListener and dispatchEvent live.
    An interface that INHERITS EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel, Window — chains
    its own prototype to this one; it does not install the three members again. That is not a saving, it is the

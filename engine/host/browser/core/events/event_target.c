@@ -2171,22 +2171,20 @@ JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b)
     }
 }
 
-/* WEB IDL §3.2.15's `EventTarget?` — see event_target.h for why the conversion is stated here and once. */
-JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what)
+/* WEB IDL §3.2.15's "If V implements I" OVER THIS INTERFACE — see event_target.h. It is the whole of the type
+   test and it is SEPARATE from the conversion below because a declared argument position asks only this half:
+   §3.2.20's null rule is resolved by the argument machine before any brand is read, so a position declared
+   `EventTarget?` needs the predicate and nothing else. Both halves are then one statement of the walk. */
+bool event_target_is_value(JSContext *ctx, JSValueConst v)
 {
     JSValue p, target;
     bool ok = false;
 
-    DCHECK(what != NULL && *what,
-           "the `EventTarget?` conversion was asked to convert a value for a member it cannot name — the name "
-           "is the whole of what the TypeError tells the page");
-    if (JS_IsUndefined(v) || JS_IsNull(v))
-        return JS_NULL;
     /* THE WALK NEVER TOUCHES A PROXY. JS_GetPrototype on one runs its getPrototypeOf trap — the page's code,
        from inside a C activation — and a Proxy is not a platform object implementing the interface anyway, so
        a link that is one ends the walk instead of being asked. */
     if (!JS_IsObject(v) || JS_IsProxy(v))
-        return JS_ThrowTypeError(ctx, "%s must be an EventTarget or null", what);
+        return false;
     target = event_target_proto(ctx);
     p = JS_GetPrototype(ctx, v);
     while (JS_IsObject(p) && !JS_IsProxy(p)) {
@@ -2198,7 +2196,28 @@ JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *wha
     }
     JS_FreeValue(ctx, p);
     JS_FreeValue(ctx, target);
-    if (!ok)
+    return ok;
+}
+
+/* WEB IDL §3.2.15's `EventTarget?` — see event_target.h for why the conversion is stated here and once.
+   RESIDUAL — WHAT IS NOT COVERED: its two remaining callers are DICTIONARY members (FocusEventInit's and
+   MouseEventInit's `relatedTarget`); the argument position that used to come through here states the predicate
+   above with idl_arg_iface, and a dictionary member cannot, because IdlDictMember carries a `JSClassID iface`
+   and idl_dict_walk_start takes a walk-wide `bool (*narrow)(JSValueConst)` with no realm — and `EventTarget` is
+   an interface no class id names.
+   WHAT THE NEXT DIFF BUILDS: the dictionary counterpart of idl_arg_iface — a per-member predicate taking a
+   JSContext, on IdlDictMember beside its `iface`.
+   HOW ITS ABSENCE SHOWS: the throw is the event body's and runs AFTER §3.2.17 has read every member, so
+   `new FocusEvent("f", {relatedTarget: 42, get view(){ throw new Error("ran"); }})` reports `ran` where a
+   browser reports the TypeError — `relatedTarget` sorts before `view` at the same level. */
+JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what)
+{
+    DCHECK(what != NULL && *what,
+           "the `EventTarget?` conversion was asked to convert a value for a member it cannot name — the name "
+           "is the whole of what the TypeError tells the page");
+    if (JS_IsUndefined(v) || JS_IsNull(v))
+        return JS_NULL;
+    if (!event_target_is_value(ctx, v))
         return JS_ThrowTypeError(ctx, "%s must be an EventTarget or null", what);
     return JS_DupValue(ctx, v);
 }

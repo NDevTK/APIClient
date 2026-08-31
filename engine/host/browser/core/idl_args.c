@@ -266,6 +266,15 @@ typedef struct {
     bool    allow_resizable;
 } IdlTypedArrayDecl;
 
+/* §3.2.15 Interface types' `I` AT ONE POSITION — see idl_arg_iface. A struct rather than two parallel arrays
+   for the reason IdlArgDefault is one: a position cannot be described half in one array and half in another,
+   and here the halves are the TEST and the name the TypeError it throws is about. `is == NULL` is a position
+   that stated none, which is every position of every member that never calls idl_arg_iface. */
+typedef struct {
+    bool      (*is)(JSContext *ctx, JSValueConst v);
+    const char *iface;
+} IdlArgIface;
+
 typedef struct {
     IdlSetter  setter;      /* set instead of `body` for an attribute setter */
     bool       null_to_empty;
@@ -304,6 +313,12 @@ typedef struct {
        for a member that declares no IDL_TYPED_ARRAY position, which is nearly all of them; allocated by the
        first declaration that names one and freed with the pool exactly as `arg_dflts` is. */
     IdlTypedArrayDecl *arg_views;
+    /* §3.2.15's `I` AT EACH POSITION THAT OVERRODE THE MEMBER-WIDE BRAND — see idl_arg_iface. One entry per
+       position the IDL lists; NULL for a member that stated none, which is nearly all of them, allocated by
+       the first idl_arg_iface and freed with the pool exactly as `arg_views` is. A position whose entry has no
+       predicate falls back to `iface`/`iface_narrow` below, which is the shape and the reason
+       IdlDictMember::iface's zero has. */
+    IdlArgIface *arg_ifaces;
     int        magic;
     /* An IDL_DICT argument's members, and their names INTERNED at registration. The atom must be live at both
        the request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it
@@ -524,12 +539,16 @@ static int            g_sealed_at; /* how many members existed then: a member mi
 static void idl_seal_check_splits(void);
 /* The same one-moment check for idl_typed_array's other half — defined beside the conversion's own helpers. */
 static void idl_seal_check_typed_arrays(void);
+/* And for idl_iface_brand's / idl_arg_iface's — every §3.2.15 position of every member has an interface named,
+   asked once where the whole platform is in hand rather than on whichever call first reaches the position. */
+static void idl_seal_check_ifaces(void);
 static void idl_seal_check_dictionaries(void);
 
 void idl_args_seal(void)
 {
     idl_seal_check_splits();
     idl_seal_check_typed_arrays();
+    idl_seal_check_ifaces();
     idl_seal_check_dictionaries();
     g_sealed = true;
     g_sealed_at = g_n;
@@ -1061,6 +1080,81 @@ static void idl_seal_check_typed_arrays(void)
                    "a member stated §3.2.26 step 1's T at a position whose declared type is not "
                    "IDL_TYPED_ARRAY — no other conversion reads it, so the declaration describes a position "
                    "that never asks for it");
+        }
+    }
+}
+
+/* ---- Web IDL §3.2.15 Interface types' `I`, RESOLVED AT ONE DECLARED POSITION ------------------------------
+ *
+ * Three readers below, all in this file and all inside one loop of one function, so the DCHECKs these carry
+ * name a line a reader can act on by reading three call sites — which is the test
+ * §AN-ASSERT-THAT-NAMES-A-REMEDY sets, and a FOURTH caller is the point at which the position has to travel
+ * with the check rather than being derived here. `ti` is the DECLARED position the argument takes its
+ * statements from, derived once by the conversion (a variadic tail repeats the last declared position), never
+ * the argument's own index.
+ */
+
+/* HAS THIS POSITION AN INTERFACE TO TEST AGAINST — the question every arm below asserts before it tests, and
+   the one the seal asks of the whole platform at once. Either form is an answer; neither is a defect. */
+static bool idl_arg_iface_stated(const IdlMember *m, int ti)
+{
+    DCHECK(ti >= 0 && ti < m->nargs,
+           "§3.2.15's brand was asked about a position outside the member's own declared type list");
+    return (m->arg_ifaces != NULL && m->arg_ifaces[ti].is != NULL) || m->iface != 0;
+}
+
+/* §3.2.15's "If V implements I". The POSITION's own predicate is the whole test where one was stated, and the
+   declaration-wide class-plus-narrowing pair otherwise — the same override IdlDictMember::iface states for a
+   dictionary's members, asked here for an argument list's positions. */
+static bool idl_arg_implements(JSContext *ctx, const IdlMember *m, int ti, JSValueConst v)
+{
+    DCHECK(idl_arg_iface_stated(m, ti), "§3.2.15's brand test ran at a position that declared no interface");
+    if (m->arg_ifaces != NULL && m->arg_ifaces[ti].is != NULL)
+        return m->arg_ifaces[ti].is(ctx, v);
+    return idl_is_iface(v, m->iface) && (m->iface_narrow == NULL || m->iface_narrow(v));
+}
+
+/* WHAT THE TypeError IS ABOUT. A per-position declaration names its interface in the IDL's own identifier;
+   idl_iface_brand names a CLASS and has no identifier to give, and that absence is the positive statement
+   "this declaration says which class, not which interface" rather than a field nobody wrote — so the phrase
+   the message falls back to is the one that was there before any position could name itself. */
+static const char *idl_arg_iface_subject(const IdlMember *m, int ti)
+{
+    DCHECK(idl_arg_iface_stated(m, ti), "the subject of §3.2.15's TypeError was asked for at a position that "
+                                        "declared no interface");
+    return (m->arg_ifaces != NULL && m->arg_ifaces[ti].is != NULL) ? m->arg_ifaces[ti].iface
+                                                                   : "the declared interface";
+}
+
+/* EVERY BRANDING POSITION HAS A BRAND, over the whole platform at once — idl_seal_check_typed_arrays' sweep
+   asked of the other half of a declared type. It is the SEAL rather than the conversion because a member whose
+   brand was never stated is broken from the moment it is declared, and the conversion only finds out on the
+   first call that reaches that position: a member nothing on this page happens to call would carry the defect
+   to whichever page does. The set of types that ask is idl_type_brands_interface's and no copy of it. */
+static void idl_seal_check_ifaces(void)
+{
+    int i, k;
+
+    for (i = 0; i < g_n; i++) {
+        const IdlMember *m = idl_member(i);
+
+        for (k = 0; k < m->nargs; k++) {
+            bool stated = m->arg_ifaces != NULL && m->arg_ifaces[k].is != NULL;
+
+            DCHECKF(!idl_type_brands_interface(m->types[k]) ||
+                    stated || m->iface != 0,
+                    "member `%s` declares a Web IDL §3.2.15 interface type at position %d and names no "
+                    "interface for it — §3.2.15 is \"If V implements I, then return … Throw a TypeError\", and "
+                    "with no I there is nothing to test, so every value would reach the body. State it with "
+                    "idl_iface_brand (the class, for an interface one class names exactly) or with "
+                    "idl_arg_iface (the predicate and the identifier, for a position whose interface a class "
+                    "cannot express or whose member declares more than one)",
+                    m->name ? m->name : "(not installed)", k);
+            DCHECKF(idl_type_brands_interface(m->types[k]) || !stated,
+                    "member `%s` stated §3.2.15's interface at position %d, whose declared type asks for no "
+                    "brand — no conversion reads it, so the declaration describes a position that never tests "
+                    "against it",
+                    m->name ? m->name : "(not installed)", k);
         }
     }
 }
@@ -2720,9 +2814,15 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (t == IDL_STRING_UNLESS_CALLABLE)
             t = JS_IsFunction(ctx, a) ? IDL_ANY : IDL_DOMSTRING;   /* the union's own rule */
         if (t == IDL_STRING_UNLESS_IFACE) {
-            DCHECK(m->iface != 0, "a member declared an interface-or-string union with no interface to brand "
-                                  "against — the class is half of what that type states");
-            t = idl_is_iface(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
+            DCHECK(idl_arg_iface_stated(m, ti),
+                   "a member declared an interface-or-string union with no interface to brand against — the "
+                   "interface is half of what that type states, and it is stated by idl_iface_brand for one a "
+                   "class names exactly or by idl_arg_iface for one it does not");
+            /* THE ARM IS §3.2.15's OWN TEST, so it is the SAME resolution the throwing arms below make and not
+               a bare class comparison: a declaration that narrowed its interface past a class (`(HTMLElement
+               or DOMString)`) would otherwise take the object arm for every Node and the narrowing would be a
+               statement two arms of one file disagreed about. */
+            t = idl_arg_implements(ctx, m, ti, a) ? IDL_ANY : IDL_DOMSTRING;
         }
         /* §3.2.25 over `(object or DOMString)`, read in the union algorithm's own ORDER — which is the whole
            of the difference between this and IDL_STRING_OR_DICT. The union names no nullable and no dictionary
@@ -3036,13 +3136,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     /* §3.2.15's ELEMENT CONVERSION — the brand test, which runs none of the page's code, so
                        the cursor's next pull follows it in the same step. */
                     if (t == IDL_SEQUENCE_INTERFACE) {
-                        DCHECK(m->iface != 0,
-                               "an interface-sequence argument was declared with no class to brand against — "
-                               "idl_iface_brand is the other half of that type");
-                        if (!idl_is_iface(s->dw.seq.value, m->iface) ||
-                            (m->iface_narrow && !m->iface_narrow(s->dw.seq.value))) {
-                            JS_ThrowTypeError(ctx, "an element of argument %d does not implement the declared "
-                                              "interface", s->i + 1);
+                        DCHECK(idl_arg_iface_stated(m, ti),
+                               "an interface-sequence argument was declared with no interface to brand against "
+                               "— idl_iface_brand (a class) or idl_arg_iface (a predicate and the identifier) "
+                               "is the other half of that type");
+                        if (!idl_arg_implements(ctx, m, ti, s->dw.seq.value)) {
+                            JS_ThrowTypeError(ctx, "an element of argument %d does not implement %s",
+                                              s->i + 1, idl_arg_iface_subject(m, ti));
                             return JS_STEP_ABRUPT;
                         }
                         JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, JS_DupValue(ctx, s->dw.seq.value));
@@ -3128,10 +3228,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (t == IDL_INTERFACE) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            DCHECK(m->iface != 0, "an interface-typed argument was declared with no class to brand against — "
-                                  "idl_iface_brand is the other half of that type");
-            if (!idl_is_iface(a, m->iface) || (m->iface_narrow && !m->iface_narrow(a))) {
-                JS_ThrowTypeError(ctx, "argument %d does not implement the declared interface", s->i + 1);
+            DCHECK(idl_arg_iface_stated(m, ti),
+                   "an interface-typed argument was declared with no interface to brand against — "
+                   "idl_iface_brand (a class) or idl_arg_iface (a predicate and the identifier) is the other "
+                   "half of that type");
+            if (!idl_arg_implements(ctx, m, ti, a)) {
+                JS_ThrowTypeError(ctx, "argument %d does not implement %s", s->i + 1,
+                                  idl_arg_iface_subject(m, ti));
                 return JS_STEP_ABRUPT;
             }
             *slot = JS_DupValue(ctx, a);
@@ -3759,6 +3862,11 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
        member states, so a member with no IDL_TYPED_ARRAY position costs nothing and idl_args_seal reads the
        NULL as "none stated" — which is a defect only where the member's own types name one. */
     idl_member(idx)->arg_views = NULL;
+    /* NO PER-POSITION INTERFACE STATED, on the same terms: the array is allocated by the first idl_arg_iface
+       this member makes, and a NULL means every branding position of this member takes idl_iface_brand's one
+       class. That is a STATEMENT and not a hole — the same one IdlDictMember::iface's zero makes — and
+       idl_args_seal is what turns "neither was stated" into a crash. */
+    idl_member(idx)->arg_ifaces = NULL;
     /* HOW MANY THE CALLER MUST PASS. §3.6 throws a TypeError before ANY conversion when a call has fewer
        arguments than the member has required ones — `new File()` throws rather than building a File with no
        bits. It is the same number `first_optional` already states, capped at what the IDL declares, so a member
@@ -4095,6 +4203,47 @@ void idl_iface_narrow(bool (*is)(JSValueConst v))
            "brand has to be there to narrow");
     DCHECK(is != NULL, "an interface narrowing named no predicate");
     idl_member(g_n - 1)->iface_narrow = is;
+}
+
+/* §3.2.15's `I` AT ONE POSITION — see idl_args.h for the two shapes of member that need it and for why its
+   predicate takes a realm where idl_iface_narrow's does not. Same "names the last declaration" rule as
+   idl_optional_from, and it is PER POSITION rather than per member for the reason idl_typed_array is: a
+   member's IDL may write several, and initMouseEvent's two are two DIFFERENT interfaces. */
+void idl_arg_iface(int index, bool (*is)(JSContext *ctx, JSValueConst v), const char *iface)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "a position's interface was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(index >= 0 && index < m->nargs,
+           "a position's interface named a position the member's IDL does not list — the index is into that "
+           "member's own type list, which is what its declaration passed");
+    /* THE POSITION'S TYPE IS WHAT ASKS FOR AN INTERFACE, so stating one anywhere else is a declaration about a
+       different position — and, if the member was declared elsewhere, about a different member entirely. The
+       seal asserts the same pair from the other side, over every declaration at once. */
+    DCHECK(idl_type_brands_interface(m->types[index]),
+           "§3.2.15's interface was stated at a position whose declared type asks for no brand — no conversion "
+           "reads it, so the declaration describes a position that never tests against it");
+    DCHECK(is != NULL,
+           "a position's interface named no predicate — §3.2.15 step 1 is \"If V implements I\", and the "
+           "component that owns the interface is the only thing that can answer it");
+    DCHECK(iface != NULL && *iface,
+           "a position's interface named a predicate and no identifier — the identifier is the SUBJECT of the "
+           "TypeError §3.2.15 throws, so a page told only that `the declared interface` was not implemented "
+           "learns nothing it did not already know");
+    if (m->arg_ifaces == NULL) {
+        m->arg_ifaces = calloc((size_t)m->nargs, sizeof *m->arg_ifaces);
+        CHECK(m->arg_ifaces != NULL,
+              "idl: OOM recording a member's per-position interfaces — a member that cannot be declared is an "
+              "API the page cannot call");
+    }
+    /* Twice is two answers to one question, and only one of them decides every call — the same refusal
+       idl_typed_array makes, and for the same reason: it is restating the POSITION that is wrong, not the
+       combination of what was said. */
+    DCHECK(m->arg_ifaces[index].is == NULL, "a position stated §3.2.15's interface twice");
+    m->arg_ifaces[index].is = is;
+    m->arg_ifaces[index].iface = iface;
 }
 
 /* WEB IDL §3.7 Interfaces' implementation-check an object, its `interface` INPUT — see idl_args.h for why this
@@ -5470,6 +5619,10 @@ void idl_args_pool_free(void)
            stated one at, and it holds nothing but the enumerator and two flags. */
         free(idl_member(i)->arg_views);
         idl_member(i)->arg_views = NULL;
+        /* §3.2.15's per-position `I` — the predicates and the identifiers are the declaring component's, and
+           the array naming them is this pool's, allocated by the first position a member stated one at. */
+        free(idl_member(i)->arg_ifaces);
+        idl_member(i)->arg_ifaces = NULL;
         /* The joined stage labels — the strings themselves are statics belonging to the member and to this
            file; the array that names them is this pool's, and it is part of the BORROWED definition. */
         free((void *)idl_member(i)->steps);

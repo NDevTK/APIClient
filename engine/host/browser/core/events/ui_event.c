@@ -177,10 +177,19 @@ double ui_event_dict_f64(JSContext *ctx, JSValueConst init, const char *name)
     return n;
 }
 
-/* `Window?` — Web IDL §3.2.15 over the `view` member and over every legacy initializer's `viewArg`. null and
-   undefined are the IDL null; a Window (which in this engine is the realm's global, and is also what `window`
-   hands a page) crosses as itself; anything else matches the type not at all, which is Web IDL's own TypeError
-   and not a rule this file invents. Answers JS_NULL / an owned dup, or JS_EXCEPTION with the throw live. */
+/* `Window?` — Web IDL §3.2.15 over the `view` member of UIEventInit. null and undefined are the IDL null; a
+   Window (which in this engine is the realm's global, and is also what `window` hands a page) crosses as
+   itself; anything else matches the type not at all, which is Web IDL's own TypeError and not a rule this file
+   invents. Answers JS_NULL / an owned dup, or JS_EXCEPTION with the throw live.
+   RESIDUAL — WHAT IS NOT COVERED: the three legacy initializers' `viewArg` no longer comes through here, because
+   an ARGUMENT position states its interface with idl_arg_iface's predicate; a DICTIONARY member cannot, because
+   IdlDictMember carries a `JSClassID iface` and idl_dict_walk_start takes a walk-wide
+   `bool (*narrow)(JSValueConst)` with no realm — and `Window` is an interface no class id names.
+   WHAT THE NEXT DIFF BUILDS: the dictionary counterpart of idl_arg_iface — a per-member predicate taking a
+   JSContext, on IdlDictMember beside its `iface`, so `{ "view", IDL_INTERFACE_NULLABLE, … }` is declarable.
+   HOW ITS ABSENCE SHOWS: the throw is this body's and runs AFTER §3.2.17 has read every member, so
+   `new UIEvent("x", {view: 42, get which(){ throw new Error("ran"); }})` reports `ran` where a browser reports
+   the TypeError — `view` sorts before `which` at the same level, so a declared member would refuse it first. */
 JSValue ui_event_view_of(JSContext *ctx, JSValueConst v)
 {
     if (JS_IsUndefined(v) || JS_IsNull(v))
@@ -398,8 +407,13 @@ JSValue ui_event_get_modifier_state(JSContext *ctx, JSValueConst ev, JSValueCons
  * event that can never be dispatched, because §4.5 leaves the initialized flag unset and only an initializer
  * sets it. Every interface that inherits UIEvent inherits this member too, which is exactly §6's point that
  * "initializing all the attributes requires calls to two initializer methods". */
+/* `optional Window? viewArg = null` IS A DECLARED TYPE and it was IDL_ANY, so §3.2.15's brand test and
+   §3.2.20's null rule were both the body's, run by hand through ui_event_view_of — the brand written out in a
+   body that a declared type exists to replace. `Window` is one of the interfaces no JSClassID names (the
+   realm's own global OR a WindowProxy — core/frame/window_proxy.h states why those are one type test), so the
+   position states its interface as idl_arg_iface's PREDICATE rather than as a class. */
 static const IdlArgType UE_INIT_UI_ARGS[5] = {
-    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY /* Window? */, IDL_LONG,
+    IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_INTERFACE_NULLABLE, IDL_LONG,
 };
 
 /* §2.2's initialise-an-existing-event steps and this interface's `view`, INCLUDING the early return: an event
@@ -472,9 +486,12 @@ static JSValue js_ue_init_ui_event(JSContext *ctx, JSValueConst this_val, int ar
     /* Only `typeArg` is required, and §3.6 step 5's check for it is the declaration's. The other four are
        optional and genuinely absent when the page passes fewer. */
     DCHECK(argc >= 1, "initUIEvent's body ran with no typeArg");
-    view = ui_event_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
-    if (JS_IsException(view))
-        return view;
+    /* §3.2.15's brand and §3.2.20's null are the DECLARATION's — what arrives is the IDL null or a Window, and
+       §3.6 step 16.1 places the declared `= null` for a call that never reached the position, which is why the
+       position is here whatever the page passed. `view` is CONSUMED by ui_event_reinit, so it is dup'd. */
+    DCHECK(argc > 3, "initUIEvent's `viewArg` declares §6.1.1's own `= null`, so §3.6 step 16.1 extends the "
+                     "conversion to it and the body is handed the position for every call");
+    view = JS_DupValue(ctx, argv[3]);
     if (argc > 4 && JS_ToInt32(ctx, &detail, argv[4]) < 0) {
         JS_FreeValue(ctx, view);
         return JS_EXCEPTION;
@@ -526,6 +543,13 @@ void ui_event_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_ui_class, &d);
     g_init_ui_id = idl_method_id(ctx, UE_INIT_UI_ARGS, 5, js_ue_init_ui_event, 0);
     idl_optional_from(1);   /* §6.1.1: every argument but `typeArg` is optional */
+    /* UI Events §6.1.1 Initializers for interface UIEvent: `optional Window? viewArg = null`. The predicate is
+       core/frame/window_proxy.h's, which is the component that owns what a Window IS in this engine. */
+    idl_arg_iface(3, window_proxy_is_window, "Window");
+    /* AND ITS `= null`, so §3.6 step 16.1 places the IDL's own default for a call that never reached the
+       position — the body would otherwise have to decide what an absent `viewArg` means, which is the IDL's
+       declaration re-derived in a body. */
+    idl_arg_default(3, IDL_DEFAULT_NULL, NULL);
     g_ctor_stepid = idl_method_id_dict(ctx, UE_CTOR_ARGS, 2, UE_INIT,
                                        (int)(sizeof(UE_INIT) / sizeof(UE_INIT[0])), js_ue_ctor, 0);
     idl_optional_from(1);   /* §3.2.1: `constructor(DOMString type, optional UIEventInit init = {})` */
