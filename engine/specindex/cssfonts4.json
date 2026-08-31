@@ -1,0 +1,1402 @@
+{
+ "spec": "CSS Fonts Module Level 4",
+ "key": "cssfonts4",
+ "base": "https://drafts.csswg.org/css-fonts-4/",
+ "specUpdated": "28 August 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Basic Font Properties",
+   "page": "",
+   "id": "basic-font-props"
+  },
+  "3": {
+   "title": "Font Rendering Controls",
+   "page": "",
+   "id": "font-rendering-controls"
+  },
+  "4": {
+   "title": "Font Resources",
+   "page": "",
+   "id": "font-resources"
+  },
+  "5": {
+   "title": "Font Matching Algorithm",
+   "page": "",
+   "id": "font-matching-algorithm"
+  },
+  "6": {
+   "title": "Font Feature Properties",
+   "page": "",
+   "id": "font-rend-props"
+  },
+  "7": {
+   "title": "Font Feature and Variation Resolution",
+   "page": "",
+   "id": "font-feature-variation-resolution"
+  },
+  "8": {
+   "title": "Font Variation Properties",
+   "page": "",
+   "id": "font-variation-props"
+  },
+  "9": {
+   "title": "Color Font Support",
+   "page": "",
+   "id": "color-font-support"
+  },
+  "10": {
+   "title": "Font Taxonomy",
+   "page": "",
+   "id": "font-taxonomy"
+  },
+  "11": {
+   "title": "Font Technologies and Formats",
+   "page": "",
+   "id": "font-technologies-formats"
+  },
+  "12": {
+   "title": "Object Model",
+   "page": "",
+   "id": "object-model"
+  },
+  "13": {
+   "title": "Serializing",
+   "page": "",
+   "id": "serializing"
+  },
+  "14": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "15": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "16": {
+   "title": "Accessibility Considerations",
+   "page": "",
+   "id": "a11y"
+  },
+  "17": {
+   "title": "Acknowledgments",
+   "page": "",
+   "id": "acknowledgments"
+  },
+  "18": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "1.2": {
+   "title": "Interaction With Font-Relative Units",
+   "page": "",
+   "id": "font-relative"
+  },
+  "2.1": {
+   "title": "Font family: the font-family property",
+   "page": "",
+   "id": "font-family-prop"
+  },
+  "2.1.1": {
+   "title": "Syntax of <font-family-name>",
+   "page": "",
+   "id": "font-family-name-syntax"
+  },
+  "2.1.2": {
+   "title": "Syntax of <generic-font-family>",
+   "page": "",
+   "id": "generic-family-name-syntax"
+  },
+  "2.1.3": {
+   "title": "Syntax of <system-font-family-name>",
+   "page": "",
+   "id": "system"
+  },
+  "2.1.4": {
+   "title": "Relationship Between Faces and Families",
+   "page": "",
+   "id": "font-families"
+  },
+  "2.1.5": {
+   "title": "Generic font families",
+   "page": "",
+   "id": "generic-font-families"
+  },
+  "2.2": {
+   "title": "Font weight: the font-weight property",
+   "page": "",
+   "id": "font-weight-prop"
+  },
+  "2.2.1": {
+   "title": "Relative Weights",
+   "page": "",
+   "id": "relative-weights"
+  },
+  "2.2.2": {
+   "title": "Missing weights",
+   "page": "",
+   "id": "missing-weights"
+  },
+  "2.3": {
+   "title": "Font width: the font-width property",
+   "page": "",
+   "id": "font-width-prop"
+  },
+  "2.3.1": {
+   "title": "Font width: the font-stretch legacy name alias",
+   "page": "",
+   "id": "font-stretch-prop"
+  },
+  "2.4": {
+   "title": "Font style: the font-style property",
+   "page": "",
+   "id": "font-style-prop"
+  },
+  "2.5": {
+   "title": "Font size: the font-size property",
+   "page": "",
+   "id": "font-size-prop"
+  },
+  "2.5.1": {
+   "title": "Absolute Size Keyword Mapping Table",
+   "page": "",
+   "id": "absolute-size-mapping"
+  },
+  "2.6": {
+   "title": "Relative sizing: the font-size-adjust property",
+   "page": "",
+   "id": "font-size-adjust-prop"
+  },
+  "2.7": {
+   "title": "Shorthand font property: the font property",
+   "page": "",
+   "id": "font-prop"
+  },
+  "2.8": {
+   "title": "Controlling synthetic faces",
+   "page": "",
+   "id": "font-synthesis-intro"
+  },
+  "2.8.1": {
+   "title": "Controlling synthesized bold: The font-synthesis-weight property",
+   "page": "",
+   "id": "font-synthesis-weight"
+  },
+  "2.8.2": {
+   "title": "Controlling synthesized oblique: The font-synthesis-style property",
+   "page": "",
+   "id": "font-synthesis-style"
+  },
+  "2.8.3": {
+   "title": "Controlling synthesized small caps: The font-synthesis-small-caps property",
+   "page": "",
+   "id": "font-synthesis-small-caps"
+  },
+  "2.8.4": {
+   "title": "Controlling synthesized super- and subscripts: The font-synthesis-position property",
+   "page": "",
+   "id": "font-synthesis-position"
+  },
+  "2.8.5": {
+   "title": "Controlling synthetic faces: the font-synthesis shorthand",
+   "page": "",
+   "id": "font-synthesis"
+  },
+  "3.1": {
+   "title": "Introduction to Font Rendering Controls",
+   "page": "",
+   "id": "font-rendering-controls-introduction"
+  },
+  "3.2": {
+   "title": "The Font Display Timeline",
+   "page": "",
+   "id": "font-display-timeline"
+  },
+  "4.1": {
+   "title": "The @font-face rule",
+   "page": "",
+   "id": "font-face-rule"
+  },
+  "4.2": {
+   "title": "Font family: the font-family descriptor",
+   "page": "",
+   "id": "font-family-desc"
+  },
+  "4.3": {
+   "title": "Font reference: the src descriptor",
+   "page": "",
+   "id": "src-desc"
+  },
+  "4.3.1": {
+   "title": "Parsing the src descriptor",
+   "page": "",
+   "id": "font-face-src-parsing"
+  },
+  "4.3.2": {
+   "title": "Loading an individual item in the src descriptor",
+   "page": "",
+   "id": "font-face-src-loading"
+  },
+  "4.3.3": {
+   "title": "Selecting items in the src",
+   "page": "",
+   "id": "font-face-src-formats"
+  },
+  "4.3.3.1": {
+   "title": "Local font fallback",
+   "page": "",
+   "id": "local-font-fallback"
+  },
+  "4.4": {
+   "title": "Font property descriptors: the font-style , font-weight , and font-width descriptors",
+   "page": "",
+   "id": "font-prop-desc"
+  },
+  "4.4.1": {
+   "title": "Font width: the font-stretch legacy name alias",
+   "page": "",
+   "id": "font-stretch-desc"
+  },
+  "4.5": {
+   "title": "Character range: the unicode-range descriptor",
+   "page": "",
+   "id": "unicode-range-desc"
+  },
+  "4.5.1": {
+   "title": "Using character ranges to define composite fonts",
+   "page": "",
+   "id": "composite-fonts"
+  },
+  "4.6": {
+   "title": "Font features and variations: the font-feature-settings and font-variation-settings descriptors",
+   "page": "",
+   "id": "font-rend-desc"
+  },
+  "4.7": {
+   "title": "Using named instances from variable fonts: the font-named-instance descriptor",
+   "page": "",
+   "id": "font-named-instance"
+  },
+  "4.8": {
+   "title": "Font request guidelines",
+   "page": "",
+   "id": "font-requests"
+  },
+  "4.8.1": {
+   "title": "Font loading guidelines",
+   "page": "",
+   "id": "font-face-loading"
+  },
+  "4.8.2": {
+   "title": "Font fetching requirements",
+   "page": "",
+   "id": "font-fetching-requirements"
+  },
+  "4.9": {
+   "title": "Controlling Font Display Per Font-Face: the font-display descriptor",
+   "page": "",
+   "id": "font-display-desc"
+  },
+  "4.9.1": {
+   "title": "Controlling Font Display Per Font-Family via @font-feature-values",
+   "page": "",
+   "id": "font-display-font-feature-values"
+  },
+  "4.10": {
+   "title": "Default font language overriding: the font-language-override descriptor",
+   "page": "",
+   "id": "font-language-override-desc"
+  },
+  "4.11": {
+   "title": "Default font metrics overriding: the ascent-override , descent-override and line-gap-override descriptors",
+   "page": "",
+   "id": "font-metrics-override-desc"
+  },
+  "5.1": {
+   "title": "Localized name matching",
+   "page": "",
+   "id": "localized-name-matching"
+  },
+  "5.2": {
+   "title": "Matching font styles",
+   "page": "",
+   "id": "font-style-matching"
+  },
+  "5.3": {
+   "title": "Cluster matching",
+   "page": "",
+   "id": "cluster-matching"
+  },
+  "5.4": {
+   "title": "Character handling issues",
+   "page": "",
+   "id": "char-handling-issues"
+  },
+  "6.1": {
+   "title": "Glyph selection and positioning",
+   "page": "",
+   "id": "glyph-selection-positioning"
+  },
+  "6.2": {
+   "title": "Language-specific display",
+   "page": "",
+   "id": "language-specific-support"
+  },
+  "6.3": {
+   "title": "Kerning: the font-kerning property",
+   "page": "",
+   "id": "font-kerning-prop"
+  },
+  "6.4": {
+   "title": "Ligatures: the font-variant-ligatures property",
+   "page": "",
+   "id": "font-variant-ligatures-prop"
+  },
+  "6.5": {
+   "title": "Subscript and superscript forms: the font-variant-position property",
+   "page": "",
+   "id": "font-variant-position-prop"
+  },
+  "6.6": {
+   "title": "Capitalization: the font-variant-caps property",
+   "page": "",
+   "id": "font-variant-caps-prop"
+  },
+  "6.7": {
+   "title": "Numerical formatting: the font-variant-numeric property",
+   "page": "",
+   "id": "font-variant-numeric-prop"
+  },
+  "6.8": {
+   "title": "Alternates and swashes: the font-variant-alternates property",
+   "page": "",
+   "id": "font-variant-alternates-prop"
+  },
+  "6.9": {
+   "title": "Defining font specific alternates: the @font-feature-values rule",
+   "page": "",
+   "id": "font-feature-values"
+  },
+  "6.9.1": {
+   "title": "Basic syntax",
+   "page": "",
+   "id": "font-feature-values-syntax"
+  },
+  "6.9.2": {
+   "title": "Multi-valued feature value definitions",
+   "page": "",
+   "id": "multi-value-features"
+  },
+  "6.10": {
+   "title": "East Asian text rendering: the font-variant-east-asian property",
+   "page": "",
+   "id": "font-variant-east-asian-prop"
+  },
+  "6.11": {
+   "title": "Overall shorthand for font rendering: the font-variant property",
+   "page": "",
+   "id": "font-variant-prop"
+  },
+  "6.12": {
+   "title": "Low-level font feature settings control: the font-feature-settings property",
+   "page": "",
+   "id": "font-feature-settings-prop"
+  },
+  "6.13": {
+   "title": "Font language override: the font-language-override property",
+   "page": "",
+   "id": "font-language-override-prop"
+  },
+  "7.1": {
+   "title": "Default features",
+   "page": "",
+   "id": "default-features"
+  },
+  "7.2": {
+   "title": "Feature and variation precedence",
+   "page": "",
+   "id": "feature-variation-precedence"
+  },
+  "7.3": {
+   "title": "Feature precedence examples",
+   "page": "",
+   "id": "feature-precedence-examples"
+  },
+  "8.1": {
+   "title": "Optical sizing control: the font-optical-sizing property",
+   "page": "",
+   "id": "font-optical-sizing-def"
+  },
+  "8.2": {
+   "title": "Low-level font variation settings control: the font-variation-settings property",
+   "page": "",
+   "id": "font-variation-settings-def"
+  },
+  "9.1": {
+   "title": "Controlling Color Font Palettes: The font-palette property",
+   "page": "",
+   "id": "font-palette-prop"
+  },
+  "9.2": {
+   "title": "User-defined font color palettes: The @font-palette-values rule",
+   "page": "",
+   "id": "font-palette-values"
+  },
+  "9.2.1": {
+   "title": "Font family: the font-family descriptor",
+   "page": "",
+   "id": "font-family-2-desc"
+  },
+  "9.2.2": {
+   "title": "Specifying the base palette: the base-palette descriptor",
+   "page": "",
+   "id": "base-palette-desc"
+  },
+  "9.2.3": {
+   "title": "Overriding a colors from a palette: The override-colors descriptor",
+   "page": "",
+   "id": "override-color"
+  },
+  "9.3": {
+   "title": "Selecting the text presentation style: The font-variant-emoji property",
+   "page": "",
+   "id": "font-variant-emoji-prop"
+  },
+  "10.1": {
+   "title": "Installed Fonts",
+   "page": "",
+   "id": "installed-fonts"
+  },
+  "10.2": {
+   "title": "Web Fonts",
+   "page": "",
+   "id": "web-fonts"
+  },
+  "10.3": {
+   "title": "Preinstalled Fonts and User-Installed Fonts",
+   "page": "",
+   "id": "preinstalled-and-user-installed-fonts"
+  },
+  "10.4": {
+   "title": "System Font",
+   "page": "",
+   "id": "system-font"
+  },
+  "11.1": {
+   "title": "Font tech",
+   "page": "",
+   "id": "font-tech-definitions"
+  },
+  "11.2": {
+   "title": "Font formats",
+   "page": "",
+   "id": "font-format-definitions"
+  },
+  "12.1": {
+   "title": "The CSSFontFaceRule interface",
+   "page": "",
+   "id": "om-fontface"
+  },
+  "12.2": {
+   "title": "The CSSFontFeatureValuesRule interface",
+   "page": "",
+   "id": "om-fontfeaturevalues"
+  },
+  "12.3": {
+   "title": "The CSSFontPaletteValuesRule interface",
+   "page": "",
+   "id": "om-fontpalettevalues"
+  },
+  "13.1": {
+   "title": "Serializing font-related properties",
+   "page": "",
+   "id": "serializing-properties"
+  },
+  "13.2": {
+   "title": "Serializing font-related at-rules",
+   "page": "",
+   "id": "serializing-at-rules"
+  },
+  "15.1": {
+   "title": "What information might this feature expose to Web sites or other parties, and for what purposes is that exposure necessary?",
+   "page": "",
+   "id": "sp201"
+  },
+  "15.2": {
+   "title": "Is this specification exposing the minimum amount of information necessary to power the feature?",
+   "page": "",
+   "id": "sp202"
+  },
+  "15.3": {
+   "title": "How does this specification deal with personal information or personally-identifiable information or information derived thereof?",
+   "page": "",
+   "id": "sp203"
+  },
+  "15.4": {
+   "title": "How does this specification deal with sensitive information?",
+   "page": "",
+   "id": "sp204"
+  },
+  "15.5": {
+   "title": "Does this specification introduce new state for an origin that persists across browsing sessions?",
+   "page": "",
+   "id": "sp205"
+  },
+  "15.6": {
+   "title": "What information from the underlying platform, e.g. configuration data, is exposed by this specification to an origin?",
+   "page": "",
+   "id": "sp206"
+  },
+  "15.7": {
+   "title": "Does this specification allow an origin access to sensors on a user’s device",
+   "page": "",
+   "id": "sp207"
+  },
+  "15.8": {
+   "title": "What data does this specification expose to an origin? Please also document what data is identical to data exposed by other features, in the same or different contexts.",
+   "page": "",
+   "id": "sp208"
+  },
+  "15.9": {
+   "title": "Does this specification enable new script execution/loading mechanisms?",
+   "page": "",
+   "id": "sp209"
+  },
+  "15.10": {
+   "title": "Does this specification allow an origin to access other devices?",
+   "page": "",
+   "id": "sp210"
+  },
+  "15.11": {
+   "title": "Does this specification allow an origin some measure of control over a user agent’s native UI?",
+   "page": "",
+   "id": "sp211"
+  },
+  "15.12": {
+   "title": "What temporary identifiers might this specification create or expose to the web?",
+   "page": "",
+   "id": "sp212"
+  },
+  "15.13": {
+   "title": "How does this specification distinguish between behavior in first-party and third-party contexts?",
+   "page": "",
+   "id": "sp213"
+  },
+  "15.14": {
+   "title": "How does this specification work in the context of a user agent’s Private Browsing or \"incognito\" mode?",
+   "page": "",
+   "id": "sp214"
+  },
+  "15.15": {
+   "title": "Does this specification have a \"Security Considerations\" and \"Privacy Considerations\" section?",
+   "page": "",
+   "id": "sp215"
+  },
+  "15.16": {
+   "title": "Does this specification allow downgrading default security characteristics?",
+   "page": "",
+   "id": "sp216"
+  },
+  "15.17": {
+   "title": "What should this questionnaire have asked?",
+   "page": "",
+   "id": "sp217"
+  },
+  "18.1": {
+   "title": "Changes from the 1 February 2024 working draft",
+   "page": "",
+   "id": "changes-20240201"
+  },
+  "18.2": {
+   "title": "Changes from the 21 December 2021 Working Draft",
+   "page": "",
+   "id": "changes-2021-12-21"
+  },
+  "18.3": {
+   "title": "Changes from the 29 July 2021 Working Draft",
+   "page": "",
+   "id": "changes-2021-07-29"
+  },
+  "18.4": {
+   "title": "Changes from the 17 November 2020 Working Draft",
+   "page": "",
+   "id": "changes-2020-11-17"
+  },
+  "18.5": {
+   "title": "Changes from the 13 November 2019 Working Draft",
+   "page": "",
+   "id": "changes-2019-11-13"
+  },
+  "18.6": {
+   "title": "Changes from the 20 September 2018 Working Draft",
+   "page": "",
+   "id": "changes-2018-09-20"
+  },
+  "18.7": {
+   "title": "Changes from the 10 April 2018 Working Draft",
+   "page": "",
+   "id": "changes-2018-04-10"
+  },
+  "18.8": {
+   "title": "Changes from the 20 September 2018 CSS Fonts 3 Recommendation",
+   "page": "",
+   "id": "changes-fonts-3"
+  }
+ },
+ "dfns": {
+  "@character variant": [
+   "6.9.1"
+  ],
+  "@font face": [
+   "4.1"
+  ],
+  "@font feature values": [
+   "6.9"
+  ],
+  "@font palette values": [
+   "9.2"
+  ],
+  "@historical forms": [
+   "6.9.1"
+  ],
+  "absolute size": [
+   "2.5"
+  ],
+  "all petite caps": [
+   "6.6"
+  ],
+  "all small caps": [
+   "6.6"
+  ],
+  "annotation( font feature value name )": [
+   "6.8"
+  ],
+  "ascent override": [
+   "4.11",
+   "12.1"
+  ],
+  "aspect value": [
+   "2.6"
+  ],
+  "base palette": [
+   "9.2.2"
+  ],
+  "character map": [
+   "5.2"
+  ],
+  "character variant( font feature value name )": [
+   "6.8"
+  ],
+  "color font tech": [
+   "4.3.1"
+  ],
+  "common lig values": [
+   "6.4"
+  ],
+  "common ligatures": [
+   "6.4"
+  ],
+  "composite face": [
+   "5.2"
+  ],
+  "composite font face": [
+   "5.2"
+  ],
+  "contextual alt values": [
+   "6.4"
+  ],
+  "data dfn type value data export id valdef color font tech color cbdt color cbdt": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef color font tech color colrv0 color colrv0": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef color font tech color colrv1 color colrv1": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef color font tech color sbix color sbix": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef color font tech color svg color svg": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef feature tag value off off": [
+   "6.12"
+  ],
+  "data dfn type value data export id valdef feature tag value on on": [
+   "6.12"
+  ],
+  "data dfn type value data export id valdef font family cursive cursive": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family fantasy fantasy": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family generic fangsong generic(fangsong)": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family generic kai generic(kai)": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family generic khmer mul generic(khmer mul)": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family generic nastaliq generic(nastaliq)": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family monospace monospace": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family sans serif sans serif": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family serif serif": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family system ui system ui": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family ui monospace ui monospace": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family ui rounded ui rounded": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family ui sans serif ui sans serif": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font family ui serif ui serif": [
+   "2.1.5"
+  ],
+  "data dfn type value data export id valdef font features tech features aat features aat": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef font tech incremental incremental": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef font tech palettes palettes": [
+   "11.1"
+  ],
+  "data dfn type value data export id valdef font tech variations variations": [
+   "11.1"
+  ],
+  "default face": [
+   "5.2"
+  ],
+  "default font face": [
+   "5.2"
+  ],
+  "descent override": [
+   "4.11",
+   "12.1"
+  ],
+  "diagonal fractions": [
+   "6.7"
+  ],
+  "discretionary lig values": [
+   "6.4"
+  ],
+  "discretionary ligatures": [
+   "6.4"
+  ],
+  "east asian variant values": [
+   "6.10"
+  ],
+  "east asian width values": [
+   "6.10"
+  ],
+  "effective character map": [
+   "4.5"
+  ],
+  "emoji presentation participating code points": [
+   "9.3"
+  ],
+  "extra condensed": [
+   "2.3"
+  ],
+  "extra expanded": [
+   "2.3"
+  ],
+  "feature tag value": [
+   "6.12"
+  ],
+  "feature value block": [
+   "6.9.1"
+  ],
+  "feature value blocks": [
+   "6.9.1"
+  ],
+  "fetch a font": [
+   "4.8.2"
+  ],
+  "first available font": [
+   "5.2"
+  ],
+  "font block period": [
+   "3.2"
+  ],
+  "font display": [
+   "4.9",
+   "4.9.1",
+   "12.1"
+  ],
+  "font download timer": [
+   "3.2"
+  ],
+  "font failure period": [
+   "3.2"
+  ],
+  "font family": [
+   "2.1",
+   "4.2",
+   "9.2.1",
+   "12.1"
+  ],
+  "font family name": [
+   "2.1"
+  ],
+  "font feature index": [
+   "6.8"
+  ],
+  "font feature settings": [
+   "4.6",
+   "6.12",
+   "12.1"
+  ],
+  "font feature value block": [
+   "6.9.1"
+  ],
+  "font feature value declaration": [
+   "6.9.1"
+  ],
+  "font feature value declarations": [
+   "6.9.1"
+  ],
+  "font feature value name": [
+   "6.8"
+  ],
+  "font feature value type": [
+   "6.9.1"
+  ],
+  "font feature values rule": [
+   "12.2"
+  ],
+  "font features tech": [
+   "4.3.1"
+  ],
+  "font format": [
+   "4.3.1"
+  ],
+  "font kerning": [
+   "6.3"
+  ],
+  "font language override": [
+   "4.10",
+   "6.13",
+   "12.1"
+  ],
+  "font named instance": [
+   "4.7",
+   "12.1"
+  ],
+  "font optical sizing": [
+   "8.1"
+  ],
+  "font palette": [
+   "9.1"
+  ],
+  "font size": [
+   "2.5"
+  ],
+  "font size adjust": [
+   "2.6"
+  ],
+  "font specific": [
+   "6.8"
+  ],
+  "font src": [
+   "4.3.1"
+  ],
+  "font src list": [
+   "4.3.1"
+  ],
+  "font stretch": [
+   "2.3.1",
+   "4.4.1",
+   "12.1"
+  ],
+  "font style": [
+   "2.4",
+   "4.4",
+   "12.1"
+  ],
+  "font swap period": [
+   "3.2"
+  ],
+  "font synthesis": [
+   "2.8.5"
+  ],
+  "font synthesis position": [
+   "2.8.4"
+  ],
+  "font synthesis small caps": [
+   "2.8.3"
+  ],
+  "font synthesis style": [
+   "2.8.2"
+  ],
+  "font synthesis weight": [
+   "2.8.1"
+  ],
+  "font tech": [
+   "4.3.1"
+  ],
+  "font variant": [
+   "6.11"
+  ],
+  "font variant alternates": [
+   "6.8"
+  ],
+  "font variant caps": [
+   "6.6"
+  ],
+  "font variant css2": [
+   "2.7"
+  ],
+  "font variant east asian": [
+   "6.10"
+  ],
+  "font variant emoji": [
+   "9.3"
+  ],
+  "font variant ligatures": [
+   "6.4"
+  ],
+  "font variant numeric": [
+   "6.7"
+  ],
+  "font variant position": [
+   "6.5"
+  ],
+  "font variation settings": [
+   "4.6",
+   "8.2",
+   "12.1"
+  ],
+  "font weight": [
+   "2.2",
+   "4.4",
+   "12.1"
+  ],
+  "font weight absolute": [
+   "2.2"
+  ],
+  "font width": [
+   "2.3",
+   "4.4",
+   "12.1"
+  ],
+  "font width css3": [
+   "2.7"
+  ],
+  "format ( font format )": [
+   "4.3.1"
+  ],
+  "full width": [
+   "6.10"
+  ],
+  "generic font complete": [
+   "2.1.2"
+  ],
+  "generic font family": [
+   "2.1.2"
+  ],
+  "generic font incomplete": [
+   "2.1.2"
+  ],
+  "generic font script specific": [
+   "2.1.2"
+  ],
+  "historical forms": [
+   "6.8"
+  ],
+  "historical lig values": [
+   "6.4"
+  ],
+  "historical ligatures": [
+   "6.4"
+  ],
+  "installed font fallback": [
+   "5.2"
+  ],
+  "line gap override": [
+   "4.11",
+   "12.1"
+  ],
+  "lining nums": [
+   "6.7"
+  ],
+  "local ( font family name )": [
+   "4.3.1"
+  ],
+  "message box": [
+   "2.1"
+  ],
+  "no common ligatures": [
+   "6.4"
+  ],
+  "no contextual": [
+   "6.4"
+  ],
+  "no discretionary ligatures": [
+   "6.4"
+  ],
+  "no historical ligatures": [
+   "6.4"
+  ],
+  "numeric figure values": [
+   "6.7"
+  ],
+  "numeric fraction values": [
+   "6.7"
+  ],
+  "numeric spacing values": [
+   "6.7"
+  ],
+  "oblique angle [ 90deg 90deg]": [
+   "2.4"
+  ],
+  "oblique only": [
+   "2.8.2"
+  ],
+  "oldstyle nums": [
+   "6.7"
+  ],
+  "opentype tag": [
+   "6.12"
+  ],
+  "ornaments( font feature value name )": [
+   "6.8"
+  ],
+  "override colors": [
+   "9.2.3"
+  ],
+  "palette identifier": [
+   "9.1"
+  ],
+  "palette mix()": [
+   "9.1"
+  ],
+  "petite caps": [
+   "6.6"
+  ],
+  "proportional nums": [
+   "6.7"
+  ],
+  "proportional width": [
+   "6.10"
+  ],
+  "relative size": [
+   "2.5"
+  ],
+  "render with a fallback font face": [
+   "3.2"
+  ],
+  "render with an invisible fallback font face": [
+   "3.2"
+  ],
+  "semi condensed": [
+   "2.3"
+  ],
+  "semi expanded": [
+   "2.3"
+  ],
+  "set(featurevaluename values)": [
+   "12.2"
+  ],
+  "slashed zero": [
+   "6.7"
+  ],
+  "small caps": [
+   "6.6"
+  ],
+  "small caption": [
+   "2.1"
+  ],
+  "stacked fractions": [
+   "6.7"
+  ],
+  "status bar": [
+   "2.1"
+  ],
+  "styleset( font feature value name )": [
+   "6.8"
+  ],
+  "stylistic( font feature value name )": [
+   "6.8"
+  ],
+  "swash( font feature value name )": [
+   "6.8"
+  ],
+  "system font family name": [
+   "2.1"
+  ],
+  "tabular nums": [
+   "6.7"
+  ],
+  "tech ( font tech )": [
+   "4.3.1"
+  ],
+  "titling caps": [
+   "6.6"
+  ],
+  "ultra condensed": [
+   "2.3"
+  ],
+  "ultra expanded": [
+   "2.3"
+  ],
+  "unicode range": [
+   "4.5",
+   "12.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "@character variant": {
+   "6.9.2": 2
+  },
+  "@font face": {
+   "4.3.3.1": 2,
+   "4.4": 10,
+   "4.5.1": 4,
+   "4.6": 4,
+   "4.7": 2,
+   "4.8.1": 2,
+   "4.9": 2,
+   "4.9.1": 2,
+   "4.11": 3,
+   "5.2": 5,
+   "7.2": 6,
+   "10.2": 2,
+   "11.1": 2,
+   "18.8": 2
+  },
+  "@font feature values": {
+   "4.9.1": 3,
+   "6.9.1": 7,
+   "6.12": 5,
+   "18.8": 2
+  },
+  "@font palette values": {
+   "9.2.2": 3,
+   "9.2.3": 3,
+   "18.8": 2
+  },
+  "ascent override": {
+   "18.8": 4
+  },
+  "base palette": {
+   "18.8": 2
+  },
+  "character map": {
+   "5.4": 2,
+   "13.2": 2
+  },
+  "descent override": {
+   "18.8": 4
+  },
+  "feature value blocks": {
+   "12.2": 2,
+   "18.8": 2
+  },
+  "font block period": {
+   "4.9": 5,
+   "18.8": 2
+  },
+  "font display": {
+   "18.8": 6
+  },
+  "font download timer": {
+   "18.8": 2
+  },
+  "font failure period": {
+   "18.8": 2
+  },
+  "font family": {
+   "2.7": 6,
+   "5.2": 3,
+   "18.8": 8
+  },
+  "font family name": {
+   "2.1.1": 4,
+   "6.9.1": 3
+  },
+  "font feature index": {
+   "6.9.1": 3
+  },
+  "font feature settings": {
+   "7.2": 3,
+   "7.3": 2,
+   "18.8": 6
+  },
+  "font feature values rule": {
+   "18.8": 2
+  },
+  "font kerning": {
+   "6.12": 3,
+   "18.8": 2
+  },
+  "font language override": {
+   "7.2": 2,
+   "18.8": 6
+  },
+  "font named instance": {
+   "18.8": 4
+  },
+  "font optical sizing": {
+   "8.2": 3,
+   "18.8": 2
+  },
+  "font palette": {
+   "18.8": 2
+  },
+  "font size": {
+   "2.6": 3,
+   "2.7": 6,
+   "8.1": 2,
+   "18.8": 2
+  },
+  "font size adjust": {
+   "18.8": 2
+  },
+  "font stretch": {
+   "18.8": 4
+  },
+  "font style": {
+   "2.7": 7,
+   "5.2": 9,
+   "7.2": 3,
+   "8.2": 3,
+   "18.8": 6
+  },
+  "font swap period": {
+   "4.9": 4,
+   "18.8": 2
+  },
+  "font synthesis": {
+   "5.2": 2,
+   "18.8": 2
+  },
+  "font synthesis position": {
+   "2.8.5": 2,
+   "18.8": 2
+  },
+  "font synthesis small caps": {
+   "2.8.5": 2,
+   "18.8": 2
+  },
+  "font synthesis style": {
+   "2.8.5": 2,
+   "5.2": 2,
+   "18.8": 2
+  },
+  "font synthesis weight": {
+   "2.8.5": 2,
+   "18.8": 2
+  },
+  "font variant": {
+   "2.7": 4,
+   "7.2": 3,
+   "18.8": 2
+  },
+  "font variant alternates": {
+   "6.12": 6,
+   "18.8": 2
+  },
+  "font variant caps": {
+   "2.7": 2,
+   "6.12": 6,
+   "18.8": 2
+  },
+  "font variant east asian": {
+   "6.12": 9,
+   "18.8": 2
+  },
+  "font variant emoji": {
+   "18.8": 2
+  },
+  "font variant ligatures": {
+   "6.11": 2,
+   "6.12": 4,
+   "18.8": 2
+  },
+  "font variant numeric": {
+   "6.12": 8,
+   "18.8": 2
+  },
+  "font variant position": {
+   "6.12": 2,
+   "18.8": 2
+  },
+  "font variation settings": {
+   "7.2": 2,
+   "18.8": 6
+  },
+  "font weight": {
+   "2.7": 7,
+   "5.2": 3,
+   "7.2": 2,
+   "8.2": 3,
+   "18.8": 6
+  },
+  "font width": {
+   "2.3.1": 3,
+   "2.7": 6,
+   "5.2": 3,
+   "7.2": 2,
+   "8.2": 2,
+   "18.8": 6
+  },
+  "generic font family": {
+   "2.1": 5,
+   "2.1.1": 2
+  },
+  "line gap override": {
+   "18.8": 4
+  },
+  "opentype tag": {
+   "8.2": 2
+  },
+  "override colors": {
+   "9.2.2": 2,
+   "18.8": 2
+  },
+  "palette mix()": {
+   "18.8": 2
+  },
+  "set(featurevaluename values)": {
+   "18.8": 2
+  },
+  "system font family name": {
+   "2.1.3": 2
+  },
+  "unicode range": {
+   "5.2": 4,
+   "18.8": 4
+  }
+ }
+}

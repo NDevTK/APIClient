@@ -1,0 +1,500 @@
+{
+ "spec": "CSS Box Sizing Module Level 3",
+ "key": "csssizing3",
+ "base": "https://drafts.csswg.org/css-sizing-3/",
+ "specUpdated": "15 February 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terms"
+  },
+  "3": {
+   "title": "Specifying Box Sizes",
+   "page": "",
+   "id": "specifying-sizes"
+  },
+  "4": {
+   "title": "Extrinsic Size Determination",
+   "page": "",
+   "id": "extrinsic"
+  },
+  "5": {
+   "title": "Intrinsic Size Determination",
+   "page": "",
+   "id": "intrinsic"
+  },
+  "1.1": {
+   "title": "Module interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.2": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Auto Box Sizes",
+   "page": "",
+   "id": "auto-box-sizes"
+  },
+  "2.2": {
+   "title": "Intrinsic Size Contributions",
+   "page": "",
+   "id": "contributions"
+  },
+  "2.3": {
+   "title": "Intrinsic Size Constraints",
+   "page": "",
+   "id": "constraints"
+  },
+  "3.1": {
+   "title": "Sizing Properties",
+   "page": "",
+   "id": "sizing-properties"
+  },
+  "3.1.1": {
+   "title": "Preferred Size Properties: the width and height properties",
+   "page": "",
+   "id": "preferred-size-properties"
+  },
+  "3.1.2": {
+   "title": "Minimum Size Properties: the min-width and min-height properties",
+   "page": "",
+   "id": "min-size-properties"
+  },
+  "3.1.3": {
+   "title": "Maximum Size Properties: the max-width and max-height properties",
+   "page": "",
+   "id": "max-size-properties"
+  },
+  "3.2": {
+   "title": "Sizing Values: the <length-percentage [0,∞]> , auto | none , min-content , max-content , and fit-content() values",
+   "page": "",
+   "id": "sizing-values"
+  },
+  "3.2.1": {
+   "title": "“Behaving as auto ”",
+   "page": "",
+   "id": "behave-auto"
+  },
+  "3.2.2": {
+   "title": "Containing or Excluding Floats",
+   "page": "",
+   "id": "the-contain-floats-value"
+  },
+  "3.3": {
+   "title": "Box Edges for Sizing: the box-sizing property",
+   "page": "",
+   "id": "box-sizing"
+  },
+  "3.4": {
+   "title": "New Column Sizing Values: the min-content , max-content , and fit-content() values",
+   "page": "",
+   "id": "column-sizing"
+  },
+  "4.1": {
+   "title": "Percentage Sizing",
+   "page": "",
+   "id": "percentage-sizing"
+  },
+  "5.1": {
+   "title": "Intrinsic Sizes",
+   "page": "",
+   "id": "intrinsic-sizes"
+  },
+  "5.2": {
+   "title": "Intrinsic Contributions",
+   "page": "",
+   "id": "intrinsic-contribution"
+  },
+  "5.2.1": {
+   "title": "Intrinsic Contributions of Percentage-Sized Boxes",
+   "page": "",
+   "id": "cyclic-percentage-contribution"
+  },
+  "5.2.2": {
+   "title": "Compressible Replaced Elements",
+   "page": "",
+   "id": "min-content-zero"
+  }
+ },
+ "dfns": {
+  "automatic block size": [
+   "3.2"
+  ],
+  "automatic inline size": [
+   "3.2"
+  ],
+  "automatic minimum size": [
+   "3.2"
+  ],
+  "automatic size": [
+   "3.2"
+  ],
+  "available block space": [
+   "2"
+  ],
+  "available inline space": [
+   "2"
+  ],
+  "available space": [
+   "2"
+  ],
+  "behave as auto": [
+   "3.2.1"
+  ],
+  "behaves as auto": [
+   "3.2.1"
+  ],
+  "behaving as auto": [
+   "3.2.1"
+  ],
+  "border box": [
+   "3.3"
+  ],
+  "box sizing": [
+   "3.3"
+  ],
+  "calc size()": [
+   "3.2"
+  ],
+  "content box": [
+   "3.3"
+  ],
+  "cyclic percentage size": [
+   "5.2.1"
+  ],
+  "definite size": [
+   "2"
+  ],
+  "extrinsic sizing": [
+   "4"
+  ],
+  "fallback size": [
+   "2"
+  ],
+  "fit content block size": [
+   "2.1"
+  ],
+  "fit content inline size": [
+   "2.1"
+  ],
+  "fit content size": [
+   "2.1"
+  ],
+  "fit content( length percentage )": [
+   "3.4"
+  ],
+  "fit content( length percentage [0 ] )": [
+   "3.2"
+  ],
+  "fit content()": [
+   "3.2"
+  ],
+  "indefinite size": [
+   "2"
+  ],
+  "inner block size": [
+   "2"
+  ],
+  "inner height": [
+   "2"
+  ],
+  "inner inline size": [
+   "2"
+  ],
+  "inner size": [
+   "2"
+  ],
+  "inner width": [
+   "2"
+  ],
+  "intrinsic size": [
+   "2.1"
+  ],
+  "intrinsic size contribution": [
+   "2.2"
+  ],
+  "intrinsic sizing": [
+   "5"
+  ],
+  "max content": [
+   "2.1",
+   "3.2",
+   "3.4"
+  ],
+  "max content block size": [
+   "2.1"
+  ],
+  "max content block size contribution": [
+   "2.2"
+  ],
+  "max content constraint": [
+   "2.3"
+  ],
+  "max content contribution": [
+   "2.2"
+  ],
+  "max content inline size": [
+   "2.1"
+  ],
+  "max content inline size contribution": [
+   "2.2"
+  ],
+  "max content size": [
+   "2.1"
+  ],
+  "max height": [
+   "3.1.3"
+  ],
+  "max size": [
+   "3.1.3"
+  ],
+  "max width": [
+   "3.1.3"
+  ],
+  "maximum height": [
+   "3.1.3"
+  ],
+  "maximum size": [
+   "3.1.3"
+  ],
+  "maximum width": [
+   "3.1.3"
+  ],
+  "min content": [
+   "2.1",
+   "3.2",
+   "3.4"
+  ],
+  "min content block size": [
+   "2.1"
+  ],
+  "min content block size contribution": [
+   "2.2"
+  ],
+  "min content constraint": [
+   "2.3"
+  ],
+  "min content contribution": [
+   "2.2"
+  ],
+  "min content inline size": [
+   "2.1"
+  ],
+  "min content inline size contribution": [
+   "2.2"
+  ],
+  "min content size": [
+   "2.1"
+  ],
+  "min height": [
+   "3.1.2"
+  ],
+  "min size": [
+   "3.1.2"
+  ],
+  "min width": [
+   "3.1.2"
+  ],
+  "minimum height": [
+   "3.1.2"
+  ],
+  "minimum size": [
+   "3.1.2"
+  ],
+  "minimum width": [
+   "3.1.2"
+  ],
+  "outer block size": [
+   "2"
+  ],
+  "outer height": [
+   "2"
+  ],
+  "outer inline size": [
+   "2"
+  ],
+  "outer size": [
+   "2"
+  ],
+  "outer width": [
+   "2"
+  ],
+  "preferred aspect ratio": [
+   "2.3"
+  ],
+  "preferred height": [
+   "3.1.1"
+  ],
+  "preferred size": [
+   "3.1.1"
+  ],
+  "preferred width": [
+   "3.1.1"
+  ],
+  "sizing properties": [
+   "3.1"
+  ],
+  "sizing property": [
+   "3.1"
+  ],
+  "stretch fit": [
+   "2"
+  ],
+  "stretch fit block size": [
+   "2.1"
+  ],
+  "stretch fit inline size": [
+   "2.1"
+  ],
+  "stretch fit size": [
+   "2.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "automatic minimum size": {
+   "5.2.1": 2
+  },
+  "automatic size": {
+   "5.2.2": 2
+  },
+  "available space": {
+   "2.1": 3,
+   "3.2": 2,
+   "5.2.2": 4
+  },
+  "behave as auto": {
+   "5.2.1": 4,
+   "5.2.2": 3
+  },
+  "box sizing": {
+   "5.2.2": 5
+  },
+  "calc size()": {
+   "5.2.2": 3
+  },
+  "cyclic percentage size": {
+   "5.2.2": 3
+  },
+  "definite size": {
+   "2.1": 2,
+   "4.1": 2,
+   "5.2.1": 2,
+   "5.2.2": 2
+  },
+  "fallback size": {
+   "5.2.2": 2
+  },
+  "fit content size": {
+   "5.2.2": 2
+  },
+  "fit content( length percentage [0 ] )": {
+   "5.2.2": 3
+  },
+  "indefinite size": {
+   "2.1": 2,
+   "5.2.2": 3
+  },
+  "inner size": {
+   "3.3": 4,
+   "5.2.2": 5
+  },
+  "intrinsic size": {
+   "5.1": 4,
+   "5.2.2": 2
+  },
+  "intrinsic size contribution": {
+   "5.2.1": 3
+  },
+  "max content": {
+   "5.2.2": 4
+  },
+  "max content contribution": {
+   "5.2.1": 3,
+   "5.2.2": 3
+  },
+  "max content size": {
+   "5.1": 6,
+   "5.2.2": 3
+  },
+  "max height": {
+   "5.2.1": 2,
+   "5.2.2": 4
+  },
+  "max width": {
+   "5.2.1": 2,
+   "5.2.2": 3
+  },
+  "maximum height": {
+   "5.2.2": 2
+  },
+  "maximum width": {
+   "5.1": 2,
+   "5.2.2": 4
+  },
+  "min content": {
+   "5.2.2": 4
+  },
+  "min content constraint": {
+   "2.1": 2,
+   "5.2.2": 2
+  },
+  "min content contribution": {
+   "5.2.1": 6,
+   "5.2.2": 4
+  },
+  "min content size": {
+   "5.1": 5,
+   "5.2.2": 2
+  },
+  "min height": {
+   "5.1": 2,
+   "5.2.1": 3,
+   "5.2.2": 5
+  },
+  "min width": {
+   "5.1": 2,
+   "5.2.2": 4
+  },
+  "minimum height": {
+   "5.2.2": 2
+  },
+  "minimum width": {
+   "5.1": 3,
+   "5.2.1": 3,
+   "5.2.2": 5
+  },
+  "outer size": {
+   "5.2.2": 5
+  },
+  "preferred aspect ratio": {
+   "5.1": 3,
+   "5.2.2": 2
+  },
+  "preferred height": {
+   "2": 2,
+   "5.2.2": 2
+  },
+  "preferred size": {
+   "5.1": 2
+  },
+  "preferred width": {
+   "2": 2,
+   "5.2.2": 2
+  },
+  "sizing properties": {
+   "3.3": 4,
+   "5.2.2": 4
+  }
+ }
+}

@@ -1,0 +1,1020 @@
+{
+ "spec": "CSS Syntax Module Level 3",
+ "key": "csssyntax3",
+ "base": "https://drafts.csswg.org/css-syntax-3/",
+ "specUpdated": "30 July 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Description of CSS’s Syntax",
+   "page": "",
+   "id": "syntax-description"
+  },
+  "3": {
+   "title": "Tokenizing and Parsing CSS",
+   "page": "",
+   "id": "tokenizing-and-parsing"
+  },
+  "4": {
+   "title": "Tokenization",
+   "page": "",
+   "id": "tokenization"
+  },
+  "5": {
+   "title": "Parsing",
+   "page": "",
+   "id": "parsing"
+  },
+  "6": {
+   "title": "The An+B microsyntax",
+   "page": "",
+   "id": "anb-microsyntax"
+  },
+  "7": {
+   "title": "Defining Grammars for Rules and Other Values",
+   "page": "",
+   "id": "rule-defs"
+  },
+  "8": {
+   "title": "CSS stylesheets",
+   "page": "",
+   "id": "css-stylesheets"
+  },
+  "9": {
+   "title": "Serialization",
+   "page": "",
+   "id": "serialization"
+  },
+  "10": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "11": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "12": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Module interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "2.1": {
+   "title": "Escaping",
+   "page": "",
+   "id": "escaping"
+  },
+  "2.2": {
+   "title": "Error Handling",
+   "page": "",
+   "id": "error-handling"
+  },
+  "3.1": {
+   "title": "Overview of the Parsing Model",
+   "page": "",
+   "id": "parsing-overview"
+  },
+  "3.2": {
+   "title": "The input byte stream",
+   "page": "",
+   "id": "input-byte-stream"
+  },
+  "3.3": {
+   "title": "Preprocessing the input stream",
+   "page": "",
+   "id": "input-preprocessing"
+  },
+  "4.1": {
+   "title": "Token Railroad Diagrams",
+   "page": "",
+   "id": "token-diagrams"
+  },
+  "4.2": {
+   "title": "Definitions",
+   "page": "",
+   "id": "tokenizer-definitions"
+  },
+  "4.3": {
+   "title": "Tokenizer Algorithms",
+   "page": "",
+   "id": "tokenizer-algorithms"
+  },
+  "4.3.1": {
+   "title": "Consume a token",
+   "page": "",
+   "id": "consume-token"
+  },
+  "4.3.2": {
+   "title": "Consume comments",
+   "page": "",
+   "id": "consume-comment"
+  },
+  "4.3.3": {
+   "title": "Consume a numeric token",
+   "page": "",
+   "id": "consume-numeric-token"
+  },
+  "4.3.4": {
+   "title": "Consume an ident-like token",
+   "page": "",
+   "id": "consume-ident-like-token"
+  },
+  "4.3.5": {
+   "title": "Consume a string token",
+   "page": "",
+   "id": "consume-string-token"
+  },
+  "4.3.6": {
+   "title": "Consume a url token",
+   "page": "",
+   "id": "consume-url-token"
+  },
+  "4.3.7": {
+   "title": "Consume an escaped code point",
+   "page": "",
+   "id": "consume-escaped-code-point"
+  },
+  "4.3.8": {
+   "title": "Check if two code points are a valid escape",
+   "page": "",
+   "id": "starts-with-a-valid-escape"
+  },
+  "4.3.9": {
+   "title": "Check if three code points would start an ident sequence",
+   "page": "",
+   "id": "would-start-an-identifier"
+  },
+  "4.3.10": {
+   "title": "Check if three code points would start a number",
+   "page": "",
+   "id": "starts-with-a-number"
+  },
+  "4.3.11": {
+   "title": "Check if three code points would start a unicode-range",
+   "page": "",
+   "id": "starts-a-unicode-range"
+  },
+  "4.3.12": {
+   "title": "Consume an ident sequence",
+   "page": "",
+   "id": "consume-name"
+  },
+  "4.3.13": {
+   "title": "Consume a number",
+   "page": "",
+   "id": "consume-number"
+  },
+  "4.3.14": {
+   "title": "Consume a unicode-range token",
+   "page": "",
+   "id": "consume-unicode-range-token"
+  },
+  "4.3.15": {
+   "title": "Consume the remnants of a bad url",
+   "page": "",
+   "id": "consume-remnants-of-bad-url"
+  },
+  "5.1": {
+   "title": "Parser Railroad Diagrams",
+   "page": "",
+   "id": "parser-diagrams"
+  },
+  "5.2": {
+   "title": "CSS Parsing Results",
+   "page": "",
+   "id": "css-tree"
+  },
+  "5.3": {
+   "title": "Token Streams",
+   "page": "",
+   "id": "parser-definitions"
+  },
+  "5.4": {
+   "title": "Parser Entry Points",
+   "page": "",
+   "id": "parser-entry-points"
+  },
+  "5.4.1": {
+   "title": "Parse something according to a CSS grammar",
+   "page": "",
+   "id": "parse-grammar"
+  },
+  "5.4.2": {
+   "title": "Parse a comma-separated list according to a CSS grammar",
+   "page": "",
+   "id": "parse-comma-list"
+  },
+  "5.4.3": {
+   "title": "Parse a stylesheet",
+   "page": "",
+   "id": "parse-stylesheet"
+  },
+  "5.4.4": {
+   "title": "Parse a stylesheet’s contents",
+   "page": "",
+   "id": "parse-stylesheet-contents"
+  },
+  "5.4.5": {
+   "title": "Parse a block’s contents",
+   "page": "",
+   "id": "parse-block-contents"
+  },
+  "5.4.6": {
+   "title": "Parse a rule",
+   "page": "",
+   "id": "parse-rule"
+  },
+  "5.4.7": {
+   "title": "Parse a declaration",
+   "page": "",
+   "id": "parse-declaration"
+  },
+  "5.4.8": {
+   "title": "Parse a component value",
+   "page": "",
+   "id": "parse-component-value"
+  },
+  "5.4.9": {
+   "title": "Parse a list of component values",
+   "page": "",
+   "id": "parse-list-of-component-values"
+  },
+  "5.4.10": {
+   "title": "Parse a comma-separated list of component values",
+   "page": "",
+   "id": "parse-comma-separated-list-of-component-values"
+  },
+  "5.5": {
+   "title": "Parser Algorithms",
+   "page": "",
+   "id": "parser-algorithms"
+  },
+  "5.5.1": {
+   "title": "Consume a stylesheet’s contents",
+   "page": "",
+   "id": "consume-stylesheet-contents"
+  },
+  "5.5.2": {
+   "title": "Consume an at-rule",
+   "page": "",
+   "id": "consume-at-rule"
+  },
+  "5.5.3": {
+   "title": "Consume a qualified rule",
+   "page": "",
+   "id": "consume-qualified-rule"
+  },
+  "5.5.4": {
+   "title": "Consume a block",
+   "page": "",
+   "id": "consume-block"
+  },
+  "5.5.5": {
+   "title": "Consume a block’s contents",
+   "page": "",
+   "id": "consume-block-contents"
+  },
+  "5.5.6": {
+   "title": "Consume a declaration",
+   "page": "",
+   "id": "consume-declaration"
+  },
+  "5.5.7": {
+   "title": "Consume a list of component values",
+   "page": "",
+   "id": "consume-list-of-components"
+  },
+  "5.5.8": {
+   "title": "Consume a component value",
+   "page": "",
+   "id": "consume-component-value"
+  },
+  "5.5.9": {
+   "title": "Consume a simple block",
+   "page": "",
+   "id": "consume-simple-block"
+  },
+  "5.5.10": {
+   "title": "Consume a function",
+   "page": "",
+   "id": "consume-function"
+  },
+  "5.5.11": {
+   "title": "Consume a unicode-range value",
+   "page": "",
+   "id": "consume-unicode-range-value"
+  },
+  "6.1": {
+   "title": "Informal Syntax Description",
+   "page": "",
+   "id": "anb-syntax"
+  },
+  "6.2": {
+   "title": "The <a-n-plus-b> type",
+   "page": "",
+   "id": "the-anb-type"
+  },
+  "7.1": {
+   "title": "Defining Block Contents: the <block-contents> , <declaration-list> , <qualified-rule-list> , <declaration-rule-list> , and <rule-list> productions",
+   "page": "",
+   "id": "block-contents"
+  },
+  "7.2": {
+   "title": "Defining Arbitrary Contents: the <declaration-value> and <any-value> productions",
+   "page": "",
+   "id": "any-value"
+  },
+  "8.1": {
+   "title": "Style rules",
+   "page": "",
+   "id": "style-rules"
+  },
+  "8.2": {
+   "title": "At-rules",
+   "page": "",
+   "id": "at-rules"
+  },
+  "8.3": {
+   "title": "The @charset Rule",
+   "page": "",
+   "id": "charset-rule"
+  },
+  "9.1": {
+   "title": "Serializing <a-n-plus-b>",
+   "page": "",
+   "id": "serializing-anb"
+  },
+  "12.1": {
+   "title": "Changes from the 24 December 2021 Candidate Recommendation Draft",
+   "page": "",
+   "id": "changes-CR-20211224"
+  },
+  "12.2": {
+   "title": "Changes from the 16 August 2019 Candidate Recommendation",
+   "page": "",
+   "id": "changes-CR-20190716"
+  },
+  "12.3": {
+   "title": "Changes from the 20 February 2014 Candidate Recommendation",
+   "page": "",
+   "id": "changes-CR-20140220"
+  },
+  "12.4": {
+   "title": "Changes from the 5 November 2013 Last Call Working Draft",
+   "page": "",
+   "id": "changes-WD-20131105"
+  },
+  "12.5": {
+   "title": "Changes from the 19 September 2013 Working Draft",
+   "page": "",
+   "id": "changes-WD-20130919"
+  },
+  "12.6": {
+   "title": "Changes from CSS 2.1 and Selectors Level 3",
+   "page": "",
+   "id": "changes-css21"
+  }
+ },
+ "dfns": {
+  "( token": [
+   "4"
+  ],
+  "() block": [
+   "5.2"
+  ],
+  ") token": [
+   "4"
+  ],
+  "[ token": [
+   "4"
+  ],
+  "[] block": [
+   "5.2"
+  ],
+  "] token": [
+   "4"
+  ],
+  "a n plus b": [
+   "6.2"
+  ],
+  "an b": [
+   "6"
+  ],
+  "any value": [
+   "7.2"
+  ],
+  "are a valid escape": [
+   "4.3.8"
+  ],
+  "at keyword token": [
+   "4"
+  ],
+  "at rule": [
+   "8.2"
+  ],
+  "at rule list": [
+   "7.1"
+  ],
+  "bad string token": [
+   "4"
+  ],
+  "bad url token": [
+   "4"
+  ],
+  "block at rule": [
+   "8.2"
+  ],
+  "block at rules": [
+   "8.2"
+  ],
+  "block contents": [
+   "7.1"
+  ],
+  "cdc token": [
+   "4"
+  ],
+  "cdo token": [
+   "4"
+  ],
+  "check if three code points would start a number": [
+   "4.3.10"
+  ],
+  "check if three code points would start a unicode range": [
+   "4.3.11"
+  ],
+  "check if three code points would start an ident sequence": [
+   "4.3.9"
+  ],
+  "check if two code points are a valid escape": [
+   "4.3.8"
+  ],
+  "colon token": [
+   "4"
+  ],
+  "comma token": [
+   "4"
+  ],
+  "component value": [
+   "5.2"
+  ],
+  "consume a block": [
+   "5.5.4"
+  ],
+  "consume a block contents": [
+   "5.5.5"
+  ],
+  "consume a component value": [
+   "5.5.8"
+  ],
+  "consume a declaration": [
+   "5.5.6"
+  ],
+  "consume a function": [
+   "5.5.10"
+  ],
+  "consume a list of component values": [
+   "5.5.7"
+  ],
+  "consume a number": [
+   "4.3.13"
+  ],
+  "consume a numeric token": [
+   "4.3.3"
+  ],
+  "consume a qualified rule": [
+   "5.5.3"
+  ],
+  "consume a simple block": [
+   "5.5.9"
+  ],
+  "consume a string token": [
+   "4.3.5"
+  ],
+  "consume a stylesheet contents": [
+   "5.5.1"
+  ],
+  "consume a token": [
+   "4.3.1",
+   "5.3"
+  ],
+  "consume a unicode range token": [
+   "4.3.14"
+  ],
+  "consume a url token": [
+   "4.3.6"
+  ],
+  "consume an at rule": [
+   "5.5.2"
+  ],
+  "consume an escaped code point": [
+   "4.3.7"
+  ],
+  "consume an ident like token": [
+   "4.3.4"
+  ],
+  "consume an ident sequence": [
+   "4.3.12"
+  ],
+  "consume comments": [
+   "4.3.2"
+  ],
+  "consume the remnants of a bad declaration": [
+   "5.5.6"
+  ],
+  "consume the remnants of a bad url": [
+   "4.3.15"
+  ],
+  "consume the value of a unicode range descriptor": [
+   "5.5.11"
+  ],
+  "css ident sequence": [
+   "4.2"
+  ],
+  "current input code point": [
+   "4.2"
+  ],
+  "dashndashdigit ident": [
+   "6.2"
+  ],
+  "declaration list": [
+   "7.1"
+  ],
+  "declaration rule list": [
+   "7.1"
+  ],
+  "declaration value": [
+   "7.2"
+  ],
+  "decode bytes": [
+   "3.2"
+  ],
+  "delim token": [
+   "4"
+  ],
+  "descriptor declarations": [
+   "5.2"
+  ],
+  "determine the fallback encoding": [
+   "3.2"
+  ],
+  "dimension token": [
+   "4"
+  ],
+  "discard a mark": [
+   "5.3"
+  ],
+  "discard a token": [
+   "5.3"
+  ],
+  "discard whitespace": [
+   "5.3"
+  ],
+  "environment encoding": [
+   "3.2"
+  ],
+  "eof code point": [
+   "4.2"
+  ],
+  "eof token": [
+   "5.3"
+  ],
+  "filter code points": [
+   "3.3"
+  ],
+  "filtered code points": [
+   "3.3"
+  ],
+  "function token": [
+   "4"
+  ],
+  "hash token": [
+   "4"
+  ],
+  "hex digit": [
+   "4.2"
+  ],
+  "ident code point": [
+   "4.2"
+  ],
+  "ident sequence": [
+   "4.2"
+  ],
+  "ident start code point": [
+   "4.2"
+  ],
+  "ident token": [
+   "4"
+  ],
+  "input stream": [
+   "3.3"
+  ],
+  "invalid rule error": [
+   "5.5.3"
+  ],
+  "lowercase letter": [
+   "4.2"
+  ],
+  "marked indexes": [
+   "5.3"
+  ],
+  "maximum allowed code point": [
+   "4.2"
+  ],
+  "n dimension": [
+   "6.2"
+  ],
+  "name start code point": [
+   "4.2"
+  ],
+  "ndash dimension": [
+   "6.2"
+  ],
+  "ndashdigit dimension": [
+   "6.2"
+  ],
+  "ndashdigit ident": [
+   "6.2"
+  ],
+  "next input code point": [
+   "4.2"
+  ],
+  "next token": [
+   "5.3"
+  ],
+  "non ascii ident code point": [
+   "4.2"
+  ],
+  "non printable code point": [
+   "4.2"
+  ],
+  "normalize into a token stream": [
+   "5.4"
+  ],
+  "number token": [
+   "4"
+  ],
+  "parse a block contents": [
+   "5.4.5"
+  ],
+  "parse a comma separated list according to a css grammar": [
+   "5.4.2"
+  ],
+  "parse a comma separated list of component values": [
+   "5.4.10"
+  ],
+  "parse a component value": [
+   "5.4.8"
+  ],
+  "parse a css stylesheet": [
+   "8"
+  ],
+  "parse a declaration": [
+   "5.4.7"
+  ],
+  "parse a list": [
+   "5.4.2"
+  ],
+  "parse a list of component values": [
+   "5.4.9"
+  ],
+  "parse a rule": [
+   "5.4.6"
+  ],
+  "parse a stylesheet": [
+   "5.4.3"
+  ],
+  "parse a stylesheet contents": [
+   "5.4.4"
+  ],
+  "parse error": [
+   "3"
+  ],
+  "parse errors": [
+   "3"
+  ],
+  "parse something according to a css grammar": [
+   "5.4.1"
+  ],
+  "percentage token": [
+   "4"
+  ],
+  "preserved tokens": [
+   "5.2"
+  ],
+  "property declarations": [
+   "5.2"
+  ],
+  "qualified rule": [
+   "5.2"
+  ],
+  "qualified rule list": [
+   "7.1"
+  ],
+  "reconsume the current input code point": [
+   "4.2"
+  ],
+  "restore a mark": [
+   "5.3"
+  ],
+  "rule list": [
+   "7.1"
+  ],
+  "semicolon token": [
+   "4"
+  ],
+  "serialize an a n plus b value": [
+   "9.1"
+  ],
+  "signed integer": [
+   "6.2"
+  ],
+  "signless integer": [
+   "6.2"
+  ],
+  "simple block": [
+   "5.2"
+  ],
+  "start with a number": [
+   "4.3.10"
+  ],
+  "start with an ident sequence": [
+   "4.3.9"
+  ],
+  "starts with a number": [
+   "4.3.10"
+  ],
+  "starts with a valid escape": [
+   "4.3.8"
+  ],
+  "starts with an ident sequence": [
+   "4.3.9"
+  ],
+  "statement at rule": [
+   "8.2"
+  ],
+  "statement at rules": [
+   "8.2"
+  ],
+  "string token": [
+   "4"
+  ],
+  "style rule": [
+   "8.1"
+  ],
+  "token stream": [
+   "5.3"
+  ],
+  "unicode range token": [
+   "4"
+  ],
+  "uppercase letter": [
+   "4.2"
+  ],
+  "url token": [
+   "4"
+  ],
+  "whitespace token": [
+   "4"
+  ],
+  "would start a number": [
+   "4.3.10"
+  ],
+  "would start a unicode range": [
+   "4.3.11"
+  ],
+  "would start an ident sequence": [
+   "4.3.9"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "( token": {
+   "5.2": 2
+  },
+  "[ token": {
+   "5.2": 2,
+   "5.5.9": 2
+  },
+  "at keyword token": {
+   "12.6": 3
+  },
+  "at rule": {
+   "2": 8,
+   "5.2": 4,
+   "7.1": 5,
+   "8.3": 2
+  },
+  "bad string token": {
+   "4.3.5": 2
+  },
+  "bad url token": {
+   "4.3.6": 4,
+   "4.3.15": 2,
+   "12.6": 2
+  },
+  "check if three code points would start a number": {
+   "4.3.1": 3,
+   "12.6": 4
+  },
+  "check if three code points would start a unicode range": {
+   "12.6": 2
+  },
+  "check if three code points would start an ident sequence": {
+   "4.3.1": 3,
+   "12.6": 4
+  },
+  "check if two code points are a valid escape": {
+   "4.3.1": 2,
+   "4.3.9": 2,
+   "12.6": 3
+  },
+  "comma token": {
+   "12.6": 2
+  },
+  "component value": {
+   "5.3": 2
+  },
+  "consume a block": {
+   "5.5.3": 2
+  },
+  "consume a list of component values": {
+   "5.5.6": 2
+  },
+  "consume a numeric token": {
+   "4.3.1": 4
+  },
+  "consume a string token": {
+   "4.3.1": 2
+  },
+  "consume a token": {
+   "4": 2,
+   "5.5.2": 2,
+   "12.6": 2
+  },
+  "consume an ident like token": {
+   "4.3.1": 4
+  },
+  "consume an ident sequence": {
+   "4.3.1": 2
+  },
+  "consume the remnants of a bad url": {
+   "4.3.6": 3
+  },
+  "current input code point": {
+   "4.3.1": 8,
+   "4.3.5": 2
+  },
+  "delim token": {
+   "9": 2,
+   "4.3.1": 8,
+   "7.2": 2,
+   "12.6": 2
+  },
+  "dimension token": {
+   "4.3.3": 4,
+   "6.2": 3,
+   "12.6": 3
+  },
+  "discard a token": {
+   "5.5.1": 2,
+   "5.5.6": 3,
+   "5.5.9": 2
+  },
+  "discard whitespace": {
+   "5.4.6": 2,
+   "5.4.8": 2,
+   "5.5.6": 2
+  },
+  "eof token": {
+   "5.4.6": 2
+  },
+  "filter code points": {
+   "12.6": 2
+  },
+  "function token": {
+   "4.3.4": 3,
+   "12.6": 2
+  },
+  "hash token": {
+   "4.3.1": 4
+  },
+  "hex digit": {
+   "2.1": 2,
+   "4.3.7": 2,
+   "4.3.14": 3
+  },
+  "ident sequence": {
+   "2.1": 2,
+   "12.6": 2
+  },
+  "ident start code point": {
+   "4.3.9": 2,
+   "12.6": 2
+  },
+  "ident token": {
+   "4.3.4": 2,
+   "5.5.6": 2,
+   "6.2": 2,
+   "12.6": 3
+  },
+  "input stream": {
+   "4.2": 3
+  },
+  "next input code point": {
+   "4.3.1": 6,
+   "4.3.3": 2,
+   "4.3.4": 2,
+   "4.3.5": 3,
+   "4.3.6": 2,
+   "4.3.7": 2,
+   "4.3.13": 9,
+   "4.3.14": 3
+  },
+  "next token": {
+   "5.4.6": 3,
+   "5.5.6": 2,
+   "5.5.9": 3
+  },
+  "non ascii ident code point": {
+   "12.6": 2
+  },
+  "normalize into a token stream": {
+   "12.6": 2
+  },
+  "number token": {
+   "4.3.3": 2,
+   "6.2": 3,
+   "12.6": 2
+  },
+  "parse a comma separated list according to a css grammar": {
+   "12.6": 2
+  },
+  "parse a stylesheet": {
+   "12.2": 2
+  },
+  "parse errors": {
+   "4.3.5": 2,
+   "4.3.6": 4,
+   "5.5.3": 2
+  },
+  "parse something according to a css grammar": {
+   "5.4.2": 3,
+   "12.6": 2
+  },
+  "percentage token": {
+   "4.3.3": 2,
+   "12.6": 2
+  },
+  "qualified rule": {
+   "2": 3,
+   "5.5.3": 3,
+   "7.1": 5,
+   "8.1": 2,
+   "8.2": 2
+  },
+  "reconsume the current input code point": {
+   "4.3.1": 9
+  },
+  "semicolon token": {
+   "5.5.5": 2,
+   "5.5.6": 2,
+   "7.2": 2,
+   "12.6": 3
+  },
+  "string token": {
+   "4.3.5": 6,
+   "12.6": 2
+  },
+  "style rule": {
+   "2": 2,
+   "8.2": 2
+  },
+  "token stream": {
+   "5.4": 2,
+   "5.5.6": 2
+  },
+  "unicode range token": {
+   "4.3.14": 5,
+   "12.6": 2
+  },
+  "url token": {
+   "4.3.6": 7,
+   "12.6": 3
+  },
+  "whitespace token": {
+   "9": 2,
+   "5.5.6": 3
+  }
+ }
+}

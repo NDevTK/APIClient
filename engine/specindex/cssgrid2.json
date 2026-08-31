@@ -1,0 +1,1344 @@
+{
+ "spec": "CSS Grid Layout Module Level 2",
+ "key": "cssgrid2",
+ "base": "https://drafts.csswg.org/css-grid-2/",
+ "specUpdated": "30 October 2023",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Overview",
+   "page": "",
+   "id": "overview"
+  },
+  "3": {
+   "title": "Grid Layout Concepts and Terminology",
+   "page": "",
+   "id": "grid-concepts"
+  },
+  "4": {
+   "title": "Reordering and Accessibility",
+   "page": "",
+   "id": "order-accessibility"
+  },
+  "5": {
+   "title": "Grid Containers",
+   "page": "",
+   "id": "grid-model"
+  },
+  "6": {
+   "title": "Grid Items",
+   "page": "",
+   "id": "grid-items"
+  },
+  "7": {
+   "title": "Defining the Grid",
+   "page": "",
+   "id": "grid-definition"
+  },
+  "8": {
+   "title": "Placing Grid Items",
+   "page": "",
+   "id": "placement"
+  },
+  "9": {
+   "title": "Subgrids",
+   "page": "",
+   "id": "subgrids"
+  },
+  "10": {
+   "title": "Absolute Positioning",
+   "page": "",
+   "id": "abspos"
+  },
+  "11": {
+   "title": "Alignment and Spacing",
+   "page": "",
+   "id": "alignment"
+  },
+  "12": {
+   "title": "Grid Layout Algorithm",
+   "page": "",
+   "id": "layout-algorithm"
+  },
+  "13": {
+   "title": "Fragmenting Grid Layout",
+   "page": "",
+   "id": "pagination"
+  },
+  "14": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "15": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "16": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "17": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "1.1": {
+   "title": "Background and Motivation",
+   "page": "",
+   "id": "background"
+  },
+  "1.1.1": {
+   "title": "Adapting Layouts to Available Space",
+   "page": "",
+   "id": "adapting-to-available-space"
+  },
+  "1.1.2": {
+   "title": "Source-Order Independence",
+   "page": "",
+   "id": "source-independence"
+  },
+  "1.2": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Declaring the Grid",
+   "page": "",
+   "id": "overview-grid"
+  },
+  "2.2": {
+   "title": "Placing Items",
+   "page": "",
+   "id": "overview-placement"
+  },
+  "2.3": {
+   "title": "Sizing the Grid",
+   "page": "",
+   "id": "overview-sizing"
+  },
+  "3.1": {
+   "title": "Grid Lines",
+   "page": "",
+   "id": "grid-line-concept"
+  },
+  "3.2": {
+   "title": "Grid Tracks and Cells",
+   "page": "",
+   "id": "grid-track-concept"
+  },
+  "3.3": {
+   "title": "Grid Areas",
+   "page": "",
+   "id": "grid-area-concept"
+  },
+  "3.4": {
+   "title": "Nested vs. Subgridded Items",
+   "page": "",
+   "id": "subgrid-items"
+  },
+  "5.1": {
+   "title": "Establishing Grid Containers: the grid and inline-grid display values",
+   "page": "",
+   "id": "grid-containers"
+  },
+  "5.2": {
+   "title": "Sizing Grid Containers",
+   "page": "",
+   "id": "intrinsic-sizes"
+  },
+  "5.3": {
+   "title": "Scrollable Grid Overflow",
+   "page": "",
+   "id": "overflow"
+  },
+  "5.4": {
+   "title": "Limiting Large Grids",
+   "page": "",
+   "id": "overlarge-grids"
+  },
+  "6.1": {
+   "title": "Grid Item Display",
+   "page": "",
+   "id": "grid-item-display"
+  },
+  "6.2": {
+   "title": "Grid Item Sizing",
+   "page": "",
+   "id": "grid-item-sizing"
+  },
+  "6.3": {
+   "title": "Reordered Grid Items: the order property",
+   "page": "",
+   "id": "order-property"
+  },
+  "6.4": {
+   "title": "Grid Item Margins and Paddings",
+   "page": "",
+   "id": "item-margins"
+  },
+  "6.5": {
+   "title": "Z-axis Ordering: the z-index property",
+   "page": "",
+   "id": "z-order"
+  },
+  "6.6": {
+   "title": "Automatic Minimum Size of Grid Items",
+   "page": "",
+   "id": "min-size-auto"
+  },
+  "7.1": {
+   "title": "The Explicit Grid",
+   "page": "",
+   "id": "explicit-grids"
+  },
+  "7.2": {
+   "title": "Explicit Track Sizing: the grid-template-rows and grid-template-columns properties",
+   "page": "",
+   "id": "track-sizing"
+  },
+  "7.2.1": {
+   "title": "Track Sizes",
+   "page": "",
+   "id": "track-sizes"
+  },
+  "7.2.2": {
+   "title": "Naming Grid Lines: the [ <custom-ident> *]",
+   "page": "",
+   "id": "named-lines"
+  },
+  "7.2.3": {
+   "title": "Repeating Rows and Columns: the repeat() notation",
+   "page": "",
+   "id": "repeat-notation"
+  },
+  "7.2.3.1": {
+   "title": "Syntax of repeat()",
+   "page": "",
+   "id": "repeat-syntax"
+  },
+  "7.2.3.2": {
+   "title": "Repeat-to-fill: auto-fill and auto-fit repetitions",
+   "page": "",
+   "id": "auto-repeat"
+  },
+  "7.2.3.3": {
+   "title": "Interpolation/Combination of repeat()",
+   "page": "",
+   "id": "repeat-interpolation"
+  },
+  "7.2.4": {
+   "title": "Flexible Lengths: the fr unit",
+   "page": "",
+   "id": "fr-unit"
+  },
+  "7.2.5": {
+   "title": "Computed Value of a Track Listing",
+   "page": "",
+   "id": "computed-tracks"
+  },
+  "7.2.6": {
+   "title": "Resolved Value of a Track Listing",
+   "page": "",
+   "id": "resolved-track-list"
+  },
+  "7.2.6.1": {
+   "title": "Resolved Value of a Standalone Track Listing",
+   "page": "",
+   "id": "resolved-track-list-standalone"
+  },
+  "7.2.6.2": {
+   "title": "Resolved Value of a Subgridded Track Listing",
+   "page": "",
+   "id": "resolved-track-list-subgrid"
+  },
+  "7.3": {
+   "title": "Named Areas: the grid-template-areas property",
+   "page": "",
+   "id": "grid-template-areas-property"
+  },
+  "7.3.1": {
+   "title": "Serialization Of Template Strings",
+   "page": "",
+   "id": "serialize-template"
+  },
+  "7.3.2": {
+   "title": "Implicitly-Assigned Line Names",
+   "page": "",
+   "id": "implicit-named-lines"
+  },
+  "7.3.3": {
+   "title": "Implicitly-Named Areas",
+   "page": "",
+   "id": "implicit-named-areas"
+  },
+  "7.4": {
+   "title": "Explicit Grid Shorthand: the grid-template property",
+   "page": "",
+   "id": "explicit-grid-shorthand"
+  },
+  "7.5": {
+   "title": "The Implicit Grid",
+   "page": "",
+   "id": "implicit-grids"
+  },
+  "7.6": {
+   "title": "Implicit Track Sizing: the grid-auto-rows and grid-auto-columns properties",
+   "page": "",
+   "id": "auto-tracks"
+  },
+  "7.7": {
+   "title": "Automatic Placement : the grid-auto-flow property",
+   "page": "",
+   "id": "grid-auto-flow-property"
+  },
+  "7.8": {
+   "title": "Grid Definition Shorthand: the grid property",
+   "page": "",
+   "id": "grid-shorthand"
+  },
+  "8.1": {
+   "title": "Common Patterns for Grid Placement",
+   "page": "",
+   "id": "common-uses"
+  },
+  "8.1.1": {
+   "title": "Named Areas",
+   "page": "",
+   "id": "common-uses-named-areas"
+  },
+  "8.1.2": {
+   "title": "Numeric Indexes and Spans",
+   "page": "",
+   "id": "common-uses-numeric"
+  },
+  "8.1.3": {
+   "title": "Named Lines and Spans",
+   "page": "",
+   "id": "common-uses-named-lines"
+  },
+  "8.1.4": {
+   "title": "Auto Placement",
+   "page": "",
+   "id": "common-uses-auto-placement"
+  },
+  "8.2": {
+   "title": "Grid Item Placement vs. Source Order",
+   "page": "",
+   "id": "placement-a11y"
+  },
+  "8.3": {
+   "title": "Line-based Placement: the grid-row-start , grid-column-start , grid-row-end , and grid-column-end properties",
+   "page": "",
+   "id": "line-placement"
+  },
+  "8.3.1": {
+   "title": "Grid Placement Conflict Handling",
+   "page": "",
+   "id": "grid-placement-errors"
+  },
+  "8.4": {
+   "title": "Placement Shorthands: the grid-column , grid-row , and grid-area properties",
+   "page": "",
+   "id": "placement-shorthands"
+  },
+  "8.5": {
+   "title": "Grid Item Placement Algorithm",
+   "page": "",
+   "id": "auto-placement-algo"
+  },
+  "10.1": {
+   "title": "With a Grid Container as Containing Block",
+   "page": "",
+   "id": "abspos-items"
+  },
+  "10.2": {
+   "title": "With a Grid Container as Parent",
+   "page": "",
+   "id": "static-position"
+  },
+  "11.1": {
+   "title": "Gutters: the row-gap , column-gap , and gap properties",
+   "page": "",
+   "id": "gutters"
+  },
+  "11.2": {
+   "title": "Aligning with auto margins",
+   "page": "",
+   "id": "auto-margins"
+  },
+  "11.3": {
+   "title": "Inline-axis Alignment: the justify-self and justify-items properties",
+   "page": "",
+   "id": "row-align"
+  },
+  "11.4": {
+   "title": "Block-axis Alignment: the align-self and align-items properties",
+   "page": "",
+   "id": "column-align"
+  },
+  "11.5": {
+   "title": "Aligning the Grid: the justify-content and align-content properties",
+   "page": "",
+   "id": "grid-align"
+  },
+  "11.6": {
+   "title": "Grid Container Baselines",
+   "page": "",
+   "id": "grid-baselines"
+  },
+  "12.1": {
+   "title": "Grid Sizing Algorithm",
+   "page": "",
+   "id": "algo-grid-sizing"
+  },
+  "12.2": {
+   "title": "Track Sizing Terminology",
+   "page": "",
+   "id": "algo-terms"
+  },
+  "12.3": {
+   "title": "Track Sizing Algorithm",
+   "page": "",
+   "id": "algo-track-sizing"
+  },
+  "12.4": {
+   "title": "Initialize Track Sizes",
+   "page": "",
+   "id": "algo-init"
+  },
+  "12.5": {
+   "title": "Resolve Intrinsic Track Sizes",
+   "page": "",
+   "id": "algo-content"
+  },
+  "12.5.1": {
+   "title": "Distributing Extra Space Across Spanned Tracks",
+   "page": "",
+   "id": "extra-space"
+  },
+  "12.6": {
+   "title": "Maximize Tracks",
+   "page": "",
+   "id": "algo-grow-tracks"
+  },
+  "12.7": {
+   "title": "Expand Flexible Tracks",
+   "page": "",
+   "id": "algo-flex-tracks"
+  },
+  "12.7.1": {
+   "title": "Find the Size of an fr",
+   "page": "",
+   "id": "algo-find-fr-size"
+  },
+  "12.8": {
+   "title": "Stretch auto",
+   "page": "",
+   "id": "algo-stretch"
+  },
+  "13.1": {
+   "title": "Sample Fragmentation Algorithm",
+   "page": "",
+   "id": "fragmentation-alg"
+  },
+  "16.1": {
+   "title": "Changes since the 18 December 2020 CR",
+   "page": "",
+   "id": "changes-202012"
+  },
+  "16.2": {
+   "title": "Changes since the August 2020 CR",
+   "page": "",
+   "id": "changes-202008"
+  },
+  "16.3": {
+   "title": "Additions Since Level 1",
+   "page": "",
+   "id": "changes-2"
+  }
+ },
+ "dfns": {
+  "[ auto flow dense ] grid auto rows grid template columns": [
+   "7.8"
+  ],
+  "augmented grid": [
+   "10.1"
+  ],
+  "auto fill": [
+   "7.2.3.2"
+  ],
+  "auto fit": [
+   "7.2.3.2"
+  ],
+  "auto placement": [
+   "7.7"
+  ],
+  "auto placement cursor": [
+   "8.5"
+  ],
+  "auto repeat": [
+   "7.2.3.1"
+  ],
+  "auto track list": [
+   "7.2"
+  ],
+  "automatic column position": [
+   "8"
+  ],
+  "automatic column span": [
+   "8"
+  ],
+  "automatic grid position": [
+   "8"
+  ],
+  "automatic grid span": [
+   "8"
+  ],
+  "automatic placement": [
+   "7.7"
+  ],
+  "automatic position": [
+   "8"
+  ],
+  "automatic row position": [
+   "8"
+  ],
+  "automatic row span": [
+   "8"
+  ],
+  "automatic span": [
+   "8"
+  ],
+  "available grid space": [
+   "12.2"
+  ],
+  "base size": [
+   "12.3"
+  ],
+  "clamp a grid area": [
+   "5.4"
+  ],
+  "collapsed grid track": [
+   "7.2.3.2"
+  ],
+  "collapsed gutter": [
+   "11.1"
+  ],
+  "computed repeat notation": [
+   "7.2.5"
+  ],
+  "computed track list": [
+   "7.2.5"
+  ],
+  "computed track size": [
+   "7.2.5"
+  ],
+  "content based minimum size": [
+   "6.6"
+  ],
+  "content size suggestion": [
+   "6.6"
+  ],
+  "data dfn type function data export id funcdef track repeat repeat repeat()": [
+   "7.2.3"
+  ],
+  "data dfn type value data export data lt fr fr unit id valdef flex fr fr": [
+   "7.2.4"
+  ],
+  "data dfn type value data export id grid placement auto auto": [
+   "8.3"
+  ],
+  "data dfn type value data export id grid placement slot custom ident": [
+   "8.3"
+  ],
+  "definite column position": [
+   "8"
+  ],
+  "definite grid position": [
+   "8"
+  ],
+  "definite position": [
+   "8"
+  ],
+  "definite row position": [
+   "8"
+  ],
+  "distribute extra space": [
+   "12.5.1"
+  ],
+  "explicit column span": [
+   "8"
+  ],
+  "explicit grid": [
+   "7.1"
+  ],
+  "explicit grid column": [
+   "7.1"
+  ],
+  "explicit grid properties": [
+   "7.1"
+  ],
+  "explicit grid row": [
+   "7.1"
+  ],
+  "explicit grid span": [
+   "8"
+  ],
+  "explicit grid track": [
+   "7.1"
+  ],
+  "explicit grid tracks": [
+   "7.1"
+  ],
+  "explicit row span": [
+   "8"
+  ],
+  "explicit span": [
+   "8"
+  ],
+  "explicit track list": [
+   "7.2"
+  ],
+  "explicitly assigned": [
+   "7.2.2"
+  ],
+  "explicitly assigned line name": [
+   "7.2.2"
+  ],
+  "fit content( length percentage )": [
+   "7.2.1"
+  ],
+  "fit content()": [
+   "7.2.1"
+  ],
+  "fixed breadth": [
+   "7.2"
+  ],
+  "fixed repeat": [
+   "7.2.3.1"
+  ],
+  "fixed size": [
+   "7.2"
+  ],
+  "fixed sizing function": [
+   "12.1"
+  ],
+  "flex [0 ]": [
+   "7.2.1"
+  ],
+  "flex factor": [
+   "7.2.1"
+  ],
+  "flex factor sum": [
+   "12.7.1"
+  ],
+  "flex fraction": [
+   "7.2.4"
+  ],
+  "flexible length": [
+   "7.2.4"
+  ],
+  "flexible sizing function": [
+   "12.1"
+  ],
+  "flexible tracks": [
+   "7.2.4"
+  ],
+  "free space": [
+   "12.2"
+  ],
+  "grid area": [
+   "3.3",
+   "8.4"
+  ],
+  "grid auto columns": [
+   "7.6"
+  ],
+  "grid auto flow": [
+   "7.7"
+  ],
+  "grid auto rows": [
+   "7.6"
+  ],
+  "grid cell": [
+   "3.2"
+  ],
+  "grid column": [
+   "3",
+   "8.4"
+  ],
+  "grid column end": [
+   "8.3"
+  ],
+  "grid column line": [
+   "3.1"
+  ],
+  "grid column start": [
+   "8.3"
+  ],
+  "grid container": [
+   "5.1"
+  ],
+  "grid formatting context": [
+   "5.1"
+  ],
+  "grid item": [
+   "6"
+  ],
+  "grid item placement algorithm": [
+   "8.5"
+  ],
+  "grid items": [
+   "6"
+  ],
+  "grid layout": [
+   "3"
+  ],
+  "grid level": [
+   "6.1"
+  ],
+  "grid line": [
+   "3.1",
+   "8.3"
+  ],
+  "grid lines": [
+   "3.1"
+  ],
+  "grid modified document order": [
+   "11.6"
+  ],
+  "grid modified document order (grid order)": [
+   "11.6"
+  ],
+  "grid order": [
+   "11.6"
+  ],
+  "grid placement": [
+   "8"
+  ],
+  "grid placement properties": [
+   "8"
+  ],
+  "grid placement property": [
+   "8"
+  ],
+  "grid position": [
+   "8"
+  ],
+  "grid row": [
+   "3",
+   "8.4"
+  ],
+  "grid row end": [
+   "8.3"
+  ],
+  "grid row line": [
+   "3.1"
+  ],
+  "grid row start": [
+   "8.3"
+  ],
+  "grid span": [
+   "8"
+  ],
+  "grid template": [
+   "7.4"
+  ],
+  "grid template areas": [
+   "7.3"
+  ],
+  "grid template columns": [
+   "7.2"
+  ],
+  "grid template rows": [
+   "7.2"
+  ],
+  "grid template rows [ auto flow dense ] grid auto columns": [
+   "7.8"
+  ],
+  "grid template rows grid template columns": [
+   "7.4"
+  ],
+  "grid track": [
+   "3.2"
+  ],
+  "growth limit": [
+   "12.3"
+  ],
+  "hypothetical fr size": [
+   "12.7.1"
+  ],
+  "implicit column span": [
+   "8"
+  ],
+  "implicit grid": [
+   "7.5"
+  ],
+  "implicit grid column": [
+   "7.5"
+  ],
+  "implicit grid lines": [
+   "7.5"
+  ],
+  "implicit grid properties": [
+   "7.5"
+  ],
+  "implicit grid row": [
+   "7.5"
+  ],
+  "implicit grid span": [
+   "8"
+  ],
+  "implicit grid track": [
+   "7.5"
+  ],
+  "implicit grid tracks": [
+   "7.5"
+  ],
+  "implicit row span": [
+   "8"
+  ],
+  "implicit span": [
+   "8"
+  ],
+  "implicitly assigned line name": [
+   "7.3.2"
+  ],
+  "implicitly assigned line names": [
+   "7.3.2"
+  ],
+  "implicitly named area": [
+   "7.3.3"
+  ],
+  "implicitly named areas": [
+   "7.3.3"
+  ],
+  "infinitely growable": [
+   "12.5"
+  ],
+  "inflexible breadth": [
+   "7.2"
+  ],
+  "inline grid": [
+   "5.1"
+  ],
+  "intrinsic sizing function": [
+   "12.1"
+  ],
+  "leftover space": [
+   "12.7.1"
+  ],
+  "limited max content contribution": [
+   "12.5"
+  ],
+  "limited min content contribution": [
+   "12.5"
+  ],
+  "limited min max content contribution": [
+   "12.5"
+  ],
+  "line name": [
+   "7.2.2"
+  ],
+  "line name list": [
+   "7.2"
+  ],
+  "line name set": [
+   "7.2.5"
+  ],
+  "line names": [
+   "7.2",
+   "7.2.2"
+  ],
+  "max content": [
+   "7.2.1"
+  ],
+  "max track sizing function": [
+   "12.2"
+  ],
+  "min content": [
+   "7.2.1"
+  ],
+  "min track sizing function": [
+   "12.2"
+  ],
+  "minimum contribution": [
+   "12.5"
+  ],
+  "minmax( min max )": [
+   "7.2.1"
+  ],
+  "name repeat": [
+   "7.2.3.1"
+  ],
+  "named cell token": [
+   "7.3"
+  ],
+  "named grid area": [
+   "7.3"
+  ],
+  "named grid areas": [
+   "7.3"
+  ],
+  "nested grid": [
+   "3.4"
+  ],
+  "null cell token": [
+   "7.3"
+  ],
+  "parent grid": [
+   "3.4"
+  ],
+  "sizing function": [
+   "7.2"
+  ],
+  "space to fill": [
+   "12.7.1"
+  ],
+  "span count": [
+   "12.2"
+  ],
+  "specified size suggestion": [
+   "6.6"
+  ],
+  "standalone axis": [
+   "7.2"
+  ],
+  "standalone grid": [
+   "3.4"
+  ],
+  "subgrid line name list": [
+   "7.2"
+  ],
+  "subgridded axis": [
+   "7.2"
+  ],
+  "track breadth": [
+   "7.2"
+  ],
+  "track list": [
+   "7.2"
+  ],
+  "track list auto track list": [
+   "7.2"
+  ],
+  "track repeat": [
+   "7.2.3.1"
+  ],
+  "track section": [
+   "7.2.5"
+  ],
+  "track size": [
+   "7.2"
+  ],
+  "track sizing algorithm": [
+   "12.3"
+  ],
+  "track sizing function": [
+   "7.2"
+  ],
+  "transferred size suggestion": [
+   "6.6"
+  ],
+  "trash token": [
+   "7.3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "auto placement cursor": {
+   "17": 2
+  },
+  "automatic grid position": {
+   "17": 4,
+   "8.5": 3
+  },
+  "automatic grid span": {
+   "17": 4
+  },
+  "automatic placement": {
+   "17": 2
+  },
+  "available grid space": {
+   "12.7": 2
+  },
+  "base size": {
+   "12.4": 3,
+   "12.5": 12,
+   "12.5.1": 6,
+   "12.7": 2
+  },
+  "clamp a grid area": {
+   "17": 2
+  },
+  "collapsed grid track": {
+   "17": 3
+  },
+  "computed track list": {
+   "7.2": 2
+  },
+  "definite grid position": {
+   "17": 4,
+   "8.5": 7
+  },
+  "distribute extra space": {
+   "12.5": 6
+  },
+  "explicit grid": {
+   "9": 3,
+   "17": 2,
+   "7.2": 3,
+   "7.3": 2,
+   "7.5": 2,
+   "8.3": 4,
+   "8.5": 4
+  },
+  "explicit grid span": {
+   "17": 4
+  },
+  "explicit grid tracks": {
+   "17": 3
+  },
+  "explicit track list": {
+   "7.4": 2
+  },
+  "explicitly assigned": {
+   "9": 2
+  },
+  "fit content( length percentage )": {
+   "12.2": 2,
+   "12.5": 3,
+   "12.5.1": 2
+  },
+  "fixed repeat": {
+   "7.2": 2
+  },
+  "fixed size": {
+   "7.2.3.1": 2
+  },
+  "fixed sizing function": {
+   "6.6": 2,
+   "12.4": 2,
+   "12.5": 3
+  },
+  "flex factor": {
+   "7.2.4": 3,
+   "12.7": 2,
+   "12.7.1": 2
+  },
+  "flex fraction": {
+   "12.7": 6
+  },
+  "flexible sizing function": {
+   "12.5": 4
+  },
+  "flexible tracks": {
+   "12.5": 4,
+   "12.7": 2,
+   "12.7.1": 2
+  },
+  "free space": {
+   "7.2.1": 2,
+   "12.6": 2,
+   "12.7": 4
+  },
+  "grid area": {
+   "8": 3,
+   "11": 2,
+   "12": 2,
+   "17": 3,
+   "2.2": 2,
+   "5.4": 2,
+   "8.3": 3,
+   "8.5": 6
+  },
+  "grid auto columns": {
+   "17": 2,
+   "7.1": 2,
+   "7.5": 2,
+   "7.8": 4
+  },
+  "grid auto flow": {
+   "17": 2,
+   "7.5": 2,
+   "7.8": 2,
+   "8.1.4": 2,
+   "8.5": 2
+  },
+  "grid auto rows": {
+   "17": 2,
+   "7.1": 2,
+   "7.5": 2,
+   "7.8": 4
+  },
+  "grid cell": {
+   "7.3": 2
+  },
+  "grid column": {
+   "17": 4,
+   "12.1": 4
+  },
+  "grid column end": {
+   "17": 2,
+   "8.4": 6
+  },
+  "grid column start": {
+   "17": 2,
+   "8.4": 6
+  },
+  "grid container": {
+   "2": 2,
+   "6": 2,
+   "12": 4,
+   "2.3": 2,
+   "3.4": 2,
+   "5.2": 3,
+   "5.3": 3,
+   "7.2": 3,
+   "7.2.1": 5,
+   "7.2.4": 2,
+   "7.2.6.1": 2,
+   "7.3": 3,
+   "7.7": 2,
+   "8.3": 2,
+   "8.4": 2,
+   "10.1": 7,
+   "10.2": 2,
+   "11.3": 2,
+   "11.4": 2,
+   "11.5": 3,
+   "11.6": 3,
+   "12.1": 9,
+   "12.2": 3,
+   "12.5": 2,
+   "12.6": 2,
+   "12.7": 2
+  },
+  "grid item placement algorithm": {
+   "12": 2,
+   "17": 2,
+   "7.7": 4,
+   "8.1.4": 2
+  },
+  "grid items": {
+   "8": 5,
+   "9": 6,
+   "11": 4,
+   "12": 3,
+   "13": 2,
+   "1.1.1": 4,
+   "2.3": 2,
+   "3.1": 2,
+   "3.3": 2,
+   "3.4": 2,
+   "5.1": 2,
+   "6.1": 2,
+   "6.2": 2,
+   "6.4": 2,
+   "6.6": 2,
+   "7.2.1": 6,
+   "7.5": 2,
+   "7.7": 3,
+   "8.3": 7,
+   "8.4": 2,
+   "8.5": 13,
+   "11.2": 2,
+   "11.3": 3,
+   "11.4": 2,
+   "11.6": 6,
+   "12.1": 4
+  },
+  "grid line": {
+   "8.4": 4
+  },
+  "grid lines": {
+   "17": 3,
+   "3.3": 2,
+   "8.3": 2
+  },
+  "grid modified document order (grid order)": {
+   "17": 2
+  },
+  "grid placement": {
+   "17": 2,
+   "8.3": 5,
+   "8.3.1": 3,
+   "8.5": 2,
+   "10.1": 2
+  },
+  "grid placement properties": {
+   "4": 4,
+   "17": 2,
+   "10.1": 5
+  },
+  "grid position": {
+   "17": 4
+  },
+  "grid row": {
+   "17": 4,
+   "12.1": 3
+  },
+  "grid row end": {
+   "17": 2,
+   "8.4": 6
+  },
+  "grid row start": {
+   "17": 2,
+   "8.4": 6
+  },
+  "grid span": {
+   "9": 2,
+   "17": 4,
+   "8.5": 2
+  },
+  "grid template": {
+   "17": 2,
+   "7.8": 6
+  },
+  "grid template areas": {
+   "9": 2,
+   "17": 2,
+   "7.1": 3,
+   "7.4": 3
+  },
+  "grid template columns": {
+   "17": 3,
+   "7.1": 3,
+   "7.2.6.1": 3,
+   "7.2.6.2": 2,
+   "7.4": 5,
+   "7.6": 2,
+   "7.8": 4
+  },
+  "grid template rows": {
+   "17": 3,
+   "7.1": 3,
+   "7.2.6.1": 3,
+   "7.4": 5,
+   "7.6": 2,
+   "7.8": 4
+  },
+  "grid track": {
+   "17": 2,
+   "3.3": 2,
+   "6.6": 2,
+   "7.2.1": 8,
+   "11.5": 2,
+   "12.7.1": 2
+  },
+  "growth limit": {
+   "12.4": 3,
+   "12.5": 8,
+   "12.5.1": 6
+  },
+  "implicit grid": {
+   "17": 2,
+   "8.3": 2,
+   "8.5": 13,
+   "11.1": 2
+  },
+  "implicit grid lines": {
+   "8.3": 2
+  },
+  "implicit grid span": {
+   "17": 4
+  },
+  "implicit grid tracks": {
+   "17": 3,
+   "7.6": 2
+  },
+  "implicitly assigned line names": {
+   "9": 3
+  },
+  "infinitely growable": {
+   "12.5.1": 2
+  },
+  "inline grid": {
+   "6.1": 2
+  },
+  "intrinsic sizing function": {
+   "12.4": 2,
+   "12.5": 2
+  },
+  "leftover space": {
+   "7.2.1": 2,
+   "7.2.4": 3
+  },
+  "limited min max content contribution": {
+   "17": 2
+  },
+  "line name set": {
+   "7.2.6.2": 2
+  },
+  "line names": {
+   "9": 3,
+   "17": 2,
+   "7.2.3.1": 9,
+   "7.4": 2,
+   "8.1.3": 2
+  },
+  "max content": {
+   "12.2": 2,
+   "12.5": 7,
+   "12.5.1": 2
+  },
+  "max track sizing function": {
+   "6.6": 2,
+   "12.1": 2,
+   "12.5": 7,
+   "12.5.1": 5
+  },
+  "min content": {
+   "12.5": 3
+  },
+  "min track sizing function": {
+   "12.5": 7
+  },
+  "minmax( min max )": {
+   "12.2": 2
+  },
+  "named grid areas": {
+   "9": 3,
+   "8.1.1": 2,
+   "8.3": 2
+  },
+  "parent grid": {
+   "9": 6,
+   "7.2": 3
+  },
+  "space to fill": {
+   "12.7": 2
+  },
+  "standalone axis": {
+   "7.2.3.2": 2
+  },
+  "subgridded axis": {
+   "9": 9,
+   "17": 2
+  },
+  "track list": {
+   "17": 2,
+   "7.2.3.1": 3
+  },
+  "track size": {
+   "7.2.3.1": 2,
+   "7.4": 3
+  },
+  "track sizing algorithm": {
+   "12.1": 2
+  },
+  "track sizing function": {
+   "17": 2,
+   "12.5": 2
+  }
+ }
+}

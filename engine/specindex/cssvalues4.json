@@ -1,0 +1,1171 @@
+{
+ "spec": "CSS Values and Units Module Level 4",
+ "key": "cssvalues4",
+ "base": "https://drafts.csswg.org/css-values-4/",
+ "specUpdated": "20 August 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Value Definition Syntax",
+   "page": "",
+   "id": "value-defs"
+  },
+  "3": {
+   "title": "Combining Values: Interpolation, Addition, and Accumulation",
+   "page": "",
+   "id": "combining-values"
+  },
+  "4": {
+   "title": "Textual Data Types",
+   "page": "",
+   "id": "textual-values"
+  },
+  "5": {
+   "title": "Numeric Data Types",
+   "page": "",
+   "id": "numeric-types"
+  },
+  "6": {
+   "title": "Distance Units: the <length> type",
+   "page": "",
+   "id": "lengths"
+  },
+  "7": {
+   "title": "Other Quantities",
+   "page": "",
+   "id": "other-units"
+  },
+  "8": {
+   "title": "Data Types Defined Elsewhere",
+   "page": "",
+   "id": "defined-elsewhere"
+  },
+  "9": {
+   "title": "Functional Notations",
+   "page": "",
+   "id": "functional-notations"
+  },
+  "10": {
+   "title": "Mathematical Expressions",
+   "page": "",
+   "id": "math"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "2.1": {
+   "title": "Component Value Types",
+   "page": "",
+   "id": "component-types"
+  },
+  "2.2": {
+   "title": "Component Value Combinators",
+   "page": "",
+   "id": "component-combinators"
+  },
+  "2.3": {
+   "title": "Component Value Multipliers",
+   "page": "",
+   "id": "component-multipliers"
+  },
+  "2.4": {
+   "title": "Combinator and Multiplier Patterns",
+   "page": "",
+   "id": "combinator-multiplier-patterns"
+  },
+  "2.5": {
+   "title": "Component Values and White Space",
+   "page": "",
+   "id": "component-whitespace"
+  },
+  "2.6": {
+   "title": "Functional Notation Definitions",
+   "page": "",
+   "id": "component-functions"
+  },
+  "2.7": {
+   "title": "Property Value Examples",
+   "page": "",
+   "id": "value-examples"
+  },
+  "2.8": {
+   "title": "Non-Terminal Definitions and Grammar Production Blocks",
+   "page": "",
+   "id": "production-blocks"
+  },
+  "3.1": {
+   "title": "Range Checking",
+   "page": "",
+   "id": "combining-range"
+  },
+  "4.1": {
+   "title": "Pre-defined Keywords",
+   "page": "",
+   "id": "keywords"
+  },
+  "4.1.1": {
+   "title": "CSS-wide keywords: initial , inherit and unset",
+   "page": "",
+   "id": "common-keywords"
+  },
+  "4.2": {
+   "title": "Unprefixed Author-defined Identifiers: the <custom-ident> type",
+   "page": "",
+   "id": "custom-idents"
+  },
+  "4.3": {
+   "title": "Prefixed Author-defined Identifiers: the <dashed-ident> type",
+   "page": "",
+   "id": "dashed-idents"
+  },
+  "4.4": {
+   "title": "Quoted Strings: the <string> type",
+   "page": "",
+   "id": "strings"
+  },
+  "4.5": {
+   "title": "Resource Locators: the <url> type",
+   "page": "",
+   "id": "urls"
+  },
+  "4.5.1": {
+   "title": "Relative URLs",
+   "page": "",
+   "id": "relative-urls"
+  },
+  "4.5.1.1": {
+   "title": "Fragment URLs",
+   "page": "",
+   "id": "local-urls"
+  },
+  "4.5.2": {
+   "title": "Empty URLs",
+   "page": "",
+   "id": "url-empty"
+  },
+  "4.5.3": {
+   "title": "URL Modifiers",
+   "page": "",
+   "id": "url-modifiers"
+  },
+  "4.5.4": {
+   "title": "URL Processing Model",
+   "page": "",
+   "id": "url-processing"
+  },
+  "5.1": {
+   "title": "Range Restrictions and Range Definition Notation",
+   "page": "",
+   "id": "numeric-ranges"
+  },
+  "5.2": {
+   "title": "Integers: the <integer> type",
+   "page": "",
+   "id": "integers"
+  },
+  "5.2.1": {
+   "title": "Computation and Combination of <integer>",
+   "page": "",
+   "id": "combine-integers"
+  },
+  "5.3": {
+   "title": "Real Numbers: the <number> type",
+   "page": "",
+   "id": "numbers"
+  },
+  "5.3.1": {
+   "title": "Computation and Combination of <number>",
+   "page": "",
+   "id": "combine-numbers"
+  },
+  "5.4": {
+   "title": "Numbers with Units: dimension values",
+   "page": "",
+   "id": "dimensions"
+  },
+  "5.4.1": {
+   "title": "Compatible Units",
+   "page": "",
+   "id": "compat"
+  },
+  "5.4.2": {
+   "title": "Combination of Dimensions",
+   "page": "",
+   "id": "combine-dimensions"
+  },
+  "5.5": {
+   "title": "Percentages: the <percentage> type",
+   "page": "",
+   "id": "percentages"
+  },
+  "5.5.1": {
+   "title": "Computation and Combination of <percentage>",
+   "page": "",
+   "id": "combine-percentages"
+  },
+  "5.6": {
+   "title": "Mixing Percentages and Dimensions",
+   "page": "",
+   "id": "mixed-percentages"
+  },
+  "5.6.1": {
+   "title": "Computation and Combination of Percentage and Dimension Mixes",
+   "page": "",
+   "id": "combine-mixed"
+  },
+  "5.7": {
+   "title": "Ratios: the <ratio> type",
+   "page": "",
+   "id": "ratios"
+  },
+  "5.7.1": {
+   "title": "Combination of <ratio>",
+   "page": "",
+   "id": "combine-ratio"
+  },
+  "6.1": {
+   "title": "Relative Lengths",
+   "page": "",
+   "id": "relative-lengths"
+  },
+  "6.1.1": {
+   "title": "Font-relative Lengths: the em , rem , ex , rex , cap , rcap , ch , rch , ic , ric , lh , rlh units",
+   "page": "",
+   "id": "font-relative-lengths"
+  },
+  "6.1.2": {
+   "title": "Viewport-percentage Lengths: the *vw",
+   "page": "",
+   "id": "viewport-relative-lengths"
+  },
+  "6.1.2.1": {
+   "title": "The Large, Small, and Dynamic Viewport Sizes",
+   "page": "",
+   "id": "viewport-variants"
+  },
+  "6.1.2.2": {
+   "title": "The Various Viewport-relative Units",
+   "page": "",
+   "id": "viewport-relative-units"
+  },
+  "6.2": {
+   "title": "Absolute Lengths: the cm , mm , Q , in , pt , pc , px units",
+   "page": "",
+   "id": "absolute-lengths"
+  },
+  "7.1": {
+   "title": "Angle Units: the <angle> type and deg , grad , rad , turn units",
+   "page": "",
+   "id": "angles"
+  },
+  "7.2": {
+   "title": "Duration Units: the <time> type and s , ms units",
+   "page": "",
+   "id": "time"
+  },
+  "7.3": {
+   "title": "Frequency Units: the <frequency> type and Hz , kHz units",
+   "page": "",
+   "id": "frequency"
+  },
+  "7.4": {
+   "title": "Resolution Units: the <resolution> type and dpi , dpcm , dppx units",
+   "page": "",
+   "id": "resolution"
+  },
+  "8.1": {
+   "title": "Colors: the <color> type",
+   "page": "",
+   "id": "colors"
+  },
+  "8.1.1": {
+   "title": "Combination of <color>",
+   "page": "",
+   "id": "combine-colors"
+  },
+  "8.2": {
+   "title": "Images: the <image> type",
+   "page": "",
+   "id": "images"
+  },
+  "8.2.1": {
+   "title": "Combination of <image>",
+   "page": "",
+   "id": "combine-images"
+  },
+  "8.3": {
+   "title": "2D Positioning: the <position> type",
+   "page": "",
+   "id": "position"
+  },
+  "8.3.1": {
+   "title": "Parsing <position>",
+   "page": "",
+   "id": "position-parsing"
+  },
+  "8.3.2": {
+   "title": "Serializing <position>",
+   "page": "",
+   "id": "position-serialization"
+  },
+  "8.3.3": {
+   "title": "Combination of <position>",
+   "page": "",
+   "id": "combine-positions"
+  },
+  "9.1": {
+   "title": "Numeric Functions",
+   "page": "",
+   "id": "functional-numeric"
+  },
+  "9.2": {
+   "title": "Serialization of Functional Notations",
+   "page": "",
+   "id": "functional-serialization"
+  },
+  "10.1": {
+   "title": "Basic Arithmetic: calc()",
+   "page": "",
+   "id": "calc-func"
+  },
+  "10.2": {
+   "title": "Comparison Functions: min() , max() , and clamp()",
+   "page": "",
+   "id": "comp-func"
+  },
+  "10.3": {
+   "title": "Stepped Value Functions: round() , mod() , and rem()",
+   "page": "",
+   "id": "round-func"
+  },
+  "10.3.1": {
+   "title": "Argument Ranges",
+   "page": "",
+   "id": "round-infinities"
+  },
+  "10.4": {
+   "title": "Trigonometric Functions: sin() , cos() , tan() , asin() , acos() , atan() , and atan2()",
+   "page": "",
+   "id": "trig-funcs"
+  },
+  "10.4.1": {
+   "title": "Argument Ranges",
+   "page": "",
+   "id": "trig-infinities"
+  },
+  "10.5": {
+   "title": "Exponential Functions: pow() , sqrt() , hypot() , log() , exp()",
+   "page": "",
+   "id": "exponent-funcs"
+  },
+  "10.5.1": {
+   "title": "Argument Ranges",
+   "page": "",
+   "id": "exponent-infinities"
+  },
+  "10.6": {
+   "title": "Sign-Related Functions: abs() , sign()",
+   "page": "",
+   "id": "sign-funcs"
+  },
+  "10.7": {
+   "title": "Numeric Keywords",
+   "page": "",
+   "id": "calc-keywords"
+  },
+  "10.7.1": {
+   "title": "Numeric Constants: e , pi",
+   "page": "",
+   "id": "calc-constants"
+  },
+  "10.7.2": {
+   "title": "Degenerate Numeric Constants: infinity , -infinity",
+   "page": "",
+   "id": "calc-error-constants"
+  },
+  "10.7.3": {
+   "title": "Numeric Variables",
+   "page": "",
+   "id": "calc-variables"
+  },
+  "10.8": {
+   "title": "Syntax",
+   "page": "",
+   "id": "calc-syntax"
+  },
+  "10.9": {
+   "title": "Type Checking",
+   "page": "",
+   "id": "calc-type-checking"
+  },
+  "10.9.1": {
+   "title": "Calculation Contexts",
+   "page": "",
+   "id": "calc-context"
+  },
+  "10.9.2": {
+   "title": "Infinities, NaN, and Signed Zero",
+   "page": "",
+   "id": "calc-ieee"
+  },
+  "10.10": {
+   "title": "Internal Representation",
+   "page": "",
+   "id": "calc-internal"
+  },
+  "10.10.1": {
+   "title": "Simplification",
+   "page": "",
+   "id": "calc-simplification"
+  },
+  "10.11": {
+   "title": "Computed Value",
+   "page": "",
+   "id": "calc-computed-value"
+  },
+  "10.12": {
+   "title": "Range Checking",
+   "page": "",
+   "id": "calc-range"
+  },
+  "10.13": {
+   "title": "Serialization",
+   "page": "",
+   "id": "calc-serialize"
+  },
+  "10.14": {
+   "title": "Combination of Math Functions",
+   "page": "",
+   "id": "combine-math"
+  }
+ },
+ "dfns": {
+  "a b": [
+   "2.3"
+  ],
+  "absolute length": [
+   "6.2"
+  ],
+  "absolute length unit": [
+   "6.2"
+  ],
+  "absolute length units": [
+   "6.2"
+  ],
+  "accumulation procedure": [
+   "3"
+  ],
+  "addition procedure": [
+   "3"
+  ],
+  "anchor unit": [
+   "6.2"
+  ],
+  "angle percentage": [
+   "5.6"
+  ],
+  "atan2(a b)": [
+   "10.4"
+  ],
+  "bearing angle": [
+   "7.1"
+  ],
+  "between zero and b": [
+   "10.3"
+  ],
+  "calc keyword": [
+   "10.8"
+  ],
+  "calc operator nodes": [
+   "10.10"
+  ],
+  "calc product": [
+   "10.8"
+  ],
+  "calc sum": [
+   "10.8"
+  ],
+  "calc value": [
+   "10.8"
+  ],
+  "calculation contexts": [
+   "10.9.1"
+  ],
+  "calculation tree": [
+   "10.10"
+  ],
+  "canonical unit": [
+   "5.4.1"
+  ],
+  "compatible units": [
+   "5.4.1"
+  ],
+  "computed length": [
+   "6"
+  ],
+  "consistent type": [
+   "10.9"
+  ],
+  "contain a percentage": [
+   "10.9"
+  ],
+  "contains a percentage": [
+   "10.9"
+  ],
+  "coordinated value list": [
+   "10.14"
+  ],
+  "coordinating list base property": [
+   "10.14"
+  ],
+  "coordinating list property": [
+   "10.14"
+  ],
+  "coordinating list property group": [
+   "10.14"
+  ],
+  "css bracketed range notation": [
+   "5.1"
+  ],
+  "css grammar production block": [
+   "2.8"
+  ],
+  "css ident": [
+   "4"
+  ],
+  "css identifier": [
+   "4"
+  ],
+  "css value definition syntax": [
+   "2"
+  ],
+  "css wide keywords": [
+   "4.1.1"
+  ],
+  "custom ident": [
+   "4.2"
+  ],
+  "dashed ident": [
+   "4.3"
+  ],
+  "data dfn type dfn data export id length advance measure advance measure": [
+   "6.1.1"
+  ],
+  "data dfn type dfn data export id url local url flag local url flag": [
+   "4.5.1.1"
+  ],
+  "data dfn type value data export data lt cap cap unit id cap cap": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt ch ch unit id ch ch": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt em em unit id em em": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt ex ex unit id ex ex": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt ic ic unit id ic ic": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt lh lh unit id lh lh": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt rcap rcap unit id rcap rcap": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt rch rch unit id rch rch": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt rem rem unit id rem rem": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt rex rex unit id rex rex": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt ric ric unit id ric ric": [
+   "6.1.1"
+  ],
+  "data dfn type value data export data lt rlh rlh unit id rlh rlh": [
+   "6.1.1"
+  ],
+  "data dfn type value data export id cm cm": [
+   "6.2"
+  ],
+  "data dfn type value data export id deg deg": [
+   "7.1"
+  ],
+  "data dfn type value data export id dpcm dpcm": [
+   "7.4"
+  ],
+  "data dfn type value data export id dpi dpi": [
+   "7.4"
+  ],
+  "data dfn type value data export id dppx dppx": [
+   "7.4"
+  ],
+  "data dfn type value data export id dvb dvb": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id dvh dvh": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id dvi dvi": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id dvmax dvmax": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id dvmin dvmin": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id dvw dvw": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id grad grad": [
+   "7.1"
+  ],
+  "data dfn type value data export id hz hz": [
+   "7.3"
+  ],
+  "data dfn type value data export id in in": [
+   "6.2"
+  ],
+  "data dfn type value data export id khz khz": [
+   "7.3"
+  ],
+  "data dfn type value data export id lvb lvb": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id lvh lvh": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id lvi lvi": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id lvmax lvmax": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id lvmin lvmin": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id lvw lvw": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id mm mm": [
+   "6.2"
+  ],
+  "data dfn type value data export id ms ms": [
+   "7.2"
+  ],
+  "data dfn type value data export id pc pc": [
+   "6.2"
+  ],
+  "data dfn type value data export id pt pt": [
+   "6.2"
+  ],
+  "data dfn type value data export id px px": [
+   "6.2"
+  ],
+  "data dfn type value data export id q q": [
+   "6.2"
+  ],
+  "data dfn type value data export id rad rad": [
+   "7.1"
+  ],
+  "data dfn type value data export id s s": [
+   "7.2"
+  ],
+  "data dfn type value data export id svb svb": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id svh svh": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id svi svi": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id svmax svmax": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id svmin svmin": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id svw svw": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id turn turn": [
+   "7.1"
+  ],
+  "data dfn type value data export id valdef rounding strategy down down": [
+   "10.3"
+  ],
+  "data dfn type value data export id valdef rounding strategy line width line width": [
+   "10.3"
+  ],
+  "data dfn type value data export id valdef rounding strategy nearest nearest": [
+   "10.3"
+  ],
+  "data dfn type value data export id valdef rounding strategy to zero to zero": [
+   "10.3"
+  ],
+  "data dfn type value data export id valdef rounding strategy up up": [
+   "10.3"
+  ],
+  "data dfn type value data export id vb vb": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id vh vh": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id vi vi": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id vmax vmax": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id vmin vmin": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id vw vw": [
+   "6.1.2.2"
+  ],
+  "data dfn type value data export id x x": [
+   "7.4"
+  ],
+  "default viewport percentage units": [
+   "6.1.2.1"
+  ],
+  "degenerate ratio": [
+   "5.7"
+  ],
+  "determine the type of a calculation": [
+   "10.9"
+  ],
+  "device pixel": [
+   "6.2"
+  ],
+  "dynamic viewport percentage units": [
+   "6.1.2.1"
+  ],
+  "dynamic viewport size": [
+   "6.1.2.1"
+  ],
+  "fetch a style resource": [
+   "4.5.4"
+  ],
+  "font affecting properties": [
+   "6.1.1"
+  ],
+  "font affecting property": [
+   "6.1.1"
+  ],
+  "font relative lengths": [
+   "6.1.1"
+  ],
+  "frequency percentage": [
+   "5.6"
+  ],
+  "functional notation": [
+   "9"
+  ],
+  "hypot(a )": [
+   "10.5"
+  ],
+  "implementation defined limit for values approaching infinity": [
+   "10.7.2"
+  ],
+  "interpolation procedure": [
+   "3"
+  ],
+  "large viewport percentage units": [
+   "6.1.2.1"
+  ],
+  "large viewport size": [
+   "6.1.2.1"
+  ],
+  "length percentage": [
+   "5.6"
+  ],
+  "local font relative lengths": [
+   "6.1.1"
+  ],
+  "log(a b )": [
+   "10.5"
+  ],
+  "made consistent": [
+   "10.9"
+  ],
+  "make a type base consistent": [
+   "10.9"
+  ],
+  "make a type consistent": [
+   "10.9"
+  ],
+  "make consistent": [
+   "10.9"
+  ],
+  "math function": [
+   "10"
+  ],
+  "math functions": [
+   "10"
+  ],
+  "mod(a b)": [
+   "10.3"
+  ],
+  "negative infinity": [
+   "10.9.2"
+  ],
+  "negative zero": [
+   "10.9.2"
+  ],
+  "not additive": [
+   "3"
+  ],
+  "numeric data types": [
+   "5"
+  ],
+  "numeric function": [
+   "9.1"
+  ],
+  "operator nodes": [
+   "10.10"
+  ],
+  "parse a calculation": [
+   "10.10"
+  ],
+  "parsing a calculation": [
+   "10.10"
+  ],
+  "percentage containing": [
+   "10.9"
+  ],
+  "physical unit": [
+   "6.2"
+  ],
+  "physical units": [
+   "6.2"
+  ],
+  "pixel unit": [
+   "6.2"
+  ],
+  "positive infinity": [
+   "10.9.2"
+  ],
+  "positive zero": [
+   "10.9.2"
+  ],
+  "pow(a b)": [
+   "10.5"
+  ],
+  "quirky length": [
+   "10.14"
+  ],
+  "reference pixel": [
+   "6.2"
+  ],
+  "relative length": [
+   "6.1"
+  ],
+  "relative length unit": [
+   "6.1"
+  ],
+  "relative length units": [
+   "6.1"
+  ],
+  "rem(a b)": [
+   "10.3"
+  ],
+  "resolve a style resource url": [
+   "4.5.4"
+  ],
+  "root font relative lengths": [
+   "6.1.1"
+  ],
+  "round to the nearest integer": [
+   "5.2"
+  ],
+  "round( rounding strategy a b )": [
+   "10.3"
+  ],
+  "rounding strategy": [
+   "10.3"
+  ],
+  "rounding to the nearest integer": [
+   "5.2"
+  ],
+  "serialize a calculation tree": [
+   "10.13"
+  ],
+  "serialize a functional notation": [
+   "9.2"
+  ],
+  "serialize a math function": [
+   "10.13"
+  ],
+  "serialize the calculation tree": [
+   "10.13"
+  ],
+  "serializing a calculation tree": [
+   "10.13"
+  ],
+  "serializing the calculation tree": [
+   "10.13"
+  ],
+  "signed zero": [
+   "10.9.2"
+  ],
+  "signed zeros": [
+   "10.9.2"
+  ],
+  "simplify a calculation tree": [
+   "10.10.1"
+  ],
+  "simplifying a calculation tree": [
+   "10.10.1"
+  ],
+  "small viewport percentage units": [
+   "6.1.2.1"
+  ],
+  "small viewport size": [
+   "6.1.2.1"
+  ],
+  "snap a length as a border width": [
+   "6"
+  ],
+  "snap a length as a line width": [
+   "6"
+  ],
+  "snap as a border width": [
+   "6"
+  ],
+  "snap as a line width": [
+   "6"
+  ],
+  "sort a calculation children": [
+   "10.13"
+  ],
+  "specified length": [
+   "6"
+  ],
+  "style resource base url": [
+   "4.5.4"
+  ],
+  "textual data types": [
+   "4"
+  ],
+  "time percentage": [
+   "5.6"
+  ],
+  "top level calculation": [
+   "10.9.2"
+  ],
+  "url modifier": [
+   "4.5.3"
+  ],
+  "url request modifier steps": [
+   "4.5.4"
+  ],
+  "value accumulation": [
+   "3"
+  ],
+  "value addition": [
+   "3"
+  ],
+  "value definition syntax": [
+   "2"
+  ],
+  "value interpolation": [
+   "3"
+  ],
+  "viewport percentage lengths": [
+   "6.1.2"
+  ],
+  "visual angle unit": [
+   "6.2"
+  ],
+  "visual angle unit (pixel unit)": [
+   "6.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "absolute length units": {
+   "10.14": 2
+  },
+  "anchor unit": {
+   "10.14": 2
+  },
+  "atan2(a b)": {
+   "10.14": 2
+  },
+  "calculation tree": {
+   "10.11": 2,
+   "10.13": 4
+  },
+  "canonical unit": {
+   "10.10.1": 5,
+   "10.14": 2
+  },
+  "compatible units": {
+   "5.4.2": 2,
+   "10.14": 2
+  },
+  "consistent type": {
+   "10.5": 2,
+   "10.14": 2
+  },
+  "contains a percentage": {
+   "10.14": 2
+  },
+  "css bracketed range notation": {
+   "10.14": 2
+  },
+  "css grammar production block": {
+   "10.14": 2
+  },
+  "css identifier": {
+   "10.14": 4
+  },
+  "custom ident": {
+   "2.1": 3
+  },
+  "dashed ident": {
+   "10.14": 2
+  },
+  "default viewport percentage units": {
+   "10.14": 2
+  },
+  "device pixel": {
+   "6": 3
+  },
+  "dynamic viewport percentage units": {
+   "10.14": 3
+  },
+  "dynamic viewport size": {
+   "6.1.2.2": 4
+  },
+  "font relative lengths": {
+   "10.14": 5
+  },
+  "functional notation": {
+   "2.6": 2,
+   "10.14": 3
+  },
+  "hypot(a )": {
+   "10.14": 2
+  },
+  "large viewport percentage units": {
+   "10.14": 3
+  },
+  "large viewport size": {
+   "6.1.2.2": 4
+  },
+  "length percentage": {
+   "8.3": 5,
+   "8.3.3": 2
+  },
+  "log(a b )": {
+   "10.14": 2
+  },
+  "make a type base consistent": {
+   "10.4": 3,
+   "10.5": 3,
+   "10.14": 3
+  },
+  "math functions": {
+   "9.1": 2,
+   "10.1": 4,
+   "10.9": 10,
+   "10.9.2": 5,
+   "10.10": 4,
+   "10.10.1": 3,
+   "10.11": 3,
+   "10.13": 3,
+   "10.14": 6
+  },
+  "mod(a b)": {
+   "10.14": 2
+  },
+  "operator nodes": {
+   "10.10.1": 2
+  },
+  "parse a calculation": {
+   "10.14": 2
+  },
+  "positive infinity": {
+   "10.14": 4
+  },
+  "pow(a b)": {
+   "10.14": 2
+  },
+  "relative length units": {
+   "10.14": 2
+  },
+  "rem(a b)": {
+   "10.14": 2
+  },
+  "round( rounding strategy a b )": {
+   "10.14": 3
+  },
+  "rounding strategy": {
+   "10.8": 2
+  },
+  "serialize a calculation tree": {
+   "10.14": 4
+  },
+  "signed zeros": {
+   "10.14": 3
+  },
+  "simplify a calculation tree": {
+   "10.14": 5
+  },
+  "small viewport percentage units": {
+   "10.14": 3
+  },
+  "small viewport size": {
+   "6.1.2.2": 4
+  },
+  "snap a length as a line width": {
+   "10.3": 2,
+   "10.14": 6
+  },
+  "top level calculation": {
+   "10.14": 2
+  },
+  "url modifier": {
+   "4.5": 3
+  },
+  "value accumulation": {
+   "10.14": 5
+  },
+  "value addition": {
+   "10.14": 6
+  },
+  "value definition syntax": {
+   "2.8": 2,
+   "10.14": 2
+  },
+  "value interpolation": {
+   "5.6.1": 5,
+   "8.1.1": 2,
+   "10.14": 5
+  },
+  "viewport percentage lengths": {
+   "6.1.2.1": 4,
+   "10.14": 4
+  },
+  "visual angle unit (pixel unit)": {
+   "10.14": 2
+  }
+ }
+}

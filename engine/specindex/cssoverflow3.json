@@ -1,0 +1,308 @@
+{
+ "spec": "CSS Overflow Module Level 3",
+ "key": "cssoverflow3",
+ "base": "https://drafts.csswg.org/css-overflow-3/",
+ "specUpdated": "13 August 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Overflow Concepts and Terminology",
+   "page": "",
+   "id": "overflow-concepts"
+  },
+  "3": {
+   "title": "Clipping and Scrolling Overflow",
+   "page": "",
+   "id": "overflow-properties"
+  },
+  "4": {
+   "title": "Scrolling Behaviors and Animations",
+   "page": "",
+   "id": "scrolling-behaviors"
+  },
+  "5": {
+   "title": "Scrollbars and Layout",
+   "page": "",
+   "id": "scrollbar-layout"
+  },
+  "6": {
+   "title": "Automatic Ellipses",
+   "page": "",
+   "id": "auto-ellipsis"
+  },
+  "1.1": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "1.2": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "2.1": {
+   "title": "Ink Overflow",
+   "page": "",
+   "id": "ink"
+  },
+  "2.2": {
+   "title": "Scrollable Overflow",
+   "page": "",
+   "id": "scrollable"
+  },
+  "2.3": {
+   "title": "Scrolling Overflow",
+   "page": "",
+   "id": "scrolling"
+  },
+  "3.1": {
+   "title": "Managing Overflow: the overflow-x , overflow-y , and overflow properties",
+   "page": "",
+   "id": "overflow-control"
+  },
+  "3.1.1": {
+   "title": "Interaction of visibility and overflow",
+   "page": "",
+   "id": "scroll-visibility"
+  },
+  "3.1.2": {
+   "title": "Interaction of border-radius and overflow",
+   "page": "",
+   "id": "corner-clipping"
+  },
+  "3.1.3": {
+   "title": "Overflow in Print and Other Static Media",
+   "page": "",
+   "id": "static-media"
+  },
+  "3.1.4": {
+   "title": "Overflow Viewport Propagation",
+   "page": "",
+   "id": "overflow-propagation"
+  },
+  "3.2": {
+   "title": "Expanding Clipping Bounds: the overflow-clip-margin property",
+   "page": "",
+   "id": "overflow-clip-margin"
+  },
+  "3.3": {
+   "title": "Calculating the Scrollable Overflow Area",
+   "page": "",
+   "id": "scrollable-overflow-calculation"
+  },
+  "4.1": {
+   "title": "Smooth Scrolling: the scroll-behavior Property",
+   "page": "",
+   "id": "smooth-scrolling"
+  },
+  "5.1": {
+   "title": "Scrollbar Contributions to Sizing",
+   "page": "",
+   "id": "scrollbar-sizing"
+  },
+  "5.2": {
+   "title": "Reserving space for the scrollbar: the scrollbar-gutter property",
+   "page": "",
+   "id": "scrollbar-gutter-property"
+  },
+  "6.1": {
+   "title": "Overflow Ellipsis: the text-overflow property",
+   "page": "",
+   "id": "text-overflow"
+  }
+ },
+ "dfns": {
+  "block axis scroll container": [
+   "3"
+  ],
+  "both edges": [
+   "5.2"
+  ],
+  "classic scrollbars": [
+   "5.2"
+  ],
+  "dual axis scroll container": [
+   "3"
+  ],
+  "initial scroll position": [
+   "2.3"
+  ],
+  "ink overflow": [
+   "2.1"
+  ],
+  "ink overflow area": [
+   "2.1"
+  ],
+  "ink overflow rectangle": [
+   "2.1"
+  ],
+  "ink overflow region": [
+   "2.1"
+  ],
+  "inline axis scroll container": [
+   "3"
+  ],
+  "nearest scroll container": [
+   "2.3"
+  ],
+  "non scrollable overflow value": [
+   "3.1"
+  ],
+  "non scrollable values": [
+   "3.1"
+  ],
+  "overflow block": [
+   "3.1"
+  ],
+  "overflow clip edge": [
+   "3.2"
+  ],
+  "overflow clip margin": [
+   "3.2"
+  ],
+  "overflow inline": [
+   "3.1"
+  ],
+  "overflow x": [
+   "3.1"
+  ],
+  "overflow y": [
+   "3.1"
+  ],
+  "overlay scrollbars": [
+   "5.2"
+  ],
+  "scroll behavior": [
+   "4.1"
+  ],
+  "scroll container": [
+   "2.3"
+  ],
+  "scroll offset": [
+   "2.3"
+  ],
+  "scroll origin": [
+   "2.3"
+  ],
+  "scroll origin position": [
+   "2.3"
+  ],
+  "scroll position": [
+   "2.3"
+  ],
+  "scrollable axis": [
+   "3"
+  ],
+  "scrollable axis(es)": [
+   "3"
+  ],
+  "scrollable overflow": [
+   "2.2"
+  ],
+  "scrollable overflow area": [
+   "2.2"
+  ],
+  "scrollable overflow rectangle": [
+   "2.2"
+  ],
+  "scrollable overflow region": [
+   "2.2"
+  ],
+  "scrollable overflow value": [
+   "3.1"
+  ],
+  "scrollable values": [
+   "3.1"
+  ],
+  "scrollbar gutter": [
+   "5.2"
+  ],
+  "single axis scroll container": [
+   "3"
+  ],
+  "text overflow": [
+   "6.1"
+  ],
+  "unreachable scrollable overflow region": [
+   "2.3"
+  ],
+  "x axis scroll container": [
+   "3"
+  ],
+  "y axis scroll container": [
+   "3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "initial scroll position": {
+   "6.1": 2
+  },
+  "ink overflow area": {
+   "6.1": 2
+  },
+  "overflow block": {
+   "6.1": 2
+  },
+  "overflow clip edge": {
+   "3.1": 3,
+   "3.3": 2
+  },
+  "overflow clip margin": {
+   "6.1": 2
+  },
+  "overflow inline": {
+   "6.1": 2
+  },
+  "overflow x": {
+   "3.1.2": 3,
+   "6.1": 2
+  },
+  "overflow y": {
+   "3.1.2": 3,
+   "6.1": 2
+  },
+  "scroll behavior": {
+   "6.1": 2
+  },
+  "scroll container": {
+   "3": 4,
+   "3.1": 2,
+   "3.2": 2,
+   "3.3": 2,
+   "4.1": 4,
+   "6.1": 3
+  },
+  "scroll offset": {
+   "6.1": 2
+  },
+  "scroll origin": {
+   "6.1": 2
+  },
+  "scroll origin position": {
+   "6.1": 2
+  },
+  "scrollable overflow area": {
+   "3.3": 3,
+   "6.1": 3
+  },
+  "scrollable overflow rectangle": {
+   "2.3": 3,
+   "3.3": 4
+  },
+  "scrollable values": {
+   "6.1": 2
+  },
+  "scrollbar gutter": {
+   "6.1": 3
+  },
+  "unreachable scrollable overflow region": {
+   "3.3": 2
+  }
+ }
+}

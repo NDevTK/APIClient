@@ -1,0 +1,290 @@
+{
+ "spec": "CSS Transforms Module Level 1",
+ "key": "csstransforms1",
+ "base": "https://drafts.csswg.org/css-transforms-1/",
+ "specUpdated": "30 November 2025",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "The Transform Rendering Model",
+   "page": "",
+   "id": "transform-rendering"
+  },
+  "3": {
+   "title": "The transform Property",
+   "page": "",
+   "id": "transform-property"
+  },
+  "4": {
+   "title": "The transform-origin Property",
+   "page": "",
+   "id": "transform-origin-property"
+  },
+  "5": {
+   "title": "Transform reference box: the transform-box property",
+   "page": "",
+   "id": "transform-box"
+  },
+  "6": {
+   "title": "The SVG transform Attribute",
+   "page": "",
+   "id": "svg-transform"
+  },
+  "7": {
+   "title": "The Transform Functions",
+   "page": "",
+   "id": "transform-functions"
+  },
+  "8": {
+   "title": "The Transform Function Lists",
+   "page": "",
+   "id": "transform-function-lists"
+  },
+  "9": {
+   "title": "Interpolation of Transforms",
+   "page": "",
+   "id": "interpolation-of-transforms"
+  },
+  "10": {
+   "title": "Interpolation of primitives and derived transform functions",
+   "page": "",
+   "id": "interpolation-of-transform-functions"
+  },
+  "11": {
+   "title": "Interpolation of Matrices",
+   "page": "",
+   "id": "matrix-interpolation"
+  },
+  "12": {
+   "title": "Mathematical Description of Transform Functions",
+   "page": "",
+   "id": "mathematical-description"
+  },
+  "13": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "14": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "module-interactions"
+  },
+  "1.2": {
+   "title": "CSS Values",
+   "page": "",
+   "id": "css-values"
+  },
+  "3.1": {
+   "title": "Serialization of <transform-function> s",
+   "page": "",
+   "id": "serialization-of-transform-functions"
+  },
+  "3.2": {
+   "title": "Resolved value of transform",
+   "page": "",
+   "id": "serialization-of-the-computed-value"
+  },
+  "6.1": {
+   "title": "SVG presentation attributes",
+   "page": "",
+   "id": "transform-attribute-specificity"
+  },
+  "6.2": {
+   "title": "Syntax of the SVG transform attribute",
+   "page": "",
+   "id": "svg-syntax"
+  },
+  "6.3": {
+   "title": "SVG transform functions",
+   "page": "",
+   "id": "svg-transform-functions"
+  },
+  "6.4": {
+   "title": "User coordinate space",
+   "page": "",
+   "id": "svg-user-coordinate-space"
+  },
+  "6.5": {
+   "title": "SVG DOM interface for the transform attribute",
+   "page": "",
+   "id": "transform-attribute-dom"
+  },
+  "7.1": {
+   "title": "2D Transform Functions",
+   "page": "",
+   "id": "two-d-transform-functions"
+  },
+  "7.2": {
+   "title": "Transform function primitives and derivatives",
+   "page": "",
+   "id": "transform-primitives"
+  },
+  "11.1": {
+   "title": "Supporting functions",
+   "page": "",
+   "id": "supporting-functions"
+  },
+  "11.2": {
+   "title": "Interpolation of 2D matrices",
+   "page": "",
+   "id": "interpolation-of-2d-matrices"
+  },
+  "11.2.1": {
+   "title": "Decomposing a 2D matrix",
+   "page": "",
+   "id": "decomposing-a-2d-matrix"
+  },
+  "11.2.2": {
+   "title": "Interpolation of decomposed 2D matrix values",
+   "page": "",
+   "id": "interpolation-of-decomposed-2d-matrix-values"
+  },
+  "11.2.3": {
+   "title": "Recomposing to a 2D matrix",
+   "page": "",
+   "id": "recomposing-to-a-2d-matrix"
+  }
+ },
+ "dfns": {
+  "2d matrix": [
+   "1.2"
+  ],
+  "border box": [
+   "5"
+  ],
+  "containing block for all descendants": [
+   "2"
+  ],
+  "content box": [
+   "5"
+  ],
+  "current transformation matrix": [
+   "1.2"
+  ],
+  "fill box": [
+   "5"
+  ],
+  "identity transform": [
+   "1.2"
+  ],
+  "identity transform function": [
+   "1.2"
+  ],
+  "local coordinate system": [
+   "1.2"
+  ],
+  "post multiplied": [
+   "1.2"
+  ],
+  "post multiply": [
+   "1.2"
+  ],
+  "pre multiplied": [
+   "1.2"
+  ],
+  "pre multiply": [
+   "1.2"
+  ],
+  "reference box": [
+   "5"
+  ],
+  "stroke box": [
+   "5"
+  ],
+  "transform box": [
+   "5"
+  ],
+  "transform function": [
+   "7"
+  ],
+  "transform list": [
+   "3"
+  ],
+  "transform origin": [
+   "4"
+  ],
+  "transformable element": [
+   "1.2"
+  ],
+  "transformation matrix": [
+   "1.2"
+  ],
+  "transformed element": [
+   "1.2"
+  ],
+  "user coordinate system": [
+   "1.2"
+  ],
+  "view box": [
+   "5"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "content box": {
+   "14": 2
+  },
+  "current transformation matrix": {
+   "2": 3,
+   "14": 2
+  },
+  "identity transform function": {
+   "14": 2
+  },
+  "local coordinate system": {
+   "2": 3
+  },
+  "post multiplied": {
+   "2": 2
+  },
+  "post multiply": {
+   "14": 2
+  },
+  "pre multiply": {
+   "14": 2
+  },
+  "reference box": {
+   "4": 3,
+   "6.4": 2
+  },
+  "stroke box": {
+   "14": 2
+  },
+  "transform box": {
+   "14": 3
+  },
+  "transform function": {
+   "2": 2,
+   "3.1": 2,
+   "6.3": 4
+  },
+  "transform list": {
+   "14": 3,
+   "3.2": 2
+  },
+  "transform origin": {
+   "2": 5,
+   "5": 2,
+   "14": 2,
+   "6.4": 2
+  },
+  "transformable element": {
+   "14": 2
+  },
+  "transformation matrix": {
+   "2": 6,
+   "14": 2
+  }
+ }
+}

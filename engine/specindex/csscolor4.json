@@ -1,0 +1,1568 @@
+{
+ "spec": "CSS Color Module Level 4",
+ "key": "csscolor4",
+ "base": "https://drafts.csswg.org/css-color-4/",
+ "specUpdated": "30 August 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Color Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "3": {
+   "title": "Applying Color in CSS",
+   "page": "",
+   "id": "applying-color"
+  },
+  "4": {
+   "title": "Representing Colors: the <color> type",
+   "page": "",
+   "id": "color-type"
+  },
+  "5": {
+   "title": "sRGB Colors",
+   "page": "",
+   "id": "numeric-srgb"
+  },
+  "6": {
+   "title": "Color Keywords",
+   "page": "",
+   "id": "color-keywords"
+  },
+  "7": {
+   "title": "HSL Colors: hsl() and hsla() functions",
+   "page": "",
+   "id": "the-hsl-notation"
+  },
+  "8": {
+   "title": "HWB Colors: hwb() function",
+   "page": "",
+   "id": "the-hwb-notation"
+  },
+  "9": {
+   "title": "Device-independent Colors: CIE Lab and LCH, Oklab and OkLCh",
+   "page": "",
+   "id": "lab-colors"
+  },
+  "10": {
+   "title": "Predefined Color Spaces",
+   "page": "",
+   "id": "predefined"
+  },
+  "11": {
+   "title": "Converting Colors",
+   "page": "",
+   "id": "color-conversion"
+  },
+  "12": {
+   "title": "Comparing <color> Values",
+   "page": "",
+   "id": "comparing-color-values"
+  },
+  "13": {
+   "title": "Color Interpolation",
+   "page": "",
+   "id": "interpolation"
+  },
+  "14": {
+   "title": "Gamut Mapping",
+   "page": "",
+   "id": "gamut-mapping"
+  },
+  "15": {
+   "title": "Resolving <color> Values",
+   "page": "",
+   "id": "resolving-color-values"
+  },
+  "16": {
+   "title": "Serializing <color> Values",
+   "page": "",
+   "id": "serializing-color-values"
+  },
+  "17": {
+   "title": "Serializing <opacity-value>",
+   "page": "",
+   "id": "serializing-opacity-values"
+  },
+  "18": {
+   "title": "Default Style Rules",
+   "page": "",
+   "id": "sample"
+  },
+  "19": {
+   "title": "Sample code for Color Conversions",
+   "page": "",
+   "id": "color-conversion-code"
+  },
+  "20": {
+   "title": "Color Difference Formulae",
+   "page": "",
+   "id": "color-difference-code"
+  },
+  "21": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "22": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "23": {
+   "title": "Accessibility Considerations",
+   "page": "",
+   "id": "a11y-sec"
+  },
+  "1.1": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "3.1": {
+   "title": "Accessibility and Conveying Information By Color",
+   "page": "",
+   "id": "accessibility"
+  },
+  "3.2": {
+   "title": "Foreground Color: the color property",
+   "page": "",
+   "id": "the-color-property"
+  },
+  "3.3": {
+   "title": "Transparency: the opacity property",
+   "page": "",
+   "id": "transparency"
+  },
+  "3.4": {
+   "title": "Color Space of Tagged Images",
+   "page": "",
+   "id": "tagged-images"
+  },
+  "3.5": {
+   "title": "Color Spaces of Untagged Colors",
+   "page": "",
+   "id": "untagged"
+  },
+  "4.1": {
+   "title": "The <color> syntax",
+   "page": "",
+   "id": "color-syntax"
+  },
+  "4.1.1": {
+   "title": "Modern (Space-separated) Color Function Syntax",
+   "page": "",
+   "id": "color-syntax-modern"
+  },
+  "4.1.2": {
+   "title": "Legacy (Comma-separated) Color Function Syntax",
+   "page": "",
+   "id": "color-syntax-legacy"
+  },
+  "4.2": {
+   "title": "Representing Transparency in Colors: the <alpha-value> syntax",
+   "page": "",
+   "id": "alpha-syntax"
+  },
+  "4.3": {
+   "title": "Representing Cylindrical-coordinate Hues: the <hue> syntax",
+   "page": "",
+   "id": "hue-syntax"
+  },
+  "4.4": {
+   "title": "“Missing” Color Components and the none Keyword",
+   "page": "",
+   "id": "missing"
+  },
+  "4.4.1": {
+   "title": "“Powerless” Color Components",
+   "page": "",
+   "id": "powerless"
+  },
+  "4.5": {
+   "title": "Parsing a <color> Value",
+   "page": "",
+   "id": "parse-color"
+  },
+  "5.1": {
+   "title": "The RGB functions: rgb() and rgba()",
+   "page": "",
+   "id": "rgb-functions"
+  },
+  "5.2": {
+   "title": "The RGB Hexadecimal Notations: #RRGGBB",
+   "page": "",
+   "id": "hex-notation"
+  },
+  "6.1": {
+   "title": "Named Colors",
+   "page": "",
+   "id": "named-colors"
+  },
+  "6.2": {
+   "title": "System Colors",
+   "page": "",
+   "id": "css-system-colors"
+  },
+  "6.3": {
+   "title": "The transparent keyword",
+   "page": "",
+   "id": "transparent-color"
+  },
+  "6.4": {
+   "title": "The currentcolor keyword",
+   "page": "",
+   "id": "currentcolor-color"
+  },
+  "7.1": {
+   "title": "Converting HSL Colors to sRGB",
+   "page": "",
+   "id": "hsl-to-rgb"
+  },
+  "7.2": {
+   "title": "Converting sRGB Colors to HSL",
+   "page": "",
+   "id": "rgb-to-hsl"
+  },
+  "7.3": {
+   "title": "Examples of HSL Colors",
+   "page": "",
+   "id": "hsl-examples"
+  },
+  "8.1": {
+   "title": "Converting HWB Colors to sRGB",
+   "page": "",
+   "id": "hwb-to-rgb"
+  },
+  "8.2": {
+   "title": "Converting sRGB Colors to HWB",
+   "page": "",
+   "id": "rgb-to-hwb"
+  },
+  "8.3": {
+   "title": "Examples of HWB Colors",
+   "page": "",
+   "id": "hwb-examples"
+  },
+  "9.1": {
+   "title": "CIE Lab and LCH",
+   "page": "",
+   "id": "cie-lab"
+  },
+  "9.2": {
+   "title": "Oklab and OkLCh",
+   "page": "",
+   "id": "ok-lab"
+  },
+  "9.3": {
+   "title": "Specifying Lab and LCH: the lab() and lch() functional notations",
+   "page": "",
+   "id": "specifying-lab-lch"
+  },
+  "9.4": {
+   "title": "Specifying Oklab and OkLCh: the oklab() and oklch() functional notations",
+   "page": "",
+   "id": "specifying-oklab-oklch"
+  },
+  "9.5": {
+   "title": "Converting Lab or Oklab colors to LCH or OkLCh colors",
+   "page": "",
+   "id": "lab-to-lch"
+  },
+  "9.6": {
+   "title": "Converting LCH or OkLCh colors to Lab or Oklab colors",
+   "page": "",
+   "id": "lch-to-lab"
+  },
+  "10.1": {
+   "title": "Specifying Predefined Colors: the color() function",
+   "page": "",
+   "id": "color-function"
+  },
+  "10.2": {
+   "title": "The Predefined sRGB Color Space: the sRGB keyword",
+   "page": "",
+   "id": "predefined-sRGB"
+  },
+  "10.3": {
+   "title": "The Predefined Linear-Light sRGB Color Space: the srgb-linear keyword",
+   "page": "",
+   "id": "predefined-sRGB-linear"
+  },
+  "10.4": {
+   "title": "The Predefined Display P3 Color Space: the display-p3 keyword",
+   "page": "",
+   "id": "predefined-display-p3"
+  },
+  "10.5": {
+   "title": "The Predefined Linear-Light Display P3 Color Space: the display-p3-linear keyword",
+   "page": "",
+   "id": "predefined-display-p3-linear"
+  },
+  "10.6": {
+   "title": "The Predefined A98 RGB Color Space: the a98-rgb keyword",
+   "page": "",
+   "id": "predefined-a98-rgb"
+  },
+  "10.7": {
+   "title": "The Predefined ProPhoto RGB Color Space: the prophoto-rgb keyword",
+   "page": "",
+   "id": "predefined-prophoto-rgb"
+  },
+  "10.8": {
+   "title": "The Predefined ITU-R BT.2020-2 Color Space: the rec2020 keyword",
+   "page": "",
+   "id": "predefined-rec2020"
+  },
+  "10.9": {
+   "title": "The Predefined CIE XYZ Color Spaces: the xyz-d50 , xyz-d65 , and xyz keywords",
+   "page": "",
+   "id": "predefined-xyz"
+  },
+  "10.10": {
+   "title": "Converting Predefined Color Spaces to Lab or Oklab",
+   "page": "",
+   "id": "predefined-to-lab-oklab"
+  },
+  "10.11": {
+   "title": "Converting Lab or Oklab to Predefined RGB Color Spaces",
+   "page": "",
+   "id": "oklab-lab-to-predefined"
+  },
+  "10.12": {
+   "title": "Converting Between Predefined RGB Color Spaces",
+   "page": "",
+   "id": "predefined-to-predefined"
+  },
+  "10.13": {
+   "title": "Simple Alpha Compositing",
+   "page": "",
+   "id": "alpha"
+  },
+  "13.1": {
+   "title": "Component-wise Linear Interpolation",
+   "page": "",
+   "id": "component-wise-linear-interpolation"
+  },
+  "13.2": {
+   "title": "Color Space for Interpolation",
+   "page": "",
+   "id": "interpolation-space"
+  },
+  "13.3": {
+   "title": "Interpolating with Missing Components",
+   "page": "",
+   "id": "interpolation-missing"
+  },
+  "13.4": {
+   "title": "Interpolating with Alpha",
+   "page": "",
+   "id": "interpolation-alpha"
+  },
+  "13.5": {
+   "title": "Hue Interpolation",
+   "page": "",
+   "id": "hue-interpolation"
+  },
+  "13.5.1": {
+   "title": "shorter",
+   "page": "",
+   "id": "hue-shorter"
+  },
+  "13.5.2": {
+   "title": "longer",
+   "page": "",
+   "id": "hue-longer"
+  },
+  "13.5.3": {
+   "title": "increasing",
+   "page": "",
+   "id": "hue-increasing"
+  },
+  "13.5.4": {
+   "title": "decreasing",
+   "page": "",
+   "id": "hue-decreasing"
+  },
+  "14.1": {
+   "title": "An Introduction to Gamut Mapping",
+   "page": "",
+   "id": "gamut-mapping-intro"
+  },
+  "14.1.1": {
+   "title": "Clipping",
+   "page": "",
+   "id": "GM-clip"
+  },
+  "14.1.2": {
+   "title": "Closest Color (MINDE)",
+   "page": "",
+   "id": "GM-closest"
+  },
+  "14.1.3": {
+   "title": "Chroma Reduction",
+   "page": "",
+   "id": "GM-chroma"
+  },
+  "14.1.4": {
+   "title": "Excessive Chroma Reduction",
+   "page": "",
+   "id": "GM-excessive-reduction"
+  },
+  "14.1.5": {
+   "title": "Chroma Reduction with Local Clipping",
+   "page": "",
+   "id": "GM-chroma-local-MINDE"
+  },
+  "14.1.6": {
+   "title": "Deviations from Perceptual Uniformity: Hue Curvature",
+   "page": "",
+   "id": "GM-hue-curvature"
+  },
+  "14.2": {
+   "title": "CSS Gamut Mapping to an RGB Destination",
+   "page": "",
+   "id": "css-gamut-mapping"
+  },
+  "14.2.1": {
+   "title": "Binary Search Gamut Mapping with Local MINDE",
+   "page": "",
+   "id": "GMA-Binary-local-MINDE"
+  },
+  "14.2.2": {
+   "title": "Sample Pseudocode for the Binary Search Gamut Mapping with Local MINDE",
+   "page": "",
+   "id": "pseudo-binsearch"
+  },
+  "14.2.3": {
+   "title": "The EdgeSeeker Gamut Mapping",
+   "page": "",
+   "id": "GMA-EdgeSeeker"
+  },
+  "14.2.4": {
+   "title": "Sample Pseudocode for the EdgeSeeker Gamut Mapping",
+   "page": "",
+   "id": "pseudo-edgeseeker"
+  },
+  "14.2.5": {
+   "title": "The Ray Trace Gamut Mapping",
+   "page": "",
+   "id": "GMA-Raytrace"
+  },
+  "14.2.6": {
+   "title": "Sample Pseudocode for the Ray Trace Gamut Mapping",
+   "page": "",
+   "id": "pseudo-raytrace"
+  },
+  "14.2.6.1": {
+   "title": "Footnotes for Ray Trace algorithm",
+   "page": "",
+   "id": "raytrace-footnotes"
+  },
+  "15.1": {
+   "title": "Resolving sRGB values",
+   "page": "",
+   "id": "resolving-sRGB-values"
+  },
+  "15.2": {
+   "title": "Resolving Lab and LCH values",
+   "page": "",
+   "id": "resolving-lab-lch-values"
+  },
+  "15.3": {
+   "title": "Resolving Oklab and OkLCh values",
+   "page": "",
+   "id": "resolving-oklab-oklch-values"
+  },
+  "15.4": {
+   "title": "Resolving values of the color() function",
+   "page": "",
+   "id": "resolving-color-function-values"
+  },
+  "15.5": {
+   "title": "Resolving other colors",
+   "page": "",
+   "id": "resolving-other-colors"
+  },
+  "16.1": {
+   "title": "Serializing alpha values",
+   "page": "",
+   "id": "serializing-alpha-values"
+  },
+  "16.1.1": {
+   "title": "Serializing legacy alpha values",
+   "page": "",
+   "id": "serializing-legacy-alpha-values"
+  },
+  "16.1.2": {
+   "title": "Serializing modern alpha values",
+   "page": "",
+   "id": "serializing-modern-alpha-values"
+  },
+  "16.2": {
+   "title": "Serializing sRGB values",
+   "page": "",
+   "id": "serializing-sRGB-values"
+  },
+  "16.2.1": {
+   "title": "HTML-compatible serialization of sRGB values",
+   "page": "",
+   "id": "HTML-compatible-serialization-of-srgb"
+  },
+  "16.2.2": {
+   "title": "CSS serialization of sRGB values",
+   "page": "",
+   "id": "css-serialization-of-srgb"
+  },
+  "16.3": {
+   "title": "Serializing Lab and LCH values",
+   "page": "",
+   "id": "serializing-lab-lch"
+  },
+  "16.4": {
+   "title": "Serializing Oklab and OkLCh values",
+   "page": "",
+   "id": "serializing-oklab-oklch"
+  },
+  "16.5": {
+   "title": "Serializing values of the color() function",
+   "page": "",
+   "id": "serializing-color-function-values"
+  },
+  "16.6": {
+   "title": "Serializing other colors",
+   "page": "",
+   "id": "serializing-other-colors"
+  },
+  "20.1": {
+   "title": "Introduction to Color Difference metrics.",
+   "page": "",
+   "id": "color-differences-intro"
+  },
+  "20.2": {
+   "title": "ΔE2000",
+   "page": "",
+   "id": "color-difference-2000"
+  },
+  "20.3": {
+   "title": "ΔEOK",
+   "page": "",
+   "id": "color-difference-OK"
+  },
+  "20.4": {
+   "title": "ΔEOK2",
+   "page": "",
+   "id": "color-difference-OK2"
+  },
+  "20.5": {
+   "title": "ΔEOKr2",
+   "page": "",
+   "id": "color-difference-OK2r"
+  }
+ },
+ "dfns": {
+  "a98 rgb": [
+   "10.6"
+  ],
+  "absolute color": [
+   "4.1"
+  ],
+  "additive color space": [
+   "2"
+  ],
+  "alpha channel": [
+   "4"
+  ],
+  "alpha component": [
+   "4"
+  ],
+  "analogous components": [
+   "13.3"
+  ],
+  "analogous set": [
+   "13.3"
+  ],
+  "binary search gamut map with local minde": [
+   "14.2.2"
+  ],
+  "can be displayed": [
+   "10.1"
+  ],
+  "can t be displayed": [
+   "10.1"
+  ],
+  "carried forward": [
+   "13"
+  ],
+  "cast a ray": [
+   "14.2.6"
+  ],
+  "chromatic adaptation transform": [
+   "9.1"
+  ],
+  "color ()": [
+   "10.1"
+  ],
+  "color base": [
+   "4.1"
+  ],
+  "color function": [
+   "4.1"
+  ],
+  "color functions": [
+   "4"
+  ],
+  "color interpolation method": [
+   "13.2"
+  ],
+  "color progress": [
+   "13.1"
+  ],
+  "color quantities": [
+   "13.1"
+  ],
+  "color space": [
+   "2",
+   "13.2"
+  ],
+  "colorspace params": [
+   "10.1"
+  ],
+  "computed color": [
+   "15"
+  ],
+  "computed colors": [
+   "15"
+  ],
+  "convert a color": [
+   "11"
+  ],
+  "css gamut mapped": [
+   "14.2"
+  ],
+  "css gamut mapping algorithms": [
+   "14.2"
+  ],
+  "cylindrical polar color": [
+   "4"
+  ],
+  "data dfn type type data export id typedef color alpha value alpha value": [
+   "4.2"
+  ],
+  "data dfn type value data export id valdef color accentcolor accentcolor": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color accentcolortext accentcolortext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color activeborder activeborder": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color activecaption activecaption": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color activetext activetext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color aliceblue aliceblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color antiquewhite antiquewhite": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color appworkspace appworkspace": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color aqua aqua": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color aquamarine aquamarine": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color azure azure": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color background background": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color beige beige": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color bisque bisque": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color black black": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color blanchedalmond blanchedalmond": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color blue blue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color blueviolet blueviolet": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color brown brown": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color burlywood burlywood": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color buttonborder buttonborder": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color buttonface buttonface": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color buttonhighlight buttonhighlight": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color buttonshadow buttonshadow": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color buttontext buttontext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color cadetblue cadetblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color canvas canvas": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color canvastext canvastext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color captiontext captiontext": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color chartreuse chartreuse": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color chocolate chocolate": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color coral coral": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color cornflowerblue cornflowerblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color cornsilk cornsilk": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color crimson crimson": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color currentcolor currentcolor": [
+   "6.4"
+  ],
+  "data dfn type value data export id valdef color cyan cyan": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkblue darkblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkcyan darkcyan": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkgoldenrod darkgoldenrod": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkgray darkgray": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkgreen darkgreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkgrey darkgrey": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkkhaki darkkhaki": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkmagenta darkmagenta": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkolivegreen darkolivegreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkorange darkorange": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkorchid darkorchid": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkred darkred": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darksalmon darksalmon": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkseagreen darkseagreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkslateblue darkslateblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkslategray darkslategray": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkslategrey darkslategrey": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkturquoise darkturquoise": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color darkviolet darkviolet": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color deeppink deeppink": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color deepskyblue deepskyblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color dimgray dimgray": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color dimgrey dimgrey": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color dodgerblue dodgerblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color field field": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color fieldtext fieldtext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color firebrick firebrick": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color floralwhite floralwhite": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color forestgreen forestgreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color fuchsia fuchsia": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color gainsboro gainsboro": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color ghostwhite ghostwhite": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color gold gold": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color goldenrod goldenrod": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color gray gray": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color graytext graytext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color green green": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color greenyellow greenyellow": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color grey grey": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color highlight highlight": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color highlighttext highlighttext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color honeydew honeydew": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color hotpink hotpink": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color inactiveborder inactiveborder": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color inactivecaption inactivecaption": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color inactivecaptiontext inactivecaptiontext": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color indianred indianred": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color indigo indigo": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color infobackground infobackground": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color infotext infotext": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color ivory ivory": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color khaki khaki": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lavender lavender": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lavenderblush lavenderblush": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lawngreen lawngreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lemonchiffon lemonchiffon": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightblue lightblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightcoral lightcoral": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightcyan lightcyan": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightgoldenrodyellow lightgoldenrodyellow": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightgray lightgray": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightgreen lightgreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightgrey lightgrey": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightpink lightpink": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightsalmon lightsalmon": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightseagreen lightseagreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightskyblue lightskyblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightslategray lightslategray": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightslategrey lightslategrey": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightsteelblue lightsteelblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lightyellow lightyellow": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color lime lime": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color limegreen limegreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color linen linen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color linktext linktext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color magenta magenta": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mark mark": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color marktext marktext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color maroon maroon": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumaquamarine mediumaquamarine": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumblue mediumblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumorchid mediumorchid": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumpurple mediumpurple": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumseagreen mediumseagreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumslateblue mediumslateblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumspringgreen mediumspringgreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumturquoise mediumturquoise": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mediumvioletred mediumvioletred": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color menu menu": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color menutext menutext": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color midnightblue midnightblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mintcream mintcream": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color mistyrose mistyrose": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color moccasin moccasin": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color navajowhite navajowhite": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color navy navy": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color none none": [
+   "4.4"
+  ],
+  "data dfn type value data export id valdef color oldlace oldlace": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color olive olive": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color olivedrab olivedrab": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color orange orange": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color orangered orangered": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color orchid orchid": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color palegoldenrod palegoldenrod": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color palegreen palegreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color paleturquoise paleturquoise": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color palevioletred palevioletred": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color papayawhip papayawhip": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color peachpuff peachpuff": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color peru peru": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color pink pink": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color plum plum": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color powderblue powderblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color purple purple": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color rebeccapurple rebeccapurple": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color red red": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color rosybrown rosybrown": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color royalblue royalblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color saddlebrown saddlebrown": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color salmon salmon": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color sandybrown sandybrown": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color scrollbar scrollbar": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color seagreen seagreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color seashell seashell": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color selecteditem selecteditem": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color selecteditemtext selecteditemtext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color sienna sienna": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color silver silver": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color skyblue skyblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color slateblue slateblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color slategray slategray": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color slategrey slategrey": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color snow snow": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color springgreen springgreen": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color steelblue steelblue": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color tan tan": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color teal teal": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color thistle thistle": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color threeddarkshadow threeddarkshadow": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color threedface threedface": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color threedhighlight threedhighlight": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color threedlightshadow threedlightshadow": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color threedshadow threedshadow": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color tomato tomato": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color transparent transparent": [
+   "6.3"
+  ],
+  "data dfn type value data export id valdef color turquoise turquoise": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color violet violet": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color visitedtext visitedtext": [
+   "6.2"
+  ],
+  "data dfn type value data export id valdef color wheat wheat": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color white white": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color whitesmoke whitesmoke": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color window window": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color windowframe windowframe": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color windowtext windowtext": [
+   "20.5"
+  ],
+  "data dfn type value data export id valdef color yellow yellow": [
+   "6.1"
+  ],
+  "data dfn type value data export id valdef color yellowgreen yellowgreen": [
+   "6.1"
+  ],
+  "deprecated color": [
+   "20.5"
+  ],
+  "display p3": [
+   "10.4"
+  ],
+  "display p3 linear": [
+   "10.5"
+  ],
+  "equivalent colors": [
+   "12"
+  ],
+  "hex color": [
+   "5.2"
+  ],
+  "hex color notation": [
+   "5.2"
+  ],
+  "host syntax": [
+   "13.2"
+  ],
+  "hsl ()": [
+   "7"
+  ],
+  "hsla ()": [
+   "7"
+  ],
+  "html compatible serialization is requested": [
+   "16.2.1"
+  ],
+  "hue interpolation method": [
+   "13.2"
+  ],
+  "hwb ()": [
+   "8"
+  ],
+  "in gamut": [
+   "2"
+  ],
+  "interpolation color space": [
+   "13"
+  ],
+  "invalid color": [
+   "2"
+  ],
+  "lab ()": [
+   "9.3"
+  ],
+  "lch ()": [
+   "9.3"
+  ],
+  "legacy color syntax": [
+   "4.1.2"
+  ],
+  "legacy hsl syntax": [
+   "7"
+  ],
+  "legacy hsla syntax": [
+   "7"
+  ],
+  "legacy rgb syntax": [
+   "5.1"
+  ],
+  "legacy rgba syntax": [
+   "5.1"
+  ],
+  "missing color component": [
+   "4.4"
+  ],
+  "missing color components": [
+   "4.4"
+  ],
+  "missing component": [
+   "4.4"
+  ],
+  "modern color syntax": [
+   "4.1.1"
+  ],
+  "modern hsl syntax": [
+   "7"
+  ],
+  "modern hsla syntax": [
+   "7"
+  ],
+  "modern rgb syntax": [
+   "5.1"
+  ],
+  "modern rgba syntax": [
+   "5.1"
+  ],
+  "named color": [
+   "6.1"
+  ],
+  "named colors": [
+   "6.1"
+  ],
+  "oklab ()": [
+   "9.4"
+  ],
+  "oklch ()": [
+   "9.4"
+  ],
+  "opacity value": [
+   "3.3"
+  ],
+  "opaque black": [
+   "4"
+  ],
+  "out of gamut": [
+   "2"
+  ],
+  "parse a css color value": [
+   "4.5"
+  ],
+  "polar color space": [
+   "13.2"
+  ],
+  "powerless color component": [
+   "4.4.1"
+  ],
+  "predefined rgb": [
+   "10.1"
+  ],
+  "predefined rgb params": [
+   "10.1"
+  ],
+  "prepare a color col1 for conversion": [
+   "11"
+  ],
+  "prophoto rgb": [
+   "10.7"
+  ],
+  "quirky color": [
+   "20.5"
+  ],
+  "ray trace gamut map": [
+   "14.2.6"
+  ],
+  "rectangular color space": [
+   "13.2"
+  ],
+  "rectangular orthogonal color": [
+   "4"
+  ],
+  "resolve to srgb": [
+   "4.1"
+  ],
+  "rgb ()": [
+   "5.1"
+  ],
+  "rgba ()": [
+   "5.1"
+  ],
+  "srgb linear": [
+   "10.3"
+  ],
+  "support legacy color syntax": [
+   "4.1"
+  ],
+  "system color": [
+   "6.2"
+  ],
+  "system color pairings": [
+   "6.2"
+  ],
+  "tagged image": [
+   "3.4"
+  ],
+  "transparent black": [
+   "4"
+  ],
+  "untagged image": [
+   "3.5"
+  ],
+  "untagged video": [
+   "3.5"
+  ],
+  "used color": [
+   "15"
+  ],
+  "used colors": [
+   "15"
+  ],
+  "valid color": [
+   "2"
+  ],
+  "white point": [
+   "2"
+  ],
+  "xyz d50": [
+   "10.9"
+  ],
+  "xyz d65": [
+   "10.9"
+  ],
+  "xyz params": [
+   "10.1"
+  ],
+  "xyz space": [
+   "10.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "alpha component": {
+   "23": 2,
+   "9.3": 2,
+   "9.4": 2
+  },
+  "carried forward": {
+   "13.3": 2
+  },
+  "color ()": {
+   "16.5": 2,
+   "20.5": 8
+  },
+  "color space": {
+   "12": 4,
+   "23": 2,
+   "15.4": 2,
+   "16.2.2": 2
+  },
+  "css gamut mapped": {
+   "10.1": 2
+  },
+  "cylindrical polar color": {
+   "11": 3
+  },
+  "display p3": {
+   "10.1": 2,
+   "10.5": 2
+  },
+  "display p3 linear": {
+   "13.2": 2
+  },
+  "hex color": {
+   "20.5": 3
+  },
+  "hex color notation": {
+   "4": 2,
+   "23": 2
+  },
+  "hsl ()": {
+   "4.1": 4,
+   "4.1.2": 2,
+   "16.2.2": 2,
+   "20.5": 3
+  },
+  "hsla ()": {
+   "4.1": 4,
+   "4.1.2": 2,
+   "20.5": 3
+  },
+  "hwb ()": {
+   "4.1": 3,
+   "16.2.2": 3,
+   "20.5": 2
+  },
+  "interpolation color space": {
+   "13.2": 5,
+   "13.3": 4
+  },
+  "invalid color": {
+   "10.1": 5
+  },
+  "lab ()": {
+   "16.3": 2,
+   "20.5": 2
+  },
+  "lch ()": {
+   "4.1": 2,
+   "20.5": 2
+  },
+  "legacy color syntax": {
+   "4.4": 2
+  },
+  "missing color components": {
+   "11": 3,
+   "12": 4,
+   "23": 3,
+   "4.4.1": 2,
+   "13.3": 10,
+   "16.2.2": 6
+  },
+  "named colors": {
+   "15.1": 2,
+   "16.2": 2
+  },
+  "oklab ()": {
+   "16.4": 2
+  },
+  "oklch ()": {
+   "4.1": 2
+  },
+  "opaque black": {
+   "10.1": 2
+  },
+  "out of gamut": {
+   "10.1": 2
+  },
+  "powerless color component": {
+   "23": 3
+  },
+  "prophoto rgb": {
+   "10.10": 3,
+   "10.11": 3
+  },
+  "rectangular orthogonal color": {
+   "11": 2
+  },
+  "rgb ()": {
+   "4.1": 3,
+   "16.2.2": 6,
+   "20.5": 3
+  },
+  "rgba ()": {
+   "4.1": 3,
+   "16.2.2": 6,
+   "20.5": 3
+  },
+  "srgb linear": {
+   "23": 2,
+   "13.2": 2
+  },
+  "system color": {
+   "4.1": 2
+  },
+  "valid color": {
+   "10.1": 2
+  }
+ }
+}

@@ -1,0 +1,727 @@
+{
+ "spec": "CSS Writing Modes Level 4",
+ "key": "csswritingmodes4",
+ "base": "https://drafts.csswg.org/css-writing-modes-4/",
+ "specUpdated": "20 January 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction to Writing Modes",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Inline Direction and Bidirectionality",
+   "page": "",
+   "id": "text-direction"
+  },
+  "3": {
+   "title": "Vertical Writing Modes",
+   "page": "",
+   "id": "vertical-modes"
+  },
+  "4": {
+   "title": "Inline-level Alignment",
+   "page": "",
+   "id": "inline-alignment"
+  },
+  "5": {
+   "title": "Introduction to Vertical Text Layout",
+   "page": "",
+   "id": "intro-text-layout"
+  },
+  "6": {
+   "title": "Abstract Box Terminology",
+   "page": "",
+   "id": "abstract-box"
+  },
+  "7": {
+   "title": "Abstract Box Layout",
+   "page": "",
+   "id": "abstract-layout"
+  },
+  "8": {
+   "title": "The Principal Writing Mode",
+   "page": "",
+   "id": "principal-flow"
+  },
+  "9": {
+   "title": "Glyph Composition",
+   "page": "",
+   "id": "text-combine"
+  },
+  "10": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "11": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.2": {
+   "title": "Value Definitions and Terminology",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Specifying Directionality: the direction property",
+   "page": "",
+   "id": "direction"
+  },
+  "2.2": {
+   "title": "Embeddings and Overrides: the unicode-bidi property",
+   "page": "",
+   "id": "unicode-bidi"
+  },
+  "2.3": {
+   "title": "Example of Bidirectional Text",
+   "page": "",
+   "id": "bidi-example"
+  },
+  "2.4": {
+   "title": "Applying the Bidirectional Reordering Algorithm",
+   "page": "",
+   "id": "bidi-algo"
+  },
+  "2.4.1": {
+   "title": "Bidi Paragraph Embedding Levels",
+   "page": "",
+   "id": "bidi-para-direction"
+  },
+  "2.4.2": {
+   "title": "CSS–Unicode Bidi Control Translation, Text Reordering",
+   "page": "",
+   "id": "bidi-control-codes"
+  },
+  "2.4.3": {
+   "title": "Bidi Treatment of Atomic Inlines",
+   "page": "",
+   "id": "bidi-atomic-inlines"
+  },
+  "2.4.4": {
+   "title": "Paragraph Breaks Within Embeddings and Isolates",
+   "page": "",
+   "id": "bidi-embedding-breaks"
+  },
+  "2.4.5": {
+   "title": "Reordering-induced Box Fragmentation",
+   "page": "",
+   "id": "bidi-box-model"
+  },
+  "2.4.5.1": {
+   "title": "Conditions of Reordering-induced Box Fragmentation",
+   "page": "",
+   "id": "bidi-fragmentation"
+  },
+  "2.4.5.2": {
+   "title": "Box Model of Reordering-induced Box Fragments",
+   "page": "",
+   "id": "bidi-fragment-boxes"
+  },
+  "3.1": {
+   "title": "Introduction to Vertical Writing",
+   "page": "",
+   "id": "vertical-intro"
+  },
+  "3.2": {
+   "title": "Block Flow Direction: the writing-mode property",
+   "page": "",
+   "id": "block-flow"
+  },
+  "3.2.1": {
+   "title": "Obsolete SVG1.1 writing-mode Values",
+   "page": "",
+   "id": "svg-writing-mode"
+  },
+  "3.2.1.1": {
+   "title": "Supporting SVG1.1 writing-mode values in CSS syntax",
+   "page": "",
+   "id": "svg-writing-mode-css"
+  },
+  "3.2.1.2": {
+   "title": "Supporting SVG1.1 writing-mode values in presentational attributes",
+   "page": "",
+   "id": "svg-writing-mode-markup"
+  },
+  "4.1": {
+   "title": "Introduction to Baselines",
+   "page": "",
+   "id": "intro-baselines"
+  },
+  "4.2": {
+   "title": "Text Baselines",
+   "page": "",
+   "id": "text-baselines"
+  },
+  "4.3": {
+   "title": "Atomic Inline Baselines",
+   "page": "",
+   "id": "replaced-baselines"
+  },
+  "4.4": {
+   "title": "Baseline Alignment",
+   "page": "",
+   "id": "baseline-alignment"
+  },
+  "5.1": {
+   "title": "Orienting Text: the text-orientation property",
+   "page": "",
+   "id": "text-orientation"
+  },
+  "5.1.1": {
+   "title": "Vertical Typesetting and Font Features",
+   "page": "",
+   "id": "vertical-font-features"
+  },
+  "5.1.2": {
+   "title": "Mixed Vertical Orientations",
+   "page": "",
+   "id": "vertical-orientations"
+  },
+  "5.1.3": {
+   "title": "Obsolete: the SVG1.1 glyph-orientation-vertical property",
+   "page": "",
+   "id": "glyph-orientation"
+  },
+  "6.1": {
+   "title": "Abstract Dimensions",
+   "page": "",
+   "id": "abstract-axes"
+  },
+  "6.2": {
+   "title": "Flow-relative Directions",
+   "page": "",
+   "id": "logical-directions"
+  },
+  "6.3": {
+   "title": "Line-relative Directions",
+   "page": "",
+   "id": "line-directions"
+  },
+  "6.4": {
+   "title": "Abstract-to-Physical Mappings",
+   "page": "",
+   "id": "logical-to-physical"
+  },
+  "7.1": {
+   "title": "Principles of Layout in Vertical Writing Modes",
+   "page": "",
+   "id": "vertical-layout"
+  },
+  "7.2": {
+   "title": "Dimensional Mapping",
+   "page": "",
+   "id": "dimension-mapping"
+  },
+  "7.3": {
+   "title": "Orthogonal Flows",
+   "page": "",
+   "id": "orthogonal-flows"
+  },
+  "7.3.1": {
+   "title": "Available Space in Orthogonal Flows",
+   "page": "",
+   "id": "orthogonal-auto"
+  },
+  "7.3.2": {
+   "title": "Auto-sizing Block Containers in Orthogonal Flows",
+   "page": "",
+   "id": "auto-multicol"
+  },
+  "7.3.3": {
+   "title": "Auto-sizing Other Orthogonal Flow Roots",
+   "page": "",
+   "id": "orthogonal-layout"
+  },
+  "7.3.4": {
+   "title": "Fragmenting Orthogonal Flows",
+   "page": "",
+   "id": "orthogonal-pagination"
+  },
+  "7.4": {
+   "title": "Flow-Relative Mappings",
+   "page": "",
+   "id": "logical-direction-layout"
+  },
+  "7.5": {
+   "title": "Line-Relative Mappings",
+   "page": "",
+   "id": "line-mappings"
+  },
+  "7.6": {
+   "title": "Purely Physical Mappings",
+   "page": "",
+   "id": "physical-only"
+  },
+  "8.1": {
+   "title": "Propagation to the Initial Containing Block",
+   "page": "",
+   "id": "icb"
+  },
+  "8.2": {
+   "title": "Page Flow: the page progression direction",
+   "page": "",
+   "id": "page-direction"
+  },
+  "9.1": {
+   "title": "Horizontal-in-Vertical Composition: the text-combine-upright property",
+   "page": "",
+   "id": "text-combine-upright"
+  },
+  "9.1.1": {
+   "title": "Text Run Rules",
+   "page": "",
+   "id": "text-combine-runs"
+  },
+  "9.1.2": {
+   "title": "Layout Rules",
+   "page": "",
+   "id": "text-combine-layout"
+  },
+  "9.1.3": {
+   "title": "Compression Rules",
+   "page": "",
+   "id": "text-combine-compression"
+  },
+  "9.1.3.1": {
+   "title": "Full-width Characters",
+   "page": "",
+   "id": "text-combine-fullwidth"
+  }
+ },
+ "dfns": {
+  "abstract dimensions": [
+   "6.1"
+  ],
+  "alphabetic baseline": [
+   "4.2"
+  ],
+  "baseline table": [
+   "4.1"
+  ],
+  "bi orientational": [
+   "5"
+  ],
+  "bi orientational transform": [
+   "5"
+  ],
+  "bidi isolate": [
+   "2.2"
+  ],
+  "bidi isolated": [
+   "2.2"
+  ],
+  "bidi isolates": [
+   "2.2"
+  ],
+  "bidi isolation": [
+   "2.2"
+  ],
+  "bidi override": [
+   "2.2"
+  ],
+  "bidi paragraph": [
+   "2.4"
+  ],
+  "block axis": [
+   "6.1"
+  ],
+  "block dimension": [
+   "6.1"
+  ],
+  "block end": [
+   "6.2"
+  ],
+  "block flow direction": [
+   "1"
+  ],
+  "block size": [
+   "6.1"
+  ],
+  "block start": [
+   "6.2"
+  ],
+  "central baseline": [
+   "4.2"
+  ],
+  "digits integer [2 4]": [
+   "9.1"
+  ],
+  "directional embedding": [
+   "2.2"
+  ],
+  "directional override": [
+   "2.2"
+  ],
+  "dominant baseline": [
+   "4.4"
+  ],
+  "establish an orthogonal flow": [
+   "7.3"
+  ],
+  "flow relative": [
+   "6"
+  ],
+  "flow relative direction": [
+   "6.2"
+  ],
+  "flow relative directions": [
+   "6.2"
+  ],
+  "forced paragraph break": [
+   "2.4"
+  ],
+  "glyph orientation vertical": [
+   "5.1.3"
+  ],
+  "horizontal axis": [
+   "6"
+  ],
+  "horizontal block flow": [
+   "1"
+  ],
+  "horizontal dimension": [
+   "6"
+  ],
+  "horizontal only": [
+   "5"
+  ],
+  "horizontal script": [
+   "5"
+  ],
+  "horizontal tb": [
+   "3.2"
+  ],
+  "horizontal typographic mode": [
+   "1"
+  ],
+  "horizontal writing mode": [
+   "1"
+  ],
+  "inline axis": [
+   "6.1"
+  ],
+  "inline base direction": [
+   "1"
+  ],
+  "inline dimension": [
+   "6.1"
+  ],
+  "inline end": [
+   "6.2"
+  ],
+  "inline size": [
+   "6.1"
+  ],
+  "inline start": [
+   "6.2"
+  ],
+  "isolate override": [
+   "2.2"
+  ],
+  "isolated sequence": [
+   "2.2"
+  ],
+  "line left": [
+   "6.3"
+  ],
+  "line orientation": [
+   "6.3"
+  ],
+  "line over": [
+   "6.3"
+  ],
+  "line relative": [
+   "6"
+  ],
+  "line relative direction": [
+   "6.3"
+  ],
+  "line relative directions": [
+   "6.3"
+  ],
+  "line right": [
+   "6.3"
+  ],
+  "line under": [
+   "6.3"
+  ],
+  "logical height": [
+   "6.1"
+  ],
+  "logical width": [
+   "6.1"
+  ],
+  "orthogonal flow": [
+   "7.3"
+  ],
+  "physical bottom": [
+   "6"
+  ],
+  "physical dimensions": [
+   "6"
+  ],
+  "physical direction": [
+   "6"
+  ],
+  "physical directions": [
+   "6"
+  ],
+  "physical left": [
+   "6"
+  ],
+  "physical right": [
+   "6"
+  ],
+  "physical top": [
+   "6"
+  ],
+  "principal writing mode": [
+   "8"
+  ],
+  "sideways lr": [
+   "3.2"
+  ],
+  "sideways right": [
+   "5.1"
+  ],
+  "sideways rl": [
+   "3.2"
+  ],
+  "sideways typesetting": [
+   "5.1.1"
+  ],
+  "text combine upright": [
+   "9.1"
+  ],
+  "text orientation": [
+   "5.1"
+  ],
+  "typeset sideways": [
+   "5.1.1"
+  ],
+  "typeset upright": [
+   "5.1.1"
+  ],
+  "typesetting sideways": [
+   "5.1.1"
+  ],
+  "typesetting upright": [
+   "5.1.1"
+  ],
+  "typographic mode": [
+   "1"
+  ],
+  "unicode bidi": [
+   "2.2"
+  ],
+  "upright typesetting": [
+   "5.1.1"
+  ],
+  "vertical axis": [
+   "6"
+  ],
+  "vertical block flow": [
+   "1"
+  ],
+  "vertical dimension": [
+   "6"
+  ],
+  "vertical lr": [
+   "3.2"
+  ],
+  "vertical only": [
+   "5"
+  ],
+  "vertical rl": [
+   "3.2"
+  ],
+  "vertical script": [
+   "5"
+  ],
+  "vertical typographic mode": [
+   "1"
+  ],
+  "vertical writing mode": [
+   "1"
+  ],
+  "writing mode": [
+   "1",
+   "3.2"
+  ],
+  "x axis": [
+   "6"
+  ],
+  "y axis": [
+   "6"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "bi orientational": {
+   "11": 2
+  },
+  "bidi isolates": {
+   "11": 5
+  },
+  "block axis": {
+   "11": 2
+  },
+  "block end": {
+   "11": 2,
+   "7.4": 3
+  },
+  "block flow direction": {
+   "3.2": 6
+  },
+  "block size": {
+   "11": 2,
+   "7.3": 4,
+   "7.3.2": 2
+  },
+  "block start": {
+   "11": 2,
+   "7.4": 4
+  },
+  "central baseline": {
+   "11": 3
+  },
+  "forced paragraph break": {
+   "2.4.4": 2
+  },
+  "glyph orientation vertical": {
+   "11": 2
+  },
+  "horizontal dimension": {
+   "6.1": 2
+  },
+  "horizontal only": {
+   "11": 2
+  },
+  "horizontal script": {
+   "11": 2
+  },
+  "horizontal tb": {
+   "6.2": 2,
+   "8.2": 2
+  },
+  "horizontal writing mode": {
+   "11": 2
+  },
+  "inline axis": {
+   "11": 2,
+   "7.3": 2
+  },
+  "inline base direction": {
+   "2.1": 3
+  },
+  "inline end": {
+   "11": 2
+  },
+  "inline size": {
+   "11": 2,
+   "7.2": 2,
+   "7.3": 4,
+   "7.3.1": 2,
+   "7.3.2": 4
+  },
+  "inline start": {
+   "11": 2
+  },
+  "line left": {
+   "2.1": 2,
+   "7.5": 3
+  },
+  "line right": {
+   "2.1": 2,
+   "7.5": 3
+  },
+  "orthogonal flow": {
+   "11": 3,
+   "7.3.3": 2
+  },
+  "physical bottom": {
+   "11": 2
+  },
+  "physical left": {
+   "11": 2
+  },
+  "physical right": {
+   "11": 2
+  },
+  "physical top": {
+   "11": 2
+  },
+  "principal writing mode": {
+   "11": 2,
+   "8.2": 2
+  },
+  "sideways lr": {
+   "11": 3
+  },
+  "sideways rl": {
+   "11": 2
+  },
+  "sideways typesetting": {
+   "11": 4,
+   "5.1": 2
+  },
+  "text combine upright": {
+   "11": 7,
+   "9.1.1": 5,
+   "9.1.3.1": 2
+  },
+  "text orientation": {
+   "1": 2,
+   "8": 2,
+   "11": 4,
+   "5.1.3": 2
+  },
+  "typographic mode": {
+   "3.2": 5
+  },
+  "unicode bidi": {
+   "11": 2,
+   "2.1": 2
+  },
+  "upright typesetting": {
+   "11": 4
+  },
+  "vertical dimension": {
+   "6.1": 2
+  },
+  "vertical lr": {
+   "6.3": 2
+  },
+  "vertical only": {
+   "11": 3
+  },
+  "vertical rl": {
+   "7.1": 3,
+   "7.3": 2
+  },
+  "writing mode": {
+   "8": 2,
+   "11": 4,
+   "1.1": 2,
+   "3.2.1.1": 3,
+   "6.2": 2,
+   "6.4": 3
+  },
+  "x axis": {
+   "11": 3,
+   "6.1": 2
+  },
+  "y axis": {
+   "11": 3,
+   "6.1": 2
+  }
+ }
+}

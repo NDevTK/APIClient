@@ -56,6 +56,7 @@
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_base_element.h"
+#include "core/html/autofill.h"   /* §4.10.19.7.2's IDL-exposed autofill value */
 #include "core/html/form_submission_attributes.h"   /* §4.10.19.6's `action` and `formAction` */
 #include "core/html/nonce_attribute.h"   /* §2.5.6's `nonce`, whose getter is not a reflection */
 #include "core/html/html_meter.h"
@@ -289,12 +290,19 @@ static const ElReflect R_FORM[] = {
     { "rel", "rel", REFLECT_STRING },
     { "noValidate", "novalidate", REFLECT_BOOL },
 };
+/* NO `autocomplete` IN R_INPUT, R_TEXTAREA OR R_SELECT. HTML §4.10.19.7.2 Processing model ends "The
+   autocomplete IDL attribute, on getting, must return the element's IDL-exposed autofill value" — a value
+   that section DERIVES from the attribute through a 35-step algorithm over a 57-row token table, so the
+   mirror was a wrong VALUE: its DEFAULT branch sets the IDL-exposed autofill value to the EMPTY STRING,
+   and `<input autocomplete="banana">` reads "" in every browser and read "banana" here. It is
+   core/html/autofill.c. §4.10.3's `autocomplete` ON A `form` ELEMENT is a DIFFERENT attribute — an
+   enumerated on/off — and its REFLECT_ENUM row in R_FORM above is correct and stays. */
 static const ElReflect R_INPUT[] = {
     { "name", "name", REFLECT_STRING },
     { "type", "type", REFLECT_ENUM, .en = &HTML_INPUT_TYPE_ATTRIBUTE },
     { "defaultValue", "value", REFLECT_STRING }, { "placeholder", "placeholder", REFLECT_STRING },
     { "pattern", "pattern", REFLECT_STRING }, { "accept", "accept", REFLECT_STRING },
-    { "autocomplete", "autocomplete", REFLECT_STRING }, { "min", "min", REFLECT_STRING },
+    { "min", "min", REFLECT_STRING },
     { "max", "max", REFLECT_STRING }, { "step", "step", REFLECT_STRING },
     { "formMethod", "formmethod", REFLECT_ENUM, .en = &HTML_FORM_FORMMETHOD_ATTRIBUTE },
     { "formEnctype", "formenctype", REFLECT_ENUM, .en = &HTML_FORM_FORMENCTYPE_ATTRIBUTE },
@@ -316,12 +324,12 @@ static const ElReflect R_BUTTON[] = {
 };
 static const ElReflect R_TEXTAREA[] = {
     { "name", "name", REFLECT_STRING }, { "placeholder", "placeholder", REFLECT_STRING },
-    { "wrap", "wrap", REFLECT_STRING }, { "autocomplete", "autocomplete", REFLECT_STRING },
+    { "wrap", "wrap", REFLECT_STRING },
     { "disabled", "disabled", REFLECT_BOOL }, { "required", "required", REFLECT_BOOL },
     { "readOnly", "readonly", REFLECT_BOOL },
 };
 static const ElReflect R_SELECT[] = {
-    { "name", "name", REFLECT_STRING }, { "autocomplete", "autocomplete", REFLECT_STRING },
+    { "name", "name", REFLECT_STRING },
     { "disabled", "disabled", REFLECT_BOOL }, { "multiple", "multiple", REFLECT_BOOL },
     { "required", "required", REFLECT_BOOL },
 };
@@ -812,6 +820,8 @@ void html_element_init(JSContext *ctx)
     nonce_attribute_init(ctx);
     /* §4.10.19.6's two `[ReflectSetter]` setters, declared beside them for the same reason. */
     form_submission_attributes_init(ctx);
+    /* §4.10.19.7's `autocomplete` setter — one declaration for the three interfaces that share it. */
+    autofill_init(ctx);
     /* EVERY REFLECTION DECLARED ONCE, here, with the base index each row's install names them by. */
     g_html_refl_base = element_declare_reflections(ctx, "HTMLElement", R_HTML,
                                                   (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
@@ -1004,6 +1014,14 @@ void html_element_install_protos(JSContext *ctx)
         if (!strcmp(HTML_IFACE[i].iface, "HTMLInputElement") ||
             !strcmp(HTML_IFACE[i].iface, "HTMLButtonElement"))
             form_submission_attributes_install(ctx, p, "formAction");
+        /* §4.10.19.7.2's `autocomplete`, on the three interfaces whose controls have an autofill field.
+           Not a reflection row: the member answers a value the section derives from the attribute rather
+           than the attribute. `form` is NOT one of them — §4.10.3's same-named attribute is an enumerated
+           on/off and stays a row above. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLInputElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLSelectElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLTextAreaElement"))
+            autofill_install(ctx, p);
         /* §4.10.14's six numbers and §4.10.13's three, each an algorithm over the element's attributes rather
            than a mirror of one — handed the prototype for the reason §4.12.1's `async` is. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLMeterElement"))
@@ -1202,6 +1220,7 @@ void html_element_free(JSRuntime *rt)
     dom_string_map_free(rt);
     nonce_attribute_free();   /* §2.5.6's setter id, reset like core/html/html_base_element.c's */
     form_submission_attributes_free();   /* §4.10.19.6's two, likewise */
+    autofill_free();   /* §4.10.19.7's one, likewise */
     global_attributes_free();
     declarative_shadow_free();
     html_form_free(rt);

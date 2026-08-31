@@ -1,0 +1,772 @@
+{
+ "spec": "CSS Backgrounds and Borders Module Level 3",
+ "key": "cssbackgrounds3",
+ "base": "https://drafts.csswg.org/css-backgrounds-3/",
+ "specUpdated": "16 December 2025",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Backgrounds",
+   "page": "",
+   "id": "backgrounds"
+  },
+  "3": {
+   "title": "Borders",
+   "page": "",
+   "id": "borders"
+  },
+  "4": {
+   "title": "Rounded Corners",
+   "page": "",
+   "id": "corners"
+  },
+  "5": {
+   "title": "Border Images",
+   "page": "",
+   "id": "border-images"
+  },
+  "6": {
+   "title": "Miscellaneous Effects",
+   "page": "",
+   "id": "misc"
+  },
+  "7": {
+   "title": "Levels",
+   "page": "",
+   "id": "levels"
+  },
+  "8": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "9": {
+   "title": "Acknowledgments",
+   "page": "",
+   "id": "acknowledgments"
+  },
+  "10": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "11": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.2": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Layering Multiple Background Images",
+   "page": "",
+   "id": "layering"
+  },
+  "2.2": {
+   "title": "Base Color: the background-color property",
+   "page": "",
+   "id": "background-color"
+  },
+  "2.3": {
+   "title": "Image Sources: the background-image property",
+   "page": "",
+   "id": "background-image"
+  },
+  "2.4": {
+   "title": "Tiling Images: the background-repeat property",
+   "page": "",
+   "id": "background-repeat"
+  },
+  "2.5": {
+   "title": "Affixing Images: the background-attachment property",
+   "page": "",
+   "id": "background-attachment"
+  },
+  "2.6": {
+   "title": "Positioning Images: the background-position property",
+   "page": "",
+   "id": "background-position"
+  },
+  "2.6.1": {
+   "title": "Serialization of background-position values",
+   "page": "",
+   "id": "bg-position-serialization"
+  },
+  "2.7": {
+   "title": "Painting Area: the background-clip property",
+   "page": "",
+   "id": "background-clip"
+  },
+  "2.8": {
+   "title": "Positioning Area: the background-origin property",
+   "page": "",
+   "id": "background-origin"
+  },
+  "2.9": {
+   "title": "Sizing Images: the background-size property",
+   "page": "",
+   "id": "background-size"
+  },
+  "2.9.1": {
+   "title": "Serialization of background-size values",
+   "page": "",
+   "id": "bg-size-serialization"
+  },
+  "2.10": {
+   "title": "Backgrounds Shorthand: the background property",
+   "page": "",
+   "id": "background"
+  },
+  "2.11": {
+   "title": "Backgrounds of Special Elements",
+   "page": "",
+   "id": "special-backgrounds"
+  },
+  "2.11.1": {
+   "title": "The Canvas Background and the Root Element",
+   "page": "",
+   "id": "root-background"
+  },
+  "2.11.2": {
+   "title": "The Canvas Background and the HTML <body> Element",
+   "page": "",
+   "id": "body-background"
+  },
+  "2.11.3": {
+   "title": "The ::first-line Pseudo-element‘s Background",
+   "page": "",
+   "id": "first-line-background"
+  },
+  "3.1": {
+   "title": "Line Colors: the border-color properties",
+   "page": "",
+   "id": "border-color"
+  },
+  "3.2": {
+   "title": "Line Patterns: the border-style properties",
+   "page": "",
+   "id": "border-style"
+  },
+  "3.3": {
+   "title": "Line Thickness: the border-width properties",
+   "page": "",
+   "id": "border-width"
+  },
+  "3.4": {
+   "title": "Border Shorthand Properties",
+   "page": "",
+   "id": "border-shorthands"
+  },
+  "4.1": {
+   "title": "Curve Radii: the border-radius properties",
+   "page": "",
+   "id": "border-radius"
+  },
+  "4.2": {
+   "title": "Corner Shaping",
+   "page": "",
+   "id": "corner-shaping"
+  },
+  "4.3": {
+   "title": "Corner Clipping",
+   "page": "",
+   "id": "corner-clipping"
+  },
+  "4.4": {
+   "title": "Color and Style Transitions",
+   "page": "",
+   "id": "corner-transitions"
+  },
+  "4.5": {
+   "title": "Overlapping Curves",
+   "page": "",
+   "id": "corner-overlap"
+  },
+  "4.6": {
+   "title": "Effect on Tables",
+   "page": "",
+   "id": "border-radius-tables"
+  },
+  "5.1": {
+   "title": "Image Source: the border-image-source property",
+   "page": "",
+   "id": "border-image-source"
+  },
+  "5.2": {
+   "title": "Image Slicing: the border-image-slice property",
+   "page": "",
+   "id": "border-image-slice"
+  },
+  "5.3": {
+   "title": "Drawing Areas: the border-image-width property",
+   "page": "",
+   "id": "border-image-width"
+  },
+  "5.4": {
+   "title": "Edge Overhang: the border-image-outset property",
+   "page": "",
+   "id": "border-image-outset"
+  },
+  "5.5": {
+   "title": "Image Tiling: the border-image-repeat property",
+   "page": "",
+   "id": "border-image-repeat"
+  },
+  "5.6": {
+   "title": "Drawing the Border Image",
+   "page": "",
+   "id": "border-image-process"
+  },
+  "5.7": {
+   "title": "Border Image Shorthand: the border-image property",
+   "page": "",
+   "id": "border-image"
+  },
+  "5.8": {
+   "title": "Effect on Tables",
+   "page": "",
+   "id": "border-image-tables"
+  },
+  "6.1": {
+   "title": "Drop Shadows: the box-shadow property",
+   "page": "",
+   "id": "box-shadow"
+  },
+  "6.1.1": {
+   "title": "Shadow Shape, Spread, and Knockout",
+   "page": "",
+   "id": "shadow-shape"
+  },
+  "6.1.2": {
+   "title": "Blurring Shadow Edges",
+   "page": "",
+   "id": "shadow-blur"
+  },
+  "6.1.3": {
+   "title": "Layering, Layout, and Other Details",
+   "page": "",
+   "id": "shadow-layers"
+  },
+  "7.1": {
+   "title": "Level 1",
+   "page": "",
+   "id": "level-1"
+  },
+  "7.2": {
+   "title": "Level 2",
+   "page": "",
+   "id": "level-2"
+  },
+  "7.3": {
+   "title": "Level 3",
+   "page": "",
+   "id": "level-3"
+  },
+  "8.1": {
+   "title": "Changes since the 11 March 2024 Candidate Recommendation Draft",
+   "page": "",
+   "id": "changes-2024-03"
+  },
+  "8.2": {
+   "title": "Changes since the 14 February 2023 Candidate Recommendation Snapshot",
+   "page": "",
+   "id": "changes-2023-02"
+  },
+  "8.3": {
+   "title": "Changes since the 22 December 2020 Candidate Recommendation Snapshot",
+   "page": "",
+   "id": "changes-2020-12"
+  },
+  "8.4": {
+   "title": "Changes since the 17 October 2017 Candidate Recommendation",
+   "page": "",
+   "id": "changes-2017-10"
+  },
+  "8.5": {
+   "title": "Changes since the 9 September 2014 Candidate Recommendation",
+   "page": "",
+   "id": "changes-2014-09"
+  },
+  "8.6": {
+   "title": "Changes since the 4 February 2014 Last Call Working Draft",
+   "page": "",
+   "id": "changes-2014-02"
+  },
+  "8.7": {
+   "title": "Changes since the 24 July 2012 Candidate Recommendation",
+   "page": "",
+   "id": "changes-2012-07"
+  },
+  "8.8": {
+   "title": "Changes since the 17 April 2012 Candidate Recommendation",
+   "page": "",
+   "id": "changes-2012-04"
+  },
+  "8.9": {
+   "title": "Changes since the 14 February 2012 “Last Call” Working Draft",
+   "page": "",
+   "id": "changes-2012LC"
+  },
+  "8.10": {
+   "title": "Changes Since the 15 February 2011 Candidate Recommendation",
+   "page": "",
+   "id": "changes-2011"
+  },
+  "8.11": {
+   "title": "Changes Since the 17 December 2009 Candidate Recommendation",
+   "page": "",
+   "id": "changes-2009"
+  }
+ },
+ "dfns": {
+  "1st length": [
+   "6.1"
+  ],
+  "2nd length": [
+   "6.1"
+  ],
+  "3rd length [0 ]": [
+   "6.1"
+  ],
+  "4th length": [
+   "6.1"
+  ],
+  "adjusted radius dimension": [
+   "4.2"
+  ],
+  "background attachment": [
+   "2.5"
+  ],
+  "background clip": [
+   "2.7"
+  ],
+  "background color": [
+   "2.2"
+  ],
+  "background image": [
+   "2.3"
+  ],
+  "background image layer": [
+   "2.1"
+  ],
+  "background image layers": [
+   "2.1"
+  ],
+  "background image(s)": [
+   "2.3"
+  ],
+  "background origin": [
+   "2.8"
+  ],
+  "background painting area": [
+   "2.7"
+  ],
+  "background position": [
+   "2.6"
+  ],
+  "background positioning area": [
+   "2.8"
+  ],
+  "background repeat": [
+   "2.4"
+  ],
+  "background size": [
+   "2.9"
+  ],
+  "bg image": [
+   "2.3"
+  ],
+  "bg layer": [
+   "2.10"
+  ],
+  "bg position": [
+   "2.6"
+  ],
+  "bg size": [
+   "2.9"
+  ],
+  "blur radius": [
+   "6.1"
+  ],
+  "border bottom": [
+   "3.4"
+  ],
+  "border bottom color": [
+   "3.1"
+  ],
+  "border bottom left radius": [
+   "4.1"
+  ],
+  "border bottom right radius": [
+   "4.1"
+  ],
+  "border bottom style": [
+   "3.2"
+  ],
+  "border bottom width": [
+   "3.3"
+  ],
+  "border box": [
+   "2.7",
+   "2.8"
+  ],
+  "border color": [
+   "3.1"
+  ],
+  "border image": [
+   "5.1",
+   "5.7"
+  ],
+  "border image area": [
+   "5.3"
+  ],
+  "border image outset": [
+   "5.4"
+  ],
+  "border image region": [
+   "5.3"
+  ],
+  "border image repeat": [
+   "5.5"
+  ],
+  "border image slice": [
+   "5.2"
+  ],
+  "border image source": [
+   "5.1"
+  ],
+  "border image width": [
+   "5.3"
+  ],
+  "border left": [
+   "3.4"
+  ],
+  "border left color": [
+   "3.1"
+  ],
+  "border left style": [
+   "3.2"
+  ],
+  "border left width": [
+   "3.3"
+  ],
+  "border radius": [
+   "4.1"
+  ],
+  "border right": [
+   "3.4"
+  ],
+  "border right color": [
+   "3.1"
+  ],
+  "border right style": [
+   "3.2"
+  ],
+  "border right width": [
+   "3.3"
+  ],
+  "border style": [
+   "3.2"
+  ],
+  "border top": [
+   "3.4"
+  ],
+  "border top color": [
+   "3.1"
+  ],
+  "border top left radius": [
+   "4.1"
+  ],
+  "border top right radius": [
+   "4.1"
+  ],
+  "border top style": [
+   "3.2"
+  ],
+  "border top width": [
+   "3.3"
+  ],
+  "border width": [
+   "3.3"
+  ],
+  "box shadow": [
+   "6.1"
+  ],
+  "canvas background": [
+   "2.11.1"
+  ],
+  "canvas surface": [
+   "2.11"
+  ],
+  "content box": [
+   "2.7",
+   "2.8"
+  ],
+  "final bg layer": [
+   "2.10"
+  ],
+  "horizontal offset": [
+   "6.1"
+  ],
+  "inner box shadow": [
+   "6.1"
+  ],
+  "line style": [
+   "3.2"
+  ],
+  "line width": [
+   "3.3"
+  ],
+  "no repeat": [
+   "2.4"
+  ],
+  "outer box shadow": [
+   "6.1"
+  ],
+  "outset adjusted border radius": [
+   "4.2"
+  ],
+  "padding box": [
+   "2.7",
+   "2.8"
+  ],
+  "repeat style": [
+   "2.4"
+  ],
+  "repeat x": [
+   "2.4"
+  ],
+  "repeat y": [
+   "2.4"
+  ],
+  "spread distance": [
+   "6.1"
+  ],
+  "vertical offset": [
+   "6.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "background attachment": {
+   "11": 2
+  },
+  "background clip": {
+   "11": 2,
+   "2.10": 2,
+   "8.11": 2
+  },
+  "background color": {
+   "2": 2,
+   "11": 3,
+   "2.10": 3
+  },
+  "background image": {
+   "11": 2
+  },
+  "background image layers": {
+   "11": 2,
+   "2.3": 2,
+   "2.8": 2
+  },
+  "background image(s)": {
+   "11": 2,
+   "2.4": 5,
+   "2.6": 3
+  },
+  "background origin": {
+   "11": 2,
+   "2.10": 2
+  },
+  "background painting area": {
+   "2.4": 4,
+   "2.5": 2
+  },
+  "background position": {
+   "11": 2
+  },
+  "background positioning area": {
+   "2.4": 2,
+   "2.6": 7,
+   "2.9": 4
+  },
+  "background repeat": {
+   "11": 2,
+   "2.9": 2
+  },
+  "background size": {
+   "11": 2
+  },
+  "bg image": {
+   "2.10": 2
+  },
+  "bg position": {
+   "2.10": 2
+  },
+  "bg size": {
+   "2.10": 2
+  },
+  "border bottom": {
+   "11": 2
+  },
+  "border bottom color": {
+   "11": 2
+  },
+  "border bottom left radius": {
+   "11": 2
+  },
+  "border bottom right radius": {
+   "11": 2
+  },
+  "border bottom style": {
+   "11": 2
+  },
+  "border bottom width": {
+   "11": 2
+  },
+  "border box": {
+   "11": 2
+  },
+  "border color": {
+   "11": 3,
+   "3.4": 2
+  },
+  "border image": {
+   "11": 3
+  },
+  "border image area": {
+   "5": 2,
+   "5.6": 4
+  },
+  "border image outset": {
+   "11": 2,
+   "5.7": 2
+  },
+  "border image region": {
+   "11": 2,
+   "5.5": 4,
+   "5.6": 4
+  },
+  "border image repeat": {
+   "11": 2,
+   "5.7": 2
+  },
+  "border image slice": {
+   "11": 2,
+   "5.7": 2
+  },
+  "border image source": {
+   "5": 2,
+   "11": 2,
+   "5.6": 2,
+   "5.7": 2
+  },
+  "border image width": {
+   "11": 2,
+   "5.7": 2
+  },
+  "border left": {
+   "11": 2
+  },
+  "border left color": {
+   "11": 2
+  },
+  "border left style": {
+   "11": 2
+  },
+  "border left width": {
+   "11": 2
+  },
+  "border radius": {
+   "11": 3,
+   "4.2": 2,
+   "4.3": 2
+  },
+  "border right": {
+   "11": 2
+  },
+  "border right color": {
+   "11": 2
+  },
+  "border right style": {
+   "11": 2
+  },
+  "border right width": {
+   "11": 2
+  },
+  "border style": {
+   "11": 3,
+   "3.4": 2
+  },
+  "border top": {
+   "11": 2
+  },
+  "border top color": {
+   "11": 2
+  },
+  "border top left radius": {
+   "11": 2
+  },
+  "border top right radius": {
+   "11": 2
+  },
+  "border top style": {
+   "11": 2
+  },
+  "border top width": {
+   "11": 2
+  },
+  "border width": {
+   "5": 2,
+   "11": 3,
+   "3.4": 2
+  },
+  "box shadow": {
+   "11": 2,
+   "8.7": 3
+  },
+  "canvas background": {
+   "2.11": 2
+  },
+  "content box": {
+   "11": 2
+  },
+  "inner box shadow": {
+   "11": 2,
+   "6.1.1": 2
+  },
+  "line style": {
+   "3.4": 2
+  },
+  "line width": {
+   "3.4": 2
+  },
+  "outer box shadow": {
+   "11": 2,
+   "6.1.1": 2
+  },
+  "padding box": {
+   "11": 2
+  },
+  "repeat style": {
+   "2.10": 2
+  },
+  "spread distance": {
+   "6.1.1": 2,
+   "8.4": 2
+  }
+ }
+}

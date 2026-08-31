@@ -1,0 +1,837 @@
+{
+ "spec": "CSS Inline Layout Module Level 3",
+ "key": "cssinline3",
+ "base": "https://drafts.csswg.org/css-inline-3/",
+ "specUpdated": "11 August 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Inline Layout Model",
+   "page": "",
+   "id": "model"
+  },
+  "3": {
+   "title": "Baselines and Alignment Metrics",
+   "page": "",
+   "id": "css-metrics"
+  },
+  "4": {
+   "title": "Baseline Alignment",
+   "page": "",
+   "id": "alignment"
+  },
+  "5": {
+   "title": "Logical Heights and Inter-line Spacing",
+   "page": "",
+   "id": "line-height"
+  },
+  "6": {
+   "title": "Trimming Leading Over/Under Text",
+   "page": "",
+   "id": "leading-trim"
+  },
+  "7": {
+   "title": "Initial Letters",
+   "page": "",
+   "id": "initial-letter-styling"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.2": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Layout of Line Boxes",
+   "page": "",
+   "id": "line-boxes"
+  },
+  "2.2": {
+   "title": "Layout Within Line Boxes",
+   "page": "",
+   "id": "line-layout"
+  },
+  "2.3": {
+   "title": "Phantom Line Boxes",
+   "page": "",
+   "id": "invisible-line-boxes"
+  },
+  "2.4": {
+   "title": "Painting Order",
+   "page": "",
+   "id": "paint-order"
+  },
+  "3.1": {
+   "title": "Introduction to Baselines",
+   "page": "",
+   "id": "baseline-intro"
+  },
+  "3.2": {
+   "title": "Baselines and Metrics",
+   "page": "",
+   "id": "baseline-types"
+  },
+  "3.2.1": {
+   "title": "Ascent and Descent Metrics",
+   "page": "",
+   "id": "ascent-descent"
+  },
+  "3.2.2": {
+   "title": "Line Gap Metrics",
+   "page": "",
+   "id": "font-line-gap"
+  },
+  "3.3": {
+   "title": "Baselines of Glyphs and Boxes",
+   "page": "",
+   "id": "baseline-tables"
+  },
+  "4.1": {
+   "title": "Dominant Baselines: the dominant-baseline property",
+   "page": "",
+   "id": "dominant-baseline-property"
+  },
+  "4.2": {
+   "title": "Transverse Box Alignment: the vertical-align property",
+   "page": "",
+   "id": "transverse-alignment"
+  },
+  "4.2.1": {
+   "title": "Alignment Baseline Source: the baseline-source longhand",
+   "page": "",
+   "id": "baseline-source"
+  },
+  "4.2.2": {
+   "title": "Alignment Baseline Type: the alignment-baseline longhand",
+   "page": "",
+   "id": "alignment-baseline-property"
+  },
+  "4.2.2.1": {
+   "title": "Legacy Values for SVG",
+   "page": "",
+   "id": "alignment-baseline-svg-legacy"
+  },
+  "4.2.3": {
+   "title": "Post-Alignment Shift: the baseline-shift longhand",
+   "page": "",
+   "id": "baseline-shift-property"
+  },
+  "4.2.3.1": {
+   "title": "Legacy Values for SVG",
+   "page": "",
+   "id": "baseline-shift-svg-legacy"
+  },
+  "5.1": {
+   "title": "Line Spacing: the line-height property",
+   "page": "",
+   "id": "line-height-property"
+  },
+  "5.2": {
+   "title": "Text Edge Metrics: the line-fit-edge property",
+   "page": "",
+   "id": "text-edges"
+  },
+  "5.3": {
+   "title": "Calculating the Logical Height Contributions (“Layout Bounds”) of Inline Boxes",
+   "page": "",
+   "id": "inline-height"
+  },
+  "6.1": {
+   "title": "Shorthand for Text Box Trimming: the text-box property",
+   "page": "",
+   "id": "text-box-shorthand"
+  },
+  "6.2": {
+   "title": "Trimming Over/Under Text: the text-box-trim property",
+   "page": "",
+   "id": "text-box-trim"
+  },
+  "6.3": {
+   "title": "Text Trimming Metrics: the text-box-edge property",
+   "page": "",
+   "id": "text-box-edge"
+  },
+  "6.4": {
+   "title": "Inline Box Drawing Height: the inline-sizing property",
+   "page": "",
+   "id": "line-fill"
+  },
+  "7.1": {
+   "title": "An Introduction to Initial Letters",
+   "page": "",
+   "id": "initial-letter-intro"
+  },
+  "7.1.1": {
+   "title": "Drop Initial",
+   "page": "",
+   "id": "drop-initial"
+  },
+  "7.1.2": {
+   "title": "Sunken Initial Letters",
+   "page": "",
+   "id": "sunk-initial"
+  },
+  "7.1.3": {
+   "title": "Raised Initial Letters",
+   "page": "",
+   "id": "raise-initial"
+  },
+  "7.2": {
+   "title": "Selecting Initial Letters",
+   "page": "",
+   "id": "selecting-drop-initials"
+  },
+  "7.3": {
+   "title": "Creating Initial Letters: the initial-letter property",
+   "page": "",
+   "id": "sizing-drop-initials"
+  },
+  "7.3.1": {
+   "title": "Applicability",
+   "page": "",
+   "id": "first-most-inline-level"
+  },
+  "7.4": {
+   "title": "Alignment of Initial Letters: the initial-letter-align property",
+   "page": "",
+   "id": "aligning-initial-letter"
+  },
+  "7.4.1": {
+   "title": "UA Default Stylesheet for initial-letter-align",
+   "page": "",
+   "id": "initial-letter-align-defaults"
+  },
+  "7.5": {
+   "title": "Initial Letter Layout",
+   "page": "",
+   "id": "initial-letter-layout"
+  },
+  "7.5.1": {
+   "title": "Properties Applying to Initial Letters",
+   "page": "",
+   "id": "initial-letter-properties"
+  },
+  "7.5.2": {
+   "title": "Margins, Borders, and Padding",
+   "page": "",
+   "id": "initial-letter-box"
+  },
+  "7.5.3": {
+   "title": "Font Sizing of Initial Letters",
+   "page": "",
+   "id": "sizing-initial-letter"
+  },
+  "7.5.4": {
+   "title": "Shaping and Glyph Selection",
+   "page": "",
+   "id": "initial-letter-shaping"
+  },
+  "7.5.5": {
+   "title": "Sizing the Initial Letter Box",
+   "page": "",
+   "id": "initial-letter-box-size"
+  },
+  "7.5.6": {
+   "title": "Alignment Within an Initial Letter Box",
+   "page": "",
+   "id": "initial-letter-content-align"
+  },
+  "7.6": {
+   "title": "Initial Letter Positioning and Spacing",
+   "page": "",
+   "id": "initial-letter-position"
+  },
+  "7.6.1": {
+   "title": "Block-axis Positioning",
+   "page": "",
+   "id": "initial-letter-block-position"
+  },
+  "7.6.2": {
+   "title": "Inline Kerning",
+   "page": "",
+   "id": "initial-letter-inline-position"
+  },
+  "7.7": {
+   "title": "Initial Letter Wrapping: the initial-letter-wrap property",
+   "page": "",
+   "id": "initial-letter-wrapping"
+  },
+  "7.8": {
+   "title": "Line Layout",
+   "page": "",
+   "id": "initial-letter-line-layout"
+  },
+  "7.8.1": {
+   "title": "Inline Flow Layout: Alignment, Justification, and White Space",
+   "page": "",
+   "id": "initial-letter-inline-flow"
+  },
+  "7.8.2": {
+   "title": "Edge Effects: Indentation and Hanging Punctuation",
+   "page": "",
+   "id": "initial-letter-indentation"
+  },
+  "7.8.3": {
+   "title": "Ancestor Inlines",
+   "page": "",
+   "id": "initial-letter-ancestors"
+  },
+  "7.8.4": {
+   "title": "Multi-line Initial Letters",
+   "page": "",
+   "id": "initial-letter-multi-line"
+  },
+  "7.9": {
+   "title": "Clearing Initial Letters",
+   "page": "",
+   "id": "initial-letter-paragraphs"
+  },
+  "7.9.1": {
+   "title": "Raised and sunken caps",
+   "page": "",
+   "id": "raised-sunken-caps"
+  },
+  "7.9.2": {
+   "title": "Short paragraphs with initial letters",
+   "page": "",
+   "id": "short-para-initial-letter"
+  },
+  "7.9.3": {
+   "title": "Interaction with floats",
+   "page": "",
+   "id": "initial-letter-floats"
+  },
+  "7.9.4": {
+   "title": "Interaction with Fragmentation (Pagination)",
+   "page": "",
+   "id": "initial-letter-breaking"
+  }
+ },
+ "dfns": {
+  "aligned subtree": [
+   "4.2.3"
+  ],
+  "alignment baseline": [
+   "4.2.2"
+  ],
+  "alphabetic baseline": [
+   "3.2"
+  ],
+  "ascent metric": [
+   "3.2.1"
+  ],
+  "atomic initial letter": [
+   "7.5"
+  ],
+  "atomic initial letter box": [
+   "7.5"
+  ],
+  "baseline alignment preference": [
+   "4.2.1"
+  ],
+  "baseline metric": [
+   "4.1"
+  ],
+  "baseline relative shift values": [
+   "4.2.3"
+  ],
+  "baseline set": [
+   "3.3"
+  ],
+  "baseline shift": [
+   "4.2.3"
+  ],
+  "baseline source": [
+   "4.2.1"
+  ],
+  "baseline table": [
+   "3.1"
+  ],
+  "border box": [
+   "7.4"
+  ],
+  "cap height": [
+   "3.2"
+  ],
+  "cap height baseline": [
+   "3.2"
+  ],
+  "central baseline": [
+   "3.2"
+  ],
+  "data dfn type value data export id valdef dominant baseline alphabetic alphabetic": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline auto auto": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline central central": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline hanging hanging": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline ideographic ideographic": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline mathematical mathematical": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline middle middle": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline text bottom text bottom": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef dominant baseline text top text top": [
+   "4.1"
+  ],
+  "data dfn type value data export id valdef line fit edge alphabetic alphabetic": [
+   "5.2"
+  ],
+  "data dfn type value data export id valdef line fit edge cap cap": [
+   "5.2"
+  ],
+  "data dfn type value data export id valdef line fit edge ex ex": [
+   "5.2"
+  ],
+  "data dfn type value data export id valdef line fit edge ideographic ideographic": [
+   "5.2"
+  ],
+  "data dfn type value data export id valdef line fit edge ideographic ink ideographic ink": [
+   "5.2"
+  ],
+  "data dfn type value data export id valdef line fit edge leading leading": [
+   "5.2"
+  ],
+  "data dfn type value data export id valdef line fit edge text text": [
+   "5.2"
+  ],
+  "descent metric": [
+   "3.2.1"
+  ],
+  "dominant baseline": [
+   "4.1"
+  ],
+  "dropped initial": [
+   "7.1.1"
+  ],
+  "em over": [
+   "3.2"
+  ],
+  "em over baseline": [
+   "3.2"
+  ],
+  "em under": [
+   "3.2"
+  ],
+  "em under baseline": [
+   "3.2"
+  ],
+  "half leading": [
+   "5.3"
+  ],
+  "hanging baseline": [
+   "3.2"
+  ],
+  "ideographic central baseline": [
+   "3.2"
+  ],
+  "ideographic ink over": [
+   "3.2"
+  ],
+  "ideographic ink over baseline": [
+   "3.2"
+  ],
+  "ideographic ink under": [
+   "3.2"
+  ],
+  "ideographic ink under baseline": [
+   "3.2"
+  ],
+  "ideographic over": [
+   "3.2"
+  ],
+  "ideographic over baseline": [
+   "3.2"
+  ],
+  "ideographic under": [
+   "3.2"
+  ],
+  "ideographic under baseline": [
+   "3.2"
+  ],
+  "initial letter": [
+   "7.3"
+  ],
+  "initial letter align": [
+   "7.4"
+  ],
+  "initial letter box": [
+   "7.3"
+  ],
+  "initial letter sink": [
+   "7.3"
+  ],
+  "initial letter size": [
+   "7.3"
+  ],
+  "initial letter wrap": [
+   "7.7"
+  ],
+  "inline formatting context": [
+   "2"
+  ],
+  "inline initial letter": [
+   "7.5"
+  ],
+  "inline initial letter box": [
+   "7.5"
+  ],
+  "inline layout": [
+   "2"
+  ],
+  "inline sizing": [
+   "6.4"
+  ],
+  "layout bounds": [
+   "5.3"
+  ],
+  "line box": [
+   "2"
+  ],
+  "line fit edge": [
+   "5.2"
+  ],
+  "line gap metric": [
+   "3.2.2"
+  ],
+  "line height": [
+   "5.1"
+  ],
+  "line relative shift values": [
+   "4.2.3"
+  ],
+  "math baseline": [
+   "3.2"
+  ],
+  "originating line": [
+   "7.8"
+  ],
+  "originating line box": [
+   "7.8"
+  ],
+  "phantom line box": [
+   "2.3"
+  ],
+  "phantom line boxes": [
+   "2.3"
+  ],
+  "post alignment shift": [
+   "4.2.3"
+  ],
+  "preferred line height": [
+   "5.1"
+  ],
+  "raised initial": [
+   "7.1.3"
+  ],
+  "root inline box": [
+   "2"
+  ],
+  "sunken initial": [
+   "7.1.2"
+  ],
+  "text after edge": [
+   "4.2.2.1"
+  ],
+  "text before edge": [
+   "4.2.2.1"
+  ],
+  "text box": [
+   "6.1"
+  ],
+  "text box edge": [
+   "6.3"
+  ],
+  "text box trim": [
+   "6.2"
+  ],
+  "text edge": [
+   "5.2"
+  ],
+  "text over": [
+   "3.2"
+  ],
+  "text over baseline": [
+   "3.2"
+  ],
+  "text under": [
+   "3.2"
+  ],
+  "text under baseline": [
+   "3.2"
+  ],
+  "trim both": [
+   "6.2"
+  ],
+  "trim end": [
+   "6.2"
+  ],
+  "trim start": [
+   "6.2"
+  ],
+  "vertical align": [
+   "4.2"
+  ],
+  "x height": [
+   "3.2"
+  ],
+  "x height baseline": [
+   "3.2"
+  ],
+  "x middle": [
+   "3.2"
+  ],
+  "x middle baseline": [
+   "3.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "alignment baseline": {
+   "4": 4,
+   "3.3": 2,
+   "4.1": 2,
+   "4.2": 4,
+   "4.2.3": 2,
+   "7.9.4": 7
+  },
+  "alphabetic baseline": {
+   "4": 2,
+   "4.1": 2,
+   "7.4": 4,
+   "7.9.4": 3
+  },
+  "ascent metric": {
+   "5.2": 2,
+   "7.9.4": 4
+  },
+  "atomic initial letter": {
+   "7.9.4": 2
+  },
+  "baseline metric": {
+   "7.9.4": 2
+  },
+  "baseline relative shift values": {
+   "7.9.4": 2
+  },
+  "baseline set": {
+   "7.9.4": 2
+  },
+  "baseline shift": {
+   "2.2": 2,
+   "4.2": 3,
+   "7.9.4": 5
+  },
+  "baseline source": {
+   "4.2": 2,
+   "7.9.4": 4
+  },
+  "baseline table": {
+   "7.9.4": 2
+  },
+  "cap height": {
+   "7.4": 2,
+   "7.9.4": 3
+  },
+  "central baseline": {
+   "4.1": 2,
+   "7.9.4": 8
+  },
+  "descent metric": {
+   "5.2": 2,
+   "7.9.4": 4
+  },
+  "dominant baseline": {
+   "4": 3,
+   "4.2.2": 2,
+   "5.3": 2,
+   "7.9.4": 7
+  },
+  "dropped initial": {
+   "7.9.4": 3
+  },
+  "em over": {
+   "7.9.4": 9
+  },
+  "em under": {
+   "7.9.4": 9
+  },
+  "half leading": {
+   "5.2": 2
+  },
+  "hanging baseline": {
+   "7.4": 2,
+   "7.9.4": 3
+  },
+  "ideographic ink over": {
+   "7.4": 2,
+   "7.9.4": 3
+  },
+  "ideographic ink under": {
+   "7.4": 2,
+   "7.9.4": 3
+  },
+  "ideographic over": {
+   "7.9.4": 7
+  },
+  "ideographic under": {
+   "7.9.4": 7
+  },
+  "initial letter": {
+   "7.3.1": 5,
+   "7.6.1": 2,
+   "7.9.4": 5
+  },
+  "initial letter align": {
+   "7.9.4": 5
+  },
+  "initial letter box": {
+   "7.2": 2,
+   "7.3.1": 3,
+   "7.4": 12,
+   "7.5.1": 2,
+   "7.5.5": 3,
+   "7.6.1": 5,
+   "7.7": 6,
+   "7.9.3": 6,
+   "7.9.4": 7
+  },
+  "initial letter sink": {
+   "7.5.5": 2,
+   "7.6.1": 3,
+   "7.9.4": 2
+  },
+  "initial letter size": {
+   "7.6.1": 2
+  },
+  "initial letter wrap": {
+   "7.9.4": 3
+  },
+  "inline formatting context": {
+   "2.1": 2,
+   "7.9.4": 2
+  },
+  "inline initial letter": {
+   "7.5.5": 3,
+   "7.9.4": 2
+  },
+  "inline sizing": {
+   "7.9.4": 4
+  },
+  "layout bounds": {
+   "2.2": 2,
+   "5.1": 2,
+   "5.2": 2,
+   "7.9.4": 2
+  },
+  "line box": {
+   "2.1": 4,
+   "2.2": 5,
+   "4.2.3": 4,
+   "5.1": 2,
+   "5.3": 2,
+   "6.2": 4,
+   "6.4": 3,
+   "7.6.1": 2,
+   "7.9.4": 2
+  },
+  "line fit edge": {
+   "2.2": 2,
+   "5.3": 4,
+   "6.3": 2,
+   "7.9.4": 6
+  },
+  "line gap metric": {
+   "7.9.4": 2
+  },
+  "line height": {
+   "2.2": 2,
+   "4.2.3": 2,
+   "5.3": 5,
+   "6.4": 2,
+   "7.9.4": 3
+  },
+  "line relative shift values": {
+   "2.2": 2,
+   "7.9.4": 4
+  },
+  "math baseline": {
+   "7.9.4": 3
+  },
+  "originating line box": {
+   "7.6.1": 2,
+   "7.8.1": 2,
+   "7.9.4": 3
+  },
+  "phantom line boxes": {
+   "7.9.4": 5
+  },
+  "raised initial": {
+   "7.3": 2,
+   "7.9.4": 2
+  },
+  "root inline box": {
+   "2.2": 2,
+   "5.3": 2,
+   "6.2": 2
+  },
+  "sunken initial": {
+   "7.3": 2
+  },
+  "text box": {
+   "7.9.4": 4
+  },
+  "text box edge": {
+   "6.1": 3,
+   "6.2": 5,
+   "7.9.4": 8
+  },
+  "text box trim": {
+   "6.1": 3,
+   "6.3": 2,
+   "6.4": 2,
+   "7.9.4": 10
+  },
+  "text edge": {
+   "7.9.4": 2
+  },
+  "text over": {
+   "7.9.4": 3
+  },
+  "text under": {
+   "7.9.4": 3
+  },
+  "vertical align": {
+   "4": 2,
+   "7.5.1": 2,
+   "7.9.4": 6
+  },
+  "x height": {
+   "7.9.4": 3
+  },
+  "x middle": {
+   "7.9.4": 3
+  }
+ }
+}

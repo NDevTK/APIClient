@@ -1,0 +1,378 @@
+{
+ "spec": "CSS Positioned Layout Module Level 3",
+ "key": "cssposition3",
+ "base": "https://drafts.csswg.org/css-position-3/",
+ "specUpdated": "14 May 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Choosing A Positioning Scheme: position property",
+   "page": "",
+   "id": "position-property"
+  },
+  "3": {
+   "title": "Positioning Coordinates",
+   "page": "",
+   "id": "coords"
+  },
+  "4": {
+   "title": "Absolute Positioning Layout Model",
+   "page": "",
+   "id": "abspos-layout"
+  },
+  "5": {
+   "title": "Old Absolute Positioning Layout Model",
+   "page": "",
+   "id": "abspos-old"
+  },
+  "6": {
+   "title": "Informative Comparison of Normal Flow, Floats, and Positioning",
+   "page": "",
+   "id": "comparison"
+  },
+  "7": {
+   "title": "Acknowledgments",
+   "page": "",
+   "id": "ack"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.2": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Containing Blocks of Positioned Boxes",
+   "page": "",
+   "id": "def-cb"
+  },
+  "2.1.1": {
+   "title": "Further Adjustments to the Containing Block",
+   "page": "",
+   "id": "original-cb"
+  },
+  "2.2": {
+   "title": "Painting Order and Stacking Contexts",
+   "page": "",
+   "id": "stacking"
+  },
+  "3.1": {
+   "title": "Box Insets: the top , right , bottom , left , inset-block-start , inset-inline-start , inset-block-end , and inset-inline-end properties",
+   "page": "",
+   "id": "insets"
+  },
+  "3.2": {
+   "title": "Box Insets Shorthands: the inset-block , inset-inline , and inset properties",
+   "page": "",
+   "id": "inset-shorthands"
+  },
+  "3.3": {
+   "title": "Relative Positioning",
+   "page": "",
+   "id": "relpos-insets"
+  },
+  "3.4": {
+   "title": "Sticky positioning",
+   "page": "",
+   "id": "stickypos-insets"
+  },
+  "3.4.1": {
+   "title": "Scroll Position of Sticky-Positioned Boxes",
+   "page": "",
+   "id": "stickypos-scroll"
+  },
+  "3.5": {
+   "title": "Absolute (and Fixed) Positioning",
+   "page": "",
+   "id": "abspos-insets"
+  },
+  "3.5.1": {
+   "title": "Resolving auto Insets",
+   "page": "",
+   "id": "resolving-inset-auto"
+  },
+  "3.5.2": {
+   "title": "Resolving Overconstrained Insets",
+   "page": "",
+   "id": "resolving-inset-overconstraint"
+  },
+  "3.5.3": {
+   "title": "Calculating the Static Position and the “Static-Position Rectangle”",
+   "page": "",
+   "id": "staticpos-rect"
+  },
+  "4.1": {
+   "title": "Automatic Sizes of Absolutely-Positioned Boxes",
+   "page": "",
+   "id": "abspos-auto-size"
+  },
+  "4.2": {
+   "title": "Auto Margins of Absolutely-Positioned Boxes",
+   "page": "",
+   "id": "abspos-margins"
+  },
+  "4.3": {
+   "title": "Self-Alignment of Absolutely Positioned Boxes",
+   "page": "",
+   "id": "abspos-alignment"
+  },
+  "4.4": {
+   "title": "Fragmenting Absolutely-positioned Elements",
+   "page": "",
+   "id": "abspos-breaking"
+  },
+  "5.1": {
+   "title": "The Width of Absolutely-Positioned, Non-Replaced Elements",
+   "page": "",
+   "id": "abs-non-replaced-width"
+  },
+  "5.2": {
+   "title": "The width of absolute or fixed positioned, replaced elements",
+   "page": "",
+   "id": "abs-replaced-width"
+  },
+  "5.3": {
+   "title": "The Height Of Absolutely Positioned, Non-Replaced Elements",
+   "page": "",
+   "id": "abs-non-replaced-height"
+  },
+  "5.4": {
+   "title": "The Height Of Absolutely Positioned, Replaced Elements",
+   "page": "",
+   "id": "abs-replaced-height"
+  },
+  "6.1": {
+   "title": "Normal Flow Example",
+   "page": "",
+   "id": "comp-normal-flow"
+  },
+  "6.2": {
+   "title": "Relative Positioning Example",
+   "page": "",
+   "id": "comp-relpos"
+  },
+  "6.3": {
+   "title": "Floating Example",
+   "page": "",
+   "id": "comp-floating"
+  },
+  "6.4": {
+   "title": "Absolute Positioning Example",
+   "page": "",
+   "id": "comp-abspos"
+  }
+ },
+ "dfns": {
+  "absolute position": [
+   "2"
+  ],
+  "absolute position containing block": [
+   "3.5"
+  ],
+  "absolute positioning": [
+   "2"
+  ],
+  "absolute positioning containing block": [
+   "2"
+  ],
+  "absolute positioning layout": [
+   "4"
+  ],
+  "absolute positioning layout model": [
+   "4"
+  ],
+  "absolutely position": [
+   "2"
+  ],
+  "absolutely positioned": [
+   "2"
+  ],
+  "absolutely positioned box": [
+   "2"
+  ],
+  "absolutely positioned element": [
+   "2"
+  ],
+  "fixed position": [
+   "2"
+  ],
+  "fixed positioned": [
+   "2"
+  ],
+  "fixed positioned box": [
+   "2"
+  ],
+  "fixed positioning": [
+   "2"
+  ],
+  "fixed positioning containing block": [
+   "2.1"
+  ],
+  "initial fixed containing block": [
+   "2.1"
+  ],
+  "inset block": [
+   "3.2"
+  ],
+  "inset block end": [
+   "3.1"
+  ],
+  "inset block start": [
+   "3.1"
+  ],
+  "inset inline": [
+   "3.2"
+  ],
+  "inset inline end": [
+   "3.1"
+  ],
+  "inset inline start": [
+   "3.1"
+  ],
+  "inset modified containing block": [
+   "3.5"
+  ],
+  "inset properties": [
+   "3"
+  ],
+  "original containing block": [
+   "2.1.1"
+  ],
+  "position box": [
+   "3.4"
+  ],
+  "positioned box": [
+   "2"
+  ],
+  "positioning scheme": [
+   "2"
+  ],
+  "positioning schemes": [
+   "2"
+  ],
+  "relative position": [
+   "2"
+  ],
+  "relative positioning": [
+   "2"
+  ],
+  "relatively position": [
+   "2"
+  ],
+  "relatively positioned": [
+   "2"
+  ],
+  "relatively positioned box": [
+   "2"
+  ],
+  "static position": [
+   "3.5.3"
+  ],
+  "static position containing block": [
+   "3.5.3"
+  ],
+  "static position rectangle": [
+   "3.5.3"
+  ],
+  "sticky position": [
+   "2"
+  ],
+  "sticky positioned": [
+   "2"
+  ],
+  "sticky positioned box": [
+   "2"
+  ],
+  "sticky positioning": [
+   "2"
+  ],
+  "sticky view rectangle": [
+   "3.4"
+  ],
+  "stronger inset": [
+   "3.5.2"
+  ],
+  "weaker inset": [
+   "3.5.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "absolute positioning": {
+   "4": 2,
+   "7": 7,
+   "2.1.1": 2,
+   "3.5": 2
+  },
+  "absolute positioning containing block": {
+   "2.1": 4
+  },
+  "absolute positioning layout model": {
+   "7": 2
+  },
+  "fixed positioning": {
+   "7": 4,
+   "2.1": 3
+  },
+  "initial fixed containing block": {
+   "7": 2
+  },
+  "inset block": {
+   "7": 2
+  },
+  "inset block end": {
+   "7": 2
+  },
+  "inset block start": {
+   "7": 2
+  },
+  "inset inline": {
+   "7": 2
+  },
+  "inset inline end": {
+   "7": 2
+  },
+  "inset inline start": {
+   "7": 2
+  },
+  "inset modified containing block": {
+   "4": 2,
+   "3.5.2": 2,
+   "4.3": 2
+  },
+  "inset properties": {
+   "2": 3,
+   "3.3": 2,
+   "3.4": 3,
+   "3.5.1": 5,
+   "4.1": 3
+  },
+  "positioned box": {
+   "7": 2,
+   "2.2": 3
+  },
+  "positioning schemes": {
+   "1.1": 2
+  },
+  "relative positioning": {
+   "7": 6,
+   "3.3": 2
+  },
+  "static position": {
+   "3.5.1": 2
+  },
+  "sticky positioning": {
+   "7": 4,
+   "3.4": 6
+  }
+ }
+}

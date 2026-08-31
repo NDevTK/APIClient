@@ -1,0 +1,753 @@
+{
+ "spec": "CSS Flexible Box Layout Module Level 1",
+ "key": "cssflexbox1",
+ "base": "https://drafts.csswg.org/css-flexbox-1/",
+ "specUpdated": "8 May 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Flex Layout Box Model and Terminology",
+   "page": "",
+   "id": "box-model"
+  },
+  "3": {
+   "title": "Flex Containers: the flex and inline-flex display values",
+   "page": "",
+   "id": "flex-containers"
+  },
+  "4": {
+   "title": "Flex Items",
+   "page": "",
+   "id": "flex-items"
+  },
+  "5": {
+   "title": "Ordering and Orientation",
+   "page": "",
+   "id": "flow-order"
+  },
+  "6": {
+   "title": "Flex Lines",
+   "page": "",
+   "id": "flex-lines"
+  },
+  "7": {
+   "title": "Flexibility",
+   "page": "",
+   "id": "flexibility"
+  },
+  "8": {
+   "title": "Alignment",
+   "page": "",
+   "id": "alignment"
+  },
+  "9": {
+   "title": "Flex Layout Algorithm",
+   "page": "",
+   "id": "layout-algorithm"
+  },
+  "10": {
+   "title": "Fragmenting Flex Layout",
+   "page": "",
+   "id": "pagination"
+  },
+  "1.1": {
+   "title": "Overview",
+   "page": "",
+   "id": "overview"
+  },
+  "1.2": {
+   "title": "Module interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.3": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "4.1": {
+   "title": "Absolutely-Positioned Flex Children",
+   "page": "",
+   "id": "abspos-items"
+  },
+  "4.2": {
+   "title": "Flex Item Margins and Paddings",
+   "page": "",
+   "id": "item-margins"
+  },
+  "4.3": {
+   "title": "Flex Item Z-Ordering",
+   "page": "",
+   "id": "painting"
+  },
+  "4.4": {
+   "title": "Collapsed Items",
+   "page": "",
+   "id": "visibility-collapse"
+  },
+  "4.5": {
+   "title": "Automatic Minimum Size of Flex Items",
+   "page": "",
+   "id": "min-size-auto"
+  },
+  "5.1": {
+   "title": "Flex Flow Direction: the flex-direction property",
+   "page": "",
+   "id": "flex-direction-property"
+  },
+  "5.2": {
+   "title": "Flex Line Wrapping: the flex-wrap property",
+   "page": "",
+   "id": "flex-wrap-property"
+  },
+  "5.3": {
+   "title": "Flex Direction and Wrap: the flex-flow shorthand",
+   "page": "",
+   "id": "flex-flow-property"
+  },
+  "5.4": {
+   "title": "Reordering and Accessibility: the order property",
+   "page": "",
+   "id": "order-property"
+  },
+  "7.1": {
+   "title": "The flex Shorthand",
+   "page": "",
+   "id": "flex-property"
+  },
+  "7.1.1": {
+   "title": "Basic Values of flex",
+   "page": "",
+   "id": "flex-common"
+  },
+  "7.2": {
+   "title": "Components of Flexibility",
+   "page": "",
+   "id": "flex-components"
+  },
+  "7.2.1": {
+   "title": "The flex-grow property",
+   "page": "",
+   "id": "flex-grow-property"
+  },
+  "7.2.2": {
+   "title": "The flex-shrink property",
+   "page": "",
+   "id": "flex-shrink-property"
+  },
+  "7.2.3": {
+   "title": "The flex-basis property",
+   "page": "",
+   "id": "flex-basis-property"
+  },
+  "8.1": {
+   "title": "Aligning with auto margins",
+   "page": "",
+   "id": "auto-margins"
+  },
+  "8.2": {
+   "title": "Axis Alignment: the justify-content property",
+   "page": "",
+   "id": "justify-content-property"
+  },
+  "8.3": {
+   "title": "Cross-axis Alignment: the align-items and align-self properties",
+   "page": "",
+   "id": "align-items-property"
+  },
+  "8.4": {
+   "title": "Packing Flex Lines: the align-content property",
+   "page": "",
+   "id": "align-content-property"
+  },
+  "8.5": {
+   "title": "Flex Container Baselines",
+   "page": "",
+   "id": "flex-baselines"
+  },
+  "9.1": {
+   "title": "Initial Setup",
+   "page": "",
+   "id": "box-manip"
+  },
+  "9.2": {
+   "title": "Line Length Determination",
+   "page": "",
+   "id": "line-sizing"
+  },
+  "9.3": {
+   "title": "Main Size Determination",
+   "page": "",
+   "id": "main-sizing"
+  },
+  "9.4": {
+   "title": "Cross Size Determination",
+   "page": "",
+   "id": "cross-sizing"
+  },
+  "9.5": {
+   "title": "Main-Axis Alignment",
+   "page": "",
+   "id": "main-alignment"
+  },
+  "9.6": {
+   "title": "Cross-Axis Alignment",
+   "page": "",
+   "id": "cross-alignment"
+  },
+  "9.7": {
+   "title": "Resolving Flexible Lengths",
+   "page": "",
+   "id": "resolve-flexible-lengths"
+  },
+  "9.8": {
+   "title": "Definite and Indefinite Sizes",
+   "page": "",
+   "id": "definite-sizes"
+  },
+  "9.9": {
+   "title": "Intrinsic Sizes",
+   "page": "",
+   "id": "intrinsic-sizes"
+  },
+  "9.9.1": {
+   "title": "Flex Container Intrinsic Main Sizes",
+   "page": "",
+   "id": "intrinsic-main-sizes"
+  },
+  "9.9.1.1": {
+   "title": "Ideal Algorithm: Max-content Size and Min-content Single-line Size",
+   "page": "",
+   "id": "intrinsic-main-sizes-ideal"
+  },
+  "9.9.1.2": {
+   "title": "Web-compatible Intrinsic Sizing Algorithm: Max-content Size and Min-content Single-line Size",
+   "page": "",
+   "id": "intrinsic-main-sizes-compat"
+  },
+  "9.9.1.3": {
+   "title": "Multi-line Min-content Algorithm",
+   "page": "",
+   "id": "intrinsic-main-sizes-multiline"
+  },
+  "9.9.2": {
+   "title": "Flex Container Intrinsic Cross Sizes",
+   "page": "",
+   "id": "intrinsic-cross-sizes"
+  },
+  "9.9.3": {
+   "title": "Flex Item Intrinsic Size Contributions",
+   "page": "",
+   "id": "intrinsic-item-contributions"
+  },
+  "10.1": {
+   "title": "Sample Flex Fragmentation Algorithm",
+   "page": "",
+   "id": "pagination-algo"
+  }
+ },
+ "dfns": {
+  "align content": [
+   "8.4"
+  ],
+  "align items": [
+   "8.3"
+  ],
+  "align self": [
+   "8.3"
+  ],
+  "collapsed flex item": [
+   "4.4"
+  ],
+  "column reverse": [
+   "5.1"
+  ],
+  "content based minimum size": [
+   "4.5"
+  ],
+  "content size suggestion": [
+   "4.5"
+  ],
+  "cross axis": [
+   "2"
+  ],
+  "cross axis baseline set": [
+   "8.5"
+  ],
+  "cross dimension": [
+   "2"
+  ],
+  "cross end": [
+   "2"
+  ],
+  "cross size": [
+   "2"
+  ],
+  "cross size property": [
+   "2"
+  ],
+  "cross start": [
+   "2"
+  ],
+  "definite size": [
+   "9.8"
+  ],
+  "first cross axis baseline set": [
+   "8.5"
+  ],
+  "first main axis baseline set": [
+   "8.5"
+  ],
+  "flex base size": [
+   "9.2"
+  ],
+  "flex basis": [
+   "7.1",
+   "7.2.3"
+  ],
+  "flex container": [
+   "2"
+  ],
+  "flex direction": [
+   "2",
+   "5.1"
+  ],
+  "flex directions": [
+   "2"
+  ],
+  "flex end": [
+   "8.2",
+   "8.3",
+   "8.4"
+  ],
+  "flex factor": [
+   "7.1"
+  ],
+  "flex factors": [
+   "7.1"
+  ],
+  "flex flow": [
+   "5.3"
+  ],
+  "flex formatting context": [
+   "3"
+  ],
+  "flex grow": [
+   "7.1",
+   "7.2.1"
+  ],
+  "flex grow factor": [
+   "7.1"
+  ],
+  "flex item": [
+   "2"
+  ],
+  "flex items": [
+   "2"
+  ],
+  "flex layout": [
+   "1"
+  ],
+  "flex level": [
+   "4"
+  ],
+  "flex line": [
+   "6"
+  ],
+  "flex lines": [
+   "6"
+  ],
+  "flex shrink": [
+   "7.1",
+   "7.2.2"
+  ],
+  "flex shrink factor": [
+   "7.1"
+  ],
+  "flex start": [
+   "8.2",
+   "8.3",
+   "8.4"
+  ],
+  "flex wrap": [
+   "5.2"
+  ],
+  "fully inflexible": [
+   "7"
+  ],
+  "hypothetical cross size": [
+   "9.4"
+  ],
+  "hypothetical main size": [
+   "9.2"
+  ],
+  "indefinite size": [
+   "9.8"
+  ],
+  "initial free space": [
+   "9.7"
+  ],
+  "inline flex": [
+   "3"
+  ],
+  "justify content": [
+   "8.2"
+  ],
+  "last cross axis baseline set": [
+   "8.5"
+  ],
+  "last main axis baseline set": [
+   "8.5"
+  ],
+  "main axis": [
+   "2"
+  ],
+  "main axis baseline set": [
+   "8.5"
+  ],
+  "main dimension": [
+   "2"
+  ],
+  "main end": [
+   "2"
+  ],
+  "main size": [
+   "2"
+  ],
+  "main size property": [
+   "2"
+  ],
+  "main start": [
+   "2"
+  ],
+  "max cross size": [
+   "2"
+  ],
+  "max cross size properties": [
+   "2"
+  ],
+  "max cross size property": [
+   "2"
+  ],
+  "max main size": [
+   "2"
+  ],
+  "max main size properties": [
+   "2"
+  ],
+  "max main size property": [
+   "2"
+  ],
+  "min cross size": [
+   "2"
+  ],
+  "min cross size property": [
+   "2"
+  ],
+  "min main size": [
+   "2"
+  ],
+  "min main size property": [
+   "2"
+  ],
+  "multi line flex container": [
+   "6"
+  ],
+  "participates in baseline alignment": [
+   "8.3"
+  ],
+  "remaining free space": [
+   "9.7"
+  ],
+  "row reverse": [
+   "5.1"
+  ],
+  "scaled flex shrink factor": [
+   "9.7"
+  ],
+  "single line flex container": [
+   "6"
+  ],
+  "space around": [
+   "8.2",
+   "8.4"
+  ],
+  "space between": [
+   "8.2",
+   "8.4"
+  ],
+  "specified size suggestion": [
+   "4.5"
+  ],
+  "target main size": [
+   "9.7"
+  ],
+  "transferred size suggestion": [
+   "4.5"
+  ],
+  "wrap reverse": [
+   "5.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "align content": {
+   "10.1": 8
+  },
+  "align items": {
+   "10.1": 5
+  },
+  "align self": {
+   "6": 2,
+   "1.1": 3,
+   "8.1": 2,
+   "10.1": 17
+  },
+  "collapsed flex item": {
+   "9.9.1.2": 2,
+   "10.1": 5
+  },
+  "column reverse": {
+   "10.1": 7
+  },
+  "content based minimum size": {
+   "10.1": 6
+  },
+  "cross axis": {
+   "1.1": 2,
+   "4.1": 2,
+   "5.2": 2,
+   "8.3": 4,
+   "8.4": 2,
+   "8.5": 2,
+   "9.9.2": 2,
+   "10.1": 11
+  },
+  "cross axis baseline set": {
+   "10.1": 5
+  },
+  "cross end": {
+   "8.4": 3,
+   "10.1": 3
+  },
+  "cross size": {
+   "4.4": 2,
+   "4.5": 2,
+   "8.3": 2,
+   "9.2": 3,
+   "9.4": 6,
+   "9.9.2": 6,
+   "10.1": 28
+  },
+  "cross size property": {
+   "10.1": 3
+  },
+  "cross start": {
+   "8.3": 3,
+   "8.4": 3,
+   "10.1": 6
+  },
+  "definite size": {
+   "4.5": 5,
+   "9.2": 4,
+   "9.4": 2,
+   "10.1": 35
+  },
+  "flex base size": {
+   "9.7": 6,
+   "9.9.1.1": 3,
+   "10.1": 18
+  },
+  "flex basis": {
+   "9.2": 5,
+   "10.1": 26
+  },
+  "flex container": {
+   "3": 4,
+   "4": 3,
+   "6": 2,
+   "4.1": 3,
+   "5.1": 2,
+   "5.2": 2,
+   "7.2.3": 2,
+   "8.2": 2,
+   "8.4": 4,
+   "8.5": 6,
+   "9.2": 4,
+   "9.4": 2,
+   "9.8": 2,
+   "9.9.1": 4,
+   "9.9.1.1": 7,
+   "9.9.1.2": 2,
+   "9.9.2": 7,
+   "10.1": 44
+  },
+  "flex direction": {
+   "5": 2,
+   "5.3": 2,
+   "10.1": 4
+  },
+  "flex end": {
+   "10.1": 3
+  },
+  "flex factors": {
+   "9.9.1.1": 2
+  },
+  "flex flow": {
+   "10.1": 6
+  },
+  "flex grow": {
+   "9.9.1.1": 3,
+   "10.1": 4
+  },
+  "flex grow factor": {
+   "9.7": 2,
+   "9.9.1.1": 3,
+   "10.1": 4
+  },
+  "flex items": {
+   "4": 5,
+   "6": 3,
+   "7": 2,
+   "4.2": 2,
+   "4.5": 2,
+   "7.1": 7,
+   "8.2": 6,
+   "8.3": 10,
+   "8.5": 6,
+   "9.2": 3,
+   "9.8": 4,
+   "9.9.1.1": 5,
+   "9.9.1.2": 2,
+   "9.9.2": 4,
+   "9.9.3": 2,
+   "10.1": 66
+  },
+  "flex layout": {
+   "10.1": 2
+  },
+  "flex lines": {
+   "8.4": 2,
+   "8.5": 3,
+   "9.4": 3,
+   "9.9.2": 2,
+   "10.1": 15
+  },
+  "flex shrink": {
+   "10.1": 4
+  },
+  "flex shrink factor": {
+   "9.7": 2,
+   "10.1": 4
+  },
+  "flex start": {
+   "10.1": 7
+  },
+  "flex wrap": {
+   "6": 3,
+   "5.3": 2,
+   "10.1": 2
+  },
+  "fully inflexible": {
+   "10.1": 4
+  },
+  "hypothetical main size": {
+   "9.7": 3,
+   "10.1": 6
+  },
+  "inline flex": {
+   "4": 2
+  },
+  "justify content": {
+   "10.1": 6
+  },
+  "main axis": {
+   "1.1": 2,
+   "4.5": 2,
+   "5.1": 3,
+   "7.1.1": 2,
+   "8.5": 5,
+   "10.1": 12
+  },
+  "main axis baseline set": {
+   "10.1": 5
+  },
+  "main end": {
+   "5.1": 4,
+   "8.2": 3,
+   "10.1": 4
+  },
+  "main size": {
+   "4.5": 2,
+   "7.1": 2,
+   "9.2": 6,
+   "9.4": 3,
+   "9.7": 5,
+   "9.8": 2,
+   "9.9.1": 2,
+   "9.9.1.1": 3,
+   "10.1": 20
+  },
+  "main size property": {
+   "7.1": 2,
+   "10.1": 2
+  },
+  "main start": {
+   "5.1": 4,
+   "8.2": 3,
+   "10.1": 5
+  },
+  "max main size properties": {
+   "10.1": 6
+  },
+  "min main size property": {
+   "10.1": 6
+  },
+  "multi line flex container": {
+   "10": 2,
+   "5.2": 2,
+   "8.4": 3,
+   "9.9.2": 3,
+   "10.1": 13
+  },
+  "participates in baseline alignment": {
+   "10.1": 2
+  },
+  "row reverse": {
+   "10.1": 7
+  },
+  "scaled flex shrink factor": {
+   "9.9.1.1": 2,
+   "10.1": 5
+  },
+  "single line flex container": {
+   "5.2": 2,
+   "8.4": 2,
+   "9.4": 2,
+   "10.1": 14
+  },
+  "space around": {
+   "10.1": 2
+  },
+  "space between": {
+   "10.1": 2
+  },
+  "specified size suggestion": {
+   "10.1": 2
+  },
+  "target main size": {
+   "10.1": 2
+  },
+  "transferred size suggestion": {
+   "10.1": 2
+  },
+  "wrap reverse": {
+   "10.1": 13
+  }
+ }
+}

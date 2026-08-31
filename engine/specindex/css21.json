@@ -1,0 +1,4434 @@
+{
+ "spec": "Cascading Style Sheets Level 2 Revision 1 (CSS 2.1)",
+ "key": "css21",
+ "base": "https://www.w3.org/TR/CSS2/",
+ "specUpdated": "W3C Recommendation 07 June 2011, edited in place 12 April 2016 to point to new work, edited in place 07 December 2021 to correct markup.",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "About the CSS 2.1 Specification",
+   "page": "about.html",
+   "id": "q1.0"
+  },
+  "2": {
+   "title": "Introduction to CSS 2.1",
+   "page": "intro.html",
+   "id": "q2.0"
+  },
+  "3": {
+   "title": "Conformance: Requirements and Recommendations",
+   "page": "conform.html",
+   "id": "q3.0"
+  },
+  "4": {
+   "title": "Syntax and basic data types",
+   "page": "syndata.html",
+   "id": "q4.0"
+  },
+  "5": {
+   "title": "Selectors",
+   "page": "selector.html",
+   "id": "q5.0"
+  },
+  "6": {
+   "title": "Assigning property values, Cascading, and Inheritance",
+   "page": "cascade.html",
+   "id": "q6.0"
+  },
+  "7": {
+   "title": "Media types",
+   "page": "media.html",
+   "id": "q7.0"
+  },
+  "8": {
+   "title": "Box model",
+   "page": "box.html",
+   "id": "box-model"
+  },
+  "9": {
+   "title": "Visual formatting model",
+   "page": "visuren.html",
+   "id": "q9.0"
+  },
+  "10": {
+   "title": "Visual formatting model details",
+   "page": "visudet.html",
+   "id": "q10.0"
+  },
+  "11": {
+   "title": "Visual effects",
+   "page": "visufx.html",
+   "id": "q11.0"
+  },
+  "12": {
+   "title": "Generated content , automatic numbering , and lists",
+   "page": "generate.html",
+   "id": "generated-text"
+  },
+  "13": {
+   "title": "Paged media",
+   "page": "page.html",
+   "id": "the-page"
+  },
+  "14": {
+   "title": "Colors and Backgrounds",
+   "page": "colors.html",
+   "id": "q14.0"
+  },
+  "15": {
+   "title": "Fonts",
+   "page": "fonts.html",
+   "id": "q15.0"
+  },
+  "16": {
+   "title": "Text",
+   "page": "text.html",
+   "id": "q16.0"
+  },
+  "17": {
+   "title": "Tables",
+   "page": "tables.html",
+   "id": "q17.0"
+  },
+  "18": {
+   "title": "User interface",
+   "page": "ui.html",
+   "id": "q18.0"
+  },
+  "1.1": {
+   "title": "CSS 2.1 vs CSS 2",
+   "page": "about.html",
+   "id": "css2.1-v-css2"
+  },
+  "1.2": {
+   "title": "Reading the specification",
+   "page": "about.html",
+   "id": "reading"
+  },
+  "1.3": {
+   "title": "How the specification is organized",
+   "page": "about.html",
+   "id": "organization"
+  },
+  "1.4": {
+   "title": "Conventions",
+   "page": "about.html",
+   "id": "conventions"
+  },
+  "1.4.1": {
+   "title": "Document language elements and attributes",
+   "page": "about.html",
+   "id": "doc-language"
+  },
+  "1.4.2": {
+   "title": "CSS property definitions",
+   "page": "about.html",
+   "id": "property-defs"
+  },
+  "1.4.2.1": {
+   "title": "Value",
+   "page": "about.html",
+   "id": "value-defs"
+  },
+  "1.4.2.2": {
+   "title": "Initial",
+   "page": "about.html",
+   "id": "initial-value"
+  },
+  "1.4.2.3": {
+   "title": "Applies to",
+   "page": "about.html",
+   "id": "applies-to"
+  },
+  "1.4.2.4": {
+   "title": "Inherited",
+   "page": "about.html",
+   "id": "inherited-prop"
+  },
+  "1.4.2.5": {
+   "title": "Percentage values",
+   "page": "about.html",
+   "id": "percentage-wrt"
+  },
+  "1.4.2.6": {
+   "title": "Media groups",
+   "page": "about.html",
+   "id": "media-applies"
+  },
+  "1.4.2.7": {
+   "title": "Computed value",
+   "page": "about.html",
+   "id": "computed-defs"
+  },
+  "1.4.3": {
+   "title": "Shorthand properties",
+   "page": "about.html",
+   "id": "shorthand"
+  },
+  "1.4.4": {
+   "title": "Notes and examples",
+   "page": "about.html",
+   "id": "notes-and-examples"
+  },
+  "1.4.5": {
+   "title": "Images and long descriptions",
+   "page": "about.html",
+   "id": "images-and-longdesc"
+  },
+  "1.5": {
+   "title": "Acknowledgments",
+   "page": "about.html",
+   "id": "acknowledgements"
+  },
+  "2.1": {
+   "title": "A brief CSS 2.1 tutorial for HTML",
+   "page": "intro.html",
+   "id": "html-tutorial"
+  },
+  "2.2": {
+   "title": "A brief CSS 2.1 tutorial for XML",
+   "page": "intro.html",
+   "id": "xml-tutorial"
+  },
+  "2.3": {
+   "title": "The CSS 2.1 processing model",
+   "page": "intro.html",
+   "id": "processing-model"
+  },
+  "2.3.1": {
+   "title": "The canvas",
+   "page": "intro.html",
+   "id": "the-canvas"
+  },
+  "2.3.2": {
+   "title": "CSS 2.1 addressing model",
+   "page": "intro.html",
+   "id": "addressing"
+  },
+  "2.4": {
+   "title": "CSS design principles",
+   "page": "intro.html",
+   "id": "design-principles"
+  },
+  "3.1": {
+   "title": "Definitions",
+   "page": "conform.html",
+   "id": "defs"
+  },
+  "3.2": {
+   "title": "UA Conformance",
+   "page": "conform.html",
+   "id": "conformance"
+  },
+  "3.3": {
+   "title": "Error conditions",
+   "page": "conform.html",
+   "id": "errors"
+  },
+  "3.4": {
+   "title": "The text/css content type",
+   "page": "conform.html",
+   "id": "text-css"
+  },
+  "4.1": {
+   "title": "Syntax",
+   "page": "syndata.html",
+   "id": "syntax"
+  },
+  "4.1.1": {
+   "title": "Tokenization",
+   "page": "syndata.html",
+   "id": "tokenization"
+  },
+  "4.1.2": {
+   "title": "Keywords",
+   "page": "syndata.html",
+   "id": "keywords"
+  },
+  "4.1.2.1": {
+   "title": "Vendor-specific extensions",
+   "page": "syndata.html",
+   "id": "vendor-keywords"
+  },
+  "4.1.2.2": {
+   "title": "Informative Historical Notes",
+   "page": "syndata.html",
+   "id": "vendor-keyword-history"
+  },
+  "4.1.3": {
+   "title": "Characters and case",
+   "page": "syndata.html",
+   "id": "characters"
+  },
+  "4.1.4": {
+   "title": "Statements",
+   "page": "syndata.html",
+   "id": "statements"
+  },
+  "4.1.5": {
+   "title": "At-rules",
+   "page": "syndata.html",
+   "id": "at-rules"
+  },
+  "4.1.6": {
+   "title": "Blocks",
+   "page": "syndata.html",
+   "id": "block"
+  },
+  "4.1.7": {
+   "title": "Rule sets, declaration blocks, and selectors",
+   "page": "syndata.html",
+   "id": "rule-sets"
+  },
+  "4.1.8": {
+   "title": "Declarations and properties",
+   "page": "syndata.html",
+   "id": "declaration"
+  },
+  "4.1.9": {
+   "title": "Comments",
+   "page": "syndata.html",
+   "id": "comments"
+  },
+  "4.2": {
+   "title": "Rules for handling parsing errors",
+   "page": "syndata.html",
+   "id": "parsing-errors"
+  },
+  "4.3": {
+   "title": "Values",
+   "page": "syndata.html",
+   "id": "values"
+  },
+  "4.3.1": {
+   "title": "Integers and real numbers",
+   "page": "syndata.html",
+   "id": "numbers"
+  },
+  "4.3.2": {
+   "title": "Lengths",
+   "page": "syndata.html",
+   "id": "length-units"
+  },
+  "4.3.3": {
+   "title": "Percentages",
+   "page": "syndata.html",
+   "id": "percentage-units"
+  },
+  "4.3.4": {
+   "title": "URLs and URIs",
+   "page": "syndata.html",
+   "id": "uri"
+  },
+  "4.3.5": {
+   "title": "Counters",
+   "page": "syndata.html",
+   "id": "counter"
+  },
+  "4.3.6": {
+   "title": "Colors",
+   "page": "syndata.html",
+   "id": "color-units"
+  },
+  "4.3.7": {
+   "title": "Strings",
+   "page": "syndata.html",
+   "id": "strings"
+  },
+  "4.3.8": {
+   "title": "Unsupported Values",
+   "page": "syndata.html",
+   "id": "unsupported-values"
+  },
+  "4.4": {
+   "title": "CSS style sheet representation",
+   "page": "syndata.html",
+   "id": "charset"
+  },
+  "4.4.1": {
+   "title": "Referring to characters not represented in a character encoding",
+   "page": "syndata.html",
+   "id": "escaping"
+  },
+  "5.1": {
+   "title": "Pattern matching",
+   "page": "selector.html",
+   "id": "pattern-matching"
+  },
+  "5.2": {
+   "title": "Selector syntax",
+   "page": "selector.html",
+   "id": "selector-syntax"
+  },
+  "5.2.1": {
+   "title": "Grouping",
+   "page": "selector.html",
+   "id": "grouping"
+  },
+  "5.3": {
+   "title": "Universal selector",
+   "page": "selector.html",
+   "id": "universal-selector"
+  },
+  "5.4": {
+   "title": "Type selectors",
+   "page": "selector.html",
+   "id": "type-selectors"
+  },
+  "5.5": {
+   "title": "Descendant selectors",
+   "page": "selector.html",
+   "id": "descendant-selectors"
+  },
+  "5.6": {
+   "title": "Child selectors",
+   "page": "selector.html",
+   "id": "child-selectors"
+  },
+  "5.7": {
+   "title": "Adjacent sibling selectors",
+   "page": "selector.html",
+   "id": "adjacent-selectors"
+  },
+  "5.8": {
+   "title": "Attribute selectors",
+   "page": "selector.html",
+   "id": "attribute-selectors"
+  },
+  "5.8.1": {
+   "title": "Matching attributes and attribute values",
+   "page": "selector.html",
+   "id": "matching-attrs"
+  },
+  "5.8.2": {
+   "title": "Default attribute values in DTDs",
+   "page": "selector.html",
+   "id": "default-attrs"
+  },
+  "5.8.3": {
+   "title": "Class selectors",
+   "page": "selector.html",
+   "id": "class-html"
+  },
+  "5.9": {
+   "title": "ID selectors",
+   "page": "selector.html",
+   "id": "id-selectors"
+  },
+  "5.10": {
+   "title": "Pseudo-elements and pseudo-classes",
+   "page": "selector.html",
+   "id": "pseudo-elements"
+  },
+  "5.11": {
+   "title": "Pseudo-classes",
+   "page": "selector.html",
+   "id": "pseudo-class-selectors"
+  },
+  "5.11.1": {
+   "title": ":first-child pseudo-class",
+   "page": "selector.html",
+   "id": "first-child"
+  },
+  "5.11.2": {
+   "title": "The link pseudo-classes: :link and :visited",
+   "page": "selector.html",
+   "id": "link-pseudo-classes"
+  },
+  "5.11.3": {
+   "title": "The dynamic pseudo-classes: :hover , :active , and :focus",
+   "page": "selector.html",
+   "id": "dynamic-pseudo-classes"
+  },
+  "5.11.4": {
+   "title": "The language pseudo-class: :lang",
+   "page": "selector.html",
+   "id": "lang"
+  },
+  "5.12": {
+   "title": "Pseudo-elements",
+   "page": "selector.html",
+   "id": "pseudo-element-selectors"
+  },
+  "5.12.1": {
+   "title": "The :first-line pseudo-element",
+   "page": "selector.html",
+   "id": "first-line-pseudo"
+  },
+  "5.12.2": {
+   "title": "The :first-letter pseudo-element",
+   "page": "selector.html",
+   "id": "first-letter"
+  },
+  "5.12.3": {
+   "title": "The :before and :after pseudo-elements",
+   "page": "selector.html",
+   "id": "before-and-after"
+  },
+  "6.1": {
+   "title": "Specified, computed, and actual values",
+   "page": "cascade.html",
+   "id": "value-stages"
+  },
+  "6.1.1": {
+   "title": "Specified values",
+   "page": "cascade.html",
+   "id": "specified-value"
+  },
+  "6.1.2": {
+   "title": "Computed values",
+   "page": "cascade.html",
+   "id": "computed-value"
+  },
+  "6.1.3": {
+   "title": "Used values",
+   "page": "cascade.html",
+   "id": "used-value"
+  },
+  "6.1.4": {
+   "title": "Actual values",
+   "page": "cascade.html",
+   "id": "actual-value"
+  },
+  "6.2": {
+   "title": "Inheritance",
+   "page": "cascade.html",
+   "id": "inheritance"
+  },
+  "6.2.1": {
+   "title": "The 'inherit' value",
+   "page": "cascade.html",
+   "id": "value-def-inherit"
+  },
+  "6.3": {
+   "title": "The @import rule",
+   "page": "cascade.html",
+   "id": "at-import"
+  },
+  "6.4": {
+   "title": "The cascade",
+   "page": "cascade.html",
+   "id": "cascade"
+  },
+  "6.4.1": {
+   "title": "Cascading order",
+   "page": "cascade.html",
+   "id": "cascading-order"
+  },
+  "6.4.2": {
+   "title": "!important rules",
+   "page": "cascade.html",
+   "id": "important-rules"
+  },
+  "6.4.3": {
+   "title": "Calculating a selector's specificity",
+   "page": "cascade.html",
+   "id": "specificity"
+  },
+  "6.4.4": {
+   "title": "Precedence of non-CSS presentational hints",
+   "page": "cascade.html",
+   "id": "preshint"
+  },
+  "7.1": {
+   "title": "Introduction to media types",
+   "page": "media.html",
+   "id": "media-intro"
+  },
+  "7.2": {
+   "title": "Specifying media-dependent style sheets",
+   "page": "media.html",
+   "id": "media-sheets"
+  },
+  "7.2.1": {
+   "title": "The @media rule",
+   "page": "media.html",
+   "id": "at-media-rule"
+  },
+  "7.3": {
+   "title": "Recognized media types",
+   "page": "media.html",
+   "id": "media-types"
+  },
+  "7.3.1": {
+   "title": "Media groups",
+   "page": "media.html",
+   "id": "media-groups"
+  },
+  "8.1": {
+   "title": "Box dimensions",
+   "page": "box.html",
+   "id": "box-dimensions"
+  },
+  "8.2": {
+   "title": "Example of margins, padding, and borders",
+   "page": "box.html",
+   "id": "mpb-examples"
+  },
+  "8.3": {
+   "title": "Margin properties: 'margin-top' , 'margin-right' , 'margin-bottom' , 'margin-left' , and 'margin'",
+   "page": "box.html",
+   "id": "margin-properties"
+  },
+  "8.3.1": {
+   "title": "Collapsing margins",
+   "page": "box.html",
+   "id": "collapsing-margins"
+  },
+  "8.4": {
+   "title": "Padding properties: 'padding-top' , 'padding-right' , 'padding-bottom' , 'padding-left' , and 'padding'",
+   "page": "box.html",
+   "id": "padding-properties"
+  },
+  "8.5": {
+   "title": "Border properties",
+   "page": "box.html",
+   "id": "border-properties"
+  },
+  "8.5.1": {
+   "title": "Border width: 'border-top-width' , 'border-right-width' , 'border-bottom-width' , 'border-left-width' , and 'border-width'",
+   "page": "box.html",
+   "id": "border-width-properties"
+  },
+  "8.5.2": {
+   "title": "Border color: 'border-top-color' , 'border-right-color' , 'border-bottom-color' , 'border-left-color' , and 'border-color'",
+   "page": "box.html",
+   "id": "border-color-properties"
+  },
+  "8.5.3": {
+   "title": "Border style: 'border-top-style' , 'border-right-style' , 'border-bottom-style' , 'border-left-style' , and 'border-style'",
+   "page": "box.html",
+   "id": "border-style-properties"
+  },
+  "8.5.4": {
+   "title": "Border shorthand properties: 'border-top' , 'border-right' , 'border-bottom' , 'border-left' , and 'border'",
+   "page": "box.html",
+   "id": "border-shorthand-properties"
+  },
+  "8.6": {
+   "title": "The box model for inline elements in bidirectional context",
+   "page": "box.html",
+   "id": "bidi-box-model"
+  },
+  "9.1": {
+   "title": "Introduction to the visual formatting model",
+   "page": "visuren.html",
+   "id": "visual-model-intro"
+  },
+  "9.1.1": {
+   "title": "The viewport",
+   "page": "visuren.html",
+   "id": "viewport"
+  },
+  "9.1.2": {
+   "title": "Containing blocks",
+   "page": "visuren.html",
+   "id": "containing-block"
+  },
+  "9.2": {
+   "title": "Controlling box generation",
+   "page": "visuren.html",
+   "id": "box-gen"
+  },
+  "9.2.1": {
+   "title": "Block-level elements and block boxes",
+   "page": "visuren.html",
+   "id": "block-boxes"
+  },
+  "9.2.1.1": {
+   "title": "Anonymous block boxes",
+   "page": "visuren.html",
+   "id": "anonymous-block-level"
+  },
+  "9.2.2": {
+   "title": "Inline-level elements and inline boxes",
+   "page": "visuren.html",
+   "id": "inline-boxes"
+  },
+  "9.2.2.1": {
+   "title": "Anonymous inline boxes",
+   "page": "visuren.html",
+   "id": "anonymous"
+  },
+  "9.2.3": {
+   "title": "Run-in boxes",
+   "page": "visuren.html",
+   "id": "run-in"
+  },
+  "9.2.4": {
+   "title": "The 'display' property",
+   "page": "visuren.html",
+   "id": "display-prop"
+  },
+  "9.3": {
+   "title": "Positioning schemes",
+   "page": "visuren.html",
+   "id": "positioning-scheme"
+  },
+  "9.3.1": {
+   "title": "Choosing a positioning scheme: 'position' property",
+   "page": "visuren.html",
+   "id": "choose-position"
+  },
+  "9.3.2": {
+   "title": "Box offsets: 'top' , 'right' , 'bottom' , 'left'",
+   "page": "visuren.html",
+   "id": "position-props"
+  },
+  "9.4": {
+   "title": "Normal flow",
+   "page": "visuren.html",
+   "id": "normal-flow"
+  },
+  "9.4.1": {
+   "title": "Block formatting contexts",
+   "page": "visuren.html",
+   "id": "block-formatting"
+  },
+  "9.4.2": {
+   "title": "Inline formatting contexts",
+   "page": "visuren.html",
+   "id": "inline-formatting"
+  },
+  "9.4.3": {
+   "title": "Relative positioning",
+   "page": "visuren.html",
+   "id": "relative-positioning"
+  },
+  "9.5": {
+   "title": "Floats",
+   "page": "visuren.html",
+   "id": "floats"
+  },
+  "9.5.1": {
+   "title": "Positioning the float: the 'float' property",
+   "page": "visuren.html",
+   "id": "float-position"
+  },
+  "9.5.2": {
+   "title": "Controlling flow next to floats: the 'clear' property",
+   "page": "visuren.html",
+   "id": "flow-control"
+  },
+  "9.6": {
+   "title": "Absolute positioning",
+   "page": "visuren.html",
+   "id": "absolute-positioning"
+  },
+  "9.6.1": {
+   "title": "Fixed positioning",
+   "page": "visuren.html",
+   "id": "fixed-positioning"
+  },
+  "9.7": {
+   "title": "Relationships between 'display', 'position', and 'float'",
+   "page": "visuren.html",
+   "id": "dis-pos-flo"
+  },
+  "9.8": {
+   "title": "Comparison of normal flow, floats, and absolute positioning",
+   "page": "visuren.html",
+   "id": "comparison"
+  },
+  "9.8.1": {
+   "title": "Normal flow",
+   "page": "visuren.html",
+   "id": "comp-normal-flow"
+  },
+  "9.8.2": {
+   "title": "Relative positioning",
+   "page": "visuren.html",
+   "id": "comp-relpos"
+  },
+  "9.8.3": {
+   "title": "Floating a box",
+   "page": "visuren.html",
+   "id": "comp-float"
+  },
+  "9.8.4": {
+   "title": "Absolute positioning",
+   "page": "visuren.html",
+   "id": "comp-abspos"
+  },
+  "9.9": {
+   "title": "Layered presentation",
+   "page": "visuren.html",
+   "id": "layers"
+  },
+  "9.9.1": {
+   "title": "Specifying the stack level: the 'z-index' property",
+   "page": "visuren.html",
+   "id": "z-index"
+  },
+  "9.10": {
+   "title": "Text direction: the 'direction' and 'unicode-bidi' properties",
+   "page": "visuren.html",
+   "id": "direction"
+  },
+  "10.1": {
+   "title": "Definition of \"containing block\"",
+   "page": "visudet.html",
+   "id": "containing-block-details"
+  },
+  "10.2": {
+   "title": "Content width: the 'width' property",
+   "page": "visudet.html",
+   "id": "the-width-property"
+  },
+  "10.3": {
+   "title": "Calculating widths and margins",
+   "page": "visudet.html",
+   "id": "Computing_widths_and_margins"
+  },
+  "10.3.1": {
+   "title": "Inline, non-replaced elements",
+   "page": "visudet.html",
+   "id": "inline-width"
+  },
+  "10.3.2": {
+   "title": "Inline, replaced elements",
+   "page": "visudet.html",
+   "id": "inline-replaced-width"
+  },
+  "10.3.3": {
+   "title": "Block-level, non-replaced elements in normal flow",
+   "page": "visudet.html",
+   "id": "blockwidth"
+  },
+  "10.3.4": {
+   "title": "Block-level, replaced elements in normal flow",
+   "page": "visudet.html",
+   "id": "block-replaced-width"
+  },
+  "10.3.5": {
+   "title": "Floating, non-replaced elements",
+   "page": "visudet.html",
+   "id": "float-width"
+  },
+  "10.3.6": {
+   "title": "Floating, replaced elements",
+   "page": "visudet.html",
+   "id": "float-replaced-width"
+  },
+  "10.3.7": {
+   "title": "Absolutely positioned, non-replaced elements",
+   "page": "visudet.html",
+   "id": "abs-non-replaced-width"
+  },
+  "10.3.8": {
+   "title": "Absolutely positioned, replaced elements",
+   "page": "visudet.html",
+   "id": "abs-replaced-width"
+  },
+  "10.3.9": {
+   "title": "'Inline-block', non-replaced elements in normal flow",
+   "page": "visudet.html",
+   "id": "inlineblock-width"
+  },
+  "10.3.10": {
+   "title": "'Inline-block', replaced elements in normal flow",
+   "page": "visudet.html",
+   "id": "inlineblock-replaced-width"
+  },
+  "10.4": {
+   "title": "Minimum and maximum widths: 'min-width' and 'max-width'",
+   "page": "visudet.html",
+   "id": "min-max-widths"
+  },
+  "10.5": {
+   "title": "Content height: the 'height' property",
+   "page": "visudet.html",
+   "id": "the-height-property"
+  },
+  "10.6": {
+   "title": "Calculating heights and margins",
+   "page": "visudet.html",
+   "id": "Computing_heights_and_margins"
+  },
+  "10.6.1": {
+   "title": "Inline, non-replaced elements",
+   "page": "visudet.html",
+   "id": "inline-non-replaced"
+  },
+  "10.6.2": {
+   "title": "Inline replaced elements, block-level replaced elements in normal flow, 'inline-block' replaced elements in normal flow and floating replaced elements",
+   "page": "visudet.html",
+   "id": "inline-replaced-height"
+  },
+  "10.6.3": {
+   "title": "Block-level non-replaced elements in normal flow when 'overflow' computes to 'visible'",
+   "page": "visudet.html",
+   "id": "normal-block"
+  },
+  "10.6.4": {
+   "title": "Absolutely positioned, non-replaced elements",
+   "page": "visudet.html",
+   "id": "abs-non-replaced-height"
+  },
+  "10.6.5": {
+   "title": "Absolutely positioned, replaced elements",
+   "page": "visudet.html",
+   "id": "abs-replaced-height"
+  },
+  "10.6.6": {
+   "title": "Complicated cases",
+   "page": "visudet.html",
+   "id": "block-root-margin"
+  },
+  "10.6.7": {
+   "title": "'Auto' heights for block formatting context roots",
+   "page": "visudet.html",
+   "id": "root-height"
+  },
+  "10.7": {
+   "title": "Minimum and maximum heights: 'min-height' and 'max-height'",
+   "page": "visudet.html",
+   "id": "min-max-heights"
+  },
+  "10.8": {
+   "title": "Line height calculations: the 'line-height' and 'vertical-align' properties",
+   "page": "visudet.html",
+   "id": "line-height"
+  },
+  "10.8.1": {
+   "title": "Leading and half-leading",
+   "page": "visudet.html",
+   "id": "leading"
+  },
+  "11.1": {
+   "title": "Overflow and clipping",
+   "page": "visufx.html",
+   "id": "overflow-clipping"
+  },
+  "11.1.1": {
+   "title": "Overflow: the 'overflow' property",
+   "page": "visufx.html",
+   "id": "overflow"
+  },
+  "11.1.2": {
+   "title": "Clipping: the 'clip' property",
+   "page": "visufx.html",
+   "id": "clipping"
+  },
+  "11.2": {
+   "title": "Visibility: the 'visibility' property",
+   "page": "visufx.html",
+   "id": "visibility"
+  },
+  "12.1": {
+   "title": "The :before and :after pseudo-elements",
+   "page": "generate.html",
+   "id": "before-after-content"
+  },
+  "12.2": {
+   "title": "The 'content' property",
+   "page": "generate.html",
+   "id": "content"
+  },
+  "12.3": {
+   "title": "Quotation marks",
+   "page": "generate.html",
+   "id": "quotes"
+  },
+  "12.3.1": {
+   "title": "Specifying quotes with the 'quotes' property",
+   "page": "generate.html",
+   "id": "quotes-specify"
+  },
+  "12.3.2": {
+   "title": "Inserting quotes with the 'content' property",
+   "page": "generate.html",
+   "id": "quotes-insert"
+  },
+  "12.4": {
+   "title": "Automatic counters and numbering",
+   "page": "generate.html",
+   "id": "counters"
+  },
+  "12.4.1": {
+   "title": "Nested counters and scope",
+   "page": "generate.html",
+   "id": "scope"
+  },
+  "12.4.2": {
+   "title": "Counter styles",
+   "page": "generate.html",
+   "id": "counter-styles"
+  },
+  "12.4.3": {
+   "title": "Counters in elements with 'display: none'",
+   "page": "generate.html",
+   "id": "undisplayed-counters"
+  },
+  "12.5": {
+   "title": "Lists",
+   "page": "generate.html",
+   "id": "lists"
+  },
+  "12.5.1": {
+   "title": "Lists: the 'list-style-type' , 'list-style-image' , 'list-style-position' , and 'list-style' properties",
+   "page": "generate.html",
+   "id": "list-style"
+  },
+  "13.1": {
+   "title": "Introduction to paged media",
+   "page": "page.html",
+   "id": "page-intro"
+  },
+  "13.2": {
+   "title": "Page boxes: the @page rule",
+   "page": "page.html",
+   "id": "page-box"
+  },
+  "13.2.1": {
+   "title": "Page margins",
+   "page": "page.html",
+   "id": "page-margins"
+  },
+  "13.2.2": {
+   "title": "Page selectors: selecting left, right, and first pages",
+   "page": "page.html",
+   "id": "page-selectors"
+  },
+  "13.2.3": {
+   "title": "Content outside the page box",
+   "page": "page.html",
+   "id": "outside-page-box"
+  },
+  "13.3": {
+   "title": "Page breaks",
+   "page": "page.html",
+   "id": "page-breaks"
+  },
+  "13.3.1": {
+   "title": "Page break properties: 'page-break-before' , 'page-break-after' , 'page-break-inside'",
+   "page": "page.html",
+   "id": "page-break-props"
+  },
+  "13.3.2": {
+   "title": "Breaks inside elements: 'orphans' , 'widows'",
+   "page": "page.html",
+   "id": "break-inside"
+  },
+  "13.3.3": {
+   "title": "Allowed page breaks",
+   "page": "page.html",
+   "id": "allowed-page-breaks"
+  },
+  "13.3.4": {
+   "title": "Forced page breaks",
+   "page": "page.html",
+   "id": "forced"
+  },
+  "13.3.5": {
+   "title": "\"Best\" page breaks",
+   "page": "page.html",
+   "id": "best-page-breaks"
+  },
+  "13.4": {
+   "title": "Cascading in the page context",
+   "page": "page.html",
+   "id": "page-cascade"
+  },
+  "14.1": {
+   "title": "Foreground color: the 'color' property",
+   "page": "colors.html",
+   "id": "colors"
+  },
+  "14.2": {
+   "title": "The background",
+   "page": "colors.html",
+   "id": "background"
+  },
+  "14.2.1": {
+   "title": "Background properties: 'background-color' , 'background-image' , 'background-repeat' , 'background-attachment' , 'background-position' , and 'background'",
+   "page": "colors.html",
+   "id": "background-properties"
+  },
+  "15.1": {
+   "title": "Introduction",
+   "page": "fonts.html",
+   "id": "fonts-intro"
+  },
+  "15.2": {
+   "title": "Font matching algorithm",
+   "page": "fonts.html",
+   "id": "algorithm"
+  },
+  "15.3": {
+   "title": "Font family: the 'font-family' property",
+   "page": "fonts.html",
+   "id": "font-family-prop"
+  },
+  "15.3.1": {
+   "title": "Generic font families",
+   "page": "fonts.html",
+   "id": "generic-font-families"
+  },
+  "15.3.1.1": {
+   "title": "serif",
+   "page": "fonts.html",
+   "id": "serif-def"
+  },
+  "15.3.1.2": {
+   "title": "sans-serif",
+   "page": "fonts.html",
+   "id": "sans-serif-def"
+  },
+  "15.3.1.3": {
+   "title": "cursive",
+   "page": "fonts.html",
+   "id": "cursive-def"
+  },
+  "15.3.1.4": {
+   "title": "fantasy",
+   "page": "fonts.html",
+   "id": "fantasy-def"
+  },
+  "15.3.1.5": {
+   "title": "monospace",
+   "page": "fonts.html",
+   "id": "monospace-def"
+  },
+  "15.4": {
+   "title": "Font styling: the 'font-style' property",
+   "page": "fonts.html",
+   "id": "font-styling"
+  },
+  "15.5": {
+   "title": "Small-caps: the 'font-variant' property",
+   "page": "fonts.html",
+   "id": "small-caps"
+  },
+  "15.6": {
+   "title": "Font boldness: the 'font-weight' property",
+   "page": "fonts.html",
+   "id": "font-boldness"
+  },
+  "15.7": {
+   "title": "Font size: the 'font-size' property",
+   "page": "fonts.html",
+   "id": "font-size-props"
+  },
+  "15.8": {
+   "title": "Shorthand font property: the 'font' property",
+   "page": "fonts.html",
+   "id": "font-shorthand"
+  },
+  "16.1": {
+   "title": "Indentation: the 'text-indent' property",
+   "page": "text.html",
+   "id": "indentation-prop"
+  },
+  "16.2": {
+   "title": "Alignment: the 'text-align' property",
+   "page": "text.html",
+   "id": "alignment-prop"
+  },
+  "16.3": {
+   "title": "Decoration",
+   "page": "text.html",
+   "id": "decoration"
+  },
+  "16.3.1": {
+   "title": "Underlining, overlining, striking, and blinking: the 'text-decoration' property",
+   "page": "text.html",
+   "id": "lining-striking-props"
+  },
+  "16.4": {
+   "title": "Letter and word spacing: the 'letter-spacing' and 'word-spacing' properties",
+   "page": "text.html",
+   "id": "spacing-props"
+  },
+  "16.5": {
+   "title": "Capitalization: the 'text-transform' property",
+   "page": "text.html",
+   "id": "caps-prop"
+  },
+  "16.6": {
+   "title": "White space: the 'white-space' property",
+   "page": "text.html",
+   "id": "white-space-prop"
+  },
+  "16.6.1": {
+   "title": "The 'white-space' processing model",
+   "page": "text.html",
+   "id": "white-space-model"
+  },
+  "16.6.2": {
+   "title": "Example of bidirectionality with white space collapsing",
+   "page": "text.html",
+   "id": "egbidiwscollapse"
+  },
+  "16.6.3": {
+   "title": "Control and combining characters' details",
+   "page": "text.html",
+   "id": "ctrlchars"
+  },
+  "17.1": {
+   "title": "Introduction to tables",
+   "page": "tables.html",
+   "id": "tables-intro"
+  },
+  "17.2": {
+   "title": "The CSS table model",
+   "page": "tables.html",
+   "id": "table-display"
+  },
+  "17.2.1": {
+   "title": "Anonymous table objects",
+   "page": "tables.html",
+   "id": "anonymous-boxes"
+  },
+  "17.3": {
+   "title": "Columns",
+   "page": "tables.html",
+   "id": "columns"
+  },
+  "17.4": {
+   "title": "Tables in the visual formatting model",
+   "page": "tables.html",
+   "id": "model"
+  },
+  "17.4.1": {
+   "title": "Caption position and alignment",
+   "page": "tables.html",
+   "id": "caption-position"
+  },
+  "17.5": {
+   "title": "Visual layout of table contents",
+   "page": "tables.html",
+   "id": "table-layout"
+  },
+  "17.5.1": {
+   "title": "Table layers and transparency",
+   "page": "tables.html",
+   "id": "table-layers"
+  },
+  "17.5.2": {
+   "title": "Table width algorithms: the 'table-layout' property",
+   "page": "tables.html",
+   "id": "width-layout"
+  },
+  "17.5.2.1": {
+   "title": "Fixed table layout",
+   "page": "tables.html",
+   "id": "fixed-table-layout"
+  },
+  "17.5.2.2": {
+   "title": "Automatic table layout",
+   "page": "tables.html",
+   "id": "auto-table-layout"
+  },
+  "17.5.3": {
+   "title": "Table height algorithms",
+   "page": "tables.html",
+   "id": "height-layout"
+  },
+  "17.5.4": {
+   "title": "Horizontal alignment in a column",
+   "page": "tables.html",
+   "id": "column-alignment"
+  },
+  "17.5.5": {
+   "title": "Dynamic row and column effects",
+   "page": "tables.html",
+   "id": "dynamic-effects"
+  },
+  "17.6": {
+   "title": "Borders",
+   "page": "tables.html",
+   "id": "borders"
+  },
+  "17.6.1": {
+   "title": "The separated borders model",
+   "page": "tables.html",
+   "id": "separated-borders"
+  },
+  "17.6.1.1": {
+   "title": "Borders and Backgrounds around empty cells: the 'empty-cells' property",
+   "page": "tables.html",
+   "id": "empty-cells"
+  },
+  "17.6.2": {
+   "title": "The collapsing border model",
+   "page": "tables.html",
+   "id": "collapsing-borders"
+  },
+  "17.6.2.1": {
+   "title": "Border conflict resolution",
+   "page": "tables.html",
+   "id": "border-conflict-resolution"
+  },
+  "17.6.3": {
+   "title": "Border styles",
+   "page": "tables.html",
+   "id": "table-border-styles"
+  },
+  "18.1": {
+   "title": "Cursors: the 'cursor' property",
+   "page": "ui.html",
+   "id": "cursor-props"
+  },
+  "18.2": {
+   "title": "System Colors",
+   "page": "ui.html",
+   "id": "system-colors"
+  },
+  "18.3": {
+   "title": "User preferences for fonts",
+   "page": "ui.html",
+   "id": "system-fonts"
+  },
+  "18.4": {
+   "title": "Dynamic outlines: the 'outline' property",
+   "page": "ui.html",
+   "id": "dynamic-outlines"
+  },
+  "18.4.1": {
+   "title": "Outlines and the focus",
+   "page": "ui.html",
+   "id": "outline-focus"
+  },
+  "18.5": {
+   "title": "Magnification",
+   "page": "ui.html",
+   "id": "magnification"
+  },
+  "A": {
+   "title": "Aural style sheets",
+   "page": "aural.html",
+   "id": "q19.0"
+  },
+  "A.1": {
+   "title": "The media types 'aural' and 'speech'",
+   "page": "aural.html",
+   "id": "aural-media-group"
+  },
+  "A.2": {
+   "title": "Introduction to aural style sheets",
+   "page": "aural.html",
+   "id": "aural-intro"
+  },
+  "A.2.1": {
+   "title": "Angles",
+   "page": "aural.html",
+   "id": "angles"
+  },
+  "A.2.2": {
+   "title": "Times",
+   "page": "aural.html",
+   "id": "times"
+  },
+  "A.2.3": {
+   "title": "Frequencies",
+   "page": "aural.html",
+   "id": "frequencies"
+  },
+  "A.3": {
+   "title": "Volume properties: 'volume'",
+   "page": "aural.html",
+   "id": "volume-props"
+  },
+  "A.4": {
+   "title": "Speaking properties: 'speak'",
+   "page": "aural.html",
+   "id": "speaking-props"
+  },
+  "A.5": {
+   "title": "Pause properties: 'pause-before' , 'pause-after' , and 'pause'",
+   "page": "aural.html",
+   "id": "pause-props"
+  },
+  "A.6": {
+   "title": "Cue properties: 'cue-before' , 'cue-after' , and 'cue'",
+   "page": "aural.html",
+   "id": "cue-props"
+  },
+  "A.7": {
+   "title": "Mixing properties: 'play-during'",
+   "page": "aural.html",
+   "id": "mixing-props"
+  },
+  "A.8": {
+   "title": "Spatial properties: 'azimuth' and 'elevation'",
+   "page": "aural.html",
+   "id": "spatial-props"
+  },
+  "A.9": {
+   "title": "Voice characteristic properties: 'speech-rate' , 'voice-family' , 'pitch' , 'pitch-range' , 'stress' , and 'richness'",
+   "page": "aural.html",
+   "id": "voice-char-props"
+  },
+  "A.10": {
+   "title": "Speech properties: 'speak-punctuation' and 'speak-numeral'",
+   "page": "aural.html",
+   "id": "speech-props"
+  },
+  "A.11": {
+   "title": "Audio rendering of tables",
+   "page": "aural.html",
+   "id": "aural-tables"
+  },
+  "A.11.1": {
+   "title": "Speaking headers: the 'speak-header' property",
+   "page": "aural.html",
+   "id": "speak-headers"
+  },
+  "A.12": {
+   "title": "Sample style sheet for HTML",
+   "page": "aural.html",
+   "id": "sample"
+  },
+  "A.13": {
+   "title": "Emacspeak",
+   "page": "aural.html",
+   "id": "Emacspeak"
+  },
+  "B": {
+   "title": "Bibliography",
+   "page": "refs.html",
+   "id": "q20.0"
+  },
+  "B.1": {
+   "title": "Normative references",
+   "page": "refs.html",
+   "id": "normative"
+  },
+  "B.2": {
+   "title": "Informative references",
+   "page": "refs.html",
+   "id": "informative"
+  },
+  "C": {
+   "title": "Changes",
+   "page": "changes.html",
+   "id": "q21.0"
+  },
+  "C.1": {
+   "title": "Additional property values",
+   "page": "changes.html",
+   "id": "new"
+  },
+  "C.1.1": {
+   "title": "Section 4.3.6 Colors",
+   "page": "changes.html",
+   "id": "q21.2"
+  },
+  "C.1.2": {
+   "title": "Section 9.2.4 The 'display' property",
+   "page": "changes.html",
+   "id": "q21.3"
+  },
+  "C.1.3": {
+   "title": "Section 12.2 The 'content' property",
+   "page": "changes.html",
+   "id": "q21.4"
+  },
+  "C.1.4": {
+   "title": "Section 16.6 White space: the 'white-space' property",
+   "page": "changes.html",
+   "id": "q21.5"
+  },
+  "C.1.5": {
+   "title": "Section 18.1 Cursors: the 'cursor' property",
+   "page": "changes.html",
+   "id": "q21.6"
+  },
+  "C.2": {
+   "title": "Changes",
+   "page": "changes.html",
+   "id": "changes"
+  },
+  "C.2.1": {
+   "title": "Section 1.1 CSS 2.1 vs CSS 2",
+   "page": "changes.html",
+   "id": "q21.8"
+  },
+  "C.2.2": {
+   "title": "Section 1.2 Reading the specification",
+   "page": "changes.html",
+   "id": "q21.9"
+  },
+  "C.2.3": {
+   "title": "Section 1.3 How the specification is organized",
+   "page": "changes.html",
+   "id": "q21.10"
+  },
+  "C.2.4": {
+   "title": "Section 1.4.2.1 Value",
+   "page": "changes.html",
+   "id": "q21.11"
+  },
+  "C.2.5": {
+   "title": "Section 1.4.2.6 Media groups",
+   "page": "changes.html",
+   "id": "q21.12"
+  },
+  "C.2.6": {
+   "title": "Section 1.4.2.7 Computed value",
+   "page": "changes.html",
+   "id": "q21.13"
+  },
+  "C.2.7": {
+   "title": "Section 1.4.4 Notes and examples",
+   "page": "changes.html",
+   "id": "q21.14"
+  },
+  "C.2.8": {
+   "title": "Section 1.5 Acknowledgments",
+   "page": "changes.html",
+   "id": "q21.15"
+  },
+  "C.2.9": {
+   "title": "Section 3.2 Conformance",
+   "page": "changes.html",
+   "id": "q21.16"
+  },
+  "C.2.10": {
+   "title": "Section 3.3 Error Conditions",
+   "page": "changes.html",
+   "id": "q21.17"
+  },
+  "C.2.11": {
+   "title": "Section 4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.18"
+  },
+  "C.2.12": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.19"
+  },
+  "C.2.13": {
+   "title": "Section 4.2 Rules for handling parsing errors",
+   "page": "changes.html",
+   "id": "q21.20"
+  },
+  "C.2.14": {
+   "title": "Section 4.3 Values",
+   "page": "changes.html",
+   "id": "q21.21"
+  },
+  "C.2.15": {
+   "title": "Section 4.3.2 Lengths",
+   "page": "changes.html",
+   "id": "q21.22"
+  },
+  "C.2.16": {
+   "title": "Section 4.3.4 URLs and URIs",
+   "page": "changes.html",
+   "id": "q21.23"
+  },
+  "C.2.17": {
+   "title": "Section 4.3.5 Counters",
+   "page": "changes.html",
+   "id": "q21.24"
+  },
+  "C.2.18": {
+   "title": "Section 4.3.6 Colors",
+   "page": "changes.html",
+   "id": "q21.25"
+  },
+  "C.2.19": {
+   "title": "Section 4.3.8 Unsupported Values",
+   "page": "changes.html",
+   "id": "q21.26"
+  },
+  "C.2.20": {
+   "title": "Section 4.4 CSS style sheet representation",
+   "page": "changes.html",
+   "id": "q21.27"
+  },
+  "C.2.21": {
+   "title": "Section 5.8.1 Matching attributes and attribute values",
+   "page": "changes.html",
+   "id": "q21.28"
+  },
+  "C.2.22": {
+   "title": "Section 5.8.3 Class selectors",
+   "page": "changes.html",
+   "id": "q21.29"
+  },
+  "C.2.23": {
+   "title": "Section 5.9 ID selectors",
+   "page": "changes.html",
+   "id": "q21.30"
+  },
+  "C.2.24": {
+   "title": "Section 5.10 Pseudo-elements and pseudo-classes",
+   "page": "changes.html",
+   "id": "q21.31"
+  },
+  "C.2.25": {
+   "title": "Section 5.11.2 The link pseudo-classes: :link and :visited",
+   "page": "changes.html",
+   "id": "q21.32"
+  },
+  "C.2.26": {
+   "title": "Section 5.11.4 The language pseudo-class: :lang",
+   "page": "changes.html",
+   "id": "q21.33"
+  },
+  "C.2.27": {
+   "title": "Section 5.12.1 The :first-line pseudo-element",
+   "page": "changes.html",
+   "id": "q21.34"
+  },
+  "C.2.28": {
+   "title": "Section 5.12.2 The :first-letter pseudo-element",
+   "page": "changes.html",
+   "id": "q21.35"
+  },
+  "C.2.29": {
+   "title": "Section 6.1 Specified, computed, and actual values",
+   "page": "changes.html",
+   "id": "q21.36"
+  },
+  "C.2.30": {
+   "title": "Section 6.4.1 Cascading order",
+   "page": "changes.html",
+   "id": "q21.37"
+  },
+  "C.2.31": {
+   "title": "Section 6.4.3 Calculating a selector's specificity",
+   "page": "changes.html",
+   "id": "q21.38"
+  },
+  "C.2.32": {
+   "title": "Section 6.4.4 Precedence of non-CSS presentational hints",
+   "page": "changes.html",
+   "id": "q21.39"
+  },
+  "C.2.33": {
+   "title": "Section 7.3 Recognized Media Types",
+   "page": "changes.html",
+   "id": "q21.40"
+  },
+  "C.2.34": {
+   "title": "Section 7.3.1 Media Groups",
+   "page": "changes.html",
+   "id": "q21.41"
+  },
+  "C.2.35": {
+   "title": "Section 8.3 Margin properties",
+   "page": "changes.html",
+   "id": "q21.42"
+  },
+  "C.2.36": {
+   "title": "Section 8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.43"
+  },
+  "C.2.37": {
+   "title": "Section 8.4 Padding properties",
+   "page": "changes.html",
+   "id": "q21.44"
+  },
+  "C.2.38": {
+   "title": "Section 8.5.2 Border color",
+   "page": "changes.html",
+   "id": "q21.45"
+  },
+  "C.2.39": {
+   "title": "Section 8.5.3 Border style",
+   "page": "changes.html",
+   "id": "q21.46"
+  },
+  "C.2.40": {
+   "title": "Section 8.6 The box model for inline elements in bidirectional context",
+   "page": "changes.html",
+   "id": "q21.47"
+  },
+  "C.2.41": {
+   "title": "Section 9.1.2 Containing blocks",
+   "page": "changes.html",
+   "id": "q21.48"
+  },
+  "C.2.42": {
+   "title": "Section 9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.49"
+  },
+  "C.2.43": {
+   "title": "Section 9.2.2.1 Anonymous inline boxes",
+   "page": "changes.html",
+   "id": "q21.50"
+  },
+  "C.2.44": {
+   "title": "Section 9.2.3 Run-in boxes",
+   "page": "changes.html",
+   "id": "q21.51"
+  },
+  "C.2.45": {
+   "title": "Section 9.2.4 The 'display' property",
+   "page": "changes.html",
+   "id": "q21.52"
+  },
+  "C.2.46": {
+   "title": "Section 9.3.1 Choosing a positioning scheme",
+   "page": "changes.html",
+   "id": "q21.53"
+  },
+  "C.2.47": {
+   "title": "Section 9.3.2 Box offsets",
+   "page": "changes.html",
+   "id": "q21.54"
+  },
+  "C.2.48": {
+   "title": "Section 9.4.1 Block formatting contexts",
+   "page": "changes.html",
+   "id": "q21.55"
+  },
+  "C.2.49": {
+   "title": "Section 9.4.2 Inline formatting context",
+   "page": "changes.html",
+   "id": "q21.56"
+  },
+  "C.2.50": {
+   "title": "Section 9.4.3 Relative positioning",
+   "page": "changes.html",
+   "id": "q21.57"
+  },
+  "C.2.51": {
+   "title": "Section 9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.58"
+  },
+  "C.2.52": {
+   "title": "Section 9.5.1 Positioning the float",
+   "page": "changes.html",
+   "id": "q21.59"
+  },
+  "C.2.53": {
+   "title": "Section 9.5.2 Controlling flow next to floats",
+   "page": "changes.html",
+   "id": "q21.60"
+  },
+  "C.2.54": {
+   "title": "Section 9.7 Relationships between 'display', 'position', and 'float'",
+   "page": "changes.html",
+   "id": "q21.61"
+  },
+  "C.2.55": {
+   "title": "Section 9.9 Layered presentation",
+   "page": "changes.html",
+   "id": "q21.62"
+  },
+  "C.2.56": {
+   "title": "Section 9.10 Text direction",
+   "page": "changes.html",
+   "id": "q21.63"
+  },
+  "C.2.57": {
+   "title": "Chapter 10 Visual formatting model details",
+   "page": "changes.html",
+   "id": "q21.64"
+  },
+  "C.2.58": {
+   "title": "Section 10.1 Definition of \"containing block\"",
+   "page": "changes.html",
+   "id": "q21.65"
+  },
+  "C.2.59": {
+   "title": "Section 10.2 Content width",
+   "page": "changes.html",
+   "id": "q21.66"
+  },
+  "C.2.60": {
+   "title": "Section 10.3 Calculating widths and margins",
+   "page": "changes.html",
+   "id": "q21.67"
+  },
+  "C.2.61": {
+   "title": "Section 10.3.2 Inline, replaced elements",
+   "page": "changes.html",
+   "id": "q21.68"
+  },
+  "C.2.62": {
+   "title": "Section 10.3.3 Block-level, non-replaced elements in normal flow",
+   "page": "changes.html",
+   "id": "q21.69"
+  },
+  "C.2.63": {
+   "title": "Section 10.3.4 Block-level, replaced elements in normal flow",
+   "page": "changes.html",
+   "id": "q21.70"
+  },
+  "C.2.64": {
+   "title": "Section 10.3.5 Floating, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.71"
+  },
+  "C.2.65": {
+   "title": "Section 10.3.6 Floating, replaced elements",
+   "page": "changes.html",
+   "id": "q21.72"
+  },
+  "C.2.66": {
+   "title": "Section 10.3.7 Absolutely positioned, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.73"
+  },
+  "C.2.67": {
+   "title": "Section 10.3.8 Absolutely positioned, replaced elements",
+   "page": "changes.html",
+   "id": "q21.74"
+  },
+  "C.2.68": {
+   "title": "Section 10.4 Minimum and maximum widths",
+   "page": "changes.html",
+   "id": "q21.75"
+  },
+  "C.2.69": {
+   "title": "Section 10.5 Content height",
+   "page": "changes.html",
+   "id": "q21.76"
+  },
+  "C.2.70": {
+   "title": "Section 10.6 Calculating heights and margins",
+   "page": "changes.html",
+   "id": "q21.77"
+  },
+  "C.2.71": {
+   "title": "Section 10.6.1 Inline, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.78"
+  },
+  "C.2.72": {
+   "title": "Section 10.6.2 Inline replaced elements, block-level replaced elements in normal flow, 'inline-block' replaced elements in normal flow and floating replaced elements",
+   "page": "changes.html",
+   "id": "q21.79"
+  },
+  "C.2.73": {
+   "title": "Section 10.6.3 Block-level non-replaced elements in normal flow when 'overflow' computes to 'visible'",
+   "page": "changes.html",
+   "id": "q21.80"
+  },
+  "C.2.74": {
+   "title": "Section 10.6.4 Absolutely positioned, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.81"
+  },
+  "C.2.75": {
+   "title": "Section 10.6.5 Absolutely positioned, replaced elements",
+   "page": "changes.html",
+   "id": "q21.82"
+  },
+  "C.2.76": {
+   "title": "Section 10.7 Minimum and maximum heights",
+   "page": "changes.html",
+   "id": "q21.83"
+  },
+  "C.2.77": {
+   "title": "Section 10.8 Line height calculations",
+   "page": "changes.html",
+   "id": "q21.84"
+  },
+  "C.2.78": {
+   "title": "Section 10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.85"
+  },
+  "C.2.79": {
+   "title": "Section 11.1 Overflow and clipping",
+   "page": "changes.html",
+   "id": "q21.86"
+  },
+  "C.2.80": {
+   "title": "Section 11.1.1 Overflow",
+   "page": "changes.html",
+   "id": "q21.87"
+  },
+  "C.2.81": {
+   "title": "Section 11.1.2 Clipping: the 'clip' property",
+   "page": "changes.html",
+   "id": "q21.88"
+  },
+  "C.2.82": {
+   "title": "Section 11.2 Visibility",
+   "page": "changes.html",
+   "id": "q21.89"
+  },
+  "C.2.83": {
+   "title": "Chapter 12 Generated content, automatic numbering, and lists",
+   "page": "changes.html",
+   "id": "q21.90"
+  },
+  "C.2.84": {
+   "title": "Section 12.1 The :before and :after pseudo-elements",
+   "page": "changes.html",
+   "id": "q21.91"
+  },
+  "C.2.85": {
+   "title": "Section 12.2 The 'content' property",
+   "page": "changes.html",
+   "id": "q21.92"
+  },
+  "C.2.86": {
+   "title": "Section 12.3.2 Inserting quotes with the 'content' property",
+   "page": "changes.html",
+   "id": "q21.93"
+  },
+  "C.2.87": {
+   "title": "Section 12.4 Automatic counters and numbering",
+   "page": "changes.html",
+   "id": "q21.94"
+  },
+  "C.2.88": {
+   "title": "Section 12.4.1 Nested counters and scope",
+   "page": "changes.html",
+   "id": "q21.95"
+  },
+  "C.2.89": {
+   "title": "Section 12.5 Lists",
+   "page": "changes.html",
+   "id": "q21.96"
+  },
+  "C.2.90": {
+   "title": "Section 12.5.1 Lists",
+   "page": "changes.html",
+   "id": "q21.97"
+  },
+  "C.2.91": {
+   "title": "Chapter 13 Paged media",
+   "page": "changes.html",
+   "id": "q21.98"
+  },
+  "C.2.92": {
+   "title": "Section 13.2.2 Page selectors",
+   "page": "changes.html",
+   "id": "q21.99"
+  },
+  "C.2.93": {
+   "title": "Section 13.3.1 Page break properties",
+   "page": "changes.html",
+   "id": "q21.100"
+  },
+  "C.2.94": {
+   "title": "Section 13.3.3 Allowed page breaks",
+   "page": "changes.html",
+   "id": "q21.101"
+  },
+  "C.2.95": {
+   "title": "Section 14.2.1 Background properties",
+   "page": "changes.html",
+   "id": "q21.102"
+  },
+  "C.2.96": {
+   "title": "Section 14.3 Gamma correction",
+   "page": "changes.html",
+   "id": "q21.103"
+  },
+  "C.2.97": {
+   "title": "Chapter 15 Fonts",
+   "page": "changes.html",
+   "id": "q21.104"
+  },
+  "C.2.98": {
+   "title": "Section 15.2 Font matching algorithm",
+   "page": "changes.html",
+   "id": "q21.105"
+  },
+  "C.2.99": {
+   "title": "Section 15.2.2 Font family",
+   "page": "changes.html",
+   "id": "q21.106"
+  },
+  "C.2.100": {
+   "title": "Section 15.5 Small-caps",
+   "page": "changes.html",
+   "id": "q21.107"
+  },
+  "C.2.101": {
+   "title": "Section 15.6 Font boldness",
+   "page": "changes.html",
+   "id": "q21.108"
+  },
+  "C.2.102": {
+   "title": "Section 15.7 Font size",
+   "page": "changes.html",
+   "id": "q21.109"
+  },
+  "C.2.103": {
+   "title": "Chapter 16 Text",
+   "page": "changes.html",
+   "id": "q21.110"
+  },
+  "C.2.104": {
+   "title": "Section 16.2 Alignment",
+   "page": "changes.html",
+   "id": "q21.111"
+  },
+  "C.2.105": {
+   "title": "Section 16.3.1 Underlining, over lining, striking, and blinking",
+   "page": "changes.html",
+   "id": "q21.112"
+  },
+  "C.2.106": {
+   "title": "Section 16.4 Letter and word spacing",
+   "page": "changes.html",
+   "id": "q21.113"
+  },
+  "C.2.107": {
+   "title": "Section 16.5 Capitalization",
+   "page": "changes.html",
+   "id": "q21.114"
+  },
+  "C.2.108": {
+   "title": "Section 16.6 White space",
+   "page": "changes.html",
+   "id": "q21.115"
+  },
+  "C.2.109": {
+   "title": "Chapter 17 Tables",
+   "page": "changes.html",
+   "id": "q21.116"
+  },
+  "C.2.110": {
+   "title": "Section 17.2 The CSS table model",
+   "page": "changes.html",
+   "id": "q21.117"
+  },
+  "C.2.111": {
+   "title": "Section 17.2.1 Anonymous table objects",
+   "page": "changes.html",
+   "id": "q21.118"
+  },
+  "C.2.112": {
+   "title": "Section 17.4 Tables in the visual formatting model",
+   "page": "changes.html",
+   "id": "q21.119"
+  },
+  "C.2.113": {
+   "title": "Section 17.4.1 Caption position and alignment",
+   "page": "changes.html",
+   "id": "q21.120"
+  },
+  "C.2.114": {
+   "title": "Section 17.5 Visual layout of table contents",
+   "page": "changes.html",
+   "id": "q21.121"
+  },
+  "C.2.115": {
+   "title": "Section 17.5.1 Table layers and transparency",
+   "page": "changes.html",
+   "id": "q21.122"
+  },
+  "C.2.116": {
+   "title": "Section 17.5.2.1 Fixed table layout",
+   "page": "changes.html",
+   "id": "q21.123"
+  },
+  "C.2.117": {
+   "title": "Section 17.5.2.2 Automatic table layout",
+   "page": "changes.html",
+   "id": "q21.124"
+  },
+  "C.2.118": {
+   "title": "Section 17.5.3 Table height algorithms",
+   "page": "changes.html",
+   "id": "q21.125"
+  },
+  "C.2.119": {
+   "title": "Section 17.5.4 Horizontal alignment in a column",
+   "page": "changes.html",
+   "id": "q21.126"
+  },
+  "C.2.120": {
+   "title": "Section 17.6 Borders",
+   "page": "changes.html",
+   "id": "q21.127"
+  },
+  "C.2.121": {
+   "title": "Section 17.6.1 The separated borders model",
+   "page": "changes.html",
+   "id": "q21.128"
+  },
+  "C.2.122": {
+   "title": "Section 17.6.1.1 Borders and Backgrounds around empty cells",
+   "page": "changes.html",
+   "id": "q21.129"
+  },
+  "C.2.123": {
+   "title": "Section 17.6.2 The collapsing border model",
+   "page": "changes.html",
+   "id": "q21.130"
+  },
+  "C.2.124": {
+   "title": "Section 17.6.2.1 Border conflict resolution",
+   "page": "changes.html",
+   "id": "q21.131"
+  },
+  "C.2.125": {
+   "title": "Section 18.1 Cursors: the 'cursor' property",
+   "page": "changes.html",
+   "id": "q21.132"
+  },
+  "C.2.126": {
+   "title": "Section 18.4 Dynamic outlines",
+   "page": "changes.html",
+   "id": "q21.133"
+  },
+  "C.2.127": {
+   "title": "Chapter 12 Generated content, automatic numbering, and lists",
+   "page": "changes.html",
+   "id": "q21.134"
+  },
+  "C.2.128": {
+   "title": "Appendix A. Aural style sheets",
+   "page": "changes.html",
+   "id": "q21.135"
+  },
+  "C.2.129": {
+   "title": "Appendix A Section 5 Pause properties",
+   "page": "changes.html",
+   "id": "q21.136"
+  },
+  "C.2.130": {
+   "title": "Appendix A Section 6 Cue properties",
+   "page": "changes.html",
+   "id": "q21.137"
+  },
+  "C.2.131": {
+   "title": "Appendix A Section 7 Mixing properties",
+   "page": "changes.html",
+   "id": "q21.138"
+  },
+  "C.2.132": {
+   "title": "Appendix B Bibliography",
+   "page": "changes.html",
+   "id": "q21.139"
+  },
+  "C.2.133": {
+   "title": "Other",
+   "page": "changes.html",
+   "id": "q21.140"
+  },
+  "C.3": {
+   "title": "Errors",
+   "page": "changes.html",
+   "id": "known-errors"
+  },
+  "C.3.1": {
+   "title": "Shorthand properties",
+   "page": "changes.html",
+   "id": "q21.142"
+  },
+  "C.3.2": {
+   "title": "Applies to",
+   "page": "changes.html",
+   "id": "q21.143"
+  },
+  "C.3.3": {
+   "title": "Section 4.1.1 (and G2)",
+   "page": "changes.html",
+   "id": "q21.144"
+  },
+  "C.3.4": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.145"
+  },
+  "C.3.5": {
+   "title": "Section 4.3 (Double sign problem)",
+   "page": "changes.html",
+   "id": "q21.146"
+  },
+  "C.3.6": {
+   "title": "Section 4.3.2 Lengths",
+   "page": "changes.html",
+   "id": "q21.147"
+  },
+  "C.3.7": {
+   "title": "Section 4.3.3 Percentages",
+   "page": "changes.html",
+   "id": "q21.148"
+  },
+  "C.3.8": {
+   "title": "Section 4.3.4 URLs and URIs",
+   "page": "changes.html",
+   "id": "q21.149"
+  },
+  "C.3.9": {
+   "title": "Section 4.3.5 Counters",
+   "page": "changes.html",
+   "id": "q21.150"
+  },
+  "C.3.10": {
+   "title": "Section 4.3.6 Colors",
+   "page": "changes.html",
+   "id": "q21.151"
+  },
+  "C.3.11": {
+   "title": "Section 4.3.7 Strings",
+   "page": "changes.html",
+   "id": "q21.152"
+  },
+  "C.3.12": {
+   "title": "Section 5.10 Pseudo-elements and pseudo-classes",
+   "page": "changes.html",
+   "id": "q21.153"
+  },
+  "C.3.13": {
+   "title": "Section 6.4 The cascade",
+   "page": "changes.html",
+   "id": "q21.154"
+  },
+  "C.3.14": {
+   "title": "Section 8.1 Box Dimensions",
+   "page": "changes.html",
+   "id": "q21.155"
+  },
+  "C.3.15": {
+   "title": "Section 8.2 Example of margins, padding, and borders",
+   "page": "changes.html",
+   "id": "q21.156"
+  },
+  "C.3.16": {
+   "title": "Section 8.5.4 Border shorthand properties",
+   "page": "changes.html",
+   "id": "q21.157"
+  },
+  "C.3.17": {
+   "title": "Section 9.2.1 Block-level elements and block boxes",
+   "page": "changes.html",
+   "id": "q21.158"
+  },
+  "C.3.18": {
+   "title": "Section 9.3.1 Choosing a positioning scheme",
+   "page": "changes.html",
+   "id": "q21.159"
+  },
+  "C.3.19": {
+   "title": "Section 9.3.2 Box offsets",
+   "page": "changes.html",
+   "id": "q21.160"
+  },
+  "C.3.20": {
+   "title": "Section 9.4.1 Block formatting contexts",
+   "page": "changes.html",
+   "id": "q21.161"
+  },
+  "C.3.21": {
+   "title": "Section 9.4.2 Inline formatting context",
+   "page": "changes.html",
+   "id": "q21.162"
+  },
+  "C.3.22": {
+   "title": "Section 9.4.3 Relative positioning",
+   "page": "changes.html",
+   "id": "q21.163"
+  },
+  "C.3.23": {
+   "title": "Section 9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.164"
+  },
+  "C.3.24": {
+   "title": "Section 9.5.1 Positioning the float",
+   "page": "changes.html",
+   "id": "q21.165"
+  },
+  "C.3.25": {
+   "title": "Section 9.5.2 Controlling flow next to floats",
+   "page": "changes.html",
+   "id": "q21.166"
+  },
+  "C.3.26": {
+   "title": "Section 9.6 Absolute positioning",
+   "page": "changes.html",
+   "id": "q21.167"
+  },
+  "C.3.27": {
+   "title": "Section 9.7 Relationships between 'display', 'position', and 'float'",
+   "page": "changes.html",
+   "id": "q21.168"
+  },
+  "C.3.28": {
+   "title": "Section 9.10 Text direction",
+   "page": "changes.html",
+   "id": "q21.169"
+  },
+  "C.3.29": {
+   "title": "Section 10.1 Definition of \"containing block\"",
+   "page": "changes.html",
+   "id": "q21.170"
+  },
+  "C.3.30": {
+   "title": "Section 10.3.3 Block-level, non-replaced elements in normal flow",
+   "page": "changes.html",
+   "id": "q21.171"
+  },
+  "C.3.31": {
+   "title": "Section 10.4 Minimum and maximum widths",
+   "page": "changes.html",
+   "id": "q21.172"
+  },
+  "C.3.32": {
+   "title": "Section 10.6.3 Block-level non-replaced elements in normal flow when 'overflow' computes to 'visible'",
+   "page": "changes.html",
+   "id": "q21.173"
+  },
+  "C.3.33": {
+   "title": "Section 10.7 Minimum and maximum heights",
+   "page": "changes.html",
+   "id": "q21.174"
+  },
+  "C.3.34": {
+   "title": "Section 11.1.1 Overflow",
+   "page": "changes.html",
+   "id": "q21.175"
+  },
+  "C.3.35": {
+   "title": "Section 11.1.2 Clipping: the 'clip' property",
+   "page": "changes.html",
+   "id": "q21.176"
+  },
+  "C.3.36": {
+   "title": "Section 11.2 Visibility",
+   "page": "changes.html",
+   "id": "q21.177"
+  },
+  "C.3.37": {
+   "title": "Section 12.4.2 Counter styles",
+   "page": "changes.html",
+   "id": "q21.178"
+  },
+  "C.3.38": {
+   "title": "Section 12.6.2 Lists",
+   "page": "changes.html",
+   "id": "q21.179"
+  },
+  "C.3.39": {
+   "title": "Section 14.2 The background",
+   "page": "changes.html",
+   "id": "q21.180"
+  },
+  "C.3.40": {
+   "title": "Section 14.2.1 Background properties",
+   "page": "changes.html",
+   "id": "q21.181"
+  },
+  "C.3.41": {
+   "title": "Section 15.2 Font matching algorithm",
+   "page": "changes.html",
+   "id": "q21.182"
+  },
+  "C.3.42": {
+   "title": "Section 15.7 Font size",
+   "page": "changes.html",
+   "id": "q21.183"
+  },
+  "C.3.43": {
+   "title": "Section 16.1 Indentation",
+   "page": "changes.html",
+   "id": "q21.184"
+  },
+  "C.3.44": {
+   "title": "Section 16.2 Alignment",
+   "page": "changes.html",
+   "id": "q21.185"
+  },
+  "C.3.45": {
+   "title": "Section 17.2 The CSS table model",
+   "page": "changes.html",
+   "id": "q21.186"
+  },
+  "C.3.46": {
+   "title": "Section 17.2.1 Anonymous table objects",
+   "page": "changes.html",
+   "id": "q21.187"
+  },
+  "C.3.47": {
+   "title": "Section 17.4 Tables in the visual formatting model",
+   "page": "changes.html",
+   "id": "q21.188"
+  },
+  "C.3.48": {
+   "title": "Section 17.5 Visual layout of table contents",
+   "page": "changes.html",
+   "id": "q21.189"
+  },
+  "C.3.49": {
+   "title": "Section 17.5.1 Table layers and transparency",
+   "page": "changes.html",
+   "id": "q21.190"
+  },
+  "C.3.50": {
+   "title": "Section 17.6.1 The separated borders model",
+   "page": "changes.html",
+   "id": "q21.191"
+  },
+  "C.3.51": {
+   "title": "Section 18.2 System Colors",
+   "page": "changes.html",
+   "id": "q21.192"
+  },
+  "C.3.52": {
+   "title": "Section E.2 Painting order",
+   "page": "changes.html",
+   "id": "q21.193"
+  },
+  "C.4": {
+   "title": "Clarifications",
+   "page": "changes.html",
+   "id": "clarifications"
+  },
+  "C.4.1": {
+   "title": "Section 2.1 A brief CSS 2.1 tutorial for HTML",
+   "page": "changes.html",
+   "id": "q21.195"
+  },
+  "C.4.2": {
+   "title": "Section 2.2 A brief CSS 2.1 tutorial for XML",
+   "page": "changes.html",
+   "id": "q21.196"
+  },
+  "C.4.3": {
+   "title": "Section 2.3 The CSS 2.1 processing model",
+   "page": "changes.html",
+   "id": "q21.197"
+  },
+  "C.4.4": {
+   "title": "Section 3.1 Definitions",
+   "page": "changes.html",
+   "id": "q21.198"
+  },
+  "C.4.5": {
+   "title": "Section 4.1 Syntax",
+   "page": "changes.html",
+   "id": "q21.199"
+  },
+  "C.4.6": {
+   "title": "Section 4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.200"
+  },
+  "C.4.7": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.201"
+  },
+  "C.4.8": {
+   "title": "Section 4.1.7 Rule sets, declaration blocks, and selectors",
+   "page": "changes.html",
+   "id": "q21.202"
+  },
+  "C.4.9": {
+   "title": "Section 4.2 Rules for handling parsing errors",
+   "page": "changes.html",
+   "id": "q21.203"
+  },
+  "C.4.10": {
+   "title": "Section 4.3.1 Integers and real numbers",
+   "page": "changes.html",
+   "id": "q21.204"
+  },
+  "C.4.11": {
+   "title": "Section 4.3.2 Lengths",
+   "page": "changes.html",
+   "id": "q21.205"
+  },
+  "C.4.12": {
+   "title": "Section 4.3.4 URLs and URIs",
+   "page": "changes.html",
+   "id": "q21.206"
+  },
+  "C.4.13": {
+   "title": "Section 5.1 Pattern matching",
+   "page": "changes.html",
+   "id": "q21.207"
+  },
+  "C.4.14": {
+   "title": "Section 5.7 Adjacent sibling selectors",
+   "page": "changes.html",
+   "id": "q21.208"
+  },
+  "C.4.15": {
+   "title": "Section 5.8.1 Matching attributes and attribute values",
+   "page": "changes.html",
+   "id": "q21.209"
+  },
+  "C.4.16": {
+   "title": "Section 5.8.2 Default attribute values in DTDs",
+   "page": "changes.html",
+   "id": "q21.210"
+  },
+  "C.4.17": {
+   "title": "Section 5.9 ID selectors",
+   "page": "changes.html",
+   "id": "q21.211"
+  },
+  "C.4.18": {
+   "title": "Section 5.11.3 The dynamic pseudo-classes: :hover, :active, and :focus",
+   "page": "changes.html",
+   "id": "q21.212"
+  },
+  "C.4.19": {
+   "title": "Section 5.11.4 The language pseudo-class: :lang",
+   "page": "changes.html",
+   "id": "q21.213"
+  },
+  "C.4.20": {
+   "title": "Section 5.12.2 The :first-letter pseudo-element",
+   "page": "changes.html",
+   "id": "q21.214"
+  },
+  "C.4.21": {
+   "title": "Section 6.2 Inheritance",
+   "page": "changes.html",
+   "id": "q21.215"
+  },
+  "C.4.22": {
+   "title": "Section 6.2.1 The 'inherit' value",
+   "page": "changes.html",
+   "id": "q21.216"
+  },
+  "C.4.23": {
+   "title": "Section 6.3 The @import rule",
+   "page": "changes.html",
+   "id": "q21.217"
+  },
+  "C.4.24": {
+   "title": "Section 6.4 The Cascade",
+   "page": "changes.html",
+   "id": "q21.218"
+  },
+  "C.4.25": {
+   "title": "Section 6.4.1 Cascading order",
+   "page": "changes.html",
+   "id": "q21.219"
+  },
+  "C.4.26": {
+   "title": "Section 6.4.3 Calculating a selector's specificity",
+   "page": "changes.html",
+   "id": "q21.220"
+  },
+  "C.4.27": {
+   "title": "Section 7.2.1 The @media rule",
+   "page": "changes.html",
+   "id": "q21.221"
+  },
+  "C.4.28": {
+   "title": "Section 7.3 Recognized media types",
+   "page": "changes.html",
+   "id": "q21.222"
+  },
+  "C.4.29": {
+   "title": "Section 7.3.1 Media groups",
+   "page": "changes.html",
+   "id": "q21.223"
+  },
+  "C.4.30": {
+   "title": "Section 8.1 Box dimensions",
+   "page": "changes.html",
+   "id": "q21.224"
+  },
+  "C.4.31": {
+   "title": "Section 8.3 Margin properties",
+   "page": "changes.html",
+   "id": "q21.225"
+  },
+  "C.4.32": {
+   "title": "Section 8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.226"
+  },
+  "C.4.33": {
+   "title": "Section 8.5.3 Border style",
+   "page": "changes.html",
+   "id": "q21.227"
+  },
+  "C.4.34": {
+   "title": "Section 9.1.1 The viewport",
+   "page": "changes.html",
+   "id": "q21.228"
+  },
+  "C.4.35": {
+   "title": "Section 9.2.4 The 'display' property",
+   "page": "changes.html",
+   "id": "q21.229"
+  },
+  "C.4.36": {
+   "title": "Section 9.3.1 Choosing a positioning scheme",
+   "page": "changes.html",
+   "id": "q21.230"
+  },
+  "C.4.37": {
+   "title": "Section 9.3.2 Box offsets",
+   "page": "changes.html",
+   "id": "q21.231"
+  },
+  "C.4.38": {
+   "title": "Section 9.4.2 Inline formatting context",
+   "page": "changes.html",
+   "id": "q21.232"
+  },
+  "C.4.39": {
+   "title": "Section 9.4.3 Relative positioning",
+   "page": "changes.html",
+   "id": "q21.233"
+  },
+  "C.4.40": {
+   "title": "Section 9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.234"
+  },
+  "C.4.41": {
+   "title": "Section 9.5.1 Positioning the float",
+   "page": "changes.html",
+   "id": "q21.235"
+  },
+  "C.4.42": {
+   "title": "Section 9.5.2 Controlling flow next to floats",
+   "page": "changes.html",
+   "id": "q21.236"
+  },
+  "C.4.43": {
+   "title": "Section 9.8 Comparison of normal flow, floats, and absolute positioning",
+   "page": "changes.html",
+   "id": "q21.237"
+  },
+  "C.4.44": {
+   "title": "Section 10.1 Definition of \"containing block\"",
+   "page": "changes.html",
+   "id": "q21.238"
+  },
+  "C.4.45": {
+   "title": "Section 10.2 Content width",
+   "page": "changes.html",
+   "id": "q21.239"
+  },
+  "C.4.46": {
+   "title": "Section 10.3.3 Block-level, non-replaced elements in normal flow",
+   "page": "changes.html",
+   "id": "q21.240"
+  },
+  "C.4.47": {
+   "title": "Section 10.3.8 Absolutely positioning, replaced elements",
+   "page": "changes.html",
+   "id": "q21.241"
+  },
+  "C.4.48": {
+   "title": "Section 10.4 Minimum and maximum widths",
+   "page": "changes.html",
+   "id": "q21.242"
+  },
+  "C.4.49": {
+   "title": "Section 10.6 Calculating heights and margins",
+   "page": "changes.html",
+   "id": "q21.243"
+  },
+  "C.4.50": {
+   "title": "Section 10.7 Minimum and maximum heights",
+   "page": "changes.html",
+   "id": "q21.244"
+  },
+  "C.4.51": {
+   "title": "Section 10.8 Line height calculations",
+   "page": "changes.html",
+   "id": "q21.245"
+  },
+  "C.4.52": {
+   "title": "Section 10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.246"
+  },
+  "C.4.53": {
+   "title": "Section 11.1 Overflow and clipping",
+   "page": "changes.html",
+   "id": "q21.247"
+  },
+  "C.4.54": {
+   "title": "Section 11.1.1 Overflow",
+   "page": "changes.html",
+   "id": "q21.248"
+  },
+  "C.4.55": {
+   "title": "Section 11.1.2 Clipping",
+   "page": "changes.html",
+   "id": "q21.249"
+  },
+  "C.4.56": {
+   "title": "Section 11.2 Visibility",
+   "page": "changes.html",
+   "id": "q21.250"
+  },
+  "C.4.57": {
+   "title": "Section 12.1 The :before and :after pseudo-elements",
+   "page": "changes.html",
+   "id": "q21.251"
+  },
+  "C.4.58": {
+   "title": "Section 12.2 The 'content' property",
+   "page": "changes.html",
+   "id": "q21.252"
+  },
+  "C.4.59": {
+   "title": "Section 12.3.2 Inserting quotes with the 'content' property",
+   "page": "changes.html",
+   "id": "q21.253"
+  },
+  "C.4.60": {
+   "title": "Section 12.4 Automatic counters and numbering",
+   "page": "changes.html",
+   "id": "q21.254"
+  },
+  "C.4.61": {
+   "title": "Section 12.4.3 Counters in elements with 'display: none'",
+   "page": "changes.html",
+   "id": "q21.255"
+  },
+  "C.4.62": {
+   "title": "Section 14.2 The background",
+   "page": "changes.html",
+   "id": "q21.256"
+  },
+  "C.4.63": {
+   "title": "Section 15.1 Fonts Introduction",
+   "page": "changes.html",
+   "id": "q21.257"
+  },
+  "C.4.64": {
+   "title": "Section 15.2 Font matching algorithm",
+   "page": "changes.html",
+   "id": "q21.258"
+  },
+  "C.4.65": {
+   "title": "Section 15.2.2 Font family",
+   "page": "changes.html",
+   "id": "q21.259"
+  },
+  "C.4.66": {
+   "title": "Section 15.3.1 Generic font families",
+   "page": "changes.html",
+   "id": "q21.260"
+  },
+  "C.4.67": {
+   "title": "Section 15.4 Font styling",
+   "page": "changes.html",
+   "id": "q21.261"
+  },
+  "C.4.68": {
+   "title": "Section 15.5 Small-caps",
+   "page": "changes.html",
+   "id": "q21.262"
+  },
+  "C.4.69": {
+   "title": "Section 15.6 Font boldness",
+   "page": "changes.html",
+   "id": "q21.263"
+  },
+  "C.4.70": {
+   "title": "Section 15.7 Font size",
+   "page": "changes.html",
+   "id": "q21.264"
+  },
+  "C.4.71": {
+   "title": "Section 16.1 Indentation",
+   "page": "changes.html",
+   "id": "q21.265"
+  },
+  "C.4.72": {
+   "title": "Section 16.2 Alignment",
+   "page": "changes.html",
+   "id": "q21.266"
+  },
+  "C.4.73": {
+   "title": "Section 16.3.1 Underlining, over lining, striking, and blinking",
+   "page": "changes.html",
+   "id": "q21.267"
+  },
+  "C.4.74": {
+   "title": "Section 16.5 Capitalization",
+   "page": "changes.html",
+   "id": "q21.268"
+  },
+  "C.4.75": {
+   "title": "Section 16.6 White space",
+   "page": "changes.html",
+   "id": "q21.269"
+  },
+  "C.4.76": {
+   "title": "Section 17.1 Introduction to tables",
+   "page": "changes.html",
+   "id": "q21.270"
+  },
+  "C.4.77": {
+   "title": "Section 17.2 The CSS table model",
+   "page": "changes.html",
+   "id": "q21.271"
+  },
+  "C.4.78": {
+   "title": "Section 17.2.1 Anonymous table objects",
+   "page": "changes.html",
+   "id": "q21.272"
+  },
+  "C.4.79": {
+   "title": "Section 17.4 Tables in the visual formatting model",
+   "page": "changes.html",
+   "id": "q21.273"
+  },
+  "C.4.80": {
+   "title": "Section 17.5 Visual layout of table contents",
+   "page": "changes.html",
+   "id": "q21.274"
+  },
+  "C.4.81": {
+   "title": "Section 17.5.1 Table layers and transparency",
+   "page": "changes.html",
+   "id": "q21.275"
+  },
+  "C.4.82": {
+   "title": "Section 17.5.2 Table width algorithms",
+   "page": "changes.html",
+   "id": "q21.276"
+  },
+  "C.4.83": {
+   "title": "Section 17.5.2.1 Fixed table layout",
+   "page": "changes.html",
+   "id": "q21.277"
+  },
+  "C.4.84": {
+   "title": "Section 17.5.2.2 Automatic table layout",
+   "page": "changes.html",
+   "id": "q21.278"
+  },
+  "C.4.85": {
+   "title": "Section 17.5.4 Horizontal alignment in a column",
+   "page": "changes.html",
+   "id": "q21.279"
+  },
+  "C.4.86": {
+   "title": "Section 17.5.5 Dynamic row and column effects",
+   "page": "changes.html",
+   "id": "q21.280"
+  },
+  "C.4.87": {
+   "title": "Section 17.6.1 The separated borders model",
+   "page": "changes.html",
+   "id": "q21.281"
+  },
+  "C.4.88": {
+   "title": "Section 17.6.2 The collapsing borders model",
+   "page": "changes.html",
+   "id": "q21.282"
+  },
+  "C.4.89": {
+   "title": "Section 18.2 System Colors",
+   "page": "changes.html",
+   "id": "q21.283"
+  },
+  "C.4.90": {
+   "title": "Section 18.4 Dynamic outlines",
+   "page": "changes.html",
+   "id": "q21.284"
+  },
+  "C.4.91": {
+   "title": "Section 18.4.1 Outlines and the focus",
+   "page": "changes.html",
+   "id": "q21.285"
+  },
+  "C.4.92": {
+   "title": "Appendix D Default style sheet for HTML 4",
+   "page": "changes.html",
+   "id": "q21.286"
+  },
+  "C.5": {
+   "title": "Errata since the Candidate Recommendation of July 2007",
+   "page": "changes.html",
+   "id": "errata"
+  },
+  "C.5.1": {
+   "title": "Section 1.4.2.1 Value",
+   "page": "changes.html",
+   "id": "q21.288"
+  },
+  "C.5.2": {
+   "title": "Section 2.3 The CSS 2.1 processing model",
+   "page": "changes.html",
+   "id": "q21.289"
+  },
+  "C.5.3": {
+   "title": "Section 3.1 Definitions",
+   "page": "changes.html",
+   "id": "q21.290"
+  },
+  "C.5.4": {
+   "title": "Section 4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.291"
+  },
+  "C.5.5": {
+   "title": "Section 4.1.2.2 Informative Historical Notes",
+   "page": "changes.html",
+   "id": "q21.292"
+  },
+  "C.5.6": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.293"
+  },
+  "C.5.7": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.294"
+  },
+  "C.5.8": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.295"
+  },
+  "C.5.9": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.296"
+  },
+  "C.5.10": {
+   "title": "Section 4.1.5 At-rules",
+   "page": "changes.html",
+   "id": "q21.297"
+  },
+  "C.5.11": {
+   "title": "Section 4.1.7 Rule sets, declaration blocks, and selectors",
+   "page": "changes.html",
+   "id": "q21.298"
+  },
+  "C.5.12": {
+   "title": "Section 4.2 Rules for handling parsing errors",
+   "page": "changes.html",
+   "id": "q21.299"
+  },
+  "C.5.13": {
+   "title": "Section 4.2 Rules for handling parsing errors",
+   "page": "changes.html",
+   "id": "q21.300"
+  },
+  "C.5.14": {
+   "title": "Section 4.3.2 Lengths",
+   "page": "changes.html",
+   "id": "q21.301"
+  },
+  "C.5.15": {
+   "title": "Section 4.3.5 Counters",
+   "page": "changes.html",
+   "id": "q21.302"
+  },
+  "C.5.16": {
+   "title": "Section 5.8.1 Matching attributes and attribute values",
+   "page": "changes.html",
+   "id": "q21.303"
+  },
+  "C.5.17": {
+   "title": "Section 5.8.2 Default attribute values in DTDs",
+   "page": "changes.html",
+   "id": "q21.304"
+  },
+  "C.5.18": {
+   "title": "Section 5.11.4 The language pseudo-class: :lang",
+   "page": "changes.html",
+   "id": "q21.305"
+  },
+  "C.5.19": {
+   "title": "Section 5.12.3 The :before and :after pseudo-elements",
+   "page": "changes.html",
+   "id": "q21.306"
+  },
+  "C.5.20": {
+   "title": "Section 6.3 The @import rule",
+   "page": "changes.html",
+   "id": "q21.307"
+  },
+  "C.5.21": {
+   "title": "Section 6.3 The @import rule",
+   "page": "changes.html",
+   "id": "q21.308"
+  },
+  "C.5.22": {
+   "title": "Section 6.4.1 Cascading order",
+   "page": "changes.html",
+   "id": "q21.309"
+  },
+  "C.5.23": {
+   "title": "Section 6.4.1 Cascading order",
+   "page": "changes.html",
+   "id": "q21.310"
+  },
+  "C.5.24": {
+   "title": "Section 7.2.1 The @media rule",
+   "page": "changes.html",
+   "id": "q21.311"
+  },
+  "C.5.25": {
+   "title": "Section 8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.312"
+  },
+  "C.5.26": {
+   "title": "Section 8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.313"
+  },
+  "C.5.27": {
+   "title": "Section 8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.314"
+  },
+  "C.5.28": {
+   "title": "Section 9.2.2 Inline-level elements and inline boxes",
+   "page": "changes.html",
+   "id": "q21.315"
+  },
+  "C.5.29": {
+   "title": "Section 9.2.4 The 'display' property",
+   "page": "changes.html",
+   "id": "q21.316"
+  },
+  "C.5.30": {
+   "title": "Section 9.3.2 Box offsets: 'top', 'right', 'bottom', 'left'",
+   "page": "changes.html",
+   "id": "q21.317"
+  },
+  "C.5.31": {
+   "title": "Section 9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.318"
+  },
+  "C.5.32": {
+   "title": "Section 9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.319"
+  },
+  "C.5.33": {
+   "title": "Section 9.5.2 Controlling flow next to floats: the 'clear' property",
+   "page": "changes.html",
+   "id": "q21.320"
+  },
+  "C.5.34": {
+   "title": "Section 9.6.1 Fixed positioning",
+   "page": "changes.html",
+   "id": "q21.321"
+  },
+  "C.5.35": {
+   "title": "Section 9.9.1 Specifying the stack level: the 'z-index' property",
+   "page": "changes.html",
+   "id": "q21.322"
+  },
+  "C.5.36": {
+   "title": "Section 10.1 Definition of \"containing block\"",
+   "page": "changes.html",
+   "id": "q21.323"
+  },
+  "C.5.37": {
+   "title": "Section 10.3 Calculating widths and margins",
+   "page": "changes.html",
+   "id": "q21.324"
+  },
+  "C.5.38": {
+   "title": "Section 10.3.1 Inline, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.325"
+  },
+  "C.5.39": {
+   "title": "Section 10.3.2 Inline, replaced elements",
+   "page": "changes.html",
+   "id": "q21.326"
+  },
+  "C.5.40": {
+   "title": "Section 10.3.2 Inline, replaced elements",
+   "page": "changes.html",
+   "id": "q21.327"
+  },
+  "C.5.41": {
+   "title": "Section 10.3.3 Block-level, non-replaced elements in normal flow",
+   "page": "changes.html",
+   "id": "q21.328"
+  },
+  "C.5.42": {
+   "title": "Section 10.3.7 Absolutely positioned, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.329"
+  },
+  "C.5.43": {
+   "title": "Section 10.3.7 Absolutely positioned, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.330"
+  },
+  "C.5.44": {
+   "title": "Section 10.3.8 Absolutely positioned, replaced elements",
+   "page": "changes.html",
+   "id": "q21.331"
+  },
+  "C.5.45": {
+   "title": "Section 10.3.8 Absolutely positioned, replaced elements",
+   "page": "changes.html",
+   "id": "q21.332"
+  },
+  "C.5.46": {
+   "title": "Section 10.3.8 Absolutely positioned, replaced elements",
+   "page": "changes.html",
+   "id": "q21.333"
+  },
+  "C.5.47": {
+   "title": "Section 10.5 Content height: the 'height' property",
+   "page": "changes.html",
+   "id": "q21.334"
+  },
+  "C.5.48": {
+   "title": "Section 10.6.2 Inline replaced elements [&hellip;]",
+   "page": "changes.html",
+   "id": "q21.335"
+  },
+  "C.5.49": {
+   "title": "Section 10.6.4 Absolutely positioned, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.336"
+  },
+  "C.5.50": {
+   "title": "Section 10.6.5 Absolutely positioned, replaced elements",
+   "page": "changes.html",
+   "id": "q21.337"
+  },
+  "C.5.51": {
+   "title": "Section 10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.338"
+  },
+  "C.5.52": {
+   "title": "Section 11.1.1 Overflow: the 'overflow' property",
+   "page": "changes.html",
+   "id": "q21.339"
+  },
+  "C.5.53": {
+   "title": "Section 11.1.2 Clipping: the 'clip' property",
+   "page": "changes.html",
+   "id": "q21.340"
+  },
+  "C.5.54": {
+   "title": "Section 12.2 The 'content' property",
+   "page": "changes.html",
+   "id": "q21.341"
+  },
+  "C.5.55": {
+   "title": "Section 12.4.2 Counter styles",
+   "page": "changes.html",
+   "id": "q21.342"
+  },
+  "C.5.56": {
+   "title": "Section 12.5 Lists",
+   "page": "changes.html",
+   "id": "q21.343"
+  },
+  "C.5.57": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.344"
+  },
+  "C.5.58": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.345"
+  },
+  "C.5.59": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.346"
+  },
+  "C.5.60": {
+   "title": "Section 13.2 Page boxes: the @page rule",
+   "page": "changes.html",
+   "id": "q21.347"
+  },
+  "C.5.61": {
+   "title": "Section 13.2.1.1 Rendering page boxes that do not fit a target sheet",
+   "page": "changes.html",
+   "id": "q21.348"
+  },
+  "C.5.62": {
+   "title": "Section 13.2.3 Content outside the page box",
+   "page": "changes.html",
+   "id": "q21.349"
+  },
+  "C.5.63": {
+   "title": "Section 13.3.1 Page break properties: 'page-break-before', 'page-break-after', 'page-break-inside'",
+   "page": "changes.html",
+   "id": "q21.350"
+  },
+  "C.5.64": {
+   "title": "Section 13.3.1 Page break properties: 'page-break-before', 'page-break-after', 'page-break-inside'",
+   "page": "changes.html",
+   "id": "q21.351"
+  },
+  "C.5.65": {
+   "title": "Section 13.3.2 Breaks inside elements: 'orphans', 'widows'",
+   "page": "changes.html",
+   "id": "q21.352"
+  },
+  "C.5.66": {
+   "title": "Section 13.3.2 Breaks inside elements: 'orphans', 'widows'",
+   "page": "changes.html",
+   "id": "q21.353"
+  },
+  "C.5.67": {
+   "title": "Section 13.3.3 Allowed page breaks",
+   "page": "changes.html",
+   "id": "q21.354"
+  },
+  "C.5.68": {
+   "title": "Section 13.3.3 Allowed page breaks",
+   "page": "changes.html",
+   "id": "q21.355"
+  },
+  "C.5.69": {
+   "title": "Section 13.3.3 Allowed page breaks",
+   "page": "changes.html",
+   "id": "q21.356"
+  },
+  "C.5.70": {
+   "title": "Section 13.3.5 \"Best\" page breaks",
+   "page": "changes.html",
+   "id": "q21.357"
+  },
+  "C.5.71": {
+   "title": "Section 14.2 The background",
+   "page": "changes.html",
+   "id": "q21.358"
+  },
+  "C.5.72": {
+   "title": "Section 14.2 The background",
+   "page": "changes.html",
+   "id": "q21.359"
+  },
+  "C.5.73": {
+   "title": "Section 14.2.1 Background properties: 'background-color', 'background-image', 'background-repeat', 'background-attachment', 'background-position', and 'background'",
+   "page": "changes.html",
+   "id": "q21.360"
+  },
+  "C.5.74": {
+   "title": "Section 15.6 Font boldness: the 'font-weight' property",
+   "page": "changes.html",
+   "id": "q21.361"
+  },
+  "C.5.75": {
+   "title": "Section 16.6 Whitespace: the 'white-space' property",
+   "page": "changes.html",
+   "id": "q21.362"
+  },
+  "C.5.76": {
+   "title": "Section 16.6.1 The 'white-space' processing model",
+   "page": "changes.html",
+   "id": "q21.363"
+  },
+  "C.5.77": {
+   "title": "Section 17.2.1 Anonymous table objects",
+   "page": "changes.html",
+   "id": "q21.364"
+  },
+  "C.5.78": {
+   "title": "Section 17.2.1 Anonymous table objects",
+   "page": "changes.html",
+   "id": "q21.365"
+  },
+  "C.5.79": {
+   "title": "Section 17.4 Tables in the visual formatting model",
+   "page": "changes.html",
+   "id": "q21.366"
+  },
+  "C.5.80": {
+   "title": "Section 17.5.4 Horizontal alignment in a column",
+   "page": "changes.html",
+   "id": "q21.367"
+  },
+  "C.5.81": {
+   "title": "Section 18.1 Cursors: the 'cursor' property",
+   "page": "changes.html",
+   "id": "q21.368"
+  },
+  "C.5.82": {
+   "title": "Section B.2 Informative references",
+   "page": "changes.html",
+   "id": "q21.369"
+  },
+  "C.5.83": {
+   "title": "Appendix D. Default style sheet for HTML 4",
+   "page": "changes.html",
+   "id": "q21.370"
+  },
+  "C.5.84": {
+   "title": "Appendix D. Default style sheet for HTML 4",
+   "page": "changes.html",
+   "id": "q21.371"
+  },
+  "C.5.85": {
+   "title": "Section E.2 Painting order",
+   "page": "changes.html",
+   "id": "q21.372"
+  },
+  "C.5.86": {
+   "title": "Appendix G. Grammar of CSS 2.1",
+   "page": "changes.html",
+   "id": "q21.373"
+  },
+  "C.5.87": {
+   "title": "Section G.1 Grammar",
+   "page": "changes.html",
+   "id": "q21.374"
+  },
+  "C.5.88": {
+   "title": "Section G.2 Lexical scanner",
+   "page": "changes.html",
+   "id": "q21.375"
+  },
+  "C.5.89": {
+   "title": "Section G.2 Lexical scanner",
+   "page": "changes.html",
+   "id": "q21.376"
+  },
+  "C.5.90": {
+   "title": "Section G.2 Lexical scanner",
+   "page": "changes.html",
+   "id": "q21.377"
+  },
+  "C.5.91": {
+   "title": "Section G.2 Lexical scanner",
+   "page": "changes.html",
+   "id": "q21.378"
+  },
+  "C.5.92": {
+   "title": "Appendix I. Index",
+   "page": "changes.html",
+   "id": "q21.379"
+  },
+  "C.6": {
+   "title": "Errata since the Candidate Recommendation of April 2009",
+   "page": "changes.html",
+   "id": "errata2"
+  },
+  "C.6.1": {
+   "title": "Section 4.2 Rules for handling parsing errors",
+   "page": "changes.html",
+   "id": "q21.381"
+  },
+  "C.6.2": {
+   "title": "Section 13.3.3 Allowed page breaks",
+   "page": "changes.html",
+   "id": "q21.382"
+  },
+  "C.6.3": {
+   "title": "Section 15.3 Font family: the 'font-family' property",
+   "page": "changes.html",
+   "id": "q21.383"
+  },
+  "C.6.4": {
+   "title": "Section 15.3.1.1 serif",
+   "page": "changes.html",
+   "id": "q21.384"
+  },
+  "C.6.5": {
+   "title": "Section 15.7 Font size: the 'font-size' property",
+   "page": "changes.html",
+   "id": "q21.385"
+  },
+  "C.6.6": {
+   "title": "Section 17.5.2.1 Fixed table layout",
+   "page": "changes.html",
+   "id": "q21.386"
+  },
+  "C.6.7": {
+   "title": "Section 17.5.3 Table height layout",
+   "page": "changes.html",
+   "id": "q21.387"
+  },
+  "C.6.8": {
+   "title": "Appendix G. Grammar of CSS 2.1",
+   "page": "changes.html",
+   "id": "q21.388"
+  },
+  "C.7": {
+   "title": "Errata since the Candidate Recommendation of September 2009",
+   "page": "changes.html",
+   "id": "errata3"
+  },
+  "C.7.1": {
+   "title": "Section 1.4.2.1 Value",
+   "page": "changes.html",
+   "id": "q21.390"
+  },
+  "C.7.2": {
+   "title": "Section 3.1 Definitions",
+   "page": "changes.html",
+   "id": "q21.391"
+  },
+  "C.7.3": {
+   "title": "Section 4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.392"
+  },
+  "C.7.4": {
+   "title": "Section 4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.393"
+  },
+  "C.7.5": {
+   "title": "Section 4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.394"
+  },
+  "C.7.6": {
+   "title": "Section 4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.395"
+  },
+  "C.7.7": {
+   "title": "Section 4.1.2.2 Informative Historical Notes",
+   "page": "changes.html",
+   "id": "q21.396"
+  },
+  "C.7.8": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.397"
+  },
+  "C.7.9": {
+   "title": "Section 4.1.3 Characters and case",
+   "page": "changes.html",
+   "id": "q21.398"
+  },
+  "C.7.10": {
+   "title": "Section 4.1.8 Declarations and properties",
+   "page": "changes.html",
+   "id": "q21.399"
+  },
+  "C.7.11": {
+   "title": "Section 4.2 Rules for handling parsing errors",
+   "page": "changes.html",
+   "id": "q21.400"
+  },
+  "C.7.12": {
+   "title": "Section 4.3.2 Lengths",
+   "page": "changes.html",
+   "id": "q21.401"
+  },
+  "C.7.13": {
+   "title": "Section 4.3.2 Lengths",
+   "page": "changes.html",
+   "id": "q21.402"
+  },
+  "C.7.14": {
+   "title": "Section 4.3.4 URLs and URIs",
+   "page": "changes.html",
+   "id": "q21.403"
+  },
+  "C.7.15": {
+   "title": "Section 4.3.4 URLs and URIs",
+   "page": "changes.html",
+   "id": "q21.404"
+  },
+  "C.7.16": {
+   "title": "Section 5.8.2 Default attribute values in DTDs",
+   "page": "changes.html",
+   "id": "q21.405"
+  },
+  "C.7.17": {
+   "title": "Section 5.11.4 The language pseudo-class: :lang",
+   "page": "changes.html",
+   "id": "q21.406"
+  },
+  "C.7.18": {
+   "title": "Section 5.12 Pseudo-elements",
+   "page": "changes.html",
+   "id": "q21.407"
+  },
+  "C.7.19": {
+   "title": "Section 5.12.1 The :first-line pseudo-element",
+   "page": "changes.html",
+   "id": "q21.408"
+  },
+  "C.7.20": {
+   "title": "Section 5.12.2 The :first-letter pseudo-element",
+   "page": "changes.html",
+   "id": "q21.409"
+  },
+  "C.7.21": {
+   "title": "Section 6.2 Inheritance",
+   "page": "changes.html",
+   "id": "q21.410"
+  },
+  "C.7.22": {
+   "title": "Section 6.4.4 Precedence of non-CSS presentational hints",
+   "page": "changes.html",
+   "id": "q21.411"
+  },
+  "C.7.23": {
+   "title": "Section 7.3 Recognized media types",
+   "page": "changes.html",
+   "id": "q21.412"
+  },
+  "C.7.24": {
+   "title": "Section 8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.413"
+  },
+  "C.7.25": {
+   "title": "Section 8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.414"
+  },
+  "C.7.26": {
+   "title": "Section 9.2.1 Block-level elements and block boxes",
+   "page": "changes.html",
+   "id": "q21.415"
+  },
+  "C.7.27": {
+   "title": "Section 9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.416"
+  },
+  "C.7.28": {
+   "title": "Section 9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.417"
+  },
+  "C.7.29": {
+   "title": "Section 9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.418"
+  },
+  "C.7.30": {
+   "title": "Section 9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.419"
+  },
+  "C.7.31": {
+   "title": "Section 9.2.2 Inline-level elements and inline boxes",
+   "page": "changes.html",
+   "id": "q21.420"
+  },
+  "C.7.32": {
+   "title": "Section 9.2.3 Run-in boxes",
+   "page": "changes.html",
+   "id": "q21.421"
+  },
+  "C.7.33": {
+   "title": "Section 9.2.4 The 'display' property",
+   "page": "changes.html",
+   "id": "q21.422"
+  },
+  "C.7.34": {
+   "title": "Section 9.2.4 The 'display' property",
+   "page": "changes.html",
+   "id": "q21.423"
+  },
+  "C.7.35": {
+   "title": "Section 9.3 Positioning schemes",
+   "page": "changes.html",
+   "id": "q21.424"
+  },
+  "C.7.36": {
+   "title": "Section 9.4 Normal flow",
+   "page": "changes.html",
+   "id": "q21.425"
+  },
+  "C.7.37": {
+   "title": "Section 9.3.2 Box offsets: 'top', 'right', 'bottom', 'left'",
+   "page": "changes.html",
+   "id": "q21.426"
+  },
+  "C.7.38": {
+   "title": "Section 9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.427"
+  },
+  "C.7.39": {
+   "title": "Section 9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.428"
+  },
+  "C.7.40": {
+   "title": "Section 9.5.2 Controlling flow next to floats: the 'clear' property",
+   "page": "changes.html",
+   "id": "q21.429"
+  },
+  "C.7.41": {
+   "title": "Section 9.5.2 Controlling flow next to floats: the 'clear' property",
+   "page": "changes.html",
+   "id": "q21.430"
+  },
+  "C.7.42": {
+   "title": "Section 9.5.2 Controlling flow next to floats: the 'clear' property",
+   "page": "changes.html",
+   "id": "q21.431"
+  },
+  "C.7.43": {
+   "title": "Section 9.5.2 Controlling flow next to floats: the 'clear' property",
+   "page": "changes.html",
+   "id": "q21.432"
+  },
+  "C.7.44": {
+   "title": "Section 14.2.1 Background properties",
+   "page": "changes.html",
+   "id": "q21.433"
+  },
+  "C.7.45": {
+   "title": "Section 9.9.1 Specifying the stack level: the 'z-index' property",
+   "page": "changes.html",
+   "id": "q21.434"
+  },
+  "C.7.46": {
+   "title": "Section 9.10 Text direction: the 'direction' and 'unicode-bidi' properties",
+   "page": "changes.html",
+   "id": "q21.435"
+  },
+  "C.7.47": {
+   "title": "Section 9.10 Text direction: the 'direction' and 'unicode-bidi' properties",
+   "page": "changes.html",
+   "id": "q21.436"
+  },
+  "C.7.48": {
+   "title": "Section 9.10 Text direction: the 'direction' and 'unicode-bidi' properties",
+   "page": "changes.html",
+   "id": "q21.437"
+  },
+  "C.7.49": {
+   "title": "Section 10.1 Definition of \"containing block\"",
+   "page": "changes.html",
+   "id": "q21.438"
+  },
+  "C.7.50": {
+   "title": "Section 10.2 Content width: the 'width' property",
+   "page": "changes.html",
+   "id": "q21.439"
+  },
+  "C.7.51": {
+   "title": "Section 10.2 Content width: the 'width' property",
+   "page": "changes.html",
+   "id": "q21.440"
+  },
+  "C.7.52": {
+   "title": "Section 10.2 Content width: the 'width' property",
+   "page": "changes.html",
+   "id": "q21.441"
+  },
+  "C.7.53": {
+   "title": "Section 10.5 Content height: the 'height' property",
+   "page": "changes.html",
+   "id": "q21.442"
+  },
+  "C.7.54": {
+   "title": "Section 10.5 Content height: the 'height' property",
+   "page": "changes.html",
+   "id": "q21.443"
+  },
+  "C.7.55": {
+   "title": "Section 10.6.7 'Auto' heights for block formatting context roots",
+   "page": "changes.html",
+   "id": "q21.444"
+  },
+  "C.7.56": {
+   "title": "Section 10.7 Minimum and maximum heights: 'min-height' and 'max-height'",
+   "page": "changes.html",
+   "id": "q21.445"
+  },
+  "C.7.57": {
+   "title": "Section 10.8 Line height calculations: the 'line-height' and 'vertical-align' properties",
+   "page": "changes.html",
+   "id": "q21.446"
+  },
+  "C.7.58": {
+   "title": "Section 10.8 Line height calculations: the 'line-height' and 'vertical-align' properties",
+   "page": "changes.html",
+   "id": "q21.447"
+  },
+  "C.7.59": {
+   "title": "Section 10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.448"
+  },
+  "C.7.60": {
+   "title": "Section 10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.449"
+  },
+  "C.7.61": {
+   "title": "Section 10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.450"
+  },
+  "C.7.62": {
+   "title": "Section 11.1 Overflow and clipping",
+   "page": "changes.html",
+   "id": "q21.451"
+  },
+  "C.7.63": {
+   "title": "Section 11.1.1 Overflow: the 'overflow' property",
+   "page": "changes.html",
+   "id": "q21.452"
+  },
+  "C.7.64": {
+   "title": "Section 11.1.1 Overflow: the 'overflow' property",
+   "page": "changes.html",
+   "id": "q21.453"
+  },
+  "C.7.65": {
+   "title": "Section 11.1.1 Overflow: the 'overflow' property",
+   "page": "changes.html",
+   "id": "q21.454"
+  },
+  "C.7.66": {
+   "title": "Section 11.1.2 Clipping: the 'clip' property",
+   "page": "changes.html",
+   "id": "q21.455"
+  },
+  "C.7.67": {
+   "title": "Section 12.5 Lists",
+   "page": "changes.html",
+   "id": "q21.456"
+  },
+  "C.7.68": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.457"
+  },
+  "C.7.69": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.458"
+  },
+  "C.7.70": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.459"
+  },
+  "C.7.71": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.460"
+  },
+  "C.7.72": {
+   "title": "Section 12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.461"
+  },
+  "C.7.73": {
+   "title": "Section 13.2 Page boxes: the @page rule",
+   "page": "changes.html",
+   "id": "q21.462"
+  },
+  "C.7.74": {
+   "title": "Section 13.2.2 Page selectors: selecting left, right, and first pages",
+   "page": "changes.html",
+   "id": "q21.463"
+  },
+  "C.7.75": {
+   "title": "Section 13.3.2 Breaks inside elements: 'orphans', 'widows'",
+   "page": "changes.html",
+   "id": "q21.464"
+  },
+  "C.7.76": {
+   "title": "Section 13.3.3 Allowed page breaks",
+   "page": "changes.html",
+   "id": "q21.465"
+  },
+  "C.7.77": {
+   "title": "Section 15.3 Font family: the 'font-family' property",
+   "page": "changes.html",
+   "id": "q21.466"
+  },
+  "C.7.78": {
+   "title": "Section 15.3.1 Generic font families",
+   "page": "changes.html",
+   "id": "q21.467"
+  },
+  "C.7.79": {
+   "title": "Section 15.6 Font boldness: the 'font-weight' property",
+   "page": "changes.html",
+   "id": "q21.468"
+  },
+  "C.7.80": {
+   "title": "Section 15.6 Font boldness: the 'font-weight' property",
+   "page": "changes.html",
+   "id": "q21.469"
+  },
+  "C.7.81": {
+   "title": "Section 15.7 Font size: the 'font-size' property",
+   "page": "changes.html",
+   "id": "q21.470"
+  },
+  "C.7.82": {
+   "title": "Section 16.1 Indentation: the 'text-indent' property",
+   "page": "changes.html",
+   "id": "q21.471"
+  },
+  "C.7.83": {
+   "title": "Section 16.1 Indentation: the 'text-indent' property",
+   "page": "changes.html",
+   "id": "q21.472"
+  },
+  "C.7.84": {
+   "title": "Section 16.2 Alignment: the 'text-align' property",
+   "page": "changes.html",
+   "id": "q21.473"
+  },
+  "C.7.85": {
+   "title": "Section 16.2 Alignment: the 'text-align' property",
+   "page": "changes.html",
+   "id": "q21.474"
+  },
+  "C.7.86": {
+   "title": "Section 16.3.1 Underlining, overlining, striking, and blinking: the 'text-decoration' property",
+   "page": "changes.html",
+   "id": "q21.475"
+  },
+  "C.7.87": {
+   "title": "Section 16.3.1 Underlining, overlining, striking, and blinking: the 'text-decoration' property",
+   "page": "changes.html",
+   "id": "q21.476"
+  },
+  "C.7.88": {
+   "title": "Section 16.4 Letter and word spacing: the 'letter-spacing' and 'word-spacing' properties",
+   "page": "changes.html",
+   "id": "q21.477"
+  },
+  "C.7.89": {
+   "title": "Section 16.6 White space: the 'white-space' property",
+   "page": "changes.html",
+   "id": "q21.478"
+  },
+  "C.7.90": {
+   "title": "Section 16.6.1 The 'white-space' processing model",
+   "page": "changes.html",
+   "id": "q21.479"
+  },
+  "C.7.91": {
+   "title": "Section 16.6.1 The 'white-space' processing model",
+   "page": "changes.html",
+   "id": "q21.480"
+  },
+  "C.7.92": {
+   "title": "Section 16.6.1 The 'white-space' processing model",
+   "page": "changes.html",
+   "id": "q21.481"
+  },
+  "C.7.93": {
+   "title": "Section 17.2 The CSS table model",
+   "page": "changes.html",
+   "id": "q21.482"
+  },
+  "C.7.94": {
+   "title": "Section 17.2.1 Anonymous table objects",
+   "page": "changes.html",
+   "id": "q21.483"
+  },
+  "C.7.95": {
+   "title": "Section 17.2.1 Anonymous table objects",
+   "page": "changes.html",
+   "id": "q21.484"
+  },
+  "C.7.96": {
+   "title": "Section 17.4 Tables in the visual formatting model",
+   "page": "changes.html",
+   "id": "q21.485"
+  },
+  "C.7.97": {
+   "title": "Section 17.4 Tables in the visual formatting model",
+   "page": "changes.html",
+   "id": "q21.486"
+  },
+  "C.7.98": {
+   "title": "Section 17.5.2.2 Automatic table layout",
+   "page": "changes.html",
+   "id": "q21.487"
+  },
+  "C.7.99": {
+   "title": "Section 17.5.3 Table height algorithms",
+   "page": "changes.html",
+   "id": "q21.488"
+  },
+  "C.7.100": {
+   "title": "Section 17.5.4 Horizontal alignment in a column",
+   "page": "changes.html",
+   "id": "q21.489"
+  },
+  "C.7.101": {
+   "title": "Section B.2 Informative references",
+   "page": "changes.html",
+   "id": "q21.490"
+  },
+  "C.7.102": {
+   "title": "Section D. Default style sheet for HTML 4",
+   "page": "changes.html",
+   "id": "q21.491"
+  },
+  "C.7.103": {
+   "title": "Section E.2 Painting order",
+   "page": "changes.html",
+   "id": "q21.492"
+  },
+  "C.7.104": {
+   "title": "Appendix G Grammar of CSS 2.1",
+   "page": "changes.html",
+   "id": "q21.493"
+  },
+  "C.8": {
+   "title": "Changes since the working draft of 7 December 2010",
+   "page": "changes.html",
+   "id": "q21.494"
+  },
+  "C.8.1": {
+   "title": "8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.495"
+  },
+  "C.8.2": {
+   "title": "10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.496"
+  },
+  "C.8.3": {
+   "title": "10.3 Calculating widths and margins",
+   "page": "changes.html",
+   "id": "q21.497"
+  },
+  "C.8.4": {
+   "title": "14.3 Gamma correction",
+   "page": "changes.html",
+   "id": "q21.498"
+  },
+  "C.8.5": {
+   "title": "11.1.2 Clipping: the 'clip' property",
+   "page": "changes.html",
+   "id": "q21.499"
+  },
+  "C.8.6": {
+   "title": "9.4.2 Inline formatting contexts",
+   "page": "changes.html",
+   "id": "q21.500"
+  },
+  "C.8.7": {
+   "title": "10.3.2 Inline, replaced elements",
+   "page": "changes.html",
+   "id": "q21.501"
+  },
+  "C.8.8": {
+   "title": "10.1 Definition of \"containing block\"",
+   "page": "changes.html",
+   "id": "q21.502"
+  },
+  "C.8.9": {
+   "title": "13.2.2 Page selectors: selecting left, right, and first pages",
+   "page": "changes.html",
+   "id": "q21.503"
+  },
+  "C.8.10": {
+   "title": "8.3.1 Collapsing margins",
+   "page": "changes.html",
+   "id": "q21.504"
+  },
+  "C.8.11": {
+   "title": "10.8 Line height calculations: the 'line-height' and 'vertical-align' properties",
+   "page": "changes.html",
+   "id": "q21.505"
+  },
+  "C.8.12": {
+   "title": "10.8.1 Leading and half-leading",
+   "page": "changes.html",
+   "id": "q21.506"
+  },
+  "C.8.13": {
+   "title": "10.6.1 Inline, non-replaced elements",
+   "page": "changes.html",
+   "id": "q21.507"
+  },
+  "C.8.14": {
+   "title": "9.5.1 Positioning the float: the 'float' property",
+   "page": "changes.html",
+   "id": "q21.508"
+  },
+  "C.8.15": {
+   "title": "9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.509"
+  },
+  "C.8.16": {
+   "title": "5.12.1 The :first-line pseudo-element",
+   "page": "changes.html",
+   "id": "q21.510"
+  },
+  "C.8.17": {
+   "title": "16.6 White space: the 'white-space' property",
+   "page": "changes.html",
+   "id": "q21.511"
+  },
+  "C.8.18": {
+   "title": "12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.512"
+  },
+  "C.8.19": {
+   "title": "9.7 Relationships between 'display', 'position', and 'float'",
+   "page": "changes.html",
+   "id": "q21.513"
+  },
+  "C.8.20": {
+   "title": "9.4.2 Inline formatting contexts",
+   "page": "changes.html",
+   "id": "q21.514"
+  },
+  "C.8.21": {
+   "title": "4.1.9 Comments",
+   "page": "changes.html",
+   "id": "q21.515"
+  },
+  "C.8.22": {
+   "title": "12.5.1 Lists: the 'list-style-type', 'list-style-image', 'list-style-position', and 'list-style' properties",
+   "page": "changes.html",
+   "id": "q21.516"
+  },
+  "C.8.23": {
+   "title": "9.5.1 Positioning the float: the 'float' property",
+   "page": "changes.html",
+   "id": "q21.517"
+  },
+  "C.8.24": {
+   "title": "9.3 Positioning schemes",
+   "page": "changes.html",
+   "id": "q21.518"
+  },
+  "C.8.25": {
+   "title": "9.10 Text direction: the 'direction' and 'unicode-bidi' properties",
+   "page": "changes.html",
+   "id": "q21.519"
+  },
+  "C.8.26": {
+   "title": "16.3.1 Underlining, overlining, striking, and blinking: the 'text-decoration' property",
+   "page": "changes.html",
+   "id": "q21.520"
+  },
+  "C.8.27": {
+   "title": "16.3.1 Underlining, overlining, striking, and blinking: the 'text-decoration' property",
+   "page": "changes.html",
+   "id": "q21.521"
+  },
+  "C.8.28": {
+   "title": "10.4 Minimum and maximum widths: 'min-width' and 'max-width'",
+   "page": "changes.html",
+   "id": "q21.522"
+  },
+  "C.8.29": {
+   "title": "9.3.2 Box offsets: 'top', 'right', 'bottom', 'left'",
+   "page": "changes.html",
+   "id": "q21.523"
+  },
+  "C.8.30": {
+   "title": "9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.524"
+  },
+  "C.8.31": {
+   "title": "17.4 Tables in the visual formatting model",
+   "page": "changes.html",
+   "id": "q21.525"
+  },
+  "C.8.32": {
+   "title": "11.1.2 Clipping: the 'clip' property",
+   "page": "changes.html",
+   "id": "q21.526"
+  },
+  "C.8.33": {
+   "title": "13.2 Page boxes: the @page rule",
+   "page": "changes.html",
+   "id": "q21.527"
+  },
+  "C.8.34": {
+   "title": "4.1.1 Tokenization",
+   "page": "changes.html",
+   "id": "q21.528"
+  },
+  "C.8.35": {
+   "title": "4.2 Rules for handling parsing errors",
+   "page": "changes.html",
+   "id": "q21.529"
+  },
+  "C.8.36": {
+   "title": "3.1 Definitions",
+   "page": "changes.html",
+   "id": "q21.530"
+  },
+  "C.8.37": {
+   "title": "4.3.4 URLs and URIs",
+   "page": "changes.html",
+   "id": "q21.531"
+  },
+  "C.8.38": {
+   "title": "9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.532"
+  },
+  "C.8.39": {
+   "title": "11.1.1 Overflow: the 'overflow' property",
+   "page": "changes.html",
+   "id": "q21.533"
+  },
+  "C.8.40": {
+   "title": "9.2.1.1 Anonymous block boxes",
+   "page": "changes.html",
+   "id": "q21.534"
+  },
+  "C.8.41": {
+   "title": "16.2 Alignment: the 'text-align' property",
+   "page": "changes.html",
+   "id": "q21.535"
+  },
+  "C.8.42": {
+   "title": "9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.536"
+  },
+  "C.8.43": {
+   "title": "9.4.2 Inline formatting contexts",
+   "page": "changes.html",
+   "id": "q21.537"
+  },
+  "C.8.44": {
+   "title": "5.12 Pseudo-elements",
+   "page": "changes.html",
+   "id": "q21.538"
+  },
+  "C.8.45": {
+   "title": "9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.539"
+  },
+  "C.8.46": {
+   "title": "9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.540"
+  },
+  "C.8.47": {
+   "title": "14.2.1 Background properties: 'background-color', 'background-image', 'background-repeat', 'background-attachment', 'background-position', and 'background'",
+   "page": "changes.html",
+   "id": "q21.541"
+  },
+  "C.8.48": {
+   "title": "9.2.4 The 'display' property",
+   "page": "changes.html",
+   "id": "q21.542"
+  },
+  "C.8.49": {
+   "title": "6.1.2 Computed values",
+   "page": "changes.html",
+   "id": "q21.543"
+  },
+  "C.8.50": {
+   "title": "10.3.2 Inline, replaced elements",
+   "page": "changes.html",
+   "id": "q21.544"
+  },
+  "C.8.51": {
+   "title": "Section 9.5.2 Controlling flow next to floats: the 'clear' property",
+   "page": "changes.html",
+   "id": "q21.545"
+  },
+  "C.8.52": {
+   "title": "G.2 Lexical scanner",
+   "page": "changes.html",
+   "id": "q21.546"
+  },
+  "C.8.53": {
+   "title": "Section 9.5.2 Controlling flow next to floats: the 'clear' property",
+   "page": "changes.html",
+   "id": "q21.547"
+  },
+  "C.8.54": {
+   "title": "9.5 Floats",
+   "page": "changes.html",
+   "id": "q21.548"
+  },
+  "C.8.55": {
+   "title": "10.6.3 Block-level non-replaced elements in normal flow when 'overflow' computes to 'visible'",
+   "page": "changes.html",
+   "id": "q21.549"
+  },
+  "D": {
+   "title": "Default style sheet for HTML 4",
+   "page": "sample.html",
+   "id": "q22.0"
+  },
+  "E": {
+   "title": "Elaborate description of Stacking Contexts",
+   "page": "zindex.html",
+   "id": "q23.0"
+  },
+  "E.1": {
+   "title": "Definitions",
+   "page": "zindex.html",
+   "id": "stacking-defs"
+  },
+  "E.2": {
+   "title": "Painting order",
+   "page": "zindex.html",
+   "id": "painting-order"
+  },
+  "E.3": {
+   "title": "Notes",
+   "page": "zindex.html",
+   "id": "stacking-notes"
+  },
+  "F": {
+   "title": "Full property table",
+   "page": "propidx.html",
+   "id": "q24.0"
+  },
+  "G": {
+   "title": "Grammar of CSS 2.1",
+   "page": "grammar.html",
+   "id": "q25.0"
+  },
+  "G.1": {
+   "title": "Grammar",
+   "page": "grammar.html",
+   "id": "grammar"
+  },
+  "G.2": {
+   "title": "Lexical scanner",
+   "page": "grammar.html",
+   "id": "scanner"
+  },
+  "G.3": {
+   "title": "Comparison of tokenization in CSS 2.1 and CSS1",
+   "page": "grammar.html",
+   "id": "tokenizer-diffs"
+  },
+  "G.4": {
+   "title": "Implementation note",
+   "page": "grammar.html",
+   "id": "q25.4"
+  },
+  "I": {
+   "title": "Index",
+   "page": "indexlist.html",
+   "id": "q27.0"
+  }
+ },
+ "dfns": {
+  "absolutely positioned element": [
+   "9.6"
+  ],
+  "aligned subtree": [
+   "10.8.1"
+  ],
+  "at keyword": [
+   "4.1.5"
+  ],
+  "atomic inline level boxes": [
+   "9.2.2"
+  ],
+  "block boxes": [
+   "9.2.1"
+  ],
+  "block container box": [
+   "9.2.1"
+  ],
+  "block level boxes": [
+   "9.2.1"
+  ],
+  "block level elements": [
+   "9.2.1"
+  ],
+  "border box": [
+   "8.1"
+  ],
+  "clearance .": [
+   "9.5.2"
+  ],
+  "clipping region": [
+   "11.1.2"
+  ],
+  "collapse through": [
+   "8.3.1"
+  ],
+  "collapsed margin": [
+   "8.3.1"
+  ],
+  "containing block": [
+   "10.1",
+   "9.1.2"
+  ],
+  "content area": [
+   "8.1"
+  ],
+  "content box": [
+   "8.1"
+  ],
+  "content height": [
+   "8.1"
+  ],
+  "content width": [
+   "8.1"
+  ],
+  "declaration block": [
+   "4.1.7"
+  ],
+  "default style sheet": [
+   "6.4"
+  ],
+  "flow of an element": [
+   "C.8.24",
+   "9.3"
+  ],
+  "formatting structure": [
+   "2.3"
+  ],
+  "forward compatible parsing": [
+   "4.1"
+  ],
+  "in flow": [
+   "C.8.24",
+   "9.3"
+  ],
+  "inhibits run in behavior": [
+   "C.7.32"
+  ],
+  "initial containing block": [
+   "10.1"
+  ],
+  "inline box": [
+   "9.2.2"
+  ],
+  "inline level boxes": [
+   "9.2.2"
+  ],
+  "inline level elements": [
+   "9.2.2"
+  ],
+  "internal table element": [
+   "17.1"
+  ],
+  "line box": [
+   "9.4.2"
+  ],
+  "list properties": [
+   "12.5"
+  ],
+  "margin box": [
+   "8.1"
+  ],
+  "out of flow": [
+   "C.8.24",
+   "9.3"
+  ],
+  "padding box": [
+   "8.1"
+  ],
+  "page area": [
+   "13.2"
+  ],
+  "page box": [
+   "13.2"
+  ],
+  "page context": [
+   "13.2"
+  ],
+  "page selector": [
+   "13.2"
+  ],
+  "positioning schemes": [
+   "9.3"
+  ],
+  "principal block level box": [
+   "9.2.1"
+  ],
+  "pseudo classes": [
+   "5.10"
+  ],
+  "pseudo elements": [
+   "5.10"
+  ],
+  "relative positioning": [
+   "9.4.3"
+  ],
+  "run in box": [
+   "C.7.32"
+  ],
+  "run in element": [
+   "C.7.32"
+  ],
+  "sans serif": [
+   "15",
+   "15.3.1.2"
+  ],
+  "screen reader": [
+   "A.2"
+  ],
+  "shorthand properties": [
+   "1.4.3"
+  ],
+  "simple selector": [
+   "5.2"
+  ],
+  "stack level": [
+   "9.9.1"
+  ],
+  "stacking context": [
+   "9.9.1"
+  ],
+  "static position containing block": [
+   "C.5.43",
+   "10.3.7"
+  ],
+  "table box": [
+   "C.7.97",
+   "17.4"
+  ],
+  "table element": [
+   "17.1"
+  ],
+  "table wrapper box": [
+   "C.7.97",
+   "17.4"
+  ],
+  "used value": [
+   "6.1.3"
+  ],
+  "user agent (ua)": [
+   "3.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "border box": {
+   "I": 6
+  },
+  "collapse through": {
+   "I": 7
+  },
+  "collapsed margin": {
+   "I": 3
+  },
+  "containing block": {
+   "I": 13
+  },
+  "content box": {
+   "I": 8
+  },
+  "flow of an element": {
+   "I": 2
+  },
+  "in flow": {
+   "I": 7
+  },
+  "initial containing block": {
+   "I": 17
+  },
+  "margin box": {
+   "I": 5
+  },
+  "out of flow": {
+   "I": 4
+  },
+  "padding box": {
+   "I": 7
+  }
+ }
+}

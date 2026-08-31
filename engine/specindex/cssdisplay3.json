@@ -1,0 +1,462 @@
+{
+ "spec": "CSS Display Module Level 3",
+ "key": "cssdisplay3",
+ "base": "https://drafts.csswg.org/css-display-3/",
+ "specUpdated": "5 June 2026",
+ "fetched": "2026-08-31",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Box Layout Modes: the display property",
+   "page": "",
+   "id": "the-display-properties"
+  },
+  "3": {
+   "title": "Display Order: the order property",
+   "page": "",
+   "id": "order-property"
+  },
+  "4": {
+   "title": "Invisibility: the visibility property",
+   "page": "",
+   "id": "visibility"
+  },
+  "5": {
+   "title": "Run-In Layout",
+   "page": "",
+   "id": "run-in-layout"
+  },
+  "1.1": {
+   "title": "Module interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.2": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Outer Display Roles for Flow Layout: the block , inline , and run-in keywords",
+   "page": "",
+   "id": "outer-role"
+  },
+  "2.2": {
+   "title": "Inner Display Layout Models: the flow , flow-root , table , flex , grid , and ruby keywords",
+   "page": "",
+   "id": "inner-model"
+  },
+  "2.3": {
+   "title": "Generating Marker Boxes: the list-item keyword",
+   "page": "",
+   "id": "list-items"
+  },
+  "2.4": {
+   "title": "Layout-Internal Display Types: the table-*",
+   "page": "",
+   "id": "layout-specific-display"
+  },
+  "2.5": {
+   "title": "Box Generation: the none and contents keywords",
+   "page": "",
+   "id": "box-generation"
+  },
+  "2.6": {
+   "title": "Precomposed Inline-level Display Values",
+   "page": "",
+   "id": "legacy-display"
+  },
+  "2.7": {
+   "title": "Automatic Box Type Transformations",
+   "page": "",
+   "id": "transformations"
+  },
+  "2.8": {
+   "title": "The Root Element’s Principal Box",
+   "page": "",
+   "id": "root"
+  },
+  "3.1": {
+   "title": "Reordering and Accessibility",
+   "page": "",
+   "id": "order-accessibility"
+  }
+ },
+ "dfns": {
+  "anonymous box": [
+   "1"
+  ],
+  "atomic inline": [
+   "5"
+  ],
+  "atomic inline box": [
+   "5"
+  ],
+  "block box": [
+   "5"
+  ],
+  "block container": [
+   "5"
+  ],
+  "block container box": [
+   "5"
+  ],
+  "block formatting context": [
+   "5"
+  ],
+  "block formatting context root": [
+   "5"
+  ],
+  "block layout": [
+   "5"
+  ],
+  "block level": [
+   "2.1",
+   "5"
+  ],
+  "block level box": [
+   "2.1"
+  ],
+  "block level content": [
+   "5"
+  ],
+  "box tree": [
+   "1"
+  ],
+  "containing block": [
+   "5"
+  ],
+  "containing block chain": [
+   "5"
+  ],
+  "data dfn type value data export id valdef display block block": [
+   "2.1"
+  ],
+  "data dfn type value data export id valdef display contents contents": [
+   "2.5"
+  ],
+  "data dfn type value data export id valdef display flex flex": [
+   "2.2"
+  ],
+  "data dfn type value data export id valdef display flow flow": [
+   "2.2"
+  ],
+  "data dfn type value data export id valdef display flow root flow root": [
+   "2.2"
+  ],
+  "data dfn type value data export id valdef display grid grid": [
+   "2.2"
+  ],
+  "data dfn type value data export id valdef display inline block inline block": [
+   "2.6"
+  ],
+  "data dfn type value data export id valdef display inline flex inline flex": [
+   "2.6"
+  ],
+  "data dfn type value data export id valdef display inline grid inline grid": [
+   "2.6"
+  ],
+  "data dfn type value data export id valdef display inline inline": [
+   "2.1"
+  ],
+  "data dfn type value data export id valdef display inline table inline table": [
+   "2.6"
+  ],
+  "data dfn type value data export id valdef display list item list item": [
+   "2.3"
+  ],
+  "data dfn type value data export id valdef display none none": [
+   "2.5"
+  ],
+  "data dfn type value data export id valdef display ruby base container ruby base container": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display ruby base ruby base": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display ruby ruby": [
+   "2.2"
+  ],
+  "data dfn type value data export id valdef display ruby text container ruby text container": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display ruby text ruby text": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display run in run in": [
+   "2.1"
+  ],
+  "data dfn type value data export id valdef display table caption table caption": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table cell table cell": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table column group table column group": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table column table column": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table footer group table footer group": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table header group table header group": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table row group table row group": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table row table row": [
+   "2.4"
+  ],
+  "data dfn type value data export id valdef display table table": [
+   "2.2"
+  ],
+  "display box": [
+   "2"
+  ],
+  "display inside": [
+   "2"
+  ],
+  "display internal": [
+   "2"
+  ],
+  "display legacy": [
+   "2"
+  ],
+  "display listitem": [
+   "2"
+  ],
+  "display outside": [
+   "2"
+  ],
+  "display type": [
+   "2"
+  ],
+  "document order": [
+   "5"
+  ],
+  "element tree": [
+   "1"
+  ],
+  "establish an independent formatting context": [
+   "5"
+  ],
+  "established an independent formatting context": [
+   "5"
+  ],
+  "establishes an independent formatting context": [
+   "5"
+  ],
+  "establishing an independent formatting context": [
+   "5"
+  ],
+  "flow layout": [
+   "2.2"
+  ],
+  "formatting context": [
+   "5"
+  ],
+  "in flow": [
+   "5"
+  ],
+  "in flow box": [
+   "5"
+  ],
+  "independent formatting context": [
+   "5"
+  ],
+  "initial containing block": [
+   "5"
+  ],
+  "inline block": [
+   "2"
+  ],
+  "inline block box": [
+   "2"
+  ],
+  "inline box": [
+   "5"
+  ],
+  "inline formatting context": [
+   "5"
+  ],
+  "inline level": [
+   "2.1",
+   "5"
+  ],
+  "inline level box": [
+   "2.1"
+  ],
+  "inline level content": [
+   "5"
+  ],
+  "inner display type": [
+   "2"
+  ],
+  "internal ruby box": [
+   "2.4"
+  ],
+  "internal ruby element": [
+   "2.4"
+  ],
+  "internal table box": [
+   "2.4"
+  ],
+  "internal table element": [
+   "2.4"
+  ],
+  "invisible box": [
+   "4"
+  ],
+  "invisible boxes": [
+   "4"
+  ],
+  "layout internal": [
+   "2.4"
+  ],
+  "non replaced": [
+   "5"
+  ],
+  "non replaced element": [
+   "5"
+  ],
+  "order modified document order": [
+   "3"
+  ],
+  "out of flow": [
+   "5"
+  ],
+  "out of flow box": [
+   "5"
+  ],
+  "outer display type": [
+   "2"
+  ],
+  "parent box": [
+   "1"
+  ],
+  "principal box": [
+   "5"
+  ],
+  "replaced element": [
+   "5"
+  ],
+  "root element": [
+   "5"
+  ],
+  "run in": [
+   "5"
+  ],
+  "run in box": [
+   "5"
+  ],
+  "run in sequence": [
+   "5"
+  ],
+  "table caption box": [
+   "2.4"
+  ],
+  "text node": [
+   "1"
+  ],
+  "text nodes": [
+   "1"
+  ],
+  "text sequence": [
+   "1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "anonymous box": {
+   "5": 4
+  },
+  "block box": {
+   "2": 3
+  },
+  "block container": {
+   "2": 3,
+   "2.2": 3
+  },
+  "block formatting context": {
+   "2.2": 4
+  },
+  "block level": {
+   "2": 5
+  },
+  "box tree": {
+   "2": 2,
+   "5": 2
+  },
+  "display inside": {
+   "2.2": 2
+  },
+  "display legacy": {
+   "5": 2
+  },
+  "display outside": {
+   "2.1": 2
+  },
+  "display type": {
+   "5": 2
+  },
+  "element tree": {
+   "5": 2
+  },
+  "flow layout": {
+   "5": 2,
+   "2.1": 3
+  },
+  "formatting context": {
+   "2.2": 2
+  },
+  "inline block": {
+   "5": 3
+  },
+  "inline box": {
+   "2": 3
+  },
+  "inline level": {
+   "2": 5
+  },
+  "inner display type": {
+   "5": 8,
+   "2.2": 2,
+   "2.4": 4,
+   "2.7": 2
+  },
+  "invisible boxes": {
+   "5": 2
+  },
+  "layout internal": {
+   "5": 2
+  },
+  "outer display type": {
+   "5": 3,
+   "2.1": 2,
+   "2.2": 3
+  },
+  "parent box": {
+   "5": 2
+  },
+  "principal box": {
+   "1": 4
+  },
+  "replaced element": {
+   "2.4": 2
+  },
+  "text nodes": {
+   "5": 2
+  },
+  "text sequence": {
+   "5": 4,
+   "2.5": 3
+  }
+ }
+}
