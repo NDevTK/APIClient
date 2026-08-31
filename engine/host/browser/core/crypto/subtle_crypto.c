@@ -84,18 +84,35 @@ static JSAtom    g_atom_length = JS_ATOM_NULL;
    by description and nothing else would have shown. */
 static JSRuntime *g_rt;
 
-/* WEB IDL §3.7.7 Operations' BRAND CHECK — "If jsValue does not implement the interface target, throw a
-   TypeError", so `SubtleCrypto.prototype.digest.call({}, …)` is one. Because the operation's return type is a
-   promise, §3.7.7 makes that a REJECTION rather than a throw, which core/idl_args performs for every member
-   that declares one. This only has to state the TypeError.
-   THE NUMBER USED TO READ §3.7.5, WHICH IS "CONSTANTS" — a real section with no brand check in it at all, so
-   the citation resolved and said nothing the code claims. */
-static bool sd_brand(JSContext *ctx, JSValueConst this_val)
+/* WEB IDL §3.7 Interfaces' implementation-check an object, step 3's `interface` — "If object does not
+ * implement interface, then throw a TypeError" — as the PREDICATE core/idl_args' idl_this_iface takes. §14's
+ * SubtleCrypto is exactly one class and nothing inherits from it, so implementing it IS carrying that class
+ * id; the component that owns the interface is the only thing that can answer that, which is why the
+ * declaration names a predicate rather than restating the test.
+ *
+ * IT IS A DECLARATION AND NO LONGER A CALL IN EACH BODY, AND THAT IS AN ORDER RATHER THAN A TIDY-UP. §3.7.7
+ * Operations' create an operation function asks the receiver in STEP 2's TRY-LIST at its step 2.1.2.3 — "If
+ * jsValue does not implement the interface target, throw a TypeError" — and only reaches "compute the
+ * effective overload set" at 2.1.4 and §3.6 Overload resolution algorithm at 2.1.5, so EVERY argument
+ * conversion runs after it. A body runs after all of them, so the test written there let
+ * `SubtleCrypto.prototype.importKey.call({}, {toString(){ window.ran = true; return "raw"; }}, …)` run the
+ * page's `toString` and refuse afterwards, where a browser refuses with `window.ran` still undefined. It also
+ * put §3.6 step 5's ARITY refusal ahead of the receiver's, which is the same difference one step earlier.
+ *
+ * STEP 2 HOLDS TWO SIBLING LISTS — the try-list those sub-numbers belong to, and the list under "And then, if
+ * an exception E was thrown" that restarts at 1 — so a bare `2.1` names two different steps and the list is
+ * named here rather than left to the sub-number alone.
+ *
+ * BOTH REFUSALS ARE A REJECTION AND NOT A THROW, which is why the order is observable through a `.catch` and
+ * not only through a `try`: the four members declare idl_returns_promise, and step 2's exception-list returns
+ * `! Call(%Promise.reject%, %Promise%, «E»)` for a promise-typed operation.
+ *
+ * THE NUMBER USED TO READ §3.7.5, WHICH IS "CONSTANTS" — a real section with no brand check in it at all, so
+ * the citation resolved and said nothing the code claims. */
+static bool subtle_crypto_is(JSValueConst v)
 {
     DCHECK(g_subtle_class != 0, "a SubtleCrypto member ran before subtle_crypto_init declared the class");
-    if (JS_GetClassID(this_val) == g_subtle_class) return true;
-    JS_ThrowTypeError(ctx, "a SubtleCrypto member was reached on something that is not a SubtleCrypto");
-    return false;
+    return JS_GetClassID(v) == g_subtle_class;
 }
 
 /* §32.2's REGISTRY ROWS FOR THE "digest" OPERATION: "The recognized algorithm names are "SHA-1", "SHA-256",
@@ -373,10 +390,6 @@ static int sd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         DCHECK(argc >= 2, "§14.3.5's digest ran with fewer than its two declared arguments — Web IDL §3.6 "
                           "step 5 refuses that in the prologue and §3.7.7 turns the refusal into a rejection, "
                           "so the body is only ever entered with both");
-        if (!sd_brand(ctx, hdr->this_val)) {
-            JS_FreeValue(ctx, cb_result);
-            return sc_reject(ctx, &s->p, presult);
-        }
     }
     /* AN ABRUPT REQUEST RESULT ARRIVES AT THE HELPER THAT PARKED, AS ITS OWN -1 — and it is taken THERE, at
        SD_NAME's and SD_NAME_STR's `if (r < 0) return sc_reject(...)`, never by a test at the top of this
@@ -745,10 +758,6 @@ static int sv_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                "entered with all of them");
         DCHECK(magic == SC_M_SIGN || magic == SC_M_VERIFY,
                "the sign/verify machine ran under a magic neither member declares");
-        if (!sd_brand(ctx, hdr->this_val)) {
-            JS_FreeValue(ctx, cb_result);
-            return sc_reject(ctx, &s->p, presult);
-        }
     }
     /* Only SV_NAME and SV_NAME_STR park on a request able to throw — the same claim §14.3.5's machine makes
        and for the same reason: SV_SELECT parks on step_fork_run, and the three walking stages rest on
@@ -1141,10 +1150,6 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         sc_promise_begin(ctx, &s->p);
         DCHECK(argc >= 5, "§14.3.9's importKey ran with fewer than its five declared arguments — Web IDL §3.6 "
                           "step 5 refuses that in the prologue and §3.7.7 turns the refusal into a rejection");
-        if (!sd_brand(ctx, hdr->this_val)) {
-            JS_FreeValue(ctx, cb_result);
-            return sc_reject(ctx, &s->p, presult);
-        }
         s->extractable = (uint8_t)(JS_ToBool(ctx, argc > 3 ? argv[3] : JS_UNDEFINED) != 0);
         /* §9's NORMALIZED VALUE, AS A MASK. It cannot fail: the position is declared IDL_SEQUENCE_ENUM, so Web
            IDL §3.2.18 refused every string that is not a KeyUsage during the argument conversion — which §3.6
@@ -1542,15 +1547,24 @@ void subtle_crypto_init(JSContext *ctx)
     /* §14's `Promise<ArrayBuffer> digest(...)`: Web IDL §3.7.7 makes EVERY throw of this member — the brand
        check, the arity, both argument conversions and the algorithm itself — a rejected promise. */
     idl_returns_promise();
+    /* §3.7's implementation-check an object, step 3, STATED RATHER THAN PERFORMED — see subtle_crypto_is for
+       why the position of this statement is the whole point of it. Every one of §14's members is a REGULAR
+       operation on the interface prototype object, so every one of them makes it. */
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
     g_id_sign = idl_method_id_step(ctx, SV_ARGS_SIGN, 3, NULL, 0, &SV_DECL, SC_M_SIGN);
     idl_returns_promise();
-    /* §3.2.15's `I` for the `CryptoKey key` position — the class, which is what cannot be forged. */
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
+    /* §3.2.15's `I` for the `CryptoKey key` position — the class, which is what cannot be forged. THE TWO
+       BRANDS ARE ANSWERED AT OPPOSITE ENDS OF THE MEMBER: this one is part of §3.6's conversion at 2.1.5, the
+       receiver's is 2.1.2.3, so `sign.call({}, alg, notAKey, data)` names the RECEIVER and not the key. */
     idl_iface_brand(crypto_key_class());
     g_id_verify = idl_method_id_step(ctx, SV_ARGS_VERIFY, 4, NULL, 0, &SV_DECL, SC_M_VERIFY);
     idl_returns_promise();
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
     idl_iface_brand(crypto_key_class());
     g_id_import_key = idl_method_id_step(ctx, IK_ARGS, 5, NULL, 0, &IK_DECL, 0);
     idl_returns_promise();
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
     /* §3.2.18's `E` AT EACH OF THE TWO POSITIONS §14.3.9's IDL declares one at — position 0's own type, and
        position 4's ELEMENT type. */
     idl_arg_enum(0, IK_FORMATS);

@@ -549,6 +549,10 @@ static void idl_seal_check_typed_arrays(void);
 static void idl_seal_check_ifaces(void);
 /* And for idl_arg_enum's — every §3.2.18 position of every member has a value list to be a member of. */
 static void idl_seal_check_enums(void);
+/* And for idl_this_iface's — §3.7's implementation-check takes ONE `interface`, so one interface identifier is
+   answered by ONE predicate however many members name it. Asked here for the same reason as the two above: a
+   declaration cannot see the other declarations of its own interface. */
+static void idl_seal_check_receivers(void);
 static void idl_seal_check_dictionaries(void);
 
 void idl_args_seal(void)
@@ -557,6 +561,7 @@ void idl_args_seal(void)
     idl_seal_check_typed_arrays();
     idl_seal_check_ifaces();
     idl_seal_check_enums();
+    idl_seal_check_receivers();
     idl_seal_check_dictionaries();
     g_sealed = true;
     g_sealed_at = g_n;
@@ -1215,6 +1220,78 @@ static void idl_seal_check_enums(void)
                     m->name ? m->name : "(not installed)", k);
         }
     }
+}
+
+/* ---- Web IDL §3.7 Interfaces' implementation-check an object, its `interface` INPUT, ACROSS EVERY MEMBER ---
+ *
+ * ONE INTERFACE HAS ONE IMPLEMENTATION TEST. §3.7's implementation-check takes a single `interface`, and
+ * idl_this_iface pairs a PREDICATE with an IDENTIFIER by hand at every member that states one — so two members
+ * of one interface can name two different tests, and the disagreement then decides which receivers each of
+ * them accepts with nothing to say so. A member branded against a NEIGHBOURING component's predicate is the
+ * same defect and reads as a copy-paste that compiled: it is the only kind of receiver bug that makes a member
+ * refuse a receiver a browser accepts, which is a page-visible TypeError on a correct call rather than a
+ * missing refusal. It is asked at the SEAL for idl_seal_check_ifaces' own reason — a declaration cannot see
+ * the other declarations of its own interface, and the conversion would only find out on the first call that
+ * reaches a member, so an interface nothing on this page happens to call would carry the disagreement to
+ * whichever page does.
+ *
+ * THE OTHER DIRECTION IS NOT ASSERTED AND MUST NOT BE. One predicate legitimately answers for two identifiers
+ * wherever this engine has a single class for an interface and for something that inherits it — a member of
+ * `StyleSheet` reached on the only stylesheet objects that exist is answered by the very test a member of
+ * `CSSStyleSheet` uses — so requiring the pairing to be injective would refuse a correct declaration.
+ *
+ * IT IS DEV-ONLY BODY AND NOT ONLY DEV-ONLY ASSERTS, WHICH IS A DELIBERATE DIFFERENCE FROM THE TWO CHECKS
+ * ABOVE. The comparison below DEREFERENCES `this_iface`, and what guarantees it is non-NULL beside a non-NULL
+ * `this_is` is a DCHECK in idl_this_iface — which is compiled out in exactly the build a live `strcmp` would
+ * still run in. Leaving the loop live would trade a dev abort for a release segfault, so the read lives where
+ * the statement that makes it safe lives.
+ *
+ * NAMED RESIDUAL — COVERAGE IS THE HALF THIS CANNOT ASK, AND IT IS THE HALF THAT MATTERS MOST WHILE THE
+ * PLATFORM IS BEING CONVERTED. WHAT IS NOT COVERED: whether a member of an interface whose OTHER members
+ * declare a receiver declares one itself. The pool holds no member→interface link for a member that declared
+ * nothing, so the next member added to a converted component is silently unchecked — and it is WORSE than an
+ * unconverted member, because converting a component DELETES the body's own brand test, so the member that
+ * forgets has no test at all rather than a late one. WHAT THE NEXT DIFF BUILDS: the receiver predicate
+ * recorded against the INTERFACE PROTOTYPE OBJECT where the component already names it — idl_interface_tag,
+ * which §3.7.3 makes every interface prototype call — and read at idl_install_method, the one point every
+ * installed operation converges on, so an unbranded member installed on a converted prototype aborts naming
+ * itself. HOW ITS ABSENCE WOULD SHOW: a member added to a component that has converted takes EVERY receiver,
+ * and `Iface.prototype.<new>.call({})` reaches the body where its converted neighbours throw.
+ * AND THAT DIFF OWES A MEASUREMENT RATHER THAN AN ASSUMPTION, because the prototype is not always there and a
+ * check that skips a target in silence is the zero this file spends its length warning about: an install
+ * target that carries no §3.7.3 tag — a [Global] object, a namespace object, the instance an unforgeable
+ * operation is installed on — has no interface for that read to find, and a handful of interface prototypes
+ * are tagged AFTER their first install rather than before it, which is an ordering to fix at those components
+ * rather than a case to skip.
+ */
+static void idl_seal_check_receivers(void)
+{
+#if APICLIENT_DEV
+    int i, k;
+
+    for (i = 0; i < g_n; i++) {
+        const IdlMember *m = idl_member(i);
+
+        if (m->this_is == NULL) continue;
+        DCHECK(m->this_iface != NULL,
+               "a member carries §3.7's implementation test with no interface identifier beside it — "
+               "idl_this_iface sets the two together, so a member holding one of them was written to by "
+               "something that is not that declaration");
+        for (k = 0; k < i; k++) {
+            const IdlMember *o = idl_member(k);
+
+            if (o->this_is == NULL || strcmp(o->this_iface, m->this_iface) != 0) continue;
+            DCHECKF(o->this_is == m->this_is,
+                    "members `%s` and `%s` both declare interface %s as their receiver and name two different "
+                    "implementation tests for it — Web IDL §3.7 Interfaces' implementation-check an object "
+                    "takes ONE `interface`, so one of these two members refuses receivers the other accepts "
+                    "and a page calling both on the same object is told the object implements the interface "
+                    "and does not. State the interface's own predicate at both",
+                    o->name ? o->name : "(not installed)", m->name ? m->name : "(not installed)",
+                    m->this_iface);
+        }
+    }
+#endif
 }
 
 static int idl_declared_positions(const IdlMember *m)
