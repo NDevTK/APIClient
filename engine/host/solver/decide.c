@@ -1093,11 +1093,19 @@ void *decide_freeze_path(void) {
  * truncate, and its length-prefixed fields mean no member can spell another's boundary.
  *
  * Returns a heap key the caller frees, or NULL when the value has no identity this engine can spell —
- * uncertainty, which keeps both arms. */
+ * uncertainty, which keeps both arms.
+ *
+ * AND IT IS THE BRANCH IDENTITY, NOT THE VALUE'S OWN, WHICH IS ONE STRING FOR EVERY VALUE BUT A NEGATION. A
+ * program spells one gate two ways — `if (p)` and `if (!p)` — and they are not two predicates: §7.1.2
+ * ToBoolean stands between the value and the branch in both, so the second asks the first's question with the
+ * arms swapped. Keying them apart would make a flow that has already fixed `p` fork AGAIN at `!p` and then
+ * stand on two arms that contradict each other — sound, since it only over-explores, and the loss of the one
+ * refinement that makes the frontier tractable. So the polarity is applied to the ARM by the caller and never
+ * to this key; concolic_branch_ident_c states the whole of it. */
 static char *decide_key(JSValueConst cond) {
     const char *f[1];
 
-    f[0] = concolic_ident_c(cond);
+    f[0] = concolic_branch_ident_c(cond);
     return concolic_ident_compose("branch", f, 1);
 }
 
@@ -1112,7 +1120,11 @@ int decide_value_arm(JSValueConst cond)
     if (!key) return -1;
     arm = concolic_branch_decided(key);
     free(key);
-    return arm;
+    /* THE KEY IS THE PREDICATE'S AND THE ANSWER IS THIS VALUE'S, and for a negation those differ by exactly
+       the polarity — the same XOR decide_branch applies to the arm it returns. Asking for the key's answer
+       and handing it back unflipped would tell a caller holding `!p` what it would have learned holding `p`,
+       which is the arm it did not ask about. -1 is not decided and has no complement. */
+    return arm < 0 ? arm : (arm ^ concolic_branch_neg(cond));
 }
 
 /* THE RECORDED ARM AT THE CURSOR, or -1 WHEN THE SLOT THERE ANSWERS A DIFFERENT QUESTION — the whole of what
@@ -1449,9 +1461,20 @@ static void decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
 static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking) {
     const char *src = NULL, *tok = NULL;
     char *key;
-    int op, forked = 0, arm, real;
+    int op, forked = 0, arm, real, neg;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
+
+    /* THE POLARITY BETWEEN THE VALUE THIS BRANCH TESTS AND THE PREDICATE IT IS ABOUT — read ONCE, here, and
+       applied at exactly two places: to the observation on the way in, and to the arm on the way out. Between
+       those two lines this whole function works in the PREDICATE's terms, which is what lets the pin, the
+       exclusion, the bound and the call predicate below record off the same three readers with no case for a
+       negation anywhere: `arm` means "the page's own gate answered true", whichever way the page spelled the
+       test. Everything that is not a negation answers 0 and reads exactly as it did. */
+    neg = concolic_branch_neg(cond);
+    DCHECK(neg == 0 || neg == 1,
+           "a branch condition carries a polarity that is neither itself nor its complement — the arm below "
+           "is XORed with this, so a third value would return an arm the interpreter reads as forked");
 
     /* If the condition is a COMPARISON result (`x === 'admin'`), the taken arm may PIN the source to a concrete
        value — CONCRETIZE-ON-PIN, so later reads compute the REAL @H value, not the shape. */
@@ -1461,6 +1484,12 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        it: which arm this flow keeps if this branch is new, and whether the arm it ends on is FORCED. Taking it
        twice would be two reads of one example with nothing forcing them to agree. */
     real = decide_real_arm(ctx, cond);
+    /* …IN THE PREDICATE'S TERMS, because that is what `arm` is measured in below and the two are compared to
+       each other. The example rides the value the interpreter produced — `!p`'s example is the real `!` run on
+       `p`'s — so un-flipping it here is reading the same observation from the other end, never re-deriving it.
+       UNOBSERVED has no complement and must not acquire one: it is the positive statement that nothing this
+       run saw says which arm is real, and XORing it would turn that into the arm 0. */
+    if (real != REAL_ARM_UNOBSERVED) real ^= neg;
     key = decide_key(cond);
     arm = decide_arm(ctx, key, restartable, nonforking, real, &forked);
     free(key);
@@ -1551,6 +1580,10 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
             concolic_strpred_file(sp.subject, sp.method, sp.args, sp.nargs, arm);
         }
     }
+    /* AND BACK INTO THE VALUE'S TERMS. Everything above recorded a fact about the PREDICATE; the interpreter
+       asked about the CONDITION, and for a negation those are complements. The forked bit is unaffected —
+       whether a sibling was prepared is a fact about the branch and not about which way it reads. */
+    arm ^= neg;
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 

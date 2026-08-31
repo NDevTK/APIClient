@@ -48,6 +48,19 @@ typedef struct {
     char *src;          /* INJECTION IDENTITY: the source an @S candidate substitutes at */
     char *root;         /* DELIVERY PROVENANCE: where the bytes ENTERED. Inherited unchanged; NULL iff !src */
     char *ident;        /* IDENTITY: this exact value, composed below. NULL = this engine cannot spell it */
+    /* WHICH PREDICATE A BRANCH OVER THIS VALUE IS ASKING ABOUT, AND WITH WHAT POLARITY — a SECOND name, and
+       the two are not interchangeable because they answer two questions. `ident` names THIS VALUE, which is
+       what a DERIVATION composes from (`"" + !p` and `"" + p` must not collide). `br_key` names the value
+       whose TRUTH this one's truth is a function of, which is what the path constraint is keyed by — and for
+       a negation that is the OPERAND, because `!p` is not a second predicate about `p`, it is `p` read the
+       other way round. §7.1.2 ToBoolean is applied on BOTH sides of `if (p)` and `if (!p)` alike, so nothing
+       is lost or invented by saying so: one question, two spellings, ONE constraint entry, and a flow that
+       decided `p` decides `!p` without forking again.
+       NULL br_key = this value's own `ident` is the key, which is every value that is not a negation. The two
+       are written together at the one mint that produces them and asserted together there; `br_neg` may be 1
+       only where `br_key` names something, since a polarity against no predicate is a fact about nothing. */
+    char *br_key;
+    signed char br_neg; /* 1 = this value is the logical COMPLEMENT of the predicate `br_key` names */
     JSValue example;    /* concrete example, or JS_UNDEFINED */
     int cmp_op;         /* for an EQUALITY RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
     char *cmp_tok;      /* the concrete side of the equality */
@@ -965,6 +978,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->src);
     free(c->root);
     free(c->ident);
+    free(c->br_key);
     free(c->cmp_tok);
     free(c->cmp_subj);
     free(c->cmp_subj_ident);
@@ -1737,6 +1751,61 @@ static void pred_set_strpred(JSValueConst v, const char *method, char **args, in
     CHECK(c->sp_subj, "concolic: OOM recording the hole a call predicate is a fact about");
 }
 
+/* CARRY A PREDICATE'S OBSERVATION ONTO ITS NEGATION — UNCHANGED, WHICH IS THE POINT AND NOT AN OVERSIGHT.
+ *
+ * decide.c reads the equality, the ordering and the call predicate off the value a branch tests, and it reads
+ * them TOGETHER WITH THE ARM: it pins on the arm that makes the equality true, excludes on the other, states
+ * `rel` or `rel_op_negate(rel)` by the arm, files `holds` as the arm. So there are two places the negation
+ * could live — in the RECORD or in the ARM — and putting it in the record would mean negating three different
+ * kinds of fact in three different ways, one of which (a call predicate) has no negation at all: §RUN-DON'T-
+ * MATCH forbids deciding what `startsWith` MEANS, so there is no paired method to flip to.
+ * Putting it in the ARM costs one XOR and is the same statement for all three. So the observation is carried
+ * verbatim and `br_neg` carries the polarity — which is why this function copies and never inverts.
+ *
+ * IT IS NOT A DERIVATION AND SO IT IS NOT THE INVERSION §Re-execution FORBIDS. `x.slice(1).startsWith("/api")`
+ * is a fact about `x.slice(1)` and carrying it onto `x` would require undoing `slice`, which is banned by
+ * name. Nothing is undone here: `!p` and `p` are the SAME boolean, and §7.1.2 ToBoolean — the only operation
+ * between the value and the branch — is applied identically whichever way the page spelled the test.
+ *
+ * `c->member` IS DELIBERATELY NOT CARRIED. It is the property NAME a member read went through, and a negation
+ * is not a read of anything; carrying it would make `!x.foo` answer that it was read under `foo`, and the call
+ * handler names the method it reports from exactly that field. */
+static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
+    Concolic *d = JS_GetOpaque(dst, g_concolic_class);
+    Concolic *s = JS_GetOpaque(src, g_concolic_class);
+    int k;
+
+    DCHECK(d != NULL && s != NULL, "a predicate was carried through a negation between values that are not "
+                                   "both concolic — the record read from and the record written to are the "
+                                   "same class or there is no observation to carry");
+    DCHECK(d->cmp_op == OPCMP_NONE && d->rel_op == REL_NONE && d->sp_meth == NULL,
+           "a negation was given a second predicate — a value negates ONE operand, so a record that already "
+           "holds an observation is two predicates wearing one identity and decide.c's own asserts would then "
+           "fire naming a defect one mint away from here");
+    d->cmp_op = s->cmp_op;
+    if (s->cmp_tok)        { d->cmp_tok        = strdup(s->cmp_tok);        CHECK(d->cmp_tok,        "concolic: OOM carrying an equality's token through a negation"); }
+    if (s->cmp_subj)       { d->cmp_subj       = strdup(s->cmp_subj);       CHECK(d->cmp_subj,       "concolic: OOM carrying an equality's hole through a negation"); }
+    if (s->cmp_subj_ident) { d->cmp_subj_ident = strdup(s->cmp_subj_ident); CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation"); }
+    d->rel_op  = s->rel_op;
+    d->rel_num = s->rel_num;
+    if (s->rel_tok)  { d->rel_tok  = strdup(s->rel_tok);  CHECK(d->rel_tok,  "concolic: OOM carrying an ordering's token through a negation"); }
+    if (s->rel_subj) { d->rel_subj = strdup(s->rel_subj); CHECK(d->rel_subj, "concolic: OOM carrying an ordering's hole through a negation"); }
+    if (s->sp_meth)  { d->sp_meth  = strdup(s->sp_meth);  CHECK(d->sp_meth,  "concolic: OOM carrying a call predicate's method through a negation"); }
+    if (s->sp_subj)  { d->sp_subj  = strdup(s->sp_subj);  CHECK(d->sp_subj,  "concolic: OOM carrying a call predicate's hole through a negation"); }
+    d->sp_nargs = s->sp_nargs;
+    if (s->sp_nargs) {
+        DCHECK(s->sp_args != NULL,
+               "a call predicate carries an argument COUNT with no list — the mint writes both or neither, so "
+               "the negation is about to read a list its own operand does not have");
+        d->sp_args = malloc((size_t)s->sp_nargs * sizeof(char *));
+        CHECK(d->sp_args, "concolic: OOM carrying a gate's argument list through a negation");
+        for (k = 0; k < s->sp_nargs; k++) {
+            d->sp_args[k] = strdup(s->sp_args[k]);
+            CHECK(d->sp_args[k], "concolic: OOM carrying an argument a gate passed through a negation");
+        }
+    }
+}
+
 /* A COMPARISON-RESULT bool carrying `src <op> tok`, for a component whose IDL member IS a comparison over its
    own source (HTML §6.2's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
    page's own `x === tok` composes for the same source and token, which is what makes the two ONE constraint
@@ -2405,6 +2474,79 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     return r;
 }
 
+/* §7.1.2 ToBoolean ( arg ) OVER UNKNOWN INPUT, and §13.5.7 Logical NOT Operator ( ! ) with it — see the hook's
+ * contract in quickjs.h for why the operator answers at all.
+ *
+ * THE WHOLE OF THE DESIGN IS THAT THE RESULT IS A NEW VALUE WITH AN OLD PREDICATE. It is a new VALUE because a
+ * program holds it (`var q = !p`), passes it, concatenates it — so it needs an identity of its own or `"" + !p`
+ * and `"" + p` would compose to one derivation. It is an old PREDICATE because a branch over it asks exactly
+ * the question a branch over the operand asks: `if (!p)` is `if (p)` with the arms swapped, and §7.1.2 is
+ * applied on both sides alike. Those two facts are the two fields — `ident` for derivations, `br_key`/`br_neg`
+ * for the branch — and keeping them apart is what buys the feasible-refinement a fresh `("!", p)` constraint
+ * key would have thrown away: with one key, a flow that decided `p` DECIDES `!p` instead of forking a second
+ * time over one predicate and then standing on two arms that contradict each other.
+ *
+ * `!!x` COMPOSES BACK, which is the test that the polarity is a parity and not a wrapper. The inner call gives
+ * `br_key = ident(x), br_neg = 1`; the outer reads those and gives `br_key = ident(x), br_neg = 0`. So
+ * `if (!!x)`, `if (Boolean(x))` and `if (x)` are ONE constraint entry, which is what they are in the program.
+ *
+ * THE EXAMPLE IS THE REAL OPERATION RUN ON THE OPERAND'S — §Solver-half's only sound propagation. §7.1.2 has
+ * no ToPrimitive step, so running it re-enters nothing: an object is true, a string is its length. A value
+ * carrying no example produces none, which is the positive statement decide_real_arm reads as "nothing this
+ * run observed says which arm is real".
+ *
+ * IT MINTS THROUGH concolic_alloc AND NOT concolic_derived, for pred_new's reason exactly: this is a BOOLEAN
+ * the operator computed, so an @S candidate substitution here would answer a predicate with the attacker's
+ * payload string. */
+JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
+    const char *src, *root, *sh, *bkey, *f[2];
+    char *shape, *ident;
+    Concolic *rc;
+    JSValue ex, example = JS_UNDEFINED, r;
+
+    if (!concolic_is(v)) return JS_UNINITIALIZED;
+    DCHECK(negate == 0 || negate == 1,
+           "§7.1.2 ToBoolean was asked for with a polarity that is neither the value nor its complement — the "
+           "parameter is one bit and a third value would compose an identity no operator produces");
+    src  = concolic_src_c(v);
+    root = concolic_root_c(v);
+    sh   = concolic_shape_c(v);
+    shape = shapef(negate ? "!%s" : "Boolean(%s)", sh ? sh : "{}");
+    /* THE POLARITY IS IN THE IDENTITY because `!p` and `Boolean(p)` are OPPOSITE values and a derivation off
+       one must never compose to the other's key. It is NOT in the branch key, which is the same predicate for
+       both — the two fields disagree here on purpose, and that disagreement is the mechanism. */
+    f[0] = negate ? "!" : "ToBoolean"; f[1] = concolic_ident_c(v);
+    ident = concolic_ident_compose("tb", f, 2);
+    ex = concolic_example(ctx, v);
+    if (!JS_IsUndefined(ex)) {
+        int b = JS_ToBool(ctx, ex);
+        DCHECK(b == 0 || b == 1,
+               "§7.1.2 ToBoolean over a concolic's example answered neither true nor false — it answers -1 "
+               "only for an exception value, so a producer has attached a pending throw to a value as its "
+               "example");
+        example = JS_NewBool(ctx, b ^ negate);
+    }
+    JS_FreeValue(ctx, ex);
+    r = concolic_alloc(ctx, shape, src, root, ident, example);
+    free(shape);
+    rc = JS_GetOpaque(r, g_concolic_class);
+    DCHECK(rc != NULL, "a ToBoolean result was minted as something that is not a concolic value");
+    /* THE BRANCH KEY AND ITS POLARITY, WRITTEN TOGETHER — the operand's own branch key, so a chain of
+       negations keys the innermost predicate and never a tower of wrappers. An operand this engine cannot
+       spell leaves BOTH absent, which is the sound answer: no key, no polarity, and every branch over the
+       result keeps both arms. */
+    bkey = concolic_branch_ident_c(v);
+    if (bkey) {
+        rc->br_key = strdup(bkey);
+        CHECK(rc->br_key, "concolic: OOM recording the predicate a negation is the complement of");
+        rc->br_neg = (signed char)(concolic_branch_neg(v) ^ negate);
+    }
+    /* …AND THE OBSERVATION THE OPERAND CARRIES, VERBATIM — see pred_carry_through_not for why it is not
+       inverted here and why the arm is where the negation lives. */
+    pred_carry_through_not(r, v);
+    return r;
+}
+
 /* A BUILTIN OVER AN UNKNOWN OPERAND — see the hook's contract in quickjs.h. The shape records WHICH operation
    produced it, so an @H shape reads as the expression the page actually wrote and an @S search knows which
    source to solve for. Example-free: this engine does not yet run the operation on the operand's example (a
@@ -3011,6 +3153,35 @@ const char *concolic_ident_c(JSValueConst v) {
     return c ? c->ident : NULL;
 }
 
+/* THE PREDICATE A BRANCH OVER THIS VALUE IS ASKING ABOUT — see the field's declaration. It falls back to the
+   value's OWN identity, which is not a default filling a hole: every value that is not a negation IS the
+   predicate a branch over it tests, so the fallback is the answer rather than a stand-in for a missing one. */
+const char *concolic_branch_ident_c(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c) return NULL;
+    DCHECK(c->br_key == NULL || c->ident != NULL,
+           "a value names another predicate as its branch key while having no identity of its own — the two "
+           "are composed from the same operand at one mint, so one present without the other is a negation "
+           "whose own derivations would collide with something else's");
+    return c->br_key ? c->br_key : c->ident;
+}
+
+/* …AND THE POLARITY BETWEEN THE TWO. 0 = this value IS that predicate, 1 = its complement. Read at the branch
+   and applied to the ARM, never to the key, which is the whole of how `if (p)` and `if (!p)` become one
+   constraint entry with two answers instead of two entries with one each. */
+int concolic_branch_neg(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c) return 0;
+    DCHECK(c->br_neg == 0 || c->br_neg == 1,
+           "a value carries a branch polarity that is neither itself nor its complement — the field is one "
+           "bit written at one mint, so a third value is a record some other write reached");
+    DCHECK(c->br_neg == 0 || c->br_key != NULL,
+           "a value carries a polarity against NO predicate — a complement is a fact about something, so a "
+           "1 with no key would flip the arm of a branch keyed by this value's own identity and answer every "
+           "later test of it backwards");
+    return c->br_neg;
+}
+
 
 /* THE EXAMPLE THIS FLOW MAY STILL BELIEVE — §Learning-from-replies' "the forced sibling drops the contradicted
  * example, so only gate-DEPENDENT values degrade to a shape while gate-independent values stay concrete", and
@@ -3242,6 +3413,7 @@ static JSConcolicHooks g_hooks = {
     .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
     .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
+    .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,
     .key_name = concolic_key_name_hook,
     .builtin = concolic_builtin_hook,

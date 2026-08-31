@@ -80,6 +80,25 @@ const char *concolic_root_c(JSValueConst v);
  * and it is why absence is safe here while a wrong identity is not. */
 const char *concolic_ident_c(JSValueConst v);
 
+/* THE PREDICATE A BRANCH OVER THIS VALUE IS ASKING ABOUT — a SECOND name, and a different question from the
+ * identity above, which is why it is a second accessor rather than a refinement of one.
+ *
+ * `concolic_ident_c` names THIS VALUE and is what a DERIVATION composes from. This names the value whose truth
+ * this one's truth is a function of, and is what the per-flow path constraint is keyed by. For everything that
+ * is not a negation the two are the SAME string, and that is not a fallback filling a hole: a value IS the
+ * predicate a branch over it tests. They part company at exactly one operator. `!p` is a new VALUE (a program
+ * holds it, concatenates it, passes it — so `"" + !p` must not compose to `"" + p`'s key) and it is not a new
+ * PREDICATE: `if (!p)` asks what `if (p)` asks, with the arms swapped, because §7.1.2 ToBoolean stands between
+ * the value and the branch in both spellings alike. Giving the negation its own constraint key would make one
+ * flow fork TWICE over one gate and then stand on two arms that contradict each other — sound, since it only
+ * over-explores, and a real loss of the feasible-refinement that makes forced multi-path execution tractable.
+ * So the polarity rides the ARM and never the key, and `concolic_branch_neg` is the half that carries it: 0 =
+ * this value IS that predicate, 1 = its complement. `!!x`, `Boolean(x)` and `x` therefore reach ONE entry.
+ * NULL/0 for an operand this engine cannot spell — no key, no polarity, both arms kept, which is the same
+ * positive statement `concolic_ident_c`'s NULL makes. */
+const char *concolic_branch_ident_c(JSValueConst v);
+int         concolic_branch_neg(JSValueConst v);
+
 /* THE ONE ENCODING every identity and every constraint key is written in — a TAG plus FIELDS, each written as
    `<byte length>:<bytes>`. Two different (tag, fields) sequences can never write the same string, so a
    collision is impossible BY CONSTRUCTION rather than detected: no field's contents can spell another field's
@@ -392,6 +411,12 @@ JSValue     concolic_typeof_hook(JSContext *ctx, JSValueConst v);   /* JS_UNINIT
    per call site. */
 int         concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops);
 JSValue     concolic_tostr_hook(JSContext *ctx, JSValueConst v);
+/* JSConcolicHooks.to_bool — §7.1.2 ToBoolean ( arg ) over unknown input, and §13.5.7's Logical NOT with
+   it (`negate`). Same rule as .arith and .to_str: the operator answers because the conversion boundary owes C
+   a real boolean, and for a concolic that boundary answers from the REPRESENTATION — an ordinary object, so
+   `true`. The result carries the operand's own predicate as its BRANCH KEY with the polarity beside it, which
+   is what makes `if (p)` and `if (!p)` one constraint entry; see concolic_branch_ident_c. */
+JSValue     concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate);
 /* JSConcolicHooks.key_read — `obj[x]` with an unknown key reads an unknown property. */
 JSValue     concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key);
 /* JSConcolicHooks.key_name — the real string an unknown key denotes (its shape), stable per source. */
@@ -536,31 +561,21 @@ RelOp       concolic_rel(JSValueConst v, const char **ptok, double *pnum, const 
  * has to handle: concolic_exotic_get answers a pinned source with the real bytes, so `x.startsWith("/api")`
  * on a pinned `x` runs the REAL §22.1.3.23 builtin over a real String and the branch does not fork at all.
  *
- * RESIDUAL — `if (!x.startsWith("/api"))` RECORDS NOTHING, AND THE LOSS IS NOT IN THIS MECHANISM. It is the
- * shape a real bundle writes most often, so it is stated here rather than left to be rediscovered, and it is
- * a residual rather than an assert because everything on this side is CORRECT for what reaches it — the crash
- * would fire on a branch this file never sees.
- *   WHAT IS NOT COVERED: a branch whose condition is the LOGICAL NEGATION of a concolic. `!` compiles to
- *   OP_lnot, whose interpreter body takes JS_ToBoolFree of its operand, and JS_ToBoolFree answers `true` for
- *   every JS_TAG_OBJECT — a concolic is one — so `!unknown` is the concrete `false` before OP_if_false runs
- *   and solver_decide is never asked. It is NOT specific to a call predicate: `if (!(x === "a"))` and
- *   `if (!(x > 5))` lose their forks identically, so `excludes` and `bounds` have the same hole. `&&` and `||`
- *   are unaffected — the compiler branches on the operand itself (OP_if_false / OP_if_true) with no OP_lnot
- *   between — which is why a conjunction of gates records both of them.
- *   WHAT THE NEXT DIFF BUILDS: a `lnot` entry on quickjs.h's JSConcolicHooks (the struct declares add, cmp,
- *   is, absent, present, publish, rel, type_of, arith, to_str and key_read, and no negation among them),
- *   consulted at OP_lnot, plus its host half here — which mints a predicate carrying the operand's own
- *   observation NEGATED (an equality's OPCMP_EQ/NE swapped, an ordering's relation through rel_op_negate, a
- *   call predicate's `holds` flipped), so decide.c files the same three facts off the same three readers with
- *   no new case. What it must also settle, and what makes it a diff of its own rather than a line: the
- *   negation's constraint KEY. Composing a fresh `("!", operand)` identity makes `if (p)` and `if (!p)` two
- *   entries, so one flow testing both forks twice over one predicate — sound, since it only over-explores,
- *   and a real loss of the feasible-refinement this file exists to keep.
- *   HOW ITS ABSENCE WOULD SHOW: in testing/fixtures/h_predicates.html's own terms — write a case
- *   `if (!f.x.startsWith("/api")) fetch("/x1?page=" + f.x); else fetch("/x2?page=" + f.x);` and exactly ONE
- *   request is emitted (`/x2`, the else arm, taken concretely), carrying no `predicates` key, while the
- *   `if`/`else` spelling of the identical gate two lines above emits BOTH with `holds:true` and
- *   `holds:false`. One gate, two spellings, two requests versus one. */
+ * A NEGATED GATE RECORDS THE SAME FACT AS ITS POSITIVE SPELLING, AND THE MECHANISM THAT MAKES IT SO IS NOT
+ * HERE. `if (!x.startsWith("/api"))` is the shape a real bundle writes most often, and it used to record
+ * nothing at all — not because this side was wrong, but because §7.1.2 ToBoolean answered the branch before
+ * the branch was asked: `!` compiles to OP_lnot, whose interpreter body coerces its operand, and the coercion
+ * of a concolic is a coercion of its REPRESENTATION, which is an ordinary object and therefore `true`. So
+ * `!unknown` was the concrete `false` and the fork never happened. The defect shape is worth keeping because
+ * it recurs wherever a value class rides an engine's own tag: a coercion that answers from the representation
+ * is not a coarse answer, it is a DECIDED one, and it deletes an arm with nothing to say so.
+ * The operator answers now (quickjs.h's JSConcolicHooks.to_bool, concolic_tobool_hook), and the arm — never
+ * the constraint key — carries the polarity, so ONE entry serves both spellings. What this file therefore
+ * does NOT do, and must not be made to do, is negate the observation: an equality's OPCMP_EQ/NE, an ordering's
+ * relation and a call's `holds` would each need their own inversion, and the third has none — §RUN-DON'T-MATCH
+ * forbids deciding what `startsWith` MEANS, so there is no paired method to flip to. The arm is one XOR and is
+ * the same statement for all three. See concolic_branch_ident_c for the key, and pred_carry_through_not for
+ * why the record travels verbatim. */
 typedef struct {
     const char *method;         /* the property NAME the page read off the unknown — an atom, never a guess */
     const char *const *args;    /* every argument, each as the page's own §7.1.19 ToString of it */
