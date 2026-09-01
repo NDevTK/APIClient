@@ -1,6 +1,7 @@
 /* CSS 2 §9.4.1 "Block formatting contexts" — a box's position. See flow_position.h for the coordinate space,
    for why the root element is the one box that is answered, and for what each other box is waiting on. */
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,13 +18,107 @@
 #include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
 
+/* THE SUBJECT OF EVERY CRASH IN THIS FILE, WHICH IS A BOX AND NOT A PLACE.
+   §AN-ASSERT-THAT-NAMES-A-REMEDY's test is to count the call sites that can reach an abort and to make the
+   ADDRESS part of the assert once that number is larger than one would read by hand. Measured by reverse
+   reachability over every `.c` file under engine/host: `flow_border_box_origin` is reached from 73 call sites
+   over 46 functions in 9 files, 7 of them outside core/layout — every CSSOM VIEW §6 member that asks for a
+   position or an extent, §7's scroll algorithms, a Range's client rects, IntersectionObserver's update and the
+   rendering step. So it is.
+   AND THAT COUNT UNDERSTATES IT, because ONE call site reaches this file once per BOX IN THE DOCUMENT rather
+   than once. core/layout/scrolling_area.c's descendant walk asks `flow_border_box_origin` for every
+   descendant's margin edge, and core/dom/element_view.c's `ev_scroll_extent` runs the VIEWPORT's walk — over
+   the document element's whole subtree — before its step 6 has-a-box guard, which is the step everyone reads
+   as coming first. So one `element.scrollWidth` places every box in the document, and the caller a frame list
+   names says nothing whatever about WHICH of them had no rule.
+   WHICH ADDRESS IS THE QUESTION, and core/layout/line_box.c answered it for the same shape. A `__FILE__`/
+   `__LINE__` threaded from those callers arrives through `sa_descendant_edge`, `fp_line_box_origin` and
+   `flow_padding_box_origin` — a handful of forwarding functions for the whole tree, which is the capture point
+   that rule names as the WRONG one — and it would still not say which box has no rule. Every remedy the aborts
+   below state names a computed `display`, `position`, `float` or `writing-mode` and a module to build, so the
+   address their reader is standing in front of is the ELEMENT and that value.
+   IT IS TOTAL, AND ITS ONE ALLOCATION IS FREED ON EVERY PATH INCLUDING THE ABORTING ONE. A helper a crash
+   calls must not be able to crash: an assert inside message composition does not report a SECOND defect, it
+   REPLACES the first, and the reader loses the box and the remedy. So there is no assert in these two
+   functions, and `css_computed_value` is reached DIRECTLY rather than through `fp_computed_is` below — whose
+   own DCHECK is correct where this file reads a property to compute geometry with, and would be exactly that
+   replacement here. `replaced_element_of` is not reached at all, for the sharper form of the same reason: it
+   ABORTS by name for an `embed`, a `video`, a `canvas`, an `object`, an `audio` and an `input`, so a message
+   that asked it whether this box is replaced would report core/layout/replaced_element.c's gap for precisely
+   the boxes whose own gap is being reported.
+   A NULL ELEMENT AND A NAMELESS ONE ARE DIFFERENT ANSWERS AND ARE SPELLED DIFFERENTLY: the first says the
+   caller had nothing to name, the second says it had a node neither parser nor `createElement` minted. The
+   local name is written through `%.*s` with lexbor's own length rather than as a C string, because it is a
+   length-and-pointer pair with no promise of a terminator and C99 §7.19.6.1 "The fprintf function" is what
+   makes that safe — with a precision, "no more than that many bytes are written" and the argument "shall be a
+   pointer to the initial element of an array of character type", the null terminator being required only
+   "if the precision is not specified or is greater than the size of the array".
+   THE ALLOCATION IS MADE AND RELEASED IN ONE FUNCTION, which is why the primitive is a COPY INTO A CALLER'S
+   BUFFER rather than lexbor's or the cascade's own pointer handed back. A crash path has no place to put a
+   `free`, so a helper that returned the cascade's string would either leak it or oblige every DFAILF site to
+   release something it is aborting past — and the two aborts here that also want a value under their own
+   control (`fp_require_placeable`'s `d`) would then hold two spellings of one release rule. One buffer, one
+   `free`, on the aborting path and on the release-build path alike. */
+static const char *fp_computed_into(lxb_dom_element_t *el, const char *name, char *buf, size_t cap)
+{
+    char *v;
+    int n;
+
+    if (buf == NULL || cap == 0) return "(nowhere to compose a computed value)";
+    if (el == NULL) return "(no element)";
+    v = css_computed_value(el, name);
+    if (v == NULL) return "(no computed value)";
+    n = snprintf(buf, cap, "%s", v);
+    free(v);
+    return n < 0 ? "(computed value unavailable)" : buf;
+}
+
+static const char *fp_box_name(lxb_dom_element_t *el, char *buf, size_t cap)
+{
+    char dbuf[64];
+    size_t len = 0;
+    const lxb_char_t *tag;
+    int n;
+
+    if (buf == NULL || cap == 0) return "(nowhere to compose a box name)";
+    if (el == NULL) return "(no element)";
+    tag = lxb_dom_element_local_name(el, &len);
+    if (len > 128) len = 128;
+    n = tag == NULL
+        ? snprintf(buf, cap, "(no local name) (display `%s`)",
+                   fp_computed_into(el, "display", dbuf, sizeof dbuf))
+        : snprintf(buf, cap, "<%.*s> (display `%s`)", (int) len, (const char *) tag,
+                   fp_computed_into(el, "display", dbuf, sizeof dbuf));
+    return n < 0 ? "(box name unavailable)" : buf;
+}
+
+/* THE SAME, FOR A NODE THAT MAY NOT BE AN ELEMENT. The one assert below whose subject is a node rather than a
+   box is the containing-block one, whose whole question is what this element's PARENT is — §10.1's first case
+   is the root element's alone and core/layout/used_value.c decides the root by that parent being the Document
+   — so "(no element)" would be a wrong answer there rather than a missing one, and the node KIND is the fact
+   a reader needs. */
+static const char *fp_node_name(lxb_dom_node_t *n, char *buf, size_t cap)
+{
+    if (n == NULL) return "(no node)";
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) return fp_box_name(lxb_dom_interface_element(n), buf, cap);
+    if (n->type == LXB_DOM_NODE_TYPE_TEXT) return "(text node)";
+    if (n->type == LXB_DOM_NODE_TYPE_COMMENT) return "(comment node)";
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) return "(the document)";
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) return "(a document fragment)";
+    return "(non-element node)";
+}
+
 static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
 {
     char *v = css_computed_value(el, name);
+    char nbuf[160];
     bool same;
 
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
-                      "them is in lexbor's registry with an initial value, so the last layer always answers");
+    DCHECKF(v != NULL,
+            "%s, property `%s`: "
+            "the cascade produced no computed value for a property this engine models — every one of "
+            "them is in lexbor's registry with an initial value, so the last layer always answers",
+            fp_box_name(el, nbuf, sizeof nbuf), name);
     same = strcmp(v, kw) == 0;
     free(v);
     return same;
@@ -39,8 +134,11 @@ static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *
    computed by the wrong rule with nothing to say so. */
 static void fp_require_horizontal_tb(lxb_dom_element_t *el)
 {
+    char nbuf[160], wbuf[64];
+
     if (!fp_computed_is(el, "writing-mode", "horizontal-tb"))
-        DFAIL("this box's computed `writing-mode` is not `horizontal-tb`, so its BLOCK FLOW DIRECTION is not "
+        DFAILF("%s, computed `writing-mode` `%s`: "
+              "this box's computed `writing-mode` is not `horizontal-tb`, so its BLOCK FLOW DIRECTION is not "
               "downwards and its inline axis is not horizontal — css-writing-modes-4 §3.2 \"Block Flow "
               "Direction: the writing-mode property\" gives `vertical-rl` and `sideways-rl` a right-to-left "
               "block flow and `vertical-lr` and `sideways-lr` a left-to-right one. CSS 2 §9.4.1's two rules are "
@@ -51,7 +149,9 @@ static void fp_require_horizontal_tb(lxb_dom_element_t *el)
               "which restates §9.4.1 over the block and inline axes, and then this file's stacking and "
               "touching become the flow-relative pair with §6.4 \"Abstract-to-Physical Mappings\" applied once "
               "at the end. core/layout/block_flow.c's own vertical walk is the same subproblem seen from the "
-              "height side and lands with it");
+              "height side and lands with it",
+              fp_box_name(el, nbuf, sizeof nbuf),
+              fp_computed_into(el, "writing-mode", wbuf, sizeof wbuf));
 }
 
 /* "The containing block in which the root element lives is a rectangle called the initial containing block"
@@ -69,17 +169,22 @@ static bool fp_is_root(const lxb_dom_node_t *n)
 static CssPx fp_icb_width(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    char nbuf[160];
     JSContext *dctx;
 
-    DCHECK(n->owner_document != NULL,
+    DCHECKF(n->owner_document != NULL,
+           "%s: "
            "the initial containing block was asked for an element whose node has no owner document — every node "
-           "this engine mints belongs to the document that created it");
+           "this engine mints belongs to the document that created it",
+           fp_box_name(el, nbuf, sizeof nbuf));
     dctx = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
-    DCHECK(dctx != NULL && viewport_exists(dctx),
+    DCHECKF(dctx != NULL && viewport_exists(dctx),
+           "%s (realm %s): "
            "CSS 2 §9.4.1's placement was asked for an element whose document is not being presented, so there "
            "is no viewport and §10.1's INITIAL CONTAINING BLOCK does not exist. The caller's own first step is "
            "the has-a-box predicate (core/dom/element_view.h), which is defined over exactly that question — so "
-           "the two answers have come apart");
+           "the two answers have come apart",
+           fp_box_name(el, nbuf, sizeof nbuf), dctx == NULL ? "absent" : "present but presenting no viewport");
     return viewport_icb_width(dctx);
 }
 
@@ -107,11 +212,15 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
 static CssPx fp_border_before(lxb_dom_element_t *el, bool vertical)
 {
     CssLength b = css_computed_length(el, vertical ? "border-top-width" : "border-left-width");
+    char nbuf[160];
 
-    DCHECK(b.kind == CSS_LENGTH_ABSOLUTE,
+    DCHECKF(b.kind == CSS_LENGTH_ABSOLUTE,
+           "%s, property `%s`, computed kind %d: "
            "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 §3.3's "
            "`Computed value:` line is `absolute length, snapped as a border width`, so every arm of that "
-           "derivation produces one and a percentage or a keyword here is a rule that did not run");
+           "derivation produces one and a percentage or a keyword here is a rule that did not run",
+           fp_box_name(el, nbuf, sizeof nbuf),
+           vertical ? "border-top-width" : "border-left-width", (int) b.kind);
     return b.px;
 }
 
@@ -187,15 +296,19 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
     FlowRect *rects;
     FlowPoint o;
     CssPx left, top;
+    char ebuf[160], sbuf[160];
     size_t n, i;
 
     DCHECK(el != NULL && out != NULL,
            "CSS 2 §9.4.2's fragment rectangles were asked for with no element or nowhere to report them");
     n = line_box_inline_fragments(el, &style, &frags);
-    DCHECK(n >= 1 && frags != NULL && style != NULL,
+    DCHECKF(n >= 1 && frags != NULL && style != NULL,
+           "%s, establishing box %s, %zu fragment(s) reported%s: "
            "CSS 2 §9.4.2's fragments were reported as none for an inline box that generates one. That entry's "
            "own asserts make a zero count impossible — an inline box's two edge items are content the fill "
-           "partitions — so this is that contract having been broken between the two files");
+           "partitions — so this is that contract having been broken between the two files",
+           fp_box_name(el, ebuf, sizeof ebuf), fp_box_name(style, sbuf, sizeof sbuf), n,
+           frags == NULL ? " and no fragment array" : "");
     /* §10.1's SECOND CASE, composed exactly as the block-level arm below composes it: the establishing box's
        own origin (this function, one level up — which is where a float, an out-of-flow ancestor or a vertical
        writing mode crashes by its own section) plus CSS 2 §8.1's leading border and padding, which is the
@@ -240,18 +353,22 @@ static void fp_require_placeable(lxb_dom_element_t *el)
         "table-cell", "table-column-group", "table-column", "table-caption",
     };
     char *d = css_computed_value(el, "display");
+    char nbuf[160];
     bool table_internal = false, inline_level;
     unsigned i;
 
-    DCHECK(d != NULL, "the cascade produced no computed `display` for an element whose box is being placed");
+    DCHECKF(d != NULL, "%s: the cascade produced no computed `display` for an element whose box is being placed",
+            fp_box_name(el, nbuf, sizeof nbuf));
     if (d == NULL) return;
-    DCHECK(strcmp(d, "none") != 0 && strcmp(d, "contents") != 0,
+    DCHECKF(strcmp(d, "none") != 0 && strcmp(d, "contents") != 0,
+           "%s: "
            "CSS 2 §9.4.1's placement was asked for an element that GENERATES NO BOX — css-display-3 §2.5 "
            "\"Box Generation: the none and contents keywords\" gives `contents` no box of its own and `none` "
            "no box at all (\"The element and its descendants generate no boxes or text sequences.\"), and "
            "core/dom/element_view.h's one box "
            "predicate reads exactly those two values. The caller's own step establishes the box exists before "
-           "asking where it is, so this is that predicate and this test disagreeing");
+           "asking where it is, so this is that predicate and this test disagreeing",
+           fp_box_name(el, nbuf, sizeof nbuf));
     for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
         if (strcmp(d, TABLE_INTERNAL[i]) == 0) table_internal = true;
     /* `inline` IS NOT IN THIS LIST, and that is the one change that makes this function's name true: a box
@@ -267,19 +384,26 @@ static void fp_require_placeable(lxb_dom_element_t *el)
        release, so a `free` beside one is a `free` the release build FALLS THROUGH — freeing inside the loop and
        carrying on comparing would be a use-after-free there, and freeing in each arm would be a double free at
        the end. The classification is decided first, the buffer is released once, and the two arms then hold
-       nothing. */
+       nothing.
+       AND THE TWO CRASHES NAME THE `display` WITHOUT READING `d`, which is why this rule survived their gaining
+       an address: `fp_box_name` asks the cascade for its own copy and releases it inside itself, so the arms
+       still hold nothing after the free above. Folding `d` into either message to save that second read is the
+       use-after-free this paragraph is about, arriving through the part of the line that looks like prose. */
     free(d);
     if (table_internal)
-        DFAIL("this box is TABLE-INTERNAL, and CSS 2.1 §17.5 'Visual layout of table contents' positions it "
+        DFAILF("%s: "
+              "this box is TABLE-INTERNAL, and CSS 2.1 §17.5 'Visual layout of table contents' positions it "
               "rather than §9.4.1: a row group, a row, a cell, a column, a column group and a caption are laid "
               "out inside the TABLE's own grid of rows and columns, so a cell's position is the accumulated "
               "widths of the columns before it and the accumulated heights of the rows above it, and neither "
               "is a distance §9.4.1's two rules can produce. It needs the box structure §17.2.1 'Anonymous "
               "table objects' generates — the row groups, rows and cells a UA inserts around whatever the "
               "author wrote — and then §17.5.2's and §17.5.3's algorithms over it, which core/layout/"
-              "used_value.c already crashes for when a table's EXTENT is asked. BUILD §17.2.1, then §17.5");
+              "used_value.c already crashes for when a table's EXTENT is asked. BUILD §17.2.1, then §17.5",
+              fp_box_name(el, nbuf, sizeof nbuf));
     if (inline_level)
-        DFAIL("CSS 2.1 §9.2.2 'Inline-level elements and inline boxes' makes this an ATOMIC INLINE-LEVEL box — "
+        DFAILF("%s: "
+              "CSS 2.1 §9.2.2 'Inline-level elements and inline boxes' makes this an ATOMIC INLINE-LEVEL box — "
               "`inline-block`, `inline-table`, or css-display §2's `inline flex` and `inline grid` — which "
               "\"participate in their inline formatting context as a single opaque box\". So §9.4.2 places it, "
               "not §9.4.1, and its position is a position ON A LINE BOX exactly as a non-replaced inline box's "
@@ -313,7 +437,8 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "\"Sizing Grid Containers\", so what is left of that half is the module's own INTRINSIC MAIN "
               "SIZES and no longer the classification — "
               "which is what core/layout/line_box.c's own atomic arm names. Then this box reaches the line and "
-              "this arm deletes");
+              "this arm deletes",
+              fp_box_name(el, nbuf, sizeof nbuf));
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
        what the two rules below are written about. A `table` is one of them and stays on this path: §17.4
        'Tables in the visual formatting model' says the table wrapper box is block-level for `display: table`
@@ -328,6 +453,9 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     lxb_dom_node_t *n;
     lxb_dom_element_t *cb;
     FlowPoint o;
+    /* `vbuf` holds a computed value at two sites and a NODE NAME at the third, so it is sized for the wider of
+       the two rather than for the value it happens to carry first. */
+    char nbuf[160], vbuf[160];
 
     DCHECK(el != NULL, "a border box's position was asked for with no element");
     n = lxb_dom_interface_node(el);
@@ -335,20 +463,24 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     /* §9.4.1 PLACES BOXES IN NORMAL FLOW, so a box that is not in one leaves through its own section first —
        §9.3's positioning scheme is what decides which, and it decides it before any placement rule applies. */
     if (fp_computed_is(el, "position", "absolute") || fp_computed_is(el, "position", "fixed"))
-        DFAIL("CSS 2 §9.3.1 takes an ABSOLUTELY POSITIONED box out of normal flow, so §9.4.1's placement does "
+        DFAILF("%s, computed `position` `%s`: "
+              "CSS 2 §9.3.1 takes an ABSOLUTELY POSITIONED box out of normal flow, so §9.4.1's placement does "
               "not apply to it at all: its position is §9.3.2's `top`/`right`/`bottom`/`left` resolved against "
               "the containing block §10.1's third and fourth cases give it, and §10.6.4 solves the vertical "
               "pair the same way §10.3.7 solves the horizontal one. Both sections fall back on the STATIC "
               "POSITION — 'where the box would have been in normal flow' — for their `auto` cases, so this is "
               "not an alternative to §9.4.1's flow layout but a consumer of it. BUILD §9.4.1's vertical "
-              "stacking first, then §10.3.7 and §10.6.4 over it");
+              "stacking first, then §10.3.7 and §10.6.4 over it",
+              fp_box_name(el, nbuf, sizeof nbuf), fp_computed_into(el, "position", vbuf, sizeof vbuf));
     if (!fp_computed_is(el, "float", "none"))
-        DFAIL("CSS 2 §9.5 'Floats' positions a FLOATING box, and §9.4.1's rule does not: a float is shifted to "
+        DFAILF("%s, computed `float` `%s`: "
+              "CSS 2 §9.5 'Floats' positions a FLOATING box, and §9.4.1's rule does not: a float is shifted to "
               "the left or right edge of its containing block and then down past any earlier float it would "
               "overlap, under §9.5.1's nine constraints. Its own used width is a SHRINK-TO-FIT (§10.3.5) and "
               "core/layout/used_value.c COMPUTES ONE NOW, over core/layout/intrinsic_size.h's measurement of "
               "the box's content — so the extent is no longer the blocker and the POSITION is the whole of what "
-              "is left. BUILD §9.5.1's nine constraints over the line boxes the float interacts with");
+              "is left. BUILD §9.5.1's nine constraints over the line boxes the float interacts with",
+              fp_box_name(el, nbuf, sizeof nbuf), fp_computed_into(el, "float", vbuf, sizeof vbuf));
     fp_require_horizontal_tb(el);
     /* §9.4's TWO NORMAL-FLOW FORMATTING CONTEXTS ARE ALTERNATIVES, and which one places a box is its own
        inline-or-block LEVEL — §9.4.1 is written about a block-level box and §9.4.2 about the boxes on a line.
@@ -381,10 +513,12 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
        THE RECURSION TERMINATES AT THE ROOT, whose containing block is §10.1's first case — the ICB, which is
        no element's box — so `used_value_containing_block` answering NULL is exactly the arm above. */
     cb = used_value_containing_block(el);
-    DCHECK(cb != NULL,
+    DCHECKF(cb != NULL,
+           "%s, parent %s: "
            "CSS 2.1 §10.1 answered NULL — its first case, the initial containing block — for an element that is "
            "not the root. The two tests are the same test (a node whose parent is the Document), so they have "
-           "come apart");
+           "come apart",
+           fp_box_name(el, nbuf, sizeof nbuf), fp_node_name(n->parent, vbuf, sizeof vbuf));
     o = flow_border_box_origin(cb);
     p.x = css_px_add(css_px_add(o.x, fp_edge_before(cb, false)),
                      fp_left_offset(el, used_value_containing_block_width(el)));
