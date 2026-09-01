@@ -289,8 +289,11 @@ static bool san_ns_eq(const char *a, const char *b)
     return strcmp(a, b) == 0;
 }
 
-/* §8.6.2's item equality: "all of their members are equal", which for a canonical element or attribute is the
-   name and the namespace. */
+/* §8.6.3 Sanitizer configuration's item equality — "SanitizerElementNamespace, SanitizerAttributeNamespace,
+   SanitizerElementNamespaceWithAttributes, and SanitizerProcessingInstruction dictionaries are considered
+   equal when all of their members are equal" — which for a canonical element or attribute is the name and the
+   namespace. The sentence is §8.6.3's and this cited §8.6.2, which is where the operations that USE it live;
+   the other site stating the same rule already names §8.6.3. */
 static bool san_item_is(JSContext *ctx, JSValueConst item, const char *name, const char *ns)
 {
     SanName n;
@@ -470,7 +473,7 @@ static JSValue san_default_config(JSContext *ctx)
 
 /* §8.6.2's CANONICALIZE THE CONFIGURATION over an EMPTY dictionary, which is the only configuration dictionary
    this engine can be handed without the page's code running: steps 1, 2 and 3 give the three remove-lists and
-   step 10 the `comments` member. It is `SetHTMLUnsafeOptions`'s `sanitizer = {}` default — a configuration
+   step 11 the `comments` member. It is `SetHTMLUnsafeOptions`'s `sanitizer = {}` default — a configuration
    that allows everything — and with `allowCommentsPIsAndDataAttributes` false it is the empty SAFE one. */
 static JSValue san_empty_config(JSContext *ctx, bool allow_comments_pis_data)
 {
@@ -482,8 +485,8 @@ static JSValue san_empty_config(JSContext *ctx, bool allow_comments_pis_data)
        processing instruction at all, which is what a safe configuration means by not naming one. */
     JS_SetPropertyStr(ctx, cfg, allow_comments_pis_data ? "removeProcessingInstructions"
                                                         : "processingInstructions", JS_NewArray(ctx));
-    JS_SetPropertyStr(ctx, cfg, "comments", JS_NewBool(ctx, allow_comments_pis_data));   /* step 10 */
-    /* Step 11 sets `dataAttributes` only when an `attributes` allow-list exists, and this configuration has
+    JS_SetPropertyStr(ctx, cfg, "comments", JS_NewBool(ctx, allow_comments_pis_data));   /* step 11 */
+    /* Step 12 sets `dataAttributes` only when an `attributes` allow-list exists, and this configuration has
        none — which is also why §8.6.3's validity says a `dataAttributes` beside a remove-list is invalid. */
     return cfg;
 }
@@ -804,6 +807,29 @@ static JSValue san_canon_list(JSContext *ctx, JSValueConst list, SanKind kind)
     return out;
 }
 
+/* STEPS 11 AND 12 CARRY A BOOLEAN MEMBER THROUGH UNCHANGED, and this is the one place to say what it may be.
+   Both steps are "if it does not exist, set it": a member the page WROTE is copied into the canonical
+   configuration verbatim, which is faithful — §3.2.17 (ES-to-IDL list) step 4.1.4.1 already converted it, so
+   in the standard's model there is nothing left here but a boolean.
+   IN THIS ENGINE THERE IS A THIRD VALUE, AND IT IS THE POINT OF THIS ASSERT. idl_args.c's §3.2.17 member loop
+   rewrites a CONCOLIC member's declared type to IDL_ANY before any type arm is asked, unconditionally, so
+   `new Sanitizer({comments: location.hash})` reaches this line still wearing the Object solver/concolic.c
+   gives an unknown — and these two steps then store it in the configuration the whole component answers
+   from. That is correct and deliberate (opacity must survive a coercion), which is exactly why it is worth
+   asserting: it is the ONLY way an unknown gets into `r->config`, and every read of these two members below
+   goes through idl_dict_bool because of it.
+   `v` IS CONSUMED. */
+static void san_carry_flag(JSContext *ctx, JSValueConst cfg, const char *member, JSValue v)
+{
+    DCHECKF(JS_IsBool(v) || concolic_is(v),
+            "§8.6.2's canonicalize the configuration is carrying `%s` into the canonical configuration as "
+            "something that is neither of §8.6.3's `boolean` values nor unknown external input — this file "
+            "declares the member IDL_BOOLEAN_NO_DEFAULT, and the args machine's member loop answers that "
+            "declaration with a real boolean, an absence, or the crossed unknown. A fourth shape means "
+            "SAN_CONFIG_MEMBERS no longer declares `%s` a boolean", member, member);
+    JS_SetPropertyStr(ctx, cfg, member, v);
+}
+
 /* §8.6.2's CANONICALIZE THE CONFIGURATION, over the dictionary the args machine converted. It builds a NEW
    object rather than mutating that one: the converted dictionary belongs to the machine's argument vector and
    dies with the call, while the Sanitizer's configuration outlives it. */
@@ -816,7 +842,7 @@ static JSValue san_canonicalize_config(JSContext *ctx, JSValueConst in, bool all
         { "removeAttributes",             SAN_KIND_ATTRIBUTE },            /* step 7 */
         { "replaceWithChildrenElements",  SAN_KIND_ELEMENT },              /* step 8 */
         { "processingInstructions",       SAN_KIND_PI },                   /* step 9 */
-        { "removeProcessingInstructions", SAN_KIND_PI },                   /* step 9 */
+        { "removeProcessingInstructions", SAN_KIND_PI },                   /* step 10 */
     };
     JSValue cfg = JS_NewObject(ctx);
     JSValue v;
@@ -839,21 +865,21 @@ static JSValue san_canonicalize_config(JSContext *ctx, JSValueConst in, bool all
         !san_has(ctx, cfg, "removeProcessingInstructions"))
         JS_SetPropertyStr(ctx, cfg, allow_comments_pis_data ? "removeProcessingInstructions"
                                                             : "processingInstructions", JS_NewArray(ctx));
-    v = san_get(ctx, in, "comments");                                                      /* step 10 */
+    v = san_get(ctx, in, "comments");                                                      /* step 11 */
     if (JS_IsUndefined(v)) {
         JS_FreeValue(ctx, v);
         v = JS_NewBool(ctx, allow_comments_pis_data);
     }
-    JS_SetPropertyStr(ctx, cfg, "comments", v);
-    /* Step 11: `dataAttributes` is an extension of the ATTRIBUTES allow-list, so it is defaulted only beside
+    san_carry_flag(ctx, cfg, "comments", v);
+    /* Step 12: `dataAttributes` is an extension of the ATTRIBUTES allow-list, so it is defaulted only beside
        one — and a page that writes it without one keeps it, which is exactly what the validity check refuses. */
     v = san_get(ctx, in, "dataAttributes");
     if (!JS_IsUndefined(v)) {
-        JS_SetPropertyStr(ctx, cfg, "dataAttributes", v);
+        san_carry_flag(ctx, cfg, "dataAttributes", v);
     } else {
         JS_FreeValue(ctx, v);
         if (san_has(ctx, cfg, "attributes"))
-            JS_SetPropertyStr(ctx, cfg, "dataAttributes", JS_NewBool(ctx, allow_comments_pis_data));
+            san_carry_flag(ctx, cfg, "dataAttributes", JS_NewBool(ctx, allow_comments_pis_data));
     }
     return cfg;
 }
@@ -1055,8 +1081,12 @@ static bool san_element_equal(JSContext *ctx, JSValueConst a, JSValueConst b)
 
 /* §8.6.4's "determine whether a canonical SanitizerConfig is valid" — the check §8.6.2's `configure` step 2
    throws a TypeError on, and the one that makes every "a canonical configuration has one of these two lists"
-   assertion in this file TRUE rather than hoped. Its own steps 1, 3 and 5 are asserts about what canonicalize
-   guarantees, so they are DCHECKs here and the rest are the answer. */
+   assertion in this file TRUE rather than hoped. Its own steps 1, 3, 5 and 7 are asserts about what
+   canonicalize guarantees, so they are DCHECKs here and the rest are the answer (step 7's — every item is
+   canonical — is asserted where an item is READ, by san_name_of, rather than as a sweep here).
+   ITS EIGHTEEN STEPS ARE ELEVEN LINES BECAUSE SIX OF THEM ARE "if X exists: …" / "Otherwise: …" PAIRS whose
+   two arms differ only in which list they ask, and one `has_x ? a : b` answers both. A pair is cited as the
+   RANGE it covers; a label naming only the first arm reads as a claim that the second is somewhere else. */
 static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
 {
     JSValue elements = san_get(ctx, cfg, "elements");
@@ -1066,10 +1096,12 @@ static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
     JSValue rem_at = san_get(ctx, cfg, "removeAttributes");
     JSValue pis = san_get(ctx, cfg, "processingInstructions");
     JSValue rem_pi = san_get(ctx, cfg, "removeProcessingInstructions");
-    JSValue data = san_get(ctx, cfg, "dataAttributes");
     bool has_el = !JS_IsUndefined(elements), has_at = !JS_IsUndefined(attributes);
     bool has_pi = !JS_IsUndefined(pis), has_rwc = !JS_IsUndefined(rwc);
-    bool data_on = JS_ToBool(ctx, data);
+    /* What steps 16.2.1.5 and 16.3 ask — "If config["dataAttributes"] is true and …" — read ONCE through the
+       reader that refuses unknown external input, because a bare JS_ToBool here answers `true` for every
+       unknown and decides whether this configuration is one `configure` step 2 throws a TypeError for. */
+    bool data_on = idl_dict_bool(ctx, cfg, "dataAttributes");
     bool ok = false;
     uint32_t n, i;
 
@@ -1085,11 +1117,11 @@ static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
     if (has_el && !JS_IsUndefined(rem_el)) goto done;                          /* step 2 */
     if (has_pi && !JS_IsUndefined(rem_pi)) goto done;                          /* step 4 */
     if (has_at && !JS_IsUndefined(rem_at)) goto done;                          /* step 6 */
-    if (san_list_has_dup(ctx, has_el ? elements : rem_el, false)) goto done;   /* step 8 */
-    if (has_rwc && san_list_has_dup(ctx, rwc, false)) goto done;               /* step 9 */
-    if (san_list_has_dup(ctx, has_pi ? pis : rem_pi, true)) goto done;         /* step 10 */
-    if (san_list_has_dup(ctx, has_at ? attributes : rem_at, false)) goto done; /* step 11 */
-    if (has_rwc) {                                                             /* step 12 */
+    if (san_list_has_dup(ctx, has_el ? elements : rem_el, false)) goto done;   /* steps 8-9 */
+    if (has_rwc && san_list_has_dup(ctx, rwc, false)) goto done;               /* step 10 */
+    if (san_list_has_dup(ctx, has_pi ? pis : rem_pi, true)) goto done;         /* steps 11-12 */
+    if (san_list_has_dup(ctx, has_at ? attributes : rem_at, false)) goto done; /* steps 13-14 */
+    if (has_rwc) {                                                             /* step 15 */
         n = san_len(ctx, rwc);
         for (i = 0; i < n; i++) {
             JSValue e = JS_GetPropertyUint32(ctx, rwc, i);
@@ -1105,8 +1137,8 @@ static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
         }
         if (san_lists_intersect(ctx, has_el ? elements : rem_el, rwc)) goto done;
     }
-    if (has_at) {                                                              /* step 13 */
-        DCHECK(!JS_IsUndefined(data),
+    if (has_at) {                                                              /* step 16 */
+        DCHECK(san_has(ctx, cfg, "dataAttributes"),                            /* step 16.1 */
                "§8.6.4's validity found an attributes allow-list with no dataAttributes beside it — "
                "canonicalize the configuration sets one whenever that list exists");
         n = san_len(ctx, elements);
@@ -1117,15 +1149,15 @@ static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
             bool bad = san_list_has_dup(ctx, local, false) || san_list_has_dup(ctx, lrem, false) ||
                        san_lists_intersect(ctx, attributes, local) ||
                        !san_list_subset(ctx, lrem, attributes) ||
-                       (data_on && san_list_has_data_attribute(ctx, local));
+                       (data_on && san_list_has_data_attribute(ctx, local));   /* step 16.2.1.5 */
 
             JS_FreeValue(ctx, local);
             JS_FreeValue(ctx, lrem);
             JS_FreeValue(ctx, el);
             if (bad) goto done;
         }
-        if (data_on && san_list_has_data_attribute(ctx, attributes)) goto done;
-    } else {                                                                   /* step 14 */
+        if (data_on && san_list_has_data_attribute(ctx, attributes)) goto done; /* step 16.3 */
+    } else {                                                                   /* step 17 */
         n = san_len(ctx, elements);
         for (i = 0; i < n; i++) {
             JSValue el = JS_GetPropertyUint32(ctx, elements, i);
@@ -1141,9 +1173,9 @@ static bool san_config_is_valid(JSContext *ctx, JSValueConst cfg)
             JS_FreeValue(ctx, el);
             if (bad) goto done;
         }
-        if (!JS_IsUndefined(data)) goto done;
+        if (san_has(ctx, cfg, "dataAttributes")) goto done;                    /* step 17.2 */
     }
-    ok = true;
+    ok = true;                                                                 /* step 18 */
 done:
     JS_FreeValue(ctx, elements);
     JS_FreeValue(ctx, attributes);
@@ -1152,7 +1184,6 @@ done:
     JS_FreeValue(ctx, rem_at);
     JS_FreeValue(ctx, pis);
     JS_FreeValue(ctx, rem_pi);
-    JS_FreeValue(ctx, data);
     return ok;
 }
 
@@ -1414,17 +1445,20 @@ static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, 
     SanitizerRec *r = san_rec_here(ctx, this_val);
     const char *member = magic ? "dataAttributes" : "comments";
     bool allow, had;
-    JSValue cur;
 
     if (!r) return JS_EXCEPTION;
     /* §3.6 threw for a call with no argument before this body ran, and the declaration converted what there
        was — so this is ToBoolean over a value that is already one, or over unknown external input, which
-       forks rather than being asserted about. */
+       forks rather than being asserted about. THE ARGUMENT IS THE HALF THAT IS ANSWERED: `ONE_BOOL` declares
+       IDL_BOOLEAN, whose rule is IDL_CONCOLIC_FORKS, so the conversion asked step_tobool_run and `argv[0]` is
+       a real boolean here. The member it is compared AGAINST is the other half, and it is not — see below. */
     allow = argc > 0 && JS_ToBool(ctx, argv[0]);
     if (magic && !san_has(ctx, r->config, "attributes")) return JS_FALSE;    /* step 3 */
-    cur = san_get(ctx, r->config, member);
-    had = !JS_IsUndefined(cur) && JS_ToBool(ctx, cur) == allow;
-    JS_FreeValue(ctx, cur);
+    /* Step 4's "if configuration[member] is allow, return false" over the STORED member, which is where an
+       unknown that crossed §3.2.17 lives — so it goes through the refusing reader and never a bare ToBoolean,
+       which would answer `true` for every unknown and report "nothing changed" for a configuration whose flag
+       nobody has established. */
+    had = san_has(ctx, r->config, member) && idl_dict_bool(ctx, r->config, member) == allow;
     if (had) return JS_FALSE;
     if (magic && allow) {
         /* Step 5: a custom data attribute may not be listed in an allow-list once they are allowed globally —
@@ -1508,12 +1542,12 @@ static JSValue js_san_allow_element(JSContext *ctx, JSValueConst this_val, int a
         JS_FreeValue(ctx, rwc);
         if (!JS_IsUndefined(ga)) {                                              /* step 4.2 */
             if (!JS_IsUndefined(local)) {
-                JSValue d = san_get(ctx, r->config, "dataAttributes");
-
                 san_dedup(ctx, local);
                 san_filter_by(ctx, local, ga, false);      /* difference with the global allow-list */
-                if (JS_ToBool(ctx, d)) san_drop_data_attributes(ctx, local);
-                JS_FreeValue(ctx, d);
+                /* Through the refusing reader: whether this element keeps its own `data-` entries is a world
+                   an unknown flag admits both of, and a bare ToBoolean would silently keep the drop arm. */
+                if (idl_dict_bool(ctx, r->config, "dataAttributes"))
+                    san_drop_data_attributes(ctx, local);
             }
             if (!JS_IsUndefined(lrem)) {
                 san_dedup(ctx, lrem);
@@ -1665,10 +1699,8 @@ static JSValue js_san_allow_attribute(JSContext *ctx, JSValueConst this_val, int
     if (!r) return JS_EXCEPTION;
     if (!san_modifier_item(ctx, argv[0], SAN_KIND_ATTRIBUTE, &at, &nm)) return JS_EXCEPTION;
     if (san_has(ctx, r->config, "attributes")) {                                /* step 4 */
-        JSValue d = san_get(ctx, r->config, "dataAttributes");
-        bool data_on = JS_ToBool(ctx, d);
+        bool data_on = idl_dict_bool(ctx, r->config, "dataAttributes");
 
-        JS_FreeValue(ctx, d);
         list = san_get(ctx, r->config, "attributes");
         /* Steps 4.1-4.2: a custom data attribute is already allowed when they all are, and listing it would be
            the duplicate entry §8.6.3's validity refuses. */
@@ -1890,10 +1922,17 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
             return JS_STEP_YIELD;
         }
         if (child->type == LXB_DOM_NODE_TYPE_COMMENT) {                             /* step 1.3 */
-            JSValue c = san_get(ctx, w->config, "comments");
-            bool keep = JS_IsBool(c) && JS_ToBool(ctx, c);
+            /* Step 1.3.1 is "If configuration["comments"] is not true, then remove child", and after
+               canonicalize the member is a real boolean or absent — san_carry_flag asserts exactly that — so
+               `is true` and ToBoolean cannot differ and the reader answers the spec's own question.
+               THE TEST THAT STOOD HERE WAS `JS_IsBool(c) && JS_ToBool(ctx, c)`, AND OVER UNKNOWN EXTERNAL
+               INPUT THAT IS THE COLLAPSE RUNNING BACKWARDS. A concolic wears an ordinary Object, so JS_IsBool
+               answered false, the comment was removed, and the world in which the page allowed it was deleted
+               — a type test standing in for a value test, which reads as a defensive guard and is one. It is
+               the same deletion a bare JS_ToBool makes in the other direction, and it is worse to find,
+               because nothing about the spelling says a truth value was being decided at all. */
+            bool keep = idl_dict_bool(ctx, w->config, "comments");
 
-            JS_FreeValue(ctx, c);
             if (keep) hdr->stage = w->stage_base + SAN_NEXT;
             else      san_begin_remove(ctx, hdr, w, child);
             return JS_STEP_YIELD;
@@ -2038,11 +2077,13 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
 
             if (!allowed) {
                 /* The custom-data escape: a `data-` attribute in the null namespace survives an allow-list it
-                   is not in, when the configuration allows data attributes at all. */
-                JSValue da = san_get(ctx, w->config, "dataAttributes");
-
-                allowed = strncmp(aname, "data-", 5) == 0 && ansp == NULL && JS_ToBool(ctx, da);
-                JS_FreeValue(ctx, da);
+                   is not in, when the configuration allows data attributes at all. Step 1.5.9.3.1 asks the
+                   name FIRST, so the flag is only read where its answer changes what happens to this
+                   attribute — and it is read through the reader that refuses an unknown, because "does this
+                   attacker-shaped attribute survive the sanitizer" is precisely a world that must not be
+                   decided by an Object being truthy. */
+                allowed = strncmp(aname, "data-", 5) == 0 && ansp == NULL &&
+                          idl_dict_bool(ctx, w->config, "dataAttributes");
             }
             drop = !allowed;
             JS_FreeValue(ctx, local);
