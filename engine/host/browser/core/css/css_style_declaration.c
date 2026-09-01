@@ -1550,12 +1550,19 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  * test is the one this
  * whole comment is about. Every consumer of a computed `display` reads `inline` as a box it declines to
  * measure — core/dom/element_view.c's step 1 answers zero, its fragment count aborts naming CSS 2.1 §9.4.2 — while
- * `ruby` and `ruby-text` are box types NO consumer has an arm for: core/layout/used_value.c's `uv_box_kind`
- * would classify one as BLOCK FLOW and hand CSS 2.1 §10.3.3's constraint equation a box CSS 2.1 §10 does not
- * describe,
- * so `clientWidth` would stop being zero and start being a real number computed for the wrong box. A wrong
- * number is worse than the wrong-but-declined answer it replaces. These two rows land in the same diff that
- * gives CSS Ruby a box type in `uv_box_kind` and in `element_view_fragment_kind`.
+ * `ruby` and `ruby-text` are box types NO consumer has an arm for, and the ARGUMENT FOR OMITTING THE ROWS HAS
+ * CHANGED WHILE THE CONCLUSION HAS NOT — which is worth writing down, because the old reason is the one a
+ * reader would re-derive. It used to be that core/layout/used_value.c's `uv_box_kind` would classify a ruby
+ * box as BLOCK FLOW and hand CSS 2.1 §10.3.3's constraint equation a box CSS 2.1 §10 does not describe, so
+ * `clientWidth` would stop being zero and start being a real number computed for the wrong box. That fall no
+ * longer exists: `uv_box_kind`'s tail is a closed list and a ruby value now ABORTS there, naming CSS Ruby
+ * Annotation Layout Module Level 1 and the three sections that build it. So adding these rows today would not
+ * produce a wrong number — it would abort on every page containing a `<ruby>`, for a module that is not built.
+ * THAT IS STILL NOT A REASON TO ADD THEM, and not because a crash is unwelcome: the crash is the module's
+ * forcing function and it already stands, at the site where the missing algorithm is. A UA row would only move
+ * WHICH ELEMENTS reach it, from the ones an author styled to every `<ruby>` in every document, and reaching a
+ * known absence from more places is not progress. These two rows land in the same diff that gives CSS Ruby a
+ * box type in `uv_box_kind` and in `element_view_fragment_kind`.
  *
  * THE `@namespace "http://www.w3.org/1999/xhtml"` AT THE HEAD OF EVERY ONE OF THOSE RULES IS NOT HONOURED HERE
  * and the lookup is by LOCAL NAME alone. It is a real divergence and it is stated rather than assumed away: an
