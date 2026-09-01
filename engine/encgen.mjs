@@ -40,7 +40,13 @@ async function get(path) {
 }
 
 const registry = JSON.parse(await get("encodings.json"));
-const encodings = registry.flatMap((g) => g.encodings.map((e) => ({ ...e, group: g.heading })));
+/* THE REGISTRY'S OWN ENTRIES, FLATTENED — not copies of them. This used to build `{ ...e, group: g.heading }`,
+   a wrapper whose one added field was written here and read NOWHERE, in this file or anywhere else: the
+   write-with-no-reader half of the contract fieldgate.mjs audits, in a record that is built and consumed
+   entirely in JavaScript and so declares no name it can see (its per-area note says a zero in those columns is
+   silent about exactly this boundary, not clean about it). The group each encoding belongs to is still read
+   where it is actually used — `singleByte` below asks the registry for the group by heading. */
+const encodings = registry.flatMap((g) => g.encodings);
 const labels = encodings.flatMap((e) => e.labels);
 if (encodings.length !== N_ENCODINGS || labels.length !== N_LABELS) {
   console.error(`[encgen] the registry now has ${encodings.length} encodings and ${labels.length} labels, and ` +

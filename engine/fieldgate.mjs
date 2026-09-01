@@ -891,6 +891,24 @@ const cMatched = [];
    what stands to the LEFT of the whole read needs that offset and cannot recover it from the text: the text is
    whitespace-collapsed and appears many times in a file, so searching for it would answer about some other
    occurrence. It is recorded only where a receiver was actually produced. */
+/* AND `out.text` IS THE WALK'S OWN FACT, WHICH IS NOT THE SAME THING AS ITS ANSWER. This walk is asked by two
+ * callers with two different questions, and for a long time it answered both with the stricter one's answer.
+ * §the READ question is "does a RECORD cross a seam as this receiver", and for a `|| <literal>` head the answer
+ * is no — the read is the substituted literal's member. §the CALLEE question is "what expression is being
+ * CALLED here", asked where a function literal is an argument and the callee is what types its parameter, and
+ * for that same head the answer is the text: `(n.members || []).some` calls Array.prototype.some, and the
+ * elements it hands the callback are the elements of `n.members`, which §the ORIGIN of a value resolves through
+ * the same `originHead` that strips a literal alternative for exactly this reason.
+ *
+ * The cost of collapsing them was silent in the direction §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS names: the
+ * callee site got a DECIDED NEGATIVE (`""`, not null — the walk found the expression and decided it), read it
+ * as falsy, and recorded no callee at all, so every callback passed to a method of a `|| []` head fell out of
+ * `paramSlot` and its parameter had no producer to name. The refusal carried a reason about the OTHER question.
+ *
+ * So the WALK yields the fact — the primary expression's own normalized text — and each caller asks its own
+ * question of it. `.text` is set wherever the walk completed a primary expression, decided negatives included,
+ * and NOT where it stopped early (a string/template/regexp head, where nothing was normalized) or where the
+ * span crossed a `;` and is therefore not one expression. */
 function receiverBefore(struct, code, dotAt, out) {
   let i = dotAt;
   while (i > 0 && /\s/.test(struct[i - 1])) i--;
@@ -940,7 +958,13 @@ function receiverBefore(struct, code, dotAt, out) {
   }
   const raw = code.slice(i, end).trim();
   const t = raw.replace(/\s+/g, "");
-  if (out) { let st = i; while (st < end && /\s/.test(code[st])) st++; out.start = st; }
+  if (out) {
+    let st = i;
+    while (st < end && /\s/.test(code[st])) st++;
+    out.start = st;
+    /* `t` has had ALL whitespace removed, so the only way it is not one expression is a `;` inside it. */
+    if (!t.includes(";")) out.text = t;
+  }
   if (/^[A-Za-z_$]/.test(t)) return /^[^\s;]*$/.test(t) ? t : null;
   /* An ARRAY LITERAL head — `[...m.values()].filter(f).length` — is a computed collection and no record ever
      crossed a seam as one: a decided negative. */
@@ -1363,9 +1387,16 @@ function functionScopes(struct, code) {
     const parts = splitTop(struct, open + 1, closeArgs - 1);
     const index = parts.findIndex(([a, b]) => h >= a && h < b);
     if (index < 0) continue;
-    const callee = receiverBefore(struct, code, e2);
-    if (!callee) continue;
-    s.callee = { text: callee, at: e2, index };
+    /* THE WALK'S FACT, NOT ITS READ-SIDE ANSWER — see §`out.text`. What is wanted here is the text of the
+       expression being CALLED, and a `(x || []).some` is being called whatever the read rule says about a
+       member of it. Every consumer of `s.callee` asks its own question of the text and refuses what it cannot
+       resolve: the IDL arm hands the base to `ifaceOfExpr`, the import arm demands the callee be a plain
+       dotted path rooted at an imported binding, and §the ORIGIN of a value strips the alternative with the
+       same `originHead` the value question already uses. */
+    const out2 = {};
+    receiverBefore(struct, code, e2, out2);
+    if (!out2.text) continue;
+    s.callee = { text: out2.text, at: e2, index };
   }
 
   /* The innermost span containing `off`. Spans are sorted by their opening brace, so the candidates are the
@@ -3187,7 +3218,8 @@ function identityOfBinding(t, off, scan, s) {
  * A FOREIGN ARRAY'S ELEMENTS ARE FOREIGN, which is why the element question is asked as the value question
  * first. Where that answers nothing there are element constructs of their own — what a `for … of` iterates, what
  * is pushed into an array, what an element-visiting callback is handed, and what `map`/`flatMap` build out of
- * their callback's own answer.
+ * their callback's own answer WHEN THAT ANSWER IS A PATH ROOTED AT THE CALLBACK'S OWN PARAMETER, which is the
+ * only shape of it this walk may read — see §MAP_PATH for why the general shape is not readable here.
  *
  * THE UNDER-CREDITING DIRECTION, STATED: a corpus record handed to a package and returned by it — `sortBy(recs,
  * f)` — would be decided foreign, because the specifier is all an import can say and it says the same thing
@@ -3198,6 +3230,45 @@ const SELECT_METHOD = new Set(["filter", "slice", "sort", "concat", "reverse", "
 const ELEMENT_CALLBACK = new Set(["map", "flatMap", "forEach", "filter", "some", "every", "find", "findIndex",
                                   "findLast", "findLastIndex", "sort", "flat"]);
 const BODY_READER = new Set(["text", "json", "arrayBuffer", "blob", "formData", "bytes"]);
+const MAP_METHOD = new Set(["map", "flatMap"]);
+
+/* §MAP_PATH — `X.map(cb)`'s ELEMENTS ARE `cb`'s ANSWER, AND ONE SHAPE OF THAT ANSWER IS READABLE WITH NO SCOPE
+ * LOOKUP AT ALL. The general shape is not: resolving a name inside `cb`'s body needs the body's own OFFSET, and
+ * a declaration reaches this walk as TEXT — `initOf` hands back `code.slice(w.rhs, e)` whitespace-collapsed and
+ * drops `w.rhs`, so every name inside it is resolved at the READER'S offset instead. That is harmless for a
+ * declaration in an enclosing scope (the same binding is found) and WRONG inside a nested function literal,
+ * where the spelling is bound by the literal and the reader's scope binds something else of the same name. An
+ * arm that resolved a callback body that way would not under-credit, it would answer CONFIDENTLY about another
+ * binding — the one outcome a decided category must never have.
+ *
+ * A PATH ROOTED AT THE CALLBACK'S OWN PARAMETER has no free name in it: `(g) => g.encodings` binds `g` in the
+ * very text being read, so nothing has to be looked up anywhere. And the answer follows from a rule this walk
+ * already makes one construct earlier — §the mem arm's "a member off a foreign base is foreign" — so the
+ * elements of `X.map((p) => p.k)` are produced by whoever produced the elements of `X`, for `map` and for
+ * `flatMap` alike (a foreign array's elements are foreign, so flattening one changes no answer). The path may
+ * be empty (`(p) => p`), which is the identity map.
+ *
+ * IT CAN ONLY EVER AGREE WITH THE CONTAINER: where `X`'s elements are a record this corpus builds, this arm
+ * answers nothing, exactly as the mem arm does. What it does NOT read is a body that computes — a call, an
+ * object literal, a spread — and that is the residual: `registry.flatMap((g) => g.encodings.map((e) => ({ ...e,
+ * … })))` builds its elements HERE out of foreign parts, and naming their producer needs both the offset plumbing
+ * above and a rule for which of a spread literal's names came from the spread. WHAT THE NEXT DIFF BUILDS is the
+ * offset half: `initOf` returning each declaration's own `w.rhs` beside its text, as `returnsOf` already returns
+ * `{text, at}` — and ITS ABSENCE SHOWS as a receiver standing in AMBIGUOUS whose every read is of a field some
+ * package or fetched body wrote, reached through a callback whose body is not a path. */
+const pathOverParams = (cbText) => {
+  const t = (cbText || "").trim();
+  /* Only an ARROW, and only one whose body is an expression: a `function` literal's body is a block whose
+     `return` is a statement this does not read, and a block-bodied arrow is the same construct. */
+  const m = /^\(?\s*([^)=]*?)\s*\)?\s*=>\s*/.exec(t);
+  if (!m || /^\s*async\b/.test(t)) return false;
+  const params = m[1].split(",").map((p) => p.trim());
+  if (!params.length || !params.every((p) => /^[A-Za-z_$][\w$]*$/.test(p))) return false;
+  let body = t.slice(m[0].length).trim();
+  while (body[0] === "(" && matchAt(body, 0) === body.length) body = body.slice(1, -1).trim();
+  const path = /^([A-Za-z_$][\w$]*)(?:\s*\.\s*[A-Za-z_$][\w$]*)*$/.exec(body);
+  return !!path && params.includes(path[1]);
+};
 
 const originName = (spec) => `the \`${spec}\` module`;
 
@@ -3274,7 +3345,10 @@ function resolveModule(fromFile, spec) {
  * read as "produced by node:fs" when `build.mjs` wrote every name in it — a decided negative over a corpus seam,
  * which is the one direction a decided category must never be wrong in.
  *
- * `st` carries the cycle guard and the NAMES the receiver reads. */
+ * `st` carries the cycle guard, and nothing else: it USED to carry the names the receiver reads, written by the
+ * one caller and read by NO arm here — this gate's own WRITE-WITH-NO-READER, in this gate's own state object,
+ * for as long as the walk has existed. Its verdict line for that case is "delete the half of the contract that
+ * has gone stale", so it is deleted rather than left as an affordance somebody might one day read. */
 function originOfExpr(t0, off, scan, st, mode) {
   const t = originHead(t0);
   if (!t || !scan) return null;
@@ -3303,6 +3377,12 @@ function originOfExpr(t0, off, scan, st, mode) {
     const cm = memberSplit(call.callee);
     if (cm) {
       if (SELECT_METHOD.has(cm.name) && !bytes) return originOfExpr(cm.base, off, scan, st, mode);
+      /* §MAP_PATH: `X.map((p) => p.k)` builds its elements out of the callback's answer, and a path rooted at
+         the callback's own parameter is that answer read with nothing looked up. Asked only of the ELEMENT
+         question — who made `X.map(cb)` ITSELF is this corpus, which is the answer the `value` mode already
+         gives by declining. */
+      if (elem && MAP_METHOD.has(cm.name) && call.args.length === 1 && pathOverParams(call.args[0]))
+        return originOfExpr(cm.base, off, scan, st, "elem");
       if (BODY_READER.has(cm.name) && ifaceOfExpr(cm.base, off, scan, null) === "Response")
         /* Fetch §5.3 Body mixin: these read THE BODY, and a body is bytes some SERVER wrote — an answer to the
            bytes question, which is exactly the one a filesystem read cannot answer. */
@@ -3543,7 +3623,7 @@ for (const s of jsScans) {
       /* ASKED AT EVERY READ, NOT AT THE FIRST ONE, for the reason the `instanceof` arm above states: one of the
          constructs that answers this is a fact about a POSITION — which loop body a read stands in — and a
          group's reads can stand in two. Deciding from `rs[0]` would be the tokenizer deciding. */
-      const froms = rs.map((r) => originOfExpr(recv, r.off, s, { seen: new Set(), names }, "value"));
+      const froms = rs.map((r) => originOfExpr(recv, r.off, s, { seen: new Set() }, "value"));
       const from = agreeOrigin(froms);
       if (from) {
         foreignDecided.push({ ...s.site(rs[0].off), recv, names: [...names],
