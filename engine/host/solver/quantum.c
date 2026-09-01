@@ -4,13 +4,13 @@
    allows, and the whole of what this file does is make the question arrive on time. */
 #include "solver/quantum.h"
 #include "solver/engine.h"     /* ENGINE_QUANTUM_MS — the slice IS the scheduler's, never a private copy */
+#include "solver/compose.h"    /* this document is sized by what it writes — see composef */
 #include "check.h"
 #include "quickjs.h"           /* JS_RequestFlowYield — the one call the edge makes */
 
 #include <stdio.h>             /* the one line this component says out loud — see quantum_announce */
-#include <stdlib.h>            /* the composer's buffer — see quantum_json */
+#include <stdlib.h>            /* free — the announcer owns the document composef handed it */
 #include <time.h>
-#include <string.h>
 
 /* ── WHAT THIS RUN'S NUMBERS ARE DENOMINATED IN, SAID ONCE, BY THE COMPONENT THAT OWNS THE FACT ─────────────
  *
@@ -92,13 +92,18 @@ static void quantum_announce(void)
 }
 
 /* THE THREE FACTS AS ONE DOCUMENT — quantum.h says why it lives in this file and why it is not a census.
-   THE ARITHMETIC, DONE FROM THE FORMAT STRING RATHER THAN ESTIMATED, which is result.c's rule for every
-   composer and holds here for the same reason: a truncation does not lose a digit, it loses the closing brace,
-   and the document that embeds this one then will not parse. The format's fixed bytes are 34 without its
-   conversion specifiers; the widest forms of the two it renders itself are 5 (`false`) and 11 (an int's full
-   decimal with sign). 34 + 5 + 11 + 1 = 51, plus the measure string, whose length is ADDED rather than bounded
-   — the two literals differ per host branch by hundreds of bytes and a fixed buffer would be a constant chosen
-   for whichever branch was edited last.
+   NO BYTE COUNT: this composer is sized by what it writes, through solver/compose.h's `composef`, which is
+   result.c's rule for every composer and holds here for the same reason a truncation matters at all — it does
+   not lose a digit, it loses the closing brace, and the document that embeds this one then will not parse.
+   THE COUNT THAT STOOD HERE WAS RIGHT AND IS GONE ANYWAY, which is the whole argument for the change: it read
+   "the format's fixed bytes are 34 without its conversion specifiers; the widest forms of the two it renders
+   itself are 5 (`false`) and 11 (an int's full decimal with sign). 34 + 5 + 11 + 1 = 51", and every one of
+   those figures was correct. Two of the six composers carrying a count like it were NOT correct, both in the
+   safe-looking direction, and neither was caught by the fit assert written to catch it — so being right is a
+   property of the author on the day, and this file's numbers were one edit from being the third pair. The
+   measure string was already ADDED rather than bounded here (the two literals differ per host branch by
+   hundreds of bytes and a fixed buffer would be a constant chosen for whichever branch was edited last), which
+   is the same reasoning one term at a time; `composef` is it applied to the whole string.
    `isCpu` IS A JSON BOOLEAN AND NOT A 0/1, WHICH IS A CONTRACT AND NOT A SPELLING. Every row of every census
    on this seam is a number, and the consumers assert exactly that of them in one generic loop; a numeric
    `isCpu` would pass that loop and quietly become a fifth census, when what it states is a yes/no about the
@@ -112,9 +117,6 @@ static void quantum_announce(void)
 char *quantum_json(void)
 {
     const char *measure = quantum_measure();
-    size_t n = strlen(measure) + 51;
-    char *out;
-    int m;
 
 #if APICLIENT_DEV
     {
@@ -127,15 +129,8 @@ char *quantum_json(void)
                    "trusted zone cannot parse and every finding for that page is discarded");
     }
 #endif
-    out = malloc(n);
-    if (!out) return NULL;
-    m = snprintf(out, n, "{\"measure\":\"%s\",\"isCpu\":%s,\"sliceMs\":%d}",
-                 measure, quantum_measure_is_cpu() ? "true" : "false", (int)ENGINE_QUANTUM_MS);
-    DCHECK(m > 0 && (size_t)m < n,
-           "the quantum denomination did not fit its buffer — a truncation here does not lose a digit, it "
-           "loses the closing brace, so both the `@QUANTUM` line and the result document that embeds this "
-           "will not parse. Re-do the byte count above from the format string rather than widening it by eye");
-    return out;
+    return composef("{\"measure\":\"%s\",\"isCpu\":%s,\"sliceMs\":%d}",
+                    measure, quantum_measure_is_cpu() ? "true" : "false", (int)ENGINE_QUANTUM_MS);
 }
 
 /* ── EMSCRIPTEN: no CPU clock, no asynchronous edge ────────────────────────────────────────────────────────

@@ -86,12 +86,18 @@
 typedef enum { STEP_UNITS(STEP_UNIT_ENUM) STEP_UNIT_N } StepUnit;
 #undef STEP_UNIT_ENUM
 
-/* HOW WIDE THE HISTOGRAM IS AS JSON, DERIVED FROM THE LIST RATHER THAN COUNTED BY HAND. solver/result.c sizes
-   its census buffer as terms and says "RE-DO THE COUNTS WHEN YOU ADD A ROW … there is no way to be nearly
-   right" — which is true and is exactly why THIS block's count may not be one of those: adding an arm here
-   would silently truncate a document somebody has to re-derive a hand-typed number for. One row is
-   `"<name>":<long>,` — a quote, the name, a quote, a colon, up to 20 digits of `long`, a comma — so 24
-   characters beside the name; plus the two braces and the terminator. */
+/* HOW WIDE THE HISTOGRAM IS AS JSON, DERIVED FROM THE LIST RATHER THAN COUNTED BY HAND. This block used to
+   justify itself against solver/result.c's census buffer, which was sized by hand-counted terms under the
+   instruction "RE-DO THE COUNTS WHEN YOU ADD A ROW … there is no way to be nearly right" — the point being
+   that adding an arm HERE must not silently truncate a document somebody has to re-derive a typed number for.
+   THAT COUNT IS GONE: every composer on the result seam is now sized by what it WRITES (solver/compose.h), so
+   the hazard the sentence guarded against no longer exists and the sentence would have gone on citing a
+   paragraph that had been deleted. The derivation below stays, and its reason is now its own rather than
+   borrowed: this width sizes a STACK buffer that `cold_hist_json` fills row by row, which is the one place on
+   this seam where a length must be known BEFORE the bytes exist — so it is derived from the list it renders,
+   and an arm added above widens it in the same edit that adds it.
+   One row is `"<name>":<long>,` — a quote, the name, a quote, a colon, up to 20 digits of `long`, a comma —
+   so 24 characters beside the name; plus the two braces and the terminator. */
 #define STEP_UNIT_WIDTH(id, name) + (sizeof(name) - 1) + 24
 enum { STEP_UNITS_JSON_MAX = 2 STEP_UNITS(STEP_UNIT_WIDTH) + 1 };
 #undef STEP_UNIT_WIDTH

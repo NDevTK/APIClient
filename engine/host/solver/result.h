@@ -173,7 +173,12 @@ JSValue result_explored_throw(JSContext *ctx);
    surface is keyed by. 1 = this engine declared the throw its own exploration; 0 = it did not, which is the
    positive statement that the pair came from the page's own program and is the population a regression lands
    in. A host printing a page-error stream asks this at the moment it prints, because a stream's reader has no
-   second chance to reclassify a line it has already consumed. */
+   second chance to reclassify a line it has already consumed.
+   THE DOCUMENT ROUTE ASKS IT TOO, AND ASKS IT HERE RATHER THAN CARRYING A COLUMN. `pageErrorsExplored` is
+   composed by walking the reported rows and asking this function per pair, so there is one declaration in one
+   place and nothing to keep in step — a field on the row would be a second copy of a fact that is established
+   strictly before any row exists. A DECLARED PAIR WITH NO ROW IS IN NO ARRAY: an exploration throw the page
+   CAUGHT was declared and never reported, and the three arrays are three readings of the REPORTED set. */
 int result_page_error_explored(const char *msg, const char *filename);
 
 /* ---- TAKING ONE BACK ---------------------------------------------------------------------------------------
@@ -263,9 +268,11 @@ typedef enum {
 void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename, ResultPageErrorEdge edge));
 /* The other half of that declaration: this host PUBLISHES result_json unconditionally and reads `pageErrors`
    out of it — and `pageErrorsRetracted` beside it, which is what tells a page that raised nothing from a page
-   that raised errors and handled every one of them. Say it where the host states its other edges, beside WHO
-   answers the network and WHO evaluates a string handler — a page error's reader is an edge of exactly that
-   kind. */
+   that raised errors and handled every one of them, and `pageErrorsExplored`, which is ORTHOGONAL to that pair
+   and says whose throw each message was. Three arrays, two questions: a message is in exactly one of the first
+   two and may be in the third as well, so a consumer renders it ONCE under the context the third one decides.
+   Say it where the host states its other edges, beside WHO answers the network and WHO evaluates a string
+   handler — a page error's reader is an edge of exactly that kind. */
 void result_page_errors_ride_the_document(void);
 
 #endif

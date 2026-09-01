@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "solver/compose.h"   /* every census below is sized by what it writes — see composef */
 #include "solver/result.h"
 #include "solver/endpoint.h"
 #include "solver/solve.h"
@@ -372,28 +373,43 @@ static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
    MESSAGE rather than merely a count of withdrawals. `Element.matches is not a function` names an unbuilt
    engine capability whether or not the bundle caught the rejection it arrived in — the retraction says the
    page did nothing wrong, never that the engine has nothing to build.
-   AND WHOSE THROW IT WAS IS NOT ON THIS ROUTE YET, WHICH IS NARROWER THAN result.h STATES RATHER THAN WRONG.
-   `result_page_error_explored` answers for any consumer and the STREAM route asks it, so a host whose output
-   is lines already partitions the two populations; the DOCUMENT does not carry the answer, so a consumer that
-   reads only `pageErrors` sees an engine-minted exploration TypeError sitting among the page's own errors with
-   nothing to distinguish it. THE NEXT DIFF adds a third, ORTHOGONAL array (`pageErrorsExplored` — orthogonal
-   and not a fourth state of the two above, because "did this still stand" and "whose throw was it" are two
-   questions and a message may honestly answer both), per MESSAGE like these two, which is exact here rather
-   than a compromise: the text is this engine's own prose raised at its own seam, so a message explored at one
-   throw site is explored at every one. IT IS A SEPARATE DIFF BECAUSE ITS REAL CONTENT IS `result_json`'s BUFFER
-   ARITHMETIC — a twelfth `%s` means re-deriving the fixed-byte and counter widths FROM THE FORMAT STRING, and
-   that function's own paragraph records what happened the last time somebody ADJUSTED that count instead:
-   five numbers wrong in the safe-looking direction and a stated worst case of 742 inside a buffer the real one
-   (818) did not fit. ITS ABSENCE SHOWS as an extension popup listing `options.signal does not implement
-   AbortSignal (on the forced arm …)` under a page's own errors, on a run whose smoke log printed the same pair
-   as explored. */
-static char *errs_json_array_where(int want_standing) {
+   AND WHOSE THROW IT WAS IS THE THIRD ARRAY, WHICH IS ORTHOGONAL TO THE PAIR ABOVE AND NOT A FOURTH STATE OF
+   IT. "Did this still stand" and "whose throw was it" are two questions, and a message honestly answers both:
+   `pageErrorsExplored` names the messages this engine MINTED — a browser component forking N feasible
+   completions over unknown external input, reaching on one of them a spec step whose answer IS a throw, which
+   CLAUDE.md names among the things that are deliberately NOT a `@WHY`. It is EVIDENCE and is still reported;
+   what it is not is a page error of the kind `pageErrors` exists for, and before this array the DOCUMENT route
+   could not say so — a consumer reading only `pageErrors` saw an engine-minted exploration TypeError sitting
+   among the page's own errors with nothing to distinguish it, which is a person being shown an error their
+   page did not have. The STREAM route has partitioned the two since `@PAGEERR-EXPLORED`; this is the same
+   answer on the route an extension popup reads.
+   PER MESSAGE LIKE THE OTHER TWO, AND EXACT HERE RATHER THAN A COMPROMISE: the text is this engine's own prose
+   raised at its own seam, so a message explored at one throw site is explored at every one.
+   IT IS ASKED OF `result_page_error_explored` AND NOT OF A FIELD ON THE ROW, which is what keeps it one fact in
+   one place — the declaration is made at the RAISE, strictly before §8.1.4.6 reports anything, so a column here
+   could only ever be a second copy kept in step by hand. The consumer's job is to ASK.
+   A DECLARED PAIR WITH NO ROW IS NOT LISTED, AND THAT IS A POSITIVE STATEMENT RATHER THAN A GAP. This walk is
+   over `g_errs` — what was REPORTED — so an exploration throw the page CAUGHT was declared, never reported,
+   and belongs in no partition of a console it is not in. The arrays are three readings of one reported set.
+   ITS ABSENCE WOULD SHOW as an extension popup listing `options.signal does not implement AbortSignal (on the
+   forced arm …)` under a page's own errors, on a run whose smoke log printed the same pair as explored. */
+typedef enum {
+    /* the page raised it and nothing took it back */
+    ERRS_STANDING,
+    /* named and then withdrawn, standing nowhere — disjoint from the above */
+    ERRS_RETRACTED,
+    /* whose throw it was — ORTHOGONAL to both, so a message may be in this and in one of them */
+    ERRS_EXPLORED
+} ErrsArray;
+
+static char *errs_json_array(ErrsArray which) {
     char *b = NULL; size_t cap = 0, len = 0;
     int emitted = 0;
     errs_raw(&b, &cap, &len, "[");
     for (int i = 0; i < g_errs_n; i++) {
-        int seen = 0, stands_somewhere = 0, retracted_somewhere = 0;
-        /* BY MESSAGE, ACROSS EVERY ROW THAT CARRIES IT, because the two arrays are decided per MESSAGE while
+        int seen = 0, stands_somewhere = 0, retracted_somewhere = 0, explored_somewhere = 0;
+        int want;
+        /* BY MESSAGE, ACROSS EVERY ROW THAT CARRIES IT, because the three arrays are decided per MESSAGE while
            the rows are per pair: a message standing at one throw site is not retracted just because another
            site withdrew it. */
         for (int j = 0; j < g_errs_n; j++) {
@@ -401,9 +417,33 @@ static char *errs_json_array_where(int want_standing) {
             if (j < i) seen = 1;
             if (g_errs[j].standing) stands_somewhere = 1;
             if (g_errs[j].retracted) retracted_somewhere = 1;
+            /* THE PAIR IS THE KEY HERE TOO, and it is the row's own pair rather than this one's: the
+               declaration is keyed on (message, throw site) and this loop is walking every site that raised
+               the message, so asking with `g_errs[i]`'s site would answer about a different row. */
+            if (result_page_error_explored(g_errs[j].msg, g_errs[j].at)) explored_somewhere = 1;
         }
         if (seen) continue;
-        if (want_standing ? !stands_somewhere : (stands_somewhere || !retracted_somewhere)) continue;
+        /* EVERY ROW STANDS FOR AT LEAST ONE OCCURRENCE, WHICH IS WHAT MAKES THE PAIR ABOVE A PARTITION and is
+           therefore what the third array is orthogonal TO. `result_page_error` mints a row at standing 1 and
+           the retraction moves an occurrence between the two counters without destroying it, so their sum is
+           invariant and a row at neither is a row created by something that is not an occurrence. */
+        DCHECK(g_errs[i].standing || g_errs[i].retracted,
+               "a page-error row stands for no occurrence at all — the row is minted at standing 1 and the "
+               "retraction only MOVES an occurrence to the retracted counter, so a row at zero on both was "
+               "created by a path that never reported anything, and the two arrays this file calls a partition "
+               "would silently stop being one");
+        switch (which) {
+        case ERRS_STANDING:  want = stands_somewhere; break;
+        case ERRS_RETRACTED: want = !stands_somewhere && retracted_somewhere; break;
+        case ERRS_EXPLORED:  want = explored_somewhere; break;
+        default:
+            DFAIL("a page-error array was asked for under an ErrsArray this composer does not have — the enum "
+                  "and this switch are the only two places the question is spelled, so a value outside it is a "
+                  "cast or an uninitialised read rather than a fourth array somebody added");
+            want = 0;
+            break;
+        }
+        if (!want) continue;
         if (emitted++) errs_raw(&b, &cap, &len, ",");
         errs_raw(&b, &cap, &len, "\"");
         errs_append(&b, &cap, &len, g_errs[i].msg);
@@ -412,6 +452,15 @@ static char *errs_json_array_where(int want_standing) {
     errs_raw(&b, &cap, &len, "]");
     return b ? b : strdup("[]");
 }
+
+/* EVERY COMPOSER BELOW IS SIZED BY WHAT IT WRITES, AND NO CALL SITE HERE HAS A BUFFER AT ALL — the mechanism
+   is solver/compose.h's `composef`, and that file states in full what it replaces and why the arithmetic it
+   replaces had already been got wrong twice IN THIS FILE, both times in the safe-looking direction. What is
+   worth keeping at this end is the shape of the miss rather than its numbers: each composer carried a
+   `DCHECK(m > 0 && m < n)` under its snprintf, and a fit assert fires only on a document WIDE ENOUGH to reach
+   the end of the buffer. The rows a real page produces are small, so an under-count sat inside the slack for
+   as long as the slack lasted, and the margin raised to protect a bad count was the same margin that hid one.
+   A field added to any composer below now costs nothing here — no count, no term, no margin, nothing to re-do. */
 
 /* THE ORDERING, COMPOSED — see result.h for why this lives here rather than in a host's printf, and for what
    the two shapes below mean. This function DECIDES NOTHING: it reads flow_wfq_census and renders it.
@@ -494,33 +543,21 @@ static char *errs_json_array_where(int want_standing) {
    — behind by AGING, which nothing bounded reaches, rather than behind by LIFT, which one term reading
    differently would close. On a one-family frontier the reward half of that is identically zero.
 
-   THE ARITHMETIC, DONE RATHER THAN ESTIMATED, and it is the reason the buffer is this size: the format's fixed
-   bytes are 384 without its conversion specifiers, and the thirty-three numbers' widest forms are 3594
-   (fourteen longs and nine int64s at 20, three `%.1f` doubles at 312 and seven `%.3f` at 314 — a double's
-   widest decimal form is 309 integer digits plus sign, point and fraction, which is what makes this buffer two
-   orders larger than the counter documents in this file). 384 + 3594 + 1 = 3979 against this 4096. RE-DO IT
-   WHEN YOU ADD A ROW; the DCHECK below catches the arithmetic being re-done wrong, and is not a substitute for
-   doing it. The starvation pair added 33 fixed bytes (`,"neverPicked":` at 15 and `,"neverPickedGap":` at 18)
-   and 334 of conversion (one more long, one more `%.3f`), which is where 312/2906/3328 became 345/3240/3586;
-   the leader triple then added 39 fixed (`"topSvc":` at 9, `,"topSvcFam":` at 13 and `,"nonrewardMax":` at 16,
-   the leading comma of the group being the one the previous row already ended on) and 354 of conversion (two
-   more int64s at 20 and one more `%.3f` at 314), which is where those became these. */
+   NO BYTE COUNT — see solver/compose.h's `composef`. This composer used to carry one, and it was the widest
+   of the five: a
+   `%.1f` double's widest decimal form is 309 integer digits plus sign, point and fraction, so ten of them made
+   a 4096-byte buffer out of a document whose real pages are two lines long. That number was the reason nothing
+   here could ever have found a miscount — the slack was three orders larger than the rows. */
 char *result_wfq_json(void) {
     WfqCensus w;
-    char *out;
-    size_t n = 4096;
-    int m;
 
     flow_wfq_census(&w);
-    out = malloc(n);
-    if (!out) return NULL;
     /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
        than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
        parking and both leave no members standing. */
     if (w.members == 0)
-        m = snprintf(out, n, "{\"members\":0}");
-    else
-        m = snprintf(out, n,
+        return composef("{\"members\":0}");
+    return composef(
                      "{\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
                      "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,"
                      "\"neverPicked\":%ld,\"neverPickedGap\":%.3f,"
@@ -540,11 +577,6 @@ char *result_wfq_json(void) {
                      w.dist_max, w.w_top, w.w_min, w.cand_w_max,
                      (long long)w.top_svc, (long long)w.top_svc_fam, w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap);
-    DCHECK(m > 0 && (size_t)m < n,
-           "the WFQ census did not fit its buffer — a truncation here does not lose a digit, it loses the "
-           "closing brace, so the document that embeds it will not parse and every finding for this page is "
-           "discarded. Re-do the byte count above rather than widening it by eye");
-    return out;
 }
 
 /* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes
@@ -558,31 +590,17 @@ char *result_wfq_json(void) {
    frontier of four flows whose chains hold tens of thousands of frozen segments is a lifetime bug that reads
    exactly like a healthy run in the first three numbers.
 
-   THE ARITHMETIC, DONE FROM THE FORMAT STRING RATHER THAN ESTIMATED: its fixed bytes are 99 without the
-   conversion specifiers, and the eight numbers' widest forms are 452 (seven longs at 20 and one `%.1f` double
-   at 312 — 309 integer digits plus sign, point and fraction). 99 + 452 + 1 = 552 against this 576. RE-DO IT
-   WHEN YOU ADD A ROW; the DCHECK below catches the arithmetic being re-done wrong and is not a substitute for
-   doing it. */
+   NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
-    size_t n = 576;
-    char *out;
-    int m;
 
     cow_swap_stats(&sc, &st, &sm);
     cow_chain_stats(&hs, &he);
     dom_cow_chain_stats(&ds, &de);
-    out = malloc(n);
-    if (!out) return NULL;
-    m = snprintf(out, n,
+    return composef(
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
                  "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de);
-    DCHECK(m > 0 && (size_t)m < n,
-           "the swap census did not fit its buffer — a truncation here does not lose a digit, it loses the "
-           "closing brace, so the document that embeds it will not parse and every finding for this page is "
-           "discarded. Re-do the byte count above rather than widening it by eye");
-    return out;
 }
 
 /* WHAT THE FRONTIER IS MADE OF AND WHAT ITS PARKED SNAPSHOTS WEIGH — solver/cold.h's ColdCensus, this
@@ -706,25 +724,20 @@ char *result_swap_json(void) {
    unblock nothing. They were being added into `hostAnswered`, which made a peer holding four timelines read as
    four payments for one ask and inverted the census's own `answered <= asked`.
 
-   THE ARITHMETIC IS THE EXPRESSION THAT SIZES THE BUFFER AND NOT A SENTENCE BESIDE IT, because the sentence
-   beside it was WRONG and the buffer it justified was TOO SMALL. It read "fixed bytes 503 … the thirty-nine
-   numbers' widest forms are 753 … 503 + 753 + 1 = 1257 against this 1280", and the format string it described
-   measured 521 fixed bytes over FORTY numbers — thirty-seven longs and three ints, whose widest forms are
-   773 — so the honest sum was 521 + 773 + 1 = 1295 against a 1280 buffer that was ALREADY 15 BYTES SHORT of
-   its own worst case. Every one of those figures was wrong in the safe-looking direction, which is the exact
-   history `result_document`'s comment records fifty lines down: an arithmetic ADJUSTED to a new row rather
-   than re-derived from the string. So the counts stop being prose. They are still hand-derived — there is no
-   portable way to ask a format string its widest expansion — but they are now TERMS THE COMPILER ADDS, so the
-   stated sum and the allocated size cannot disagree with each other, and the way a forgotten row surfaces is
-   the DCHECK under the snprintf rather than a paragraph nobody re-checks.
-   WHERE IT IS STILL FRAGILE, SAID PLAINLY. The counts are a HAND CENSUS of one string — that part did not go
-   away, it only stopped being able to disagree with the malloc. The widths are `long` at 20 and `int` at 11,
-   which is the 64-bit host's `long`; on WASM32 A `long` IS 32 BITS and every long term is generous by nine
-   bytes, so the assert cannot fire on the shipping host FIRST — a miscount is found where the numbers are
-   widest, which is not where this runs in production. There is also NO SLACK by construction: the terms ARE
-   the worst case, so the widest possible census fills the buffer exactly and any miscount at all is a
-   truncation rather than a near miss. That is the intent. RE-DO THE COUNTS WHEN YOU ADD A ROW: they are three
-   integers and there is no way to be nearly right. */
+   THE ARITHMETIC IS GONE AND THE QUESTION IT ANSWERED WAS THE WRONG ONE. This composer carried the count as
+   TERMS THE COMPILER ADDS rather than as a sum somebody typed, and that was a real improvement over the prose
+   it replaced — the prose had read "fixed bytes 503 … the thirty-nine numbers' widest forms are 753" against a
+   string measuring 521 over FORTY, so the honest sum was 1295 inside a 1280-byte buffer that was already
+   fifteen bytes short. But the terms were still a HAND CENSUS of one string, its own paragraph said so, and it
+   went on to say "there is no portable way to ask a format string its widest expansion" — which is TRUE, and
+   is why nobody should be asking it. The ACTUAL expansion is portable, exact and already the mechanism check.h
+   and solver/concolic.c use; solver/compose.h's `composef` states it with its citations. The three counts,
+   the STEP_UNITS
+   term and the assert under the snprintf all go with it, and adding a row here now costs nothing at all.
+   WHAT IS LOST WITH THEM IS WORTH NAMING: the old terms were a WORST case, so a miscount showed up first on
+   whichever host made the numbers widest — which the paragraph pointed out was never the shipping one, since
+   a WASM32 `long` is 32 bits and every long term was generous by nine bytes there. A measured length has no
+   host-dependence at all: it is the length THIS run writes, on the host that is running. */
 /* ONE ROW-COMPOSER FOR THE TWO PER-ARM HISTOGRAMS THIS CENSUS CARRIES. They differ in exactly one thing — the
    POPULATION they are counts of — and not at all in how a row is spelled, so a second copy of the loop would be
    a second speller of solver/step_unit.h's row format, which is the drift that file's own "THE ONE LIST"
@@ -760,13 +773,13 @@ static long cold_hist_json(char *buf, size_t cap, const long *counts, const char
 }
 
 char *result_cold_json(void) {
-    /* The format string's widest expansion, as terms rather than as a sum somebody typed. `COLD_LITERAL` is the
-       string with every conversion specifier removed. */
-    enum { COLD_LITERAL = 737, COLD_LONGS = 49, COLD_INTS = 4 };
     ColdCensus c;
     /* THE TWO PER-ARM HISTOGRAMS, EACH COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Their width is
        STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens both
-       automatically — which is the one thing the hand-counted terms above must not be asked to do.
+       automatically. These are the only fixed buffers left in this composer and they stay fixed for a reason
+       the deleted ones did not have: their width is DERIVED from the list they render rather than counted off
+       the string that renders them, which is the same property solver/compose.h's `composef` gives the
+       document around them.
        THEY ARE TWO ROWS BECAUSE THEY ARE TWO QUESTIONS, and this is the whole reason the second exists.
        `hist` is a census of the MEMBERS STANDING at this instant, so a zero there says nobody is sitting in
        that arm right now; `runs` is a count of the STEPS this instance has run, so a zero there says the
@@ -784,12 +797,7 @@ char *result_cold_json(void) {
     ColdResumed resumed;
     EngineFrontierCensus e;
     EngineStepUnitRuns r;
-    /* …plus the two histograms' own width, which is the ONE term here that is not a hand count: it is an
-       expansion of solver/step_unit.h's list, so adding an arm cannot silently truncate this document. */
-    size_t n = COLD_LITERAL + COLD_LONGS * 20 + COLD_INTS * 11 + 2 * STEP_UNITS_JSON_MAX + 1;
-    char *out;
     int ran;
-    int m;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -847,9 +855,7 @@ char *result_cold_json(void) {
            "an inherited-drive claim was met or lost in a session whose rebuild carried no orphan locator — the "
            "three orphanClaims rows are about to describe a round trip that this document also says did not "
            "happen");
-    out = malloc(n);
-    if (!out) return NULL;
-    m = snprintf(out, n,
+    return composef(
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                  "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
                  "\"deepest\":%d,\"completed\":%d,"
@@ -888,11 +894,6 @@ char *result_cold_json(void) {
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, runs,
                  hist);
-    DCHECK(m > 0 && (size_t)m < n,
-           "the cold/frontier census did not fit its buffer — a truncation here loses the closing brace, so "
-           "the document that embeds it will not parse and every finding for this page is discarded. Re-do "
-           "the byte count above rather than widening it by eye");
-    return out;
 }
 
 /* WHAT THE RUNTIME AND THE C ALLOCATOR UNDER IT HOLD — quickjs's own JS_ComputeMemoryUsage walk, the child
@@ -928,25 +929,18 @@ char *result_cold_json(void) {
    holding builtin and a heap call frame are the two largest things quickjs cannot name, and a frontier of
    parked flows holds one of each per parked call and per suspended activation.
 
-   THE ARITHMETIC, from the format string: fixed bytes 342 without the conversion specifiers, and the
-   twenty-six numbers' widest forms are 475 (twenty-one int64s at 20 and five ints at 11).
-   342 + 475 + 1 = 818 against this 832. RE-DO IT WHEN YOU ADD A ROW. */
+   NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_heap_json(JSContext *ctx) {
     JSMemoryUsage mem;
     JSRuntime *rt;
     long long attributed;
-    size_t n = 832;
-    char *out;
-    int m;
 
     DCHECK(ctx != NULL, "the heap census was asked for against no realm — every row of it is a walk of ONE "
                         "runtime, so a census with no runtime to walk is a reading of nothing");
     rt = JS_GetRuntime(ctx);
     JS_ComputeMemoryUsage(rt, &mem);
     attributed = (long long)mem.memory_used_size;
-    out = malloc(n);
-    if (!out) return NULL;
-    m = snprintf(out, n,
+    return composef(
                  "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
                  "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
                  "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
@@ -966,11 +960,6 @@ char *result_heap_json(JSContext *ctx) {
                  (long long)mem.malloc_size - attributed,
                  JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
                  (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
-    DCHECK(m > 0 && (size_t)m < n,
-           "the heap census did not fit its buffer — a truncation here loses the closing brace, so the "
-           "document that embeds it will not parse and every finding for this page is discarded. Re-do the "
-           "byte count above rather than widening it by eye");
-    return out;
 }
 
 /* The composition, and nothing else. Each surface serializes itself — endpoint.c walks its deduped endpoints,
@@ -980,11 +969,15 @@ char *result_heap_json(JSContext *ctx) {
 char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
-    char *errs = errs_json_array_where(/*want_standing*/ 1);
-    /* AND THE ONES THIS ENGINE TOOK BACK — see errs_json_array_where. Composed beside `pageErrors` and never
+    char *errs = errs_json_array(ERRS_STANDING);
+    /* AND THE ONES THIS ENGINE TOOK BACK — see errs_json_array. Composed beside `pageErrors` and never
        folded into it: a run in which the page raised nothing and a run in which it raised errors and handled
        every one of them are two different pages, and one empty array was the evidence for both. */
-    char *errsRetracted = errs_json_array_where(/*want_standing*/ 0);
+    char *errsRetracted = errs_json_array(ERRS_RETRACTED);
+    /* AND THE ONES THIS ENGINE MINTED ITSELF — ORTHOGONAL to those two rather than a third state of them, so a
+       message here is also in exactly one of them. errs_json_array states the three facts and why a consumer
+       reading only `pageErrors` was being shown an error the page did not have. */
+    char *errsExplored = errs_json_array(ERRS_EXPLORED);
     /* THE ORDERING, ON THE ONE SURFACE THAT CROSSES THE ABI — see result.h. Composed here rather than by a
        host, because the host that had it is a driver the production entry does not call. */
     char *wfq = result_wfq_json();
@@ -1008,46 +1001,36 @@ char *result_json(JSContext *ctx) {
        filing whatever rejection a GET happened to provoke under the identity of an endpoint nobody probed.
        It is extension/lib/req2proto.js, which issues the probe as the page and writes straight into
        `globalStore.probeResults`; nothing about it crosses this seam. */
-    size_t n;
     char *out;
 
-    if (!eps || !sinks || !errs || !errsRetracted || !wfq || !cold || !heap || !swap || !forkAt || !quantum) {
-        free(eps); free(sinks); free(errs); free(errsRetracted); free(wfq);
+    if (!eps || !sinks || !errs || !errsRetracted || !errsExplored || !wfq || !cold || !heap || !swap ||
+        !forkAt || !quantum) {
+        free(eps); free(sinks); free(errs); free(errsRetracted); free(errsExplored); free(wfq);
         free(cold); free(heap); free(swap); free(forkAt); free(quantum);
         return NULL;
     }
-    /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 603 with its conversion specifiers
-       and 523 without them, and the twenty-one counters' full-width decimals are 375 (five ints at 11, sixteen
-       longs at 20), so the worst case is 899 (523 + 375 + the NUL) against this 1024. The ELEVEN `%s`
-       contribute nothing to that
-       figure and everything to the sum above it — each is a composed surface whose real length is added by
-       `strlen`, which is why a census joining the document costs a term in `n` and 11 bytes of literal here.
-       `pageErrorsRetracted` is the eleventh: 25 bytes of literal, a `strlen` term, and nothing added to the
-       widest form. THE MARGIN IS RAISED RATHER THAN SPENT, and the reason is not comfort: the DCHECK below is
-       a DCHECK, so it is compiled out at `-DAPICLIENT_DEV=0` and a release build has the arithmetic and
-       nothing else standing between it and a lost closing brace. It was 192 for a shape whose widest form was
-       already 197 — inside only because the real numbers are small — then 384 against a worst case the arrival
-       census took to 454, then 512 against 488, then 640 against the routed-delivery pair's 566, then 768.
-       THAT 768 WAS ALREADY 50 BYTES SHORT WHEN THIS COUNT WAS RE-DONE, and the prose above it was the reason
-       nobody noticed: it said "467 with its conversion specifiers and 407 without" and "nineteen counters …
-       335", against a format string that measured 508/442 with twenty-one counters at 375. Every one of those
-       five numbers was wrong in the safe-looking direction, so the stated worst case (742) sat comfortably
-       inside a buffer the real worst case (818) did not fit — an arithmetic that had been ADJUSTED to the new
-       field rather than re-done from the string, which is exactly what the sentence below tells you not to do.
-       RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD, FROM THE FORMAT STRING ITSELF; it is four counts and there is
-       no way to be nearly right. The DCHECK under the snprintf is the second half of this, not a substitute for
-       it: the arithmetic is what makes the buffer right, the assert is what catches it being re-done wrong —
-       and here it was the only thing standing between the shipped document and a lost closing brace. */
+    /* NO SLACK, NO COUNT, NO MARGIN — see solver/compose.h's `composef`, which this composer is the reason
+       for. The
+       arithmetic that used to stand here was the one this file's history is about: it said "467 with its
+       conversion specifiers and 407 without" and "nineteen counters … 335" against a format string measuring
+       508/442 over twenty-one counters at 375, so the stated worst case of 742 sat comfortably inside a buffer
+       whose real worst case (818) did not fit — five numbers wrong, every one of them in the safe-looking
+       direction, because the count had been ADJUSTED to the new field rather than re-done from the string.
+       The instruction under it ("RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD") was correct, was followed wrong,
+       and is now unnecessary: a field added below costs nothing here.
+       THE MARGIN'S OWN ARGUMENT IS RETIRED RATHER THAN DELETED, because it was a good argument about the
+       arrangement it defended and a reader would otherwise re-derive it. It said the slack must be RAISED
+       rather than spent because the fit assert is a DCHECK, compiled out at `-DAPICLIENT_DEV=0`, leaving a
+       release build with the arithmetic and nothing else between it and a lost closing brace. That was
+       insurance against the arithmetic being WRONG, and it is exactly what let both of the misses above sit
+       unnoticed — a margin large enough to protect a bad count is large enough to hide one. With the length
+       MEASURED there is nothing to insure: the measurement runs in every build, on the same argument list, in
+       the same function, so the release build's buffer is right for the same reason the dev build's is. */
     /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(errsRetracted) + strlen(wfq) +
-        strlen(cold_park_json()) +
-        strlen(cold) + strlen(heap) + strlen(swap) + strlen(forkAt) + strlen(quantum) + 1024;
-    out = malloc(n);
-    if (out) {
+    {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
            times as long grew its frontier or grew the work inside each flow, and those need opposite fixes.
            AND WHAT THE CROSS-INSTANCE SEAM DID. A delivery arriving says nothing about whether the ancestry it
@@ -1065,7 +1048,6 @@ char *result_json(JSContext *ctx) {
            `world_segments_held`'s own DCHECK (a table larger than its history was grown by something that is
            not world.c) rides along with them. */
         int held = world_segments_held(), made = 0, segf = 0;
-        int m;
         /* AND WHY THE SECURITY ARRAY IS THE LENGTH IT IS, WHICH AN EMPTY ONE CANNOT SAY. `securitySinks: []`
            has four readings that take opposite actions — no attacker source was ever read, none reached a
            sink, sinks ran and only the page's own strings arrived, or taint arrived and the search was
@@ -1097,12 +1079,18 @@ char *result_json(JSContext *ctx) {
         engine_routed_census(&routedDelivered, &routedRefused);
         engine_orphan_census(&orphansDriven, &orphansAsked);
         engine_routed_task_census(routedEnds);
-        m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
+        out = composef("{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              /* THE ONES THIS ENGINE NAMED AND THEN TOOK BACK — beside `pageErrors` because
                                 the two are read together and disjoint: neither array can say on its own
                                 whether an empty console means the page raised nothing or handled everything
-                                it raised. errs_json_array_where states the three facts they keep apart. */
+                                it raised. errs_json_array states the three facts they keep apart. */
                              "\"pageErrorsRetracted\":%s,"
+                             /* AND THE ONES THIS ENGINE MINTED — ORTHOGONAL to the pair above rather than a
+                                third state of it, so a message here is ALSO in exactly one of them and a
+                                consumer renders it ONCE, under the context this array decides. Without it an
+                                extension popup lists an engine-minted exploration TypeError among the page's
+                                own errors, which is a person being shown an error their page did not have. */
+                             "\"pageErrorsExplored\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,\"_unitsDone\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
@@ -1131,7 +1119,7 @@ char *result_json(JSContext *ctx) {
                                 decides whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
                              "\"_quantum\":%s,\"_park\":%s}",
-                     eps, sinks, errs, errsRetracted,
+                     eps, sinks, errs, errsRetracted, errsExplored,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused,
@@ -1140,20 +1128,12 @@ char *result_json(JSContext *ctx) {
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
                      orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, quantum,
                      cold_park_json());
-        /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED, AND IT IS THE ONLY THING THAT WAS STILL RIGHT. It was
-           192 bytes for three counters and now carries twenty-one, whose widest form is 375 digits beside 523
-           bytes of literal — and a previous 768 did not cover that, which nothing noticed because the prose
-           stating the count had been adjusted instead of re-derived (see the arithmetic above). A truncation
-           here does not lose a digit, it loses the closing brace: the host gets a document that will not parse
-           and reports NOTHING for the page, which is the loudest possible consequence arriving as the quietest
-           possible bug. snprintf already told us; this is what asks. */
-        DCHECK(m > 0 && (size_t)m < n, "the result document did not fit its buffer — the host would be handed "
-                                       "truncated JSON and every finding for this page would be discarded");
     }
     free(eps);
     free(sinks);
     free(errs);
     free(errsRetracted);
+    free(errsExplored);
     free(wfq);
     free(cold);
     free(heap);

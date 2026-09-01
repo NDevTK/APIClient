@@ -128,6 +128,21 @@ function assertResultDocument(r) {
          "the engine's result document carries no pageErrorsRetracted array — result.c composes it beside " +
          "pageErrors in the same snprintf, so its absence is that composition changed under this reader and " +
          "a page whose rejections were all handled would be indistinguishable from one that raised nothing");
+  /* AND WHOSE THROW EACH MESSAGE WAS — ORTHOGONAL to the pair above rather than a third state of it, so a
+     message in this array is ALSO in exactly one of them. A browser component that forks N feasible
+     completions over unknown external input reaches, on one of them, a spec step whose answer IS a throw
+     (Web IDL §3.2.15 Interface types ends "Throw a TypeError."); that throw is correct, is a world this engine
+     CHOSE to run, and is EVIDENCE — but it is not a page error of the kind `pageErrors` exists for, and until
+     this array the document could not say so. What that cost is what this relay does next: an engine-minted
+     exploration TypeError was rendered to a person as one of their own page's errors.
+     ASSERTED RATHER THAN DEFAULTED, like every field on this seam. A `|| []` here would make an engine that
+     stopped declaring its own throws look exactly like a page all of whose errors were its own — which is the
+     defect this array exists to end, restored one layer up. */
+  DCHECK(Array.isArray(r.pageErrorsExplored),
+         "the engine's result document carries no pageErrorsExplored array — result.c composes it beside " +
+         "pageErrors and pageErrorsRetracted in the same composition, so its absence is that composition " +
+         "changed under this reader and every engine-minted exploration throw would be reported to a person " +
+         "as an error their own page raised");
   /* THE COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
      which five arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
      is emitted atomically is not a weaker check, it is a check on the wrong thing: it passes for exactly the
@@ -659,11 +674,32 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        the rejection it arrived in. A separate array would have needed its own path through the brain, the
        serializer and the popup to reach the one surface a reviewer reads, and would have arrived saying
        exactly what a `context` says. `page-retracted` is a single token like every other value on this axis
-       ("page", "engine", "why", "result-parse"), so nothing downstream has to learn a new shape. */
-    resolverErrors: (result
-        ? result.pageErrors.map((e) => ({ context: "page", message: String(e) }))
-            .concat(result.pageErrorsRetracted.map((e) => ({ context: "page-retracted", message: String(e) })))
-        : []).concat(extraErrors),
+       ("page", "engine", "why", "result-parse"), so nothing downstream has to learn a new shape.
+       AND WHOSE THROW IT WAS IS THE SECOND AXIS, WHICH IS WHY IT SUFFIXES THE TOKEN RATHER THAN CONCATENATING
+       A THIRD LIST. `pageErrorsExplored` is ORTHOGONAL to the pair above — a message in it is ALSO in exactly
+       one of them — so concatenating it would render one message TWICE, once as the page's own error and once
+       as the engine's, which is the contradiction-on-one-screen solver/result.c refuses for the disjoint pair
+       and refuses here for the same reason. Two independent facts get two independent halves of one token:
+       the standing/retracted axis chooses the base, the explored axis appends `-explored`, and the result is a
+       closed 2x2 over a row that is still {context, message} and two strings — nothing added, nothing for the
+       brain, the serializer or the popup to learn, since popup.js renders `context + ": " + message` verbatim.
+       WHAT THIS FIXES IS A PERSON BEING SHOWN AN ERROR THEIR PAGE DID NOT HAVE. `options.signal does not
+       implement AbortSignal (on the forced arm …)` is the engine forcing a branch a real session would not
+       have taken, and the throw on that arm is the exploration WORKING — it is evidence, and it is not a defect
+       in the page. It was listed under "page" with nothing to distinguish it. A Set is built once rather than
+       an `indexOf` per row so a document with many messages does not go quadratic on the one seam every page
+       crosses. */
+    resolverErrors: (function () {
+      if (!result) return [].concat(extraErrors);
+      const explored = new Set(result.pageErrorsExplored.map((e) => String(e)));
+      const row = (base) => (e) => {
+        const message = String(e);
+        return { context: explored.has(message) ? base + "-explored" : base, message };
+      };
+      return result.pageErrors.map(row("page"))
+          .concat(result.pageErrorsRetracted.map(row("page-retracted")))
+          .concat(extraErrors);
+    })(),
     /* NO probeResults ON THIS SEAM. The engine issues no request, so it receives no rejection and has no
        error-derived schema to relay; the record the Send panel reads is written by the two systems that DO
        probe — lib/req2proto.js (driven by lib/discovery-probe.js and lib/response-decode.js) — straight into

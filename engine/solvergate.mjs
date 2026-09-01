@@ -828,7 +828,33 @@ const DROP = new Map([
                    `.then` in the corpus is attached in the expression that produced the promise, so this array
                    is `[]` on all of them today. Nobody may read this row as evidence that a mismatch in it was
                    ever observed here. */
-                "pageErrorsRetracted"])],
+                "pageErrorsRetracted",
+                /* AND THE THIRD ARRAY, WHICH LEAVES ON THE ONE ABOVE'S GROUND AND NOT ON ITS OWN — it INHERITS
+                   the variance rather than having any. `pageErrorsExplored` names the messages the engine
+                   MINTED, and whether a given (message, throw site) pair was minted by this engine is decided
+                   by the PRODUCER at the raise, which no schedule touches; so on any message that is reported
+                   under every schedule, this array's answer is invariant.
+                   WHAT IT IS NOT INVARIANT OVER IS WHETHER THE MESSAGE IS REPORTED AT ALL. It is ORTHOGONAL to
+                   the standing/retracted pair — solver/result.c composes it from every reported row regardless
+                   of which of the two that row is in — so a message whose only occurrence is RETRACTED enters
+                   and leaves this array exactly as it enters and leaves `pageErrorsRetracted`, for exactly the
+                   reason written above: HTML §8.1.4.7 step 4.1.1 suppresses the report for a promise handled
+                   before its queued task runs and §8.1.6.4 step 7.4 withdraws it for one handled after, and
+                   which of those happens is which of two queued tasks the scheduler picked first.
+                   SO THE STANDING HALF OF IT WOULD BE COMPARABLE AND THE ARRAY AS A WHOLE IS NOT, and that is
+                   stated rather than acted on: splitting the surface to recover the comparison would put the
+                   document's shape back into a gate's convenience, and this gate's job is to compare what the
+                   engine emits. The FINDING that half would protect is already held — an exploration throw
+                   changes no `fetchCallSites` row, since the sibling arms of the same fork carry on past it
+                   and emit exactly those endpoints, which is the whole argument result.h makes for the
+                   array existing.
+                   BY CONSTRUCTION AND NOT FROM A MEASUREMENT, on the same ground as its neighbour, and stated
+                   as what was READ rather than as an absolute: `result_explored_throw` has one caller, the
+                   `options.signal` arm of browser/core/events/event_target.c, and no document in
+                   engine/tests/solver passes an options OBJECT to `addEventListener` at all — so this array is
+                   `[]` on the whole corpus today and nobody may read this row as evidence that a mismatch in
+                   it was ever observed here. */
+                "pageErrorsExplored"])],
   /* `turns` IS A SWITCH-IN COUNT, WHICH IS `_switches` ONE LEVEL DOWN. solve.c counts it in solve_flow_begin —
      the scheduler's every switch-in of a candidate flow — and says so where it counts it: "IT IS SWITCH-INS AND
      NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a second copy of `tried`: a

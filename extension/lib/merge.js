@@ -60,10 +60,15 @@ function mergeASTResultsIntoVDD(tab, results) {
        bridge. */
 
     /* WHAT AN ANALYSIS DOCUMENT ACTUALLY CONTAINS, AND WHY THREE MERGE PASSES ARE GONE. solver/result.c
-       composes the engine's one @RESULT document in ONE snprintf and it has TWELVE fields: fetchCallSites,
-       securitySinks, pageErrors, the eight cost counters, and _park. Every OTHER name on the object this
-       function receives is a host-side constant written by bridge.js's `linesToAnalysis` — its own comment
-       calls them "sibling fields the brain reads unconditionally, present + empty so it never throws".
+       composes the engine's one @RESULT document in ONE composition, and every name in it comes from that one
+       place — the finding arrays, the page-error arrays, the run counters and the nested censuses. Every OTHER
+       name on the object this function receives is a host-side constant written by bridge.js's
+       `linesToAnalysis` — its own comment calls them "sibling fields the brain reads unconditionally, present
+       + empty so it never throws". THE COUNT THAT STOOD HERE IS GONE RATHER THAN UPDATED: it said "TWELVE
+       fields: fetchCallSites, securitySinks, pageErrors, the eight cost counters, and _park" and the document
+       had long since passed thirty, so it was a census of a shape no revision still had — and a replacement
+       number would rot the same way on the next field. What is load-bearing is the ORIGIN of a name, which is
+       checkable by opening result.c; the tally never was.
 
        So `protoFieldMaps`, `protoEnums` and `sourceMapTypes` were three merge passes reading `[]` on every
        run this project has ever done, and `domEndpoints` was a fourth. They are the defect class in its
