@@ -1608,9 +1608,81 @@ JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset,
     return JS_UNDEFINED;
 }
 
+/* AN `unsigned long` POSITION OF §4.10 / §4.11, READ — and NOT with a JS_ToUint32 of this file's own, which is
+   the shape core/idl_args.h bans by name: "A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN ARGUMENT". §3.2's
+   conversion is a BOUNDARY that unknown external input crosses AS ITSELF — idl_concolic_rule answers
+   IDL_CONCOLIC_CROSSES for every integer type, IDL_UNSIGNED_LONG among them — so `t.substringData(i, 2)` with
+   an unknown `i` reaches this body still holding the unknown, and a raw coercion of it owes C a real number it
+   cannot have. That coercion does not merely return a wrong number: ToNumber hands a concolic straight back,
+   so the engine aborts INSIDE the coercion, one frame below this file. CHECKING THE COERCION'S RETURN VALUE IS
+   NO DEFENCE AND NEVER WAS — the abort happens before there is a return to check, which is why the discarded
+   returns here and the checked one in js_text_split were one defect wearing two shapes.
+   THE KNOWN VALUE IS ANSWERED BY THE ONE COPY OF THE ARITHMETIC. idl_number_of IS §3.2's reader for a body
+   that needs a real number, and for a value the declaration already converted it is exactly the assert pair
+   this site would otherwise have to write itself — that the operand is a Number, and that reading it back
+   cannot throw. Routing through it does not make the discarded return provably dead; it removes it.
+   THE UNKNOWN IS A FORK THIS BODY CANNOT YET PERFORM, and it is the SPEC's own fork rather than one this file
+   chose. §4.10's "replace data" step 2 and "substring data" step 2 are both "If offset is greater than length,
+   then throw an "IndexSizeError" DOMException", and §4.11's "split a Text node" step 2 is the same sentence —
+   a comparison over exactly this value against a length the engine knows. §3.2.4.6 unsigned long's
+   ConvertToInt(V, 32, "unsigned") is TOTAL over [0, 2**32-1], so nothing has excluded either side of that
+   comparison for ANY unknown, with an example or without one: BOTH completions are feasible and neither arm
+   may be picked. Answering it from the unknown's own example instead is the collapse §Solver-half forbids —
+   what would replace the value is a REAL number this engine computed, and nothing downstream could tell it
+   from an offset the page wrote as a literal.
+   SO IT ABORTS, AND WHAT THE NEXT DIFF BUILDS IS NAMED: js_cd_op and js_text_split become IdlStepBody step
+   machines (core/idl_args.h's IDL_STEP_FIRST) so they can PARK, and step 2 is then asked through step_fork_run
+   over the unknown — with idl_number_of's example deciding which arm is the real one and
+   JS_OUTCOME_REAL_UNSTATED where there is no example, exactly as core/timing/timer.c asks HTML §8.7 Timers'
+   step 4 over an unknown `setTimeout` delay. A plain body cannot: step_fork_run snapshots a machine, and this
+   one is a C activation with nowhere to park.
+   A MACRO AND NOT A HELPER, because a should-never-happen stamps the line it is WRITTEN at: a function shared
+   by four members would report its own one line for every position of every one of them, which is the
+   assert-that-names-a-remedy-but-not-a-site defect. `which` and `member` are what let the abort say which
+   operand of which member died. */
+#define CD_UNSIGNED_LONG(ctx_, dst_, arg_, which_, member_)                                                   \
+    do {                                                                                                       \
+        JSValueConst cdul_v_ = (arg_);                                                                         \
+        double cdul_n_ = 0;                                                                                    \
+                                                                                                               \
+        if (concolic_is(cdul_v_)) {                                                                            \
+            DFAIL("DOM §4.10 Interface CharacterData / §4.11 Interface Text: `" member_ "` was given an "       \
+                  "UNKNOWN `" which_ "`. Its step 2 is: If offset is greater than length, then throw an "       \
+                  "\"IndexSizeError\" DOMException. That is a comparison over this value, and §3.2.4.6 "        \
+                  "unsigned long's ConvertToInt(V, 32, \"unsigned\") is total over [0, 2**32-1], so BOTH "      \
+                  "completions are feasible and neither arm may be chosen. Deciding it from the unknown's own " \
+                  "example would collapse a modelable value to bare-concrete and delete the other arm. BUILD "  \
+                  "THE FORK: make this body an IdlStepBody (core/idl_args.h, IDL_STEP_FIRST) so it can park, "  \
+                  "then ask step 2 through step_fork_run over the unknown, taking the real arm from "           \
+                  "idl_number_of's example and JS_OUTCOME_REAL_UNSTATED when it has none — the shape "          \
+                  "core/timing/timer.c already uses for HTML §8.7 Timers' step 4.");                            \
+            /* THE MACRO RETURNS, and both bodies that expand it return JSValue. It has to: DFAIL is           \
+               `((void)0)` in a release build, so without this the branch would fall through with `dst_` at    \
+               its initializer and answer offset 0 — a plausible datum for a call whose offset nobody knows,   \
+               which is the concealment check.h exists to prevent, arriving as the ABSENCE of a release arm.   \
+               Throwing is what the coercion this replaced already does in release at the same boundary, so    \
+               the two builds fail for the same reason rather than one of them inventing a number. */          \
+            return JS_ThrowTypeError((ctx_),                                                                   \
+                                     "`" member_ "` was given an unknown `" which_ "`, and DOM §4.10 / §4.11 "  \
+                                     "step 2's comparison over it is not modelled yet");                       \
+        } else {                                                                                               \
+            int cdul_have_ = idl_number_of((ctx_), IDL_UNSIGNED_LONG, cdul_v_, &cdul_n_);                       \
+                                                                                                               \
+            DCHECK(cdul_have_ == 1,                                                                            \
+                   "idl_number_of found no number for `" which_ "` of `" member_ "`, which is not unknown "     \
+                   "external input — it answers 0 only for an unknown carrying no example, and that arm "       \
+                   "returned above");                                                                          \
+            (dst_) = (uint32_t)cdul_n_;                                                                        \
+        }                                                                                                      \
+    } while (0)
+
 /* §4.10's five members. magic: 0 substringData, 1 appendData, 2 insertData, 3 deleteData, 4 replaceData.
-   Every argument arrives CONVERTED — `unsigned long` and `DOMString` are the declaration's work — so nothing
-   here runs the page's code and the body is ordinary C. */
+   THE `DOMString` ARGUMENT ARRIVES CONVERTED OR UNKNOWN and the splice below reads both; the `unsigned long`
+   positions are read through CD_UNSIGNED_LONG above for the same reason, which is the half this comment used
+   to deny. It said, in full: "Every argument arrives CONVERTED — `unsigned long` and `DOMString` are the
+   declaration's work — so nothing here runs the page's code and the body is ordinary C." Every clause of that
+   is true of the conversion the DECLARATION performs, and the sentence was still read as a licence for a raw
+   JS_ToUint32 — on the very type it names first, and the one unknown external input crosses as itself. */
 static JSValue js_cd_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val);
@@ -1623,13 +1695,29 @@ static JSValue js_cd_op(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     if (!n || !node_is_chardata(n))
         return JS_ThrowTypeError(ctx, "a CharacterData method ran on a node that holds no character data");
     cd = lxb_dom_interface_character_data(n);
+    /* EVERY ARGUMENT §4.10 DECLARES IS REQUIRED — not one of the five members writes `optional` — so a short
+       call is the DECLARATION's to refuse and a body reading past `argc` would be reading a slot the boundary
+       never filled. Asserted the way the other indexed members of this engine assert it, and named per member
+       because "2" is three different sentences here. */
+    DCHECK(argc >= (magic == 1 ? 1 : magic == 4 ? 3 : 2),
+           "a §4.10 CharacterData method reached its body with fewer arguments than its IDL declares, and "
+           "every one of them is required — the declaration's own argument-count check is what should have "
+           "refused the call");
     switch (magic) {
-    case 0: case 3: case 4:
-        JS_ToUint32(ctx, &offset, argv[0]);
-        JS_ToUint32(ctx, &count, argv[1]);
+    case 0:
+        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "substringData");
+        CD_UNSIGNED_LONG(ctx, count,  argv[1], "count",  "substringData");
+        break;
+    case 3:
+        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "deleteData");
+        CD_UNSIGNED_LONG(ctx, count,  argv[1], "count",  "deleteData");
+        break;
+    case 4:
+        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "replaceData");
+        CD_UNSIGNED_LONG(ctx, count,  argv[1], "count",  "replaceData");
         break;
     case 2:
-        JS_ToUint32(ctx, &offset, argv[0]);
+        CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "insertData");
         break;
     default:
         DCHECK(magic == 1, "a CharacterData method was declared with a magic §4.10 does not name");
@@ -1730,7 +1818,14 @@ static JSValue js_text_split(JSContext *ctx, JSValueConst this_val, int argc, JS
     (void)magic;
     if (!n || n->type != LXB_DOM_NODE_TYPE_TEXT)
         return JS_ThrowTypeError(ctx, "splitText ran on a node that is not a Text node");
-    if (argc > 0 && JS_ToUint32(ctx, &offset, argv[0]) < 0) return JS_EXCEPTION;
+    /* THE ARGUMENT IS REQUIRED, so its absence is the DECLARATION's to refuse: §4.11 writes
+       `[NewObject] Text splitText(unsigned long offset)` with no `optional`, and this member is declared with
+       nargs 1, whose argument-count check runs before the body. `argc > 0 &&` stood here instead — a
+       consumer-side default over a producer that cannot omit the value, which would have read offset 0 for a
+       call the boundary never lets through. */
+    DCHECK(argc >= 1, "§4.11's `splitText` reached its body with no argument — its IDL argument is required, "
+                      "so the declaration's own argument-count check is what should have refused the call");
+    CD_UNSIGNED_LONG(ctx, offset, argv[0], "offset", "splitText");
     split = node_split_text(ctx, n, offset);
     return split ? node_wrap(ctx, split) : JS_EXCEPTION;
 }
