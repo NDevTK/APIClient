@@ -18,6 +18,7 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/idl_args.h"     /* §2.2's SubscribeOptions is converted by Web IDL §3.2.17's ONE walk */
 #include "core/dom/abort.h"
 #include "core/streams/stream_work.h"
 #include "core/events/report_exception.h"
@@ -225,6 +226,10 @@ typedef struct JSObsState {
     JSValue   cb[6];      /* the call request's buffer: [this, func, args...], and the widest call here is
                              §2.2.1's native subscribe (observable, internal observer, signal) and §2.3.3's
                              Reducer (accumulator, currentValue, index) — three arguments, so five slots */
+    /* WEB IDL §3.2.17 Dictionary types OVER `SubscribeOptions`, IN FLIGHT. One walk serves §2.2's
+       `subscribe(observer, options)` and all eight of §2.3.3's promise-returning operators, because a
+       dictionary is converted at most once per invocation and no operation here converts two. */
+    IdlDictWalk dw;
     AbortSignalWork aw;   /* §3.2 "signal abort", as a request */
     StreamWork sw;        /* PromiseResolve, for §2.3.1's nextPromise */
     ReportExceptionWork rw;   /* HTML §8.1.4.6 "report an exception", as a request */
@@ -290,6 +295,22 @@ void     obs_subscribe_enter(JSContext *ctx, JSObsState *s, JSValueConst observa
                              JSValueConst signal, int ret);
 /* §2.3.1 "convert to an Observable", as a CALL so its TypeError arrives as a value. `value` BORROWED. */
 void     obs_convert_enter(JSContext *ctx, JSObsState *s, JSValueConst value, int ret);
+
+/* CONVERT `options` AS A `SubscribeOptions` AND PLACE ITS `signal` ON THE STATE — Web IDL §3.2.17 Dictionary
+ * types, run by the ONE walk core/idl_args.h owns, over the ONE declaration observable.c makes.
+ *
+ * IT IS ONE FUNCTION BECAUSE THE DICTIONARY HAS NINE CALL SITES AND HAD TWO COPIES. `subscribe()` read it in
+ * one file and §2.3.3's eight promise-returning operators read it in another, each with its own `JS_NewAtom`,
+ * its own [[Get]], its own hand-written brand test and its own TypeError text — which is the second copy of
+ * §3.2.17 that core/idl_args.h's header forbids by name, and the road by which step 4.1.5's defaults, the
+ * required-member rule and every per-member coercion could have drifted between the two.
+ *
+ * `*pcb` is the request answer and is CONSUMED (the caller's own copy is cleared). Returns >0 — which the
+ * caller RETURNS, since the walk is parked inside the member's [[Get]] — or 0 with `s->sig`/`s->has_sig` set,
+ * or -1 with a throw live. §3.2.17 step 1's TypeError for a value that is neither an Object, undefined nor
+ * null is raised here rather than at each caller, because both callers convert the SAME optional argument. */
+int      obs_subscribe_options_run(JSContext *ctx, JSObsState *s, JSValueConst options, JSValue *pcb,
+                                   JSValue **out_cb, int *out_argc);
 
 /* THE OPERATORS' HALF OF THE MACHINE. `obs_ops_entry` runs S_ENTRY for an operation observable_ops.c owns;
    `obs_ops_stage` runs a stage it owns. Both answer the way the core loop's arms do: 1 = "*pr is what step()

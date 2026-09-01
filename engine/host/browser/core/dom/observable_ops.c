@@ -842,33 +842,19 @@ static int ops_stage_enter(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue 
 
     if (op == OP_TOARRAY || op == OP_FOREACH || op == OP_EVERY || op == OP_FIRST ||
         op == OP_LAST || op == OP_FIND || op == OP_SOME || op == OP_REDUCE) {
-        /* `optional SubscribeOptions options = {}` — the one member is `AbortSignal signal`, whose [[Get]] is
-           the page's and whose type is a brand check. Web IDL runs this BEFORE the method steps, so a throwing
-           getter throws out of the operator rather than producing a rejected promise. */
-        JSValueConst options = step_arg(&s->hdr, ops_options_index(op));
-        JSValue signal = JS_UNDEFINED;
-
-        if (JS_IsObject(options)) {
-            JSAtom a = JS_NewAtom(ctx, "signal");
-            r = step_getprop_run(ctx, &s->hdr, options, a, *pcb, &signal, out_cb, out_argc);
-            JS_FreeAtom(ctx, a);
-            if (r > 0) { *pr = r; return 1; }
-            if (r < 0) { *pr = JS_STEP_ABRUPT; return 1; }
-            *pcb = JS_UNDEFINED;
-            if (!JS_IsUndefined(signal) && !abort_signal_is(ctx, signal)) {
-                JS_FreeValue(ctx, signal);
-                JS_ThrowTypeError(ctx, "`signal` must be an AbortSignal");
-                *pr = JS_STEP_ABRUPT;
-                return 1;
-            }
-        } else if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
-            JS_ThrowTypeError(ctx, "the options must be an object");
-            *pr = JS_STEP_ABRUPT;
-            return 1;
-        }
-        r = ops_promise_prologue(ctx, s, op, signal);
-        JS_FreeValue(ctx, signal);
-        return r;
+        /* `optional SubscribeOptions options = {}` — Web IDL §3.2.17 Dictionary types, run by the ONE walk
+           observable.c declares. Web IDL runs this BEFORE the method steps, so a throwing getter throws out of
+           the operator rather than producing a rejected promise.
+           THIS BLOCK USED TO BE THE SECOND COPY of that section — its own `JS_NewAtom("signal")`, its own
+           [[Get]], its own hand-written brand test and its own TypeError text, standing beside the identical
+           four lines in observable.c's S_OPTIONS_READ. Eight of this dictionary's nine call sites are here, so
+           the copy that drifted would have been the one seven operators went through. */
+        r = obs_subscribe_options_run(ctx, s, step_arg(&s->hdr, ops_options_index(op)), pcb, out_cb, out_argc);
+        if (r > 0) { *pr = r; return 1; }
+        if (r < 0) { *pr = JS_STEP_ABRUPT; return 1; }
+        /* §2.3.3's "options's signal" — BORROWED by the prologue, which dups whatever it keeps. An absent
+           member is undefined here, which is the same "not given" the prologue's own arms already read. */
+        return ops_promise_prologue(ctx, s, op, s->has_sig ? (JSValueConst)s->sig : JS_UNDEFINED);
     }
 
     DCHECK(op == OP_OP_ALGO, "S_OP_ENTER was reached by an operation that has no first step there");

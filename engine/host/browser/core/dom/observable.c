@@ -56,6 +56,41 @@ static JSClassID  g_obs_class, g_sub_class;
 static JSRuntime *g_obs_rt;
 static int        g_op_stepid[OP_N];
 
+/* ---- §2.2's `dictionary SubscribeOptions { AbortSignal signal; };`, DECLARED ONCE -------------------------
+ *
+ * WHY IT IS A DECLARATION AND NOT A READ. The member's [[Get]] is the page's code and its type is Web IDL
+ * §3.2.15 Interface types' brand, and both of those are §3.2.17 Dictionary types' work rather than an
+ * algorithm's — so a component performing them by hand is the second copy of that section which
+ * core/idl_args.h's own header names as the thing this declaration exists to prevent. Nine members take this
+ * dictionary (§2.2's `subscribe` and §2.3.3's eight promise-returning operators) and two of them read it.
+ *
+ * IT REACHES THE WALK THROUGH `idl_dict_declare` AND NOT THROUGH AN ARGUMENT POSITION, which is the entry
+ * core/idl_args.h states for a dictionary with no position to be declared at: every operation in this
+ * component registers its own JSTrampStepDef, so there is no `idl_method_id_*` declaration for the argument
+ * machine to convert at. The walk it starts is the SAME machine an argument-position dictionary drives, which
+ * is what makes this one road rather than a second one.
+ *
+ * `signal` IS NOT `required` AND HAS NO DEFAULT, so Web IDL §3.2.17 Dictionary types (ES-to-IDL list) step
+ * 4.1.4's "If jsMemberValue is not undefined" arm is the whole of it: an absent member does not exist at all,
+ * which is precisely what §2.2.1's steps 5.3 and 9 branch on ("If options's signal exists, then:"). That is
+ * why the member carries IDL_DEFAULT_NONE rather than a `null` that would make `{}` and `{signal:null}` the
+ * same subscription — and `{signal:null}` is a TypeError, since the IDL writes `AbortSignal` and not
+ * `AbortSignal?`.
+ *
+ * THE INTERFACE IS STATED WALK-WIDE AND NOT PER MEMBER, because this dictionary has exactly one
+ * interface-typed member — which is the case IdlDictMember::iface's own comment reserves the declaration-wide
+ * form for. It is read at the START rather than written into the member list at install time, so there is no
+ * static to keep in step with a member list somebody reorders. */
+static const IdlDictMember SUBSCRIBE_OPTIONS[] = {
+    { "signal", IDL_INTERFACE },
+};
+static const IdlDictDecl SUBSCRIBE_OPTIONS_DECL = {
+    "SubscribeOptions", SUBSCRIBE_OPTIONS, (int)(sizeof(SUBSCRIBE_OPTIONS) / sizeof(SUBSCRIBE_OPTIONS[0]))
+};
+/* Its member names, interned once per runtime by idl_dict_declare — they must be live at BOTH halves of a
+   member read, which is why they cannot be made per read. Borrowed from the IDL pool. */
+static const JSAtom *g_subscribe_options_atoms;
+
 /* ---- the slot records ------------------------------------------------------------------------------------
  *
  * An Observable's is `{ callback, subscriber }` — §2.2's "subscribe callback" and its "weak subscriber".
@@ -286,6 +321,10 @@ static void js_obs_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->op2);
     v->val(ctx, &s->op3);
     for (k = 0; k < 6; k++) v->val(ctx, &s->cb[k]);
+    /* The SAME NULL/0 the start and the run are given: the frames are one statement of this host's layout,
+       and a `visit` naming a different pair would drop whatever a live frame still held. A walk that never
+       started holds the zeroed state's non-refcounted integers, which this takes no reference to. */
+    idl_dict_walk_visit(ctx, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, v);
     abort_signal_work_visit(ctx, &s->aw, v);
     stream_work_visit(ctx, &s->sw, v);
     report_exception_work_visit(ctx, &s->rw, v);
@@ -412,6 +451,62 @@ void obs_convert_enter(JSContext *ctx, JSObsState *s, JSValueConst value, int re
     JS_FreeValue(ctx, s->op1); s->op1 = v;
     s->fnext = (uint8_t)ret;
     obs_goto(s, S_OP_CONVERT);
+}
+
+/* See observable_impl.h. Web IDL §3.2.17 Dictionary types over `optional SubscribeOptions options = {}`. */
+int obs_subscribe_options_run(JSContext *ctx, JSObsState *s, JSValueConst options, JSValue *pcb,
+                              JSValue **out_cb, int *out_argc)
+{
+    JSValue in = *pcb, dict, sig;
+    int r;
+
+    *pcb = JS_UNDEFINED;
+    if (!s->dw.started) {
+        /* Web IDL §3.2.17 Dictionary types (ES-to-IDL list) step 1: "If jsDict is not an Object and jsDict is
+           neither undefined nor null, then throw a TypeError". It is the CALLER's — idl_dict_walk_start
+           asserts it rather than performing it — and this function is the caller for both of the sites that
+           convert this dictionary, which is why the sentence is written once here and not twice out there. */
+        if (!JS_IsObject(options) && !JS_IsUndefined(options) && !JS_IsNull(options)) {
+            JS_FreeValue(ctx, in);
+            JS_ThrowTypeError(ctx, "the SubscribeOptions argument is neither an object, undefined nor null");
+            return -1;
+        }
+        DCHECK(g_subscribe_options_atoms != NULL,
+               "§2.2's SubscribeOptions was converted before observable_init interned its member names — the "
+               "atoms must be live at both halves of the `signal` read, so they are declared once per runtime "
+               "and never made per read");
+        /* NO FRAMES: the one member's type is IDL_INTERFACE, which nests no conversion, and
+           idl_dict_walk_start asserts that against idl_members_depth over this very list rather than taking
+           the claim on trust. */
+        if (idl_dict_walk_start(ctx, &s->dw, options, SUBSCRIBE_OPTIONS, SUBSCRIBE_OPTIONS_DECL.n,
+                                g_subscribe_options_atoms, SUBSCRIBE_OPTIONS_DECL.name,
+                                abort_signal_class(), /*narrow*/ NULL, /*frames*/ NULL, /*frames_cap*/ 0) < 0) {
+            JS_FreeValue(ctx, in);
+            return -1;
+        }
+    }
+    r = idl_dict_walk_run(ctx, &s->hdr, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, in, out_cb, out_argc);
+    if (r > 0) return r;        /* parked in `signal`'s [[Get]] — the page's getter or a Proxy trap */
+    if (r < 0) return -1;       /* §3.2.17's `?`, or §3.2.15's brand refusing the value */
+    dict = idl_dict_walk_take(ctx, &s->dw);
+    sig = idl_dict_get(ctx, dict, "signal");
+    JS_FreeValue(ctx, dict);
+    /* "If options's signal exists, then:" — §2.2.1 steps 5.3 and 9, and §2.3.3's eight prologues. An absent
+       member does not exist, which is the whole of what the flag says. */
+    if (JS_IsUndefined(sig)) {
+        JS_FreeValue(ctx, sig);
+        return 0;
+    }
+    DCHECK(abort_signal_is(ctx, sig),
+           "the declared `AbortSignal signal` member of §2.2's SubscribeOptions reached this algorithm as "
+           "something that is not an AbortSignal — §3.2.15's brand is the member's own type and refuses "
+           "everything else BEFORE this point, except unknown external input, which core/idl_args.h crosses "
+           "as itself. Ask §3.2.15's brand for an ARM over an unknown (step_fork_run at the member's own "
+           "conversion) so both worlds run, rather than letting one of them reach here undecided");
+    JS_FreeValue(ctx, s->sig);
+    s->sig = sig;
+    s->has_sig = 1;
+    return 0;
 }
 
 JSValue obs_algo_new(JSContext *ctx, int alg, JSValueConst rec)
@@ -755,33 +850,14 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
         }
 
         case S_OPTIONS_READ: {
-            /* `optional SubscribeOptions options = {}` — one member, `AbortSignal signal`, whose read is the
-               page's and whose type is a brand check. */
-            JSValueConst options = step_arg(&s->hdr, 1);
-
-            if (JS_IsObject(options)) {
-                JSAtom a = JS_NewAtom(ctx, "signal");
-                JSValue v;
-                r = step_getprop_run(ctx, &s->hdr, options, a, cb_result, &v, out_cb, out_argc);
-                JS_FreeAtom(ctx, a);
-                if (r > 0) return r;
-                if (r < 0) return JS_STEP_ABRUPT;
-                cb_result = JS_UNDEFINED;
-                if (!JS_IsUndefined(v)) {
-                    if (!abort_signal_is(ctx, v)) {
-                        JS_FreeValue(ctx, v);
-                        JS_ThrowTypeError(ctx, "subscribe: `signal` must be an AbortSignal");
-                        return JS_STEP_ABRUPT;
-                    }
-                    s->sig = v;
-                    s->has_sig = 1;
-                } else {
-                    JS_FreeValue(ctx, v);
-                }
-            } else if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
-                JS_ThrowTypeError(ctx, "subscribe: the options must be an object");
-                return JS_STEP_ABRUPT;
-            }
+            /* `optional SubscribeOptions options = {}` — Web IDL §3.2.17 Dictionary types, run by the walk
+               core/idl_args.h owns over the declaration at the top of this file. This stage USED TO HOLD ITS
+               OWN COPY of that section — a `JS_NewAtom("signal")`, one [[Get]], a hand-written brand test and
+               a TypeError of its own — and §2.3.3's eight promise-returning operators held a second copy of
+               the same four lines in observable_ops.c. Both are gone; the section is stated once. */
+            r = obs_subscribe_options_run(ctx, s, step_arg(&s->hdr, 1), &cb_result, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
             s->io = internal_observer_new(ctx, s->iocb[0], s->iocb[1], s->iocb[2]);
             obs_goto(s, S_ATTACH);
             continue;
@@ -1481,6 +1557,12 @@ void observable_init(JSContext *ctx)
     }
     g_sub_native_slot = realm_value_declare(ctx, "Observable §2.2.1 subscribe-to (spec prose)");
     g_from_fn_slot    = realm_value_declare(ctx, "Observable §2.3.1 convert-to-an-Observable");
+    /* §2.2's SubscribeOptions has no ARGUMENT POSITION to be declared at — every operation in this component
+       registers its own step definition, so there is no idl_method_id_* entry for the argument machine to
+       convert it at — which is exactly the entry idl_dict_declare is public for. It interns the member names
+       once per runtime AND runs §3.2.17's read-order check over the declaration, which is why the walk goes
+       through it rather than reaching for JS_NewAtom. */
+    g_subscribe_options_atoms = idl_dict_declare(ctx, &SUBSCRIBE_OPTIONS_DECL);
     realm_declare_intrinsic(observable_install_protos);
 }
 
@@ -1587,5 +1669,8 @@ void observable_free(JSContext *ctx)
     g_katom = JS_ATOM_NULL;
     g_ready = 0;
     g_obs_rt = NULL;
+    /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is
+       the HANDLE, and a handle left pointing into a released pool is a stale slot the next agent would read. */
+    g_subscribe_options_atoms = NULL;
     for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;
 }
