@@ -44,6 +44,11 @@
  * `{location.hash}.slice()`), and the registry is an exact strcmp, so it matched nothing. Nothing was broken
  * on the consumer side: reading absence as "the source declared none" is exactly what a consumer owes a
  * producer. The producer had thrown the fact away three derivations earlier. */
+/* "THIS PREDICATE IS NOT AN EQUALITY", WHICH IS NOT A JSConcolicEqOp AND MUST NOT BE ENCODED AS ONE. quickjs
+   declares the two algorithms an equality OPERATOR can name; an ordering names neither, and reusing LOOSE's
+   zero for it would make `x < 700` answer that the page wrote `==`. Negative so it cannot collide with a
+   future member of that enum either. */
+enum { CMP_ALGO_NONE = -1 };
 typedef struct {
     char *shape;        /* @H/@S display form */
     char *src;          /* INJECTION IDENTITY: the source an @S candidate substitutes at */
@@ -68,7 +73,18 @@ typedef struct {
     signed char cmp_kind;  /* …and WHAT it spells (ConcolicLit) — the spelling's other half, never separable
                               from it: decide.c pins with both or pins nine characters where the page wrote
                               `undefined`. Written with `cmp_tok` at pred_new, copied with it at pred_copy. */
-    char *cmp_subj;     /* …and the HOLE KEY of the unknown side — see concolic_cmp_subject. The three are ONE
+    /* …AND WHICH EQUALITY THE PAGE WROTE, which is what says what an arm is ENTITLED TO CONCLUDE and is
+       therefore not a spelling of the operator that is already in `ident`. §7.2.14 IsStrictlyEqual ( x, y )
+       step 1 returns false unless SameType, so a `===` that HELD determines the operand; §7.2.13
+       IsLooselyEqual ( x, y ) coerces instead, and its holding arm leaves a SET for every kind this engine can
+       spell — see concolic.h's concolic_pin for the step-by-step reading. Written with `cmp_op` at pred_new
+       and carried with it through a negation, because the arm and the algorithm are read at one line of
+       decide.c and a value holding one without the other pins a witness.
+       CMP_ALGO_NONE FOR A PREDICATE THAT IS NOT AN EQUALITY, and it is not a JSConcolicEqOp: quickjs declares
+       the two algorithms an OPERATOR can name, and "this is an ordering" is not one of them. Sharing the zero
+       with LOOSE would make an ordering answer that the page wrote `==`. */
+    signed char cmp_algo;
+    char *cmp_subj;     /* …and the HOLE KEY of the unknown side — see concolic_cmp_subject. The four are ONE
                            observation: written together at pred_new, asserted together there, and read
                            together by decide.c, which pins on one arm and excludes on the other. */
     /* …AND THE UNKNOWN SIDE'S IDENTITY, WHICH IS A FOURTH NAME FOR A REASON AND NOT A DUPLICATE OF `cmp_subj`.
@@ -391,12 +407,17 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
               drags a COW delta. Deciding them is feasible-refinement, the thing that makes forced multi-path
               execution tractable, and it is sound-only — it prunes a branch on the SAME predicate the flow has
               already fixed, never one whose domain still permits both outcomes.
-     pinned_root — SOME value ROOTED at this key was pinned by this flow, which is a fact about the SOURCE and
-              not about the value. `event.origin`, `event.origin.toLowerCase()` and `String(event.origin)` are
-              three identities with one root, and a demand made of any of them is one demand on the attacker's
-              principal. It is a separate field and not `val` because it is a different claim: writing the
-              lowercased token under `message.origin` would make a later read of `event.origin` ITSELF answer
-              it, which is a fabricated value in exactly the direction §Solver-half forbids.
+     pinned_root — SOME value ROOTED at this key was DEMANDED by this flow, which is a fact about the SOURCE
+              and not about the value. `event.origin`, `event.origin.toLowerCase()` and `String(event.origin)`
+              are three identities with one root, and a demand made of any of them is one demand on the
+              attacker's principal. It is a separate field and not `val` because it is a different claim:
+              writing the lowercased token under `message.origin` would make a later read of `event.origin`
+              ITSELF answer it, which is a fabricated value in exactly the direction §Solver-half forbids.
+              AND THE TWO ARE SEPARATELY DECIDED, which is the sharp end of that sentence rather than a
+              qualification of it. `val` is a DETERMINATION and this is a DEMAND, and a §7.2.13 IsLooselyEqual
+              ( x, y ) gate makes the second without the first: its holding arm bounds the operand to a SET, so
+              there is no value to write, while the flow has still required the principal to satisfy it. See
+              concolic_pin.
      excl  — the tokens an equality gate over this HOLE proved it is NOT, on the arm `val` does not cover.
               Forced multi-path runs both arms of every `x === "admin"`, so a pin and an exclusion are minted
               at the same rate; without this the second of the two flows knew nothing it could report about
@@ -660,8 +681,23 @@ static Cons *cons_entry(const char *key) {
    entries then hold one key and the second write is a no-op on the first, which is what `cons_entry` already
    does for every repeated narrowing — writing the mark only for a DERIVED pin would make the direct spelling
    the one case the principal rule missed, and it is the spelling every real bundle writes. */
-void concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val) {
+void concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val, JSConcolicEqOp algo) {
     Cons *c;
+    /* THE TWO WRITES ARE ONE ACT AND TWO DECISIONS, AND THE ALGORITHM SEPARATES THEM. See concolic.h for the
+       step-by-step reading of §7.2.13 IsLooselyEqual ( x, y ); in one line, `===` holding DETERMINES the
+       operand (§7.2.14 IsStrictlyEqual ( x, y ) step 1 is "If SameType(x, y) is false, return false") while
+       `==` holding leaves a SET for every kind this store can spell, so a loose pin picks a WITNESS and
+       concretize-on-pin then decides every later branch over the source from that choice.
+       THE DEMAND SURVIVES BOTH, which is why this is not a `return` at the top of the function. A loose
+       equality against a principal is still a demand for a particular value of it, and `e.origin == TRUSTED`
+       is in fact unforgeable cross-origin for exactly the reason §7.2.13 step 1 gives — two Strings go
+       straight to §7.2.14. Refusing the mark with the value would un-suppress every loose origin check in
+       every bundle, which is a FALSE PoC, and §Attacker-sources forbids that in the direction that emits
+       one. */
+    DCHECK(algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT,
+           "an arm recorded an equality observation naming an algorithm quickjs.h does not declare — §7.2.13 "
+           "and §7.2.14 differ on exactly whether the holding arm determined a value, so an unnamed one has "
+           "no answer to the only question this function asks of it");
     /* THE VOCABULARY IS ASSERTED AT THE MINT, WHICH IS WHERE THE STORE CAN STILL REFUSE. A reader that met a
        spelling with no kind could only guess, and the guess this store used to make — "everything is a
        string" — is the defect: `x === undefined` recorded nine characters and every later read of that source
@@ -678,22 +714,37 @@ void concolic_pin(const char *src, const char *root, ConcolicLit kind, const cha
        read-back answers `undefined` for — the impossible state made impossible in both builds instead of
        asserted in one. BIGINT is concolic.h's named residual; NONE is the dev abort above, still refused here
        so release cannot proceed past it either.
-       THE REFUSAL IS BEFORE THE ROOT MARK AS WELL AS BEFORE THE VALUE, because the two are one act: a demand
-       on a principal is a demand for a VALUE, and nothing was pinned here, so recording the mark alone would
-       say a flow demanded a particular principal and leave nothing anywhere saying which. */
+       THE REFUSAL IS BEFORE THE ROOT MARK AS WELL AS BEFORE THE VALUE, AND THAT IS ABOUT THIS REFUSAL RATHER
+       THAN ABOUT THE TWO WRITES IN GENERAL — the loose-equality gate below makes the mark WITHOUT the value,
+       so the reason has to be the narrow one it always was. Here the store cannot express the operand AT ALL:
+       there is no spelling it can hold, so recording the mark alone would say a flow demanded a particular
+       principal with nothing anywhere able to say which, and nothing could later supply it. The loose case is
+       the opposite — the token is expressible and the demand is observed; only the DETERMINATION is missing. */
     if (kind == CONCOLIC_LIT_BIGINT || kind == CONCOLIC_LIT_NONE) return;
-    c = cons_entry(src);
-    free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
-    c->valkind = (signed char)kind;
+    /* THE DETERMINATION, WHICH ONLY §7.2.14 MAKES. §7.2.13 IsLooselyEqual ( x, y )'s holding arm leaves the
+       operand in a SET — `x == undefined` admits null by step 2, a numeric-looking String by step 6, a Boolean
+       by step 9 and an Object by step 12, which runs the page's own ToPrimitive — so writing one member of it
+       here is choosing a WITNESS, and concretize-on-pin makes every later branch over the source decide from
+       the choice instead of forking. §@H draws the line at whether a VALUE was determined, never whether a
+       constraint was, and this is the value half of it.
+       THE NARROWING IS NOT LOST BECAUSE IT WAS NEVER HELD — it is UNRECORDED, which is concolic.h's named
+       residual at this function's declaration, and until that recorder exists an unpinned source simply forks
+       again at its next gate. That is sound and is what this engine did before any pin existed. */
     /* A CONCOLIC CARRIES A PROVENANCE AND A ROOT TOGETHER (concolic_alloc asserts it), so a pin taken off one
        and missing the other is a value minted somewhere that does not go through that mint — and what it costs
        is silent: the principal rule below would answer "unpinned" for a flow that demanded an origin, and the
-       PoC it then emits is one no cross-document attacker can deliver. */
+       PoC it then emits is one no cross-document attacker can deliver. ASKED ABOVE THE SPLIT, because the
+       demand is made under BOTH algorithms and the root is what names whose bytes were demanded. */
     DCHECK(root != NULL, "an equality pinned an attacker value that carries no delivery ROOT — the root is "
                          "what says WHOSE bytes were demanded, and §Attacker-sources' unforgeable-origin rule "
                          "is decided by exactly that");
-    /* `c` IS DEAD FROM HERE. cons_entry may grow the head, and the growth is a realloc — so the second entry
-       is taken only after the first has been written, and nothing below may reach back through `c`. */
+    if (algo == JS_CONCOLIC_EQ_STRICT) {
+        c = cons_entry(src);
+        free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
+        c->valkind = (signed char)kind;
+        /* `c` IS DEAD FROM HERE. cons_entry may grow the head, and the growth is a realloc — so the second
+           entry is taken only after the first has been written, and nothing below may reach back through it. */
+    }
     if (root) cons_entry(root)->pinned_root = 1;
 }
 /* THE HOLE KEY — see concolic.h. One speller, because it is read at two ends that would otherwise normalise
@@ -1861,7 +1912,7 @@ static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
  * and `tok` are the PIN, which only an equality against a concrete side has (an ordering narrows a domain and
  * determines no value — §Solver-half: a range-gated parameter stays a domain-annotated shape). */
 static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root, char *ia, char *ib,
-                        int eq_kind, ConcolicLit tok_kind, const char *tok, const char *subj)
+                        int eq_kind, int algo, ConcolicLit tok_kind, const char *tok, const char *subj)
 {
     const char *f[3];
     char *ident;
@@ -1892,6 +1943,18 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
            "a comparison result's pin token and its KIND disagree about whether the concrete side can be "
            "spelled at all — the two come from one classification (operand_kind, through literal_tok), so a "
            "value carrying one without the other is a pin whose own mint cannot say what type it pinned");
+    /* AND THE ALGORITHM IS THE PIN'S FOURTH HALF, asserted here for the reason the kind is: it is what says
+       what the holding arm may CONCLUDE, and no consumer can recover it later — by the time decide.c reaches
+       the arm, the operands are gone and only this record is left. An ordering has no algorithm and says so;
+       an equality has one and may not omit it, because JS_CONCOLIC_EQ_LOOSE is zero and an omission would read
+       as the page having written `==`, which is the arm that refuses the pin — safe, and a lie about the
+       source text either way. */
+    DCHECK(eq_kind == OPCMP_NONE ? algo == CMP_ALGO_NONE
+                                 : (algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT),
+           "a comparison result's operator and its equality ALGORITHM disagree about whether it is an equality "
+           "at all — an ordering carrying an algorithm names a §7.2.13/§7.2.14 reading of a predicate neither "
+           "defines, and an equality without one is a pin whose arm cannot say whether it determined a value "
+           "or merely bounded it");
     f[0] = op; f[1] = ia; f[2] = ib;
     ident = concolic_ident_compose("?", f, 3);
     free(ia); free(ib);
@@ -1903,6 +1966,7 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     c->cmp_tok = tok ? strdup(tok) : NULL;
     CHECK(!tok || c->cmp_tok, "concolic: OOM recording the value an equality pins to");
     c->cmp_kind = (signed char)tok_kind;
+    c->cmp_algo = (signed char)algo;   /* what the arm may CONCLUDE — written with `cmp_op`, for its reason */
     c->cmp_subj = subj ? strdup(subj) : NULL;
     CHECK(!subj || c->cmp_subj, "concolic: OOM recording the hole an equality is a fact about");
     return r;
@@ -2015,6 +2079,10 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     d->cmp_op = s->cmp_op;
     if (s->cmp_tok)        { d->cmp_tok        = strdup(s->cmp_tok);        CHECK(d->cmp_tok,        "concolic: OOM carrying an equality's token through a negation"); }
     d->cmp_kind = s->cmp_kind;   /* the token's other half — carried on the same line, for `cmp_tok`'s reason */
+    d->cmp_algo = s->cmp_algo;   /* …and what the arm may CONCLUDE. `!(x == L)` is `x == L` read the other way
+                                    round — the operand, the token and the ALGORITHM are all the same, and a
+                                    negation that dropped this would let a `==` reach decide.c looking like a
+                                    predicate with no algorithm, whose pin is refused for the wrong reason. */
     if (s->cmp_subj)       { d->cmp_subj       = strdup(s->cmp_subj);       CHECK(d->cmp_subj,       "concolic: OOM carrying an equality's hole through a negation"); }
     if (s->cmp_subj_ident) { d->cmp_subj_ident = strdup(s->cmp_subj_ident); CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation"); }
     d->rel_op  = s->rel_op;
@@ -2073,7 +2141,7 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
        than by calling the stripper on a shape this function was never handed. */
     return pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
                     concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
-                    op, kind, tok, src);
+                    op, JS_CONCOLIC_EQ_STRICT, kind, tok, src);
 }
 /* …AND THE TWIN FOR A RELATION OVER TWO LIVE VALUES, for a browser component whose own algorithm compares two
  * operands either of which may be unknown (HTML §8.7's timer task source orders one expiry against another).
@@ -2104,7 +2172,7 @@ JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValue
     opq = concolic_is(a) ? a : b;
     return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq),
                     ident_of_operand(ctx, a), ident_of_operand(ctx, b),
-                    OPCMP_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
+                    OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
 }
 
 int concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const char **ptok) {
@@ -2124,6 +2192,33 @@ int concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const ch
     if (pkind) *pkind = (ConcolicLit)c->cmp_kind;
     if (ptok) *ptok = c->cmp_tok;
     return c->cmp_op;
+}
+
+/* WHICH EQUALITY THE PAGE WROTE — see concolic.h. It is a SECOND read rather than a fifth out-parameter on
+   concolic_cmp for the reason pred_set_subject_ident is a second call: only the arm that PINS asks it, and a
+   signature every caller has to answer would hand the three that do not a value they must then ignore. The
+   refusal below is what keeps that safe — a caller that reaches this on a non-equality is not defaulted, it
+   aborts naming the predicate it is standing on. */
+JSConcolicEqOp concolic_cmp_algo(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL && c->cmp_op != OPCMP_NONE,
+           "the equality ALGORITHM was asked of a value that records no equality — an ordering and a call "
+           "predicate have none, so the only answer available here would be a §7.2.13/§7.2.14 reading of a "
+           "predicate neither defines, and the caller would pin off it");
+    DCHECK(c != NULL && (c->cmp_algo == JS_CONCOLIC_EQ_LOOSE || c->cmp_algo == JS_CONCOLIC_EQ_STRICT),
+           "an equality result carries an algorithm quickjs.h does not declare — pred_new writes it beside "
+           "`cmp_op` and asserts the pair there, so a value holding one without the other is minted somewhere "
+           "that does not go through that mint");
+    /* AND THE RELEASE BUILD ANSWERS THE REFUSING ARM RATHER THAN DEREFERENCING, which is a POSITIVE statement
+       and not the `|| default` that hides a producer's hole. Both asserts above vanish at APICLIENT_DEV=0, so
+       without this the first of them stops guarding the pointer the line below reads — the promotion CLAUDE.md
+       names, traded for a segfault. `LOOSE` is chosen because it is the arm that makes NO pin: a release build
+       standing somewhere dev aborts loses one narrowing and the source forks again at its next gate, which is
+       sound and is what this engine did before any pin existed. The other value would concretize a source off
+       a record that could not say it had determined anything. */
+    if (!c || c->cmp_op == OPCMP_NONE) return JS_CONCOLIC_EQ_LOOSE;
+    return (JSConcolicEqOp)c->cmp_algo;
 }
 
 RelOp concolic_rel(JSValueConst v, const char **ptok, double *pnum, const char **psubj) {
@@ -2304,8 +2399,17 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        decide.c's feasible refinement, pruning an arm nothing had contradicted, which is the soundness bug this
        file already fixed once for the relational operators ("`x < 700` and `x > 700` were one fact too"). The
        algorithm is now stated by the caller, so the identity can say which. */
+    /* …AND THE ALGORITHM TRAVELS WITH THE ARM, because the arm alone does not say what it PROVED. `cmp_op`
+       records which arm makes the equality HOLD, which is the same fact for both algorithms; what differs is
+       the conclusion the holding arm licenses, and only §7.2.13 IsLooselyEqual ( x, y ) versus §7.2.14
+       IsStrictlyEqual ( x, y ) decides that. This line used to hand decide.c the arm and nothing else, so a
+       held `x == undefined` pinned the source exactly as a held `x === undefined` did — while §7.2.13 steps 2
+       and 3 ("If x is null and y is undefined, return true" and its converse) leave the operand as either of
+       TWO values. The pin that followed picked one of them and concretize-on-pin then decided every later
+       branch over that source from the choice. See concolic.h's concolic_pin for the full reading. */
     res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, iu, io,
-                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, kind, tok, subj);
+                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE,
+                   tok ? (int)op : CMP_ALGO_NONE, kind, tok, subj);
     /* AND WHICH VALUE THE PREDICATE IS ABOUT, BY ITS OWN IDENTITY — read off `opq` BEFORE any reordering, and
        under exactly the condition the hole is minted under (`subj`, which is `tok`, which is "one side is a
        spellable literal"). `iu` above is NOT this: it is swapped with `io` when both operands are unknown, so
@@ -2463,7 +2567,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
         JSValueConst opq = ca ? a : b, other = ca ? b : a;
         JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq),
                                ident_of_operand(ctx, a), ident_of_operand(ctx, b),
-                               OPCMP_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
+                               OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
         /* A BOUND EXISTS ONLY WHERE THE RELATION'S OWN MEANING IS DETERMINED, and §7.2.12 IsLessThan is what
            decides that. Step 3 takes the STRING comparison when px and py are BOTH Strings and the numeric
            one otherwise, so a concrete side that is a Number puts the comparison on the numeric path whatever
@@ -3318,6 +3422,11 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
     c->example = example;   /* consume */
     c->cmp_op = OPCMP_NONE;
+    /* AND THE ALGORITHM IS THE ONE OF THE THREE THAT reclaim_calloc CANNOT SET, which is exactly why it is
+       stated here rather than left to the allocator like `rel_op`: "not an equality" is CMP_ALGO_NONE and the
+       zero it would otherwise hold is JS_CONCOLIC_EQ_LOOSE, so a value that is not a predicate at all would
+       answer that the page wrote `==` over it. */
+    c->cmp_algo = CMP_ALGO_NONE;
     c->rel_op = REL_NONE;   /* reclaim_calloc already zeroes it; stated beside cmp_op so the two stay one act */
     JS_SetOpaque(obj, c);
     return obj;

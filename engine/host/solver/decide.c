@@ -1509,8 +1509,16 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        a second lookup that could name a different one. It is what says WHOSE bytes this arm demanded — the
        fact §Attacker-sources' unforgeable-origin rule is decided by, and the one thing no later reader can
        recover, because by the time the value reaches a sink the identity that was pinned is gone. */
+    /* AND WHICH EQUALITY HELD TRAVELS WITH THE ARM, because the arm alone does not say what it PROVED. `op`
+       records which side of the branch makes the equality hold and is the same fact for `==` and `===`; what
+       differs is the conclusion that arm licenses, and only §7.2.13 IsLooselyEqual ( x, y ) versus §7.2.14
+       IsStrictlyEqual ( x, y ) decides it. This call used to carry the arm and nothing else, so a held
+       `x == undefined` pinned exactly as a held `x === undefined` did — while §7.2.13 steps 2 and 3 leave the
+       operand as EITHER of two values, and concretize-on-pin then decided every later branch over that source
+       out of a witness the run had not observed. concolic_pin splits the two writes on it; see its
+       declaration for the step-by-step reading and for why the principal DEMAND is made under both. */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
-        concolic_pin(src, concolic_root_c(cond), tok_kind, tok);
+        concolic_pin(src, concolic_root_c(cond), tok_kind, tok, concolic_cmp_algo(cond));
     /* AND THE OTHER ARM, WHICH IS AN OBSERVATION AND NOT AN ABSENCE — the half this line did not have.
        Forced multi-path runs BOTH arms of every `x === "admin"`, so the two branches of this `if` fire at
        exactly the same rate: one flow leaves knowing the value IS "admin", and its sibling leaves having
@@ -1523,7 +1531,15 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        line between a pin and a domain is whether a VALUE was determined, never whether a constraint was.
        A NULL subject is a POSITIVE statement and the one thing this reads as one: an operand whose shape is
        the unnameable `{}` has no hole the @H surface prints, so there is no name to file the fact under and
-       nothing downstream could read it if there were. */
+       nothing downstream could read it if there were.
+       AND THIS ARM IS SOUND UNDER **BOTH** EQUALITIES, WHICH IS WHY IT TAKES NO ALGORITHM WHERE THE PIN DOES.
+       The two arms are not symmetric and reading them as symmetric is the mistake to avoid here: §7.2.14
+       IsStrictlyEqual ( x, y ) step 1 is "If SameType(x, y) is false, return false", so `x === tok` implies
+       SameType, and §7.2.13 IsLooselyEqual ( x, y ) step 1 — "If SameType(x, y) is true, then … Return
+       IsStrictlyEqual(x, y)" — then returns that same answer. So `x === tok` implies `x == tok`, and the
+       contrapositive is exactly this arm: a LOOSE equality that FAILED proves the operand is not the token,
+       every bit as strictly as a strict one that failed. Gating this on the algorithm alongside the pin would
+       delete a real observation on the arm the tool exists to explore, for a symmetry §7.2.13 does not have. */
     else if (tok && ((op == OPCMP_EQ && arm == 0) || (op == OPCMP_NE && arm == 1))) {
         const char *subj = concolic_cmp_subject(cond);
         if (subj) concolic_exclude(subj, tok);

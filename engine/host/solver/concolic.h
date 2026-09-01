@@ -435,6 +435,16 @@ JSValue     concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSV
    not the kind is about to pin nine characters where the page proved `undefined`. It answers
    CONCOLIC_LIT_NONE exactly when the result is OPCMP_NONE. */
 int         concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const char **ptok);
+/* …AND WHICH EQUALITY THE PAGE WROTE FOR IT, WHICH IS A FIFTH FACT ABOUT THE SAME OBSERVATION AND NOT A
+   SPELLING OF THE OPERATOR. The four above say an arm determines something, what it determines, what that
+   spells and which hole it is about; this says under WHICH ALGORITHM, and the answer changes what an arm is
+   entitled to conclude. Asked only of a value `concolic_cmp` has just answered OPCMP_EQ or OPCMP_NE for — a
+   predicate that is not an equality has no algorithm and this aborts rather than inventing one, so "not an
+   equality" is unrepresentable in the return type instead of being encoded as a member of it.
+   IT IS NOT READ OFF THE IDENTITY. `cmp_op_ident` composes `==`/`===` into the predicate's key, so the
+   algorithm is recoverable from that string — by MATCHING it, which is what §RUN-DON'T-MATCH forbids and what
+   a key-format change would silently break. The fact is recorded as a fact. */
+JSConcolicEqOp concolic_cmp_algo(JSValueConst v);
 /* JSConcolicHooks.cmp — `op` names WHICH equality the program wrote (quickjs.h's JSConcolicEqOp), because
    §7.2.13 IsLooselyEqual and §7.2.14 IsStrictlyEqual disagree and this hook does two things that need the
    answer: it composes the operator into the predicate's IDENTITY (so `x == '1'` and `x === '1'` are two
@@ -485,6 +495,42 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    only hold what the read-back can mint back as the REAL value, so this refuses a kind it cannot reproduce
    rather than recording a spelling for it: a source that is not pinned simply forks again at its next gate,
    which is sound and is what the engine did before any pin existed.
+
+   `algo` NAMES WHICH EQUALITY HELD, AND IT DECIDES ONLY ONE OF THE TWO WRITES ABOVE. They are one ACT and
+   they are not one DECISION: the value pin is a DETERMINATION, and the root mark is a DEMAND.
+   UNDER `===` THE HOLDING ARM DETERMINES THE VALUE. §7.2.14 IsStrictlyEqual ( x, y ) step 1 is "If
+   SameType(x, y) is false, return false", so the arm is reachable only where the operand IS the token.
+   UNDER `==` IT DETERMINES NOTHING, FOR EVERY KIND THIS STORE CAN SPELL, and that is a reading of §7.2.13
+   IsLooselyEqual ( x, y )'s fourteen steps rather than a caution. Step 2 is "If x is null and y is undefined,
+   return true" and step 3 its converse, so `x == undefined` holds for BOTH of two values. Steps 5 and 6 admit
+   a String against a Number token and the reverse; steps 9 and 10 send a Boolean through ToNumber; steps 7 and
+   13 admit a BigInt. And step 12 — "If x is an Object and y is either a String, a Number, a BigInt, or a
+   Symbol, return ! IsLooselyEqual(? ToPrimitive(x), y)" — admits an OBJECT against every token kind there is,
+   by running the PAGE's own valueOf. So the holding arm leaves a SET in every case, and pinning one member of
+   it picks a WITNESS: §@H's line is whether a VALUE was determined, never whether a constraint was, and
+   choosing `undefined` out of {undefined, null} is the same fabrication as inventing 6 for `x > 5`.
+   IT IS WORSE THAN A WRONG REPORT BECAUSE OF CONCRETIZE-ON-PIN. A pinned source reads back as the pinned
+   value, so every LATER branch over it is decided by running the real predicate instead of forking — the
+   witness does not merely get emitted, it deletes the sibling world the run never contradicted. An absent pin
+   forks and explores both; a wrong one decides an arm nothing downstream can contradict.
+   THE DEMAND IS MADE UNDER BOTH, AND REFUSING IT WOULD MANUFACTURE A FALSE PoC. `if (e.origin == TRUSTED)` is
+   a spelling real handlers write, and a principal is a String while the token is a String — so §7.2.13 step 1
+   ("If SameType(x, y) is true, then … Return IsStrictlyEqual(x, y)") hands that comparison straight to
+   §7.2.14, and the check is exactly as unforgeable cross-origin as `===`. `concolic_principal_pinned` reads
+   this mark and solve.c suppresses on it, so gating the mark on the algorithm too would un-suppress every
+   loose origin check in every bundle — §Attacker-sources' "never a false PoC" failing in the one direction
+   that emits one. The demand is that the flow required a particular value OF the principal; that a loose
+   equality bounds rather than determines it does not make it less of a demand.
+   AN UNSTATED ALGORITHM TAKES THE REFUSED ARM. JS_CONCOLIC_EQ_LOOSE is quickjs.h's zero, so a caller that
+   forgets refuses the value and keeps the demand — forgetting is not a way to be exempted.
+   NAMED RESIDUAL — A LOOSE EQUALITY'S HOLDING ARM RECORDS NOTHING. What is not covered: the SET §7.2.13
+   leaves is a real narrowing this flow observed, and nothing here files it, so the true arm of `x == 0`
+   emits its parameter with the same bytes as a parameter nothing ever tested. What the next diff builds: a
+   loosely-equal DOMAIN recorder standing beside `concolic_exclude` and `concolic_bound` below, plus the @H
+   rendering that prints its shape, so that arm states `{==0}` where it now states nothing. How its absence
+   would show: for one source, the FALSE arm of a `==` gate carries an exclusion into the report while the
+   TRUE arm carries an unannotated shape — the two arms of one observation disagreeing about whether a gate
+   was seen at all, which §@H calls a wrong report rather than a partial one.
    NAMED RESIDUAL — A BIGINT IS NOT PINNED. What is not covered: `x === 5n` on its true arm records nothing, so
    a bundle gating on a BigInt literal re-forks every later branch over that source instead of deciding it.
    What the next diff builds: a quickjs export that mints a BigInt from its §6.1.6.2.21
@@ -494,7 +540,8 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    which is a value-dependent behaviour split rather than a narrower mechanism. How its absence would show: two
    sibling flows for every repeated `===` against one BigInt-valued source, where a string-valued source
    produces one; the fork census names the predicate. */
-void        concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val);
+void        concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val,
+                         JSConcolicEqOp algo);
 /* THE HOLE A REPORT PRINTS, SPELLED ONCE — the joint between a constraint recorded at a BRANCH and a domain
    emitted at a REQUEST, which are the two ends §Solver-half's two-facts rule has to connect.
    A shape is what the @H surface renders where the code computed no value, and the BRACES DO NOT SIT IN THE
