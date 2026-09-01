@@ -192,6 +192,24 @@ void line_box_content_span(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_
  * "not existing for any other purpose" is about §8.3.1's margin collapsing and §10.6.3's height, both of which
  * this entry answers nothing for.
  *
+ * AN ATOMIC INLINE-LEVEL BOX HANGS FROM THAT SAME BASELINE BY A DIFFERENT SENTENCE, and the two derivations
+ * are separated by whether the box HAS a baseline rather than by which kind of box it is. CSS 2.2 §10.8's
+ * `vertical-align` definition states both halves: "for inline non-replaced elements, the box used for
+ * alignment is the box whose height is the 'line-height' … FOR ALL OTHER ELEMENTS, THE BOX USED FOR ALIGNMENT
+ * IS THE MARGIN BOX", and `baseline` itself — "align the baseline of the box with the baseline of the parent
+ * box. IF THE BOX DOES NOT HAVE A BASELINE, ALIGN THE BOTTOM MARGIN EDGE with the parent's baseline." §10.8
+ * gives a baseline to an `inline-table` ("The baseline of an 'inline-table' is the baseline of the first row
+ * of the table") and to an `inline-block` ("The baseline of an 'inline-block' is the baseline of its last line
+ * box in the normal flow, unless it has either no in-flow line boxes or if its 'overflow' property has a
+ * computed value other than 'visible', in which case the baseline is the bottom margin edge") and to NOTHING
+ * else — and that second sentence's OWN exception is why the split named below is the work an `inline-block`
+ * still waits on rather than a detail of it. So a REPLACED element's bottom
+ * margin edge sits ON the line's baseline — which is why an image on a line of text leaves the font's
+ * descender visible below it. Its border area is then that baseline less its own `margin-bottom`, extending
+ * one used BORDER EDGE EXTENT upward (§10.6.2 "Inline replaced elements, block-level replaced elements in
+ * normal flow, 'inline-block' replaced elements in normal flow and floating replaced elements"). It is the
+ * same pair `lb_atomic_extent` puts above the baseline for §10.8's step 1, read back through §8.1's nesting.
+ *
  * §7.1's ALIGNMENT IS APPLIED HERE AND THE COORDINATE IS COMPLETE. css-text-4 §7.1 "Text Alignment: the
  * text-align shorthand" is a shorthand with a `Computed value:` line of "see individual properties", so what
  * this reads is §7.3 "Default Text Alignment: the text-align-all property" and, for the last line of the block
@@ -205,14 +223,21 @@ typedef struct {
 
 /* `el`'s FRAGMENTS, in content order, with `*establishing` receiving the block container whose content box
  * origin they are measured from. Answers the count and stores a newly allocated array of that many at `*out`,
- * WHICH THE CALLER OWNS AND MUST FREE; the count is never zero, because an inline box that generates a box is
- * on at least one line ("line boxes are created as needed to hold inline-level content", and this box's two
- * edge items ARE content the fill partitions).
+ * WHICH THE CALLER OWNS AND MUST FREE; the count is never zero, because a box that generates a box is on at
+ * least one line ("line boxes are created as needed to hold inline-level content", and this box's items ARE
+ * content the fill partitions).
  *
- * `el` MUST BE A NON-REPLACED INLINE BOX — a computed `display` of `inline` that is in flow. An atomic
- * inline-level box (`inline-block` and the rest of css-display §2's inline-outer list) is ONE fragment and not
- * a span of them, and it reaches this component's own walk as the capability that walk crashes for; the caller
- * establishes which it has before asking, and this asserts it.
+ * `el` MUST BE A BOX ON A LINE — a computed `display` of `inline`, in flow, in a `horizontal-tb` writing mode.
+ * That is TWO SHAPES and the count is where they differ: a NON-REPLACED inline box is delimited by its two
+ * EDGE items and CSS 2.2 §9.4.2 splits it across as many line boxes as it spans, while a REPLACED one (HTML
+ * §15.4 "Replaced elements", whose computed `display` stays `inline`) is delimited by the ONE run item
+ * `lb_child` collects for it and is always exactly ONE fragment — CSS 2.2 §9.2.2 "Inline-level elements and
+ * inline boxes" makes it an atomic inline-level box that "participate[s] in [its] inline formatting context as
+ * a SINGLE OPAQUE BOX", so it is never the box §9.4.2 "SPLIT[s] into several boxes". Both are asserted.
+ * THE OTHER ATOMIC INLINE-LEVEL BOXES ARE NOT HERE YET, and it is their COLLECTION and not this delimitation
+ * that is missing: an `inline-block`, `inline-table`, `inline-flex` or `inline-grid` crashes in this
+ * component's own walk, which names §10.8's inner baseline each of them HAS and the used inline size its own
+ * module owns. The day that walk collects one it reaches this entry through the same single-item arm.
  *
  * IT FINDS THE FORMATTING CONTEXT ITSELF, and that is why it takes an element where the two entries above take
  * a run: the question "which inline formatting context is this box in" is answered by walking PAST every inline
@@ -228,6 +253,13 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
  * extreme over ALL of its fragments, in the same frame `line_box_content_span` and `LineBoxFragment` report in
  * (offsets from `*establishing`'s content box origin on that axis), with `*establishing` receiving the block
  * container that frame belongs to.
+ *
+ * BOTH HALVES OF THE NAME ARE THE PRECONDITION AND THIS ENTRY ASSERTS THEM, which the entry above no longer
+ * does for it: that one answers a REPLACED inline element now, and this one must not, because CSS 2.2 §8.3
+ * "Margin properties"' exception is what its block arm rests on — "these properties apply to all elements, but
+ * VERTICAL MARGINS WILL NOT HAVE ANY EFFECT ON NON-REPLACED INLINE ELEMENTS" — and a replaced element's
+ * vertical margins DO have an effect. A replaced element also needs none of this: §10.3.2 and §10.6.2 give it
+ * both extents and core/layout/flow_position.h gives it one origin, which is the ordinary composition.
  *
  * IT EXISTS BECAUSE AN INLINE BOX HAS NO `width` AND NO `height`, so the ONE-ORIGIN-PLUS-ONE-EXTENT shape every
  * other box's margin edge is composed from cannot describe it. CSS 2.2 §10.3.1 "Inline, non-replaced elements"

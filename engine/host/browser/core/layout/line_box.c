@@ -1080,6 +1080,42 @@ static void lb_edge_items(const TextRunMeasure *m, lxb_dom_element_t *el, size_t
            "hold its content holds none of it");
 }
 
+/* THE ONE RUN ITEM OF AN ATOMIC INLINE-LEVEL BOX, which is the same delimitation question `lb_edge_items`
+   answers for an inline box and has a different answer for the same reason the two boxes are different kinds.
+   CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": an atomic inline-level box "participate[s] in [its]
+   inline formatting context as a SINGLE OPAQUE BOX", so `lb_child` emits ONE item for the whole of it and does
+   not descend into it — there are no boundaries to bracket a range with, and the range is the item's own index.
+   THE THREE KINDS THAT ARE NOT IT ARE EXCLUDED BY AN ASSERT AND NOT BY A `continue`, which is the one place
+   this differs in shape from `lb_edge_items`: that walk skips kinds a box legitimately owns (its descendants'
+   characters lie between its two edges), and this box owns NOTHING but its own item, so a character, a forced
+   break or a box edge carrying this element is that walk and this reader disagreeing about what an atomic
+   inline puts on a line. */
+static size_t lb_atomic_item(const TextRunMeasure *m, lxb_dom_element_t *el, size_t count)
+{
+    size_t i, found = 0, at = 0;
+
+    for (i = 0; i < count; i++) {
+        if (text_run_measure_item_style(m, i) != el) continue;
+        DCHECK(text_run_measure_item_is_atomic(m, i),
+               "an ATOMIC INLINE-LEVEL box owns a run item that is not the atomic one — a character, a forced "
+               "break, or one of the two box EDGES core/layout/line_box.c brackets an inline box's content "
+               "with. CSS 2.2 §9.2.2 makes this box \"a single opaque box\" and CSS 2.1 §3.1 puts a replaced "
+               "element's content \"outside the scope of the CSS formatting model\", so `lb_child` emits its "
+               "one item and does not descend — an item of any other kind carrying this element is that walk "
+               "having collected an inside this box does not have");
+        at = i;
+        found++;
+    }
+    DCHECK(found == 1,
+           "an ATOMIC INLINE-LEVEL box does not have exactly ONE run item in the formatting context that "
+           "collected it. `lb_child` emits one (`text_run_measure_add_atomic`, css-text-3 §5.5 \"Line Breaking "
+           "Details\"' \"each replaced element or other atomic inline\") and returns without descending, so a "
+           "count of zero is this box never having been collected — the walk skipped it as out of flow or as "
+           "generating no box, which the caller's has-a-box predicate has already denied — and a count above "
+           "one is two walks through one accumulator");
+    return at;
+}
+
 size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                  LineBoxFragment **out)
 {
@@ -1088,37 +1124,36 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     LineBoxFragment *frags;
     lxb_dom_element_t *style;
     lxb_dom_node_t *first;
-    CssPx top = css_px(0.0), lead, trail, before, after;
+    CssPx top = css_px(0.0), lead, trail;
+    CssPx before = css_px(0.0), after = css_px(0.0), drop = css_px(0.0), extent = css_px(0.0);
     size_t n, i, open = 0, close = 0, nf = 0;
+    bool atomic;
 
     DCHECK(el != NULL && establishing != NULL && out != NULL,
            "CSSOM VIEW §6's box fragments were asked for with no element or nowhere to report them");
     DCHECK(lb_computed_is(el, "display", "inline"),
-           "CSSOM VIEW §6's per-line box fragments were asked for a box that is not a non-replaced INLINE box. "
-           "CSS 2.2 §9.2.2 \"Inline-level elements and inline boxes\" makes an `inline-block`, `inline-table`, "
-           "`inline-flex` or `inline-grid` an ATOMIC inline-level box, which \"participate[s] in [its] inline "
-           "formatting context as a SINGLE OPAQUE BOX\" and is therefore one fragment rather than a span of "
-           "them — and this component's own walk crashes for one before a fill exists to place it. The caller's "
-           "own step (core/dom/element_view.h's fragment kind) decides which it has, so reaching here with an "
-           "atomic inline is those two classifications having come apart");
-    /* THE OTHER HALF OF "NON-REPLACED INLINE BOX", AND IT IS NOT THE `display` THE TEST ABOVE READS. HTML §15.4
-       "Replaced elements" makes an `img`, an `iframe`, a `video` or an `input` a replaced element while its
-       computed `display` stays `inline`, and CSS 2.2 §9.2.2's opaque-box sentence covers it for the same reason
-       it covers an `inline-block` — css-text-3 §5.5 names them together as "each replaced element or other
-       atomic inline". So it is ONE fragment, and `lb_child` collects it as ONE run item rather than as a pair
-       of boundaries: the edge walk below would find none and delimit a fragment out of another box's. */
-    DCHECK(!replaced_element_of(el).replaced,
-           "CSSOM VIEW §6's per-line box fragments were asked for a REPLACED inline element. HTML §15.4 makes "
-           "it a replaced element with a computed `display` of `inline`, and CSS 2.2 §9.2.2 makes such a box "
-           "\"a single opaque box\" that is never split across line boxes — so §6's step 3 count is ONE and its "
-           "border area is composed the ordinary way, from CSS 2.1 §10.3.2's used width and §10.6.2's used "
-           "height (core/layout/used_value.h) plus the box's own position, exactly as core/layout/"
-           "scrolling_area.c already composes it for the same element. EVERY CALLER DECIDES THAT BEFORE ASKING "
-           "— core/dom/element_view.c's fragment kind and core/layout/flow_position.c's inline-box predicate "
-           "both test the pair of conjuncts CSS 2.1 §10.3.1's and §10.6.1's titles are written over ('Inline, "
-           "NON-REPLACED elements'), which is the same pair core/layout/used_value.c asserts over — so "
-           "reaching here means one of them read the `display` without asking HTML §15.4, and the answers have "
-           "come apart");
+           "CSSOM VIEW §6's box fragments were asked for a box whose computed `display` is not `inline`, so it "
+           "is not on a line box of the formatting context this walk fills. CSS 2.2 §9.2.2 \"Inline-level "
+           "elements and inline boxes\" makes an `inline-block`, `inline-table`, `inline-flex` or "
+           "`inline-grid` an ATOMIC inline-level box, which \"participate[s] in [its] inline formatting context "
+           "as a SINGLE OPAQUE BOX\" — that IS the single-item shape below and it is not what is missing for "
+           "one: `lb_child` crashes for it before a fill exists to place it, naming its own baseline (CSS 2.2 "
+           "§10.8's `vertical-align` definition gives one to an `inline-block` and to an `inline-table`) and "
+           "its used inline size. Everything else is block-level or generates no box at all, and the caller's "
+           "own step (core/dom/element_view.h's fragment kind, core/layout/flow_position.c's placement) decides "
+           "that before asking — so reaching here is those classifications having come apart");
+    /* WHICH DELIMITATION THIS BOX'S FRAGMENTS TAKE, AND IT IS NOT THE `display` THE TEST ABOVE READS. HTML
+       §15.4 "Replaced elements" makes an `img`, an `iframe`, a `video` or an `input` a replaced element while
+       its computed `display` stays `inline`, and CSS 2.2 §9.2.2's opaque-box sentence covers it for the same
+       reason it covers an `inline-block` — css-text-3 §5.5 "Line Breaking Details" names them together as
+       "each replaced element or other atomic inline". So `lb_child` collects it as ONE run item rather than as
+       a pair of boundaries, and its fragment is delimited by that item's own index: the edge walk would find
+       none and delimit a fragment out of another box's.
+       IT IS EXACTLY ONE FRAGMENT AND THAT IS §9.2.2's SENTENCE RATHER THAN A COUNT THIS FILE CHOOSES: a single
+       opaque box is never the box §9.4.2 "SPLIT[s] into several boxes … distributed across several line boxes",
+       so the one item is on one line and the loop's intersection selects it. The closing assert below is over
+       both shapes and this one additionally asserts the count. */
+    atomic = replaced_element_of(el).replaced;
     /* HTML §15.3.4 "Phrasing content"'s `br { display-outside: newline; }` and `wbr { display-outside:
        break-opportunity; }` reach this component as plain `display: inline` boxes carrying a fact the cascade
        cannot answer for (core/layout/phrasing_break.h), and `lb_child` puts them on the line as a FORCED BREAK
@@ -1129,16 +1164,23 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
         DFAIL("CSSOM VIEW §6's box fragments were asked for an element HTML §15.3.4 \"Phrasing content\" gives "
               "a `display-outside` of `newline` or `break-opportunity` — a `br` or a `wbr`. CSS 2.2 §9.4.2's "
               "run holds it as the BREAK it is and not as an inline box with two boundaries, so it has no edge "
-              "items to delimit a fragment with, and the box it does generate is one no CSS module sizes: no "
-              "module defines `display-outside: newline` at all (core/layout/phrasing_break.h states that in "
-              "full), so there is no `Applies to:` line to read a width or a height off. WHAT IT NEEDS IS ONE "
-              "MORE THING FROM THE RUN, and it is the same shape the atomic-inline arm of this file's own walk "
-              "asks for: a fragment delimited by the item's OWN INDEX rather than by a pair of edges — a "
-              "`br`'s border area is a zero-width rectangle at the position its item sits at, on the line its "
-              "item is on, with §10.6.1's content area out of its own first available font (which "
-              "`lb_line_extent` already reads for it, since `<br style=\"line-height:100px\">` makes a line "
-              "100px tall). BUILD the single-item fragment beside the two-edge one below, and route both kinds "
-              "of phrasing break to it");
+              "items to delimit a fragment with. THE SINGLE-ITEM DELIMITATION IS BUILT AND IS NOT WHAT THIS "
+              "WAITS FOR: `lb_atomic_item` below delimits a fragment by an item's OWN INDEX and the loop after "
+              "it composes the rectangle, so what is left is one ROUTE and one DERIVATION, and each names a "
+              "different absence. THE ROUTE: that lookup asserts the item is text_run.h's ATOMIC kind, which "
+              "is the kind css-text-3 §5.5 \"Line Breaking Details\" gives \"each replaced element or other "
+              "atomic inline\" and is NOT the FORCED-BREAK kind a `br` is collected as — widen it to the "
+              "item's own element and let each caller state the kind it expects. THE DERIVATION: an atomic "
+              "inline's block axis hangs its MARGIN BOX from the line's baseline (CSS 2.2 §10.8's "
+              "`vertical-align` `baseline`: \"if the box does not have a baseline, align the bottom margin "
+              "edge with the parent's baseline\"), and a `br` has no margin box to hang — the box it generates "
+              "is one no CSS module sizes, because no module defines `display-outside: newline` at all "
+              "(core/layout/phrasing_break.h states that in full), so there is no `Applies to:` line to read a "
+              "width or a height off. Its border area is a ZERO-WIDTH rectangle at its item's position with "
+              "§10.6.1's content area out of its own first available font, which `lb_line_extent` already "
+              "reads for it (`<br style=\"line-height:100px\">` makes a line 100px tall). A `wbr` does not "
+              "reach even that: `lb_phrasing_break` crashes for the soft wrap opportunity itself, one walk "
+              "earlier, so it is that crash and not this one that gates it");
     lb_require_horizontal_tb(el);
     style = lb_establishing_box(el);
     lb_require_horizontal_tb(style);
@@ -1146,16 +1188,22 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     first = lxb_dom_interface_node(style)->first_child;
     n = lb_fill(&m, style, first, NULL, &lines);
     DCHECK(n >= 1,
-           "CSS 2.2 §9.4.2's fill produced NO line box for a formatting context that contains an inline box. "
-           "That box's two EDGE items are content the fill partitions — \"line boxes are created as needed to "
-           "hold inline-level content\" — so a run holding them has at least one line, and an empty answer "
-           "means this element's items were never collected: the walk skipped it as out of flow or as "
-           "generating no box, which the caller's has-a-box predicate has already denied");
+           "CSS 2.2 §9.4.2's fill produced NO line box for a formatting context that contains an inline-level "
+           "box. That box's items are content the fill partitions — \"line boxes are created as needed to hold "
+           "inline-level content\", which is an inline box's two EDGES or an atomic inline's one item — so a "
+           "run holding them has at least one line, and an empty answer means this element's items were never "
+           "collected: the walk skipped it as out of flow or as generating no box, which the caller's "
+           "has-a-box predicate has already denied");
     /* THE ITEM COUNT COMES OFF THE PARTITION AND NOT OFF THE ACCUMULATOR, because the partition is what this
        file is entitled to read: `text_run_measure_fill` asserts that its last line closes at the end of the
        collection ("[UAX14] LB3 … did not close §9.4.2's last line box over the whole ITEM collection"), so
-       `lines[n - 1].to` IS that count and is the bound every index below is compared against anyway. */
-    lb_edge_items(&m, el, lines[n - 1].to, &open, &close);
+       `lines[n - 1].to` IS that count and is the bound every index below is compared against anyway.
+       THE TWO DELIMITATIONS PRODUCE ONE HALF-OPEN ITEM RANGE `[open, close + 1)` AND THE LOOP BELOW READS
+       NOTHING ELSE, which is what makes the atomic a shape of this walk rather than a second walk beside it:
+       an inline box's range is its two boundaries and everything its descendants put between them, and an
+       atomic's is the one item CSS 2.2 §9.2.2's "single opaque box" contributes. */
+    if (atomic) open = close = lb_atomic_item(&m, el, lines[n - 1].to);
+    else lb_edge_items(&m, el, lines[n - 1].to, &open, &close);
     frags = malloc(n * sizeof *frags);
     CHECK(frags != NULL, "out of memory reporting CSSOM VIEW §6's box fragments. There is one entry per line "
                          "box of one formatting context and the fragments are a subset of them, so a failure "
@@ -1167,17 +1215,44 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
        margins, borders, and padding have NO VISUAL EFFECT where the split occurs (or at any split, when there
        are several)." So the leading margin is on the fragment holding the OPENING edge item and the trailing
        one on the fragment holding the CLOSING edge item — which for an unsplit box is the same fragment, and
-       for a split one leaves every middle fragment running edge to edge with nothing taken off it. */
+       for a split one leaves every middle fragment running edge to edge with nothing taken off it.
+       AN ATOMIC INLINE TAKES THE SAME TWO OFF FOR THE SAME REASON READ ONE LINE EARLIER: `lb_child` sizes its
+       ONE item with `used_value_margin_edge_px` — the MARGIN box, which CSS 2.2 §9.4.2 is what puts on the
+       line ("horizontal margins, borders, and padding are respected between these boxes") — so the item span
+       exceeds §6's border area by exactly this box's own two horizontal margins, and it is unsplit, so both
+       come off its one fragment. */
     lead = used_value_px(el, "margin-left");
     trail = used_value_px(el, "margin-right");
-    /* CSS 2 §8.1 "Box dimensions"' two nestings between this box's CONTENT area and its BORDER area on the
-       block axis. §10.6.1 is what says they are stated over the content area at all — "the vertical padding,
-       border and margin of an inline, non-replaced box start at the top and bottom of the content area" — and
-       they are read ONCE because they are a property of the BOX: §9.4.2's "when an inline box is split,
-       margins, borders, and padding have no visual effect WHERE THE SPLIT OCCURS" cuts the INLINE axis, and a
-       split leaves both block-axis edges on every fragment. */
-    before = css_px_add(lb_border_px(el, "top"), used_value_px(el, "padding-top"));
-    after = css_px_add(lb_border_px(el, "bottom"), used_value_px(el, "padding-bottom"));
+    if (atomic) {
+        /* CSS 2.2 §10.8's `vertical-align` definition, WHICH IS WHERE AN ATOMIC INLINE'S BLOCK AXIS IS DECIDED
+           AND NOT §10.6.1's. Two of its sentences compose and `lb_atomic_extent` above is the same pair read
+           for the line's own height: "for all other elements, the box used for alignment is the MARGIN BOX",
+           and `baseline`'s own definition — "align the baseline of the box with the baseline of the parent
+           box. IF THE BOX DOES NOT HAVE A BASELINE, ALIGN THE BOTTOM MARGIN EDGE with the parent's baseline."
+           A REPLACED ELEMENT HAS NO BASELINE: §10.8 gives one to an `inline-table` and to an `inline-block`
+           and to nothing else, and `lb_require_baseline_alignment` has already refused every other
+           css-inline-3 §4.2 alignment before this box reached the run. So its BOTTOM MARGIN EDGE sits ON the
+           line's baseline, which is the one coordinate the loop below has, and §8.1's nesting is the rest: the
+           border area's far edge is that baseline less this box's own `margin-bottom`, and its near edge is
+           one used BORDER EDGE EXTENT (§10.6.2 "Inline replaced elements, block-level replaced elements in
+           normal flow, 'inline-block' replaced elements in normal flow and floating replaced elements",
+           through core/layout/used_value.h) further out.
+           IT IS THE SAME TWO NUMBERS `lb_atomic_extent` PUT ABOVE THE BASELINE, read back through §8.1 rather
+           than restated: that function's `above` is `used_value_margin_edge_px(el, true)` and its `below` is
+           zero, so the margin box's bottom IS the baseline and this composition and that one cannot come to
+           describe different boxes. */
+        drop = used_value_px(el, "margin-bottom");
+        extent = used_value_border_edge_px(el, true);
+    } else {
+        /* CSS 2 §8.1 "Box dimensions"' two nestings between this box's CONTENT area and its BORDER area on the
+           block axis. §10.6.1 is what says they are stated over the content area at all — "the vertical
+           padding, border and margin of an inline, non-replaced box start at the top and bottom of the content
+           area" — and they are read ONCE because they are a property of the BOX: §9.4.2's "when an inline box
+           is split, margins, borders, and padding have no visual effect WHERE THE SPLIT OCCURS" cuts the
+           INLINE axis, and a split leaves both block-axis edges on every fragment. */
+        before = css_px_add(lb_border_px(el, "top"), used_value_px(el, "padding-top"));
+        after = css_px_add(lb_border_px(el, "bottom"), used_value_px(el, "padding-bottom"));
+    }
     for (i = 0; i < n; i++) {
         bool exists = false;
         LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
@@ -1203,12 +1278,40 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
                    "`text_run_measure_line_offset` over the SAME line at two bounds and that walk is a sum of "
                    "non-negative advances and non-negative box edges, so a decreasing prefix is an advance "
                    "measure or an edge that lost its sign");
-            /* §10.6.1's CONTENT AREA out of the first available font's `A` and `D`, with CSS 2 §8.1's padding
-               and border nested outside it — "the vertical padding, border and margin of an inline,
-               non-replaced box START AT THE TOP AND BOTTOM OF THE CONTENT AREA, and has nothing to do with the
-               'line-height'." The line's own height is therefore NOT this rectangle and is not read for it. */
-            frags[nf].block_start = css_px_sub(css_px_sub(baseline, css_font_ascent_px(el)), before);
-            frags[nf].block_end = css_px_add(css_px_add(baseline, css_font_descent_px(el)), after);
+            if (atomic) {
+                /* §10.8's `vertical-align` `baseline` over a box with NO baseline, derived where the two terms
+                   were read: the bottom MARGIN edge is the line's baseline, so the border area ends one
+                   `margin-bottom` above it and begins one used border-edge extent further out. */
+                frags[nf].block_end = css_px_sub(baseline, drop);
+                frags[nf].block_start = css_px_sub(frags[nf].block_end, extent);
+                /* THE ONE PLACE THIS RECTANGLE AND core/layout/used_value.h CAN DISAGREE, ASSERTED. The block
+                   axis above IS that component's extent by construction, but the INLINE axis is not: it is
+                   `text_run_measure_line_offset` at two adjacent item bounds less this box's two horizontal
+                   margins, and it must come out at the SAME used border-edge extent CSSOM VIEW §6's step 3
+                   reports for this element through core/dom/element_view.c's one-fragment arm — CSS 2.1
+                   §10.3.2 "Inline, replaced elements"' used width with §8.1's padding and border around it.
+                   The defect it catches is the item having been sized off a different element, an index that
+                   named the wrong item, or css-text-3 §4.1.2's trimming having reached between two bounds that
+                   are adjacent; the neighbourhood is IEEE-754's around one real number reached by two orders
+                   of addition, exactly as `lb_strut_extent`'s identity is. */
+                DCHECK(lb_close(css_px_sub(frags[nf].inline_end, frags[nf].inline_start).px,
+                                used_value_border_edge_px(el, false).px),
+                       "an ATOMIC INLINE-LEVEL box's fragment is a different width along the line than CSS 2.1 "
+                       "§10.3.2 \"Inline, replaced elements\"' used BORDER EDGE. The run item carries "
+                       "`used_value_margin_edge_px` — CSS 2.2 §9.4.2's \"horizontal margins, borders, and "
+                       "padding are respected between these boxes\" — so its span at two ADJACENT item bounds "
+                       "less the box's own two horizontal margins is that same nesting read back through CSS 2 "
+                       "§8.1, and a disagreement is the item having been sized for a different element than "
+                       "the margins were read for");
+            } else {
+                /* §10.6.1's CONTENT AREA out of the first available font's `A` and `D`, with CSS 2 §8.1's
+                   padding and border nested outside it — "the vertical padding, border and margin of an
+                   inline, non-replaced box START AT THE TOP AND BOTTOM OF THE CONTENT AREA, and has nothing to
+                   do with the 'line-height'." The line's own height is therefore NOT this rectangle and is not
+                   read for it. */
+                frags[nf].block_start = css_px_sub(css_px_sub(baseline, css_font_ascent_px(el)), before);
+                frags[nf].block_end = css_px_add(css_px_add(baseline, css_font_descent_px(el)), after);
+            }
             nf++;
         }
         /* §9.4.2: "line boxes are stacked with NO VERTICAL SEPARATION (except as specified elsewhere) and they
@@ -1221,10 +1324,18 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     free(lines);
     text_run_measure_release(&m);
     DCHECK(nf >= 1,
-           "an inline box landed on NO line box of the formatting context that collected it. Its two edge items "
+           "an inline-level box landed on NO line box of the formatting context that collected it. Its items "
            "are inside `[0, count)` and CSS 2.2 §9.4.2's fill PARTITIONS those items across its lines, so every "
            "item is on exactly one line — an empty intersection is that partition having lost an item, which "
            "`text_run_measure_fill` asserts it does not");
+    /* §9.2.2's "single opaque box" IS the count, asserted rather than assumed: the item range of an atomic
+       inline is ONE index, the fill's lines partition the items, and a half-open range of one index therefore
+       meets exactly one line. A second fragment would be that partition having put one item on two lines. */
+    DCHECK(!atomic || nf == 1,
+           "an ATOMIC INLINE-LEVEL box was reported as MORE THAN ONE box fragment. CSS 2.2 §9.2.2 "
+           "\"Inline-level elements and inline boxes\" makes it \"a single opaque box\", so it is never the "
+           "box §9.4.2 \"SPLIT[s] into several boxes … distributed across several line boxes\" — its one run "
+           "item is on one line, and a second fragment is CSS 2.2 §9.4.2's fill having put one item on two");
     *out = frags;
     return nf;
 }
@@ -1238,6 +1349,24 @@ void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **esta
     DCHECK(el != NULL && establishing != NULL && lo != NULL && hi != NULL,
            "CSS 2.2 §9.4.2's margin span of an inline box was asked for with no element, nowhere to report the "
            "formatting context it is in, or nowhere to report one of the two edges");
+    /* BOTH HALVES OF "NON-REPLACED INLINE BOX", ASKED HERE BECAUSE THIS ENTRY'S OWN BLOCK AXIS IS THE HALF
+       THAT DIVIDES THEM AND `line_box_inline_fragments` NO LONGER ASKS IT. That entry answers a REPLACED
+       element now — its fragment is CSS 2.2 §9.2.2's single opaque box, delimited by one run item — and this
+       entry's vertical arm below reports the border area AS the margin edge on the strength of CSS 2.2 §8.3
+       "Margin properties"' own exception, which is written over NON-REPLACED inline elements alone ("vertical
+       margins will not have any effect on non-replaced inline elements"). A replaced element's vertical
+       margins DO have an effect, so answering one here would drop them silently — the caller composes an
+       ORIGIN PLUS AN EXTENT for it instead (core/layout/scrolling_area.c's own predicate is this same pair,
+       and §10.3.2 and §10.6.2 give it both numbers), which is why this is an assert and not an arm. */
+    DCHECK(!replaced_element_of(el).replaced,
+           "CSS 2.2 §9.4.2's margin span was asked for a REPLACED inline element. §8.3 \"Margin properties\"' "
+           "exception — \"these properties apply to all elements, but VERTICAL MARGINS WILL NOT HAVE ANY "
+           "EFFECT ON NON-REPLACED INLINE ELEMENTS\" — is what lets the block arm below report a border area "
+           "as a margin edge, and it does not cover this box: HTML §15.4 \"Replaced elements\" makes it "
+           "replaced, so `margin-top` and `margin-bottom` are used values its margin edge is outside of. It "
+           "also does not need this entry at all — CSS 2.1 §10.3.2 and §10.6.2 give it both extents and "
+           "core/layout/flow_position.h gives it one origin, which is the composition "
+           "core/layout/scrolling_area.c's own non-replaced-inline predicate routes it to");
     n = line_box_inline_fragments(el, establishing, &frags);
     DCHECK(n >= 1 && frags != NULL,
            "CSS 2.2 §9.4.2's fragments were reported as NONE for an inline box that generates one. That entry's "

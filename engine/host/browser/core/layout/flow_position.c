@@ -143,24 +143,33 @@ static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
  * §9.4.1 IS NOT ASKED ABOUT A BOX THAT DOES NOT EXIST, which is the caller's own first step (flow_position.h),
  * so `none` and `contents` are a DCHECK rather than an arm: reaching here with either means the predicate that
  * decides box existence and this one disagree. */
-static bool fp_is_inline_box(lxb_dom_element_t *el)
+static bool fp_is_on_a_line_box(lxb_dom_element_t *el)
 {
-    /* BOTH HALVES OF "NON-REPLACED INLINE BOX", because the arm this predicate selects is §9.4.2's placement of
-       a box that is SPLIT across line boxes and a replaced element is not one. HTML §15.4 "Replaced elements"
-       makes an `img`, an `iframe`, a `video` or an `input` replaced while its computed `display` stays
-       `inline`, and CSS 2.1 §9.2.2 makes such a box an atomic inline-level box that "participate[s] in [its]
-       inline formatting context as a single opaque box" — css-text-3 §5.5 names it in the same breath as an
-       `inline-block` ("each replaced element or other atomic inline"). It is still INLINE-LEVEL, so §9.4.1's
-       two rules do not place it either; it leaves through `fp_require_placeable`'s own arm below.
-       IT IS THE SAME PAIR core/layout/used_value.c ASSERTS OVER (§10.3.1's and §10.6.1's titles are "Inline,
-       NON-REPLACED elements") and the same predicate core/layout/scrolling_area.c splits on — one fact, and
-       this was one of the places that answered it with half the question. */
-    return fp_computed_is(el, "display", "inline") && !replaced_element_of(el).replaced;
+    /* THE QUESTION IS THE BOX'S LEVEL AND NOT WHETHER IT IS REPLACED, which is what this predicate used to
+       answer and is the reason a replaced element crashed here. CSS 2.1 §9.2.2 "Inline-level elements and
+       inline boxes" puts BOTH kinds on the line: a non-replaced `display: inline` element "generates an inline
+       box", and an inline-level box that is not one — "such as replaced inline-level elements, inline-block
+       elements, and inline-table elements" — is an ATOMIC inline-level box that "participate[s] in [its]
+       inline formatting context as a single opaque box". §9.4's two normal-flow formatting contexts are
+       alternatives decided by exactly that level, so both leave through §9.4.2 and neither is placed by
+       §9.4.1's two rules.
+       WHAT SEPARATES THEM IS THE FRAGMENT'S SHAPE AND core/layout/line_box.h OWNS IT: an inline box is
+       delimited by its two EDGE items and split across as many line boxes as it spans, a replaced element by
+       the ONE run item css-text-3 §5.5 "Line Breaking Details" collects for "each replaced element or other
+       atomic inline". One answer, one component, and this file composes the coordinate out of it either way.
+       THE OTHER ATOMIC INLINE-LEVEL BOXES DO NOT COME THROUGH HERE because their computed `display` is not
+       `inline` — an `inline-block`, `inline-table`, `inline-flex` or `inline-grid` leaves through
+       `fp_require_placeable` below, which names what each still needs. A REPLACED element whose `display` is
+       `block` is not inline-level at all: §9.2.1 makes it a block box and §9.4.1's two rules DO place it, so
+       it takes the induction at the end of this function, with §10.3.4's and §10.6.2's used extents under it. */
+    return fp_computed_is(el, "display", "inline");
 }
 
-/* CSS 2 §9.4.2 "Inline formatting contexts"' PLACEMENT of a non-replaced inline box — "boxes are laid out
-   horizontally, one after the other, beginning at the top of a containing block", broken into line boxes whose
-   width the containing block decides.
+/* CSS 2 §9.4.2 "Inline formatting contexts"' PLACEMENT of a box on a line — "boxes are laid out horizontally,
+   one after the other, beginning at the top of a containing block", broken into line boxes whose width the
+   containing block decides. It answers a NON-REPLACED inline box's fragments and a REPLACED element's one
+   fragment through the same entry, because §9.4.2 places both and core/layout/line_box.h owns the one
+   difference between them (a range of two edge items, or one atomic item's own index).
    ITS ORIGIN IS ITS FIRST FRAGMENT'S, and that is §9.4.2's own consequence rather than a choice among several:
    "when an inline box exceeds the width of a line box, it is SPLIT into several boxes and these boxes are
    distributed across several line boxes", so the box has as many border areas as it has fragments and exactly
@@ -208,7 +217,11 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
     return n;
 }
 
-static FlowPoint fp_inline_box_origin(lxb_dom_element_t *el)
+/* THE ORIGIN OF A BOX §9.4.2 PLACES, WHICH IS ITS FIRST FRAGMENT'S CORNER FOR BOTH SHAPES OF SUCH A BOX. An
+   inline box has one border area per fragment and exactly one begins first in content order; a REPLACED
+   element is CSS 2.1 §9.2.2's "single opaque box" and has exactly one, so the same index answers both and no
+   caller has to know which it is holding. */
+static FlowPoint fp_line_box_origin(lxb_dom_element_t *el)
 {
     FlowRect *rects = NULL;
     FlowPoint p;
@@ -239,10 +252,12 @@ static void fp_require_placeable(lxb_dom_element_t *el)
            "asking where it is, so this is that predicate and this test disagreeing");
     for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
         if (strcmp(d, TABLE_INTERNAL[i]) == 0) table_internal = true;
-    /* `inline` IS NOT IN THIS LIST, and that is the one change that makes this function's name true: a
-       non-replaced inline box is PLACED now, by §9.4.2 through core/layout/line_box.h, and it leaves through
-       `fp_inline_box_origin` before this classification is asked. What is left here is the ATOMIC inline-level
-       boxes CSS 2.1 §9.2.2 "Inline-level elements and inline boxes" separates from it. */
+    /* `inline` IS NOT IN THIS LIST, and that is the one change that makes this function's name true: a box
+       whose computed `display` is `inline` is PLACED now, by §9.4.2 through core/layout/line_box.h, and it
+       leaves through `fp_line_box_origin` before this classification is asked — a non-replaced inline box out
+       of its two edge items, and a REPLACED element out of the one atomic item that carries it. What is left
+       here is the ATOMIC inline-level boxes CSS 2.1 §9.2.2 "Inline-level elements and inline boxes" separates
+       from an inline box AND whose own `display` is not `inline`. */
     inline_level = strcmp(d, "inline-block") == 0 ||
                    strcmp(d, "inline-table") == 0 || strcmp(d, "inline-flex") == 0 ||
                    strcmp(d, "inline-grid") == 0;
@@ -261,31 +276,6 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "table objects' generates — the row groups, rows and cells a UA inserts around whatever the "
               "author wrote — and then §17.5.2's and §17.5.3's algorithms over it, which core/layout/"
               "used_value.c already crashes for when a table's EXTENT is asked. BUILD §17.2.1, then §17.5");
-    /* HTML §15.4's REPLACED ELEMENT IS INLINE-LEVEL WITH A COMPUTED `display` OF `inline`, so it reaches this
-       classification through `fp_is_inline_box`'s second conjunct rather than through the list above — and it
-       is on the SAME side of §9.4.1 as that list. It is asked after `d` is freed and reads none of it: HTML
-       §15.4.1 and §15.4.2 decide it from the element's nature and its image request state, not from a
-       `display`. */
-    if (replaced_element_of(el).replaced)
-        DFAIL("HTML §15.4 \"Replaced elements\" makes this a REPLACED ELEMENT with a computed `display` of "
-              "`inline`, which CSS 2.1 §9.2.2 makes an ATOMIC INLINE-LEVEL box — \"a single opaque box\" — so "
-              "§9.4.2 places it on a LINE BOX and §9.4.1's two rules, which are written about a block-level "
-              "box in a block formatting context, say nothing about it. ITS CONTRIBUTION TO THE RUN IS BUILT "
-              "AND IS NOT WHAT THIS WAITS FOR: core/layout/line_box.c collects it as css-text-3 §5.5's atomic "
-              "inline (a margin-box inline size plus the U+FFFC whose [UAX14] class CB is the soft wrap "
-              "opportunity before and after it), the fill distributes it, and CSS 2 §10.8's step 1 takes its "
-              "margin box height. WHAT IS MISSING IS THE FRAGMENT — CSSOM VIEW §6's step 3 rectangle for a box "
-              "the run holds as ONE ITEM rather than as a pair of edges. `line_box_inline_fragments` delimits "
-              "a fragment by an inline box's opening and closing EDGE items and this box has neither, which is "
-              "why it asserts against a replaced element rather than answering; its `br` arm names the same "
-              "absent shape for the same reason. BUILD the single-item fragment there: the inline axis is "
-              "`text_run_measure_line_offset` at the item's own index and at index+1, less the box's two "
-              "margins to reach §6's BORDER area; the block axis hangs from the line's baseline, where "
-              "`lb_atomic_extent` already puts this box's BOTTOM MARGIN EDGE (CSS 2.2 §10.8's `vertical-align` "
-              "`baseline`: \"if the box does not have a baseline, align the bottom margin edge with the "
-              "parent's baseline\"), so the border area is that baseline less `margin-bottom` and less "
-              "core/layout/used_value.h's border-edge extent. Then `fp_inline_box_origin` above turns it into "
-              "this coordinate unchanged and this arm deletes");
     if (inline_level)
         DFAIL("CSS 2.1 §9.2.2 'Inline-level elements and inline boxes' makes this an ATOMIC INLINE-LEVEL box — "
               "`inline-block`, `inline-table`, or css-display §2's `inline flex` and `inline grid` — which "
@@ -297,9 +287,14 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "\"Default Text Alignment: the text-align-all property\" is the alignment (core/css/"
               "css_computed_value.c derives it, and core/css/css_shorthand.c carries the §7.1 shorthand row "
               "that makes a `text-align` declaration reach it), and `line_box_inline_fragments` composes them "
-              "into a fragment rectangle that `fp_inline_box_origin` above turns into this very coordinate for "
+              "into a fragment rectangle that `fp_line_box_origin` above turns into this very coordinate for "
               "a `display: inline` box. Following this line as it stood would have built all of that a second "
-              "time. THE RUN ITEM IS BUILT TOO AND IS NO LONGER WHAT THIS WAITS FOR: core/layout/text_run.h "
+              "time. THE SINGLE-ITEM DELIMITATION IS BUILT TOO, AND IT IS THE SHAPE THIS BOX WILL TAKE: "
+              "`line_box_inline_fragments` delimits an ATOMIC inline's fragment by its own item index rather "
+              "than by a pair of edges, and hangs its MARGIN BOX from the line's baseline for a box CSS 2 "
+              "§10.8 gives no baseline — so what this box needs from that entry is not a new arm but the "
+              "SPLIT of its margin box at the baseline named below. THE RUN ITEM IS BUILT TOO AND IS NO "
+              "LONGER WHAT THIS WAITS FOR: core/layout/text_run.h "
               "carries css-text-3 §5.5's atomic inline as a kind of its own — a margin-box inline size plus "
               "the U+FFFC whose [UAX14] class CB is \"a soft wrap opportunity before and after each replaced "
               "element or other atomic inline\" — and core/layout/line_box.c emits one for a REPLACED element "
@@ -355,10 +350,10 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     fp_require_horizontal_tb(el);
     /* §9.4's TWO NORMAL-FLOW FORMATTING CONTEXTS ARE ALTERNATIVES, and which one places a box is its own
        inline-or-block LEVEL — §9.4.1 is written about a block-level box and §9.4.2 about the boxes on a line.
-       A non-replaced inline box therefore leaves through its own section HERE, before the classification
-       below, exactly as a float and an out-of-flow box leave through theirs above: the two rules at the end of
-       this function are §9.4.1's and say nothing about a box on a line box. */
-    if (fp_is_inline_box(el)) return fp_inline_box_origin(el);
+       A box on a line therefore leaves through its own section HERE, before the classification below, exactly
+       as a float and an out-of-flow box leave through theirs above: the two rules at the end of this function
+       are §9.4.1's and say nothing about a box on a line box. */
+    if (fp_is_on_a_line_box(el)) return fp_line_box_origin(el);
     fp_require_placeable(el);
 
     /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,

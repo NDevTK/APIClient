@@ -41,19 +41,26 @@
  * containing block's width less its own `margin-right` and less its border box's width, and an over-constrained
  * box differs between them exactly where §10.3.3 says it does.
  *
- * A NON-REPLACED INLINE BOX IS THE ONE BOX THIS FILE PLACES BY A DIFFERENT SECTION, and it leaves through that
- * section rather than through the induction above. §9.4's two normal-flow formatting contexts are ALTERNATIVES
- * decided by a box's own level: §9.4.1's two rules are written about a block-level box, and a box on a line is
- * §9.4.2's — "boxes are laid out horizontally, one after the other, beginning at the top of a containing
- * block". Its origin is its FIRST FRAGMENT's, because §9.4.2 splits an inline box across line boxes and gives
- * it one border area per fragment; core/layout/line_box.h computes them all against the establishing block
- * container's content box, and this file adds that box's own origin and CSS 2 §8.1's leading border and
- * padding — the same composition §10.1's second case makes for a block-level child.
+ * A BOX ON A LINE IS THE ONE BOX THIS FILE PLACES BY A DIFFERENT SECTION, and it leaves through that section
+ * rather than through the induction above. §9.4's two normal-flow formatting contexts are ALTERNATIVES decided
+ * by a box's own LEVEL and by nothing else: §9.4.1's two rules are written about a block-level box, and a box
+ * on a line is §9.4.2's — "boxes are laid out horizontally, one after the other, beginning at the top of a
+ * containing block". Its origin is its FIRST FRAGMENT's; core/layout/line_box.h computes the fragments against
+ * the establishing block container's content box, and this file adds that box's own origin and CSS 2 §8.1's
+ * leading border and padding — the same composition §10.1's second case makes for a block-level child.
+ * THE LEVEL IS THE WHOLE TEST AND "REPLACED" IS NOT PART OF IT. §9.2.2 puts both kinds of inline-level box on
+ * the line: a non-replaced `display: inline` element "generates an inline box" that §9.4.2 SPLITS across as
+ * many line boxes as it spans, and a REPLACED one (HTML §15.4 "Replaced elements", whose computed `display`
+ * stays `inline`) is an ATOMIC inline-level box — "a single opaque box" — which is exactly ONE fragment.
+ * line_box.h answers both and this file composes the coordinate out of `*out[0]` either way; asking whether a
+ * box is replaced HERE was one component answering a question about the fragment's SHAPE that belongs to the
+ * component that delimits it.
  *
  * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
  * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an ATOMIC
- * inline-level box (§9.2.2's `inline-block` and the rest) waits on the run item that carries a used WIDTH and
- * its own two soft wrap opportunities, and a box whose computed `writing-mode` is not `horizontal-tb` waits on
+ * inline-level box whose own `display` is not `inline` (§9.2.2's `inline-block` and the rest) waits on §10.8's
+ * inner BASELINE that splits its margin box and on the used inline size its own module owns, and a box whose
+ * computed `writing-mode` is not `horizontal-tb` waits on
  * css-writing-modes-4 §7.4's flow-relative restatement of the two rules this file implements physically.
  *
  * THE ANSWER IS A `CssPx` PAIR FOR used_value.h's REASON. §10.1's base case is the viewport, so a coordinate
@@ -96,9 +103,9 @@ typedef struct {
     CssPx x, y, width, height;
 } FlowRect;
 
-/* EVERY BORDER AREA OF A NON-REPLACED INLINE BOX, in content order, in the initial containing block's space.
- * Answers the count and stores a newly allocated array of that many at `*out`, WHICH THE CALLER OWNS AND MUST
- * FREE; the count is never zero.
+/* EVERY BORDER AREA OF A BOX ON A LINE, in content order, in the initial containing block's space. Answers the
+ * count and stores a newly allocated array of that many at `*out`, WHICH THE CALLER OWNS AND MUST FREE; the
+ * count is never zero, and for a REPLACED element it is exactly ONE (§9.2.2's "single opaque box").
  *
  * IT IS A SECOND ENTRY BECAUSE AN INLINE BOX HAS MORE THAN ONE RECTANGLE AND `flow_border_box_origin` HAS ONE
  * ANSWER. CSS 2 §9.4.2 "Inline formatting contexts": "when an inline box exceeds the width of a line box, it is
@@ -109,16 +116,22 @@ typedef struct {
  * page reads and the first rectangle it enumerates cannot disagree.
  *
  * IT ANSWERS THE FULL RECTANGLE AND NOT A POINT, which is the one place this component and core/layout/
- * used_value.h are not separable. An inline box's border area is not "an extent at a position": its inline
- * extent is how far its own fragment runs ON THAT LINE, which is a different number per fragment and is not
- * §10.3.1's used `width` (the property "does not apply"), and its block extent is §10.6.1's content area out
- * of the first available font rather than a used `height`. Both come out of core/layout/line_box.h's fragment,
- * so splitting them across two entries would put half of one rectangle behind a component that cannot answer
- * for the other half.
+ * used_value.h are not separable FOR A NON-REPLACED INLINE BOX. That box's border area is not "an extent at a
+ * position": its inline extent is how far its own fragment runs ON THAT LINE, which is a different number per
+ * fragment and is not §10.3.1's used `width` (the property "does not apply"), and its block extent is
+ * §10.6.1's content area out of the first available font rather than a used `height`. Both come out of
+ * core/layout/line_box.h's fragment, so splitting them across two entries would put half of one rectangle
+ * behind a component that cannot answer for the other half.
+ * A REPLACED ELEMENT'S EXTENTS ARE SEPARABLE AND ARE STILL ANSWERED HERE, which is not a redundancy: §10.3.2
+ * and §10.6.2 give it a used width and height, so core/dom/element_view.c composes its ONE rectangle the
+ * ordinary way (that extent at this file's origin) and never calls this entry. What this entry hands back for
+ * it is the fragment the origin is READ OUT OF, and line_box.c asserts its inline extent against §10.3.2's
+ * used border edge — one number derived two ways, which is what makes the two roads checkable against each
+ * other rather than merely parallel.
  *
- * `el` MUST BE A NON-REPLACED INLINE BOX in normal flow with a `horizontal-tb` writing mode; every other box
- * crashes naming its own section, in this file for the positioning scheme and in core/layout/line_box.c for
- * what it contributes to a line. */
+ * `el` MUST BE A BOX ON A LINE — a computed `display` of `inline`, in normal flow, with a `horizontal-tb`
+ * writing mode, whether or not HTML §15.4 makes it replaced. Every other box crashes naming its own section,
+ * in this file for the positioning scheme and in core/layout/line_box.c for what it contributes to a line. */
 size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out);
 
 #endif
