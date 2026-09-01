@@ -816,49 +816,6 @@ function _destructiveToken(u) {
   }
 }
 
-/* THE SAME DENY LIST, ASKED BY A CALLER WHOSE ACT IS NOT A `safeFetch` — the THIRD reader this file exports
-   and the last of the three questions a host outside it could not ask. `safeFetchMethodRefusal` and
-   `safeFetchFiringRefusal` already answer the two halves of the firing question for a caller that cannot
-   route through the chokepoint; the deny list is the FLOOR under that policy, and it was the one half no such
-   caller could see. So the floor stood under ONE of the two transports SECURITY.md sanctions. The other is
-   the page-context relay (`lib/schema.js` -> `content.js`'s `handlePageFetch`), and its request is
-   `credentials: "same-origin"` unconditionally, with no parameter in which a caller could say otherwise — so
-   the harm condition's CREDENTIALED half is true there for every caller, which is exactly the half a request
-   that never reaches this file can never be judged on.
-   IT IS NOT A SECOND COPY, AND THAT IS WHY IT IS A FUNCTION HERE RATHER THAN A LIST THERE. CLAUDE.md puts the
-   deny list "in `safe-fetch.js` WITH EVERY OTHER RISK DECISION", and a second `_DESTRUCTIVE` in the other
-   transport would be the layering violation that sentence names: two tables, one question, and the one that
-   drifts is the copy nobody re-reads. One function, several readers.
-   IT IS MORE NEEDED ON A TRANSPORT THAT NAMES A VERB, WHICH IS WHY THIS IS NOT MERE SYMMETRY. This file is
-   GET-ONLY BY ABSENCE, and RFC 9110 §9.2.1 "Safe Methods" puts GET in its safe set — "Of the request methods
-   defined by this specification, the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe" — so the
-   gate inside `safeFetch` stands over requests the spec already calls read-only and covers only §9.2.1's own
-   named failure, that "it is the resource owner's responsibility to ensure that the action is consistent with
-   the request method semantics". A relay that takes `msg.method` verbatim has no such backstop: §9.2.1 says
-   nothing reassuring about a POST to a path spelled `delete`.
-   IT ANSWERS THE REFUSAL RECORD AND NOT THE TOKEN, for the reason `safeFetchMethodRefusal` does: a caller
-   that must tell somebody WHY reads the same `{kind, reason}` shape the reply record's own `refusal` field
-   carries, and cannot re-derive the `blocked-destructive:` spelling into a second vocabulary. The grade is
-   `decline` and it is the PERMANENT one, on the argument the gate inside `safeFetch` already makes — no
-   widening reopens this list, because a browser WOULD send this request and this tool will not send it with
-   the person's session.
-   IT TAKES AN ABSOLUTE URL STRING and parses it HERE, exactly as `safeFetchFiringRefusal` does: what a caller
-   holds is a string, and the address this gate is judged on is the one this file's parser produced. An
-   address that will not parse is a `CHECK` rather than a `null`, because `null` is this function's POSITIVE
-   statement that nothing in the list matched — so an unparseable address would otherwise be permitted by the
-   very value that permits a safe one, which is the defaulted-read defect standing where a refusal belongs. */
-function safeFetchDestructiveRefusal(url) {
-  var parsed = null;
-  try { parsed = new URL(String(url)); } catch (e) { RETHROW_FATAL(e); parsed = null; }
-  CHECK(parsed !== null,
-        "safeFetchDestructiveRefusal was asked about " + JSON.stringify(String(url)) + ", which is not an " +
-        "address a URL parser accepts — the caller is about to spend the person's session on it, and this " +
-        "gate answers `null` for \"nothing in the list matched\", so an unparseable address would be " +
-        "permitted by the same value that permits a safe one");
-  var t = _destructiveToken(parsed);
-  return t ? { kind: "decline", reason: "blocked-destructive:" + t } : null;
-}
-
 /* §2.2.6's URL LIST, OVER THE FINAL HREF ITS CALLER ALREADY COMPUTED — not over `resp`, and
    that is the same "one question, one answer" rule the fetch below is built on rather than a
    tidying. This took the Response and re-read `resp.url` for itself inside two swallowing
@@ -1340,18 +1297,17 @@ async function safeFetch(url, opts) {
    answers it by ABSENCE, so a host that cannot see the answer writes its own — which both of them did, with
    two different grades. It answers in the SAME refusal vocabulary the reply record's `refusal` field carries,
    so a host has ONE shape to read whether the refusal came before the fetch or out of it.
-   `safeFetchDestructiveRefusal` IS THE FLOOR UNDER BOTH OF THOSE, and it is here for the reason they are —
-   with one difference worth stating, because it is what made its absence invisible. The firing and method
-   questions were being ANSWERED WRONG in two places, which is a disagreement somebody eventually reads. The
-   deny list was not being answered at all outside this file: it is scoped INSIDE `safeFetch` to
-   `credentialed && provenance !== "observed"`, and a request that never reaches this file cannot be inside
-   that scope, so the gate's silence about the page-context relay read exactly like a relay no gate had
-   anything to say about. It reads the SAME `_destructiveToken`; a list in the other transport would be the
-   second copy this whole block exists to refuse. */
+   THERE IS DELIBERATELY NO `safeFetchDestructiveRefusal` HERE, AND ITS ABSENCE IS A DECISION RATHER THAN
+   AN OVERSIGHT. One was exported and read by `lib/schema.js`'s page-context relay, and both halves were
+   removed: the deny list is a floor under requests THIS FILE COMPOSES AND FIRES ON ITS OWN, and the relay
+   carries requests an OPERATOR composed at a surface that showed them the bytes. A token list may refuse
+   this file's own autonomy cheaply — a wrong deny costs one unfired request the report still carries in
+   full — and may never overrule a human's explicit act, where the same wrong deny is the tool vetoing its
+   operator on a substring they never saw. So the list stays scoped INSIDE `safeFetch`, and a reader who
+   finds the other transport ungated has found the thing that was taken out on purpose. */
 if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
-  self.safeFetchDestructiveRefusal = safeFetchDestructiveRefusal;
   self.safeFetchWiden = safeFetchWiden;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;

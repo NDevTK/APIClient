@@ -397,9 +397,9 @@ what it owes is that the destination be one this zone can name exactly.
 - **Requests issued AS THE PAGE — the page-context relay.** `pageContextGet` / `pageContextSend` /
   `pageContextFetch` reach `content.js`'s `handlePageFetch`, whose raw `fetch` runs in the untrusted renderer.
   Destination is this zone's; credentials are the page's own (`credentials:"same-origin"`); the enforcement is
-  the BROWSER's SOP/CORS rather than ours, with ONE gate that is ours and is not an SOP question at all — the
-  credentialed destructive-path deny list, asked of the chokepoint through `safeFetchDestructiveRefusal` and
-  never copied into this transport. Both directions are the subsection below, because they fail
+  the BROWSER's SOP/CORS rather than ours, and the credentialed destructive-path deny list DELIBERATELY does
+  not reach here — it is a floor under requests this tool composes on its own, and this relay carries an
+  operator's. Both directions are the subsection below, because they fail
   differently and only one of them is a privilege question.
 - **Renderer program assembly — `renderer-host.js`.** A raw `fetch` of a FIXED name list off our own extension
   origin, because an opaque-origin frame cannot load those files by URL itself. The destination is a constant
@@ -465,27 +465,26 @@ have to be stated, because they fail differently and only one of them is a privi
   of what that renderer holds. It is a DOWNGRADE from the extension's `<all_urls>` reach, not a grant. This
   is why "what stops a compromised content script asking for a fetch the offscreen never authorised" has no
   check behind it and needs none — a compromised renderer does not need our relay to make that request.
-  **THAT ARGUMENT IS ABOUT PRIVILEGE, AND ONE GATE ON THIS EDGE IS NOT ABOUT PRIVILEGE AT ALL.** The
-  credentialed destructive-path deny list exists because this tool builds requests no real client makes, and a
-  GET that ends the person's session mid-analysis is a CSRF *we* committed against our own user. "A
-  compromised renderer already holds the socket" does not answer it, because the party being protected is the
-  PERSON and the party acting is US. `safe-fetch.js` scopes that list to
-  `credentialed && provenance !== "observed"` — so a request that never reaches that file cannot be inside the
-  scope at all, and the gate was not answering permissively here, it was UNASKABLE here. Every request this
-  relay sends is credentialed by construction (`handlePageFetch` sets `credentials: "same-origin"` with no
-  parameter in which a caller could say otherwise), and two of its three entries name POST, which RFC 9110
-  §9.2.1 "Safe Methods"' safe set does not contain — "Of the request methods defined by this specification,
-  the GET, HEAD, OPTIONS, and TRACE methods are defined to be safe." — so the
-  argument is *stronger* here than at the chokepoint, which is GET-only by absence. `pageContextFetch`
-  therefore asks `safeFetchDestructiveRefusal`, which IS `_destructiveToken` read by a caller whose act is not
-  a `safeFetch` — the same shape as `safeFetchMethodRefusal` and `safeFetchFiringRefusal`, and never a second
-  list in this transport, which is the layering violation CLAUDE.md names for putting a risk decision anywhere
-  but the chokepoint. The PROVENANCE half is not asked here and the gate is over-broad on purpose: this relay
-  has no `observed` caller to exempt, because every address it carries is one this tool composed (a well-known
-  discovery path from a fixed literal list, a captured endpoint re-sent with a deliberately malformed body) or
-  one an operator typed into the Send panel. It is asked PRE-REQUEST only — the reply record carries no
-  `resp.url`, so the landed-address re-ask `safe-fetch.js` makes has no input on this edge; the residual is
-  stated at the gate in `lib/schema.js`.
+  **AND THE CREDENTIALED DESTRUCTIVE-PATH DENY LIST DOES NOT APPLY ON THIS EDGE, WHICH IS A RULE ABOUT WHO
+  ACTED RATHER THAN ABOUT WHICH TRANSPORT CARRIED IT.** A gate was built at `pageContextFetch` and removed.
+  The facts it rested on are all TRUE and are worth keeping so they are not re-derived into the same wrong
+  conclusion: `safe-fetch.js` scopes the list to `credentialed && provenance !== "observed"`, so a request
+  that never reaches that file cannot be inside the scope; every request this relay sends IS credentialed by
+  construction (`handlePageFetch` sets `credentials: "same-origin"` with no parameter in which a caller could
+  say otherwise); and two of its three entries name POST, which RFC 9110 §9.2.1 "Safe Methods"' safe set does
+  not contain — "Of the request methods defined by this specification, the GET, HEAD, OPTIONS, and TRACE
+  methods are defined to be safe." Every one of those is about the REQUEST, and none of them about who
+  decided to send it. That is the whole of the error.
+  The list is sound because it is ALLOWED TO BE WRONG: a wrong deny costs one unfired request that forced
+  execution still derives and reports in full. That arithmetic inverts the moment a human composed the
+  request. This relay's entries are operator-typed — the Send panel, where a person read the address, the verb
+  and the body and pressed the button — or an operator-initiated probe. A token list standing there is not a
+  floor under our autonomy, it is the tool VETOING ITS OPERATOR on a substring match, and the cost is a person
+  told their own explicit act was blocked by a pattern they never saw. The egress taxonomy above already draws
+  this line: a path answering the operator is authorized by a human at a surface that shows them the bytes.
+  That is the strongest grade in this document; a token list is the weakest, and the weak one does not
+  overrule the strong one. The list stays scoped inside `safeFetch`, for `safeFetch`'s own autonomous
+  requests, and a reader who finds this transport ungated has found a decision rather than a gap.
   What the relay does need, and has, is that the far end holds NO policy: `handlePageFetch` takes
   `msg.method` verbatim, so the VERB is decided entirely at the trusted call site. That is why the three
   entries are named for their OPERATION rather than for a method (`pageContextGet` GET-only for learning a
