@@ -710,18 +710,49 @@ typedef enum {
     SAN_KIND_PI,                   /* canonicalize a processing instruction: one `target` member */
 } SanKind;
 
-/* A NAME THIS CONFIGURATION CANNOT MATCH BY BYTES. The declared conversion lets unknown external input cross as
-   itself — a coercion must never de-taint it — and every question this file asks of a name is then a strcmp,
-   which has no answer for a value whose domain is not pinned. */
-static void san_require_known(JSValueConst v)
+/* A NAME THIS CONFIGURATION CANNOT MATCH BY BYTES, AND A COLLECTION IT CANNOT WALK — TWO REFUSALS AND NOT ONE.
+   Both are reached because the declared conversion lets unknown external input cross the boundary AS ITSELF
+   rather than coercing it (a coercion must never de-taint an unknown), so a `DOMString` member and a
+   `sequence<>` member alike arrive here still wearing the Object solver/concolic.c gives an unknown. There the
+   likeness ends: one names work at §8.6.4's LOOKUP, the other names work at the operand's own SHAPE, and one
+   message carrying both told a reader neither which it was nor what to build.
+   THE ADDRESS IS THE CALLER'S, WHICH IS WHY THESE ARE MACROS expanded at the site and not functions called
+   from it. A DFAIL stamps the line it is WRITTEN at, and §8.6.2's canonicalization reaches this refusal from
+   SEVEN places — a list entry, a `namespace`, a `name`, a processing instruction, its `target`, a whole list,
+   and the configuration the constructor was handed — so one shared body reported ONE line for all seven and
+   named an action with no object. It is the same reason idl_dict_bool is a macro over idl_dict_bool_at, and
+   the ROLE travels beside the file/line pair because an address alone does not separate two operands read on
+   neighbouring lines of one helper. */
+static void san_require_known_name_at(JSValueConst v, const char *what, const char *file, int line)
 {
     if (!concolic_is(v)) return;
-    DFAIL("§8.6.2 canonicalized a sanitizer name, namespace or target that is UNKNOWN EXTERNAL INPUT. Every "
-          "question this configuration answers about it is a byte comparison — contains, remove, the sorted "
-          "get, and the inner sanitize steps' own lookups — so an unpinned name decides nothing. What belongs "
-          "here is the FORK: a domain that permits both outcomes runs the allowed arm AND the removed arm, "
-          "rather than collapsing the value to its example or to a name it never had");
+    DFAILF("§8.6.2 The Sanitizer interface's canonicalization was handed a %s that is UNKNOWN EXTERNAL INPUT, "
+           "at %s:%d. Every question this configuration answers about that string is a byte comparison — "
+           "§8.6.2's own contains and remove operations, its sorted `get`, and §8.6.4 Sanitization algorithms' "
+           "element, attribute and processing-instruction lookups — so an unpinned name decides none of them, "
+           "and collapsing it to its example would answer all of them about a name the page never wrote. "
+           "WHAT BELONGS HERE IS THE FORK, AND THE SITE THAT OWES IT IS THE LOOKUP RATHER THAN THIS "
+           "CANONICALIZATION: `is this name in this list` over an unpinned string has more than one feasible "
+           "answer, so it is an OUTCOME the asking machine declares and step_fork_run decides, never a strcmp. "
+           "The consumer that asks it has to be a step machine to ask it at all (JS_CFUNC_STEP_DEF, or "
+           "idl_method_id_step for a declared member) — a plain C body is already inside its activation with "
+           "no state for the sibling arm to be snapshotted at", what, file, line);
 }
+
+static void san_require_known_collection_at(JSValueConst v, const char *what, const char *file, int line)
+{
+    if (!concolic_is(v)) return;
+    DFAILF("§8.6.2 The Sanitizer interface's canonicalization was handed a %s that is UNKNOWN EXTERNAL INPUT, "
+           "at %s:%d. THIS IS NOT THE NAME QUESTION AND ITS REMEDY IS A DIFFERENT ONE: an unknown collection "
+           "has no length, no entries and no members, so there is nothing to canonicalize item by item and no "
+           "membership arm to fork — what this run does not know is HOW MANY worlds there are, which is a fact "
+           "about the operand's own shape and not about any one thing inside it. What belongs here is the "
+           "unknown collection itself: a length the engine forks over and entries it mints, before a single "
+           "item of it can be canonicalized", what, file, line);
+}
+
+#define san_require_known_name(v, what)       san_require_known_name_at((v), (what), __FILE__, __LINE__)
+#define san_require_known_collection(v, what) san_require_known_collection_at((v), (what), __FILE__, __LINE__)
 
 /* §8.6.2's CANONICALIZE A SANITIZER NAME over one entry of a converted list: a DOMString becomes
    «[ "name" → it, "namespace" → defaultNamespace ]», and a dictionary keeps its own two members with step 3's
@@ -731,14 +762,14 @@ static JSValue san_canon_name(JSContext *ctx, JSValueConst item, const char *def
 {
     JSValue o = JS_NewObject(ctx), ns;
 
-    san_require_known(item);
+    san_require_known_name(item, "sanitizer element or attribute list entry");
     if (!JS_IsObject(item)) {
         JS_SetPropertyStr(ctx, o, "name", JS_DupValue(ctx, item));
         JS_SetPropertyStr(ctx, o, "namespace", default_ns ? JS_NewString(ctx, default_ns) : JS_NULL);
         return o;
     }
     ns = JS_GetPropertyStr(ctx, item, "namespace");
-    san_require_known(ns);
+    san_require_known_name(ns, "`namespace` member of a sanitizer element or attribute");
     if (JS_IsString(ns)) {
         const char *nsc = JS_ToCString(ctx, ns);
 
@@ -748,7 +779,7 @@ static JSValue san_canon_name(JSContext *ctx, JSValueConst item, const char *def
     {
         JSValue nv = JS_GetPropertyStr(ctx, item, "name");
 
-        san_require_known(nv);
+        san_require_known_name(nv, "`name` member of a sanitizer element or attribute");
         JS_SetPropertyStr(ctx, o, "name", nv);
     }
     JS_SetPropertyStr(ctx, o, "namespace", ns);
@@ -764,9 +795,9 @@ static JSValue san_canon_item(JSContext *ctx, JSValueConst item, SanKind kind)
     if (kind == SAN_KIND_PI) {
         JSValue t;
 
-        san_require_known(item);
+        san_require_known_name(item, "sanitizer processing instruction list entry");
         t = JS_IsObject(item) ? JS_GetPropertyStr(ctx, item, "target") : JS_DupValue(ctx, item);
-        san_require_known(t);
+        san_require_known_name(t, "`target` member of a sanitizer processing instruction");
         o = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, o, "target", t);
         return o;
@@ -796,7 +827,7 @@ static JSValue san_canon_list(JSContext *ctx, JSValueConst list, SanKind kind)
     JSValue out = JS_NewArray(ctx);
     uint32_t n, i;
 
-    san_require_known(list);
+    san_require_known_collection(list, "sanitizer element, attribute or processing instruction list");
     n = san_len(ctx, list);
     for (i = 0; i < n; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, list, i);
@@ -1197,7 +1228,7 @@ static JSValue san_configure(JSContext *ctx, JSValueConst dict, bool allow_comme
 {
     JSValue cfg;
 
-    san_require_known(dict);
+    san_require_known_collection(dict, "SanitizerConfig `configure` was handed");
     cfg = san_canonicalize_config(ctx, dict, allow_comments_pis_data);
     if (JS_IsException(cfg)) return cfg;
     if (!san_config_is_valid(ctx, cfg)) {
