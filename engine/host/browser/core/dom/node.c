@@ -4008,7 +4008,87 @@ JSRuntime *node_agent_runtime(void)
 static int g_id_cd[5] = { -1, -1, -1, -1, -1 };   /* §4.10's five splice members */
 static int g_id_nodevalue = -1, g_id_textcontent = -1, g_id_textcontent_get = -1, g_id_data = -1,
            g_id_lookup_prefix = -1, g_id_lookup_ns = -1, g_id_default_ns = -1, g_id_root = -1,
-           g_id_split_text = -1;
+           g_id_split_text = -1, g_id_text_ctor = -1, g_id_comment_ctor = -1;
+
+/* DOM §4.11 Interface Text's and DOM §4.14 Interface Comment's CONSTRUCTORS — "The new Text(data) constructor
+ * steps are to set this's data to data and this's node document to current global object's associated
+ * Document", and DOM §4.14's sentence is the same one with Comment in it. TWO SENTENCES, ONE BODY, because
+ * they differ only in which Lexbor factory runs; the magic says which.
+ *
+ * THEY WERE THE SHARED `js_node_iface_ctor` THROW, and nothing said so. Web IDL §3.7.1 Interface object gives
+ * every exposed interface a property on the global and gives it [[Construct]] steps only where the interface
+ * is declared with a constructor operation — so `Text` and `Comment` were on the global, answered
+ * `instanceof`, carried DOM §4.4's constants, and threw "Illegal constructor" on the one thing a page writes
+ * them for. `node_install_interface` is for the interfaces that declare NO constructor, which is what
+ * CDATASection (DOM §4.12 declares none) and ProcessingInstruction still reach it as — the second of those
+ * for the reason stated at its install below, not because it declares none.
+ *
+ * THE DEFAULT IS THE SPEC'S AND NOT `undefined`. `constructor(optional DOMString data = "")`, so a page
+ * writing `new Text()` gets a node whose data is the EMPTY STRING. Stringifying the absent argument would give
+ * it the nine characters "undefined" — a real value, plausible, and wrong, which is the shape this engine
+ * treats as worst. `idl_optional_from(0)` at the declaration is what makes Web IDL §3.6 Overload resolution
+ * algorithm stop short of position 0 rather than convert an absent one, and the `argc >= 1` here is what
+ * supplies DOM §4.11's own default in its place.
+ *
+ * The node is DETACHED and belongs to the flow that made it, exactly as document.c's createTextNode says of
+ * its own: nothing shared has changed until the page inserts it, and the creation entry is what gives the
+ * node's Lexbor bytes an owner — without it every node a page ever constructs stays in the document's arena
+ * for the life of the instance, invisible to the runtime's gc_obj_list walk, which sees only GC objects.
+ * magic 0 = Text (DOM §4.11), 1 = Comment (DOM §4.14). */
+static JSValue js_cd_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *root = document_root_node(ctx), *made;
+    const char *s = "";
+    size_t len = 0;
+    JSValue r;
+
+    (void)new_target;
+    DCHECK(magic == 0 || magic == 1, "§4.11's and §4.14's shared constructor body was reached with a magic "
+                                     "naming neither Text nor Comment");
+    DCHECK(root != NULL, "a CharacterData constructor ran before the document existed — its own step is \"set "
+                         "this's node document to current global object's associated Document\", and there is "
+                         "no document for that step to name");
+    /* Already a STRING by the time it arrives: the position is declared IDL_DOMSTRING, so §3.2.10 DOMString's
+       ToString — and any `toString` the page hung on the argument — ran on the IDL machine, where it can
+       suspend, before this body was entered.
+       UNLESS IT IS UNKNOWN INPUT, WHICH IS THE OTHER HALF AND IS WHY THIS ASKS. idl_concolic_rule answers
+       CROSSES for IDL_DOMSTRING — an unknown value reaches the body UNCONVERTED so that a later branch on it
+       still forks — and `JS_ToCStringLen` on one runs ToString into ToPrimitive and collapses the very thing
+       that was preserved. `new Text(location.hash.slice(1))` is the case: the taint has to survive into the
+       node, so an unknown denotes its SHAPE (concolic_name_cstr, the same accessor a selector, an attribute
+       name and a class token reach for) and everything else converts normally.
+       THE TWO ARMS ARE NOT ONE CALL, and the length is why. A DOMString may contain U+0000, so the concrete
+       arm needs the REAL byte count `JS_ToCStringLen` reports and `strlen` would truncate at the NUL; a shape
+       carries none by construction, so `strlen` is exact for it. Both are OWNED and both are freed with
+       JS_FreeCString. */
+    if (argc >= 1) {
+        if (concolic_is(argv[0])) {
+            s = concolic_name_cstr(ctx, argv[0]);
+            if (!s) return JS_EXCEPTION;
+            len = strlen(s);
+        } else {
+            s = JS_ToCStringLen(ctx, &len, argv[0]);
+            if (!s) return JS_EXCEPTION;
+        }
+    }
+    if (magic == 0) {
+        lxb_dom_text_t *t = lxb_dom_document_create_text_node(root->owner_document,
+                                                             (const lxb_char_t *)s, len);
+        CHECK(t != NULL, "new Text(): the Lexbor node allocation failed — handing back a null the page cannot "
+                         "tell from a node it never asked for is not an option");
+        made = lxb_dom_interface_node(t);
+    } else {
+        lxb_dom_comment_t *c = lxb_dom_document_create_comment(root->owner_document,
+                                                              (const lxb_char_t *)s, len);
+        CHECK(c != NULL, "new Comment(): the Lexbor node allocation failed — handing back a null the page "
+                         "cannot tell from a node it never asked for is not an option");
+        made = lxb_dom_interface_node(c);
+    }
+    dom_cow_note_created(made);   /* this flow made it; detached until the page inserts it */
+    if (argc >= 1) JS_FreeCString(ctx, s);
+    r = node_wrap(ctx, made);
+    return r;
+}
 
 void node_init(JSContext *ctx)
 {
@@ -4086,6 +4166,13 @@ void node_init(JSContext *ctx)
         /* §4.11 `[NewObject] Text splitText(unsigned long offset)` — one `unsigned long`, and the declaration
            is what converts it, so an object argument runs its `valueOf` on the machine like every other. */
         g_id_split_text = idl_method_id(ctx, CD_UL_UL, 1, js_text_split, 0);
+        /* §4.11's and §4.14's `constructor(optional DOMString data = "")` — see js_cd_ctor. One declared
+           position, optional FROM position 0, so `new Text()` is a zero-argument call that reaches the body
+           with argc 0 rather than one whose absent argument was stringified to "undefined". */
+        g_id_text_ctor = idl_method_id(ctx, CD_STR, 1, js_cd_ctor, 0);
+        idl_optional_from(0);
+        g_id_comment_ctor = idl_method_id(ctx, CD_STR, 1, js_cd_ctor, 1);
+        idl_optional_from(0);
     }
     /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
        `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
@@ -4277,11 +4364,37 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
                                    (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
         node_install_interface_ctor(ctx, global, "Node", np, node_ctor);
         node_install_interface(ctx, global, "CharacterData", cdp);
-        node_install_interface(ctx, global, "Text", tp);
+        /* §4.11 AND §4.14 DECLARE CONSTRUCTORS, so their interface objects are built with §3.7.1's
+           [[Construct]] steps rather than with the shared throw — see js_cd_ctor. Everything else about the
+           object is unchanged: node_install_interface_ctor is the same call the throwing ones reach, so
+           `Text.ELEMENT_NODE` still reads §4.4's constants off Node's interface object exactly as before.
+           CharacterData, CDATASection and the rest keep the throw because their IDL declares no constructor,
+           which is what makes `node_install_interface` the right call for them and not a default. */
+        DCHECK(g_id_text_ctor >= 0 && g_id_comment_ctor >= 0,
+               "Text and Comment were installed before node_init declared §4.11's and §4.14's constructors");
+        node_install_interface_ctor(ctx, global, "Text", tp,
+                                    idl_step_constructor(ctx, "Text", g_id_text_ctor));
         JSValue csp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_CDATA_SECTION);
         JSValue pip = node_type_proto(ctx, LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION);
-        node_install_interface(ctx, global, "Comment", cmp);
+        node_install_interface_ctor(ctx, global, "Comment", cmp,
+                                    idl_step_constructor(ctx, "Comment", g_id_comment_ctor));
         node_install_interface(ctx, global, "CDATASection", csp);
+        /* DOM §4.12 Interface CDATASection declares no constructor, so its throw is the SPEC. DOM §4.13
+           Interface ProcessingInstruction's is NOT — a NAMED RESIDUAL, and the code here is right for what it
+           does rather than unfinished.
+           WHAT IS NOT COVERED: `new ProcessingInstruction(target, data)`, whose DOM §4.13 steps are "Set
+           this's node document to current global object's associated Document" and then "Initialize this with
+           target and data".
+           WHAT THE NEXT DIFF BUILDS: that second step is a NAMED algorithm DOM §4.13 shares between this
+           constructor and DOM §4.5's createProcessingInstruction — "To initialize a ProcessingInstruction node
+           pi, with target and data" — and this engine has it INLINE in document.c's js_doc_create_xml_node
+           under `magic == 1`, so the constructor cannot be written without lifting it out to the one place
+           both reach. A second copy here is what CLAUDE.md forbids, and it would be a copy that is ALSO
+           missing the algorithm's last step ("Update attributes from data given pi"), which the inline one
+           does not run either — so the lift has to carry that step, not just move what is there.
+           HOW ITS ABSENCE SHOWS: the audit's own `interfaces a page cannot new` category still names
+           ProcessingInstruction, and a page writing `new ProcessingInstruction("xml-stylesheet", "href='x'")`
+           gets a TypeError where every browser gives it a node. */
         node_install_interface(ctx, global, "ProcessingInstruction", pip);
         JS_FreeValue(ctx, np); JS_FreeValue(ctx, cdp);
         JS_FreeValue(ctx, tp); JS_FreeValue(ctx, cmp);
