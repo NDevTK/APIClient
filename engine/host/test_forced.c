@@ -6081,7 +6081,8 @@ typedef struct {
        carries an annotation for, and it is what `{ "/api/baseuri", "base" }` was. For a PREFIX it is the rest
        of the address, which is the whole point of a prefix row: the last segment is the thing under test. */
     const char *b;
-    size_t      n;    /* to the next record's `"url":"`, or to the end of the document for the last one */
+    size_t      n;    /* to this record's OWN closing brace — see emitted_rec_end, which is where that is
+                         decided and where the containment every reader below rests on is asserted */
 } EmittedRec;
 
 /* solver/pending.h defines exactly three provenance grades, and `same_identity` makes the grade part of a
@@ -6089,6 +6090,93 @@ typedef struct {
    distinctness check below names, caught one step earlier and with the caller's array at stake — which is
    why it is a CHECK and not a DCHECK: writing past that array must not proceed in a release build either. */
 #define EMITTED_REC_MAX 3
+
+/* ─── ONE RECORD'S OWN LAST BYTE — A NESTING SCAN, BECAUSE THE NEXT RECORD'S FIRST BYTES ARE NOT THIS ONE'S EDGE
+ *
+ * Locating a record's far edge by SEARCHING FOR THE NEXT ONE is wrong in two directions at once, and only the
+ * first of them has an answer of that shape at all. Forwards, the span swallowed the next record's
+ * `},{"method":"…",` preamble — bytes belonging to a different request. Backwards, THE LAST RECORD HAS NO NEXT
+ * RECORD TO FIND, so its span was the whole remainder of the document: through the array's `]` and into
+ * `securitySinks`, `pageErrors`, `pageErrorsRetracted` and every `_`-prefixed counter this document carries.
+ * A row asking ONE endpoint whether it carries `64` (`/api/serdeep`), `121` (`/api/insertsteps`) or `448`
+ * (`/api/bigparse`) is then answered by any counter whose decimal happens to contain those digits — and WHICH
+ * record is last is the order the scheduler recorded them in, so the same row can pass on one schedule and
+ * fail on another. That is a row that can pass WHILE THE ENGINE IS WRONG, which is worse than a row that
+ * fails, and it is the one thing this file may never be: it is the only instrument that says whether the
+ * solver found what it should.
+ *
+ * THE EDGE IS A FACT ABOUT THIS RECORD AND IS READ OFF ITS OWN NESTING. `at` is the `"` that opens this
+ * record's `"url"` key, and what endpoint_json_array writes after it — `"url":"…","provenance":"…","params":[…]`,
+ * then `,"headers":{…}` where there is one, then `}` — closes every bracket it opens. So the FIRST closer this
+ * scan meets at record depth IS the record's own brace, whatever any value inside it spells.
+ *
+ * IT CANNOT BE FOOLED BY A VALUE, AND THAT IS A PROPERTY OF THE FORMAT RATHER THAN OF THIS FIXTURE. RFC 8259
+ * §7 "Strings": "A string begins and ends with quotation marks. All Unicode characters may be placed within
+ * the quotation marks, except for the characters that MUST be escaped: quotation mark, reverse solidus, and
+ * the control characters (U+0000 through U+001F)." A `"` inside a value is therefore always `\"`, so the
+ * string state tracked here can never fall out of step with the document's, and a `{`, `}`, `[` or `]` inside
+ * a value is never counted — which is exactly what a search for the next record's opening bytes could not
+ * promise, since those bytes are ordinary characters a value may spell. core/json_buf.h writes that escaping,
+ * and this is the one place the argument is made: the readers below inherit it from the span rather than each
+ * restating it for its own needle.
+ *
+ * WHERE THE ENDPOINTS ARRAY ENDS IS ASSERTED FROM THE TWO PRODUCERS AND NOT PATTERN-MATCHED OFF THE OUTPUT.
+ * endpoint_json_array separates its records with a bare `,` and closes the array with `]`; solver/result.c's
+ * result_json composes the document as `{"fetchCallSites":<that array>,"securitySinks":…`. So a record's `}`
+ * is followed by `,{` or by `],"securitySinks":` and by nothing else. That is the fact a span may not reach
+ * past, it is stated nowhere else in this file, and a producer that changes either half crashes HERE instead
+ * of silently handing every row below a span that is not a record. */
+static const char *emitted_rec_end(const char *at) {
+    const char *p = at;
+    int depth = 0, instr = 0;
+
+    for (; *p; p++) {
+        if (instr) {
+            if (*p == '\\') {
+                CHECK(p[1] != '\0',
+                      "an endpoint record's string value ends the result document on a reverse solidus — the "
+                      "escape has no escapee, so this scan cannot know whether the next byte closes the "
+                      "string, and every span it went on to hand out would be a guess");
+                p++;
+                continue;
+            }
+            if (*p == '"') instr = 0;
+            continue;
+        }
+        if (*p == '"') { instr = 1; continue; }
+        if (*p == '{' || *p == '[') { depth++; continue; }
+        if (*p != '}' && *p != ']') continue;
+        if (depth > 0) { depth--; continue; }
+        CHECK(*p == '}',
+              "an endpoint record closed with `]` at its own nesting depth — endpoint_json_array writes every "
+              "record as an OBJECT, so this scan is not standing where it believes it is and the span it would "
+              "return begins inside one record and ends inside another");
+        break;
+    }
+    CHECK(*p == '}',
+          "an endpoint record is never closed anywhere in the result document — endpoint_json_array writes a "
+          "`}` for every record it opens, so a scan that walked to the end of the string would give this row a "
+          "span running through the array's `]` into securitySinks, pageErrors and every `_` counter, and the "
+          "row would then be answerable by bytes belonging to a different surface entirely");
+    DCHECKF(p[1] == ',' || p[1] == ']',
+            "an endpoint record's closing `}` is followed by byte %d — endpoint_json_array writes a bare `,` "
+            "between records and a `]` after the last one, and nothing else, so this is not a record's edge "
+            "and the span returned from here is not this record's",
+            (int)(unsigned char)p[1]);
+    DCHECK(p[1] != ',' || p[2] == '{',
+           "an endpoint record is followed by a `,` that opens no further record — endpoint_json_array writes "
+           "that comma immediately before the next record's `{`, so a scan standing here has stopped inside "
+           "some nested object and every span below it would begin in one record and end in another");
+    DCHECK(p[1] != ']' || strncmp(p + 2, ",\"securitySinks\":", 17) == 0,
+           "THE ENDPOINTS ARRAY DOES NOT END WHERE THIS READER BELIEVES IT DOES. solver/result.c's result_json "
+           "composes the document as `{\"fetchCallSites\":<array>,\"securitySinks\":…`, so the array's `]` is "
+           "followed by that key and by nothing else. This is the assert that keeps the LAST record's span "
+           "inside the array: every other record is bounded by the one after it, and the last one is bounded "
+           "only by where the array stops — which is why a far edge SEARCHED for rather than scanned ran off "
+           "the end of the array and made a question about one endpoint answerable by an @S entry, a page "
+           "error or a run counter");
+    return p;
+}
 
 /* EVERY MATCH OF ONE PATTERN, IN DOCUMENT ORDER. The pattern already carries `"url":"` and whatever the caller
    named after it, so this holds no opinion about whole-versus-prefix; `k` is its length, which is where each
@@ -6106,9 +6194,13 @@ static int emitted_records_by(const char *js, const char *pat, size_t k, Emitted
                "this address may be answered by — ask them apart", pat);
         out[n].at = e;
         out[n].b  = e + k;
-        end = strstr(out[n].b, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
-        out[n].n  = end ? (size_t)(end - out[n].b) : strlen(out[n].b);
-        e = out[n].b + out[n].n;
+        end = emitted_rec_end(e);   /* THIS record's own closing brace — never the next record's first bytes */
+        CHECKF(end > out[n].b,
+               "the address pattern `%s` located an endpoint record whose closing brace stands at or before "
+               "its own `url` — the span every reader below is asked inside would be empty or inverted, and "
+               "an inverted one is a length no bound in this file can refuse", pat);
+        out[n].n  = (size_t)(end - out[n].b);
+        e = end;
         n++;
     }
     return n;
