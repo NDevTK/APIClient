@@ -6044,101 +6044,208 @@ static const char *param_value_next(const char *v, const char **pb, size_t *pn) 
     return v + 1;
 }
 
-/* ONE ENDPOINT'S OWN RECORD, WITHOUT ITS ADDRESS — the bounds every reader below is a question asked INSIDE,
-   and the same rule `s_record` states for an @S entry: a `strstr` over the whole document reaches a field from
-   ANY endpoint, so a two-clause row can be answered by a token its own statement never emitted.
-   THE SPAN STARTS PAST THE URL BECAUSE AN ADDRESS IS NOT AN OBSERVATION. A row asking (endpoint, token) whose
-   token is a substring of the endpoint's own address is a ONE-clause row wearing two — reaching the statement
-   at all satisfies both — which is the `touch` defect this file already carries an annotation for, and it is
-   what `{ "/api/baseuri", "base" }` was. Everything the record STATES (its params, their names, locations and
-   values) is inside this span; the only thing outside it is the address the caller already named.
-   Answers the first byte after this endpoint's url string and writes the distance to the next endpoint's, or
-   NULL when there is no such record.
-   NAMED FOR THE DOCUMENT IT READS, NOT FOR THE THING THE DOCUMENT DESCRIBES. `endpoint_record` is already
-   taken, by solver/endpoint.h, for the engine entry that WRITES one — and this translation unit includes that
-   header, so the obvious name is not merely confusing here, it does not compile. The pair is a READER over the
-   emitted result document, which is the only subject any probe in this file has, so `emitted_` says which side
-   of the engine a reader is standing on and leaves the producer's name to the producer. */
-static const char *emitted_record_span(const char *js, const char *url, size_t *span) {
+/* ─── EVERY RECORD OF ONE STATEMENT — BECAUSE AN ADDRESS IS NOT A RECORD ─────────────────────────────────
+ *
+ * Every reader below is a question asked INSIDE the bounds these locate, which is the rule `s_record` states
+ * for an @S entry: a `strstr` over the whole document reaches a field from ANY endpoint, so a two-clause row
+ * can be answered by a token its own statement never emitted.
+ * AN ADDRESS NAMES A STATEMENT AND A STATEMENT EMITS ONE RECORD PER PROVENANCE GRADE ITS ARMS STOOD ON, which
+ * is the fact the single-match locators these replaced did not have. solver/endpoint.c's `same_identity` puts
+ * the grade INSIDE a record's identity on purpose — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's "never
+ * merged into the observed pool" is a property of that struct rather than a rule somebody has to keep — so a
+ * `fetch` standing after a branch whose concrete example DECIDES it emits TWO records at one address: the
+ * primary arm's `derived`, and the contradicted sibling's `forced` (solver/flow.h's flow_mark_forced_arm,
+ * read at the request by solver/engine.c's engine_prov_of_running_path). Both are the same call in the same
+ * source line, so a first-hit `strstr` was a coin flip between two arms of ONE statement, decided by whichever
+ * arm the scheduler happened to emit first — and this file's own headline claim is that a fork's arms both
+ * reach the sink, so the reader that could see only one of them could not state it.
+ * SO THE SCOPE IS THE STATEMENT AND NOT THE RECORD, AND THAT IS THE SAME RULE THIS FILE ALREADY HAD rather
+ * than a widening of it. The objection has always been CROSS-STATEMENT: a token must come from the endpoint
+ * the row NAMES and not from any endpoint in the document. A row about `/api/addnum/` is about what THAT
+ * `fetch` emitted, on whichever of its own arms emitted it, and no row in this file states a grade — a claim
+ * that could be satisfied only by one of them is not a claim any of these rows make.
+ * WHAT A ROW MAY NEVER BE ANSWERED BY IS A DIFFERENT STATEMENT, and that is what the two asserts here refuse:
+ * the grades of one address must be DISTINCT (a repeat means those records differ by METHOD or by PARAM SET,
+ * so they are two requests and not two arms of one), and an address PREFIX must name ONE address.
+ * NAMED FOR THE DOCUMENT THEY READ, NOT FOR THE THING THE DOCUMENT DESCRIBES. `endpoint_record` is already
+ * taken, by solver/endpoint.h, for the engine entry that WRITES one — and this translation unit includes that
+ * header, so the obvious name is not merely confusing here, it does not compile. These are READERS over the
+ * emitted result document, which is the only subject any probe in this file has, so `emitted_` says which side
+ * of the engine a reader is standing on and leaves the producer's name to the producer. */
+typedef struct {
+    const char *at;   /* this record's own `"url":"` — what the method reader walks back from */
+    /* THE FIRST BYTE PAST THE MATCHED PATTERN, AND WHERE IT LANDS IS THE CALLER'S QUESTION. For a whole
+       address it is the record's first stated field, because AN ADDRESS IS NOT AN OBSERVATION: a row asking
+       (endpoint, token) whose token is a substring of the endpoint's own address is a ONE-clause row wearing
+       two — reaching the statement at all satisfies both — which is the `touch` defect this file already
+       carries an annotation for, and it is what `{ "/api/baseuri", "base" }` was. For a PREFIX it is the rest
+       of the address, which is the whole point of a prefix row: the last segment is the thing under test. */
+    const char *b;
+    size_t      n;    /* to the next record's `"url":"`, or to the end of the document for the last one */
+} EmittedRec;
+
+/* solver/pending.h defines exactly three provenance grades, and `same_identity` makes the grade part of a
+   record's identity, so ONE address stands for at most three records. A fourth is the same defect the
+   distinctness check below names, caught one step earlier and with the caller's array at stake — which is
+   why it is a CHECK and not a DCHECK: writing past that array must not proceed in a release build either. */
+#define EMITTED_REC_MAX 3
+
+/* EVERY MATCH OF ONE PATTERN, IN DOCUMENT ORDER. The pattern already carries `"url":"` and whatever the caller
+   named after it, so this holds no opinion about whole-versus-prefix; `k` is its length, which is where each
+   record's readable span begins. */
+static int emitted_records_by(const char *js, const char *pat, size_t k, EmittedRec *out, int cap) {
+    const char *e = js, *end;
+    int n = 0;
+
+    DCHECK(out != NULL && cap > 0, "an endpoint statement was located with nowhere to put its records");
+    while ((e = strstr(e, pat)) != NULL) {
+        CHECKF(n < cap,
+               "the address pattern `%s` matched more endpoint records than there are provenance grades for "
+               "one statement to be evidence at, so this walk would write past the caller's array. The "
+               "surplus records differ by METHOD or by PARAM SET and are OTHER REQUESTS, which no row asking "
+               "this address may be answered by — ask them apart", pat);
+        out[n].at = e;
+        out[n].b  = e + k;
+        end = strstr(out[n].b, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
+        out[n].n  = end ? (size_t)(end - out[n].b) : strlen(out[n].b);
+        e = out[n].b + out[n].n;
+        n++;
+    }
+    return n;
+}
+
+/* THE GRADE ONE RECORD IS EVIDENCE AT, read off the field endpoint_json_array writes IMMEDIATELY after the
+   address and inside this record's own span. A url cannot contain the key's bytes unescaped — json_buf_str
+   escapes an embedded quote — so the first occurrence at or after this record's `"url":"` is this record's.
+   A CHECK because the field is written unconditionally (solver/endpoint.c) and because the grade is the whole
+   of what tells two records of one address apart: a reader that cannot find it cannot say whether an address
+   names one statement's arms or two different requests, which is the question every row below rests on. */
+static const char *emitted_rec_grade(const EmittedRec *r, size_t *n) {
+    static const char key[] = ",\"provenance\":\"";
+    const char *g = strstr(r->at, key), *q;
+
+    CHECK(g != NULL && g < r->b + r->n,
+          "an endpoint record carries no `provenance` between its address and the next record — "
+          "endpoint_json_array writes that field unconditionally and immediately after the url, and it is "
+          "what tells one statement's arms apart from two different requests at one address");
+    g += sizeof key - 1;
+    q = memchr(g, '"', (size_t)(r->b + r->n - g));
+    CHECK(q != NULL, "an endpoint record's `provenance` string is not terminated inside the record");
+    *n = (size_t)(q - g);
+    return g;
+}
+
+/* THESE RECORDS ARE ONE STATEMENT'S ARMS AND NOT SEVERAL REQUESTS — the assert that makes a set answerable.
+   `what` is the address or prefix the row named, so the crash has an object rather than a remedy with none. */
+static void emitted_recs_one_statement(const EmittedRec *r, int n, const char *what) {
+    int i, j;
+
+    for (i = 1; i < n; i++)
+        for (j = 0; j < i; j++) {
+            size_t an, bn;
+            const char *ga = emitted_rec_grade(&r[i], &an), *gb = emitted_rec_grade(&r[j], &bn);
+
+            DCHECKF(an != bn || memcmp(ga, gb, an) != 0,
+                    "two endpoint records at `%s` carry the SAME provenance grade `%.*s`, so that address "
+                    "names a SET OF REQUESTS rather than one statement's arms — every question asked through "
+                    "it would be answered by whichever member carries the bytes. solver/endpoint.c's "
+                    "same_identity tells one statement's records apart BY GRADE, so a repeat means these two "
+                    "differ by METHOD or by PARAM SET: ask them apart", what, (int)an, ga);
+        }
+}
+
+/* EVERY RECORD OF THE STATEMENT AT `url`. */
+static int emitted_records(const char *js, const char *url, EmittedRec *out, int cap) {
     char pat[160];
-    const char *e, *end;
-    int k = snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
+    int k = snprintf(pat, sizeof pat, "\"url\":\"%s\"", url), n;
 
     CHECK(k > 0 && (size_t)k < sizeof pat,
           "an endpoint row's url pattern did not fit its buffer — a truncated pattern matches a PREFIX of the "
           "address, so the row would read a field out of some other endpoint's record");
-    DCHECK(span != NULL, "an endpoint record was located with nowhere to put its bounds");
-    if (!(e = strstr(js, pat))) return NULL;
-    e += (size_t)k;
-    end = strstr(e, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
-    *span = end ? (size_t)(end - e) : strlen(e);
-    return e;
+    n = emitted_records_by(js, pat, (size_t)k, out, cap);
+    emitted_recs_one_statement(out, n, url);
+    return n;
 }
 
-/* DOES ONE ENDPOINT'S RECORD CARRY `needle` — the scope a row whose claim is (this endpoint, this token) and
-   no finer. It is what the two-column probe table needs and the whole-document `strstr` it replaced could not
-   give: the cross-STATEMENT axis is gone by construction, because no byte of another endpoint's record is in
-   the range. It remains a substring test WITHIN this record, so a row that can say WHICH PARAM carries the
-   value says so through param_value_is instead — a claim about a value is not a claim about a record. */
-static int emitted_record_has(const char *js, const char *url, const char *needle) {
-    size_t span, n = strlen(needle);
-    const char *e = emitted_record_span(js, url, &span), *p;
-
-    if (!e || span < n) return 0;
-    for (p = e; p + n <= e + span; p++)
-        if (memcmp(p, needle, n) == 0) return 1;
-    return 0;
-}
-
-/* ONE RECORD LOCATED BY AN ADDRESS PREFIX — for the statement whose LAST SEGMENT is the thing under test, so
-   the row cannot name the whole address without writing the answer into the question. `/api/addnum/v1000000`
-   and `/api/addnum/v19200998080` are the two spellings §13.15.3 step 1.c decides between, and path_scan
-   re-spells whichever one it got into a template whose hole it NAMES out of the concolic's display shape — a
-   name nothing outside a run can predict. So the prefix is the only part of the address a row may state.
-   THE ONE-RECORD CHECK IS THE WHOLE OF WHAT MAKES IT A LOCATOR AND NOT A `strstr`. A prefix that matches two
-   records names a SET, and a question asked of a set is answered by whichever member happens to carry the
-   bytes — the defect this file's readers exist to refuse, arriving through the one reader that admits a
-   partial address. It is asserted here rather than declared at the call, for the reason the `probegate:prefix`
-   marker is CHECKED rather than obeyed: the day a second endpoint shares the prefix, the row must stop
-   answering instead of quietly widening. */
-static const char *emitted_record_prefixed(const char *js, const char *prefix, size_t *span) {
+/* EVERY RECORD OF THE ONE STATEMENT WHOSE ADDRESS BEGINS WITH `prefix` — for the statement whose LAST SEGMENT
+   is the thing under test, so the row cannot name the whole address without writing the answer into the
+   question. `/api/addnum/v1000000` and `/api/addnum/v19200998080` are the two spellings §13.15.3 step 1.c
+   decides between, and path_scan re-spells whichever one it got into a template whose hole it NAMES out of the
+   concolic's display shape — a name nothing outside a run can predict. So the prefix is the only part of the
+   address a row may state.
+   THE ONE-ADDRESS CHECK IS THE WHOLE OF WHAT MAKES THIS A LOCATOR AND NOT A `strstr`, AND IT IS OVER THE
+   ADDRESS RATHER THAN OVER THE COUNT. Two matches are two ARMS when their addresses agree and two STATEMENTS
+   when they do not, and only the second is a set a row must stop answering — an earlier form of this check
+   counted records instead, so it refused the arms and offered two remedies neither of which exists for them:
+   two records of one address cannot be named apart by any fixture edit (they are one `fetch`), and asking the
+   whole address reaches both exactly as the prefix does. It is asserted here rather than declared at the call,
+   for the reason the `probegate:prefix` marker is CHECKED rather than obeyed: the day a second STATEMENT
+   shares the prefix, the row must stop answering instead of quietly widening. */
+static int emitted_records_prefixed(const char *js, const char *prefix, EmittedRec *out, int cap) {
     char pat[160];
-    const char *e, *end;
-    int k = snprintf(pat, sizeof pat, "\"url\":\"%s", prefix);
+    int k = snprintf(pat, sizeof pat, "\"url\":\"%s", prefix), n, i;
 
     CHECK(k > 0 && (size_t)k < sizeof pat,
           "an endpoint row's url PREFIX pattern did not fit its buffer — a truncated prefix matches a shorter "
           "address than the row named, which is a wider set and not a smaller one");
-    DCHECK(span != NULL, "an endpoint record was located by prefix with nowhere to put its bounds");
-    if (!(e = strstr(js, pat))) return NULL;
-    DCHECK(strstr(e + 1, pat) == NULL,
-           "an address PREFIX matched two endpoint records, so the row asking through it names a SET rather "
-           "than a statement — every question below it would be answered by whichever member carries the "
-           "bytes. Name the records apart or ask the whole address");
-    e += (size_t)k;
-    end = strstr(e, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
-    *span = end ? (size_t)(end - e) : strlen(e);
-    return e;
+    n = emitted_records_by(js, pat, (size_t)k, out, cap);
+    for (i = 1; i < n; i++) {
+        /* `at + 7` is the address's first byte, past `"url":"`, and it runs to the quote that closes it —
+           which json_buf_str never writes unescaped inside a string, so that quote is the address's end. */
+        const char *a = out[0].at + 7, *b = out[i].at + 7;
+        const char *ea = strchr(a, '"'), *eb = strchr(b, '"');
+
+        CHECK(ea != NULL && eb != NULL, "an endpoint record's url string is not terminated");
+        DCHECKF((size_t)(ea - a) == (size_t)(eb - b) && memcmp(a, b, (size_t)(ea - a)) == 0,
+                "an address PREFIX matched two DIFFERENT endpoint addresses, `%.*s` and `%.*s`, so the row "
+                "asking through it names a SET OF STATEMENTS rather than one — every question below it would "
+                "be answered by whichever statement carries the bytes. Extend the prefix until it names one "
+                "address; naming the RECORDS apart is not the remedy here, because two records of ONE address "
+                "are one fetch's derived and forced arms and no fixture edit separates them",
+                (int)(ea - a), a, (int)(eb - b), b);
+    }
+    emitted_recs_one_statement(out, n, prefix);
+    return n;
 }
 
-/* Does the one record at `prefix` carry `needle` — the scoped form of what a bare prefix `strstr` beside a
+/* DOES ANY RECORD OF THE STATEMENT AT `url` CARRY `needle` — the scope a row whose claim is (this endpoint,
+   this token) and no finer. It is what the two-column probe table needs and the whole-document `strstr` it
+   replaced could not give: the cross-STATEMENT axis is gone by construction, because no byte of another
+   statement's record is in the range. It remains a substring test WITHIN this statement, so a row that can say
+   WHICH PARAM carries the value says so through param_value_is instead — a claim about a value is not a claim
+   about a record. */
+static int emitted_record_has(const char *js, const char *url, const char *needle) {
+    EmittedRec r[EMITTED_REC_MAX];
+    size_t m = strlen(needle);
+    int n = emitted_records(js, url, r, EMITTED_REC_MAX), i;
+    const char *p;
+
+    for (i = 0; i < n; i++)
+        for (p = r[i].b; p + m <= r[i].b + r[i].n; p++)
+            if (memcmp(p, needle, m) == 0) return 1;
+    return 0;
+}
+
+/* Does the one statement at `prefix` carry `needle` — the scoped form of what a bare prefix `strstr` beside a
    bare value `strstr` was standing in for. The two clauses named no record between them: the prefix said an
    address like this exists, the value said those bytes exist, and nothing said they were the same record. */
 static int emitted_record_prefix_has(const char *js, const char *prefix, const char *needle) {
-    size_t span, n = strlen(needle);
-    const char *e = emitted_record_prefixed(js, prefix, &span), *p;
+    EmittedRec r[EMITTED_REC_MAX];
+    size_t m = strlen(needle);
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i;
+    const char *p;
 
-    if (!e || span < n) return 0;
-    for (p = e; p + n <= e + span; p++)
-        if (memcmp(p, needle, n) == 0) return 1;
+    for (i = 0; i < n; i++)
+        for (p = r[i].b; p + m <= r[i].b + r[i].n; p++)
+            if (memcmp(p, needle, m) == 0) return 1;
     return 0;
 }
 
 /* ONE ENDPOINT'S REQUEST METHOD — the one field of a record that no reader above can reach, because it is the
    one field that sits BEFORE the address. `endpoint_json_array` writes `{"method":..,"url":..,"params":[..`
-   (solver/endpoint.c), and `emitted_record_span` deliberately begins PAST the url because an address is not an
-   observation — so the method is outside every scope this file could state, and a row about it had no spelling
-   but a whole-document one.
+   (solver/endpoint.c), and an `EmittedRec`'s readable span deliberately begins PAST the url because an address
+   is not an observation — so the method is outside every scope this file could state, and a row about it had
+   no spelling but a whole-document one.
    THAT WHOLE-DOCUMENT SPELLING IS A COLLISION THE WHOLE-JSON RULE CANNOT SEE, WHICH IS WHY THIS IS A READER AND
    NOT A LONGER `strstr`. `strstr(js, "\"POST\"")` is a needle whose own two quote bytes are token boundaries,
    so the containment axis rules it safe and is right to: nothing CONTAINS it. It is answered instead by
@@ -6148,34 +6255,36 @@ static int emitted_record_prefix_has(const char *js, const char *prefix, const c
    THE WALK BACK IS WHAT MAKES IT AN ASSERTION RATHER THAN A LONGER PATTERN. Spelling the pair as one
    `snprintf("\"method\":\"%s\",\"url\":\"%s\"")` matches exactly and says nothing when it does not: a wrong
    method and an emitter that moved the field read the same 0. Locating the record by its address and then
-   requiring the field to be there is what tells those apart at the origin. */
+   requiring the field to be there is what tells those apart at the origin.
+   ASKED OF EVERY ARM OF THE STATEMENT, for the reason the banner above gives: a verb is a fact about what the
+   `fetch` IS, and which of its arms happened to be emitted first is not a fact about the verb. */
 static int emitted_record_method(const char *js, const char *url, const char *method) {
-    char pat[160];
-    const char *u, *o, *v;
+    EmittedRec r[EMITTED_REC_MAX];
     size_t n = strlen(method);
-    int k = snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
+    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i;
 
-    CHECK(k > 0 && (size_t)k < sizeof pat,
-          "an endpoint row's url pattern did not fit its buffer — a truncated pattern matches a PREFIX of the "
-          "address, so the row would read the method out of some other endpoint's record");
-    if (!(u = strstr(js, pat))) return 0;
-    for (o = u; o > js && *o != '{'; o--) { }
-    DCHECK(*o == '{' && strncmp(o + 1, "\"method\":\"", 10) == 0 && u > o + 12 && u[-1] == ',' && u[-2] == '"',
-           "endpoint_json_array writes a record whose `\"url\"` is not immediately preceded by the `\"method\"` "
-           "field this reader reads it out of, so every method probe reads 0 for a reason that is not about "
-           "what the engine recorded");
-    v = o + 11;                                   /* past `{"method":"` — the method's own first byte */
-    return (size_t)(u - 2 - v) == n && memcmp(v, method, n) == 0;
+    for (i = 0; i < cnt; i++) {
+        const char *u = r[i].at, *o, *v;
+
+        for (o = u; o > js && *o != '{'; o--) { }
+        DCHECK(*o == '{' && strncmp(o + 1, "\"method\":\"", 10) == 0 && u > o + 12 && u[-1] == ',' &&
+               u[-2] == '"',
+               "endpoint_json_array writes a record whose `\"url\"` is not immediately preceded by the "
+               "`\"method\"` field this reader reads it out of, so every method probe reads 0 for a reason "
+               "that is not about what the engine recorded");
+        v = o + 11;                               /* past `{"method":"` — the method's own first byte */
+        if ((size_t)(u - 2 - v) == n && memcmp(v, method, n) == 0) return 1;
+    }
+    return 0;
 }
 
-/* The first byte INSIDE one param's validValues array, or NULL when this endpoint or this param is absent. */
-static const char *param_values_span(const char *js, const char *url, const char *pname) {
+/* The first byte INSIDE one param's validValues array WITHIN ONE RECORD, or NULL when that record does not
+   carry the param. The record is the CALLER'S because a statement has several and each reader below walks
+   them: a param whose value one arm computed is on that arm's record and on no other. */
+static const char *param_values_in(const EmittedRec *r, const char *pname) {
     char pat[160];
-    const char *e, *end, *p, *v;
-    size_t span;
+    const char *e = r->b, *end = r->b + r->n, *p, *v;
 
-    if (!(e = emitted_record_span(js, url, &span))) return NULL;
-    end = e + span;
     snprintf(pat, sizeof pat, "\"name\":\"%s\",\"location\":", pname);
     p = strstr(e, pat);
     if (!p || p >= end) {
@@ -6195,22 +6304,27 @@ static const char *param_values_span(const char *js, const char *url, const char
     return v + strlen("\"validValues\":[");
 }
 
-/* HOW MANY VALUES ONE PARAM OF ONE ENDPOINT CARRIES — for a row whose claim is about one ("this param carries
+/* HOW MANY VALUES ONE PARAM OF ONE STATEMENT CARRIES — for a row whose claim is about one ("this param carries
    more than one value, therefore the walk forked instead of deciding a bound"). 0 = no such endpoint, or no
-   such param on it. */
+   such param on it. Summed over the statement's records, because a second value reached by a second ARM is
+   exactly the fork such a row is about and a per-record count could not see it. */
 static int param_value_count(const char *js, const char *url, const char *pname) {
-    const char *v = param_values_span(js, url, pname), *b;
+    EmittedRec r[EMITTED_REC_MAX];
+    const char *v, *b;
     size_t n;
-    int k = 0;
+    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i, k = 0;
 
-    while (v && (v = param_value_next(v, &b, &n)) != NULL) k++;
+    for (i = 0; i < cnt; i++)
+        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; ) k++;
     return k;
 }
 
-/* ONE PARAM OF ONE ENDPOINT CARRIES `val` AS ONE OF ITS VALUES, MATCHED WHOLE — the primitive a MERGED param
+/* ONE PARAM OF ONE STATEMENT CARRIES `val` AS ONE OF ITS VALUES, MATCHED WHOLE — the primitive a MERGED param
    needs and the one this file did not have. `_only` is the wrong instrument wherever the fixture SAYS the
-   param carries several values (a fork's two arms merging into one record is the headline claim of this
-   document, not a finding against it). Whole-entry equality is what "this arm emitted" means, and it is the
+   param carries several values (a fork's two arms reaching the sink is the headline claim of this document,
+   not a finding against it) — and whether those arms land in ONE record or in one per provenance grade is
+   solver/endpoint.c's business and not a row's, which is why this asks the STATEMENT and not a record.
+   Whole-entry equality is what "this arm emitted" means, and it is the
    ONLY primitive over a param's values here: the containment twin that used to stand beside it is gone,
    because a containment test cannot fail for exactly the two things a probe most needs to refuse. An arm that
    emitted `adminX` satisfies a claim about `admin`; and — the one that is not obvious and is why every
@@ -6222,16 +6336,19 @@ static int param_value_count(const char *js, const char *url, const char *pname)
    The escape check is `param_value_only`'s and is here for the same reason — a `val` needing a JSON escape is
    being compared against a spelling json_buf_str never writes, which reads as a row stuck at 0. */
 static int param_value_is(const char *js, const char *url, const char *pname, const char *val) {
-    const char *v = param_values_span(js, url, pname), *b, *c;
+    EmittedRec r[EMITTED_REC_MAX];
+    const char *v, *b, *c;
     size_t n, m = strlen(val);
-    int plain = 1;
+    int cnt, i, plain = 1;
 
     for (c = val; *c; c++)
         if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) plain = 0;
     DCHECK(plain, "a probe's expected param value carries a byte json_buf_str escapes, so it is being compared "
                   "against a spelling the emitter never writes");
-    while (v && (v = param_value_next(v, &b, &n)) != NULL)
-        if (n == m && memcmp(b, val, m) == 0) return 1;
+    cnt = emitted_records(js, url, r, EMITTED_REC_MAX);
+    for (i = 0; i < cnt; i++)
+        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; )
+            if (n == m && memcmp(b, val, m) == 0) return 1;
     return 0;
 }
 
@@ -6391,24 +6508,33 @@ static void fork_row_impl(const char *js, int *row, const char **why,
                       (int)(sizeof fr_worlds_ / sizeof fr_worlds_[0]), fr_why_, sizeof fr_why_);        \
     } while (0)
 
-/* ONE PARAM OF ONE ENDPOINT CARRIES EXACTLY ONE VALUE AND IT IS `val` — the claim the three rows above were
+/* ONE PARAM OF ONE STATEMENT CARRIES EXACTLY ONE VALUE AND IT IS `val` — the claim the three rows above were
    trying to make, and the one an `strstr` up to a literal `]` was standing in for. Exactly-one is the whole
    assertion for a statement whose value the code DETERMINED: a second entry means the flow forked where the
    fixture says it cannot, which is a finding and not a match.
+   COUNTED OVER THE STATEMENT'S RECORDS AND NOT INSIDE ONE, which is what makes that assertion true rather than
+   nearly true. A fork whose arms are told apart by their provenance grade puts each arm's value on its OWN
+   record (solver/endpoint.c's same_identity), so a per-record count reads "exactly one" for precisely the
+   split this row exists to refuse — the second value is not missing, it is one record along.
    `val` is compared against the emitted JSON bytes, so a value needing an escape would never match; that is
    asserted rather than left to be discovered as a row stuck at 0. */
 static int param_value_only(const char *js, const char *url, const char *pname, const char *val) {
-    const char *v = param_values_span(js, url, pname), *b, *c;
+    EmittedRec r[EMITTED_REC_MAX];
+    const char *v, *b, *c;
     size_t n, m = strlen(val);
-    int plain = 1;
+    int cnt, i, plain = 1, seen = 0;
 
     for (c = val; *c; c++)
         if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) plain = 0;
     DCHECK(plain, "a probe's expected param value carries a byte json_buf_str escapes, so it is being compared "
                   "against a spelling the emitter never writes");
-    if (!v || (v = param_value_next(v, &b, &n)) == NULL) return 0;
-    if (n != m || memcmp(b, val, m) != 0) return 0;
-    return param_value_next(v, &b, &n) == NULL;   /* and nothing after it */
+    cnt = emitted_records(js, url, r, EMITTED_REC_MAX);
+    for (i = 0; i < cnt; i++)
+        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; ) {
+            if (seen || n != m || memcmp(b, val, m) != 0) return 0;   /* a second entry, or the wrong one */
+            seen = 1;
+        }
+    return seen;
 }
 
 /* THE STAGE AN @S SEARCH REACHED, read off the entry the report already carries. ONE boolean per sink
@@ -6817,7 +6943,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
 
        AND THE ROW THAT MADE THAT READING POSSIBLE WAS NOT MEASURING THIS STATEMENT AT ALL. `role_admin` and
        `role_public` were `strstr(js, "admin")` and `strstr(js, "public")` — unanchored bare words over the
-       whole result document, which is precisely the term param_values_span's own banner was written against.
+       whole result document, which is precisely the term the record readers' own banner was written against.
        `admin` is a substring of `/api/orphan/admin-only`, of `/api/admin/audit-log` and of
        `/routes/us-west-2/admin`, so `role-admin` was 1 WHENEVER `orphan-gate` WAS — ENTAILED by a row about a
        different capability, and the entailment is not a worry about what could happen: one of those two logs
@@ -8172,9 +8298,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        address like this exists, the second said those bytes exist somewhere, and a run that put `v1000000` on
        any other endpoint satisfied the pair exactly as the right one does. A declared-prefix marker made the
        CONTAINMENT axis stop reporting them and could say nothing about the join, which is the two axes being
-       independent exactly as this file's banner states. `emitted_record_prefixed` is the locator that closes
-       it, and its own DCHECK carries what the marker was for: a prefix matching two records names a SET, and
-       the row must stop answering rather than quietly widen. */
+       independent exactly as this file's banner states. `emitted_records_prefixed` is the locator that closes
+       it, and its own DCHECK carries what the marker was for: a prefix matching two ADDRESSES names a SET OF
+       STATEMENTS, and the row must stop answering rather than quietly widen.
+       IT IS TWO ADDRESSES AND NOT TWO RECORDS, which is the correction the first form of that DCHECK cost a
+       lane to learn: this `fetch` stands directly after `if (addn > 0)`, whose concrete example DECIDES it, so
+       the contradicted sibling is a FORCED arm (solver/flow.h's flow_mark_forced_arm) and solver/endpoint.c's
+       same_identity keeps a forced sighting out of a derived record on purpose. Both arms then emit at ONE
+       address, and a check that counted RECORDS refused the statement it was written to read — offering two
+       remedies neither of which exists, since one `fetch` cannot be named apart and the whole address reaches
+       both arms exactly as the prefix does. */
     const char *addfork_why = NULL; int addfork_tt = 1;
     FORK_ROW(js, &addfork_tt, &addfork_why, "/api/addfork", "v",
              "§13.15.3 step 1.c keeping the SUM unknown — an arm that answered with a bare number would "
@@ -9026,7 +9159,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        collapsed row cannot tell an accessor that never ran from one that ran once from one that returned a
        shape, and every one of those is a different thing to go fix. Four rungs, each with a strictly earlier
        observation site than the one above it, so the LOWEST 0 is the localisation.
-       Rung 1 is asked WITHOUT param_values_span deliberately: the helper answers NULL for an absent endpoint
+       Rung 1 is asked WITHOUT param_values_in deliberately: the helper answers NULL for an absent endpoint
        and for an absent param alike, so the endpoint's own presence has to be read off the document directly
        or the bottom of the ladder collapses in exactly the way the ladder exists to prevent. */
     int getter_url = strstr(js, "\"url\":\"/api/getfork\"") != NULL;

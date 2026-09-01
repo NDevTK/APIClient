@@ -617,7 +617,7 @@ function collectReaderModel(blank, docName) {
  * silently, because the subject test `continue`s and the site lands in no count at all. That is
  * §A-TEST-FILE-THE-GATE-DOES-NOT-COLLECT one level down: the total looks complete because the rows it never
  * saw are not in the denominator. Followed transitively so an alias of an alias is still the document. */
-/* AND AN ALIAS IS SCOPED, because a name is not a variable. `param_values_span` walks a local `p` INSIDE the
+/* AND AN ALIAS IS SCOPED, because a name is not a variable. `param_values_in` walks a local `p` INSIDE the
  * document and a probe row a thousand lines away walks its own `p` ACROSS it, and a file-wide name set cannot
  * tell them apart — it audits the helper's own structural scan as if it were a probe term and reports a
  * finding about a `strstr` no statement of the fixture owns. So an alias reaches only to the end of the
@@ -724,7 +724,7 @@ function needleWrite(blank, ident, before) {
  * partial resolution reported as a whole one is the same defect one layer up. */
 /* WHAT EACH READER'S KEY PARAMETERS ACTUALLY HOLD, propagated down the chain the model recorded. A row calls
  * `param_value_is(js, "/api/hdrs", "acc", …)`; the needle that searches for the record is three readers down,
- * inside `emitted_record_span`, whose OWN call sites are the two helpers above it and carry no literal at all.
+ * inside `emitted_records`, whose OWN call sites are the readers above it and carry no literal at all.
  * Substituting a reader's direct callers therefore resolves NOTHING for exactly the readers that matter — the
  * ones the whole file funnels through — so the binding travels the same edges the scope derivation did. */
 function keyBindings(model, clauses) {
