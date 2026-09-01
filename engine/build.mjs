@@ -564,7 +564,17 @@ const EMSCRIPTEN_ABORT = "Aborted(native code called abort())";
 const REFUSED_WITNESS = /^\[[^\]\n]+\] REFUSED TO MEASURE: (.+)$/m;
 function abortRecord(out) {
   const m = out.match(ABORT_WITNESS);
-  if (m) return m[0];
+  /* THE WHOLE LINE, NOT THE WITNESS'S OWN MATCH — which is what `return m[0]` here was, and it discarded the
+     record for exactly one of the two shapes. The prose alternative ends at `$`, so its match IS its line and
+     nothing was ever wrong with it; the JSON alternative is a seven-word PREFIX, so every `check.h` abort
+     arrived here as the literal `@WHY {"phase":"assert"` and nothing else — a cause that names no cause, in
+     the one line anybody reads AND in the detail line under it, with the `cond`, the `at` and the `reason`
+     the macro composed thrown away at this statement. It was relayed to another lane as the cause and cost
+     that lane its own reading to find out the cause had been dropped, which is §A-FINDING-RELAYED with the
+     finding removed before the relay. One regex serving two shapes can only ever be right about the one whose
+     match happens to reach the end of its line, so the line is taken from the match's POSITION (`^` anchors
+     it to a line start) and never from its extent. */
+  if (m) return out.slice(m.index).split("\n", 1)[0];
   /* An abort with no assertion line above it is a RAW `abort()`/`assert` — still an abort, and the absence of
      the message is itself the finding (a site that should be using check.h). Said, rather than defaulted. */
   if (out.includes(EMSCRIPTEN_ABORT))
@@ -578,7 +588,23 @@ function abortRecord(out) {
    too-few-censuses arm — put a whole paragraph into the stage table, where the report pads every label to a
    column width. A name ends at the first " (" or the first " — ", whichever comes first, which is true of
    every arm because that is how each one is written. */
-const causeName = (cause) => {
+/* AND `check.h`'S LINE IS A RECORD, SO ITS NAME IS COMPOSED FROM ITS FIELDS RATHER THAN SLICED OFF ITS FRONT.
+   The rule below ends a name at the first " — " and pads it into a table column, and the macro writes
+   `@WHY {"phase":…,"cond":…,"at":…,"reason":…}` — so the ninety columns a name gets are spent on `phase` and
+   on the C text of the condition, and the `reason` (the only field written for a reader) never starts before
+   the cut. The two fields anybody acts on are WHERE it fired and WHAT it says, in that order, which is the
+   order §AN-ASSERT-THAT-NAMES-A-REMEDY asks for: a remedy with an object.
+   A LINE THIS CANNOT PARSE IS RETURNED WHOLE. The record is evidence; a name derived from a shape it does not
+   have would be a guess replacing it, and the shape moving is itself the finding. The captured bytes are used
+   as they were written rather than JSON-unescaped, so there is no arm here that can throw. */
+const assertRecordName = (cause) => {
+  const at = cause.match(/^@(?:WHY|E) \{.*"at":"((?:[^"\\]|\\.)*)"/);
+  const why = cause.match(/^@(?:WHY|E) \{.*"reason":"((?:[^"\\]|\\.)*)"/);
+  return at && why ? `${at[1]} ${why[1]}` : cause;
+};
+
+const causeName = (raw) => {
+  const cause = assertRecordName(raw);
   const cut = [" (", " — "].map((d) => cause.indexOf(d)).filter((i) => i >= 0);
   const name = (cut.length ? cause.slice(0, Math.min(...cut)) : cause).trim();
   /* AND IT STAYS A TABLE CELL. `report` pads every label to one column width, so a verdict that runs to a
