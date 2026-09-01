@@ -1396,6 +1396,34 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     /* Document's own — §3.1.1 and the Page Visibility API. */                                                   \
     X("onreadystatechange", "readystatechange", EH_DOCUMENT | EH_XHR_READYSTATE)                                 \
     X("onvisibilitychange", "visibilitychange", EH_DOCUMENT)                                                     \
+    /* NOT COVERED: FULLSCREEN's `onfullscreenchange` and `onfullscreenerror`, which that standard declares on   \
+       BOTH `partial interface Element` and `partial interface Document`. They are the two rows a reader         \
+       completing Element's surface from @webref/idl reaches for first, and they are BLOCKED — not small.        \
+       WHAT THEY WOULD NEED THAT NO ROW HERE HAS: a bit of their own. Every existing bit is a MIXIN a target     \
+       includes or an interface that declares its own set, and these two are declared on Element itself, so      \
+       neither EH_GLOBAL (which would make them content attributes on every HTML element — see below) nor        \
+       EH_DOCUMENT can carry them. FULLSCREEN §3 API says of both: "The following are the event handlers (and    \
+       their corresponding event handler event types) that must be supported by Element and Document objects     \
+       as event handler IDL attributes" — IDL ATTRIBUTES AND NOT CONTENT ATTRIBUTES, so the new bit would        \
+       have to be one event_target_handler_attribute_on_element answers NO for, exactly as it does for the       \
+       two rows above and the twelve below.                                                                     \
+       WHY THE BIT IS NOT THE WORK. Nothing in this engine dispatches `fullscreenchange` or `fullscreenerror`,   \
+       and this list's standing rule is that a handler attribute for an event no algorithm fires is the          \
+       shape-only member the IDL audit exists to expose — the reason IDBDatabase's other three and CSS scroll    \
+       snap's two are absent. The events come from FULLSCREEN §2 Model's "run the fullscreen steps", which HTML  \
+       §8.1.7.3 Processing model's update the rendering runs at its step 12, and this build has NO model at      \
+       all: no `requestFullscreen`, no `exitFullscreen`, no `fullscreenElement`, and nothing that puts an        \
+       element in the top layer the fullscreen way (`dialog.showModal()` is the only producer that exists).      \
+       What the tree carries under that name is a permissions-policy feature string, HTMLIFrameElement's         \
+       `allowFullscreen` content-attribute reflection, and rendering.c's two probes — no algorithm at all.       \
+       THE NEXT DIFF BUILDS THAT MODEL, and the tree already names the join: core/rendering/rendering.c's        \
+       steps_11_to_13 carries `realm_awaits(docctx, "Document.prototype.exitFullscreen", …)`, a producer probe   \
+       that ABORTS the moment that member is installed, naming update-the-rendering step 12 as the thing to      \
+       write. So the ordered subproblem is the model and step 12; these two rows are the LAST line of it, not    \
+       the first. ADDING THEM ALONE WOULD ALSO BE SILENT: that probe is keyed on `exitFullscreen`, so two        \
+       handler rows would install two accessors nothing can ever invoke without tripping anything.               \
+       ITS ABSENCE SHOWS as engine/idlgen.mjs reporting `onfullscreenchange` and `onfullscreenerror` ABSENT on   \
+       Element, on Document, and on every element interface that inherits them. */                               \
     /* XHR §3.3 — the two of its seven that belong to NO other mixin, so this list is where they arrive. */      \
     X("onloadend", "loadend", EH_XHR | EH_FILE_READER)                                                                            \
     X("ontimeout", "timeout", EH_XHR)                                                                            \
@@ -1883,18 +1911,23 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     return JS_UNDEFINED;
 }
 
-/* HTML §8.1.8.1: an EVENT HANDLER CONTENT ATTRIBUTE is the content attribute of the same name as an event
-   handler IDL attribute, and that name set is exactly the list above — so the question is answered here rather
-   than by a second list somewhere else. Trusted Types §3.8 step 2 asks it of every setAttribute: an event
-   handler content attribute demands a TrustedScript, so `el.setAttribute("onclick", s)` throws under
-   `require-trusted-types-for 'script'` while `el.setAttribute("title", s)` does not, and a copy of this list
-   that fell one name behind would answer that question differently from the property that shares the name. */
-/* EVERY EVENT HANDLER CONTENT ATTRIBUTE NAME, ENUMERATED — §8.1.8.1 defines the set as the names of the event
-   handler IDL attributes, so both this and the predicate below come off the one X-list rather than a second
-   copy that would drift the first time a handler is added.
-   IT IS AN ENUMERATION AND NOT A FILTER, which is the difference HTML §8.6.2's remove-unsafe needs: its step 4
-   APPENDS every one of these to a configuration's removeAttributes list, and a caller that could only ask "is
-   this one" can filter an allow-list it already has but can never build the deny-list the step describes. */
+/* HTML §8.1.8.1: an EVENT HANDLER CONTENT ATTRIBUTE is "a content attribute for a specific event handler", and
+   which handlers have one is decided by the standard that EXPOSES them that way — never by this list's mere
+   membership. That sentence used to read "that name set is exactly the list above", which is the claim the
+   fourteen rows below refute. Trusted Types §3.8 Get Trusted Type data for attribute step 2 asks the question
+   of every setAttribute: a handler content attribute demands a TrustedScript, so `el.setAttribute("onclick",
+   s)` throws under `require-trusted-types-for 'script'` while `el.setAttribute("title", s)` does not. */
+/* THE HANDLER LIST'S ROWS, ENUMERATED — every event handler IDL attribute, content attribute or not, off the
+   one X-list rather than a second copy that would drift the first time a handler is added.
+   IT IS AN ENUMERATION AND NOT A FILTER, which is the difference HTML §8.6.2's remove-unsafe needs: it appends
+   "each attribute that is an event handler content attribute" to a configuration's removeAttributes list, and
+   a caller that could only ask "is this one" can filter an allow-list it already has but can never build the
+   deny-list the step describes.
+   WHICH ROWS ARE CONTENT ATTRIBUTES IS STILL THIS FILE'S ANSWER — the caller walks these rows and asks
+   event_target_handler_attribute_on_element per row. A pre-filtered enumeration would have been the shorter
+   API and the worse one: it would have hidden the fact that the two sets DIFFER, which is the fact this
+   component has to keep saying out loud, and it would have handed §8.6.2 an index space that means something
+   different from every other index in this file. */
 int event_target_handler_attribute_count(void) { return EH_COUNT; }
 
 const char *event_target_handler_attribute_at(int i)
@@ -1927,13 +1960,28 @@ int event_target_handler_attribute_index(const char *name, size_t name_len)
     return -1;
 }
 
-/* THE PREDICATE IS THE LOOKUP, not a second walk of the same list. Trusted Types §3.8 and HTML §8.6.2 ask only
-   whether the name is one of these; §8.1.8.1's attribute change steps need the ROW, because everything after
-   step 1 is keyed on it. */
+/* THE PREDICATE IS THE LOOKUP AND THEN THE MEMBERSHIP, not a second walk of the same list. §8.1.8.1's
+   attribute change steps need the ROW, because everything after step 1 is keyed on it; Trusted Types §3.8 has
+   no element and needs the NAME-LEVEL question, which is the membership asked with `body_or_frameset` true —
+   the union of §8.1.8.2's first and third tables is exactly the set of names that are content attributes on
+   SOME element.
+   IT RETURNED THE LOOKUP ALONE, which is the one-bit-two-questions defect and was a live wrong answer in both
+   of this predicate's callers. Fourteen rows of the X-list carry neither EH_GLOBAL nor EH_WINDOW —
+   `onreadystatechange`, `onvisibilitychange` (§8.1.8.2's FOURTH table: "must be supported on Document objects
+   as event handler IDL attributes", IDL only), `onloadend`, `ontimeout`, `onsuccess`, `oncomplete`,
+   `onblocked`, `onupgradeneeded`, `onversionchange`, `oncurrententrychange`, `onnavigate`, `onnavigateerror`,
+   `onnavigatesuccess`, `ondispose` — and every one of them is an IDL attribute of an interface that is not an
+   element. Answering yes for them made `el.setAttribute("onreadystatechange", s)` throw a TypeError under
+   `require-trusted-types-for 'script'` where a browser sets an ordinary attribute, and made §8.6.2's
+   remove-unsafe strip fourteen attributes a browser keeps — the second of which a page can SEE, since
+   `sanitizer.get()` reports the configuration those names were appended to. */
 bool event_target_is_handler_attribute(const char *name)
 {
+    int index;
+
     DCHECK(name != NULL, "the event handler content attribute test was asked about no name");
-    return event_target_handler_attribute_index(name, strlen(name)) >= 0;
+    index = event_target_handler_attribute_index(name, strlen(name));
+    return index >= 0 && event_target_handler_attribute_on_element(index, true);
 }
 
 bool event_target_handler_attribute_on_element(int index, bool body_or_frameset)
@@ -1945,8 +1993,14 @@ bool event_target_handler_attribute_on_element(int index, bool body_or_frameset)
        WindowEventHandlers names, whose content attributes are "exposed on all body and frameset elements".
        EH_WINDOW_REFLECTING adds nothing here on purpose: §8.1.8.2's SECOND table is a table of
        GlobalEventHandlers members, so EH_GLOBAL already carries all six and that bit decides only their
-       TARGET. A row with neither bit — `onmessage` on a MessagePort, `onupgradeneeded` on an IDBRequest — is
-       an IDL attribute of an interface that is not an element and is a content attribute nowhere. */
+       TARGET. A row with neither bit — `onupgradeneeded` on an IDBOpenDBRequest, `onvisibilitychange` on a
+       Document — is an IDL attribute of an interface that is not an element and is a content attribute
+       nowhere. (`onmessage` stood here as the first example and is NOT one: it carries EH_WINDOW, so
+       `<body onmessage="x">` is a handler exactly as §8.1.8.2's third table says.)
+       CALLED WITH `body_or_frameset` TRUE THIS IS ALSO THE NAME-LEVEL SET, which is why
+       event_target_is_handler_attribute is one line over this rather than a second reading of EH_MASK: the
+       union of the two tables is the set of names that are content attributes on SOME element, and two
+       readings of one mask are two things that can disagree. */
     return (EH_MASK[index] & EH_GLOBAL) != 0 || (body_or_frameset && (EH_MASK[index] & EH_WINDOW) != 0);
 }
 

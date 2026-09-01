@@ -200,14 +200,28 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
    second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
-/* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? HTML §8.1.8.1 defines that set as the names of the
-   event handler IDL attributes above, so it is answered from the one list rather than from a second copy.
-   Trusted Types §3.8 step 2 is the caller: an event handler content attribute maps to TrustedScript. */
+/* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? Trusted Types §3.8 Get Trusted Type data for
+   attribute step 2 is the caller: a name in this set maps to TrustedScript whatever the element is.
+   IT IS NOT "IS THIS ONE OF THE HANDLER LIST'S NAMES", AND THE TWO ARE NOT THE SAME QUESTION — this used to
+   answer with the second, which is the one-bit-two-questions defect: the X-list is every event handler IDL
+   ATTRIBUTE this engine installs anywhere, and §8.1.8.1's "an event handler content attribute is a content
+   attribute for a specific event handler" reaches only the handlers some standard exposes THAT way. HTML
+   §8.1.8.2's first table gives its rows "as both event handler content attributes and event handler IDL
+   attributes" and its third exposes WindowEventHandlers' names as content attributes on body and frameset;
+   its FOURTH says `onreadystatechange` and `onvisibilitychange` "must be supported on Document objects as
+   event handler IDL attributes" — IDL only — and XHR's, IndexedDB's and Navigation's rows are IDL attributes
+   of interfaces that are not elements at all. Fourteen of the list's rows are therefore content attributes
+   NOWHERE, and answering yes for them was wrong in both callers at once: Trusted Types threw on
+   `el.setAttribute("onupgradeneeded", s)` under `require-trusted-types-for 'script'` where a browser does
+   not, and the Sanitizer stripped fourteen attributes a browser keeps. */
 bool event_target_is_handler_attribute(const char *name);
-/* THE SAME SET, ENUMERATED. HTML §8.6.2's remove-unsafe step 4 appends every event handler content attribute
-   to a configuration's removeAttributes list, which is a deny-list it must BUILD — a caller that can only ask
-   "is this one" can filter an allow-list it already holds but cannot produce that. Both come off the one
-   X-list, so a handler added to §8.1.8.1's set is added to both at once. The names are static. */
+/* THE HANDLER LIST'S ROWS, ENUMERATED — every event handler IDL attribute, content attribute or not. HTML
+   §8.6.2's remove-unsafe needs "for each attribute that is an event handler content attribute", which is a
+   deny-list it must BUILD, and a caller that can only ask "is this one" can filter an allow-list it already
+   holds but cannot produce that. So the caller walks these rows and asks
+   event_target_handler_attribute_on_element below which of them are content attributes — one question per
+   row, answered here, rather than a filtered enumeration that would hide the distinction the fourteen rows
+   above make. The names are static. */
 int         event_target_handler_attribute_count(void);
 const char *event_target_handler_attribute_at(int i);
 
@@ -242,7 +256,11 @@ int event_target_handler_attribute_index(const char *name, size_t name_len);
    ordinary attribute in every browser and `<body onunload="x">` is a handler, and a test that asked only
    whether the name is in the list would have made the first one a handler on an object nothing dispatches
    `unload` at. §8.1.8.2's SECOND table needs no term of its own: all six of its names are GlobalEventHandlers
-   members, so the first table already contains them and what that table decides is only their TARGET. */
+   members, so the first table already contains them and what that table decides is only their TARGET.
+   `body_or_frameset` TRUE ALSO ANSWERS THE NAME-LEVEL QUESTION, and that is arithmetic rather than a second
+   meaning: the union of the two tables IS the set of names that are content attributes on SOME element, so a
+   caller with no element in hand — Trusted Types §3.8, HTML §8.6.2's remove-unsafe — asks with true and gets
+   exactly that union. Two questions over ONE set of bits, which is what keeps them from ever disagreeing. */
 bool event_target_handler_attribute_on_element(int index, bool body_or_frameset);
 /* §8.1.8.1's DETERMINE THE TARGET OF AN EVENT HANDLER, by row rather than by name — the same four steps the IDL
    accessors run, so `<body onload=…>` and `document.body.onload = …` cannot land on different objects. OWNED,

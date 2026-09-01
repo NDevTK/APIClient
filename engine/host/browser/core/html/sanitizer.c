@@ -592,9 +592,19 @@ static bool san_config_remove_unsafe(JSContext *ctx, JSValueConst cfg)
        §8.1.8.1 Event handlers defines the set by ("an event handler content attribute is a content attribute
        for a specific event handler"), so a handler added there is removed here without anything else edited.
        §8.6.5's built-in safe baseline has an EMPTY removeAttributes list precisely because the attributes it
-       would otherwise carry are these, named here rather than duplicated there. */
+       would otherwise carry are these, named here rather than duplicated there.
+       THE STEP SAYS "each attribute that IS an event handler content attribute", AND THAT IS NARROWER THAN
+       THE HANDLER LIST — which is why the membership is asked per row rather than taken from the enumeration.
+       Fourteen of event_target.c's rows are event handler IDL attributes of interfaces that are not elements
+       (`onreadystatechange` and `onvisibilitychange` off §8.1.8.2's fourth table, XHR's `onloadend` and
+       `ontimeout`, IndexedDB's five, Navigation's five), and appending those was not a harmless surplus: an
+       author-supplied removeAttributes list is READ BACK by `sanitizer.get()`, so a safe sanitization
+       reported a configuration naming fourteen attributes no browser puts there, and stripped them off
+       markup a browser leaves alone. `body_or_frameset` is TRUE because the question here is about a NAME and
+       not about an element — the union of §8.1.8.2's first and third tables is the whole set. */
     for (i = 0; i < event_target_handler_attribute_count(); i++)
-        if (san_config_remove_attribute(ctx, cfg, event_target_handler_attribute_at(i), NULL))
+        if (event_target_handler_attribute_on_element(i, true) &&
+            san_config_remove_attribute(ctx, cfg, event_target_handler_attribute_at(i), NULL))
             result = true;
     return result;
 }
