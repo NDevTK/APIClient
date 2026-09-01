@@ -1,4 +1,4 @@
-/* The ToggleEvent interface — HTML §4.11.5. See toggle_event.c. */
+/* The ToggleEvent interface — HTML §6.5.1 The ToggleEvent interface. See toggle_event.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_TOGGLE_EVENT_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_TOGGLE_EVENT_H
 

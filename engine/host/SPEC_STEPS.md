@@ -4561,10 +4561,17 @@ object it acts on rather than taking them with it.
   plus the first-strong-character scan `dir=auto` resolves by. A submitted control carrying a
   non-empty `dirname` reaches a `DFAIL` naming it, rather than submitting one entry where a browser
   submits two.
-- **`SubmitEvent`.** HTML §4.10.22.3 "Form submission algorithm" **step 5.6** fires `submit` **using
-  `SubmitEvent`**, with a `submitter` attribute; this engine fires a plain `Event`, so `e.submitter` is undefined. The interface is one
-  slot on one event — it lands with the click-activation path that makes a submitter reachable
-  without `requestSubmit`.
+- **`SubmitEvent` IS BUILT, and this entry's old claim — "this engine fires a plain `Event`, so
+  `e.submitter` is undefined" — is DELETED rather than softened.** It was the most dangerous shape a
+  stale entry has: an announced ABSENCE, which tells the next reader not to look. HTML §4.10.22.3
+  "Form submission algorithm" **step 5.6** fires `submit` using `SubmitEvent`, and this engine does
+  too — `core/html/submit_event.c` owns HTML §4.10.22.10 "The SubmitEvent interface" (the prototype,
+  the interface object as a per-realm intrinsic, and the constructor), and the submission machine
+  mints one through `submit_event_new` with **step 5.5**'s submitterButton. What is still absent is
+  the CLICK-ACTIVATION path this entry bundled with it, which is a different thing: a submit
+  button has no activation behaviour here (`event_target_set_activation` is registered by
+  `hyperlink.c` and by nothing else), so the only road step 5.5 has to a non-null submitterButton is
+  `form.requestSubmit(btn)` — a page that submits by clicking its button reaches step 5.5 with none.
 - **A file control's SELECTED FILES are always empty, and that is not absent — it is the answer.**
   There is no picker and no user, so step 5.8's "if there are no selected files" branch is the only
   one reachable, and it is implemented: a named file control still contributes its entry.

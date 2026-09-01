@@ -24,16 +24,13 @@
  * the same reason it gives each its own prototype, and realm.h exists precisely because a list of per-realm
  * installs that is hand-copied is a list that stops being maintained: a component missing from one copy is
  * silently absent in that realm with nothing to say so. */
-#include <string.h>
-
-#include <lexbor/dom/dom.h>
-
 #include "check.h"
 #include "quickjs.h"
 #include "core/dom/node.h"
 #include "core/events/event.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
+#include "core/html/html_element.h"
 #include "core/html/submit_event.h"
 #include "core/realm.h"
 
@@ -51,18 +48,6 @@ static JSValue se_proto(JSContext *ctx)
     DCHECK(!JS_IsNull(proto),
            "SubmitEvent.prototype was asked for in a realm that never ran its per-realm install");
     return proto;   /* OWNED */
-}
-
-/* `HTMLElement?` — the type of the attribute and of the init dictionary's member. Every HTML element wrapper in
-   this engine is one interface's object at the class level (§16.5a's gap: one class for every node), so the
-   narrowing is the NODE's own two facts: it is an element, and it is in the HTML namespace. That is exactly what
-   "implements HTMLElement" means to this engine — HTMLUnknownElement included, which is right, because the IDL
-   type is satisfied by it. */
-static bool se_is_html_element(JSValueConst v)
-{
-    lxb_dom_node_t *n = node_of(v);
-
-    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML;
 }
 
 /* §4.10.22.10: "The submitter attribute must return the value it was initialized to." */
@@ -116,7 +101,7 @@ JSValue submit_event_new(JSContext *ctx, JSValueConst submitter)
     JS_FreeValue(ctx, tv);
     if (JS_IsException(ev))
         return ev;
-    DCHECK(JS_IsNull(submitter) || se_is_html_element(submitter),
+    DCHECK(JS_IsNull(submitter) || html_element_is(submitter),
            "§4.10.22.3 step 5.5's submitterButton was neither null nor an HTMLElement — the attribute is typed "
            "`HTMLElement?` and step 5.5 produces exactly those two");
     if (se_init_slot(ctx, ev, submitter) < 0) {
@@ -133,15 +118,46 @@ JSValue submit_event_new(JSContext *ctx, JSValueConst submitter)
  * lexicographically among itself — which is the order this list is in, and the order a page pins by throwing
  * from one member's getter.
  *
- * `submitter` IS DECLARED `IDL_ANY` AND CHECKED HERE, and that placement is the declaration surface's gap
- * rather than this member's choice: `HTMLElement?` is a NULLABLE INTERFACE type, and IDL_INTERFACE brands
- * against a CLASS — it refuses null, which the IDL's `= null` default makes the ordinary value, and every node
- * wrapper is one class so it could not say HTMLElement anyway. The rule performed here is the type's, whole:
- * null and undefined are the IDL null, an HTML element crosses as itself, and anything else is a TypeError. */
+ * `submitter` IS THE DECLARED TYPE `HTMLElement?` — IDL_INTERFACE_NULLABLE under §3.2.20 Nullable types over
+ * §3.2.15 Interface types, branded on the NODE class with `html_element_is` as the narrowing. It was IDL_ANY
+ * with the rule written out in the body, and the placement was called the declaration surface's gap rather
+ * than this member's choice, on two arguments of which ONE was never true and the other has been retired.
+ * The one that was never true: "IDL_INTERFACE refuses null, which the IDL's `= null` default makes the
+ * ordinary value" — that is what the NULLABLE row is for, and it existed then; §3.2.20 makes null and
+ * undefined the IDL null ahead of any brand. The one that was true and is retired: IDL_INTERFACE brands
+ * against a CLASS and every node wrapper in this engine is one class, so a declared interface could say only
+ * "a Node" and would have crossed an SVG element as an HTMLElement. A member now carries a NARROWING beside
+ * its class (IdlDictMember::iface_narrow, and idl_iface_narrow for a declaration whose interface-typed members
+ * are all one interface — which this dictionary's single one is), and the namespace is the whole of that
+ * narrowing: §4's element-interface table maps every HTML-namespace element to an interface INHERITING
+ * HTMLElement, HTMLUnknownElement included, which is why `html_element_is` is the right answer and not a
+ * stricter one.
+ *
+ * AND WHAT MOVED IS NOT MERELY WHERE THE CHECK IS WRITTEN. The body's `is it an HTML element` could not tell
+ * "this is not an HTMLElement" from "this engine does not know what this is": unknown external input reaches a
+ * body wearing the ordinary Object solver/concolic.c gives it, so a hand-rolled test answered NO for it and
+ * threw a page-visible TypeError — a WRONG ANSWER handed to a script rather than a refusal, and the world in
+ * which the value is the button it will turn out to be was deleted with it. That world is the one this engine
+ * is for: `submitter` is what decides the request, since a submit button carries `formaction`, `formmethod`,
+ * `formenctype` and `formtarget`. The declared type crosses an unknown as ITSELF: `idl_concolic_rule` answers
+ * IDL_CONCOLIC_CROSSES for it, and §3.2.17's member loop rewrites a CONCOLIC member whose rule is anything but
+ * FORKS to IDL_ANY before a type arm is asked — so the unknown passes ahead of the nullable interface arm and
+ * reaches the slot, and the type refuses only values it has ESTABLISHED are not HTMLElements.
+ *
+ * `= null` IS DECLARED, AND IT WAS NOT. The IDL at the top of this file writes `HTMLElement? submitter = null`
+ * and this row carried IDL_DEFAULT_NONE, which §3.2.17 leaves ABSENT — the body's own
+ * `JS_IsUndefined(sub) → JS_NULL` was standing in for the declaration's default, so deleting the body without
+ * the default would have made `new SubmitEvent("submit").submitter` answer `undefined` where every browser
+ * answers `null`. The two go together or the deletion is a regression.
+ *
+ * THE ORDER DID NOT MOVE, AND SAYING SO IS PART OF THE CLAIM. §3.2.17's member loop converts in lexicographical
+ * order and `submitter` is this dictionary's ONLY own member, so its TypeError lands where the body's threw.
+ * Where a declared refusal DOES move earlier is a dictionary with members after the interface-typed one; this
+ * one has none, so the gain here is the crossing above and the default below it. */
 static const IdlArgType SE_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
 static const IdlDictMember SE_INIT[] = {
     { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
-    { "submitter", IDL_ANY, false, NULL, 1 },
+    { "submitter", IDL_INTERFACE_NULLABLE, false, NULL, 1, NULL, IDL_DEFAULT_NULL, NULL },
 };
 
 static JSValue js_se_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -154,14 +170,14 @@ static JSValue js_se_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         return JS_ThrowTypeError(ctx, "constructor SubmitEvent requires 'new'");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "SubmitEvent constructor requires a type");
+    /* `submitter` HAS NO CHECK HERE AND MUST NOT GAIN ONE. It is declared `HTMLElement?` with its own
+       narrowing, so §3.2.20 ran at its own position in the conversion — step 3 for a null or an undefined,
+       step 4 (§3.2.15's brand) for everything else — and what reaches this body is one of exactly THREE
+       shapes: the IDL null, an HTMLElement, or an unknown the member loop crossed as itself. The third is why
+       a shape assert would be WRONG and not merely redundant: an assert over the first two REFUSES the third,
+       which is the world the crossing exists to keep open. The slot carries it, and the page's own branch on
+       `e.submitter` is where it forks. */
     sub = idl_dict_get(ctx, init, "submitter");
-    if (JS_IsUndefined(sub) || JS_IsNull(sub)) {
-        JS_FreeValue(ctx, sub);
-        sub = JS_NULL;                       /* `HTMLElement? submitter = null` */
-    } else if (!se_is_html_element(sub)) {
-        JS_FreeValue(ctx, sub);
-        return JS_ThrowTypeError(ctx, "SubmitEventInit member `submitter` is not an HTMLElement");
-    }
     /* DOM §2.5 "Constructing events" with THIS interface's prototype — an event the PAGE constructs is untrusted. */
     ev = event_new_derived(ctx, se_proto(ctx), argv[0],
                            idl_dict_bool(ctx, init, "bubbles"),
@@ -197,6 +213,19 @@ void submit_event_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_se_class, &d);
     g_ctor_stepid = idl_method_id_dict(ctx, SE_CTOR_ARGS, 2, SE_INIT,
                                        (int)(sizeof(SE_INIT) / sizeof(SE_INIT[0])), js_se_ctor, 0);
+    /* `HTMLElement? submitter` — a NODE by class and an HTML-namespace ELEMENT by narrowing, which is the pair
+       a class id alone cannot state, and the same pairing element_internals.c declares for §4.13.7.3's
+       `optional HTMLElement anchor`.
+       IT IS STATED HERE, AT THE DECLARATION, AND NOT AT THE PER-REALM INSTALL. NavigateEventInit's four
+       interface classes are written at install because that interface is declared from core/events/event.c's
+       subclass list, whose core/platform.c row (`event`) runs BEFORE the `element` row that creates the node
+       class — so reading it at declaration time would read a zero. This file is reached the other way round:
+       submit_event_init is called from html_form_declare, which core/dom/element.c's element_init reaches
+       through html_element_init, LONG after its own node_init created that class. So the ordinary declaration
+       form applies, and idl_iface_brand's own `iface != 0` refusal is what makes the day that stops being true
+       an abort at this line rather than a silent zero read at a conversion. */
+    idl_iface_brand(node_class_id());
+    idl_iface_narrow(html_element_is);
     /* HTML §4.10.22.10 The SubmitEvent interface writes
        `constructor(DOMString type, optional SubmitEventInit eventInitDict = {})`, and the word `optional` was
        in no code: with position 1 required, Web IDL §3.6's step 5 arity check threw a TypeError for
