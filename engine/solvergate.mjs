@@ -119,12 +119,13 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 const CORPUS = join(ENGINE, "tests", "solver");
 
-/* THE SCHEDULES, AND EACH ONE IS A PAIR RATHER THAN A NAME. Every knob is one the production host already has
-   and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule declares
-   BOTH of its policies — when the ENGINE hands the thread back, and when the HOST answers what it is owed —
-   because those are two independent decisions and this file used to let the second one be INHERITED from the
-   first. That inheritance is what made the gate's strongest-sounding axis its weakest, so it is worth the space
-   to say exactly how, in the terms of the two mechanisms rather than in the terms of the names:
+/* THE SCHEDULES, AND EACH ONE IS A TRIPLE RATHER THAN A NAME. Every knob is one the production host already
+   has and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule
+   declares ALL THREE of its policies — when the ENGINE hands the thread back, when the HOST answers what it is
+   owed, and WHAT THE HOST ASKS OF THE ENGINE AT THE BOUNDARY — because those are three independent decisions
+   and this file used to let the second one be INHERITED from the first. That inheritance is what made the
+   gate's strongest-sounding axis its weakest, so it is worth the space to say exactly how, in the terms of the
+   two mechanisms rather than in the terms of the names:
  *
  * WHAT `_switches` COUNTS. solver/engine.c increments it at exactly ONE statement, inside engine_sched_slice's
  * dispatch loop: `if (best != cur) { flow_switch_out; flow_switch_in; solve_flow_begin; g_switches++; }`. It is
@@ -200,6 +201,14 @@ const CORPUS = join(ENGINE, "tests", "solver");
  *                SECOND INSTANCE resumes from it. §Time-travel-resume's whole claim, end to end, in one
  *                process. See the child's own comment for why the park is taken before the first pick and what
  *                the deeper park still needs.
+ *   `stream`   — the reference's own (floor, reply) pair with `qjs_emit_partial` called at EVERY boundary: the
+ *                CONTROLLED TWIN of `direct`, differing from it in exactly one thing, so a mismatch row against
+ *                the reference is attributable to that one call and to nothing else. What it tests is the
+ *                contract main.c writes over that entry in as many words — "It READS: no flow is touched,
+ *                nothing is drained, and the frontier the next step resumes is the one this was called on" —
+ *                which is a SCHEDULE-INVARIANCE claim and had no reader anywhere in this tree. See the entry's
+ *                own block below for why an entry the extension calls on a cadence for the whole of every long
+ *                analysis had never once been driven by a gate.
  * `direct` is the reference because it is what the extension does when no other document is competing.
  *
  * AND THE REPLY POLICIES ARE THREE, EACH NAMED FOR WHAT IT MODELS RATHER THAN FOR WHEN IT FIRES:
@@ -214,16 +223,60 @@ const CORPUS = join(ENGINE, "tests", "solver");
  *                a reply that has ALREADY ARRIVED, and these replies are minted here and have never been in
  *                flight, so this driver has to choose an arrival moment and a network does not deliver into the
  *                turn that asked.
- *   "last"     — one entry per turn, tail first. `lastreply`'s whole content. */
+ *   "last"     — one entry per turn, tail first. `lastreply`'s whole content.
+ *
+ * AND THE THIRD POLICY IS WHAT THE HOST ASKS OF THE ENGINE AT THE BOUNDARY, WHICH IS THE ONE THING PRODUCTION
+ * DOES THAT THIS GATE'S OWN REFERENCE NEVER DID. `direct` is described three lines up as "production's own
+ * pair", and it was a pair while production makes THREE decisions per round: extension/bridge.js's
+ * `streamPartial` calls `qjs_emit_partial` on a `PARTIAL_MS` cadence for the whole of any analysis that
+ * outlives it, "WITHOUT waiting for a finalize that an unbounded engine never reaches" — its words — so on
+ * every real page the engine is asked for a mid-run document between steps, and the reference that claims to
+ * model it never asked once. It is not a knob invented here (§the first line of this comment): it is a shipped
+ * ABI entry with a production caller and, until this schedule, no driver caller at all — `engine/route.mjs`
+ * does not call it and neither did this file, so the entry's contract was carried entirely by main.c's own
+ * prose. That is the §Testing shape exactly: the shipped entry is the one that rots, and this one composes the
+ * finding document the product's incremental merge is built out of.
+ *   false — the host asks nothing between steps. Every schedule above.
+ *   true  — `qjs_emit_partial` at EVERY boundary the engine reports, plus once more after the frontier answers
+ *           DONE. The last of those is compared against `qjs_result`'s document (see the parent's row): both
+ *           are `result_json(g_ctx)` with no step between them, so any difference is one of the two composers
+ *           or this driver's capture of the print sink. `qjs_emit_partial` is named in exactly five files —
+ *           engine/build.mjs's QJS_ABI list, main.c, qjs_abi.h, solver/result.h and extension/bridge.js — so
+ *           the streamed @RESULT document had one producer, one production consumer, and no driver reading it
+ *           at all. Read at the revision this landed against; grep it again before repeating it. */
 const POLICY = new Map([
-  ["direct",    { floor: -Infinity, reply: "reported" }],
-  ["preempt",   { floor:  Infinity, reply: "stuck"    }],
-  ["eager",     { floor:  Infinity, reply: "reported" }],
-  ["lastreply", { floor: -Infinity, reply: "last"     }],
-  ["park",      { floor: -Infinity, reply: "reported" }],
+  ["direct",    { floor: -Infinity, reply: "reported", partial: false }],
+  ["preempt",   { floor:  Infinity, reply: "stuck",    partial: false }],
+  ["eager",     { floor:  Infinity, reply: "reported", partial: false }],
+  ["lastreply", { floor: -Infinity, reply: "last",     partial: false }],
+  ["park",      { floor: -Infinity, reply: "reported", partial: false }],
+  /* THE CONTROLLED TWIN OF THE REFERENCE — the reference's own floor and reply, so the ONLY difference is the
+     third field and a mismatch has one candidate cause instead of two. IT IS DECLARED ON EVERY ROW ABOVE AND
+     NOT DEFAULTED HERE, which is this file's own lesson about the reply policy repeated rather than re-learned:
+     a field one schedule states and the others inherit is how the second decision came to be read off the
+     schedule's NAME.
+     WHAT THIS DOES NOT COVER, and it is a residual rather than a TODO because the schedule is correct for what
+     it drives and narrower than the entry's contract: at floor -inf the engine returns only where it can make
+     no further progress, so a corpus document that fits inside one cooperative quantum gives this schedule ~3
+     boundaries and therefore ~3 mid-run snapshots (the header's own measured table: 3 host turns at -inf
+     against 25-28 at +inf). What the next diff builds is the SECOND twin — (floor +inf, reply "reported",
+     partial true), which is `eager`'s pair and therefore `eager`'s controlled twin — so the same entry is
+     asked ~25 times per document instead of ~3 without either row losing its single-variable attribution. Its
+     absence shows as a perturbation that needs more than three calls to accumulate: this schedule agreeing
+     with the reference on every document while the +inf twin, once it exists, does not. */
+  ["stream",    { floor: -Infinity, reply: "reported", partial: true  }],
 ]);
 const SCHEDULES = [...POLICY.keys()];
 const REFERENCE = "direct";
+/* THE PAIR PRINTED BESIDE EVERY COST, AND IT IS NOW A TRIPLE — written once because it was written twice, and
+   a second speller of a schedule's declaration is how a row comes to be labelled with a policy it did not run
+   under. The header's whole argument is that a reader who cannot see WHICH pair produced a number reads a
+   column of agreements as more pressure than it is; a third decision the label omitted would be that same
+   defect with the field this diff added. */
+const policyLabel = (s) => {
+  const p = POLICY.get(s);
+  return `${s}(${p.floor === Infinity ? "+inf" : "-inf"}/${p.reply}${p.partial ? "/stream" : ""})`;
+};
 
 /* THE REFERENCE IS ASKED TWICE, AND THAT IS NOT A FIFTH SCHEDULE. Every row this gate prints is a difference
    between two SAMPLES, and nothing anywhere established that two samples of ONE schedule agree — so the gate's
@@ -313,7 +366,21 @@ async function child(docPath, schedName) {
   /* The instance helper is engine/route.mjs's, spelled the same way, because it is the same ABI: allocate the
      C string, ccall, read the answer back as one. */
   async function instance() {
-    const M = await boot();
+    /* THE PRINT SINK, TEED — the channel the extension reads findings off, given a reader here for the first
+       time. `qjs_emit_partial` does not RETURN its document: it `printf`s one `@RESULT <json>` line, and
+       extension/bridge.js scans the instance's captured lines for it, parses that one line and SPLICES IT OUT
+       ("bound eng.lines growth"). This is that, with the same bound and for the same reason: the document
+       GROWS with the finding set and main.c's own block records a leak of exactly the accumulated snapshots,
+       so a driver that kept every line would re-create it on this side of the boundary. Everything is
+       forwarded to console.log unchanged — the parent greps this child's stdout for `@RESUMED` and for
+       `@GATEFAIL`, and a tee that swallowed a line would make the park schedule's resume check answer about a
+       channel this function broke. Installed for EVERY schedule and not only the one that reads it: a second
+       instance-construction path is precisely the silent divergence between two runs that this gate exists to
+       catch, and it would sit inside the gate's own driver where nothing compares it. */
+    const sink = [];
+    const M = await boot({
+      print: (s) => { console.log(s); if (String(s).startsWith("@RESULT ")) sink.push(String(s)); },
+    });
     const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
     const str = (f, ...a) => String(M.ccall(f, "string", a.map(() => "number"), a.map(cs)) ?? "");
     /* §2.2.5's BODY, INTO THE INSTANCE'S LINEAR MEMORY — beside the record's JSON, never inside it. JSON
@@ -332,7 +399,32 @@ async function child(docPath, schedName) {
                     [cs(method), cs(u), cs(JSON.stringify(reply)), p, b.length]); }
       finally { M._free(p); }
     };
-    return { M, cs, str, provide };
+    /* ONE MID-RUN SNAPSHOT, TAKEN AND CONSUMED. `qjs_emit_partial` prints exactly one `@RESULT` line per call
+       (main.c: unconditionally, and bridge.js DCHECKs its absence for that reason), and main.c is the ONLY
+       printer of that token in the engine — so a drain that finds a number other than one is not a snapshot
+       that is hard to locate, it is this channel carrying something nobody declared, and reading the LAST line
+       the way a scanner would would make that invisible. Asked here rather than in the step loop so the take
+       and the consume are one operation and no caller can leave a document behind for the next call to find. */
+    const snapshot = () => {
+      sink.length = 0;
+      M.ccall("qjs_emit_partial", "void", [], []);
+      if (sink.length !== 1)
+        gateFail(`qjs_emit_partial printed ${sink.length} \`@RESULT\` lines and it prints exactly one per ` +
+                 "call — main.c is the engine's only writer of that token and extension/bridge.js reads its " +
+                 "findings off this same channel, so a count other than one is the print sink between the " +
+                 "engine and its host either dropping the document or carrying a second writer nobody declared");
+      const line = sink[0];
+      sink.length = 0;
+      let doc;
+      try { doc = JSON.parse(line.slice("@RESULT ".length)); }
+      catch (err) {
+        gateFail("the `@RESULT` line qjs_emit_partial printed is not JSON — the incremental merge does one " +
+                 `JSON.parse of exactly this text, so this run would reach the trusted zone as a crashed ` +
+                 `instance with every finding it had accumulated: ${String(err).slice(0, 120)}`);
+      }
+      return doc;
+    };
+    return { M, cs, str, provide, snapshot };
   }
 
   /* WHAT THE HOST OWES, and what it must REFUSE to owe. A corpus document that emits a host notice or a
@@ -543,12 +635,22 @@ async function child(docPath, schedName) {
        read every non-zero code as "call me again" and so had no exit for a frontier that says it cannot
        progress. Against a document this gate cannot pay, that is not a slow run, it is a loop with no
        terminator at all. */
+    let snapshots = 0;
     for (;;) {
       const r = e.M.ccall("qjs_step", "number", [], []);
       if (r === 0) break;   /* ENGINE_STEP_DONE — the frontier is empty (or was written out) */
       if (r !== 2 && r !== 3)
         gateFail(`qjs_step answered ${r}, which is none of DONE(0)/YIELD(2)/STALLED(3) — the ABI carries three ` +
                  "codes and this gate branches on all three, so a fourth is a contract that moved under it");
+      /* THE HOST'S OWN BOUNDARY QUESTION, BEFORE THE REPLY AND NOT AFTER IT. extension/bridge.js's round asks
+         for a snapshot of an engine that is HOT — one with owed replies outstanding, which is the state a
+         fetching engine is in for most of a real analysis — so the snapshot is taken here, where this
+         driver's engine is in that same state, rather than after `service` has emptied the owed list and left
+         it in a state production rarely observes. The document is DISCARDED: what this schedule is testing is
+         that ASKING changed nothing, and the answer to that is the finding set the run ends with, compared
+         against the reference by the parent. What is not discarded is the check inside `snapshot` that one
+         well-formed document arrived on the print sink, which is the half bridge.js asserts. */
+      if (policy.partial) { e.snapshot(); snapshots++; }
       const paid = service(e, policy, r === 3);
       /* A STALL THIS ROUND DID NOT MOVE IS A DOCUMENT THAT CANNOT DRAIN, and draining is this gate's whole
          precondition: the differential compares the finding sets of a document whose frontier drains under
@@ -562,25 +664,45 @@ async function child(docPath, schedName) {
                  "cannot drain under any schedule and its finding set is not a function of the document " +
                  `alone. Owed: ${e.str("qjs_pending").split("\n").filter(Boolean).join(" ; ") || "(no fetch)"}`);
     }
+    /* THE LAST SNAPSHOT IS TAKEN WITH THE FRONTIER ALREADY TERMINAL, WHICH IS WHAT MAKES IT COMPARABLE.
+       Everywhere else in a run the two entries answer at different instants and a difference between them
+       says nothing; here the loop has broken on DONE, no step runs between this call and the `qjs_result`
+       below it, and both are `result_json(g_ctx)` — so on every surface this gate compares the two documents
+       are the same document, and the parent holds them to that. What it can catch is not the C composer
+       disagreeing with itself (one function, one caller each) but the two PATHS out of it: `qjs_result`
+       returns a pointer this driver reads through the ccall binding, `qjs_emit_partial` prints a line this
+       driver reads off the print sink, and the second is the channel extension/bridge.js's incremental merge
+       is built on. A truncated line, a sink that drops under load, a
+       `%s` that stops at an embedded byte: each of those makes the streamed half of the product report less
+       than the engine found, and each is invisible to a driver that only ever asks for the pointer. */
+    const partial = policy.partial ? e.snapshot() : null;
     const json = e.str("qjs_result");
     if (!json) gateFail("qjs_result answered nothing — the result document did not serialize");
     const out = JSON.parse(json);
     e.M.ccall("qjs_teardown", "void", [], []);
-    return out;
+    return { result: out, partial, snapshots };
   }
 
-  /* THE DECLARED PAIR, LOOKED UP ONCE AND ASSERTED — a child is re-entered by NAME (`--run <doc> <sched>`), so
-     a name the parent's list carries and this map does not would run with no policy at all. Checked rather
+  /* THE DECLARED TRIPLE, LOOKED UP ONCE AND ASSERTED — a child is re-entered by NAME (`--run <doc> <sched>`),
+     so a name the parent's list carries and this map does not would run with no policy at all. Checked rather
      than defaulted, because the shape of that failure is the one this file is currently correcting: a run that
-     produces a real-looking result under a schedule that never happened. */
+     produces a real-looking result under a schedule that never happened. The THIRD field is asked for by name
+     rather than read as truthy, for the reason every row of POLICY states it: a schedule that omits it is a
+     schedule whose boundary policy nobody stated, and `undefined` would run it as the one this file already
+     had. */
   const policy = POLICY.get(schedName);
   if (!policy)
-    gateFail(`the schedule \`${schedName}\` declares no (floor, reply) pair — a schedule is that pair and ` +
-             "nothing else, so a name without one is a run whose order nobody stated");
+    gateFail(`the schedule \`${schedName}\` declares no (floor, reply, partial) triple — a schedule is that ` +
+             "triple and nothing else, so a name without one is a run whose order nobody stated");
+  if (typeof policy.partial !== "boolean")
+    gateFail(`the schedule \`${schedName}\` states no boundary policy — every row of POLICY declares ` +
+             "`partial` because this file has already been bitten once by a decision that was INHERITED " +
+             "rather than stated, and an absent one would run as `false` while reading as a schedule that " +
+             "had chosen it");
 
-  let result;
+  let result, partial = null, snapshots = 0;
   if (schedName === "park") {
-    const first = await session("", "park", policy);
+    const { result: first } = await session("", "park", policy);
     /* THE PRODUCER'S FIELD IS CHECKED, NEVER DEFAULTED — extension/bridge.js keeps the same DCHECK, and
        CLAUDE.md's rule is that a name read somewhere and written nowhere is a broken contract a `||` turns
        into a plausible datum. */
@@ -608,11 +730,18 @@ async function child(docPath, schedName) {
                  "is sound only while the parking session emits nothing. It emitted something, so the two " +
                  "sessions' findings now have to be FOLDED, and that fold is endpoint.c's merge rule (see the " +
                  "park comment above): build it in one place before widening this schedule");
-    result = await session(first._park.join(";"), "park", policy);
+    ({ result, snapshots } = await session(first._park.join(";"), "park", policy));
   } else {
-    result = await session("", schedName, policy);
+    ({ result, partial, snapshots } = await session("", schedName, policy));
   }
-  console.log("@EMIT " + JSON.stringify({ document: name, schedule: schedName, result }));
+  /* THE TWO DOCUMENTS CROSS TOGETHER AND ARE COMPARED IN THE PARENT, where the report vocabulary is. A child
+     says @GATEFAIL and the parent renders every one of those as `CORPUS:` — which is right for the three
+     refusals above it and would be a confident false attribution here, because a streamed document
+     disagreeing with the returned one is a fact about the ENGINE's two output paths and about this driver's
+     capture of the second, and naming the corpus for it would send the reader to rewrite a fixture. `partial`
+     is `null` for every schedule whose boundary policy is false, which is a POSITIVE statement that the
+     question was not asked — never an empty document, which would compare as a run that streamed nothing. */
+  console.log("@EMIT " + JSON.stringify({ document: name, schedule: schedName, result, partial, snapshots }));
 }
 
 /* ─── canonical form ────────────────────────────────────────────────────────────────────────────────────────
@@ -783,6 +912,13 @@ const SURFACES = new Map([
      three constants and there is nothing for the fold to reconcile. */
   ["_quantum",       { shape: "map",   accumulates: false }],
 ]);
+/* DERIVED FROM THE DECLARATION, never restated beside it. `accumulates` is already the field that separates
+   emitted output from a reading of the terminal instant, and it has two readers now — the park schedule's
+   fold pre-check and the no-subject check below — so the list they share is taken from the one declaration
+   rather than typed a second time. A surface added to SURFACES joins both readers with no edit, which is the
+   property the classification has to have: the alternative is a hand-kept list that agrees with the map until
+   the day it does not, and the disagreement would be silent in exactly the direction that reads as a pass. */
+const SURFACES_ACCUMULATING = [...SURFACES].filter(([, d]) => d.accumulates).map(([k]) => k);
 const shapeOk = (v, d) => d.shape === "array" ? Array.isArray(v)
                                               : (!!v && typeof v === "object" && !Array.isArray(v));
 /* AND THE TWO LISTS ARE CHECKED AGAINST THE DOCUMENT, which is what makes "compared by default" a mechanism
@@ -884,7 +1020,10 @@ function runChild(doc, sched) {
   const cpuUsed = childCpuDelta(cpu0, childCpuSeconds());
   const out = (r.stdout || "") + (r.stderr || "");
   const emit = out.match(/^@EMIT (\{.*\})$/m);
-  if (emit) return { ok: true, out, result: JSON.parse(emit[1]).result };
+  if (emit) {
+    const e = JSON.parse(emit[1]);
+    return { ok: true, out, result: e.result, partial: e.partial, snapshots: e.snapshots };
+  }
 
   /* WHICH OF THE FIVE THIS IS, said out loud — the same distinction engine/wpt.mjs draws, and for the same
      reason: a DCHECK naming a missing capability, this gate's own corpus refusal, an ABI this artifact does
@@ -978,7 +1117,14 @@ const detTally = { "held/diverged": 0, "held/undiscriminated": 0, "NONDETERMINIS
                    "not reached (the reference itself produced no result)": 0 };
 for (const doc of docs) {
   const runs = new Map();
-  let broke = false;
+  /* HOW MANY TIMES THE BOUNDARY QUESTION WAS ACTUALLY ASKED, kept beside the run that answered it. It is
+     the same distinction `held/diverged` against `held/undiscriminated` draws one column over: a `stream`
+     row whose document reached DONE on its first step took the FINAL snapshot and no mid-run one, so it
+     exercised the two output paths and exercised nothing about a frontier that is still standing — and
+     without this number that row and a row with twenty-five mid-run asks read identically. PRINTED, NEVER
+     COMPARED: it is a count of boundaries, which is the schedule's to choose, on `_switches`' own ground. */
+  const midrun = new Map();
+  let broke = false, docBad = 0;
   for (const sched of SCHEDULES) {
     const r = runChild(doc, sched);
     if (!r.ok) {
@@ -1005,7 +1151,55 @@ for (const doc of docs) {
       }
     }
     if (!checkCoverage(doc, sched, r.result)) { bad++; broke = true; continue; }
+    /* ─── THE STREAMED DOCUMENT AGAINST THE RETURNED ONE ───────────────────────────────────────────────────
+       ASKED OF THE SCHEDULE'S DECLARATION, never of whether a document happens to be there. `partial` present
+       under a schedule that declared `false`, or absent under one that declared `true`, is the child and this
+       loop disagreeing about which run was made — and the shape that hides it is a truthiness test, which
+       reads both as "no streaming happened" and passes. Both directions, for checkCoverage's own reason.
+       WHAT THE COMPARISON IS FOR, said once so the row is never read as a second cross-schedule check: these
+       two documents are one instant apart with no step between them and are composed by the same
+       `result_json`, so they are the same document by construction — and the two PATHS out of it are not the
+       same path. `qjs_result` hands back a pointer this driver reads through the ccall binding;
+       `qjs_emit_partial` prints a line this driver reads off the print sink, which is the channel
+       extension/bridge.js's incremental merge is built on. A
+       difference here is that channel, and it is the one failure this gate can see that is not about the
+       solver at all — so it says so rather than borrowing the MISMATCH row's sentence about dropped flows. */
+    const declaresPartial = POLICY.get(sched).partial;
+    if (declaresPartial !== (r.partial !== null && r.partial !== undefined)) {
+      bad++; broke = true;
+      console.log(`  FAILED ${doc} [${sched}]\n         the schedule declares \`partial: ${declaresPartial}\` ` +
+                  `and the run carried ${declaresPartial ? "no" : "a"} streamed document — the child takes one ` +
+                  "only where the declaration says to, so the two disagree about which run was made and the " +
+                  "row below would compare a document nobody asked for or skip one somebody did");
+      continue;
+    }
+    if (declaresPartial) {
+      if (!checkCoverage(doc, sched + " (streamed)", r.partial)) { bad++; broke = true; continue; }
+      for (const surface of SURFACES.keys()) {
+        const a = surfaceSet(r.result, surface), b = surfaceSet(r.partial, surface);
+        const onlyReturned = a.filter((x) => !b.includes(x));
+        const onlyStreamed = b.filter((x) => !a.includes(x));
+        if (!onlyReturned.length && !onlyStreamed.length) continue;
+        bad++; docBad++;
+        console.log(`  STREAM-SKEW ${doc} [${sched}]  ${surface}: qjs_result has ${a.length}, the ` +
+                    `qjs_emit_partial snapshot taken one instant earlier has ${b.length}` +
+                    "\n           Both are solver/result.c's `result_json(g_ctx)` over a TERMINAL frontier with " +
+                    "no step between them, so they are the same document and a difference is not a solver " +
+                    "disagreement: it is the ENGINE's two output paths, and the streamed one is the channel " +
+                    "the product's incremental merge reads (extension/bridge.js `streamPartial`). Whatever " +
+                    "is missing here is missing from every mid-run snapshot the extension has ever merged.");
+        for (const x of onlyReturned) console.log(`             only in qjs_result: ${x.slice(0, 300)}`);
+        for (const x of onlyStreamed) console.log(`             only in the stream: ${x.slice(0, 300)}`);
+      }
+      /* AND THE RUN IS STILL ENTERED FOR THE CROSS-SCHEDULE COMPARISON, because these are two questions and
+         dropping the run would answer the second one by not asking it. `qjs_result`'s document is what every
+         other schedule is compared against and it is unaffected by whether the STREAM of it agreed; a skew
+         suppressed here would take a real cross-schedule cap out of the table along with it, which is the
+         three-states-behind-one-answer shape this file argues about everywhere else. Counted in
+         `docBad` so the verdict word cannot read `ok` over it. */
+    }
     runs.set(sched, r.result);
+    midrun.set(sched, r.snapshots);
   }
   const ref = runs.get(REFERENCE);
   if (!ref) {
@@ -1017,6 +1211,33 @@ for (const doc of docs) {
        documents were asked a question only six of them were. */
     detTally["not reached (the reference itself produced no result)"]++;
     continue;
+  }
+  /* AND A COMPARISON NEEDS A SUBJECT, WHICH IS THE ONE THING THIS GATE HELD EVERY SURFACE TO AND NEVER ASKED
+     OF THE DOCUMENT. `checkCoverage` already makes this argument one level down, in these words: a SURFACE
+     that is not in the document "is a comparison over nothing, which reads as agreement". A DOCUMENT whose
+     accumulating surfaces are all empty is the same sentence one level up — every schedule, the repeat
+     included, compares `[]` against `[]`, every row agrees, and the line prints `ok … @H 0 @S 0`. A solver
+     that stopped emitting entirely would pass this gate on every document at once, which is the exact false
+     green §Testing means by "an absent count and a zero count are DIFFERENT facts … a run that reported no
+     document is not a page that was analysed and found clean".
+     IT IS NOT AN EXPECTED-EMISSION LIST, and that distinction is the whole reason it is allowed to exist here.
+     It states no count, no surface and no finding: a solver that learns twice as much passes it unchanged and
+     a solver that learns one thing passes it too, so there is nothing for a better solver to contradict and
+     nothing for anyone to maintain. What it refuses is a run with no subject.
+     ASKED OF THE ACCUMULATING SURFACES ONLY, on the park pre-check's ground: `_wfq` and `_quantum` are
+     readings the terminal instant answers whatever the run learned, so a document could satisfy this on two
+     constants alone and the check would be measuring its own denominator.
+     ASKED OF THE REFERENCE AND ONCE PER DOCUMENT: a schedule that emitted nothing while the reference emitted
+     something is already a MISMATCH row with the findings named in it, and asking this per schedule would
+     report that same defect twice under two different sentences. */
+  if (!SURFACES_ACCUMULATING.some((s) => surfaceSet(ref, s).length !== 0)) {
+    bad++; docBad++;
+    console.log(`  FAILED ${doc} — the reference run emitted NOTHING on any of ${SURFACES_ACCUMULATING.join(", ")}, ` +
+                "so every comparison this gate makes for this document is `[]` against `[]` and cannot fail. " +
+                "That is not a document that was explored and found clean: it is a document with no subject, " +
+                "and it would read as `ok` while measuring nothing. Either the corpus entry no longer reaches " +
+                "the code it was written for, or the solver stopped emitting — and the second is what this " +
+                "gate exists to see, so establish which before touching the fixture.");
   }
   /* ─── THE REFERENCE, ASKED A SECOND TIME ──────────────────────────────────────────────────────────────────
      See the block beside REFERENCE for why this is not a fifth schedule, why it is the reference that is
@@ -1037,9 +1258,7 @@ for (const doc of docs) {
     } else if (!checkCoverage(doc, REFERENCE + " x2", again.result)) {
       bad++; det = "NOT-MEASURED";
     } else {
-      const p = POLICY.get(REFERENCE);
-      repeatCost = `${REFERENCE}(${p.floor === Infinity ? "+inf" : "-inf"}/${p.reply})x2:` +
-                   `${again.result._switches}sw/${again.result._flows}fl`;
+      repeatCost = `${policyLabel(REFERENCE)}x2:${again.result._switches}sw/${again.result._flows}fl`;
       for (const surface of SURFACES.keys()) {
         const a = surfaceSet(ref, surface), b = surfaceSet(again.result, surface);
         const only1 = a.filter((x) => !b.includes(x));
@@ -1128,9 +1347,9 @@ for (const doc of docs) {
      came to be described as the strongest one in the set while delivering the weakest order in it. Printed,
      never compared: the moment this number becomes something to maximise it is a metric used as a target. */
   const cost = [...runs.entries()]
-    .map(([s, r]) => `${s}(${POLICY.get(s).floor === Infinity ? "+inf" : "-inf"}/${POLICY.get(s).reply}):` +
-                     `${r._switches}sw/${r._flows}fl`).join("  ");
-  console.log(`  ${doc_bad ? "FAIL" : "ok  "} ${doc.padEnd(24)} ` +
+    .map(([s, r]) => `${policyLabel(s)}:${r._switches}sw/${r._flows}fl` +
+                     (POLICY.get(s).partial ? `/${midrun.get(s)}snap` : "")).join("  ");
+  console.log(`  ${doc_bad || docBad ? "FAIL" : "ok  "} ${doc.padEnd(24)} ` +
               `@H ${String(ref.fetchCallSites.length).padStart(3)}  ` +
               `@S ${String(ref.securitySinks.length).padStart(3)}  ` +
               `err ${String(ref.pageErrors.length).padStart(2)}  det ${det.padEnd(20)} ` +
