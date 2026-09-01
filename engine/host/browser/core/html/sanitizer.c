@@ -842,30 +842,34 @@ static JSValue san_canon_list(JSContext *ctx, JSValueConst list, SanKind kind)
    Both steps are "if it does not exist, set it": a member the page WROTE is copied into the canonical
    configuration verbatim, which is faithful — §3.2.17 (ES-to-IDL list) step 4.1.4.1 already converted it, so
    in the standard's model there is nothing left here but a boolean.
-   AND IN THIS ENGINE THAT IS NOW TRUE TOO, WHICH IS A CORRECTION TO WHAT STOOD HERE. idl_args.c's §3.2.17
-   member loop used to rewrite a CONCOLIC member's declared type to IDL_ANY before any type arm was asked,
-   for every type including this one — so `new Sanitizer({comments: location.hash})` reached this line still
-   wearing the Object solver/concolic.c gives an unknown, and these two steps stored it in the configuration
-   the whole component answers from. It no longer does: `boolean` is the type whose CONVERSION is the fork
-   (idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_FORKS for IDL_BOOLEAN_NO_DEFAULT, which is what
-   SAN_CONFIG_MEMBERS declares both of these), so the member loop asks §7.1.2 ToBoolean at the branch seam,
-   BOTH worlds run, and what arrives here is a real `true` in one flow and a real `false` in its sibling.
-   THE ASSERT STILL ADMITS THE UNKNOWN, AND ONE ROUTE IS LEFT FOR ONE TO ARRIVE BY: `new Sanitizer(<unknown>)`
-   makes the CONFIGURATION ITSELF unknown, so §3.2.17 step 4.1.3.1's `? Get` MINTS these members rather than
-   reading them and "the member is absent" is a world nothing has ruled out — which for a NO-DEFAULT boolean is
-   a third world §3.2.3's two arms cannot express, so the member loop crosses that case deliberately (its own
-   residual at the crossing names the presence fork that ends it). Every read of these two members below goes
-   through idl_dict_bool because of that one route. What this must not admit is a fourth shape, which is a
-   declaration defect.
+   AND IN THIS ENGINE THAT IS NOW TRUE TOO, WHICH IS A CORRECTION TO WHAT STOOD HERE TWICE OVER. idl_args.c's
+   §3.2.17 member loop used to rewrite a CONCOLIC member's declared type to IDL_ANY before any type arm was
+   asked, for every type including this one — so `new Sanitizer({comments: location.hash})` reached this line
+   still wearing the Object solver/concolic.c gives an unknown, and these two steps stored it in the
+   configuration the whole component answers from. It no longer does: `boolean` is the type whose CONVERSION is
+   the fork (idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_FORKS for IDL_BOOLEAN_NO_DEFAULT, which is
+   what SAN_CONFIG_MEMBERS declares both of these), so the member loop asks §7.1.2 ToBoolean at the branch
+   seam, BOTH worlds run, and what arrives here is a real `true` in one flow and a real `false` in its sibling.
+   AND THE ONE ROUTE THAT USED TO BE LEFT FOR AN UNKNOWN IS CLOSED, WHICH IS WHY THIS ASSERT NO LONGER ADMITS
+   ONE. `new Sanitizer(<unknown>)` makes the CONFIGURATION ITSELF unknown, so §3.2.17 step 4.1.3.1's `? Get`
+   MINTS these members rather than reading them and "the member is absent" is a world nothing has ruled out;
+   a NO-DEFAULT boolean was crossed there because §3.2.3's two arms cannot say `absent`. The member loop now
+   decides §3.2.17 step 4.1.4's PRESENCE at the outcome seam BEFORE §3.2.3 is asked, so that configuration
+   yields a real truth value on the present arm and an absence on the other — and an absence never reaches
+   here, because both call sites below test JS_IsUndefined first. Every read of these two members still goes
+   through idl_dict_bool, which is now the same statement from the other side: that reader refuses an unknown
+   for exactly the two remaining reasons, and neither of them is a fork owed anywhere.
    `v` IS CONSUMED. */
 static void san_carry_flag(JSContext *ctx, JSValueConst cfg, const char *member, JSValue v)
 {
-    DCHECKF(JS_IsBool(v) || concolic_is(v),
+    DCHECKF(JS_IsBool(v),
             "§8.6.2's canonicalize the configuration is carrying `%s` into the canonical configuration as "
-            "something that is neither of §8.6.3's `boolean` values nor unknown external input — this file "
-            "declares the member IDL_BOOLEAN_NO_DEFAULT, and the args machine's member loop answers that "
-            "declaration with a real boolean, an absence, or the crossed unknown. A fourth shape means "
-            "SAN_CONFIG_MEMBERS no longer declares `%s` a boolean", member, member);
+            "something that is not one of §8.6.3's `boolean` values — this file declares the member "
+            "IDL_BOOLEAN_NO_DEFAULT, and the args machine's member loop answers that declaration with a real "
+            "boolean or with an absence its two callers filter before they reach here. An UNKNOWN means the "
+            "loop stopped deciding step 4.1.4's presence before asking §3.2.3, which is the crossing that "
+            "used to stand; anything else means SAN_CONFIG_MEMBERS no longer declares `%s` a boolean",
+            member, member);
     JS_SetPropertyStr(ctx, cfg, member, v);
 }
 
@@ -1507,12 +1511,13 @@ static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, 
     if (magic && !san_has(ctx, r->config, "attributes")) return JS_FALSE;    /* step 3 */
     /* Step 4's "if configuration[member] is allow, return false" over the STORED member. §8.6.3 declares both
        flags `boolean`, SAN_CONFIG_MEMBERS declares them IDL_BOOLEAN_NO_DEFAULT, and that type's rule is
-       IDL_CONCOLIC_FORKS — so for a configuration the page WROTE, §3.2.17's member loop forked the unknown at
-       the branch seam and canonicalize carried a real truth value here. The read still goes through
-       idl_dict_bool and not a bare `JS_ToBool`, because one route is left open on purpose: a configuration
-       that is ITSELF unknown mints these members instead of reading them, and the loop crosses a no-default
-       boolean there rather than deleting the absent world — see san_carry_flag. That is the case a
-       `JS_ToBool` would answer `true` for while reporting "nothing changed", with nothing to say so. */
+       IDL_CONCOLIC_FORKS — so §3.2.17's member loop forked the unknown at the branch seam and canonicalize
+       carried a real truth value here. A configuration that is ITSELF unknown used to be the one route by
+       which an unknown still arrived, because the loop crossed a no-default boolean rather than deleting its
+       absent world; the loop decides step 4.1.4's presence itself now, so that route yields a real truth
+       value too — see san_carry_flag. The read still goes through idl_dict_bool rather than a bare
+       `JS_ToBool` because that reader is what says so: a `JS_ToBool` would answer `true` for an unknown while
+       reporting "nothing changed", with nothing to say so, and the assert is what stands where that was. */
     had = san_has(ctx, r->config, member) && idl_dict_bool(ctx, r->config, member) == allow;
     if (had) return JS_FALSE;
     if (magic && allow) {
@@ -1990,8 +1995,9 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
         }
         if (child->type == LXB_DOM_NODE_TYPE_COMMENT) {                             /* step 1.3 */
             /* Step 1.3.1 is "If configuration["comments"] is not true, then remove child", and after
-               canonicalize the member is a real boolean or absent — san_carry_flag asserts exactly that — so
-               `is true` and ToBoolean cannot differ and the reader answers the spec's own question.
+               canonicalize the member is a real boolean or absent — san_carry_flag asserts the boolean and
+               its two callers are what filter the absence — so `is true` and ToBoolean cannot differ and the
+               reader answers the spec's own question.
                THE TEST THAT STOOD HERE WAS `JS_IsBool(c) && JS_ToBool(ctx, c)`, AND OVER UNKNOWN EXTERNAL
                INPUT THAT IS THE COLLAPSE RUNNING BACKWARDS. A concolic wears an ordinary Object, so JS_IsBool
                answered false, the comment was removed, and the world in which the page allowed it was deleted

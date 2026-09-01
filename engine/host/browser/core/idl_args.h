@@ -885,9 +885,16 @@ typedef struct {
     JSClassID iface;
     bool    (*narrow)(JSValueConst v);
     int       mi;       /* THE RESUME POINT: the member being read */
-    /* 0 = read the member (step 4.1.3.1), 1 = convert what was read (step 4.1.4.1), 2 = place it. The third is
-       what a PUSHED level returns to: its own step 5 hands this level the converted dictionary, and the member
-       must then be placed without re-running the read or the conversion. */
+    /* 0 = read the member (step 4.1.3.1), 3 = decide whether it is THERE (step 4.1.4's "If jsMemberValue is
+       not undefined"), 1 = convert what was read (step 4.1.4.1), 2 = place it. `2` is what a PUSHED level
+       returns to: its own step 5 hands this level the converted dictionary, and the member must then be
+       placed without re-running the read or the conversion.
+       `3` RUNS BETWEEN 0 AND 1 AND IS NUMBERED LAST BECAUSE 2 IS THE ONE A PUSHED LEVEL NAMES: a decision
+       vector and a pushed frame both record what they were standing on, so renumbering the settled phases to
+       put this one in sequence would give an old record a new meaning. It is a phase of its own rather than a
+       tail of phase 0 because the presence question can FORK, and a resume from that fork must re-enter after
+       the read (which would otherwise run the page's getter twice) and before any conversion that can park
+       (whose outstanding answer the ask would release). */
     uint8_t   mphase;
     JSValue   mv;       /* the member's value between those phases (owned) */
     /* §3.2.21 Sequences' cursor and the list it fills, for a member whose type is one. It is ALSO what the
@@ -949,16 +956,21 @@ typedef struct {
     IdlDictLevel lvl;
     uint8_t    conv_sp;   /* how many IdlConvFrame frames are live; 0 = level zero is the one in flight */
     uint8_t    started;   /* the walk has a `src` and an `out`; 0 = nothing in flight, so a resume may start it */
-    /* THE NAME OF THE FORK THIS WALK IS ASKING — step_tobool_run's `op` for a §3.2.3 boolean member over
-       unknown external input. It is HERE and not a C local because the driver reads `JSStepHdr::fork_op`
+    /* THE NAME OF THE FORK THIS WALK IS ASKING — step_fork_run's `op` for §3.2.17 step 4.1.4's PRESENCE
+       question over a member minted off an unknown source, and step_tobool_run's for a §3.2.3 boolean member
+       over unknown external input. It is HERE and not a C local because the driver reads `JSStepHdr::fork_op`
        AFTER the machine has returned JS_STEP_FORK, by which time a local of the member loop is gone; and it
        is the WALK's rather than the header's shared `len_op` because that buffer belongs to the length probe
        and two mechanisms sharing one scratch space is how one overwrites the other's outstanding question.
-       ONE BUFFER IS ENOUGH BECAUSE ONE FORK IS IN FLIGHT: step_fork_ask refuses a second ask while the first
-       one's operands are still on the header. It is SCRATCH and carries nothing across a park — the ask is
-       re-composed from the declaration on every entry, and JSStepHdr::fork_ask_key (a content hash) is what
-       survives to match the answer to the question, so a byte-copied clone that never reads this buffer's
-       stale contents is correct by construction. */
+       ONE BUFFER IS ENOUGH FOR THE TWO ASKS BECAUSE ONE FORK IS IN FLIGHT: step_fork_ask refuses a second ask
+       while the first one's operands are still on the header, and the two are sequential on one member — the
+       presence question is settled at `mphase` 3 before the boolean arm at `mphase` 1 is reached. WHAT KEEPS
+       THEM APART IS NOT THIS BUFFER BUT THE NAME EACH COMPOSES INTO IT: JSStepHdr::fork_ask_key is a content
+       hash of the string, so the two ask strings begin with different spec steps and neither one's answer can
+       be consumed at the other's call site. It is SCRATCH and carries nothing across a park — each ask is
+       re-composed from the declaration on every entry, and the key is what survives to match the answer to
+       the question, so a byte-copied clone that never reads this buffer's stale contents is correct by
+       construction. */
     char       ask[160];
 } IdlDictWalk;
 
@@ -1532,13 +1544,13 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
    CALL and never derived here, which is why this is a macro expanded at each site and not a second function
    wrapping the first; the member's own name travels with it because one name (`bubbles`, `capture`) is
    declared by many dictionaries and only the pair says which read it was.
-   WHAT IT NOW REPORTS IS NARROWER AND NO LONGER A MISSING FORK AT THIS READ. §3.2.3's fork is performed by
-   the member loop (idl_concolic_rule answers IDL_CONCOLIC_FORKS for both boolean types, so the crossing does
-   not rewrite them and the loop asks step_tobool_run), so a member read off a converted dictionary arrives as
-   a real truth value. An unknown here says one of three things — the object never went through §3.2.17, the
-   member is not declared a boolean, or it is a NO-DEFAULT boolean whose source was itself unknown so its
-   PRESENCE is the unanswered question rather than its truth value. The refusal itself is where that split is
-   stated, because only the third is work and it is owed at a site that can hold three worlds. */
+   WHAT IT NOW REPORTS IS AN OBJECT OR A DECLARATION AND NO LONGER A MISSING FORK ANYWHERE. §3.2.3's fork is
+   performed by the member loop (idl_concolic_rule answers IDL_CONCOLIC_FORKS for both boolean types, so the
+   crossing does not rewrite them and the loop asks step_tobool_run), and the loop also decides §3.2.17 step
+   4.1.4's PRESENCE at the outcome seam before that — which is what closed the one case that used to leave a
+   NO-DEFAULT boolean crossing as itself. So a member read off a converted dictionary arrives as a real truth
+   value or as an absence. An unknown here says one of two things — the object never went through §3.2.17, or
+   the member is not declared a boolean — and the refusal itself is where that split is stated. */
 bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
                          const char *file, int line);
 #define idl_dict_bool(ctx, dict, name) idl_dict_bool_at((ctx), (dict), (name), __FILE__, __LINE__)

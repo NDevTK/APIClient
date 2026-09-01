@@ -606,6 +606,29 @@ bool idl_declared_before_seal(int stepid)
    member states its LEVEL and the check is over both.
    ONE STATEMENT of the rule, because there are now two kinds of declaration to check it on: a member's own
    dictionary argument and a NESTED dictionary a sequence's element type names. */
+/* …AND THE OTHER THING A MEMBER'S DECLARATION CAN SAY TWICE, checked beside it and never inside it: the two
+   are different questions over the same table and a function answering both would be one abort message for two
+   diagnoses. Web IDL §2.7 Dictionaries' grammar gives `required` its own production —
+   `DictionaryMemberRest :: required TypeWithExtendedAttributes identifier ;` — which carries no `Default`,
+   where the other one (`Type identifier Default ;`) is the only place a default can be written. So no IDL can
+   declare both, and a table in this tree that does states two answers to what an ABSENT member means:
+   §3.2.17's step 4.1.5 would place the default and step 4.1.6's TypeError would never run.
+   IT IS CHECKED AT THE DECLARATION AND NOT WHERE IT IS READ, because the reader
+   (idl_member_absence_is_a_world) is reached only for a member whose SOURCE is unknown external input — so a
+   contradictory declaration on a dictionary no flow ever hands an unknown would sit there unreported, and the
+   fact is about the table rather than about any conversion of it. Both roads a member list arrives by call
+   this, exactly as they both call the order check. */
+static void idl_dict_default_check(const IdlDictMember *m)
+{
+    DCHECK(!(m->required && m->dflt != IDL_DEFAULT_NONE),
+           "a dictionary member was declared BOTH required and with a default value, which Web IDL §2.7 "
+           "Dictionaries' own grammar cannot express — `required` takes the production with no `Default` on "
+           "it. The declaration states two answers to what an absence means, and §3.2.17 step 4.1.5 would "
+           "place the default so step 4.1.6's TypeError never ran: drop whichever of the two the member's own "
+           "IDL does not write");
+    (void)m;
+}
+
 static void idl_dict_order_check(const IdlDictMember *members, int n, int k)
 {
     DCHECK(k >= 0 && k < n, "a dictionary's order check was asked about a member outside the table — `n` is "
@@ -704,6 +727,7 @@ static void idl_dict_intern(JSContext *ctx, const IdlDictDecl *d)
     g_ndicts++;
     for (k = 0; k < d->n; k++) {
         idl_dict_order_check(d->members, d->n, k);
+        idl_dict_default_check(&d->members[k]);
         atoms[k] = JS_NewAtom(ctx, d->members[k].name);
         if (d->members[k].dict) idl_dict_intern(ctx, d->members[k].dict);
     }
@@ -1824,6 +1848,47 @@ static void idl_member_iface(const IdlDictMember *dm, const IdlDictLevel *w,
     *narrow = dm->iface ? dm->iface_narrow : w->narrow;
 }
 
+/* IS "THE MEMBER IS ABSENT" A WORLD OF ITS OWN — the one predicate behind the presence fork below, and it is
+ * READ OFF WEB IDL §2.7 Dictionaries rather than decided here.
+ *
+ * §2.7 states the whole enumeration in two sentences and this is those two sentences in C. "Dictionary members
+ * that are specified as required, or that are specified as having a default value, will always have such
+ * corresponding entries. Other members' entries might or might not exist in the dictionary value." And, for
+ * what an absence then DOES: "In the JavaScript binding, a value of undefined for the property corresponding to
+ * a dictionary member is treated the same as omitting that property. Thus, it will cause an error if the member
+ * is required, or will trigger the default value if one is present, or will result in no entry existing in the
+ * dictionary value otherwise."
+ *
+ * SO A DEFAULTED MEMBER'S PRESENCE IS NOT A QUESTION ANY CONSUMER CAN ASK, WHICH IS A PROOF AND NOT A JUDGEMENT
+ * — and it is the general form of the argument the boolean exception used to make for itself. §3.2.17's
+ * IDL-to-JavaScript direction says the consequence outright, in the note under its step 3.1.2: "Recall that if
+ * member has a default value, then key will always exist in V." An absent defaulted member and a present one
+ * differ ONLY in the member's VALUE, and over an unknown source the value this loop places is the unconstrained
+ * unknown itself, whose domain CONTAINS the default — so every predicate that could tell the two apart forks
+ * and pins at the seam that owns it. Forking presence there buys an arm for a world the domain already spans,
+ * which §Solver-half's "err toward MORE exploration" does not license and this file's own boolean proof already
+ * refused one type over. `boolean` carries its default in the TYPE and not in `dflt` (ToBoolean(undefined) is
+ * false, which IS the `= false` such a member declares — see IDL_BOOLEAN in idl_args.h and the absent-member
+ * rewrite in the loop below), so it is read here as the defaulted member it is.
+ *
+ * AND THE TWO REMAINING SHAPES ARE DISTINCT FOR EVERY DECLARED TYPE, WHICH IS WHY THIS ASKS THE DECLARATION AND
+ * NEVER THE TYPE. A `required` member's absent world is step 4.1.6's TypeError — a completion, not a value, so
+ * no value placed on the map can stand for it, and it is the arm a `catch` reaches. A member with no default
+ * and no `required` has no entry at all when absent, and no unknown can carry that either: an unknown IS a
+ * member that exists. DOM §2.7 Interface EventTarget's flatten more options step 4.2 ("If options["passive"]
+ * exists, then set passive to options["passive"]") and DOM §4.3.1 Interface MutationObserver's `observe` both
+ * branch on exactly that, over members that are not booleans as well as over ones that are.
+ *
+ * REQUIRED AND A DEFAULT CANNOT BOTH BE DECLARED, so the two tests below are exclusive rather than ordered —
+ * §2.7's grammar gives `required` a production with no `Default` on it. That is asserted at the DECLARATION
+ * (idl_dict_default_check) and not here, because this reader runs only for a member whose source is unknown
+ * external input and a contradictory table on a dictionary no flow hands an unknown would go unreported. */
+static bool idl_member_absence_is_a_world(const IdlDictMember *dm)
+{
+    if (dm->required) return true;
+    return dm->dflt == IDL_DEFAULT_NONE && dm->type != IDL_BOOLEAN;
+}
+
 /* DRIVE THE LEVEL ON TOP one re-entry's worth — WEB IDL §3.2.17 Dictionary types (ES-to-IDL list) step 4.1's
    member loop, "For each dictionary member member declared on dictionary, in lexicographical order", and THE
    ONLY COPY OF IT. Level zero and every pushed level run this same loop, which is what makes a nested
@@ -1855,10 +1920,96 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                 if (r > 0) return r;  /* parked ON THIS MEMBER's read; the resume comes back to it */
                 if (r < 0) return -1;
             }
+            w->mphase = 3;
+        }
+        /* §3.2.17 (ES-to-IDL list) STEP 4.1.4's OWN QUESTION, ASKED — "If jsMemberValue is not undefined,
+           then:", which is the branch every later step of this loop hangs off (4.1.5's default and 4.1.6's
+           TypeError are its two "otherwise" arms). It HAS an answer whenever `src` is a real object: the get
+           read a property, and a concolic is a value the property really holds. It has NONE when `src` is
+           ITSELF unknown external input, because step 4.1.3.1's `? Get` did not read a property at all — it
+           MINTED a value whose unconstrained domain contains `undefined`, so "the member is absent" is a world
+           nothing here has ruled out and the loop used to take the present arm for every one of them.
+           IT IS THE OUTCOME SEAM AND NOT THE BRANCH SEAM, WHICH IS THE ONE DESIGN DECISION HERE. The branch
+           seam is for a predicate a page WRITES, and the page's spelling of this one is `opts.k === undefined`
+           — an equality whose taken arm PINS through concolic_pin, and a pin is stored and read back as a
+           STRING (solver/concolic.c's member read answers a pinned source with JS_NewString). There is no
+           spelling of `undefined` in that vocabulary, so routing this there would answer the absent arm by
+           making every later read of the member the four characters `undefined`, which is the fabrication
+           §@H forbids arriving through the seam that was supposed to be shared. The question this loop is
+           asking is which of §3.2.17's OWN completions it reaches, keyed by (operand, operation, completion),
+           which is what step_fork_run is; the cost is that a page writing the test itself forks a second time
+           over the same fact, which is sound and merely unshared.
+           OUTCOME 0 IS PRESENT, per step_fork_run's one rule on the numbering: it is the completion a run with
+           no forking policy takes and the one an @S candidate re-fire must not be diverted off, and it is what
+           this loop did before the fork existed — so the ABSENT world is the one this ask ADDS.
+           `real` IS STATED WHERE IT IS COMPUTABLE, which no other outcome ask in this tree does yet. A minted
+           member's example is `example_member` of the SOURCE's example read through the key, so where the
+           source HAS an object example the member's undefined example means the key is absent in it — §3.2.17
+           step 4.1.4 treats a slot holding `undefined` as absent too, so the two shapes that answer alike here
+           are the two the spec already calls one thing. Where the source has no object example the two facts
+           "the example says absent" and "there is no example" are one value and must not be averaged, so the
+           ask says UNSTATED, which is a positive statement: both arms still run and neither is marked forced.
+           `in` IS RELEASED BEFORE THE ASK for the reason the §3.2.25 arm and the boolean arm both state — the
+           request takes no `in` to hand it to and the sibling's snapshot is taken at this return, so nothing
+           of the caller's may be live across it. It is already JS_UNDEFINED on every path that reaches the
+           ask (a concolic source is an Object, so the read above consumed it), and the release is the
+           invariant rather than the current arithmetic.
+           IT IS ITS OWN PHASE BECAUSE THE ASK MUST HAPPEN ONCE PER MEMBER. `mphase` 3 is "the read is behind
+           us and step 4.1.4 has not been asked": a member whose conversion later PARKS (a ToString, a
+           sequence's pull, a pushed level) re-enters this loop carrying the answer to THAT request in `in`,
+           and an ask standing in front of it would free the answer the parked conversion is waiting for — the
+           same hazard the §3.2.25 arm guards with `started`, one level in. */
+        if (w->mphase == 3) {
+            if (concolic_is(w->mv) && concolic_is(w->src) && idl_member_absence_is_a_world(dm)) {
+                JSValue srcex = concolic_example(ctx, w->src);
+                int arm = 0, real = JS_OUTCOME_REAL_UNSTATED;
+
+                if (JS_IsObject(srcex)) {
+                    JSValue mex = concolic_example(ctx, w->mv);
+
+                    real = JS_IsUndefined(mex) ? 1 : 0;
+                    JS_FreeValue(ctx, mex);
+                }
+                JS_FreeValue(ctx, srcex);
+                JS_FreeValue(ctx, in);
+                in = JS_UNDEFINED;
+                /* THE ASK NAMES THE MEMBER AND NAMES ITSELF APART FROM THE BOOLEAN ONE, because
+                   JSStepHdr::fork_ask_key is a content hash of this string and this machine now makes TWO
+                   asks per member: a §3.2.3 boolean's answer consumed at this call site, or this one's
+                   consumed at that one, is a real arm recorded under the other operation's key and nothing
+                   else would catch it. The name is the DECLARATION's — the spec step, the member's
+                   identifier, its inheritance LEVEL and the dictionary — and never a cursor or a position in
+                   anything the page moves. ONLY THE TOP LEVEL CAN BE STANDING HERE (every level below it is
+                   parked at `mphase` 1 on the member that pushed it), so those name it uniquely. */
+                snprintf(walk->ask, sizeof walk->ask,
+                         "Web IDL §3.2.17 step 4.1.4 presence of member `%s` (level %u) of %s",
+                         dm->name, (unsigned)dm->level, idl_dict_where(w));
+                r = step_fork_run(ctx, hdr, w->mv, walk->ask, 2, real, &arm);
+                if (r) return r;   /* parked ON THIS MEMBER's presence question, or forked at it */
+                DCHECK(arm == 0 || arm == 1,
+                       "§3.2.17 step 4.1.4's presence question came back on a third arm — a member is present "
+                       "or it is not, and the two 'otherwise' steps below (4.1.5's default, 4.1.6's "
+                       "TypeError) are what the second one MEANS rather than a third world it could be in");
+                if (arm == 1) {
+                    /* THE ABSENT ARM IS THE STATE THIS LOOP ALREADY PRODUCES FOR A MEMBER THAT REALLY IS
+                       ABSENT, and it is written as that state rather than as a second spelling of it: every
+                       step below — 4.1.6's throw for a required member, the absent-member rewrite, and the
+                       place that follows — already reads `undefined` as "no entry", and idl_dict_get answers
+                       a property holding undefined and a property that is not there identically. A skip that
+                       left the member off `w->out` would be a SECOND representation of absence, and two
+                       spellings of one state is what the readers below would then have to agree about. */
+                    JS_FreeValue(ctx, w->mv);
+                    w->mv = JS_UNDEFINED;
+                }
+            }
             w->mphase = 1;
-            /* `in` is released for the reason step 4.1.5's arm below states: a non-object source consumed
+            /* §3.2.17 step 4.1.6, WHICH IS WHY IT MOVED HERE FROM THE READ ABOVE. It is one of the two arms
+               the question above decides between, so asking it before that question was answered made a
+               required member's absent world unreachable the moment the source was unknown: `mv` was the
+               minted concolic, JS_IsUndefined was false, and the TypeError a `catch` is behind never ran.
+               `in` is released for the reason step 4.1.5's arm below states: a non-object source consumed
                nothing on the way here, and this is the other edge that can be reached holding it. */
-            if (dm->required && JS_IsUndefined(w->mv)) {                 /* step 4.1.6 */
+            if (dm->required && JS_IsUndefined(w->mv)) {
                 JS_FreeValue(ctx, in);
                 JS_ThrowTypeError(ctx, "required member %s of %s is undefined",
                                   dm->name, idl_dict_where(w));
@@ -1913,33 +2064,15 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            EVERY OTHER RULE IS UNCHANGED: CROSSES and UNASKED both reach IDL_ANY exactly as they did, so a
            DOMString member still carries its bytes to the body and a dictionary member is still a bag of
            reads.
-           RESIDUAL — WHAT IS NOT COVERED, AND WHY TWO ARMS ARE COMPLETE FOR ONE BOOLEAN TYPE AND NOT THE
-           OTHER. §3.2.3's fork produces exactly two worlds, and this member loop's own step 4.1.3 question —
-           "is jsMemberValue undefined" — is a THIRD one whenever it has no answer. It always has an answer
-           when `src` is a real object: the get returned a value, and a concolic is a value. It has none when
-           `src` is ITSELF unknown, because then step 4.1.3.1's `? Get` did not read a property at all — it
-           MINTED an unknown whose unconstrained domain contains `undefined`, so "the member is absent" is a
-           world nothing here has ruled out.
-           FOR IDL_BOOLEAN THAT THIRD WORLD IS NOT A THIRD WORLD, which is a proof and not a case list: step
-           4.1.5 gives an absent member "member's default value", and a `boolean` member's default is one of
-           the two truth values this fork already runs, so the absent world is byte-identical to one of the
-           arms and two arms cover three cases. FOR IDL_BOOLEAN_NO_DEFAULT it is a real third world — that is
-           the entire reason the type exists (see idl_args.h) — and coercing there would DELETE it. So a
-           no-default boolean read off an unknown source keeps crossing, exactly as it did before this arm
-           existed, and the body that reads it keeps answering its own presence question.
-           WHAT THE NEXT DIFF BUILDS: step 4.1.3.2's presence question as a fork ON THIS WALK — a second
-           branch-seam ask, under its own ask name (this machine has one ask today and `fork_ask_key` is what
-           keeps two apart), whose ABSENT arm leaves the member off `w->out` entirely and whose PRESENT arm
-           falls through to the arms below. When that exists this exception goes and the condition is the bare
-           rule again.
-           HOW ITS ABSENCE WOULD SHOW: `addEventListener("wheel", f, location.hash)` down §3.2.25's dictionary
-           arm reads `passive` off an unknown bag, and DOM §2.7 Interface EventTarget's flatten more options
-           makes ABSENT mean "the default passive value" (true for a wheel listener on a Window) where present
-           -and-false means false. Remove this exception without the presence fork and that world is gone: the
-           listener is non-passive in every flow, and nothing crashes to say so. */
-        if (mt != IDL_ANY && concolic_is(w->mv) &&
-            (idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS ||
-             (mt == IDL_BOOLEAN_NO_DEFAULT && concolic_is(w->src))))
+           AND THE CONDITION IS THE BARE RULE AGAIN, WHICH IT WAS NOT. A no-default boolean read off an
+           UNKNOWN source was excepted here and crossed, because §3.2.3's two arms cannot say "absent" and
+           that member's absent world is its own — and the exception was the honest answer only while step
+           4.1.4's presence question went unasked. It is asked above now, before this line is reached, so a
+           member that arrives here is one whose presence this flow has DECIDED: the absent arm turned `mv`
+           into `undefined` and the rewrite two paragraphs up already sent it to IDL_ANY, and the present arm
+           is exactly the value §3.2.3 was always right to fork over. Two arms are complete for both boolean
+           types because the third world is decided one question earlier and by a different question. */
+        if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS)
             mt = IDL_ANY;
         /* AND THE ONLY FORK THIS LOOP PERFORMS IS §3.2.3's, ASSERTED WHERE THE UNCROSSING HAPPENS. The two
            §3.2.25 unions that also answer FORKS resolve their arm at an ARGUMENT position, where the value is
@@ -4290,20 +4423,19 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name)
    determined: the loop asks step_tobool_run at the BRANCH seam, both worlds run, and what it places on the
    dictionary is a real `true` or a real `false`. So by the time a body reads a member, the fork has already
    happened and this reader has nothing left to decide.
-   WHICH NARROWS WHAT THE REFUSAL BELOW MEANS TO THREE THINGS, and the old message named none of them: it
-   asked for a remedy — declare the member a step machine and fork at its own stage — that is now both already
-   built and at the wrong seam, so a reader who took it at its word would build a fork that exists.
+   WHICH NARROWS WHAT THE REFUSAL BELOW MEANS TO TWO THINGS, NEITHER OF WHICH IS A MISSING FORK. It named a
+   remedy once — declare the member a step machine and fork at its own stage — that is now both already built
+   and at the wrong seam, so a reader who took it at its word would build a fork that exists.
    (1) THE OBJECT NEVER WENT THROUGH §3.2.17, so no conversion ran on anything it holds.
    (2) THE MEMBER IS NOT DECLARED A BOOLEAN in the IdlDictMember list this operation registered, so the loop
        had no §3.2.3 arm to take for it.
-   (3) IT IS A NO-DEFAULT BOOLEAN WHOSE PRESENCE IS UNKNOWN — the source object was itself unknown external
-       input, so step 4.1.3.1's `? Get` minted the member rather than reading it, "absent" is a world nothing
-       has ruled out, and §3.2.3's two arms cannot express three. The member loop crosses that one on purpose
-       (see the residual at its crossing), and the BODY is what still owes the three-armed ask.
-   Only (3) is a request for work, and the work is at the READ rather than here: this reader hands back a C
-   `bool`, which is two worlds, so it has nowhere to put the third. (1) and (2) are declaration or builder
-   defects. It stays a DCHECK rather than being deleted because nothing else tells the three apart from a
-   confident `true`.
+   A THIRD CASE STOOD HERE AND IS GONE BECAUSE THE THING IT ASKED FOR WAS BUILT: a no-default boolean read off
+   an unknown SOURCE used to cross, since "the member is absent" was a world §3.2.3's two arms cannot express.
+   The member loop asks §3.2.17 step 4.1.4's presence question itself now, so that member reaches its readers
+   as a real truth value on the present arm and as an absence on the other, and there is no route left by
+   which an unknown arrives here holding an unanswered presence question. Both remaining cases are declaration
+   or builder defects. It stays a DCHECK rather than being deleted because nothing else tells them apart from
+   a confident `true`.
    IT KEEPS THE CALLER'S ADDRESS for the reason idl_args.h states at the macro: one name (`composed`,
    `capture`) is declared by many dictionaries, and only the pair of the name and the site says which read it
    was. */
@@ -4314,16 +4446,14 @@ bool idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name, const
 
     DCHECKF(!concolic_is(v),
             "the boolean dictionary member `%s` read at %s:%d is UNKNOWN EXTERNAL INPUT, and ToBoolean below "
-            "would pin it to `true` and delete the false world. Web IDL §3.2.17's member loop forks §3.2.3 at "
-            "the branch seam and places a real truth value, so exactly three things put an unknown here. "
+            "would pin it to `true` and delete the false world. Web IDL §3.2.17's member loop decides step "
+            "4.1.4's PRESENCE at the outcome seam and then forks §3.2.3 at the branch seam, so a member that "
+            "came through it is a real truth value or an absence and never this. Exactly two things put an "
+            "unknown here, and both are declaration or builder defects rather than work owed at this read. "
             "(1) This object never went through §3.2.17 — fix whoever built it. (2) The IdlDictMember list "
             "this operation registered does not declare `%s` IDL_BOOLEAN / IDL_BOOLEAN_NO_DEFAULT — fix the "
-            "declaration. (3) `%s` is a NO-DEFAULT boolean whose SOURCE object was itself unknown, so step "
-            "4.1.3.1's `? Get` minted it and `absent` is a world §3.2.3's two arms cannot express; the loop "
-            "crosses that case deliberately. Only (3) is work, and it is not here: this reader answers with a "
-            "C `bool`, which is two worlds, so the three-armed ask belongs at the site that can hold three "
-            "(a step machine stage asking whether the member EXISTS before asking what it is)",
-            name, file, line, name, name);
+            "declaration",
+            name, file, line, name);
     b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;
@@ -4442,6 +4572,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
         CHECK(idl_member(idx)->dict_atoms, "idl: OOM interning a dictionary's member names");
         for (k = 0; k < nmembers; k++) {
             idl_dict_order_check(members, nmembers, k);
+            idl_dict_default_check(&members[k]);
             idl_member(idx)->dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
             /* A NESTED DICTIONARY is interned HERE, at the declaration, and so is every dictionary reachable
                from it: the conversion needs its member atoms live across a suspension, and the declaration is
