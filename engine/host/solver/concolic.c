@@ -64,7 +64,10 @@ typedef struct {
     signed char br_neg; /* 1 = this value is the logical COMPLEMENT of the predicate `br_key` names */
     JSValue example;    /* concrete example, or JS_UNDEFINED */
     int cmp_op;         /* for an EQUALITY RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
-    char *cmp_tok;      /* the concrete side of the equality */
+    char *cmp_tok;      /* the concrete side of the equality, SPELLED (§7.1.19 ToString of the operand) */
+    signed char cmp_kind;  /* …and WHAT it spells (ConcolicLit) — the spelling's other half, never separable
+                              from it: decide.c pins with both or pins nine characters where the page wrote
+                              `undefined`. Written with `cmp_tok` at pred_new, copied with it at pred_copy. */
     char *cmp_subj;     /* …and the HOLE KEY of the unknown side — see concolic_cmp_subject. The three are ONE
                            observation: written together at pred_new, asserted together there, and read
                            together by decide.c, which pins on one arm and excludes on the other. */
@@ -225,15 +228,85 @@ static char *shapef(const char *fmt, ...)
    for a Symbol, which that hook would have left PENDING on ctx while reporting success. Every library utility
    that walks a prototype chain or tests an identity against a sentinel object reaches it on its first driven
    call: `while (n !== Object.prototype)` took four real bundles' worth of engine instances down. */
-static const char *operand_tag(JSValueConst v)
+static ConcolicLit operand_kind(JSValueConst v)
 {
-    if (JS_IsString(v))    return "s";
-    if (JS_IsNumber(v))    return "n";
-    if (JS_IsBool(v))      return "b";
-    if (JS_IsNull(v))      return "z";
-    if (JS_IsUndefined(v)) return "u";
-    if (JS_IsBigInt(v))    return "g";
-    return NULL;   /* an Object or a Symbol — unspellable, see above */
+    if (JS_IsString(v))    return CONCOLIC_LIT_STRING;
+    if (JS_IsNumber(v))    return CONCOLIC_LIT_NUMBER;
+    if (JS_IsBool(v))      return CONCOLIC_LIT_BOOL;
+    if (JS_IsNull(v))      return CONCOLIC_LIT_NULL;
+    if (JS_IsUndefined(v)) return CONCOLIC_LIT_UNDEFINED;
+    if (JS_IsBigInt(v))    return CONCOLIC_LIT_BIGINT;
+    return CONCOLIC_LIT_NONE;   /* an Object or a Symbol — unspellable, see above */
+}
+
+/* THE KIND'S ONE-LETTER FIELD IN A COMPOSED IDENTITY — one speller, because the identity a page's own
+   `x === 5` composes and the identity a component's declared member composes must be BYTE-IDENTICAL or the
+   two are two constraint entries over one predicate, each forking the other's settled gate. That is the
+   property page_visibility.h states, and it is what made the hardcoded `"s"` at concolic_new_cmp a defect
+   rather than a shorthand: a second speller cannot be wrong about a string and cannot be right about
+   anything else. */
+static const char *lit_tag(ConcolicLit k)
+{
+    switch (k) {
+    case CONCOLIC_LIT_STRING:    return "s";
+    case CONCOLIC_LIT_NUMBER:    return "n";
+    case CONCOLIC_LIT_BOOL:      return "b";
+    case CONCOLIC_LIT_NULL:      return "z";
+    case CONCOLIC_LIT_UNDEFINED: return "u";
+    case CONCOLIC_LIT_BIGINT:    return "g";
+    case CONCOLIC_LIT_NONE:      break;
+    }
+    DFAILF("a concrete operand was spelled under a kind this file does not name (%d) — the kind is composed "
+           "into the predicate's identity, so an unnamed one either composes no key at all or shares the key "
+           "of a comparison against a different type", (int)k);
+    return NULL;
+}
+
+/* THE PINNED VALUE, BACK — the read-back half of ConcolicLit, and the ONE place a stored (kind, spelling) pair
+   becomes a JSValue again, so the two read sites cannot disagree about what a pin means.
+   IT MINTS THE REAL VALUE AND NOT A DISPLAY OF IT, which is the whole point: §Solver-half's concretize-on-pin
+   says a later branch "is decided by RUNNING the real predicate on a real string", and the interpreter can
+   only do that if what it is handed is the value the flow proved. A Number comes back through §7.1.4
+   ToNumber ( arg ) — the engine's own inverse of the §7.1.19 ToString ( arg ) that spelled it, run on a
+   String primitive so it reaches neither §7.1.1 ToPrimitive nor any of the page's code.
+   -0 COMES BACK AS +0 AND THAT IS A WITNESS RATHER THAN A FABRICATION: §6.1.6.1.20 Number::toString spells
+   both zeroes "0", and §7.2.14 IsStrictlyEqual answers true for `-0 === 0`, so +0 satisfies exactly the
+   predicate this flow observed. */
+static JSValue pin_mint(JSContext *ctx, ConcolicLit kind, const char *val)
+{
+    DCHECK(val != NULL, "a pinned value was minted from no spelling — the kind and the text are written "
+                        "together at concolic_pin, so a kind with no text is an entry whose own writer did "
+                        "not know what it had pinned");
+    switch (kind) {
+    case CONCOLIC_LIT_STRING:    return JS_NewString(ctx, val);
+    case CONCOLIC_LIT_NULL:      return JS_NULL;
+    case CONCOLIC_LIT_UNDEFINED: return JS_UNDEFINED;
+    case CONCOLIC_LIT_BOOL:
+        DCHECK(!strcmp(val, "true") || !strcmp(val, "false"),
+               "a Boolean pin was spelled as something §7.1.19 ToString of a Boolean never produces — the "
+               "spelling is the operand the page's own predicate wrote, so anything else is a token minted "
+               "somewhere that does not go through literal_tok");
+        return JS_NewBool(ctx, !strcmp(val, "true"));
+    case CONCOLIC_LIT_NUMBER: {
+        JSValue s = JS_NewString(ctx, val), n;
+        if (JS_IsException(s)) return s;
+        n = JS_ToNumber(ctx, s);
+        JS_FreeValue(ctx, s);
+        DCHECK(!JS_IsException(n),
+               "§7.1.4 ToNumber ( arg ) threw over a String primitive — its String arm is §7.1.4.1 ToNumber "
+               "Applied to the String Type, which has no abrupt completion, "
+               "which has no abrupt completion, so an exception here is a value that is not the string this "
+               "line just minted");
+        return n;
+    }
+    case CONCOLIC_LIT_BIGINT:
+    case CONCOLIC_LIT_NONE:
+        break;
+    }
+    DFAILF("a pin was stored under a kind the read-back cannot mint (%d) — concolic_pin refuses exactly the "
+           "kinds this switch cannot answer, so reaching here means the store accepted one it may not hold "
+           "and every later read of that source is about to compute a value of the wrong type", (int)kind);
+    return JS_UNDEFINED;
 }
 
 /* THE OPERAND SPELLED — its §7.1.19 ToString, owned by the caller, NULL where it has none. This is also the
@@ -245,7 +318,7 @@ static char *literal_tok(JSContext *ctx, JSValueConst v)
     const char *s;
     char *r;
 
-    if (!operand_tag(v)) return NULL;
+    if (operand_kind(v) == CONCOLIC_LIT_NONE) return NULL;
     s = JS_ToCString(ctx, v);
     if (!s) return NULL;
     r = strdup(s);
@@ -260,14 +333,14 @@ static char *literal_tok(JSContext *ctx, JSValueConst v)
    would run the page's own `toString` from C), so it answers absent and both arms of the branch stay. */
 static char *literal_ident(JSContext *ctx, JSValueConst v)
 {
-    const char *tag = operand_tag(v);
+    ConcolicLit kind = operand_kind(v);
     const char *f[2];
     char *tok, *r;
 
-    if (!tag) return NULL;
+    if (kind == CONCOLIC_LIT_NONE) return NULL;
     tok = literal_tok(ctx, v);
     if (!tok) return NULL;
-    f[0] = tag; f[1] = tok;
+    f[0] = lit_tag(kind); f[1] = tok;
     r = concolic_ident_compose("k", f, 2);
     free(tok);
     return r;
@@ -306,6 +379,11 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    the operator and both operands). One entry holds whichever of the two its key names:
      val   — an EQ gate PINNED the source to a concrete value on its true arm, so later reads compute the REAL
               @H value (`/api/admin`, never `/api/{state}.role`). CONCRETIZE-ON-PIN.
+     valkind — …AND WHAT THOSE BYTES SPELL, which is not decoration on `val` but the other half of it. The
+              spelling is §7.1.19 ToString of the operand the page wrote, so on its own it cannot tell the
+              value `undefined` from the nine-character string; the read-back mints the REAL value from the
+              pair (pin_mint), and a store that could hold a spelling without its kind would be a store whose
+              own reader has to guess. Written and copied wherever `val` is, and never separately.
      truth — a PREDICATE over this source was already decided in this flow. `if (cfg.admin)` is not an equality
               and pins nothing, yet taking its true arm still says the value is truthy FOR THIS FLOW — and a
               bundle branches on the same flag over and over. Without this every one of those branches forked
@@ -349,7 +427,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    downstream re-spells a double and reports a bound the source file does not contain. */
 typedef struct { double num; char *txt; signed char present; signed char inclusive; } BoundSide;
 typedef struct { BoundSide lo, hi; } Bound;
-typedef struct { char *key; char *val; char **excl; int nexcl; Bound *bnd;
+typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
                  ConcolicPred *pred; int npred;
                  signed char truth; signed char pinned_root; signed char ex_contra; } Cons;
 
@@ -513,6 +591,10 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].key = strdup(key); CHECK(g_pins[g_pins_n].key, "concolic: OOM constraint key");
     g_pins[g_pins_n].val = (below && below->val) ? strdup(below->val) : NULL;
     CHECK(!(below && below->val) || g_pins[g_pins_n].val, "concolic: OOM copying an inherited pin value");
+    /* …AND ITS KIND WITH IT, on the same line and under the same condition, because the two are one fact. A
+       copy-up that took the bytes and left the kind behind would hand the sibling a spelling the read-back
+       reconstructs as CONCOLIC_LIT_NONE, which is the one value pin_mint refuses. */
+    g_pins[g_pins_n].valkind = (below && below->val) ? below->valkind : (signed char)CONCOLIC_LIT_NONE;
     /* THE EXCLUSIONS COPY UP WITH THE REST OF THE ENTRY. They are a fact this flow proved, so a copy-up that
        dropped them would make the very same path report an unconstrained parameter the moment a context
        switch happened to fall between the gate and the request that carries the value. */
@@ -579,9 +661,31 @@ static Cons *cons_entry(const char *key) {
    entries then hold one key and the second write is a no-op on the first, which is what `cons_entry` already
    does for every repeated narrowing — writing the mark only for a DERIVED pin would make the direct spelling
    the one case the principal rule missed, and it is the spelling every real bundle writes. */
-void concolic_pin(const char *src, const char *root, const char *val) {
-    Cons *c = cons_entry(src);
+void concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val) {
+    Cons *c;
+    /* THE VOCABULARY IS ASSERTED AT THE MINT, WHICH IS WHERE THE STORE CAN STILL REFUSE. A reader that met a
+       spelling with no kind could only guess, and the guess this store used to make — "everything is a
+       string" — is the defect: `x === undefined` recorded nine characters and every later read of that source
+       computed them. The kind travels from operand_kind through pred_new and concolic_cmp precisely so this
+       line has a fact to check rather than a default to apply. */
+    DCHECK(kind != CONCOLIC_LIT_NONE,
+           "an arm pinned a source to an operand this engine cannot spell — literal_tok answers NULL for an "
+           "Object and a Symbol and the hook mints no token for one, so a pin arriving here with no kind is a "
+           "token composed somewhere that does not go through that classification");
+    /* AND THE KINDS IT MAY NOT HOLD LEAVE NO ENTRY AT ALL — the store accepts exactly what pin_mint can hand
+       back as a value, which is what makes that function's own DFAILF unreachable rather than merely
+       unexpected. The list is spelled here and NOT behind the DCHECK above, because a DCHECK is compiled out
+       in release and a guard that vanishes there would let a release build record a spelling whose kind the
+       read-back answers `undefined` for — the impossible state made impossible in both builds instead of
+       asserted in one. BIGINT is concolic.h's named residual; NONE is the dev abort above, still refused here
+       so release cannot proceed past it either.
+       THE REFUSAL IS BEFORE THE ROOT MARK AS WELL AS BEFORE THE VALUE, because the two are one act: a demand
+       on a principal is a demand for a VALUE, and nothing was pinned here, so recording the mark alone would
+       say a flow demanded a particular principal and leave nothing anywhere saying which. */
+    if (kind == CONCOLIC_LIT_BIGINT || kind == CONCOLIC_LIT_NONE) return;
+    c = cons_entry(src);
     free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
+    c->valkind = (signed char)kind;
     /* A CONCOLIC CARRIES A PROVENANCE AND A ROOT TOGETHER (concolic_alloc asserts it), so a pin taken off one
        and missing the other is a value minted somewhere that does not go through that mint — and what it costs
        is silent: the principal rule below would answer "unpinned" for a flow that demanded an origin, and the
@@ -965,9 +1069,14 @@ void concolic_pins_blob_free(void *blob) {
     cons_seg_unref(b->seg);
     free(b);
 }
-static const char *pin_of(const char *src) {
+/* THE PIN THIS FLOW HOLDS FOR `src`, AS THE VALUE IT IS — the two read sites ask for a JSValue and never for
+   bytes, because a caller handed bytes has to decide what they mean and the two would eventually decide
+   differently. JS_UNINITIALIZED = no pin, which is distinguishable from a pin of `undefined` and is why it is
+   the sentinel: a source pinned to undefined must answer undefined, not "unpinned". */
+static JSValue pin_of(JSContext *ctx, const char *src) {
     const Cons *c = cons_lookup(src);
-    return c ? c->val : NULL;
+    if (!c || !c->val) return JS_UNINITIALIZED;
+    return pin_mint(ctx, (ConcolicLit)c->valkind, c->val);
 }
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
@@ -1681,7 +1790,7 @@ static JSValue example_member(JSContext *ctx, JSValueConst parent_example, JSAto
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
-    const char *field, *pv, *f[2];
+    const char *field, *f[2];
     char *shape, *ident;
     JSValue r;
 
@@ -1696,9 +1805,8 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
         free(shape); free(ident);
         return r;
     }
-    pv = pin_of(shape);                                      /* an EQ gate pinned this source -> the real value */
-    if (pv) {
-        r = JS_NewString(ctx, pv);
+    r = pin_of(ctx, shape);                                  /* an EQ gate pinned this source -> the real value */
+    if (!JS_IsUninitialized(r)) {
         free(shape); free(ident);
         return r;
     }
@@ -1754,7 +1862,7 @@ static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
  * and `tok` are the PIN, which only an equality against a concrete side has (an ordering narrows a domain and
  * determines no value — §Solver-half: a range-gated parameter stays a domain-annotated shape). */
 static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root, char *ia, char *ib,
-                        int eq_kind, const char *tok, const char *subj)
+                        int eq_kind, ConcolicLit tok_kind, const char *tok, const char *subj)
 {
     const char *f[3];
     char *ident;
@@ -1776,6 +1884,15 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
            "a comparison result's operator and pin token disagree about whether its arms determine anything "
            "— the two are written together at this mint and read together by decide.c, which pins on one arm "
            "and records the exclusion on the other");
+    /* THE TOKEN AND ITS KIND ARE ONE ARGUMENT IN TWO HALVES, asserted where they meet. A spelling with no
+       kind is what decide.c would pin as a string whatever the page compared against — the nine characters of
+       `undefined` for a value the flow proved falsy — and a kind with no spelling is a type stated about
+       nothing. Neither is recoverable downstream: by the time a later read asks the store, the operand is
+       gone and only the pair is left. */
+    DCHECK((tok != NULL) == (tok_kind != CONCOLIC_LIT_NONE),
+           "a comparison result's pin token and its KIND disagree about whether the concrete side can be "
+           "spelled at all — the two come from one classification (operand_kind, through literal_tok), so a "
+           "value carrying one without the other is a pin whose own mint cannot say what type it pinned");
     f[0] = op; f[1] = ia; f[2] = ib;
     ident = concolic_ident_compose("?", f, 3);
     free(ia); free(ib);
@@ -1786,6 +1903,7 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     c->cmp_op = eq_kind;
     c->cmp_tok = tok ? strdup(tok) : NULL;
     CHECK(!tok || c->cmp_tok, "concolic: OOM recording the value an equality pins to");
+    c->cmp_kind = (signed char)tok_kind;
     c->cmp_subj = subj ? strdup(subj) : NULL;
     CHECK(!subj || c->cmp_subj, "concolic: OOM recording the hole an equality is a fact about");
     return r;
@@ -1897,6 +2015,7 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
            "fire naming a defect one mint away from here");
     d->cmp_op = s->cmp_op;
     if (s->cmp_tok)        { d->cmp_tok        = strdup(s->cmp_tok);        CHECK(d->cmp_tok,        "concolic: OOM carrying an equality's token through a negation"); }
+    d->cmp_kind = s->cmp_kind;   /* the token's other half — carried on the same line, for `cmp_tok`'s reason */
     if (s->cmp_subj)       { d->cmp_subj       = strdup(s->cmp_subj);       CHECK(d->cmp_subj,       "concolic: OOM carrying an equality's hole through a negation"); }
     if (s->cmp_subj_ident) { d->cmp_subj_ident = strdup(s->cmp_subj_ident); CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation"); }
     d->rel_op  = s->rel_op;
@@ -1923,14 +2042,24 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
    own source (HTML §6.2's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
    page's own `x === tok` composes for the same source and token, which is what makes the two ONE constraint
    entry — the property page_visibility.h states and now the encoding rather than a coincidence of spelling. */
-JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok) {
+JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit kind, const char *tok) {
     const char *sf[1], *kf[2];
 
     DCHECK(op == OPCMP_EQ || op == OPCMP_NE,
            "a comparison result was declared with an operator that is neither an equality nor an inequality — "
            "an ordering is minted by the relational hook, which composes the engine's own operator id");
+    /* THE COMPONENT STATES THE KIND AND THIS ENTRY NO LONGER ASSUMES IT. It spelled `"s"` unconditionally,
+       which is a claim about every component that will ever declare such a member and not about this call:
+       a member comparing against a number would have composed the key of a comparison against the STRING of
+       its digits — a different predicate from the one the page's own `x === 5` composes, so the two would
+       fork each other's settled gate — and pinned the source to those digits. The kind is an argument for the
+       same reason the token is: only the caller knows it, and there is no default that is right. */
+    DCHECK(kind != CONCOLIC_LIT_NONE,
+           "a component declared its member as a comparison against an operand this engine cannot spell — an "
+           "Object or a Symbol has no identity that survives the park a resumed flow replays through, so a "
+           "member whose IDL says it compares against one is stating a predicate no key can name");
     sf[0] = src;
-    kf[0] = "s"; kf[1] = tok;   /* the token is a string literal by construction here */
+    kf[0] = lit_tag(kind); kf[1] = tok;
     /* AND IT IS THE **STRICT** SPELLING, WHICH IS WHAT MAKES THIS ONE ENTRY WITH THE PAGE'S OWN TEST. The
        specs that define these members define them as strict equalities of strings — HTML §6.2 "Page
        visibility" states this one as "The `hidden` getter steps are to return true if this's visibility state
@@ -1944,7 +2073,8 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *to
        (concolic_source_wrap asserts exactly that), so stripping them gives `src` back — stated here rather
        than by calling the stripper on a shape this function was never handed. */
     return pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
-                    concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2), op, tok, src);
+                    concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
+                    op, kind, tok, src);
 }
 /* …AND THE TWIN FOR A RELATION OVER TWO LIVE VALUES, for a browser component whose own algorithm compares two
  * operands either of which may be unknown (HTML §8.7's timer task source orders one expiry against another).
@@ -1974,13 +2104,26 @@ JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValue
            "in the frontier over a question the engine can already answer");
     opq = concolic_is(a) ? a : b;
     return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq),
-                    ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL, NULL);
+                    ident_of_operand(ctx, a), ident_of_operand(ctx, b),
+                    OPCMP_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
 }
 
-int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
+int concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const char **ptok) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    if (!c || c->cmp_op == OPCMP_NONE) return OPCMP_NONE;
-    if (psrc) *psrc = c->src; if (ptok) *ptok = c->cmp_tok;
+    if (!c || c->cmp_op == OPCMP_NONE) {
+        if (pkind) *pkind = CONCOLIC_LIT_NONE;
+        return OPCMP_NONE;
+    }
+    /* THE KIND IS ANSWERED WHEREVER THE TOKEN IS, and the assert is here rather than at the caller because
+       this is the only place that can still see the value both were written on. A caller handed a spelling
+       and no kind pins the spelling as a string — nine characters where the page wrote `undefined`. */
+    DCHECK(c->cmp_tok == NULL || c->cmp_kind != (signed char)CONCOLIC_LIT_NONE,
+           "a comparison result carries a pin token with no KIND — the two are written together at pred_new "
+           "and asserted together there, so a value holding only the spelling is one minted somewhere that "
+           "does not go through that mint, and its pin would concretize a source to the wrong type");
+    if (psrc) *psrc = c->src;
+    if (pkind) *pkind = (ConcolicLit)c->cmp_kind;
+    if (ptok) *ptok = c->cmp_tok;
     return c->cmp_op;
 }
 
@@ -2112,6 +2255,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     JSValueConst opq, other;
     const char *src, *root;
     char *tok = NULL, *iu, *io, *subj;
+    ConcolicLit kind = CONCOLIC_LIT_NONE;
     JSValue res;
 
     if (!ca && !cb) return 0;
@@ -2128,7 +2272,12 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        i.e. runs the page's own code, so naming the object here would be inventing that call's result — which
        §@H forbids in the same words it forbids inventing `6` for `x > 5`. The predicate still forks: the
        comparison result below carries the operator and both operands' identities, and only the PIN is absent. */
-    if (!concolic_is(other)) tok = literal_tok(ctx, other);
+    /* THE KIND IS TAKEN FROM THE SAME CLASSIFICATION AND ON THE SAME LINE AS THE SPELLING, because it is the
+       spelling's other half: §7.1.19 ToString flattens `undefined`, `null`, `0` and `false` onto text that is
+       also a legal STRING operand, so a token travelling alone reaches decide.c as a string whatever the page
+       compared against. `operand_kind` is what literal_tok already consults to decide there is a token at
+       all, so asking it here cannot disagree with that answer. */
+    if (!concolic_is(other)) { tok = literal_tok(ctx, other); kind = operand_kind(other); }
     /* EQUALITY IS SYMMETRIC, so `x === 'a'` and `'a' === x` compose to ONE identity: the unknown operand is
        written first, and where BOTH are unknown the two identities are ordered between themselves. Without
        that the same predicate written the other way round would be a second fact and fork a second time —
@@ -2157,7 +2306,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        file already fixed once for the relational operators ("`x < 700` and `x > 700` were one fact too"). The
        algorithm is now stated by the caller, so the identity can say which. */
     res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, iu, io,
-                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok, subj);
+                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, kind, tok, subj);
     /* AND WHICH VALUE THE PREDICATE IS ABOUT, BY ITS OWN IDENTITY — read off `opq` BEFORE any reordering, and
        under exactly the condition the hole is minted under (`subj`, which is `tok`, which is "one side is a
        spellable literal"). `iu` above is NOT this: it is swapped with `io` when both operands are unknown, so
@@ -2314,7 +2463,8 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     {
         JSValueConst opq = ca ? a : b, other = ca ? b : a;
         JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq),
-                               ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL, NULL);
+                               ident_of_operand(ctx, a), ident_of_operand(ctx, b),
+                               OPCMP_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
         /* A BOUND EXISTS ONLY WHERE THE RELATION'S OWN MEANING IS DETERMINED, and §7.2.12 IsLessThan is what
            decides that. Step 3 takes the STRING comparison when px and py are BOTH Strings and the numeric
            one otherwise, so a concrete side that is a Number puts the comparison on the numeric path whatever
@@ -3239,10 +3389,10 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
        AFTER THE CANDIDATE AND NEVER BEFORE IT: a candidate re-fire is delivering the attacker's bytes at this
        exact source, and a pin the exploring run happened to take must not stand in front of them. */
     if (!cand_matches(src)) {
-        const char *pv = src ? pin_of(src) : NULL;
-        if (pv) {
+        JSValue pv = src ? pin_of(ctx, src) : JS_UNINITIALIZED;
+        if (!JS_IsUninitialized(pv)) {
             JS_FreeValue(ctx, example);
-            return JS_NewString(ctx, pv);
+            return pv;
         }
     }
     f[0] = src;

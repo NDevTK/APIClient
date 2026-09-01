@@ -6,7 +6,11 @@
  * two places, so a flow that decided `document.hidden` would learn nothing about `visibilityState === "hidden"`
  * and the solver would fork the same question twice and believe contradictory things in one world.
  * So `visibilityState` IS the source and `hidden` is `concolic_new_cmp(source, ==, "hidden")` — the spec's own
- * sentence, expressed in the value type. Both members then key the SAME path constraint.
+ * sentence, expressed in the value type. Both members then key the SAME path constraint — and the KIND of the
+ * compared-against operand is part of that key, so this entry states it (CONCOLIC_LIT_STRING) rather than
+ * letting the mint assume one: a member comparing against a number under a mint that spelled every operand as
+ * a string would compose the key of a comparison against the DIGITS, which is a different predicate from the
+ * one the page's own test composes and would fork the gate this design exists to share.
  *
  * IT IS A SOURCE RATHER THAN A CONSTANT because a real user CAN background the tab, and a bundle's
  * `if (document.hidden) return;` is a gate with real code behind it — polling loops, analytics beacons,

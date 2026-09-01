@@ -1460,6 +1460,7 @@ static void decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
    where its sibling comes back, and it is the only thing that differs between them. */
 static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking) {
     const char *src = NULL, *tok = NULL;
+    ConcolicLit tok_kind = CONCOLIC_LIT_NONE;
     char *key;
     int op, forked = 0, arm, real, neg;
 
@@ -1478,7 +1479,13 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
 
     /* If the condition is a COMPARISON result (`x === 'admin'`), the taken arm may PIN the source to a concrete
        value — CONCRETIZE-ON-PIN, so later reads compute the REAL @H value, not the shape. */
-    op = concolic_cmp(cond, &src, &tok);
+    /* THE TOKEN'S KIND COMES BACK WITH IT, because a spelling is not a value. §7.1.19 ToString flattens
+       `undefined`, `null`, `0` and `false` onto text that is also a legal string operand, so a pin taken off
+       the spelling alone concretizes the source to that TEXT — `x === undefined` on its true arm made every
+       later read of `x` compute the nine characters "undefined", which is truthy where the flow had just
+       proved the value falsy. That is the one failure mode worse than not pinning at all: an absent pin forks
+       and explores both worlds, a wrongly typed one decides an arm nothing can contradict. */
+    op = concolic_cmp(cond, &src, &tok_kind, &tok);
 
     /* THE OBSERVATION, MADE ONCE, BEFORE ANYTHING IS DECIDED — and read by both of the things that depend on
        it: which arm this flow keeps if this branch is new, and whether the arm it ends on is FORCED. Taking it
@@ -1503,7 +1510,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        fact §Attacker-sources' unforgeable-origin rule is decided by, and the one thing no later reader can
        recover, because by the time the value reaches a sink the identity that was pinned is gone. */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
-        concolic_pin(src, concolic_root_c(cond), tok);
+        concolic_pin(src, concolic_root_c(cond), tok_kind, tok);
     /* AND THE OTHER ARM, WHICH IS AN OBSERVATION AND NOT AN ABSENCE — the half this line did not have.
        Forced multi-path runs BOTH arms of every `x === "admin"`, so the two branches of this `if` fire at
        exactly the same rate: one flow leaves knowing the value IS "admin", and its sibling leaves having

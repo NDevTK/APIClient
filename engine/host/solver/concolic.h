@@ -371,7 +371,40 @@ const char *concolic_source_encodes(const char *root);
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
    the taken arm pins/negates. */
 enum { OPCMP_NONE = 0, OPCMP_EQ = 1, OPCMP_NE = 2 };
-JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok);  /* a comparison-result bool */
+/* WHAT KIND OF PRIMITIVE A COMPARISON'S CONCRETE SIDE IS — carried BESIDE its spelling everywhere the spelling
+   goes, because a spelling alone is not a value and the pin store's whole job is to hand a later read the
+   VALUE back.
+   THE DEFECT IT CLOSES IS NOT A PARTIAL ANSWER, IT IS A CONFIDENT WRONG ONE. §Solver-half's CONCRETIZE-ON-PIN
+   argues that "once `x==='admin'` pins the value, a later READ of that source returns the pinned bytes, so a
+   later branch on it is decided by RUNNING the real predicate on a real string and does not fork at all" —
+   and that argument holds exactly while the pinned bytes ARE the value. A pin token is §7.1.19 ToString of the
+   operand the page wrote, so `x === undefined` spelled `"undefined"` and a read that answered with those nine
+   CHARACTERS handed the interpreter a truthy string where the flow had proved the value falsy: `typeof x`
+   answered "string", `if (x)` took the arm the gate had just disproved, and `x + 1` composed "undefined1".
+   That is worse than having no pin at all — an absent pin FORKS and explores both worlds, while a wrongly
+   typed one decides one arm and is never contradicted. `x === undefined` and `x === 0` are among the most
+   common predicates a minified bundle writes, so the type is not an edge of this mechanism, it is half of it.
+   THE STORE HOLDS TEXT AND MUST GO ON HOLDING IT, which is why this is a tag beside the spelling rather than a
+   value: a pin rides a per-flow constraint that is FROZEN into structurally-shared segments at every fork and
+   parked while another flow runs, and a live JSValue crosses neither a fork's freeze, an instance, a session
+   nor a park. (tag, §7.1.19 spelling) is a total encoding of every primitive this engine may name, and the
+   read-back is the spec's own inverse — §7.1.4 ToNumber for a Number, run by the engine rather than by a
+   hand-rolled parser. */
+typedef enum {
+    CONCOLIC_LIT_NONE = 0,   /* an Object or a Symbol: no spelling this engine may take — see literal_tok */
+    CONCOLIC_LIT_STRING,
+    CONCOLIC_LIT_NUMBER,
+    CONCOLIC_LIT_BOOL,
+    CONCOLIC_LIT_NULL,
+    CONCOLIC_LIT_UNDEFINED,
+    CONCOLIC_LIT_BIGINT
+} ConcolicLit;
+/* A comparison-result bool for a component whose IDL member IS a comparison. `kind` is what the member
+   compares against and is STATED rather than assumed: it composes the predicate's key beside `tok`, so a
+   component that compared against a number while this entry spelled a string would compose the key of a
+   comparison against the string `"5"` — a different predicate, decided independently of the one the page's
+   own `x === 5` decides, and pinning the source to two characters. */
+JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit kind, const char *tok);
 /* …AND ITS TWIN FOR A RELATION OVER TWO LIVE VALUES, either of which may be unknown — for a browser component
    whose own algorithm compares two operands (HTML §8.7's timer task source orders one expiry against another,
    and the expiry of a timer set with unknown external input is unknown). `op` NAMES THE SPEC RELATION being
@@ -386,8 +419,11 @@ JSValue     concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSV
    value; §Solver-half keeps that a domain-annotated shape rather than inventing a 6), and so does an equality
    whose OTHER side is also unknown, because there is no concrete value to pin to. The PREDICATE itself is not
    read through here: it lives in the value's identity, composed from the operator and both operands, which is
-   what decide.c keys the constraint by. */
-int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);
+   what decide.c keys the constraint by.
+   `pkind` IS THE TOKEN'S OTHER HALF and is answered wherever `ptok` is: a caller that took the spelling and
+   not the kind is about to pin nine characters where the page proved `undefined`. It answers
+   CONCOLIC_LIT_NONE exactly when the result is OPCMP_NONE. */
+int         concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, const char **ptok);
 /* JSConcolicHooks.cmp — `op` names WHICH equality the program wrote (quickjs.h's JSConcolicEqOp), because
    §7.2.13 IsLooselyEqual and §7.2.14 IsStrictlyEqual disagree and this hook does two things that need the
    answer: it composes the operator into the predicate's IDENTITY (so `x == '1'` and `x === '1'` are two
@@ -433,8 +469,21 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    separate mark under the root's own key so a question about the SOURCE — has this flow demanded a particular
    value of it — is answerable without walking the chain and without a second reading of the pin. The two must
    not be one entry: `event.origin.toLowerCase() === X` pins the DERIVED value, and writing `X` under
-   `message.origin` would make a later read of `event.origin` itself answer the lowercased token. */
-void        concolic_pin(const char *src, const char *root, const char *val);
+   `message.origin` would make a later read of `event.origin` itself answer the lowercased token.
+   `kind` SAYS WHAT `val` SPELLS, and the two are one argument in two halves — see ConcolicLit. The store may
+   only hold what the read-back can mint back as the REAL value, so this refuses a kind it cannot reproduce
+   rather than recording a spelling for it: a source that is not pinned simply forks again at its next gate,
+   which is sound and is what the engine did before any pin existed.
+   NAMED RESIDUAL — A BIGINT IS NOT PINNED. What is not covered: `x === 5n` on its true arm records nothing, so
+   a bundle gating on a BigInt literal re-forks every later branch over that source instead of deciding it.
+   What the next diff builds: a quickjs export that mints a BigInt from its §6.1.6.2.21
+   BigInt::toString ( x, radix ) spelling — §7.1.16 StringToBigInt ( string )'s own inverse. The widest thing
+   quickjs.h exports toward a BigInt is JS_NewBigInt64, so an arbitrary-precision literal has no route back
+   into a value at all and the int64-only half-route would make the pin depend on the literal's MAGNITUDE,
+   which is a value-dependent behaviour split rather than a narrower mechanism. How its absence would show: two
+   sibling flows for every repeated `===` against one BigInt-valued source, where a string-valued source
+   produces one; the fork census names the predicate. */
+void        concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val);
 /* THE HOLE A REPORT PRINTS, SPELLED ONCE — the joint between a constraint recorded at a BRANCH and a domain
    emitted at a REQUEST, which are the two ends §Solver-half's two-facts rule has to connect.
    A shape is what the @H surface renders where the code computed no value, and the BRACES DO NOT SIT IN THE

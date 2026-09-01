@@ -102,7 +102,10 @@ static JSValue vis_hidden_value(JSContext *ctx)
         JS_FreeValue(ctx, state);
         return JS_NewBool(ctx, hidden);
     }
-    r = concolic_new_cmp(ctx, VIS_SRC, OPCMP_EQ, VIS_HIDDEN);
+    /* THE KIND IS STATED AND NOT ASSUMED — HTML §6.2 Page visibility defines this member as a comparison of
+       the visibility state against the STRING "hidden", which is what makes the key this composes identical
+       to the one a page's own `document.visibilityState === "hidden"` composes. */
+    r = concolic_new_cmp(ctx, VIS_SRC, OPCMP_EQ, CONCOLIC_LIT_STRING, VIS_HIDDEN);
     concolic_set_example(ctx, r, JS_FALSE);   /* the comparison over the example: "visible" is not "hidden" */
     JS_FreeValue(ctx, state);
     return r;
