@@ -1581,7 +1581,112 @@ function functionScopes(struct, code) {
     }
     return out;
   };
-  return { binderOf, paramSlot, localParamSlot, callArgsOf, declaredHere: (name) => bound.has(name),
+  /* The end of the expression that STARTS at `from`: the first `;` or `,` at depth zero, or the closer that
+     ends the construct the expression sits inside. The same walk `inits` already runs over a write's right-hand
+     side, named once so the three constructs below cannot spell it three ways. */
+  const exprEnd = (from) => {
+    let e = from, d = 0;
+    for (; e < struct.length; e++) {
+      const ch = struct[e];
+      if (PAIRS[ch]) d++;
+      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
+      else if ((ch === ";" || ch === ",") && !d) break;
+    }
+    return e;
+  };
+
+  /* WHAT A `for … of` ITERATES — the one declaration `inits` cannot read, and it says so: "a declaration with
+     no write at all — `for (const n of xs)`, whose binding is the loop's and not an assignment's — has no
+     declaration text and is doubtful". That was true of a walk looking for ASSIGNMENTS, and the loop header is
+     a construct of its own: `of` is a keyword in that position and the expression after it runs to the header's
+     own `)`. It states what the binding IS everywhere in the loop, exactly as an initializer does, so it is
+     read at the same place and held to the same standard — TWO loops binding one name in one scope is two
+     declarations of one identity and is doubtful, the same answer `inits` gives that case. */
+  const iterOf = (name, off) => {
+    const RE = new RegExp(`\\bfor\\s*(?:await\\s+)?\\(\\s*(const|let|var)\\s+${name}\\s+of\\s+`, "g");
+    const here = binderOf(name, off);
+    const hits = new Set(), inside = new Set();
+    let konst = true;
+    let m2;
+    while ((m2 = RE.exec(struct))) {
+      if (binderOf(name, m2.index + m2[0].length) !== here) continue;
+      if (m2[1] !== "const") konst = false;
+      const openParen = struct.indexOf("(", m2.index);
+      const closeParen = matchAt(struct, openParen);
+      if (closeParen < 0) continue;
+      hits.add(code.slice(m2.index + m2[0].length, closeParen - 1).replace(/\s+/g, " ").trim());
+      /* THE LOOP'S OWN EXTENT, which is what makes this answerable at all where the scope model cannot help.
+         ECMAScript §14.7.5.7 ForIn/OfBodyEvaluation ( lhs, stmt, iteratorRecord, iterationKind, lhsKind,
+         labelSet [ , iteratorKind ] ) binds the head's declaration PER ITERATION, so a read inside one
+         loop is a read of THAT loop's binding — while this file attributes a declaration to the innermost
+         enclosing FUNCTION body and says so ("Two same-named declarations inside ONE function body still
+         merge, which is the residue"). Two `for (const n of …)` loops over DIFFERENT expressions in one
+         function body are two identities the binder cannot separate, and the loop body separates them. */
+      const b = sig(struct, closeParen, struct.length);
+      const end = struct[b] === "{" ? matchAt(struct, b) : exprEnd(b);
+      if (off >= m2.index && off < end)
+        inside.add(code.slice(m2.index + m2[0].length, closeParen - 1).replace(/\s+/g, " ").trim());
+    }
+    /* SEVERAL LOOPS OVER ONE EXPRESSION ARE SEVERAL DECLARATIONS OF ONE IDENTITY, which is the standard `inits`
+       states for a binding's writes — a file that walks `encodings` five times says the same thing five times.
+       Two loops over DIFFERENT expressions, with the read in NEITHER of them, leave it undecided. */
+    const text = inside.size === 1 ? [...inside][0] : hits.size === 1 ? [...hits][0] : null;
+    return text === null ? null : { text, konst };
+  };
+
+  /* WHAT IS PUSHED INTO AN ARRAY — the other half of what an array binding's declaration says. `const decls =
+     []` states the TYPE and nothing about the elements; `decls.push(…)` is where every element it will ever
+     hold is named, and reading only the initializer answers "an empty array" about a binding whose whole
+     purpose is what was put in it. A `...spread` argument contributes the ELEMENTS of its operand and a plain
+     one contributes ITSELF, which is the distinction the syntax already draws. Every push must answer and all
+     of them must agree, the standard §localParamSlot applies to a call's arguments. */
+  const pushArgsOf = (name, off) => {
+    const RE = new RegExp(`(^|[^\\w$.])${name}\\s*\\.\\s*push\\s*\\(`, "g");
+    const here = binderOf(name, off);
+    const out = [];
+    let m2;
+    while ((m2 = RE.exec(struct))) {
+      if (binderOf(name, m2.index) !== here) continue;
+      const open = m2.index + m2[0].length - 1;
+      const close = matchAt(struct, open);
+      if (close < 0) return null;
+      for (const [a, b] of splitTop(struct, open + 1, close - 1)) {
+        const t = code.slice(a, b).replace(/\s+/g, " ").trim();
+        if (!t) return null;
+        out.push(/^\.\.\./.test(t) ? { spread: true, text: t.slice(3).trim() } : { spread: false, text: t });
+      }
+    }
+    return out.length ? out : null;
+  };
+
+  /* WHAT A FUNCTION THIS FILE DECLARES ANSWERS WITH. A `return` in the function's OWN body is a declaration of
+     what the call evaluates to, read at the same place a declarator's initializer is; a `return` inside a
+     nested function literal belongs to that literal and is skipped, which `innermost` decides rather than a
+     brace count. Two functions of one name leave the answer undecided, as two declarations of one binding do.
+     A bare `return;` states no value and is skipped — every OTHER return must still answer. */
+  /* EACH ANSWER CARRIES ITS OWN OFFSET, and that is not a convenience. A caller resolving a name inside the
+     returned expression must resolve it in the SCOPE THAT WROTE IT — §receiver scope's whole subject is that two
+     bindings of one spelling are two receivers, and handing a cross-module answer back with the CALLER's offset
+     would ask about a binding in the wrong file entirely. */
+  const returnsOf = (fnName) => {
+    const cand = spans.filter((x) => x.fnName === fnName);
+    if (cand.length !== 1) return null;
+    const s0 = cand[0];
+    const out = [];
+    const RET = /\breturn\b/g;
+    RET.lastIndex = s0.open;
+    let r;
+    while ((r = RET.exec(struct)) && r.index < s0.close) {
+      if (innermost(r.index) !== s0) continue;
+      const a = sig(struct, r.index + 6, struct.length);
+      if (struct[a] === ";" || struct[a] === "}") continue;
+      out.push({ text: code.slice(a, exprEnd(a)).replace(/\s+/g, " ").trim(), at: a });
+    }
+    return out.length ? out : null;
+  };
+
+  return { binderOf, paramSlot, localParamSlot, callArgsOf, iterOf, pushArgsOf, returnsOf,
+           declaredHere: (name) => bound.has(name),
            initOf: (name, off) => inits.get(`${binderOf(name, off)}\0${name}`) ?? null };
 }
 
@@ -1598,7 +1703,8 @@ function scanJS(file, src) {
      text stays the display, because that is what a reader opens the file to find; the key is what decides
      which reads are reads of one object. A receiver whose base is not a bare identifier (`a().b`) has no
      binder to ask about and keys under its text alone, exactly as before. */
-  const { binderOf, initOf, paramSlot, localParamSlot, callArgsOf, declaredHere } = functionScopes(struct, code);
+  const { binderOf, initOf, paramSlot, localParamSlot, callArgsOf, iterOf, pushArgsOf, returnsOf,
+          declaredHere } = functionScopes(struct, code);
   const keyOf = (recv, off) => {
     const base = /^[A-Za-z_$][\w$]*/.exec(recv);
     return base ? `${recv}@${binderOf(base[0], off)}` : recv;
@@ -1932,17 +2038,34 @@ function scanJS(file, src) {
      `node:` builtin, whose records this corpus never produces and whose shape no authority here declares. That
      distinction is a construct — `./x.mjs` versus `node:http` is a character in the source, not an inference —
      and it is the same kind of fact the platform arm reads off a declaration. */
+  /* THE RELATIVE SPECIFIER IS KEPT TOO, and it is not the same fact wearing the other sign. `foreignImports`
+     answers "is this name's producer outside the corpus"; the MAP answers "which module declares this name",
+     which is what lets §the ORIGIN walk follow a value one module further instead of stopping where the file
+     ends. Both are the same character in the source, read once. */
   const foreignImports = new Set();
+  const importOf = new Map();     // local binding name -> the specifier it was imported from
   const IMPORT = /\bimport\s+([^;]*?)\bfrom\s*(["'])([^"'\n]+)\2/g;
   while ((m = IMPORT.exec(code))) {
     if (struct[m.index + m[0].length - 1] !== m[2]) continue;
-    if (/^[./]/.test(m[3])) continue;                       /* a module in this corpus, read like any other */
+    const bare = !/^[./]/.test(m[3]);
     for (const part of m[1].replace(/[{}*]/g, " ").split(",")) {
       const as = /\bas\s+([A-Za-z_$][\w$]*)/.exec(part);
       const id = as || /([A-Za-z_$][\w$]*)\s*$/.exec(part.trim());
-      if (id && id[1] !== "from") foreignImports.add(id[1]);
+      if (!id || id[1] === "from") continue;
+      importOf.set(id[1], m[3]);
+      if (bare) foreignImports.add(id[1]);   /* a package or a `node:` builtin — never read by this gate */
     }
   }
+
+  /* --- the spans a should-never-happen ASSERTS over ------------------------------------------------------- */
+  /* §Architecture's remedy for a field a consumer defaults is "it DCHECKs the field's presence and shape", and
+     a consumer that has already done it has closed the thing this gate is looking for: a name the producer does
+     not write is then an ABORT at the read rather than a plausible datum. That is a fact about a CONSTRUCT — the
+     read sits inside the argument list of the assert — and it is read here so §the anchor loop can ask it. */
+  const assertSpans = [];
+  for (const fn of ["DCHECK", "DFAIL", "CHECK", "CHECK_FAIL", "DCHECKF"])
+    for (const c of callSites(struct, fn))
+      if (struct[c.at - 1] !== "." && c.close > 0) assertSpans.push([c.open, c.close]);
 
   /* --- markers: a literal naming an @TAG is a reference to the stream contract ----------------------------- */
   /* A DRIVER PRINTS MARKERS TOO, and reading every JS literal as a MATCH made solvergate's own `@EMIT` and
@@ -1986,7 +2109,8 @@ function scanJS(file, src) {
   collectAbiJS(file, src, code, struct);
 
   return { file, src, localReads, localWrites, wholeDefaults, site, initOf, binderOf, paramSlot,
-           localParamSlot, callArgsOf, guardedBy, foreignImports };
+           localParamSlot, callArgsOf, guardedBy, foreignImports, importOf, iterOf, pushArgsOf, returnsOf,
+           asserted: (off) => assertSpans.some(([a, b]) => off >= a && off < b) };
 }
 
 /* ---- the RETURN-DOMAIN namespace: the one place a plausible datum is a VALUE rather than a NAME ------------ */
@@ -2647,6 +2771,9 @@ const REV_AT_START = gateRevision(cone);
 for (const l of revisionLines(REV_AT_START)) console.log(l);
 
 const jsScans = [];
+/* The scans, keyed by their repo-relative path, so a relative import specifier resolves to the module that
+   declares the name — which is how §the ORIGIN of a value follows a producer one module further. */
+const scanByFile = new Map();
 for (const f of files) {
   let src;
   try { src = readFileSync(f.path, "utf8"); } catch { continue; }
@@ -2658,7 +2785,7 @@ for (const f of files) {
     src = view;
   }
   const s = scanJS(rel, src);
-  if (s) jsScans.push({ ...s, area: f.area });
+  if (s) { const e = { ...s, area: f.area }; jsScans.push(e); scanByFile.set(rel, e); }
 }
 
 /* An unresolvable emission format is a hiding place for a field only in a file that emits fields. Applied
@@ -2901,7 +3028,10 @@ const platformDecided = [];   // {file,line,recv,iface,names} — a receiver a c
  * with it (`someLib.each(records, (r) => r.url)`) loses that read. Its absence shows as the field's producer
  * appearing in WRITE-WITH-NO-READER with its file and line — a row a person can open — rather than as a silent
  * pass, which is the direction this file takes everywhere. */
-const foreignDecided = [];    // {file,line,recv,callee,names} — a callback parameter of an imported callee
+const foreignDecided = [];    // {file,line,recv,names,why,by} — a value some module outside this corpus made
+/* A receiver whose record identity is STILL open and whose every read is asserted at the read — see §the
+   anchor loop's own paragraph for why that answers the half of the question this gate is the auditor of. */
+const assertedDecided = []; // {file,line,recv,names}
 const offInterface = [];      // {file,line,recv,iface,missing} — that object, read for a member the spec denies
 
 /* The interface a receiver EXPRESSION evaluates to, or null. Every arm is a construct that names a type; the
@@ -3035,6 +3165,273 @@ function identityOfBinding(t, off, scan, s) {
   return one;
 }
 
+/* ---- the ORIGIN of a value: the same specifier, followed further than one callback parameter --------------- */
+
+/* THE FOREIGN ARM ABOVE ANSWERS FOR ONE CONSTRUCT AND THE QUESTION IS BIGGER THAN THAT CONSTRUCT. Its sentence
+ * is right — "the specifier says where the producer is" — and the shape it reads it off is a callback PARAMETER,
+ * which is one of the ways a value from outside this corpus reaches a receiver and not the only one. A value
+ * that a package RETURNED (`parse(text)` from `webidl2`), that a `node:` builtin READ off the disk, or that this
+ * corpus DECODED out of bytes it did not write (`JSON.parse` of a fetched body) is produced outside the corpus by
+ * exactly the same reasoning, and it reached the shape anchor instead — where identity is decided by NAME
+ * COLLISION, which is the failure the foreign arm exists to stop.
+ *
+ * WHAT THIS IS AND IS NOT. It is a walk over CONSTRUCTS, the same kind `ifaceOfExpr` runs and in the same order:
+ * a declaration, a loop header, a call site, a spread. It is NOT a dataflow — nothing is followed through a
+ * promise, a closure, a mutation or a path, and every arm that could answer twice must have its answers AGREE or
+ * it answers nothing, which is the under-crediting direction this file takes everywhere.
+ *
+ * `JSON.parse` IS NOT A PRODUCER, IT IS A DECODER. The names in its result were written by whoever wrote the
+ * bytes; asking who called `JSON.parse` answers the wrong question, exactly as asking who called `Response.text`
+ * would. So the walk passes straight through it to its operand, and the operand is where the answer is.
+ *
+ * A FOREIGN ARRAY'S ELEMENTS ARE FOREIGN, which is why the element question is asked as the value question
+ * first. Where that answers nothing there are element constructs of their own — what a `for … of` iterates, what
+ * is pushed into an array, what an element-visiting callback is handed, and what `map`/`flatMap` build out of
+ * their callback's own answer.
+ *
+ * THE UNDER-CREDITING DIRECTION, STATED: a corpus record handed to a package and returned by it — `sortBy(recs,
+ * f)` — would be decided foreign, because the specifier is all an import can say and it says the same thing
+ * either way. That is the FOREIGN arm's own residual, unchanged by widening it; its absence shows the same way,
+ * as the field's producer standing in WRITE-WITH-NO-READER with its file and line. */
+
+const SELECT_METHOD = new Set(["filter", "slice", "sort", "concat", "reverse", "flat", "toSorted", "toReversed"]);
+const ELEMENT_CALLBACK = new Set(["map", "flatMap", "forEach", "filter", "some", "every", "find", "findIndex",
+                                  "findLast", "findLastIndex", "sort", "flat"]);
+const BODY_READER = new Set(["text", "json", "arrayBuffer", "blob", "formData", "bytes"]);
+
+const originName = (spec) => `the \`${spec}\` module`;
+
+/* Strip what does not change WHICH producer made the value: `await`, a grouping, and a `||`/`??` whose right
+   operand is a LITERAL — the default is the concealment this gate reports elsewhere and never the producer. */
+function originHead(t) {
+  let s = (t || "").trim();
+  for (;;) {
+    if (/^await\s/.test(s)) { s = s.slice(6).trim(); continue; }
+    if (s[0] === "(" && matchAt(s, 0) === s.length) { s = s.slice(1, -1).trim(); continue; }
+    const alt = /(\|\||\?\?)\s*(\{\s*\}|\[\s*\]|(["'])(?:[^\\]|\\.)*?\3|-?\d[\w.]*|null|undefined|true|false)\s*$/.exec(s);
+    if (alt && splitTopText(s, alt.index)) { s = s.slice(0, alt.index).trim(); continue; }
+    break;
+  }
+  return s;
+}
+/* Is `at` at bracket depth zero in `s`? A `||` inside a call's arguments is not this expression's alternative. */
+function splitTopText(s, at) {
+  let d = 0;
+  for (let i = 0; i < at; i++) {
+    const c = s[i];
+    if (c === "(" || c === "[" || c === "{") d++;
+    else if (c === ")" || c === "]" || c === "}") d--;
+  }
+  return d === 0;
+}
+/* `X.y` split at the LAST top-level dot, or null. */
+function memberSplit(t) {
+  let d = 0, dot = -1;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c === "(" || c === "[" || c === "{") d++;
+    else if (c === ")" || c === "]" || c === "}") d--;
+    else if (c === "." && !d) dot = i;
+  }
+  if (dot < 0) return null;
+  const name = t.slice(dot + 1).trim();
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? { base: t.slice(0, dot).trim(), name } : null;
+}
+/* A trailing call `F(a, b)`: its callee text and its argument texts, or null. */
+function callSplit(t) {
+  if (!t.endsWith(")")) return null;
+  let d = 0, open = -1;
+  for (let i = t.length - 1; i >= 0; i--) {
+    const c = t[i];
+    if (c === ")" || c === "]" || c === "}") d++;
+    else if (c === "(" || c === "[" || c === "{") { d--; if (!d) { open = i; break; } }
+  }
+  if (open <= 0) return null;
+  const callee = t.slice(0, open).trim();
+  if (!callee) return null;
+  const args = splitTop(t, open + 1, t.length - 1).map(([a, b]) => t.slice(a, b).trim());
+  return { callee, args };
+}
+/* The module a relative specifier names, as a repo-relative path this gate's own scan map is keyed by. */
+function resolveModule(fromFile, spec) {
+  if (!/^\./.test(spec)) return null;
+  const dir = fromFile.includes("/") ? fromFile.slice(0, fromFile.lastIndexOf("/")) : "";
+  const parts = (dir ? dir.split("/") : []).concat(spec.split("/"));
+  const out = [];
+  for (const p of parts) {
+    if (p === "." || p === "") continue;
+    if (p === "..") { out.pop(); continue; }
+    out.push(p);
+  }
+  return out.join("/");
+}
+
+/* THE THREE QUESTIONS ARE NOT ONE. `mode` is "value" (who made the object this expression denotes), "elem" (who
+ * made the elements of the array it denotes) or "bytes" (WHO WROTE THE TEXT it denotes) — and the third is the
+ * one that keeps a decode honest. `JSON.parse(x)` does not produce a record, it DECODES one, so the question it
+ * forwards is who wrote `x`; and a `readFileSync` answers that with a NODE OBJECT and not with a producer,
+ * because THIS CORPUS WRITES FILES TOO. Collapsing the two made `JSON.parse(readFileSync(qjs.mjs.build.json))`
+ * read as "produced by node:fs" when `build.mjs` wrote every name in it — a decided negative over a corpus seam,
+ * which is the one direction a decided category must never be wrong in.
+ *
+ * `st` carries the cycle guard and the NAMES the receiver reads. */
+function originOfExpr(t0, off, scan, st, mode) {
+  const t = originHead(t0);
+  if (!t || !scan) return null;
+  const key = `${scan.file}\0${t}\0${mode}\0${off}`;
+  if (st.seen.has(key)) return null;
+  st.seen.add(key);
+  const elem = mode === "elem", bytes = mode === "bytes";
+
+  if (elem) {
+    /* A FOREIGN CONTAINER'S ELEMENTS ARE FOREIGN — asked first, so the arms below are only the cases where the
+       container itself is something this corpus built out of foreign parts. */
+    const whole = originOfExpr(t, off, scan, st, "value");
+    if (whole) return whole;
+  }
+
+  const call = callSplit(t);
+  if (call) {
+    /* `require("pkg")` IS AN IMPORT SPELT AS A CALL, and the specifier means what it means in either spelling.
+       CommonJS is how the testing drivers are written and nothing above reads it. It names the producer of the
+       MODULE OBJECT and says nothing about bytes some other party wrote. */
+    const req = call.callee === "require" && call.args.length === 1 &&
+                /^(["'])([^"'\n]+)\1$/.exec(call.args[0]);
+    if (req && !/^[./]/.test(req[2])) return bytes ? null : originName(req[2]);
+    if (call.callee === "JSON.parse" && call.args.length)
+      return bytes ? null : originOfExpr(call.args[0], off, scan, st, "bytes");
+    const cm = memberSplit(call.callee);
+    if (cm) {
+      if (SELECT_METHOD.has(cm.name) && !bytes) return originOfExpr(cm.base, off, scan, st, mode);
+      if (BODY_READER.has(cm.name) && ifaceOfExpr(cm.base, off, scan, null) === "Response")
+        /* Fetch §5.3 Body mixin: these read THE BODY, and a body is bytes some SERVER wrote — an answer to the
+           bytes question, which is exactly the one a filesystem read cannot answer. */
+        return bytes ? "a fetched HTTP response body" : null;
+      /* A NODE API'S RETURN VALUE IS NODE'S RECORD and the bytes it carries are not. `readFileSync` answers a
+         Buffer or a string whose CONTENT this corpus may well have written; the object is `node:fs`'s and the
+         text is nobody-this-can-name's, which is why the two questions part company here. */
+      if (bytes) return null;
+    }
+    /* A CALL OF A NAME THIS CORPUS DECLARES ANSWERS WITH ITS OWN `return`s — in this module, or in the one a
+       relative specifier names. Every return must agree, as every declaration of a binding must, and each is
+       resolved AT ITS OWN OFFSET so a name inside it is looked up in the scope that wrote it. */
+    if (/^[A-Za-z_$][\w$]*$/.test(call.callee)) {
+      const spec = scan.importOf.get(call.callee);
+      if (spec && !/^[./]/.test(spec)) return bytes ? null : originName(spec);
+      const home = spec ? scanByFile.get(resolveModule(scan.file, spec)) : scan;
+      const rets = home && home.returnsOf(call.callee);
+      if (rets) return agreeOrigin(rets.map((r) => originOfExpr(r.text, r.at, home, st, mode)));
+    }
+    return null;
+  }
+
+  const mem = memberSplit(t);
+  if (mem) {
+    const base = originOfExpr(mem.base, off, scan, st, "value");
+    if (base) return bytes ? null : base;
+    /* WHERE THE BASE IS A RECORD THIS CORPUS BUILT, the property is decided by the LITERAL that built it — the
+       one construct that says what a returned object's field holds. `loadIdl()` answers `{ declarations, … }`
+       and `idl.declarations` is that shorthand, resolved in the module that wrote it. */
+    const lit = literalOf(mem.base, off, scan, st);
+    if (lit) {
+      const v = literalProp(lit.text, mem.name);
+      if (v) return originOfExpr(v, lit.at, lit.scan, st, mode);
+    }
+    return null;
+  }
+
+  if (/^[A-Za-z_$][\w$]*$/.test(t)) {
+    const spec = scan.importOf.get(t);
+    if (spec && !/^[./]/.test(spec)) return bytes ? null : originName(spec);
+    /* A `for (const … of …)` HEAD IS ASKED BEFORE THE ASSIGNMENT SCAN, and the reason is ECMAScript rather
+     * than preference. The head DECLARES the binding and nothing else can: §14.7.5.7 ForIn/OfBodyEvaluation
+     * ( lhs, stmt, iteratorRecord, iterationKind, lhsKind, labelSet [ , iteratorKind ] ) asserts `lhsKind is
+     * lexical-binding` and then does "Let iterationEnv be NewDeclarativeEnvironment ( oldEnv )" before
+     * instantiating the ForDeclaration in it — a fresh binding per iteration. `const` makes that binding
+     * immutable (§9.1.1.1.3 CreateImmutableBinding ( name, strict )), and §9.1.1.1.5 SetMutableBinding ( name,
+     * value, strict ) says "If the binding is an immutable binding, a TypeError is thrown if strict is true".
+     * So a `name = …` the assignment scan attributes to a `const` loop variable CANNOT be a write to
+     * it: it is another binding's, merged in because `inits` reads every write in the enclosing FUNCTION body
+     * and this file's scope model attributes declarations to that body rather than to the block.
+     * Measured: `for (const n of declarations)` in one module read as declared by `n = name` and
+     * `n = dictInheritanceOf.get(n)` — the `for (let n = name; …)` of a nested arrow two helpers down. Taking
+     * `inits` first therefore did not leave the binding undecided, it answered it with another binding's
+     * declarations, which is worse. `let`/`var` heads are NOT authoritative in the same way and fall through
+     * to the writes, where the two must agree like any other pair of declarations. */
+    const head = scan.iterOf(t, off);
+    if (head && head.konst) return elem || bytes ? null : originOfExpr(head.text, off, scan, st, "elem");
+    const decls = scan.initOf(t, off);
+    if (decls) {
+      const answers = decls.filter((d) => d && d !== "null" && d !== "undefined")
+                           .map((d) => originOfExpr(d, off, scan, st, mode));
+      const one = agreeOrigin(answers);
+      if (one) return one;
+      /* `const decls = []` states an EMPTY array and every element it holds is named by a push. Asked only
+         where the declarations themselves answered nothing, so a binding that says what it is is not
+         second-guessed by what was appended to it. */
+      if (elem && decls.every((d) => /^\[\s*\]$/.test(d || ""))) {
+        const pushed = scan.pushArgsOf(t, off);
+        if (pushed) return agreeOrigin(pushed.map((p) => originOfExpr(p.text, off, scan, st,
+                                                                     p.spread ? "elem" : "value")));
+      }
+      return null;
+    }
+    /* A `for … of` BINDING IS AN ELEMENT of what the header iterates — so the VALUE question about the binding
+       is the ELEMENT question about the header, and there is no arm for the elements OF a loop variable. A
+       `const` head was already taken above; this is the `let`/`var` one, reached only where the writes said
+       nothing. */
+    if (head) return elem || bytes ? null : originOfExpr(head.text, off, scan, st, "elem");
+    const ps = scan.paramSlot(t, off);
+    if (ps && mode === "value" && ps.param === 0) {
+      const cm2 = memberSplit(ps.callee);
+      if (cm2 && ELEMENT_CALLBACK.has(cm2.name)) return originOfExpr(cm2.base, ps.calleeAt, scan, st, "elem");
+    }
+    return null;
+  }
+  return null;
+}
+/* Every answer must be the same answer, and every arm must have answered. */
+function agreeOrigin(answers) {
+  if (!answers.length) return null;
+  let one = null;
+  for (const a of answers) { if (!a || (one !== null && one !== a)) return null; one = a; }
+  return one;
+}
+/* The object literal a name is declared to hold, with the OFFSET and the MODULE it was written at — both,
+   because a name inside it is resolved in the scope that wrote it and nowhere else. */
+function literalOf(t, at, scan, st) {
+  const s = originHead(t);
+  if (/^\{/.test(s) && matchAt(s, 0) === s.length) return { text: s, at, scan };
+  const call = callSplit(s);
+  if (call && /^[A-Za-z_$][\w$]*$/.test(call.callee)) {
+    const spec = scan.importOf.get(call.callee);
+    if (spec && !/^[./]/.test(spec)) return null;
+    const home = spec ? scanByFile.get(resolveModule(scan.file, spec)) : scan;
+    const rets = home && home.returnsOf(call.callee);
+    if (rets && rets.length === 1) return literalOf(rets[0].text, rets[0].at, home, st);
+    return null;
+  }
+  if (/^[A-Za-z_$][\w$]*$/.test(s)) {
+    const decls = scan.initOf(s, at);
+    if (decls && decls.length === 1) return literalOf(decls[0], at, scan, st);
+  }
+  return null;
+}
+/* The expression an object literal binds to `name` — `{ name: e }` or the `{ name }` shorthand — or null. The
+   caller resolves it at the LITERAL's own offset rather than at the property's: a literal's text is whitespace-
+   normalized, so an offset computed inside it is not an offset in the file, and every property of one literal is
+   in one scope anyway. Naming the literal's start is exact; naming the property's would be arithmetic on a
+   string this no longer has the original spacing of. */
+function literalProp(lit, name) {
+  for (const [a, b] of splitTop(lit, 1, lit.length - 1)) {
+    const seg = lit.slice(a, b).trim();
+    const kv = new RegExp(`^(?:["']?)${name}(?:["']?)\\s*:\\s*([\\s\\S]+)$`).exec(seg);
+    if (kv) return kv[1].trim();
+    if (seg === name) return name;
+  }
+  return null;
+}
+
 /* WHICH INTERFACE IN `base`'s SUBTREE THE READ SET FITS. An IDL return type is an upper bound — `getElementById`
    answers `Element?` and the object is an HTMLSelectElement — so the construct fixes the subtree and the names
    pick within it: the candidate covering the MOST of them wins, an inheritance chain collapses to its most
@@ -3135,7 +3532,22 @@ for (const s of jsScans) {
          returns is not the binding this file imported. */
       const callee = ps && /^([A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)*$/.exec(ps.callee);
       if (callee && s.foreignImports.has(callee[1])) {
-        foreignDecided.push({ ...s.site(rs[0].off), recv, callee: ps.callee, names: [...names] });
+        foreignDecided.push({ ...s.site(rs[0].off), recv, names: [...names],
+                             why: `is a callback argument of \`${ps.callee}\``, by: ps.callee });
+        continue;
+      }
+      /* …AND THE SAME SPECIFIER, FOLLOWED FURTHER. A callback parameter is one way a value from outside this
+         corpus reaches a receiver; a package's RETURN, a `node:` builtin's read of the disk and a `JSON.parse`
+         of bytes this corpus did not write are others, and every one of them would otherwise be handed to an
+         anchor that decides by name collision. See §the ORIGIN of a value. */
+      /* ASKED AT EVERY READ, NOT AT THE FIRST ONE, for the reason the `instanceof` arm above states: one of the
+         constructs that answers this is a fact about a POSITION — which loop body a read stands in — and a
+         group's reads can stand in two. Deciding from `rs[0]` would be the tokenizer deciding. */
+      const froms = rs.map((r) => originOfExpr(recv, r.off, s, { seen: new Set(), names }, "value"));
+      const from = agreeOrigin(froms);
+      if (from) {
+        foreignDecided.push({ ...s.site(rs[0].off), recv, names: [...names],
+                             why: `is produced by ${from}`, by: from });
         continue;
       }
     }
@@ -3149,10 +3561,26 @@ for (const s of jsScans) {
       /* ONE intersecting name is not an anchor and it is not a pass either. Reported only where the receiver
          also reads a name NO producer emits — which is the only configuration in which the undecided question
          could be hiding this defect, and reporting the rest would be reporting the language again. */
-      if (bestN === 1 && [...names].some((n) => !(fields.get(n)?.writes.length)))
+      if (bestN === 1 && [...names].some((n) => !(fields.get(n)?.writes.length))) {
+        /* AND THE CONSUMER'S OWN ASSERT ANSWERS THE HALF OF THIS QUESTION THAT MATTERS. The row above states two
+           undecided things and they are not equally load-bearing: WHICH record this is, and whether the names no
+           producer writes are the DEFECT. §Architecture's remedy for the second is verbatim "it DCHECKs the
+           field's presence and shape", and a receiver every one of whose names is already asserted at a read has
+           applied that remedy — whatever the record turns out to be, a name its producer does not write is an
+           ABORT at the read and not a plausible datum, which is the entire thing this category is protecting.
+           So it is DECIDED on a construct, not passed: the identity stays open and is printed saying so.
+           ASKED ONLY HERE, inside the one-intersecting-name branch. Where the shape anchor DID decide the
+           identity the question is a different one — that record's own contract — and an assert is no answer to
+           it, so an arm placed above the anchor would remove audited receivers instead of undecided ones. */
+        const unasserted = [...names].filter((n) => !rs.some((r) => r.name === n && s.asserted(r.off)));
+        if (!unasserted.length) {
+          assertedDecided.push({ ...s.site(rs[0].off), recv, names: [...names] });
+          continue;
+        }
         ambiguous.push({ ...s.site(rs[0].off), recv, reason: ONE_FIELD,
                          why: oneFieldWhy([...names].filter((n) => cEmitted.has(n))[0],
                                           [...names].filter((n) => !(fields.get(n)?.writes.length))) });
+      }
       continue;
     }
     for (const r of rs) {
@@ -3456,13 +3884,20 @@ if (ambiguous.length) {
    disagree with it; the alternative is a count that shrank for reasons nobody can check. */
 if (foreignDecided.length) {
   const byCallee = new Map();
-  for (const f of foreignDecided) byCallee.set(f.callee, (byCallee.get(f.callee) || 0) + 1);
-  log(`── DECIDED FOREIGN — ${foreignDecided.length} receiver(s) a module OUTSIDE this corpus hands to a ` +
-      `callback. The specifier says where the producer is; this gate's subject is the serialized seam, so they ` +
-      `are out of it — decided, not passed ──`);
-  for (const f of foreignDecided) log(`  ${place(f)}  \`${f.recv}\` is a callback argument of \`${f.callee}\` — ` +
+  for (const f of foreignDecided) byCallee.set(f.by, (byCallee.get(f.by) || 0) + 1);
+  log(`── DECIDED FOREIGN — ${foreignDecided.length} receiver(s) a module OUTSIDE this corpus produced, either ` +
+      `by handing it to a callback or by returning it. The specifier says where the producer is; this gate's ` +
+      `subject is the serialized seam, so they are out of it — decided, not passed ──`);
+  for (const f of foreignDecided) log(`  ${place(f)}  \`${f.recv}\` ${f.why} — ` +
                                       f.names.map((n) => `\`${n}\``).join(", "));
-  log(`  by callee: ` + [...byCallee].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c}×${n}`).join(", "));
+  log(`  by producer: ` + [...byCallee].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c}×${n}`).join(", "));
+}
+if (assertedDecided.length) {
+  log(`── DECIDED ASSERTED — ${assertedDecided.length} receiver(s) whose record identity is still OPEN and ` +
+      `every one of whose reads is a should-never-happen ASSERT. A name the producer does not write aborts at ` +
+      `the read, which is §Architecture's own remedy already applied — decided on the construct, not passed ──`);
+  for (const a of assertedDecided)
+    log(`  ${place(a)}  \`${a.recv}\` — ${a.names.map((n) => `\`${n}\``).join(", ")}, each DCHECKed at its read`);
 }
 if (platformDecided.length) {
   const byIface = new Map();
@@ -3556,7 +3991,25 @@ show(`A REPLY FIELD THE BOUNDARY DOES NOT DECLARE — ${replyFieldDefects.length
   for (const a of ambiguous) bump(a.file, "amb");
   for (const r of refusals) bump(r.file, "ref");
   for (const r of rawKeys) bump(r.file, "rk");
-  log("── per area ──");
+  /* WHAT THESE ZEROES ARE A FRACTION OF, printed WITH them, because §Testing's rule is that a coverage figure
+   * states its denominator in the same line or it is not a coverage figure. The producer side of this contract
+   * is `cEmitted` — the field names the C ENGINE SERIALIZES — and everything downstream is keyed to it: a
+   * SHAPE is one C emission's own set of names, a receiver anchors only by matching two of one shape, and
+   * WRITE-WITH-NO-READER is filtered by `cEmitted.has(name)` outright. So a record this tree builds and
+   * consumes entirely in JavaScript declares NOTHING here, and a zero in these columns says nothing whatever
+   * about it.
+   *
+   * MEASURED, AND THIS LINE EXISTS BECAUSE OF IT: `savedAt` was written into the cumulative store on every
+   * save and read by nothing — one occurrence in the whole tree, the write — and this gate reported 0
+   * write-no-reader for that area the whole time it stood. It was found by READING. The store crosses the
+   * IndexedDB boundary and never the C seam, so no construct here could see it, and the honest report of that
+   * is this sentence rather than a number that reads as a clean bill. Extending the corpus to the persistence
+   * boundary — an object literal a `put`/`add` is handed, with the door that reads it back as the other side —
+   * is a diff of its own; until it lands, the denominator is what is stated here. */
+  log("── per area ── these columns are a fraction of ONE contract: the field names the C engine SERIALIZES " +
+      "(shape-anchored consumers of them, and writes of them nobody reads). A record built, stored and read " +
+      "back entirely in JavaScript — the cumulative store's IndexedDB round trip — declares no name in it, so " +
+      "a zero below is silent about that boundary, not clean about it");
   const w = Math.max(...[...tally.keys()].map((k) => k.length));
   for (const [a, t] of [...tally].sort((x, y) => (y[1].rnw + y[1].wnr + y[1].def) - (x[1].rnw + x[1].wnr + x[1].def)))
     log(`  ${a.padEnd(w)}  read-no-writer ${String(t.rnw).padStart(4)}   write-no-reader ${String(t.wnr).padStart(4)}` +
