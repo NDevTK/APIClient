@@ -12,7 +12,10 @@ JSValue dom_token_list_proto(JSContext *ctx);
 void dom_token_list_free(JSRuntime *rt);
 /* `DOMTokenList` as a global — the interface object and its prototype. */
 void dom_token_list_install(JSContext *ctx, JSValueConst global);
-/* Install `classList` on Element.prototype — §4.9 puts it there and nowhere else. */
+/* Install the two Element ITSELF declares — DOM §4.9 Interface Element's `classList` and CSS SHADOW MODULE
+   LEVEL 1 §5.5 Extensions to the Element Interface's `part`. Both belong on Element.prototype and nowhere
+   else, and both are therefore inherited by every element interface, which is what `part` has to be: a custom
+   element's `part="header"` is read off an HTMLElement and an SVG one's off an SVGElement. */
 void dom_token_list_install_element(JSContext *ctx, JSValueConst element_proto);
 /* Install ONE `[SameObject, PutForwards=value] readonly attribute DOMTokenList` reflection on the interface
    prototype that DECLARES it — `relList` on HTMLAnchorElement/HTMLAreaElement/HTMLLinkElement/HTMLFormElement,

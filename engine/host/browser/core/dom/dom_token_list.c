@@ -59,13 +59,29 @@ static int g_set_value_id = -1, g_item_id = -1, g_contains_id = -1, g_add_id = -
    one member read twice: §4.10.4 The label element's is `[CEReactions, Reflect="for"] attribute DOMString`, a
    plain mirror over the same attribute NAME, so a table keyed on the member name alone would have to choose
    one answer for both interfaces. That is why an interface's row list is what decides, and why the label's row
-   stays in core/html/html_element.c's R_LABEL. */
+   stays in core/html/html_element.c's R_LABEL.
+   `part` IS THE ONE ROW WHOSE DECLARING STANDARD IS NOT HTML, and it is here for the reason the list exists
+   rather than as an exception to it. CSS SHADOW MODULE LEVEL 1 §5.5 Extensions to the Element Interface
+   declares `partial interface Element { [SameObject, PutForwards=value] readonly attribute DOMTokenList
+   part; }` and says the getter "must return a DOMTokenList object whose associated element is the context
+   object" over an attribute whose local name is `part` — which is this component's object over this
+   component's attribute, with no third thing in it. IT IS `part` AND NOT `partList`: the member name and the
+   content attribute are the SAME WORD here, which is what makes a hard-coded attribute in any member body a
+   bug that would still pass a member-name audit. NOTE THE STANDARD'S NAME. CSS Shadow Parts Level 1 was
+   MERGED into CSS Shadow Module Level 1 — drafts.csswg.org/css-shadow-parts-1/ now serves a redirect whose
+   whole body is "Merged into CSS Shadow Module Level 1" — and @webref/idl publishes the member from
+   `css-shadow.idl` with `Source: CSS Shadow Module Level 1`, so a citation to a Shadow Parts section number
+   names a document that no longer carries one. NOT CHECKED BY engine/citegen.mjs: that tool resolves a
+   citation against a committed per-standard index and this tree has none for css-shadow, so the number and
+   the title above were verified by fetching the draft and reading its own heading, and a reader changing them
+   must do the same rather than trusting a green citegen run. */
 #define TOKEN_LIST_REFLECTIONS(X) \
     X(TL_CLASS,   "classList", "class")   \
     X(TL_REL,     "relList",   "rel")     \
     X(TL_SIZES,   "sizes",     "sizes")   \
     X(TL_SANDBOX, "sandbox",   "sandbox") \
-    X(TL_FOR,     "htmlFor",   "for")
+    X(TL_FOR,     "htmlFor",   "for")     \
+    X(TL_PART,    "part",      "part")
 #define TL_ID(id, member, attr)     id,
 #define TL_MEMBER(id, member, attr) member,
 #define TL_ATTR(id, member, attr)   attr,
@@ -92,9 +108,11 @@ static JSValue g_which_key = JS_UNDEFINED; /* WHICH reflection it is — the lis
 static int     g_ready;
 
 /* ---- the view ---------------------------------------------------------------------------------------------- */
-/* Which content attribute this list reflects. One list kind so far (`class`), but the name is carried on the
-   list rather than assumed, because §7.1's other reflections (`rel`, `sandbox`) are the same object over a
-   different attribute and a hard-coded "class" would be a second implementation the day one lands. */
+/* Which content attribute this list reflects, read off the list rather than assumed. The reason USED TO BE
+   written here as a prediction — "one list kind so far (`class`) … the day one lands" — and it has landed
+   several times over: every row of TOKEN_LIST_REFLECTIONS above is a list over a different attribute, and a
+   hard-coded "class" in this function would now be a wrong ANSWER for all but one of them rather than a
+   second implementation waiting to be written. */
 static lxb_dom_element_t *list_owner(JSContext *ctx, JSValueConst this_val, const char **attr)
 {
     JSValue owner, which;
@@ -827,10 +845,22 @@ void dom_token_list_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "DOMTokenList", ctor);
 }
 
+/* EVERY TOKEN-LIST REFLECTION Element ITSELF DECLARES — which is two, from two standards, and they are one
+   call because the INTERFACE is what owns a member list rather than the standard that wrote the member down.
+   DOM §4.9 Interface Element declares `classList`; CSS SHADOW MODULE LEVEL 1 §5.5 Extensions to the Element
+   Interface declares `part` on a `partial interface Element`, and Web IDL §2.2 Interfaces says of that shape
+   that "all of the members that appear on each of the partial interfaces are considered to be members of the
+   interface itself". So both land on Element.prototype and BOTH ARE INHERITED BY EVERY
+   ELEMENT INTERFACE, which is what `part` has to be: `<my-card part="header">` is the ordinary case and an
+   HTMLElement that answered `undefined` for it would leave `el.part.add("open")` throwing on a page whose
+   whole theming surface is that member. Installing it on HTMLElement instead would have been the same member
+   in the wrong place — invisible on an SVGElement, which §5.5 covers because §5.5 extends Element. */
 void dom_token_list_install_element(JSContext *ctx, JSValueConst element_proto)
 {
-    DCHECK(g_ready, "classList was installed before dom_token_list_init built its prototype");
+    DCHECK(g_ready, "an Element token-list reflection was installed before dom_token_list_init built its "
+                    "prototype");
     dom_token_list_install_reflection(ctx, element_proto, "classList");
+    dom_token_list_install_reflection(ctx, element_proto, "part");
 }
 
 void dom_token_list_free(JSRuntime *rt)
