@@ -893,7 +893,60 @@ const cMatched = [];
 
 /* ---- JS side --------------------------------------------------------------------------------------------- */
 
-/* A receiver is normalized to its SOURCE TEXT, whitespace-collapsed. Two reads anchor to one record only when
+/* THE NORMALIZATION EVERY RECEIVER TEXT IS PRODUCED BY, AND THE ONE WHITESPACE RUN IT MUST NOT DELETE.
+ * A receiver is anchored by its TEXT, so this function is what decides which two spans are one receiver, and
+ * deleting every whitespace run makes that decision wrong in exactly one place. ECMAScript §12 ECMAScript
+ * Language: Lexical Grammar: "The source text is scanned from left to right, repeatedly taking the longest
+ * possible sequence of code points as the next input element." An IdentifierName (§12.7.1 Identifier Names) is
+ * therefore a MAXIMAL run of identifier code points, so a whitespace run flanked by two of them is the only
+ * thing holding two tokens apart — and deleting it does not collapse a spelling, it MINTS AN IDENTIFIER.
+ * `await session(x)` becomes the text `awaitsession(x)`, which is the text a receiver actually spelled
+ * `awaitsession(x)` produces; `new Set()` becomes `newSet()`, `typeof m` becomes `typeofm`, `mid in methods`
+ * becomes `midinmethods`. Every consumer downstream then asks IDENTIFIER questions of that text — `keyOf`
+ * qualifies it by the binder of its LEADING NAME, `originHead` and `ifaceOfExpr` strip a leading `await `,
+ * `initOf` looks a name up — so a fused text is a name that identifies the wrong thing, which is the same
+ * defect as a `;` inside a string literal read as a statement boundary, one token class over.
+ *
+ * SO A RUN IS KEPT AS ONE SPACE WHERE BOTH SIDES ARE IDENTIFIER CODE POINTS AND DELETED EVERYWHERE ELSE, and
+ * that is decidable from the text with no parser, because it is a question about two characters. It cannot
+ * mis-decide in either direction, and both halves are facts about the lexical grammar rather than heuristics:
+ * KEEPING one never merges anything, since a space is not an identifier code point and the longest match ends
+ * at it either way; DELETING one never merges two IDENTIFIERS, since a punctuator (§12.8 Punctuators) is built
+ * of code points no IdentifierName may contain, so whatever stands beside it begins its own token.
+ * WHAT THAT SECOND HALF DOES NOT SAY is that deleting is lossless for PUNCTUATORS — `a + + b` and `a++b` are
+ * two token streams with one text, because a punctuator CAN be continued into a longer punctuator. That is
+ * untouched here and unrealized: no whitespace run this corpus produces stands between two code points whose
+ * concatenation is a punctuator at all.
+ *
+ * THE SIDE ASKED IS `struct`, NOT `code`, AND THAT IS THE WHOLE OF WHY THIS STAYS A NORMALIZATION. The claim
+ * above is about the TOKEN STREAM, and `struct` is this file's token-stream view: a literal's interior is
+ * blanked there, so whitespace inside one is not flanked by identifier code points and is collapsed away
+ * exactly as it always was. Whitespace inside a literal is DATA and not a separator, which is a different
+ * question with a different answer, and answering it here would answer it halfway — the space in `f("a b")`
+ * would survive while the one in `f("a - b")` would not.
+ * RESIDUAL, NOT COVERED: two DISTINCT string literals whose interiors differ only in whitespace still produce
+ * one text, so `f("a b")` and `f("ab")` anchor as one receiver. The next diff makes a literal's interior
+ * survive this normalization WHOLE rather than collapsed, which changes what a receiver's display text is and
+ * not this rule. Its absence shows as one `byRecv` group whose rows quote two different literal arguments at
+ * two lines. Unrealized at this revision: over every text all three producers below emit, no two spans that
+ * are different token streams collapse onto one text. */
+function normExpr(codeSpan, structSpan) {
+  /* `blank` writes a space per masked code point, so the two views are the same length and an identifier code
+     point in `struct` is that same code point in `code` at that same offset. A caller that sliced them at two
+     different offsets would make every answer below a guess, which is the one thing worth crashing over. */
+  if (codeSpan.length !== structSpan.length) throw new Error("normExpr: the code and struct spans are not the same span");
+  let out = "";
+  for (let k = 0; k < codeSpan.length; ) {
+    if (!/\s/.test(codeSpan[k])) { out += codeSpan[k]; k++; continue; }
+    let j = k;
+    while (j < codeSpan.length && /\s/.test(codeSpan[j])) j++;
+    if (k > 0 && j < codeSpan.length && /[\w$]/.test(structSpan[k - 1]) && /[\w$]/.test(structSpan[j])) out += " ";
+    k = j;
+  }
+  return out;
+}
+
+/* A receiver is normalized to its SOURCE TEXT by §normExpr. Two reads anchor to one record only when
    they are written identically — an aliasing question this deliberately does not answer, because answering it
    by flowing the fact along assignments and into parameters is what made idl_installed.mjs's second solve
    report a union of every caller's object. Identical text is a fact; a flowed identity is an inference. */
@@ -968,9 +1021,10 @@ function receiverBefore(struct, code, dotAt, out) {
     return null;
   }
   const raw = code.slice(i, end).trim();
-  const t = raw.replace(/\s+/g, "");
-  /* `t` has had ALL whitespace removed, so a `;` in the STRUCTURE of this span is the only thing left that can
-     say it is not one expression — see §crossesStatement for why the structure and not `t` is what is asked. */
+  const t = normExpr(code.slice(i, end), struct.slice(i, end));
+  /* The only whitespace `t` still carries is a run §normExpr kept because deleting it would have merged two
+     tokens, so nothing in `t` can say this span is more than one STATEMENT — a `;` in the STRUCTURE is what
+     says that, and see §crossesStatement for why the structure and not `t` is what is asked. */
   const split = crossesStatement(struct.slice(i, end));
   if (out) {
     let st = i;
@@ -997,14 +1051,17 @@ function receiverBefore(struct, code, dotAt, out) {
      BOTH descriptions of. The call NAMES the method and §the qjs_* ABI namespace has the method's own reply
      record, so the diff is construct against construct and nothing is followed through a promise. Only a
      no-argument call is read: an argument list is a span this normalizer would have to resolve to keep the
-     receiver's text a fact, and the boundary's own methods take none. */
-  return /^\((?:await)?[\w$.]*?\.[A-Za-z_$][\w$]*\(\)\)$/.test(t) ? t : null;
+     receiver's text a fact, and the boundary's own methods take none.
+     THE SPACE AFTER `await` IS PART OF THE SHAPE, not decoration on it — §normExpr keeps exactly the run that
+     separates the keyword from its operand, and matching `await` without it would match a receiver whose base
+     is a BINDING NAMED `awaitx`, which is the collision that normalization exists to keep apart. */
+  return /^\((?:await )?[\w$.]*?\.[A-Za-z_$][\w$]*\(\)\)$/.test(t) ? t : null;
 }
 
 /* The method an awaited-call receiver names, or null — read back off the normalized text so the one place
    that decides the shape is the one place that reads it. */
 const awaitedMethod = (recv) => {
-  const m = /^\((?:await)?[\w$.]*?\.([A-Za-z_$][\w$]*)\(\)\)$/.exec(recv || "");
+  const m = /^\((?:await )?[\w$.]*?\.([A-Za-z_$][\w$]*)\(\)\)$/.exec(recv || "");
   return m ? m[1] : null;
 };
 
@@ -2006,7 +2063,12 @@ function scanJS(file, src) {
           else if ((ch === ";" || ch === ",") && !d) break;
           else if (ch === "\n" && !d) { let k = e; while (k < struct.length && /\s/.test(struct[k])) k++; if (struct[k] !== "." && struct[k] !== "?") break; }
         }
-        recv = code.slice(s, e).replace(/\s+/g, "");
+        recv = normExpr(code.slice(s, e), struct.slice(s, e));
+        /* §normExpr AND NOT A LOCAL STRIP, because this text and §receiverBefore's land in ONE `localReads`
+           pool and are compared for equality there: two producers of one anchor that normalize differently are
+           two spellings of one object, which is the merge §receiver scope is built against. It is also the
+           producer where a KEYWORD can lead — `const { a } = await session(x)` is this arm, and the walk above
+           can never yield a leading keyword because it stops at the operand's own first code point. */
         /* The `;` is asked of the STRUCTURE this span was delimited on, never of its text — §crossesStatement. */
         if (!/^[A-Za-z_$]/.test(recv) || crossesStatement(struct.slice(s, e))) recv = null;
       }
@@ -2017,7 +2079,7 @@ function scanJS(file, src) {
           const stop = matchAt(struct, struct.lastIndexOf("(", i));
           let e3 = e2;
           while (e3 < struct.length && e3 < (stop > 0 ? stop - 1 : struct.length) && struct[e3] !== ";") e3++;
-          const t2 = code.slice(e2, e3).replace(/\s+/g, "");
+          const t2 = normExpr(code.slice(e2, e3), struct.slice(e2, e3));
           if (/^[A-Za-z_$]/.test(t2) && !crossesStatement(struct.slice(e2, e3))) recv = t2;
         }
       }
