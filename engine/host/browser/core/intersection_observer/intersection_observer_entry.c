@@ -5,11 +5,14 @@
 
 #include "check.h"
 #include "quickjs.h"
-#include "quickjs-step.h"
 #include "core/agent_state.h"
+#include "core/dom/element.h"
+#include "core/dom/node.h"
+#include "core/geometry/dom_rect.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/intersection_observer/intersection_observer_entry.h"
+#include "solver/concolic.h"
 
 /* §2.3's EIGHT MEMBERS, IN THE ORDER THE IDL DECLARES THEM — the enum IS the slot index and IS the accessor's
    magic, so a name installed with no case to answer it is the one way this can go wrong and the getter's
@@ -65,13 +68,41 @@ static JSValue js_ioe_get(JSContext *ctx, JSValueConst this_val, int magic)
     return v;
 }
 
-JSValue intersection_observer_entry_new(JSContext *ctx, double time, JSValue root_bounds, JSValue bounding,
-                                        JSValue intersection, bool is_intersecting, bool is_visible,
+JSValue intersection_observer_entry_new(JSContext *ctx, JSValue time, JSValue root_bounds, JSValue bounding,
+                                        JSValue intersection, JSValue is_intersecting, JSValue is_visible,
                                         JSValue ratio, JSValueConst target)
 {
     JSValue obj, state, proto;
 
     DCHECK(g_ready, "an IntersectionObserverEntry was constructed before its interface was declared");
+    /* WHAT EACH OF §2.3'S EIGHT MEMBERS MAY BE, ASSERTED WHERE THE ENTRY IS BUILT. There are exactly two
+       producers — §3.2.10's walk, which computes every value, and §2.3's constructor, which takes them through
+       Web IDL — and they agree on these shapes. Unknown external input is admitted at the four positions a
+       page's initialiser can put one at (a member of a crossing type reaches a body as ITSELF) and at NO
+       other: the three rectangles are minted by this component's own constructor body, so an unknown never
+       stands where one belongs, and admitting it here would be a shape no producer produces. */
+    DCHECK(JS_IsNumber(time) || concolic_is(time),
+           "§2.3's `readonly attribute DOMHighResTimeStamp time` was given something that is neither a Number "
+           "nor unknown external input — HR-TIME §5 The DOMHighResTimeStamp typedef writes `typedef double "
+           "DOMHighResTimeStamp`, whose conversion produces a Number, and unknown input is the one thing the "
+           "IDL boundary passes through as itself");
+    DCHECK(JS_IsNumber(ratio) || concolic_is(ratio),
+           "§2.3's `readonly attribute double intersectionRatio` was given something that is neither a Number "
+           "nor unknown external input");
+    DCHECK((JS_IsBool(is_intersecting) || concolic_is(is_intersecting)) &&
+           (JS_IsBool(is_visible) || concolic_is(is_visible)),
+           "§2.3's `isIntersecting` / `isVisible` were given something that is neither a Boolean nor unknown "
+           "external input — both are `readonly attribute boolean`, and a page reads the value back");
+    DCHECK(JS_IsNull(root_bounds) || dom_rect_is(root_bounds),
+           "§2.3's `readonly attribute DOMRectReadOnly? rootBounds` was given something that is neither a "
+           "rectangle nor the IDL null — the `?` is what admits null and it admits nothing else");
+    DCHECK(dom_rect_is(bounding) && dom_rect_is(intersection),
+           "§2.3's `boundingClientRect` / `intersectionRect` were given something that is not a rectangle — "
+           "both are `readonly attribute DOMRectReadOnly`, with no `?` to admit a null");
+    DCHECK(element_is(target) || concolic_is(target),
+           "§2.3's `readonly attribute Element target` was given something that is not an Element — §3.2.15's "
+           "brand and the declaration's narrowing are what refuse a Text node at the constructor, and "
+           "§3.2.10's walk hands this component the element it observed");
     proto = JS_GetClassProto(ctx, g_class);
     DCHECK(!JS_IsNull(proto),
            "an IntersectionObserverEntry was constructed in a realm that never ran its prototype install");
@@ -82,12 +113,12 @@ JSValue intersection_observer_entry_new(JSContext *ctx, double time, JSValue roo
     CHECK(!JS_IsException(state), "an IntersectionObserverEntry's state could not be allocated");
     /* EVERY MEMBER IS PLACED BEFORE THE OBJECT IS HANDED BACK — the eight are the record, and an entry missing
        one is what `ioe_state`'s reader would then have to default past. */
-    JS_SetPropertyUint32(ctx, state, IOE_TIME, JS_NewFloat64(ctx, time));
+    JS_SetPropertyUint32(ctx, state, IOE_TIME, time);
     JS_SetPropertyUint32(ctx, state, IOE_ROOT_BOUNDS, root_bounds);
     JS_SetPropertyUint32(ctx, state, IOE_BOUNDING_CLIENT_RECT, bounding);
     JS_SetPropertyUint32(ctx, state, IOE_INTERSECTION_RECT, intersection);
-    JS_SetPropertyUint32(ctx, state, IOE_IS_INTERSECTING, JS_NewBool(ctx, is_intersecting));
-    JS_SetPropertyUint32(ctx, state, IOE_IS_VISIBLE, JS_NewBool(ctx, is_visible));
+    JS_SetPropertyUint32(ctx, state, IOE_IS_INTERSECTING, is_intersecting);
+    JS_SetPropertyUint32(ctx, state, IOE_IS_VISIBLE, is_visible);
     JS_SetPropertyUint32(ctx, state, IOE_INTERSECTION_RATIO, ratio);
     JS_SetPropertyUint32(ctx, state, IOE_TARGET, JS_DupValue(ctx, target));
     JS_DefinePropertyValue(ctx, obj, g_atom, state, 0);
@@ -96,66 +127,132 @@ JSValue intersection_observer_entry_new(JSContext *ctx, double time, JSValue roo
 
 /* ---- §2.3's CONSTRUCTOR ----------------------------------------------------------------------------------- */
 
-typedef struct { uint8_t unused; } JSIoeCtorState;
-static void js_ioe_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+/* §2.3's `dictionary IntersectionObserverEntryInit`, in Web IDL §3.2.17 Dictionary types' LEXICOGRAPHIC read
+   order — the order a page with getters on the initialiser observes, and the order a throw from one of them
+   pins. ALL EIGHT ARE `required`, which is part of the type and not a note: §3.2.17 (ES-to-IDL list) step
+   4.1.6 is "Otherwise, if jsMemberValue is undefined and member is required, then throw a TypeError", so `{}`
+   and `{boundingClientRect: undefined}` are refused at the member the loop is standing on, and nothing in this
+   file defaults anything.
 
-#define IOE_CTOR_STAGES(X) \
-    X(IOE_CTOR_BUILD = IDL_STEP_FIRST, \
-      "INTERSECTION OBSERVER §2.3 new IntersectionObserverEntry(intersectionObserverEntryInit)")
-enum { IOE_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const IOE_CTOR_STEPS[] = { IOE_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+   THE THREE DICTIONARY-TYPED MEMBERS NAME GEOMETRY INTERFACES §3 The DOMRect interfaces' DECLARATION and are
+   the reason it has one — see core/geometry/dom_rect.h.
+   `rootBounds` is IDL_DICT_NULLABLE where the other two are IDL_DICT, and that one
+   `?` is the whole of a difference a page can see. §3.2.20 Nullable types — T? step 3 is "Otherwise, if V is
+   null or undefined, then return the IDL nullable type T? value null", so `{rootBounds: null}` is the IDL
+   null and `entry.rootBounds` answers null — which is what §2.3's `readonly attribute DOMRectReadOnly?
+   rootBounds` declares. §3.2.17's own step 1 is "If jsDict is not an Object and jsDict is neither undefined
+   nor null, then throw a TypeError", so the UN-nullable type ADMITS a null and step 4.1.2 then makes every
+   DOMRectInit member undefined: `{boundingClientRect: null}` is a rectangle carrying Geometry §3's four
+   `= 0`. One keyword, a null and a rectangle at the origin.
+
+   `time` and `intersectionRatio` are IDL_DOUBLE, the RESTRICTED type — HR-TIME §5 The DOMHighResTimeStamp
+   typedef writes "typedef double DOMHighResTimeStamp;", so both are §3.2.7 double and `{time: NaN}` and
+   `{time: Infinity}` are that type's TypeError rather than moments an entry can carry.
+
+   `isIntersecting` and `isVisible` are IDL_BOOLEAN_NO_DEFAULT because §2.3's IDL writes no `= false`. The
+   absence that type exists to keep visible is unreachable on a `required` member — step 4.1.6 answers an
+   absent one first — and the type is still the one the IDL states, which is what stops a later edition adding
+   a default from silently keeping this engine's old answer.
+
+   `target` is IDL_INTERFACE against Element. This engine's class system reaches every node through ONE class,
+   so `idl_iface_brand(node_class_id())` says "a Node" and `idl_iface_narrow(element_is)` is what says which
+   kind — both stated at the declaration below, and both needed: `{target: document.createTextNode('x')}` is a
+   TypeError. */
+static const IdlDictMember IOE_INIT[] = {
+    { "boundingClientRect", IDL_DICT,               true, NULL, 0, &DOM_RECT_INIT_DECL },
+    { "intersectionRatio",  IDL_DOUBLE,             true },
+    { "intersectionRect",   IDL_DICT,               true, NULL, 0, &DOM_RECT_INIT_DECL },
+    { "isIntersecting",     IDL_BOOLEAN_NO_DEFAULT, true },
+    { "isVisible",          IDL_BOOLEAN_NO_DEFAULT, true },
+    { "rootBounds",         IDL_DICT_NULLABLE,      true, NULL, 0, &DOM_RECT_INIT_DECL },
+    { "target",             IDL_INTERFACE,          true },
+    { "time",               IDL_DOUBLE,             true },
+};
+
+/* ONE OF §2.3'S THREE `DOMRectInit` MEMBERS, AS THE `DOMRectReadOnly` THE INTERFACE ANSWERS.
+ *
+ * §3.2.17 HAS ALREADY RUN OVER IT: what arrives is the engine-built dictionary the nested level placed, so
+ * these four reads reach nothing of the page's and no getter of the page's can run from here.
+ *
+ * GEOMETRY §3's `= 0` IS NOT APPLIED HERE AND MUST NOT BE. `DOMRectInit` declares each member
+ * `unrestricted double = 0`, and core/geometry/dom_rect.c applies that default in exactly ONE place —
+ * `dr_value`, which the mint below goes through — because §3's positional constructor carries the same `= 0`
+ * and an omitted argument reaches it by the other road. So an absent member is `undefined` here, and that is
+ * the PRODUCER'S POSITIVE STATEMENT that the page wrote nothing rather than a hole to fill; a `? 0` written at
+ * this site would be the second answer to §3 that dom_rect.c's own note refuses.
+ *
+ * THE MEMBER MAY ALSO BE UNKNOWN EXTERNAL INPUT CROSSED WHOLE — core/idl_args.c's member loop crosses an
+ * unknown as itself whatever the declared type says — and the same four reads are the right answer for that
+ * too: reading `x` off an unknown yields another unknown (solver/concolic.c's exotic get), which is what
+ * §3.2.17 would have produced one level down, so the rectangle carries four values that still fork control
+ * flow and are still solvable at a sink instead of four zeroes that de-taint it.
+ *
+ * `DOMRectReadOnly` AND NOT `DOMRect`, because §2.3 declares all three rectangles `readonly attribute
+ * DOMRectReadOnly`: a page holding an entry must not be able to write the geometry back, and
+ * `entry.boundingClientRect instanceof DOMRect` answers false in every browser.
+ * CONSUMES `init_rect`. */
+static JSValue ioe_rect(JSContext *ctx, JSValue init_rect)
+{
+    JSValue rect;
+
+    DCHECK(JS_IsObject(init_rect),
+           "a §2.3 DOMRectInit member reached the constructor's body as something that is not an object — "
+           "§3.2.17 step 1 admits an Object or a null and refuses everything else, `required` refuses the "
+           "absent one, and this file's caller answers the nullable member's null before calling here");
+    rect = dom_rect_readonly_new_values(ctx,
+                                        idl_dict_get(ctx, init_rect, "x"),
+                                        idl_dict_get(ctx, init_rect, "y"),
+                                        idl_dict_get(ctx, init_rect, "width"),
+                                        idl_dict_get(ctx, init_rect, "height"));
+    JS_FreeValue(ctx, init_rect);
+    return rect;
+}
 
 /* §2.3's `constructor(IntersectionObserverEntryInit intersectionObserverEntryInit)`.
  *
- * THE ARGUMENT'S TYPE IS NOT DECLARED, AND THAT IS THE GAP THIS CRASHES FOR. `IntersectionObserverEntryInit`
- * has three members whose own type is a DICTIONARY — `required DOMRectInit? rootBounds`, `required DOMRectInit
- * boundingClientRect`, `required DOMRectInit intersectionRect`. The conversion that reads a nested dictionary
- * is BUILT (core/idl_args.c's §3.2.17 walk is re-entrant over a stack of levels), so what is left is the
- * declaration this file and core/geometry/dom_rect.c owe it — see js_ioe_ctor_step, which names all three.
+ * THE ARGUMENT IS DECLARED AND REQUIRED, so everything that can refuse this call has already run: Web IDL
+ * §3.6 Overload resolution algorithm's step 5 threw for `new IntersectionObserverEntry()`, and §3.2.17 read,
+ * converted or refused all eight members — three of them by descending into Geometry §3's own dictionary.
+ * What is left is this: eight values placed on an entry. Nothing here throws and nothing here reaches the
+ * page's code, which is why it is a plain body and not a step machine.
  *
  * NOTHING IN THIS ENGINE REACHES IT. §3.2.6 step 1's "construct an IntersectionObserverEntry" is the internal
- * operation `intersection_observer_entry_new` above, which takes the eight values it already holds; this is the
- * page-visible constructor and only a page calls it. */
-static int js_ioe_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+ * operation `intersection_observer_entry_new` above, which takes the eight values it already holds; this is
+ * the page-visible constructor and only a page calls it. */
+static JSValue js_ioe_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    (void)st; (void)argc; (void)argv; (void)presult; (void)out_cb; (void)out_argc;
-    JS_FreeValue(ctx, cb_result);
-    DCHECK(hdr->stage == IOE_CTOR_BUILD,
-           "the IntersectionObserverEntry constructor resumed at a stage §2.3 does not have");
-    if (JS_IsUndefined(hdr->this_val))
-        return JS_ThrowTypeError(ctx, "constructor IntersectionObserverEntry requires 'new'"), -1;
-    DFAIL("INTERSECTION OBSERVER §2.3 The IntersectionObserverEntry interface's "
-          "`constructor(IntersectionObserverEntryInit intersectionObserverEntryInit)` is NOT DECLARED, and "
-          "what is missing is now this file's own declaration work rather than an argument-machine "
-          "capability. §3.2.17's NESTED conversion EXISTS: core/idl_args.c's walk is one re-entrant member "
-          "loop over a stack of levels, idl_type_pushes_level names IDL_DICT, IDL_DICT_NULLABLE and "
-          "IDL_SEQUENCE_STRING_OR_DICT as the types that push one, and idl_members_depth counts through that "
-          "same predicate — so a `required DOMRectInit? rootBounds` has a declared type and a counted frame. "
-          "THREE THINGS ARE LEFT AND ALL THREE ARE DECLARATIONS. (1) Geometry Interfaces §3's DOMRectInit is "
-          "a file-static IdlDictMember array in core/geometry/dom_rect.c (DOM_RECT_INIT) and a nested member "
-          "names an IdlDictDecl, so that file has to NAME it and export it. (2) This file has to declare "
-          "IntersectionObserverEntryInit's EIGHT members, ALL `required`, in Web IDL §3.2.17's lexicographic "
-          "read order — boundingClientRect and intersectionRect IDL_DICT, rootBounds IDL_DICT_NULLABLE, all "
-          "three naming that declaration; intersectionRatio and time IDL_DOUBLE (DOMHighResTimeStamp is a "
-          "`double` typedef); isIntersecting and isVisible IDL_BOOLEAN_NO_DEFAULT, because the IDL writes no "
-          "`= false` and a `required` member is never absent; target IDL_INTERFACE against Element — and "
-          "replace this member's one IDL_ANY position with IDL_DICT over that list. (3) The body then reads "
-          "the eight and builds the entry through intersection_observer_entry_new, minting the three rects "
-          "with core/geometry/dom_rect.h's dom_rect_new_values, which is where §3's `= 0` for an absent "
-          "DOMRectInit member is applied and is the only place it may be.");
-    /* A RELEASE BUILD CANNOT BUILD THE CONVERSION, so the constructor refuses — which is the honest answer for
-       a capability that is not supportable outside dev, and is distinguishable by a page from a missing
-       interface object (the interface IS there, and every instance the engine mints answers all eight
-       members). */
-    return JS_ThrowTypeError(ctx, "IntersectionObserverEntry cannot be constructed by script in this engine"),
-           -1;
-}
+    JSValueConst init;
+    JSValue root, target, entry;
 
-static const IdlStepDecl js_ioe_ctor_decl = {
-    js_ioe_ctor_step, sizeof(JSIoeCtorState), js_ioe_ctor_visit, NULL,
-    "INTERSECTION OBSERVER §2.3 new IntersectionObserverEntry(intersectionObserverEntryInit)", IOE_CTOR_STEPS
-};
+    (void)magic;
+    if (JS_IsUndefined(this_val))
+        return JS_ThrowTypeError(ctx, "constructor IntersectionObserverEntry requires 'new'");
+    DCHECK(argc == 1,
+           "§2.3 declares ONE required argument and the member is not variadic, so the argument machine hands "
+           "this body exactly that one position — fewer is Web IDL §3.6 step 5's TypeError, thrown before any "
+           "conversion runs, and more is a position the declaration does not list");
+    init = argv[0];
+    /* §3.2.20 Nullable types — T? step 3 put the IDL null here for `{rootBounds: null}`, and §2.3's `readonly
+       attribute DOMRectReadOnly? rootBounds` is what makes that the entry's own value rather than a rectangle.
+       Anything else is a DOMRectInit — INCLUDING the one §3.2.17 step 1 admits a null into and step 4.1.2 then
+       leaves entirely absent, which is why this member is the only one that asks. */
+    root = idl_dict_get(ctx, init, "rootBounds");
+    if (!JS_IsNull(root)) root = ioe_rect(ctx, root);
+    /* `target` is the ONE value the mint borrows rather than consumes, so this body owns the read and gives it
+       back — see intersection_observer_entry.h. */
+    target = idl_dict_get(ctx, init, "target");
+    entry = intersection_observer_entry_new(ctx,
+                                            idl_dict_get(ctx, init, "time"),
+                                            root,
+                                            ioe_rect(ctx, idl_dict_get(ctx, init, "boundingClientRect")),
+                                            ioe_rect(ctx, idl_dict_get(ctx, init, "intersectionRect")),
+                                            idl_dict_get(ctx, init, "isIntersecting"),
+                                            idl_dict_get(ctx, init, "isVisible"),
+                                            idl_dict_get(ctx, init, "intersectionRatio"),
+                                            target);
+    JS_FreeValue(ctx, target);
+    return entry;
+}
 
 /* ---- declaration and installation -------------------------------------------------------------------------- */
 
@@ -172,19 +269,25 @@ void intersection_observer_entry_init(JSContext *ctx)
     g_atom = JS_ValueToAtom(ctx, g_key);
     CHECK(g_atom != JS_ATOM_NULL, "the IntersectionObserverEntry state slot key could not be interned");
 
-    /* ONE DECLARED POSITION, TYPED `any` — see js_ioe_ctor_step for the capability that keeps it from being
-       IDL_DICT and for the crash that names it. The position crosses unconverted and the body never reads it,
-       which is exactly what IDL_ANY is; what the declaration adds is that the position EXISTS.
-       IT WAS `nargs 0`, AND TWO SEPARATE FACTS CAME OUT WRONG BECAUSE OF IT. §2.3's
-       `constructor(IntersectionObserverEntryInit intersectionObserverEntryInit)` declares that argument
-       REQUIRED, so Web IDL §3.6's step 5 arity check owes `new IntersectionObserverEntry()` a TypeError before
-       any of the constructor's own steps run, and with no position declared there was nothing to require. And
-       Web IDL §3.7.1 Interface object's `length` — "the length of the shortest argument list of the entries in
-       S", over the effective overload set at argument count 0 — is 1, which the install used to state by hand
-       and now derives from this line. */
+    /* ONE DECLARED POSITION, TYPED AS THE DICTIONARY §2.3 WRITES THERE. The position is REQUIRED — no
+       idl_optional_from — which is what makes `new IntersectionObserverEntry()` Web IDL §3.6 step 5's
+       TypeError before any of the constructor's own work runs, and what makes Web IDL §3.7.1 Interface
+       object's `length` ("the length of the shortest argument list of the entries in S", over the effective
+       overload set at argument count 0) the 1 the install derives from this line rather than states by hand.
+       IT WAS IDL_ANY, WHICH DECLARED THAT THE POSITION EXISTED AND NOTHING ABOUT WHAT IT ACCEPTS: the value
+       crossed unconverted, the constructor could not be written, and the crash that stood here named the two
+       declarations that were missing — Geometry §3's for `DOMRectInit` (now DOM_RECT_INIT_DECL) and this
+       file's own eight-member list. Both are here, so the crash is gone with them.
+       §3.2.15's BRAND AND ITS NARROWING ARE THE DECLARATION'S, stated once for a dictionary whose only
+       interface-typed member is `required Element target`: the class reaches every node and the narrowing is
+       what says Element. */
     {
-        static const IdlArgType IOE_CTOR_ARGS[1] = { IDL_ANY };
-        g_id_ctor = idl_method_id_step(ctx, IOE_CTOR_ARGS, 1, NULL, 0, &js_ioe_ctor_decl, 0);
+        static const IdlArgType IOE_CTOR_ARGS[1] = { IDL_DICT };
+
+        g_id_ctor = idl_method_id_dict(ctx, IOE_CTOR_ARGS, 1, IOE_INIT, (int)COUNTOF(IOE_INIT),
+                                       js_ioe_ctor, 0);
+        idl_iface_brand(node_class_id());
+        idl_iface_narrow(element_is);
     }
 
     realm_declare_intrinsic(intersection_observer_entry_install_proto);

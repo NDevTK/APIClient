@@ -262,6 +262,14 @@ static const IdlDictMember DOM_RECT_INIT[] = {
     { "y",      IDL_UNRESTRICTED_DOUBLE, false },
 };
 
+/* THE SAME LIST, NAMED — see dom_rect.h for why a NESTED member needs the identifier and the count that an
+   argument position does not. The extent is written HERE and nowhere else: the two `fromRect` declarations
+   below read `DOM_RECT_INIT_DECL.n` rather than restating a `sizeof`, so there is one statement of how many
+   members §3 declares and nothing for a fifth to be added past. */
+const IdlDictDecl DOM_RECT_INIT_DECL = {
+    "DOMRectInit", DOM_RECT_INIT, (int)(sizeof(DOM_RECT_INIT) / sizeof(DOM_RECT_INIT[0]))
+};
+
 /* ---- §3's eight attributes -------------------------------------------------------------------------------- */
 
 /* THE NaN-SAFE MINIMUM AND MAXIMUM of a two-value list — Geometry's own definition: "NaN if any member of the
@@ -403,7 +411,6 @@ void dom_rect_init(JSContext *ctx)
     static const IdlArgType FOUR[4] = { IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE,
                                         IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE };
     static const IdlArgType ONE_DICT[1] = { IDL_DICT };
-    static const int N_INIT = (int)(sizeof(DOM_RECT_INIT) / sizeof(DOM_RECT_INIT[0]));
     int i;
 
     /* NOT `if (g_ro_class) return;`. This component has exactly ONE declaration site — core/platform.c's row —
@@ -421,9 +428,11 @@ void dom_rect_init(JSContext *ctx)
     idl_optional_from(0);
     g_id_ctor_rect = idl_method_id(ctx, FOUR, 4, js_dr_ctor, DR_MUTABLE);
     idl_optional_from(0);
-    g_id_from_ro = idl_method_id_dict(ctx, ONE_DICT, 1, DOM_RECT_INIT, N_INIT, js_dr_from_rect, DR_READONLY);
+    g_id_from_ro = idl_method_id_dict(ctx, ONE_DICT, 1, DOM_RECT_INIT_DECL.members, DOM_RECT_INIT_DECL.n,
+                                      js_dr_from_rect, DR_READONLY);
     idl_optional_from(0);
-    g_id_from_rect = idl_method_id_dict(ctx, ONE_DICT, 1, DOM_RECT_INIT, N_INIT, js_dr_from_rect, DR_MUTABLE);
+    g_id_from_rect = idl_method_id_dict(ctx, ONE_DICT, 1, DOM_RECT_INIT_DECL.members, DOM_RECT_INIT_DECL.n,
+                                        js_dr_from_rect, DR_MUTABLE);
     idl_optional_from(0);
     g_id_tojson = idl_method_id(ctx, NULL, 0, js_dr_tojson, 0);
     for (i = DR_X; i <= DR_HEIGHT; i++)

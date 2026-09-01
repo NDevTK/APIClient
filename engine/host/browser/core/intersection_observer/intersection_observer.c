@@ -695,27 +695,25 @@ static void io_queue_entry(JSContext *ctx, JSValueConst observer, JSValueConst s
 {
     JSContext *rctx = io_realm(ctx, state);
     JSValue entries = JS_GetPropertyUint32(ctx, (JSValue)state, IO_S_ENTRIES);
-    JSValue entry;
-    double entry_time = 0;
+    JSValue entry, entry_time;
 
     (void)observer;
     /* §2.3's `time` — the relative high resolution time of the frame's moment, in the OBSERVER's environment.
-       It is flattened to a double here because that is what the entry's own component takes, and the flatten
-       is SOUND rather than a collapse: io_update_target's step 3.2 crashes on an unknown frame timestamp
-       before this walk is reached, so the only moments that get here are ones the clock computed. The day
-       that seam is built this reads a value and so does the entry. */
-    {
-        JSValue t = hr_time_relative(rctx, frame_ts);
-
-        DCHECK(JS_IsNumber(t),
-               "§2.3's IntersectionObserverEntry time is not a number — §3.2.10 step 3.2 refuses an unknown "
-               "frame timestamp above, so nothing unknown can have reached this derivation");
-        JS_ToFloat64(rctx, &entry_time, t);
-        JS_FreeValue(rctx, t);
-    }
+       IT IS A VALUE AND NOT A FLATTENED DOUBLE. It used to be flattened here because the entry's component
+       took a C `double`, under a note saying the day that seam was built this would read a value and so would
+       the entry; that day is this one — §2.3's own constructor cannot flatten a member carrying unknown
+       external input, so the record takes JSValues and this caller hands over what the clock produced.
+       The assert stays because it is about THIS WALK and is stronger than what the record can say:
+       io_update_target's step 3.2 crashes on an unknown frame timestamp before this is reached, so the only
+       moments that get here are ones the clock computed. */
+    entry_time = hr_time_relative(rctx, frame_ts);
+    DCHECK(JS_IsNumber(entry_time),
+           "§2.3's IntersectionObserverEntry time is not a number — §3.2.10 step 3.2 refuses an unknown "
+           "frame timestamp above, so nothing unknown can have reached this derivation");
     entry = intersection_observer_entry_new(rctx, entry_time,
                                             io_rect_value(rctx, root), io_rect_value(rctx, target_rect),
-                                            io_rect_value(rctx, inter), is_intersecting, is_visible,
+                                            io_rect_value(rctx, inter),
+                                            JS_NewBool(rctx, is_intersecting), JS_NewBool(rctx, is_visible),
                                             viewport_env_derived(ratio, JS_NewFloat64(rctx, ratio.px)),
                                             target);
     io_push(ctx, entries, entry);                                         /* step 2 */

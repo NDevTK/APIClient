@@ -63,4 +63,20 @@ JSValue dom_rect_readonly_new_values(JSContext *ctx, JSValue x, JSValue y, JSVal
    and its `item` both declare `DOMRect?` as the type they answer. */
 bool dom_rect_is(JSValueConst v);
 
+/* GEOMETRY INTERFACES §3 The DOMRect interfaces' `dictionary DOMRectInit`, NAMED — the declaration record a
+ * member of ANOTHER dictionary points at. §3's own `fromRect(optional DOMRectInit other = {})` declares the
+ * list as an ARGUMENT's, which needs no identifier and no external linkage; Intersection Observer §2.3 The
+ * IntersectionObserverEntry interface's `required DOMRectInit? rootBounds` and its
+ * two un-nullable siblings are MEMBERS whose declared type is this dictionary, and core/idl_args.h's
+ * IdlDictMember::dict is the field a member states that in — so §3.2.17's nested conversion needs the list
+ * NAMED (a diagnostic has to be able to say which dictionary refused a value), COUNTED (idl_members_depth sizes
+ * the frame stack from it) and REACHABLE from another translation unit.
+ * IT IS THE SAME LIST §3'S TWO `fromRect` DECLARATIONS READ, and dom_rect.c states the members exactly once
+ * behind it — a second copy of four `unrestricted double = 0` rows would be a second answer to §3.
+ * The tag is FORWARD-DECLARED rather than reached through core/idl_args.h: a component that uses this record
+ * includes that header anyway to declare its own member list, and one that only holds a rectangle should not
+ * take the whole argument machine with it. */
+struct IdlDictDecl;
+extern const struct IdlDictDecl DOM_RECT_INIT_DECL;
+
 #endif

@@ -1797,6 +1797,26 @@ int idl_dict_walk_start(JSContext *ctx, IdlDictWalk *w, JSValueConst src,
     return 0;
 }
 
+/* WHICH §3.2.15 Interface types INTERFACE A DICTIONARY MEMBER BRANDS AGAINST — the CLASS and the NARROWING
+ * that says which kind of that class, answered TOGETHER because they are two halves of ONE statement of what
+ * the member's declared interface is. `idl_iface_brand(node_class_id())` says "a Node" and can say no more,
+ * so `idl_iface_narrow(element_is)` is what makes Intersection Observer §2.3's `required Element target`
+ * refuse a Text node; a member that takes only the class takes half a type.
+ * A MEMBER THAT STATES ITS OWN CLASS (IdlDictMember::iface) IS NAMING A DIFFERENT INTERFACE, so the
+ * declaration's narrowing is not about it and applying one written for the declaration's class would refuse
+ * that member's own correct values — HTML §7.2.6.10.1 The NavigateEvent interface's `dictionary
+ * NavigateEventInit : EventInit` is the shape that makes this real: `destination`, `signal`, `formData` and
+ * `sourceElement` are four members naming four interfaces. So the two travel together or neither is read.
+ * BOTH INTERFACE ARMS BELOW ASK THIS. The class alone was written out at each of them and they had already
+ * drifted: the nullable arm read the declaration's narrowing and the un-nullable one did not, so a class that
+ * covers a whole node tree branded and nothing said which kind. */
+static void idl_member_iface(const IdlDictMember *dm, const IdlDictLevel *w,
+                             JSClassID *want, bool (**narrow)(JSValueConst v))
+{
+    *want   = dm->iface ? dm->iface : w->iface;
+    *narrow = dm->iface ? NULL : w->narrow;
+}
+
 /* DRIVE THE LEVEL ON TOP one re-entry's worth — WEB IDL §3.2.17 Dictionary types (ES-to-IDL list) step 4.1's
    member loop, "For each dictionary member member declared on dictionary, in lexicographical order", and THE
    ONLY COPY OF IT. Level zero and every pushed level run this same loop, which is what makes a nested
@@ -2107,14 +2127,20 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                (idl_iface_brand) and that is all a dictionary needs while every interface-typed member
                of it is the same interface; NavigateEventInit's four are four DIFFERENT interfaces, so
                the member carries its own and the declaration's is not consulted. Neither stated is the
-               assert below and not a read past a missing class. */
-            JSClassID want = dm->iface ? dm->iface : w->iface;
+               assert below and not a read past a missing class.
+               AND THE DECLARATION'S NARROWING COMES WITH THE CLASS, which this arm did not read and the
+               nullable arm below did — see idl_member_iface. A class says "a Node"; Intersection Observer
+               §2.3's `required Element target` says Element, and without the narrowing a Text node crossed
+               as an entry's target with nothing to say so. */
+            JSClassID want;
+            bool (*narrow)(JSValueConst v);
 
+            idl_member_iface(dm, w, &want, &narrow);
             DCHECK(want != 0, "a dictionary declared an interface-typed member with no class to brand "
                               "against — IdlDictMember::iface states it per member, and "
                               "idl_iface_brand states it once for a dictionary whose interface-typed "
                               "members are all one interface");
-            if (!idl_is_iface(w->mv, want)) {
+            if (!idl_is_iface(w->mv, want) || (narrow && !narrow(w->mv))) {
                 JS_ThrowTypeError(ctx, "member `%s` of %s does not implement the "
                                   "declared interface", dm->name, idl_dict_where(w));
                 return -1;
@@ -2130,15 +2156,16 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                IDL_ANY before any conversion runs — so the null this branch sees is the page's own.)
                IT HAD NO BRANCH AT ALL and therefore crossed unconverted, which is the silent kind of
                gap: `{root: 5}` would have reached a body that then asked node_of for a node. */
-            JSClassID want = dm->iface ? dm->iface : w->iface;
+            JSClassID want;
+            bool (*narrow)(JSValueConst v);
 
+            idl_member_iface(dm, w, &want, &narrow);
             DCHECK(want != 0, "a dictionary declared a nullable interface-typed member with no class "
                               "to brand against — IdlDictMember::iface states it per member, and "
                               "idl_iface_brand states it once per declaration");
             if (JS_IsNull(w->mv)) {
                 /* the IDL null; nothing to brand */
-            } else if (!idl_is_iface(w->mv, want) ||
-                       (w->narrow && !w->narrow(w->mv))) {
+            } else if (!idl_is_iface(w->mv, want) || (narrow && !narrow(w->mv))) {
                 JS_ThrowTypeError(ctx, "member `%s` of %s does not implement the "
                                   "declared interface", dm->name, idl_dict_where(w));
                 return -1;
