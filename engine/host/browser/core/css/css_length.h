@@ -423,6 +423,19 @@ CssPx css_length_resolve_pct(CssLength len, CssPx basis);
 char *css_length_serialize_px(double px);
 char *css_length_serialize_pct(double pct);
 
+/* THE SAME OPERATION WITH THE UNIT LEFT TO THE CALLER — CSSOM §6.7.2's SERIALIZE A `<number>` from `v`, then
+   `unit` appended. The two entries above are this one with their suffix written in; it is public because a
+   SECOND standard states its serialization over the same sentence: CSS Typed OM 1 §6.4 CSSUnitValue
+   Serialization step 2 is "Set s to the result of serializing a <number> from value, per CSSOM § 6.7.2
+   Serializing CSS Values", and its step 3 appends the unit.
+   SO THE VALUE NEED NOT BE A LENGTH, and that is not this component overreaching. §6.7.2's number rule is
+   stated once for every CSS value that carries one, and this file holds the only implementation of it in the
+   engine — a `<time>` or an `<angle>` printed by a second shortest-round-trip search is the copy that
+   disagrees about `0.1 + 0.2` while producing a string that looks like CSS either way. `unit` is written
+   VERBATIM: §6.4's own "percent" arm appends `%` rather than the word, and choosing between them is the
+   caller's step, not this printer's. OWNED: the caller frees. */
+char *css_length_serialize_number(double v, const char *unit);
+
 /* css-values-4 §10.13 "Serialization" for §10.11's two-term residue, whose shape that section pins exactly.
    The root is a Sum, so "serialize a math function" wraps it in `calc(`; "serialize a calculation tree"'s Sum
    branch SORTS the children first, and "sort a calculation's children nodes" puts the PERCENTAGE ahead of every

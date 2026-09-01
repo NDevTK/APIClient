@@ -131,6 +131,24 @@ typedef enum {
    ident sequence and CSS compares those ASCII case-insensitively. */
 bool css_math_is_function(const char *name, size_t len);
 
+/* §10.9 Type Checking's TERMINAL RULE FOR A DIMENSION — which base type a unit IDENTIFIER names — over the
+   unit tables the components that define them own (core/css/css_length.h for §6's `<length>`, core/css/
+   css_dimension.h for §7's angles, times, frequencies and resolutions). FALSE is §10.9's "anything else",
+   which for a calculation is "The calculation's type is failure". The unit is a span, neither NUL-terminated
+   nor lowercased, because a dimension token names its unit inside the buffer it was tokenized from and CSS
+   compares unit identifiers ASCII case-insensitively.
+   IT IS PUBLIC BECAUSE A SECOND STANDARD ASKS THE SAME QUESTION OF THE SAME TABLES, AND THE TWO QUESTIONS ARE
+   NOT THE SAME QUESTION. CSS Typed OM 1 §4.3.2 Numeric Value Typing's "create a type from a string unit" has
+   nine branches, and seven of them ARE this: "unit is a <length> unit → «[ "length" → 1 ]»", and the same
+   sentence for <angle>, <time>, <frequency>, <resolution> and <flex>, with "anything else → Return failure".
+   Its other two — "unit is "number" → Return «[ ]»" and "unit is "percent" → Return «[ "percent" → 1 ]»" —
+   are NOT dimension units and must not be answered here: CSS Syntax 3 §4 tokenizes a percentage as its own
+   token type, and `calc(5number)` IS a dimension token whose unit is the ident `number`, which §10.9 refuses.
+   So the TABLE is one fact and each specification asks its own question of it; §4.3.2's two extra branches
+   stand at ITS site (core/css/css_unit_value.h) and this entry keeps §10.9's answer exactly. A second copy of
+   the table here would be the copy that disagrees about `dvmin` the day one of them is edited. */
+bool css_math_unit_base(const char *unit, size_t len, CssMathBase *base);
+
 /* §10.9's LAST RULE, answered over the text of one math function: "A math function resolves to <number>,
    <length>, <angle>, <time>, <frequency>, <resolution>, <flex>, or <percentage> according to which of those
    productions its type matches. (These categories are mutually exclusive.) If it can't match any of these, the

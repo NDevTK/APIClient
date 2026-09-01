@@ -1,5 +1,7 @@
 /* See css_namespace.h. CSSOM §8.1 The CSS.escape() Method's `namespace CSS`, plus CSS Conditional Rules
-   Module Level 3 §7.5 The CSS namespace, and the supports() function's partial namespace. */
+   Module Level 3 §7.5 The CSS namespace, and the supports() function's partial namespace — and CSS Typed OM
+   Level 1 §4.3.5 Numeric Factory Functions' partial namespace, which is sixty-three of this object's members
+   and ONE algorithm. */
 
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +14,7 @@
 #include "core/css/css_serialize.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_supports.h"
+#include "core/css/css_unit_value.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 
@@ -20,6 +23,81 @@ enum { M_ESCAPE, M_SUPPORTS, M_N };
 static const char *const CSS_MEMBER[M_N] = { "escape", "supports" };
 
 static int g_id[M_N] = { -1, -1 };
+
+/* CSS TYPED OM 1 §4.3.5's SIXTY-THREE FACTORY FUNCTIONS, in the section's own order and with its own comments
+ * marking where each unit family begins. It is a TABLE and not sixty-three bodies because §4.3.5 defines it as
+ * one: "All of the above methods must, when called with a double value, return a new CSSUnitValue whose value
+ * internal slot is set to value and whose unit internal slot is set to the name of the method as defined
+ * here", and the section then says the naming is a shorthand "to avoid defining the unit individually for all
+ * ~60 functions".
+ *
+ * THE UNIT IS THE TABLE'S ROW AND NEVER THE FUNCTION'S CURRENT NAME, which §4.3.5 warns about in a note of its
+ * own: "The unit used does not depend on the current name of the function, if it's stored in another variable;
+ * let foo = CSS.px; let val = foo(5); does not return a {value: 5, unit: "foo"} CSSUnitValue." A magic index
+ * into this array is that sentence — the body never asks what it was called.
+ *
+ * THE SPELLINGS ARE THE SPEC'S, CASE INCLUDED. `Q`, `Hz` and `kHz` are written as css-values-4 §6.2 and §7.3
+ * define them, which is what §4.3.5's own closing paragraph means by "named after the unit in its defined
+ * canonical casing" — the METHOD NAME is a JavaScript property key and is matched exactly, even though the
+ * unit identifier it denotes is matched ASCII case-insensitively everywhere a stylesheet carries one.
+ *
+ * THE LIST IS THE SPEC'S SET AND NOT THIS ENGINE'S, which is §4.3.5's own instruction and is why nothing here
+ * consults the unit tables: the factories are defined as returning a CSSUnitValue whose unit slot is the
+ * method's name, with no create-a-type step anywhere in the sentence — only §4.3.3's CONSTRUCTOR has one. So
+ * `CSS.cqw(5)` mints a value whose unit is `cqw` exactly as the standard requires, and the six CSS
+ * Conditional 5 §7 Container Relative Lengths units are the reason that distinction is load-bearing rather
+ * than pedantic. See css_unit_value.h. */
+#define CSS_UNIT_FN_N 63
+
+static const char *const CSS_UNIT_FN[CSS_UNIT_FN_N] = {
+    "number", "percent",
+    /* <length> — css-values-4 §6.1.1's twelve font-relative units, §6.1.2's viewport-percentage family in all
+       four of its spellings, CSS Conditional 5 §7's six container-relative units, and §6.2's seven absolute
+       ones. */
+    "cap", "ch", "em", "ex", "ic", "lh", "rcap", "rch", "rem", "rex", "ric", "rlh",
+    "vw", "vh", "vi", "vb", "vmin", "vmax",
+    "svw", "svh", "svi", "svb", "svmin", "svmax",
+    "lvw", "lvh", "lvi", "lvb", "lvmin", "lvmax",
+    "dvw", "dvh", "dvi", "dvb", "dvmin", "dvmax",
+    "cqw", "cqh", "cqi", "cqb", "cqmin", "cqmax",
+    "cm", "mm", "Q", "in", "pt", "pc", "px",
+    /* <angle> — css-values-4 §7.1. */
+    "deg", "grad", "rad", "turn",
+    /* <time> — §7.2. */
+    "s", "ms",
+    /* <frequency> — §7.3. */
+    "Hz", "kHz",
+    /* <resolution> — §7.4. */
+    "dpi", "dpcm", "dppx",
+    /* <flex> — css-grid-2 §7.2.4. */
+    "fr",
+};
+
+/* THE COUNT IS STATED AND THEN CHECKED AGAINST THE TABLE, because it is the array's declared width AND the
+   bound of every loop below AND the range the factory body's magic is asserted against — three readings of one
+   number, and a table edited without it would leave the tail of both arrays holding nothing. */
+_Static_assert(sizeof CSS_UNIT_FN / sizeof CSS_UNIT_FN[0] == CSS_UNIT_FN_N,
+               "CSS Typed OM 1 §4.3.5's factory table and the count declared for it disagree");
+
+/* PRE-INITIALISED TO -1, WHICH IS core/agent_state.h's stated pre-init value for an id slot and is NOT what a
+   static int array holds on its own: zero is a VALID pool entry, so a zeroed slot is indistinguishable from a
+   declaration that really landed at entry 0. The rows mirror the table above one for one, so a reader checks
+   the two shapes against each other by eye and the _Static_assert catches the rest. */
+static int g_unit_fn_id[CSS_UNIT_FN_N] = {
+    -1, -1,                                                            /* number, percent */
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,                    /* §6.1.1's twelve font-relative */
+    -1, -1, -1, -1, -1, -1,                                            /* §6.1.2's `v*` */
+    -1, -1, -1, -1, -1, -1,                                            /* `sv*` */
+    -1, -1, -1, -1, -1, -1,                                            /* `lv*` */
+    -1, -1, -1, -1, -1, -1,                                            /* `dv*` */
+    -1, -1, -1, -1, -1, -1,                                            /* Conditional 5 §7's `cq*` */
+    -1, -1, -1, -1, -1, -1, -1,                                        /* §6.2's seven absolute */
+    -1, -1, -1, -1,                                                    /* §7.1's angles */
+    -1, -1,                                                            /* §7.2's times */
+    -1, -1,                                                            /* §7.3's frequencies */
+    -1, -1, -1,                                                        /* §7.4's resolutions */
+    -1,                                                                /* css-grid-2 §7.2.4's `fr` */
+};
 
 /* ---- CSSOM §8.1 The CSS.escape() Method ------------------------------------------------------------------
  *
@@ -200,6 +278,30 @@ static JSValue js_css_supports(JSContext *ctx, JSValueConst this_val, int argc, 
     return JS_NewBool(ctx, r);
 }
 
+/* ---- CSS Typed OM 1 §4.3.5's sixty-three factory functions, as ONE body ------------------------------------
+ *
+ * §4.3.5 in full, for all of them: "All of the above methods must, when called with a double value, return a
+ * new CSSUnitValue whose value internal slot is set to value and whose unit internal slot is set to the name
+ * of the method as defined here."
+ *
+ * THE ARGUMENT IS ALREADY A NUMBER OR IT IS UNKNOWN EXTERNAL INPUT, and this body takes NEITHER apart. Web IDL
+ * §3.2's `double` conversion is the DECLARATION's — a page's own `valueOf` has already run, and a NaN or an
+ * infinity has already been refused, because the IDL says `double` and not `unrestricted double`. What is left
+ * is the value core/idl_args.h's boundary produced, which is exactly what §4.3.3's `value` internal slot is
+ * defined to hold, so the slot is set to it as-is and opacity survives into `CSS.px(x).value`. */
+static JSValue js_css_unit_factory(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
+{
+    (void)this_val;
+    DCHECK(argc == 1, "a §4.3.5 numeric factory reached its body with an argument count its IDL does not "
+                      "declare — every one of the sixty-three declares exactly one required `value` position, "
+                      "so the conversion machine owed this body exactly one argument");
+    DCHECK(magic >= 0 && magic < CSS_UNIT_FN_N,
+           "a §4.3.5 numeric factory was installed with a magic outside its table — the magic IS the unit, so "
+           "one out of range would mint a value whose unit is whatever happens to follow the array");
+    return css_unit_value_new(ctx, JS_DupValue(ctx, argv[0]), CSS_UNIT_FN[magic]);
+}
+
 /* ---- the per-realm install ------------------------------------------------------------------------------- */
 
 static void css_namespace_install_realm(JSContext *ctx)
@@ -225,6 +327,10 @@ static void css_namespace_install_realm(JSContext *ctx)
        `length` of each is §3.7.7's own derivation and is the pool's to compute, not this install's. */
     for (i = 0; i < M_N; i++)
         idl_install_method(ctx, ns, CSS_MEMBER[i], g_id[i]);
+    /* §4.3.5's partial namespace — the same step 3 over the same object, so the sixty-three land beside
+       `escape` and `supports` with the identical descriptor and are indistinguishable from them to a page. */
+    for (i = 0; i < CSS_UNIT_FN_N; i++)
+        idl_install_method(ctx, ns, CSS_UNIT_FN[i], g_unit_fn_id[i]);
     /* Web IDL §3.13 Namespaces: "For every namespace that is exposed in a given realm, a corresponding
        property exists on the realm's global object." Its own step is DefineMethodProperty(target, id,
        namespaceObject, false) — writable, NOT enumerable, configurable — which JS_SetPropertyStr is not: that
@@ -244,10 +350,16 @@ void css_namespace_init(JSContext *ctx)
        `boolean supports(CSSOMString conditionText)` — ONE declaration carrying both of §3.6's entries, since
        they share their type at every position and differ only in LENGTH. */
     static const IdlArgType SUPPORTS_ARGS[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
+    /* Every one of CSS Typed OM 1 §4.3.5's sixty-three declares the identical `(double value)`, so they share
+       ONE type list and differ only in the magic that names their unit. IDL_DOUBLE is Web IDL's RESTRICTED
+       double — the IDL says `double` and not `unrestricted double` — so `CSS.px(NaN)` is a TypeError from the
+       conversion and never a unit value carrying a number CSSOM §6.7.2 cannot serialize. */
+    static const IdlArgType UNIT_FN_ARGS[1] = { IDL_DOUBLE };
     int i;
 
-    DCHECK(g_id[M_ESCAPE] < 0 && g_id[M_SUPPORTS] < 0,
-           "css_namespace_init ran twice — the two pool entries are the AGENT's and are declared once in it");
+    DCHECK(g_id[M_ESCAPE] < 0 && g_id[M_SUPPORTS] < 0 && g_unit_fn_id[0] < 0,
+           "css_namespace_init ran twice — this object's pool entries are the AGENT's and are declared once in "
+           "it");
 
     g_id[M_ESCAPE] = idl_method_id(ctx, ESCAPE_ARGS, 1, js_css_escape, M_ESCAPE);
 
@@ -264,10 +376,21 @@ void css_namespace_init(JSContext *ctx)
        instead of §3.6 step 15.4.2's "missing". */
     idl_overload_split_optional_from(2);
 
+    /* §4.3.5's SIXTY-THREE, each `CSSUnitValue <unit>(double value)` — one required position, so §3.7.7's
+       length is 1 for every one of them, and the MAGIC is the row, which is what makes the table the
+       definition of the unit rather than the function's name (see CSS_UNIT_FN above). */
+    for (i = 0; i < CSS_UNIT_FN_N; i++)
+        g_unit_fn_id[i] = idl_method_id(ctx, UNIT_FN_ARGS, 1, js_css_unit_factory, i);
+
     for (i = 0; i < M_N; i++)
         DCHECK(g_id[i] >= 0, CSS_MEMBER[i]);
+    for (i = 0; i < CSS_UNIT_FN_N; i++)
+        DCHECK(g_unit_fn_id[i] >= 0, CSS_UNIT_FN[i]);
     for (i = 0; i < M_N; i++)
         agent_state_id("css_namespace", &g_id[i], "one of the CSS namespace's two operations");
+    for (i = 0; i < CSS_UNIT_FN_N; i++)
+        agent_state_id("css_namespace", &g_unit_fn_id[i],
+                       "one of CSS Typed OM 1 §4.3.5's numeric factory functions");
     realm_declare_intrinsic(css_namespace_install_realm);
 }
 
@@ -276,4 +399,5 @@ void css_namespace_free(void)
     int i;
 
     for (i = 0; i < M_N; i++) g_id[i] = -1;
+    for (i = 0; i < CSS_UNIT_FN_N; i++) g_unit_fn_id[i] = -1;
 }

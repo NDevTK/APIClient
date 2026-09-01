@@ -684,12 +684,16 @@ static void css_num_shortest(double v, char *digits, int *ndig, int *e10)
  * decimals is re-rounded — which puts the value below 1e11, since more than six decimals means the exponent is
  * below `ndig - 7`, so the fixed-point print that rounds it is bounded and the shortest form of the ROUNDED
  * value is what gets laid out.
- * `suffix` is the unit CSSOM §6.7.2 writes after the number, the only thing that differs between a `<length>`
- * and a `<percentage>`. The buffer holds the widest positional form a finite double can take: a sign, the 309
- * integer digits of DBL_MAX, a point, six decimals and the unit. */
+ * `suffix` is the unit CSSOM §6.7.2 writes after the number — the only thing that differs between a `<length>`
+ * and a `<percentage>`, and, since css_length.h made this entry public, between either of those and any other
+ * CSS value whose serialization is stated over the same §6.7.2 sentence (CSS Typed OM 1 §6.4's `<angle>`,
+ * `<time>`, `<frequency>` and `<resolution>` unit values reach it here). The buffer holds the widest positional
+ * form a finite double can take: a sign, the 309 integer digits of DBL_MAX, a point, six decimals and the
+ * unit — and the unit is bounded by the DCHECK below rather than by that arithmetic, because a caller outside
+ * this file chooses it. */
 #define CSS_NUM_MAX 336
 
-static char *css_len_serialize(double v, const char *suffix)
+char *css_length_serialize_number(double v, const char *suffix)
 {
     char digits[24], rounded[32], out[CSS_NUM_MAX];
     int ndig, e10, decimals, i, n = 0;
@@ -698,6 +702,18 @@ static char *css_len_serialize(double v, const char *suffix)
            "a value that is not a FINITE number reached CSSOM §6.7.2's serializer. Every length and every "
            "percentage this engine reports is off a real declaration or arithmetic over such values, so a NaN "
            "or an infinity is a derivation that lost an operand rather than a value to print");
+    /* THE UNIT IS THE ONE PART OF THE LAYOUT A CALLER OUTSIDE THIS FILE CHOOSES, so its width is asserted here
+       rather than reasoned about at each call site. `CSS_NUM_MAX` is the sign, DBL_MAX's 309 integer digits,
+       the point, the six decimals the clause below bounds the fraction to, and the NUL — everything left over
+       is the unit's, and the longest one any CSS specification defines is five bytes (`dvmin`, `cqmax`). */
+    DCHECK(suffix != NULL, "CSSOM §6.7.2's serializer was asked to write a number followed by a NULL unit — "
+                           "the empty unit is a real answer (§6.4's \"number\" arm writes nothing after the "
+                           "digits) and is spelled \"\", so a NULL is a caller that lost the string");
+    DCHECK(strlen(suffix) < (size_t)(CSS_NUM_MAX - 318),
+           "a unit longer than CSSOM §6.7.2's positional layout leaves room for. The buffer is sized from "
+           "DBL_MAX's decimal width plus the six-decimal clause, so a unit this wide would be written past its "
+           "end — and no unit any CSS specification defines is anywhere near it, which makes this a caller "
+           "passing something that is not a unit identifier");
     css_num_shortest(v, digits, &ndig, &e10);
     if (ndig - 1 - e10 > 6) {
         snprintf(rounded, sizeof rounded, "%.6f", v);
@@ -738,8 +754,8 @@ static char *css_len_serialize(double v, const char *suffix)
     return css_len_strdup(out);
 }
 
-char *css_length_serialize_px(double px)   { return css_len_serialize(px, "px"); }
-char *css_length_serialize_pct(double pct) { return css_len_serialize(pct, "%"); }
+char *css_length_serialize_px(double px)   { return css_length_serialize_number(px, "px"); }
+char *css_length_serialize_pct(double pct) { return css_length_serialize_number(pct, "%"); }
 
 /* §10.13's Sum branch over the two-term residue — see css_length.h for why the shape is pinned rather than
    chosen. The percentage is the FIRST child (sort a calculation's children nodes puts a number, then a

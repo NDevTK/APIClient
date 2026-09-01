@@ -7,6 +7,7 @@
 #include "core/console/console.h"
 #include "core/crypto/crypto.h"
 #include "core/css/css_namespace.h"
+#include "core/css/css_unit_value.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
@@ -150,6 +151,7 @@ typedef struct {
 
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
 static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
+static void d_css_unit_value(JSContext *c, const PlatformAgent *a) { (void)a; css_unit_value_init(c); }
 static void d_url(JSContext *c, const PlatformAgent *a) { (void)a; url_init(c); }
 static void d_usp(JSContext *c, const PlatformAgent *a) { (void)a; usp_init(c); }
 static void d_form_data(JSContext *c, const PlatformAgent *a) { (void)a; form_data_init(c); }
@@ -245,6 +247,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabilities_free(rt); }
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_css_namespace(JSRuntime *rt) { (void)rt; css_namespace_free(); }
+static void r_css_unit_value(JSRuntime *rt) { (void)rt; css_unit_value_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_performance(JSRuntime *rt) { (void)rt; performance_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
@@ -927,6 +930,16 @@ static const PlatformComponent PLATFORM[] = {
        a name a page reads off the global, so an install that silently stopped happening is exactly what that
        column catches. Its namespace object goes on the global through a realm intrinsic, so a child navigable
        gets its own object with its own two function objects and therefore its own realm. */
+    /* CSS TYPED OM 1's VALUE OBJECTS — §2's CSSStyleValue, §4.3.1's CSSNumericValue and §4.3.3's CSSUnitValue,
+       BEFORE the row below, which is the one that hands them to a page. §4.3.5's sixty-three numeric factory
+       functions are members of the CSS NAMESPACE and so belong to `css_namespace`; every one of them returns
+       an object THIS row's class declares, so the two rows are ordered the way their dependency runs even
+       though nothing calls a factory before both have declared. It is its own row and not part of that one for
+       the reason that one is not part of the CSSOM group: what it installs is three globals of its own, which
+       browser/platform_names.h already lists as names the platform owns, so an install that silently stopped
+       happening would take `x instanceof CSSUnitValue` with it. Its prototypes go on through a realm intrinsic
+       like the namespace object's, so a child navigable gets its own three and therefore its own realm. */
+    { "css_unit_value",      d_css_unit_value,      NULL,        r_css_unit_value },
     { "css_namespace",       d_css_namespace,       NULL,        r_css_namespace },
     /* INTERSECTION OBSERVER, AFTER `element` and after the two GEOMETRY rows. After element because its
        declaration brands both `observe(Element target)` and §2.4's `(Element or Document)? root` against the
@@ -1039,6 +1052,13 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
        members are, so an install that stopped happening would surface one frame away from the absence —
        `CSS.escape` reads `undefined` and only the CALL throws. */
     { "CSS",                   "css_namespace" },
+    /* CSS Typed OM 1's three interface objects. They are on browser/platform_names.h for the same reason `CSS`
+       is, and the witness matters here in BOTH of the ways that column exists for: a page reads
+       `window.CSSUnitValue` to decide whether the Typed OM exists at all, and `x instanceof CSSUnitValue` is
+       how it tells one of §4.3.5's results from a number. */
+    { "CSSStyleValue",         "css_unit_value" },
+    { "CSSNumericValue",       "css_unit_value" },
+    { "CSSUnitValue",          "css_unit_value" },
     /* HTML §8.9.1's three members, and the witness matters more than most for the reason Web Storage's two do:
        all three are on browser/platform_names.h, so solver/absent.c's read hook leaves a miss on them ALONE —
        a name the platform owns is a component this engine owes, and that file declines to mint a concolic for

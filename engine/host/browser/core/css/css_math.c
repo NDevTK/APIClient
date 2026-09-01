@@ -408,8 +408,9 @@ bool css_math_is_function(const char *name, size_t len)
 /* §10.9's TERMINAL VALUE rules for a DIMENSION: which base type the unit names. The unit tables are the
    components that own them — core/css/css_length.h for §6's `<length>` and core/css/css_dimension.h for §7's
    three other families — because a second copy here is the copy that disagrees about `dvmin` the day one of
-   them is edited. FALSE is §10.9's "anything else: The calculation's type is failure". */
-static bool mth_unit_base(const char *unit, size_t len, CssMathBase *base)
+   them is edited. FALSE is §10.9's "anything else: The calculation's type is failure".
+   PUBLIC BECAUSE A SECOND SPECIFICATION ASKS THE SAME QUESTION OF THE SAME TABLES — see css_math.h. */
+bool css_math_unit_base(const char *unit, size_t len, CssMathBase *base)
 {
     if (css_length_is_length_unit(unit, len))  { *base = CSS_MATH_LENGTH;     return true; }
     if (css_angle_unit(unit, len))             { *base = CSS_MATH_ANGLE;      return true; }
@@ -507,7 +508,7 @@ static bool mth_value(Mth *m, MthVal *out)
 
         /* The unit span points into the tokenizer's own buffer and is read BEFORE the token is consumed —
            lexbor keeps a token's cooked string only until the next one is requested. */
-        if (!mth_unit_base((const char *)u->data, u->length, &base)) return false;
+        if (!css_math_unit_base((const char *)u->data, u->length, &base)) return false;
         *out = mth_val(mth_type_of(base), 0.0);
         /* §10.9's TYPE is answered for every family; only the VALUE splits. css-grid-2 §7.2.4's `fr` has no
            number outside css-grid-2 §12's track sizing, so it is marked unresolved and carried — the type
