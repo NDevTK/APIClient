@@ -29,6 +29,13 @@ bool readable_stream_disturbed(JSValueConst v);
    stood here and is "Headers class", which declares no union at all.) */
 bool readable_stream_is(JSValueConst v);
 
+/* THE SAME BRAND AS A CLASS, for a DECLARED interface-typed position to be checked by the declaration rather
+   than by a body — the twin of abort_signal_class, and it exists for the same reason that one does. Streams
+   §4.2.1 Interface definition writes `required ReadableStream readable` on `ReadableWritablePair`, and
+   core/idl_args.h's IdlDictMember states the class its Web IDL §3.2.15 Interface types conversion brands
+   against; a predicate cannot be that, because the declaration surface takes a JSClassID. */
+JSClassID readable_stream_class(void);
+
 /* THE OPERATIONS A HOST PERFORMS ON A STREAM, as the function objects this component installed. Fetch §2.2.4
    "Bodies"'s "fully read" acquires a reader and reads to the end, and it performs the ABSTRACT operations — a
    page that rebinds ReadableStreamDefaultReader.prototype.read must not thereby change what `response.text()`
@@ -71,7 +78,9 @@ bool readable_ctrl_has_backpressure(JSContext *ctx, JSValueConst ctrl);
    answer is the spec's number-or-null, already a JSValue because null is one of the two answers. */
 JSValue readable_ctrl_desired_size(JSContext *ctx, JSValueConst ctrl);
 
-/* §4.9.4's CreateReadableStream, and the START that is deliberately not part of it — see readable_stream.c.
+/* §4.9.1 Working with readable streams' CreateReadableStream, and the START that is deliberately not part of
+   it — see readable_stream.c. (§4.9.4 stood here and is "Default controllers", which defines nothing named
+   CreateReadableStream; the operation has only ever been §4.9.1's.)
    The algorithms are the CALLER's function objects, called with the arguments the matching underlying-source
    member takes and with `this` = undefined; §6's TransformStream is built out of exactly this, because a
    transform stream's readable half has no source object at all. All are BORROWED; the answer is the stream

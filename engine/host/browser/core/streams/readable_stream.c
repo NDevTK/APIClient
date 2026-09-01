@@ -427,6 +427,11 @@ bool readable_stream_is(JSValueConst v)
     return g_stream_class != 0 && JS_GetOpaque(v, g_stream_class) != NULL;
 }
 
+JSClassID readable_stream_class(void)
+{
+    return g_stream_class;
+}
+
 bool readable_stream_disturbed(JSValueConst v)
 {
     StreamData *d = g_stream_class ? JS_GetOpaque(v, g_stream_class) : NULL;

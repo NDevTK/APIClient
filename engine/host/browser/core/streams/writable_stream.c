@@ -267,6 +267,11 @@ bool writable_stream_is(JSValueConst v)
     return g_ws_class != 0 && JS_GetOpaque(v, g_ws_class) != NULL;
 }
 
+JSClassID writable_stream_class(void)
+{
+    return g_ws_class;
+}
+
 /* ---- the queue, and the tests half a dozen steps ask ------------------------------------------------------- */
 
 static uint32_t ws_array_len(JSContext *ctx, JSValueConst arr)

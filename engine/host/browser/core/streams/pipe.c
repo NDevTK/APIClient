@@ -51,14 +51,69 @@
    stage after it suspended. */
 enum { ACT_NONE = 0, ACT_ABORT_DEST, ACT_CANCEL_SOURCE, ACT_CLOSE_DEST, ACT_SIGNAL };
 
-/* §4.2.4's options, in the order Web IDL converts them — LEXICOGRAPHIC, which a page pins directly by throwing
-   from one getter and counting which others ran. */
-enum { OPT_ABORT = 0, OPT_CANCEL, OPT_CLOSE, OPT_SIGNAL, OPT_N };
-static const char *const OPT_NAMES[OPT_N] = { "preventAbort", "preventCancel", "preventClose", "signal" };
+/* WHICH `prevent*` FLAG a rule reads. Three slots on the record, named for the rule that reads them and NOT
+   for a position in the dictionary: the three members are read by NAME off the converted dictionary, so
+   nothing here is an index into §3.2.17's read order. */
+enum { OPT_ABORT = 0, OPT_CANCEL, OPT_CLOSE };
 
-/* §4.2's `ReadableWritablePair`, likewise lexicographic, and both members are REQUIRED. */
+/* ---- §4.2.1's TWO DICTIONARIES, DECLARED ------------------------------------------------------------------
+ *
+ * Both were a hand-rolled loop of step_getprop_run calls over a table of names, which is the SECOND COPY of
+ * Web IDL §3.2.17 Dictionary types that core/idl_args.h's own header forbids — and it had already drifted from
+ * the one copy in three ways a page can see. It answered nothing at all for a NON-OBJECT options argument
+ * (`s.pipeTo(w, 5)` silently piped with every default, where §3.2.17's ES-to-IDL list step 1 is "If jsDict is
+ * not an Object and jsDict is neither undefined nor null, then throw a TypeError"); it ran ToBoolean over
+ * unknown external input from plain C, pinning `preventClose` to true for every unknown there has ever been
+ * and deleting the false world, where idl_dict_bool NAMES that as a member owed a fork; and it placed no
+ * §3.2.17 step 4.1.5 default, so "absent" and "present and false" were one state where the IDL writes two.
+ *
+ * SO THE CONVERSION IS core/idl_args.h's `idl_dict_walk_start`/`_run`/`_take`, the SAME machine a declared
+ * argument position drives, embedded here because §4.2.4's two members are step machines rather than declared
+ * bodies. It needs no stage of its own: every rest point §3.2.17 has is a REQUEST, which parks and resumes at
+ * its own call site with the hosting stage unmoved, so what this machine gained is one field and one re-entry.
+ */
+
+/* §4.2.1 Interface definition's `dictionary ReadableWritablePair { required ReadableStream readable; required
+   WritableStream writable; }`, in the LEXICOGRAPHIC order §3.2.17's ES-to-IDL list step 4.1 reads a
+   dictionary's own members in — which a page pins directly by throwing from one getter and counting which
+   others ran, and which idl_dict_declare asserts over this array at init.
+   `required` IS PART OF THE TYPE and is why neither member carries a default: step 4.1.6 is "Otherwise, if
+   jsMemberValue is undefined and member is required, then throw a TypeError", so `pipeThrough({})` is a
+   TypeError from the CONVERSION and never a pair with a hole in it.
+   IT IS NOT `const`, AND THAT IS THE DICTIONARY'S TWO INTERFACES rather than a looseness: §3.2.15 Interface
+   types brands against a JSClassID, a class id is MINTED at runtime, and these two members name two DIFFERENT
+   interfaces — so each states its own (IdlDictMember::iface) instead of the walk stating one for both, and the
+   two are resolved at install, which is the first point at which both classes exist. See pipe_install. */
 enum { TR_READABLE = 0, TR_WRITABLE, TR_N };
-static const char *const TR_NAMES[TR_N] = { "readable", "writable" };
+static IdlDictMember PIPE_PAIR[TR_N] = {
+    { "readable", IDL_INTERFACE, true },
+    { "writable", IDL_INTERFACE, true },
+};
+static const IdlDictDecl PIPE_PAIR_DECL = { "ReadableWritablePair", PIPE_PAIR, TR_N };
+
+/* §4.2.1's `dictionary StreamPipeOptions { boolean preventClose = false; boolean preventAbort = false; boolean
+   preventCancel = false; AbortSignal signal; }`, likewise in §3.2.17's lexicographic read order and NOT in the
+   IDL's writing order — the two differ here, which is exactly the drift the declaration's own order check is
+   for.
+   THE THREE `= false` DEFAULTS ARE DECLARED because §3.2.17 step 4.1.5 PLACES a default value, so the member
+   EXISTS on every converted dictionary and idl_dict_bool reads the IDL's own value rather than inventing one
+   out of an absence. `signal` writes no default and no `?`, so an absent one is absent and anything present
+   that is not an AbortSignal is §3.2.15's TypeError — it is this dictionary's ONE interface-typed member, so
+   its class is stated once for the WALK (idl_dict_walk_start's `iface`) rather than per member. */
+static const IdlDictMember PIPE_OPTIONS[] = {
+    { "preventAbort",  IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
+    { "preventCancel", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
+    { "preventClose",  IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
+    { "signal",        IDL_INTERFACE },
+};
+static const IdlDictDecl PIPE_OPTIONS_DECL = {
+    "StreamPipeOptions", PIPE_OPTIONS, (int)(sizeof PIPE_OPTIONS / sizeof PIPE_OPTIONS[0])
+};
+
+/* Their member names, interned ONCE per runtime at this component's init: a member read is two halves with a
+   suspension in between, so the atom has to outlive the park and cannot be made per read. */
+static const JSAtom *g_pipe_pair_atoms;
+static const JSAtom *g_pipe_options_atoms;
 
 typedef struct {
     JSValue source, dest;
@@ -218,6 +273,14 @@ typedef struct {
     JSValue act_fn, act_recv;
     uint8_t act_argc;
     JSValue promise, funcs[2];   /* this member's own answer, for the paths that reject before the pipe exists */
+    /* §3.2.17's CONVERSION IN FLIGHT — ONE walk for the two dictionaries, because they are converted in
+       SEQUENCE and never at once: Web IDL converts arguments strictly left to right, so `transform` is taken
+       before `options` is started, and idl_dict_walk_take is what leaves the walk empty for the second.
+       Its own `started` byte is the resume point, so there is no second flag here to disagree with it.
+       NO FRAMES: neither dictionary declares a `sequence<(DOMString or D)>` member, which is a statement about
+       the declarations and not a shortcut — idl_dict_walk_start asserts the number against idl_members_depth
+       over each member list, so a member that grew one would crash at the start rather than at the depth. */
+    IdlDictWalk dw;
     /* THE OPTIONS ARE READ BEFORE THE RECORD EXISTS, because a throwing getter must answer the page and leave
        no pipe behind at all — so they land here first and are copied over once the locks have been checked. */
     uint8_t prevent[3];
@@ -234,6 +297,11 @@ static void js_pipe_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSPipeState *s = st;
     int k;
     stream_work_visit(ctx, &s->w, v);
+    /* THE SAME NULL/0 the start and the run are given: the frames are ONE statement of this host's layout, and
+       a `visit` naming a different pair would drop whatever a live frame still held. Naming the walk here is
+       also what makes an ABANDONED conversion (a throwing getter, a preempted flow that never resumes) the
+       driver's ordinary discharge rather than a teardown of its own. */
+    idl_dict_walk_visit(ctx, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, v);
     v->val(ctx, &s->pipe);
     v->val(ctx, &s->value);
     for (k = 0; k < TR_N; k++) v->val(ctx, &s->tr[k]);
@@ -475,36 +543,54 @@ run:
     for (;;) {
         switch (s->hdr.stage) {
 
-        case S_TRANSFORM:
-            /* §4.2's `ReadableWritablePair`: two REQUIRED members, read in lexicographic order off whatever
-               the page passed — so each read is a request, because either can be an accessor. */
-            while (s->member < TR_N) {
-                JSAtom a;
-                if (!JS_IsObject(hdr->argv[0])) {
-                    JS_ThrowTypeError(ctx, "the transform must be an object with `readable` and `writable`");
+        case S_TRANSFORM: {
+            /* §4.2.4's FIRST ARGUMENT, whose Web IDL type is `ReadableWritablePair` — so this is §3.2.17 over
+               whatever the page passed, run before the options and before pipeThrough's own step 1, because
+               Web IDL converts arguments strictly left to right. Each member's read is a REQUEST (either can
+               be an accessor) and each member's TYPE is converted the moment it has been read, so a `readable`
+               that is not a ReadableStream is a TypeError BEFORE `writable` is even asked for — which a page
+               counts by giving `writable` a getter and asserting it never ran. */
+            if (!s->dw.started) {
+                JSValueConst tr = step_arg(hdr, 0);
+                /* §3.2.17 (ES-to-IDL list) step 1: "If jsDict is not an Object and jsDict is neither undefined
+                   nor null, then throw a TypeError." It is the CALLER's, because the two entries into that
+                   conversion throw it in two different places — see idl_dict_walk_start. undefined and null
+                   are legal and are not a special case: step 4.1.2 makes every member's value undefined, and
+                   both of these are `required`, so step 4.1.6 refuses them by name a moment later. */
+                if (!JS_IsObject(tr) && !JS_IsUndefined(tr) && !JS_IsNull(tr)) {
+                    JS_ThrowTypeError(ctx, "pipeThrough's transform is not a ReadableWritablePair");
                     return JS_STEP_ABRUPT;
                 }
-                a = JS_NewAtom(ctx, TR_NAMES[s->member]);
-                r = step_getprop_run(ctx, hdr, hdr->argv[0], a, cb_result, &s->tr[s->member],
-                                     out_cb, out_argc);
-                JS_FreeAtom(ctx, a);
-                if (r > 0) return r;
-                if (r < 0) return JS_STEP_ABRUPT;
-                cb_result = JS_UNDEFINED;
-                /* EACH MEMBER IS BRAND-CHECKED AS IT ARRIVES, not both at the end. Web IDL converts a
-                   dictionary member's TYPE the moment it has read it, so a `readable` that is not a
-                   ReadableStream is a TypeError BEFORE `writable` is even asked for — and a page counts that
-                   by giving `writable` a getter and asserting it never ran. */
-                if ((s->member == TR_READABLE && !readable_stream_is(s->tr[TR_READABLE])) ||
-                    (s->member == TR_WRITABLE && !writable_stream_is(s->tr[TR_WRITABLE]))) {
-                    JS_ThrowTypeError(ctx, "the transform's `%s` must be a stream", TR_NAMES[s->member]);
+                if (idl_dict_walk_start(ctx, &s->dw, tr, PIPE_PAIR, PIPE_PAIR_DECL.n, g_pipe_pair_atoms,
+                                        PIPE_PAIR_DECL.name, /*iface*/ 0, /*narrow*/ NULL,
+                                        /*frames*/ NULL, /*frames_cap*/ 0) < 0)
                     return JS_STEP_ABRUPT;
-                }
-                s->member++;
             }
-            s->member = 0;
+            r = idl_dict_walk_run(ctx, hdr, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, cb_result,
+                                  out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r > 0) return r;    /* parked in a member's [[Get]] or in that member's own conversion */
+            /* `pipeThrough` returns a ReadableStream, so §3.2.17's `?` leaves the member as a THROW. */
+            if (r < 0) return JS_STEP_ABRUPT;
+            {
+                JSValue pair = idl_dict_walk_take(ctx, &s->dw);
+                JS_FreeValue(ctx, s->tr[TR_READABLE]);
+                JS_FreeValue(ctx, s->tr[TR_WRITABLE]);
+                s->tr[TR_READABLE] = idl_dict_get(ctx, pair, "readable");
+                s->tr[TR_WRITABLE] = idl_dict_get(ctx, pair, "writable");
+                JS_FreeValue(ctx, pair);
+                /* BOTH MEMBERS EXIST AND BOTH ARE THEIR DECLARED INTERFACE, or the conversion above threw:
+                   `required` is step 4.1.6 and the class is §3.2.15's brand, and both are the TYPE's rather
+                   than this algorithm's. Asserted here because every stage below reads these two without
+                   asking again. */
+                DCHECK(readable_stream_is(s->tr[TR_READABLE]) && writable_stream_is(s->tr[TR_WRITABLE]),
+                       "§3.2.17 answered with a ReadableWritablePair whose members are not the two streams "
+                       "§4.2.1 declares required — a missing one is step 4.1.6's TypeError and a wrong-typed "
+                       "one is §3.2.15's, so neither can reach here");
+            }
             STEP_GOTO(s->hdr.stage, S_OPT, &s->w.phase, &s->hdr.get_phase, NULL);
             continue;
+        }
 
         case S_OPT: {
             /* BOTH MEMBERS TAKE THE OPTIONS SECOND — `pipeTo(destination, options)` and
@@ -519,41 +605,63 @@ run:
                 if (pipe_short(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
                 continue;
             }
-            while (s->member < OPT_N && JS_IsObject(opts)) {
-                JSAtom a = JS_NewAtom(ctx, OPT_NAMES[s->member]);
-                JS_FreeValue(ctx, s->value);
-                s->value = JS_UNDEFINED;
-                r = step_getprop_run(ctx, hdr, opts, a, cb_result, &s->value, out_cb, out_argc);
-                JS_FreeAtom(ctx, a);
-                if (r > 0) return r;
-                cb_result = JS_UNDEFINED;
-                if (r < 0) {
-                    /* A THROWING GETTER IS THE PAGE'S ANSWER, and which answer depends on the member's return
-                       type: `pipeThrough` returns a ReadableStream and throws, `pipeTo` returns a promise and
-                       rejects. Web IDL decides that, not this algorithm. */
+            if (!s->dw.started) {
+                /* §3.2.17 (ES-to-IDL list) step 1 again, and it is the difference a page sees most plainly:
+                   `s.pipeTo(w, 5)` is a TypeError, never a pipe that ran with every default. `options` is
+                   declared `optional StreamPipeOptions options = {}`, so an ABSENT one is undefined and step
+                   4.1.2 gives every member undefined — which the three `= false` defaults then fill. */
+                if (!JS_IsObject(opts) && !JS_IsUndefined(opts) && !JS_IsNull(opts)) {
+                    JS_ThrowTypeError(ctx, "the pipe options are not a StreamPipeOptions dictionary");
                     if (s->through) return JS_STEP_ABRUPT;
                     if (pipe_short(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
-                    goto opt_done;
+                    continue;
                 }
-                if (s->member == OPT_SIGNAL) {
-                    /* `AbortSignal signal` — not nullable and with no default, so an ABSENT member is absent
-                       and anything present that is not a signal is a TypeError. */
-                    if (!JS_IsUndefined(s->value) && !abort_signal_is(ctx, s->value)) {
-                        JS_ThrowTypeError(ctx, "pipeTo's `signal` option must be an AbortSignal");
-                        if (s->through) return JS_STEP_ABRUPT;
-                        if (pipe_short(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
-                        goto opt_done;
-                    }
-                    JS_FreeValue(ctx, s->sig);
-                    s->sig = JS_DupValue(ctx, s->value);
-                } else {
-                    /* `boolean` — ToBoolean, which runs nothing and cannot fail. */
-                    s->prevent[s->member] = (uint8_t)JS_ToBool(ctx, s->value);
-                }
-                s->member++;
+                /* THE DICTIONARY'S ONE INTERFACE-TYPED MEMBER IS `signal`, so its §3.2.15 class is stated once
+                   for the walk. It is asked for HERE and not at this component's init because a class id is
+                   minted by the component that owns it and core/platform.c declares every agent before it
+                   installs any — by the time a page can call `pipeTo`, abort's is long since minted. */
+                DCHECK(abort_signal_class() != 0,
+                       "§4.2.1's StreamPipeOptions was converted before AbortSignal's class was minted — its "
+                       "`signal` member's §3.2.15 brand is that class, and a zero is an interface conversion "
+                       "with nothing to test against");
+                if (idl_dict_walk_start(ctx, &s->dw, opts, PIPE_OPTIONS, PIPE_OPTIONS_DECL.n,
+                                        g_pipe_options_atoms, PIPE_OPTIONS_DECL.name,
+                                        abort_signal_class(), /*narrow*/ NULL,
+                                        /*frames*/ NULL, /*frames_cap*/ 0) < 0)
+                    return JS_STEP_ABRUPT;
+            }
+            r = idl_dict_walk_run(ctx, hdr, &s->dw, /*frames*/ NULL, /*frames_cap*/ 0, cb_result,
+                                  out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r > 0) return r;
+            if (r < 0) {
+                /* A THROWING GETTER, A NON-AbortSignal `signal`: each is the page's answer, and which answer
+                   depends on the MEMBER's return type — `pipeThrough` returns a ReadableStream and throws,
+                   `pipeTo` returns a promise and rejects. Web IDL decides that, not this algorithm. */
+                if (s->through) return JS_STEP_ABRUPT;
+                if (pipe_short(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
+                continue;
+            }
+            {
+                JSValue o = idl_dict_walk_take(ctx, &s->dw);
+                /* READ BY NAME OFF THE CONVERTED DICTIONARY. The three booleans carry `= false`, so §3.2.17
+                   step 4.1.5 placed a real `false` for a member the page omitted and there is no absence here
+                   for a consumer to default. Nothing of the page's is on this object, so neither read runs any
+                   of its code. */
+                s->prevent[OPT_ABORT]  = (uint8_t)idl_dict_bool(ctx, o, "preventAbort");
+                s->prevent[OPT_CANCEL] = (uint8_t)idl_dict_bool(ctx, o, "preventCancel");
+                s->prevent[OPT_CLOSE]  = (uint8_t)idl_dict_bool(ctx, o, "preventClose");
+                JS_FreeValue(ctx, s->sig);
+                s->sig = idl_dict_get(ctx, o, "signal");
+                JS_FreeValue(ctx, o);
+                /* §4.9.1 step 4 — "If signal was not given, let signal be undefined" — and step 5's assert,
+                   "either signal is undefined, or signal implements AbortSignal", which is the §3.2.15
+                   conversion's answer above rather than a test of this algorithm's. */
+                DCHECK(JS_IsUndefined(s->sig) || abort_signal_is(ctx, s->sig),
+                       "§4.9.1 step 5's assert failed: a StreamPipeOptions `signal` that is neither undefined "
+                       "nor an AbortSignal survived §3.2.15's conversion");
             }
             STEP_GOTO(s->hdr.stage, S_LOCKS, &s->w.phase, &s->hdr.get_phase, NULL);
-        opt_done:
             continue;
         }
 
@@ -1002,11 +1110,36 @@ void pipe_init(JSContext *ctx)
     }
     g_pipe_to_stepid = g_op_stepid[OP_PIPE_TO];
     g_pipe_through_stepid = g_op_stepid[OP_PIPE_THROUGH];
+
+    /* §4.2.1's two dictionaries' member names, interned ONCE for this runtime — a member read is two halves
+       with a suspension in between, so the atom must outlive the park and cannot be made per read. This is
+       also where §3.2.17's LEXICOGRAPHIC read order is checked over each declaration, so a member written out
+       of order aborts here rather than on whichever call first reaches it. */
+    g_pipe_pair_atoms = idl_dict_declare(ctx, &PIPE_PAIR_DECL);
+    g_pipe_options_atoms = idl_dict_declare(ctx, &PIPE_OPTIONS_DECL);
 }
 
 void pipe_install(JSContext *ctx, JSValueConst stream_proto)
 {
+    JSClassID rs = readable_stream_class(), ws = writable_stream_class();
+
     DCHECK(g_pipe_to_stepid >= 0, "piping was installed before pipe_init declared its machines");
+    /* §4.2.1's ReadableWritablePair STATES ITS TWO INTERFACES HERE and not at its initialiser, because a
+       JSClassID is MINTED at runtime and neither of these two exists when this component declares: this file's
+       own init is nested inside readable_stream_init, which is what mints ReadableStream's, and
+       writable_stream_init runs later still — core/platform.c declares every agent before it installs any, so
+       install is the first point at which both are real. One runtime means one pair of ids, which is asserted
+       rather than assumed: a second realm resolving differently would be two dictionaries wearing one name. */
+    DCHECK(rs != 0 && ws != 0,
+           "§4.2.1's ReadableWritablePair was installed before ReadableStream's or WritableStream's class was "
+           "minted — its two members' §3.2.15 brand IS that class, and a zero is an interface conversion with "
+           "nothing to test against");
+    DCHECK((PIPE_PAIR[TR_READABLE].iface == 0 || PIPE_PAIR[TR_READABLE].iface == rs) &&
+           (PIPE_PAIR[TR_WRITABLE].iface == 0 || PIPE_PAIR[TR_WRITABLE].iface == ws),
+           "a second realm resolved §4.2.1's ReadableWritablePair to different interface classes — the "
+           "declaration is one per RUNTIME and every realm of it brands against the same two");
+    PIPE_PAIR[TR_READABLE].iface = rs;
+    PIPE_PAIR[TR_WRITABLE].iface = ws;
     /* §4.2's IDL lengths: `pipeThrough(transform, options)` is 1 required, `pipeTo(destination, options)` is
        also 1 — the options argument is optional in both. */
     idl_install_step_method(ctx, stream_proto, "pipeThrough", 1, g_pipe_through_stepid);
@@ -1021,4 +1154,10 @@ void pipe_free(JSContext *ctx)
     g_pipe_rt = NULL;
     for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;
     g_pipe_to_stepid = g_pipe_through_stepid = -1;
+    /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is
+       the HANDLE, and a handle left pointing into a released pool is a stale slot. The two resolved interface
+       classes go back to zero for the same reason — a class id is the RUNTIME's, so one carried into the next
+       runtime would brand this dictionary's members against a class that runtime never minted. */
+    g_pipe_pair_atoms = g_pipe_options_atoms = NULL;
+    PIPE_PAIR[TR_READABLE].iface = PIPE_PAIR[TR_WRITABLE].iface = 0;
 }

@@ -13,6 +13,12 @@ void writable_stream_free(JSContext *ctx);
 /* IS THIS A WritableStream? §4.2's `pipeTo` takes one, and a union arm is a brand test. */
 bool writable_stream_is(JSValueConst v);
 
+/* THE SAME BRAND AS A CLASS — the §5 twin of readable_stream_class, for the same declaration surface. Streams
+   §4.2.1 Interface definition writes `required WritableStream writable` on `ReadableWritablePair`, whose two
+   members are two DIFFERENT interfaces, so each states its own class on its IdlDictMember rather than the
+   dictionary stating one for both. */
+JSClassID writable_stream_class(void);
+
 /* THE OPERATIONS A HOST PERFORMS ON A WRITABLE STREAM, as the function objects this component installed — the
    §5 half of what readable_stream.h already exposes, and for the same reason: §4.2.4's pipeTo() has one step,
    and Streams §4.9.1 Working with readable streams' ReadableStreamPipeTo is what it performs — the ABSTRACT
