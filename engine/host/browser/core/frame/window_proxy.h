@@ -226,6 +226,42 @@ bool window_proxy_is_top_level(JSValueConst proxy);
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
 
+/* THE OTHER END OF THAT SAME WRITE, ASKED AT THE MOMENT A REALM DIES — the proxy-side half of the bracket
+ * whose first half is the post-step-9 assert in window_proxy_set_destroyed. That one says "after the
+ * transition this record names no realm and no Window"; this one says "at the instant a realm is torn down, no
+ * record names it while having already given the Window back", and the two are about the ONE pairing the field
+ * comment states: `realm` is a RAW BORROW that is only ever valid while `window` is set, because the Window is
+ * what keeps a child realm alive at all. A record in the other combination is a live navigable holding a
+ * JSContext this teardown is freeing, and the next read through it answers out of freed memory.
+ *
+ * IT IS NOT `window_proxy_destroyed`, AND THAT IS NOT A SPELLING CHOICE. A realm reaches its teardown by three
+ * routes and `destroyed` is true on exactly one of them: §7.5.10's destroy sets it, a NAVIGATION does not (it
+ * moves `realm` and `window` to the new document and leaves the superseded realm to the collector), and a
+ * whole-graph collection does not either (a navigable nobody destroyed dies with the page). An assert reading
+ * that byte would fire on the other two.
+ *
+ * NOR IS IT "`realm` no longer names this realm", which is the sentence a reader reaches for first and which
+ * the collector makes false: this hook is reached when the realm's refcount hits zero, and for a CHILD realm
+ * that is normally the cycle collector's doing (navigable.h), so the proxy is often unreachable GARBAGE in the
+ * same sweep with its record not yet swept and `realm` still set. That state is safe precisely because the
+ * Window is still held — a record still holding it could not have let the realm reach zero unless the
+ * collector had already proved the whole cluster unreachable — which is why the Window is half of the
+ * question rather than a detail beside it.
+ *
+ * A RECORD THE COLLECTOR HAS ALREADY TAKEN ANSWERS FALSE, and that is a POSITIVE STATEMENT rather than a
+ * default filling a hole: proxy_finalizer frees the record whole, so a proxy with none holds no binding to
+ * anything and nothing can read a realm through it. §7.5.10's own note is why that case exists at all — "Even
+ * after destruction, the Document object itself might still be accessible to script, in the case where we are
+ * destroying a child navigable" — so the proxy and the realm are two objects one collection may take in
+ * either order.
+ *
+ * PURE: no allocation, no JS value touched, no reference taken, no page code run — it is called from inside a
+ * collection (the realm-teardown hook fires there), where allocating or dup'ing would re-enter the walk that
+ * is running, and where a COW capture would dup values onto an object being torn down. It reads the record
+ * through the route proxy_finalizer and proxy_gc_mark take for that same reason, and it tests the `window`
+ * slot's TAG without dereferencing it, because the Window may itself already have been finalized. */
+bool window_proxy_realm_dangling(JSValueConst proxy, JSContext *realm);
+
 /* HTML §7.2.2 "The Window object"'s "A WINDOW'S NAVIGABLE" — "the navigable whose active document is the
  * Window's associated Document's, or null if there is no such navigable" — answered as "is it null". §7.2.2.4
  * "Accessing related windows" opens `top`, `parent` and `frameElement` with a test over it, so it is ONE

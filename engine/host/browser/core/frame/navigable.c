@@ -159,6 +159,27 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
                "reader of these three numbers (this file's OOM CHECK, the result document's `_heap`, the "
                "fixture row that asks whether reclamation ever ran) is then reporting a register that is not "
                "being kept");
+        /* AND THE PROXY SIDE OF §7.5.10 STEP 9, WHICH IS THE OTHER HALF OF A BRACKET. The first half is inside
+           window_proxy_set_destroyed: after the write it asserts that the record names NEITHER a realm nor a
+           Window. This is the same pairing asked from the far end — at the one instant a realm actually dies,
+           no record may still name it while having already given the Window back. The two fields are a pair
+           because the Window is what KEEPS a child realm alive (its C function objects each hold the realm
+           that defined them), so `realm` is a raw borrow valid only while `window` is set; the other
+           combination is a live navigable holding a JSContext this hook is freeing, and the very next read
+           through that navigable — proxy_realm returns the borrow without materialising anything when it is
+           non-NULL — answers out of freed memory with nothing anywhere to say so.
+           IT IS ASKED HERE, AT THE ORIGIN, and there is exactly ONE call site that can reach this abort, which
+           is why the question is a predicate and the assert is not inside it: a DCHECK stamps the line it is
+           WRITTEN at, and the line that has to be named is the teardown, not the reader.
+           IT IS NOT "the proxy no longer names this realm" and it is not `window_proxy_destroyed` — see
+           core/frame/window_proxy.h, which states which routes into this hook leave each of those false. */
+        DCHECK(!window_proxy_realm_dangling(document_window_proxy(cctx), cctx),
+               "a realm was torn down while its navigable's §7.2.3 WindowProxy still BORROWED it with the "
+               "Window already given back — HTML §7.5.10 \"Destroying documents\" step 9 (\"Set document's "
+               "node navigable's active session history entry's document state's document to null\") clears "
+               "the two together for exactly this reason, so a record in the split state is a live navigable "
+               "naming a JSContext this hook is about to free. Whatever released the Window has to release "
+               "the realm borrow in the same write");
         g_realms[i] = g_realms[--g_realms_n];   /* order means nothing here; membership does */
         break;
     }

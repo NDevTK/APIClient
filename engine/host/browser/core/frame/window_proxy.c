@@ -1347,6 +1347,54 @@ bool window_proxy_destroyed(JSValueConst proxy)
     return p->destroyed != 0;
 }
 
+/* IS THIS RECORD'S REALM BORROW DANGLING — see window_proxy.h for the question and for why it is neither
+   `destroyed` nor a plain "does it still name this realm". CAPTURE-FREE AND COLLECTION-SAFE, which is the
+   whole reason it is a second entry point and not a caller of the accessor one line up.
+   NOT proxy_of, AND THAT IS THE SAME DISTINCTION THE COLLECTOR ENTRIES ALREADY DRAW. proxy_of captures the
+   record into the running flow's delta, because a record a flow has REACHED is one it may write — and there is
+   no flow here at all: the caller is quickjs's realm-teardown hook, which fires from inside a collection, where
+   a capture would dup this record's JSValues onto an object being torn down. proxy_finalizer and proxy_gc_mark
+   are excluded from the capture for exactly that reason; this is the third caller with the same standing, and
+   the read it makes is strictly narrower than theirs — two field loads and no reference touched at all. */
+bool window_proxy_realm_dangling(JSValueConst proxy, JSContext *realm)
+{
+    JSClassID cid = 0;
+    /* proxy_collector_record's CALL WITH ITS SECOND OUTPUT KEPT. The collector may discard the class id
+       because it was DISPATCHED through the class and therefore already knows what it is holding; this caller
+       was handed a value and does not, so the id is the only thing that can say. It is JS_GetAnyOpaque and not
+       JS_GetOpaque(proxy, g_proxy_class) for the reason stated at proxy_collector_record — window_proxy_free
+       gives the class id back, and the collection that reaches a realm teardown runs AFTER the release column
+       (core/dom/document.c states it: a child navigable's document is released from that hook, "inside
+       JS_RunGC or inside JS_FreeRuntime, and BOTH of those are after platform_agent_free"). */
+    const ProxyData *p = JS_GetAnyOpaque(proxy, &cid);
+
+    DCHECK(realm != NULL, "a WindowProxy was asked whether it dangles at NO realm — the question is asked at "
+                          "the teardown of one particular JSContext and is meaningless without it");
+    /* AND THE CLASS IS CHECKED WHERE THERE IS STILL A CLASS TO CHECK AGAINST. `g_wp_rt == NULL` is not an
+       exemption of convenience: window_proxy_free zeroes g_proxy_class by design, so after the release column
+       a LIVE proxy carries an id this component can no longer name, and comparing against zero would report
+       every one of them as something else. What stands in for the comparison there is the caller's own
+       argument — core/frame/navigable.c asks this of document_window_proxy(cctx), which core/dom/document.c
+       asserts is that realm's own §7.2.3 WindowProxy. A zero id with no record is the collector having already
+       finalized the proxy, which free_object writes as one pair (u.opaque and class_id are cleared together
+       after the finalizer returns). */
+    DCHECK(g_wp_rt == NULL || cid == g_proxy_class || (cid == 0 && p == NULL),
+           "the realm-borrow question was asked of an object that is not a §7.2.3 WindowProxy — it is answered "
+           "by reading a ProxyData off the class opaque, so a foreign class's record would be read with this "
+           "record's layout and the answer would be two fields of somebody else's struct");
+    /* THE COLLECTOR ALREADY TOOK THE RECORD — a POSITIVE ANSWER and not a hole a default fills. proxy_finalizer
+       frees a ProxyData whole, so a proxy with none holds no binding at all and no realm can be read through
+       it; §7.5.10's own note is why this is reachable rather than defensive ("Even after destruction, the
+       Document object itself might still be accessible to script, in the case where we are destroying a child
+       navigable"), so the proxy and the realm are two objects one collection may take in either order. */
+    if (p == NULL)
+        return false;
+    /* THE TAG OF `window` AND NEVER ITS TARGET. The Window this slot names may itself have been finalized
+       earlier in the same sweep, so JS_IsUndefined — which reads the JSValue's own tag — is the whole of what
+       may be asked of it here. */
+    return p->realm == realm && JS_IsUndefined(p->window);
+}
+
 bool window_proxy_browsing_context_null(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);   /* through the accessor, for window_proxy_destroyed's reason */
