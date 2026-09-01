@@ -1296,9 +1296,15 @@ function coldRoundTrip(v1, v2, store) {
      `arenaKiB` vs `cLiveKiB` — the allocator's high-water mark against what it currently holds. In wasm linear
         memory ONLY GROWS, so a run whose `cLive` is flat while `arena` climbs is FRAGMENTING and not leaking,
         and the two have entirely different fixes. `finished`/`live`/`blocked` cannot see either.
-     `childRealms` — §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling, one realm per flow that creates a navigable
-        with an address, none reclaimed. navigable.c's OOM CHECK sends its reader to this number BY NAME, and
-        until now the extension printed no line carrying it.
+     `childRealms`/`childRealmsMade`/`childRealmsPeak` — §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling: one
+        realm per flow that creates a navigable with an address. THE THREE ARE READ TOGETHER AND THE LIVE ONE
+        ALONE DECIDES NOTHING — a small `childRealms` is the answer both for a run that built none and for a
+        run that built a great many and reclaimed every one, which are opposite facts. `made` is monotone and
+        `peak` is the high-water live, so `made == peak` says not one realm was ever given back (the ceiling)
+        and `made > peak` says HTML §7.5.10 "Destroying documents" step 9's reference drop ran. This line used
+        to assert "none reclaimed" as a standing fact, which stopped being true when that step landed —
+        core/frame/window_proxy.c's window_proxy_set_destroyed releases the Window that is the one counted
+        reference to a child realm. navigable.c's OOM CHECK sends its reader to these numbers BY NAME.
      `unattributed`, `trampFrames`, `stepMachines` — what the residual is MADE of. "The heap grew" names nothing
         to fix; a residual that is suspended heap frames and a residual that is atoms have different owners.
      `mean` and `heapSegs` — the COST of a context switch and the RETENTION under it, which are independent and
@@ -1312,7 +1318,7 @@ function coldRoundTrip(v1, v2, store) {
 /* BOTH LISTS ARE THE CONTRACT IN FULL, for COLD_FIELDS' reason exactly — solver/result.c's `result_heap_json`
    and `result_swap_json` format strings, every row, whether or not the sentence below reads it. */
 const HEAP_FIELDS = ["allocations", "atoms", "strings", "objects", "shapes", "props", "funcs", "funcCode",
-                     "arrays", "miscBytes", "miscParts", "childRealms",
+                     "arrays", "miscBytes", "miscParts", "childRealms", "childRealmsMade", "childRealmsPeak",
                      "objBytes", "propBytes", "shapeBytes", "strBytes", "atomBytes", "funcBytes",
                      "arrayElemBytes", "unattributed", "stepMachines", "trampFrames",
                      "cLiveKiB", "arenaKiB"];
@@ -1350,7 +1356,16 @@ function censusReading(out) {
                (grew("arenaKiB") > 0 && grew("cLiveKiB") <= 0
                  ? ` — arena grew ${grew("arenaKiB")} KiB while live did NOT, which is FRAGMENTATION and not a leak`
                  : grew("cLiveKiB") > 0 ? ` — live grew ${grew("cLiveKiB")} KiB` : ` — flat`) +
-               `; ${h.b.childRealms} child realm(s), ${h.b.trampFrames} heap frame(s), ` +
+               /* THE THREE REALM NUMBERS ARE PRINTED AS ONE SENTENCE, because reading the live one alone is
+                  the mistake this row exists to stop. The verdict is the comparison and never the count. */
+               `; child realms ${h.b.childRealms} live / ${h.b.childRealmsPeak} peak / ` +
+               `${h.b.childRealmsMade} made` +
+               (h.b.childRealmsMade === 0
+                 ? ` — none built, so this run says nothing about reclamation`
+                 : h.b.childRealmsMade > h.b.childRealmsPeak
+                   ? ` — RECLAIMED: at least one realm died while others were being made`
+                   : ` — NOT ONE RECLAIMED: every realm this run built was live at once, which is the ceiling`) +
+               `; ${h.b.trampFrames} heap frame(s), ` +
                `${h.b.stepMachines} suspended builtin(s), ${h.b.unattributed} B the runtime cannot name`);
     /* WHICH KIND GREW, WHICH IS THE COMPARISON result_heap_json'S OWN COMMENT DESCRIBES AND NOTHING PERFORMED.
        "A climbing `allocations` with a flat `objects` is memory no GC object owns — an atom, a string, a

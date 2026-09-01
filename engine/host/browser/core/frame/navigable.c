@@ -85,10 +85,30 @@ static RealmBuilder g_realm_builder;
    paging one is not a rewording of paging a flow. */
 static JSContext **g_realms;
 static int         g_realms_n, g_realms_cap;
+/* AND THE TWO NUMBERS A LIVE COUNT CANNOT STATE, WITHOUT WHICH THE ONE ABOVE ANSWERS TWO QUESTIONS WITH ONE
+   BIT. `g_realms_n` is how many child realms are live RIGHT NOW, and a small one is the answer for "this run
+   built none" and for "this run built a hundred thousand and reclaimed every one of them" alike — which are
+   opposite facts about the ceiling, and the second is the whole of what the reclamation below is for. Both
+   this file's OOM CHECK and the fixture that exercises the removal draw a conclusion from that number that a
+   live count is not entitled to support: the CHECK tells its reader "if it is small, this OOM is a bystander",
+   which is false of a run whose realms churned, and the fixture's own note asks a reader to compare the count
+   against how many flows have run, which nothing emitted.
+   MADE is monotone — every realm this component has ever recorded — and PEAK is the high-water live. Together
+   they make reclamation a MEASUREMENT rather than an argument: `made` equal to `peak` says every realm this
+   run ever built was live at one instant, so not one was ever reclaimed, and `made` above `peak` says at least
+   one realm died while others were being made. That comparison is the assertion the reclamation owes, and it
+   is a fact about a RUN rather than about a state, which is why it is read by a fixture row (test_forced.c's
+   `realm-reclaim`) and not by a DCHECK: there is no instant at which "a realm has been reclaimed by now" is an
+   invariant, so a should-never-happen here would fire on a run that had merely not got there yet.
+   NEITHER IS A BOUND. Nothing reads them to decide whether a realm may be built, and no code path branches on
+   either — they are counted and published, which is what §NO BOUNDS distinguishes from a cap. */
+static int         g_realms_made, g_realms_peak;
 
 void navigable_set_realm_builder(RealmBuilder b) { g_realm_builder = b; }
 
 int navigable_realm_count(void) { return g_realms_n; }
+int navigable_realm_made(void)  { return g_realms_made; }
+int navigable_realm_peak(void)  { return g_realms_peak; }
 
 /* A REALM OF THIS AGENT IS BEING TORN DOWN — quickjs's realm-teardown hook, and the one moment a Document can
    be released. It is reached from the phase-safe half of the realm's own teardown, which is where a host's
@@ -124,6 +144,21 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
                "program row names its document by HANDLE and holds no reference, so the collector could not "
                "see it and compiling that row afterwards asks a doc->realm row this teardown clears. Whatever "
                "still owns those rows has to own a reference to the document too, or drop them with it");
+        /* AND THE THREE-NUMBER LAW, AT THE ONE SITE THAT LOWERS THE LIVE COUNT. It is asserted at both
+           mutation sites rather than in a helper the two share, because a helper would report ITS line for
+           whichever of them broke and these are the only two there are: a realm is recorded in
+           nav_create_finish and forgotten here. A member reaching this line means at least one was recorded,
+           so `made` cannot be zero and `peak` cannot be below the count that is about to drop — if either is,
+           the recording site ran without counting and every reading built on these numbers, the fixture's
+           reclamation row included, is a reading of a register nothing maintains. */
+        DCHECK(g_realms_made > 0 && g_realms_peak >= g_realms_n,
+               "a child realm reached its teardown while this component's own census disagreed that it had "
+               "ever been recorded — `made` is monotone and `peak` is the high-water of the live count, so a "
+               "member leaving a list with a zero `made`, or with a `peak` below the live count it is about "
+               "to lower, means nav_create_finish recorded a realm into the list without counting it. Every "
+               "reader of these three numbers (this file's OOM CHECK, the result document's `_heap`, the "
+               "fixture row that asks whether reclamation ever ran) is then reporting a register that is not "
+               "being kept");
         g_realms[i] = g_realms[--g_realms_n];   /* order means nothing here; membership does */
         break;
     }
@@ -300,16 +335,24 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
        document now (solver/result.c's `_heap`), which every host publishes, so the message names a FIELD
        rather than a stream. */
     CHECK(dom != NULL,
-          "OOM creating a child navigable's Document — CHECK the result document's `_heap.childRealms` "
-          "FIRST (a host whose output is a stream of lines prints those same bytes): it counts the child "
-          "realms that are LIVE, and a realm is live exactly while its navigable is reachable. If it is small, "
-          "this OOM is a bystander and the memory is elsewhere in the run (measured: the smoke fixture builds "
-          "zero child realms over 14003 flows and still reaches 3.39 GB). If it is large, the working set is "
-          "REACHABLE NAVIGABLES — a flow per src'd iframe, each holding its document — and the question is what "
-          "still names them, never whether reclamation exists: a realm whose navigable is gone is a garbage "
-          "CYCLE (its function objects hold their realm and its Window holds them), the collector breaks it, "
-          "and the teardown that follows is split by phase in quickjs.c so the reference releases run inside "
-          "the collection and the tables in the sweep after it");
+          "OOM creating a child navigable's Document — CHECK the result document's `_heap.childRealms`, "
+          "`childRealmsMade` and `childRealmsPeak` TOGETHER (a host whose output is a stream of lines prints "
+          "those same bytes). READING ONE OF THEM DECIDES NOTHING, and this message used to say it did: "
+          "`childRealms` is the count that is LIVE RIGHT NOW, so a small one is the answer for a run that "
+          "built no child realm at all AND for a run that built a hundred thousand and reclaimed every one, "
+          "which are opposite facts about this crash. `childRealmsMade` is monotone and `childRealmsPeak` is "
+          "the high-water live, so the three of them separate the three cases. MADE 0: this component built "
+          "nothing, this OOM is a bystander, and the memory is elsewhere in the run (measured: the smoke "
+          "fixture once built zero child realms over 14003 flows and still reached 3.39 GB). MADE HIGH AND "
+          "PEAK LOW: reclamation is running and realms are CHURN rather than a working set — look at what the "
+          "churn allocates outside the realm, not at the realms. PEAK EQUAL TO MADE: not one realm was ever "
+          "reclaimed, which is the ceiling itself — the working set is REACHABLE NAVIGABLES, a flow per src'd "
+          "iframe each holding its document, and the question is then what still names them rather than "
+          "whether reclamation exists: HTML §7.5.10 \"Destroying documents\" step 9 has the navigable let go "
+          "of the Document (core/frame/window_proxy.c's window_proxy_set_destroyed), after which a realm is a "
+          "garbage CYCLE its function objects and its Window hold together, the collector breaks it, and the "
+          "teardown that follows is split by phase in quickjs.c so the reference releases run inside the "
+          "collection and the tables in the sweep after it");
     /* FLOW-PRIVATE: `dom_document_create` above and this parse are one uninterrupted operation, so the child
        navigable's Document is a tree no other flow can reach while §13.2.6 builds it (solver/dom_cow.h).
        THE TWO CALLS ARE §7.4.5's LOAD-A-DOCUMENT AND §7.4's INITIAL about:blank, and they are different
@@ -776,6 +819,18 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
         g_realms_cap = cap;
     }
     g_realms[g_realms_n++] = cctx;
+    /* THE CENSUS THIS SITE OWES, AT THE ONE PLACE A CHILD REALM COMES INTO EXISTENCE. `made` never falls and
+       `peak` never falls, so the pair states what the live count above cannot: how many this run has built and
+       how many were alive at once. The assert is the same three-number law the teardown states from the other
+       end, written here rather than shared, so that a break reports the site that broke it. */
+    g_realms_made++;
+    if (g_realms_n > g_realms_peak) g_realms_peak = g_realms_n;
+    DCHECK(g_realms_n <= g_realms_peak && g_realms_peak <= g_realms_made,
+           "a child realm was recorded and this component's census came out inconsistent — the live count can "
+           "never exceed the high-water it just set, and that high-water can never exceed the monotone total "
+           "of realms ever recorded. Reaching this means the list gained a member through a path that is not "
+           "this one, so `made` under-counts and the run's reclamation reading (test_forced.c's "
+           "`realm-reclaim` row, `_heap.childRealmsMade`) is measured against a total that is not the total");
     /* AND THE DOCUMENT RUNS ITS OWN SCRIPTS — see navigable_seed_scripts. AFTER the realm is recorded, because
        a program names its document and the document's realm has to be the one this agent is holding by then;
        BEFORE the reference handoff below, so nothing here reads a realm whose only reference has just gone.
@@ -3878,5 +3933,11 @@ void navigable_free(JSContext *ctx)
     free(g_realms);
     g_realms = NULL;
     g_realms_n = g_realms_cap = 0;
+    /* AND THE CENSUS GOES WITH THE LIST, because it is a census of ONE AGENT and not of the process: a second
+       agent built in this runtime starts having made none, and totals carried over from the first would make
+       every reading of them (the OOM CHECK's, the result document's, the fixture's) a sum over two agents that
+       is presented as one agent's working set. A reader that needs these numbers must take them before this
+       call — test_forced.c's probes run above it for exactly that reason. */
+    g_realms_made = g_realms_peak = 0;
     g_realm_builder = NULL;
 }

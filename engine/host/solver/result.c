@@ -828,6 +828,14 @@ char *result_cold_json(void) {
    `navigable_realm_count`, which is the working set §A-CAPABILITY-MATERIALIZED-PER-FLOW names as a ceiling and
    which navigable.c's own OOM CHECK sends its reader to by name.
 
+   AND `childRealms` ALONE ANSWERS TWO QUESTIONS WITH ONE NUMBER, which is why `childRealmsMade` and
+   `childRealmsPeak` ride beside it. The live count is small for a run that built no child realm and small for
+   a run that built a great many and reclaimed every one — opposite facts about the ceiling, and the second is
+   what HTML §7.5.10 "Destroying documents" step 9's reference drop exists to produce. `made` is monotone and
+   `peak` is the high-water live, so `made == peak` says every realm this run built was live at one instant and
+   NOT ONE was reclaimed, while `made > peak` says the reclamation ran. An absent count and a zero count are
+   different facts; so are a zero that means "none built" and a zero that means "all given back".
+
    `unattributed` IS ONE SUBTRACTION AND NOT A SUM OF ROWS. JS_ComputeMemoryUsage's last statements add atoms,
    strings, objects, properties, shapes, function bytecode and pc2line INTO `memory_used_size`, and every fast
    array's elements were already added to it in the object walk — so summing those rows again beside it counts
@@ -837,14 +845,14 @@ char *result_cold_json(void) {
    holding builtin and a heap call frame are the two largest things quickjs cannot name, and a frontier of
    parked flows holds one of each per parked call and per suspended activation.
 
-   THE ARITHMETIC, from the format string: fixed bytes 304 without the conversion specifiers, and the
-   twenty-four numbers' widest forms are 453 (twenty-one int64s at 20 and three ints at 11).
-   304 + 453 + 1 = 758 against this 768. RE-DO IT WHEN YOU ADD A ROW. */
+   THE ARITHMETIC, from the format string: fixed bytes 342 without the conversion specifiers, and the
+   twenty-six numbers' widest forms are 475 (twenty-one int64s at 20 and five ints at 11).
+   342 + 475 + 1 = 818 against this 832. RE-DO IT WHEN YOU ADD A ROW. */
 char *result_heap_json(JSContext *ctx) {
     JSMemoryUsage mem;
     JSRuntime *rt;
     long long attributed;
-    size_t n = 768;
+    size_t n = 832;
     char *out;
     int m;
 
@@ -859,6 +867,7 @@ char *result_heap_json(JSContext *ctx) {
                  "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
                  "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
                  "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
+                 "\"childRealmsMade\":%d,\"childRealmsPeak\":%d,"
                  "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
                  "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
                  "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,"
@@ -867,7 +876,7 @@ char *result_heap_json(JSContext *ctx) {
                  (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
                  (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
                  (long long)mem.memory_used_size, (long long)mem.memory_used_count,
-                 navigable_realm_count(),
+                 navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
                  (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
                  (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
                  (long long)mem.fast_array_elements * (long long)sizeof(JSValue),

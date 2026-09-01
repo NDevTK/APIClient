@@ -403,6 +403,26 @@ void navigable_free(JSContext *ctx);
    number — see the @HEAP line in solver/engine.c. */
 int navigable_realm_count(void);
 
+/* THE TWO NUMBERS THAT MAKE THE ONE ABOVE ANSWERABLE — see navigable.c's note beside the statics.
+ * `made` is MONOTONE: every child realm this agent has ever recorded. `peak` is the HIGH-WATER of the live
+ * count. Neither is a bound: nothing branches on either, and no realm is refused because of what they say.
+ *
+ * THEY EXIST BECAUSE A LIVE COUNT ALONE CANNOT TELL RECLAMATION FROM ABSENCE. `navigable_realm_count()` is
+ * small both for a run that built no child realm and for a run that built a great many and reclaimed all of
+ * them, and those are opposite facts about §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling. With these, `made`
+ * equal to `peak` says every realm this run built was alive at one instant — so NOT ONE was reclaimed, which
+ * is the ceiling — and `made` above `peak` says at least one realm died while others were being made, which
+ * is the reclamation having run.
+ *
+ * THAT COMPARISON IS A FACT ABOUT A RUN AND NOT ABOUT A STATE, which is why no DCHECK here makes it: there is
+ * no instant at which "a realm has been reclaimed by now" is an invariant, so a should-never-happen would
+ * fire on a run that had simply not reached its first collection. It is asserted where a run can be asked —
+ * test_forced.c's `realm-reclaim` row — and published on every host through solver/result.c's `_heap`.
+ *
+ * READ THEM BEFORE navigable_free, which clears all three: they are a census of ONE agent. */
+int navigable_realm_made(void);
+int navigable_realm_peak(void);
+
 /* §7.4's CREATE A NEW NAVIGABLE. `url` is the child's initial address; NULL, "" or "about:blank" all mean the
    initial about:blank Document, which inherits this document's origin and policy container. Returns the child's
    WindowProxy, or JS_UNDEFINED when `url` does not parse — the caller decides what that means, because §7.4

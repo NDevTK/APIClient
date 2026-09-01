@@ -2464,10 +2464,12 @@ static const char *HTML =
        is, so the probe now costs ONE CHILD REALM PER FLOW with no load in it — the ceiling's shape, isolated
        from the fetch. What the removal then exercises is §7.5.10 step 9: the navigable lets go of the Document,
        which is the one counted reference this engine holds to a child realm, and the realm is garbage as soon
-       as no world still names it (core/frame/window_proxy.h). READ `childRealms` ON THE @HEAP LINE: it must
-       track the flows that are currently BETWEEN the read and the removal, not the flows that have ever run.
-       A count equal to the flow count says a world is still holding one — the delta blobs of drained flows,
-       or a collection that never ran — and neither is fixed by making this probe cheaper.
+       as no world still names it (core/frame/window_proxy.h). WHETHER IT COMES BACK IS THE `realm-reclaim`
+       ROW, and it is a row rather than the instruction that used to stand here. This note said "READ
+       `childRealms` ON THE @HEAP LINE … a count equal to the flow count says a world is still holding one",
+       which asked a reader to compare a LIVE realm count against a FLOW count — two different quantities, and
+       nothing emitted the one that would have made the comparison mean anything. The comparison that does is
+       `childRealmsMade` against `childRealmsPeak`, both published now, and the row performs it.
        The src'd path is not unexercised meanwhile: `node engine/wpt.mjs html/browsers` runs hundreds of src'd
        iframes at flow counts a realm-per-flow can still pay for. */
 
@@ -7689,6 +7691,46 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the statement RAN and /api/iframenav's `v` is not `ifnav` — §4.8.5's inserted iframe got no "
              "child navigable, its proxy was not stable across two reads, or the read through it did not "
              "resolve to the peer's answer");
+    /* AND THE REALM THE ROW ABOVE BUILT CAME BACK — §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling, asked as a
+       measurement instead of read off a line by hand.
+       WHAT WAS HERE BEFORE WAS A SENTENCE ADDRESSED TO A PERSON. The iframe statement's own note said "READ
+       `childRealms` ON THE @HEAP LINE: it must track the flows that are currently BETWEEN the read and the
+       removal, not the flows that have ever run. A count equal to the flow count says a world is still holding
+       one" — an instruction to perform a comparison NOTHING EMITTED THE OTHER HALF OF, since `childRealms` is
+       the LIVE count and the flow count is not a realm count. So the invariant the whole reclamation exists to
+       produce was documented and unchecked, which is a comment standing where an assertion belongs.
+       IT IS A FIXTURE ROW AND NOT A DCHECK, and that is a statement about the CLAIM rather than a preference.
+       "A realm has been reclaimed" is a fact about a RUN — there is no instant at which it is an invariant, so
+       a should-never-happen would fire on a run that had simply not reached its first collection. What IS an
+       invariant is the three-number law, and that is asserted in C at both sites that move the numbers
+       (core/frame/navigable.c).
+       THE COMPARISON IS `made` AGAINST `peak` AND NEVER THE LIVE COUNT. `made` is monotone and `peak` is the
+       high-water live, so `made == peak` says every child realm this run built was alive at ONE INSTANT — not
+       one was ever given back — while `made > peak` says at least one realm died while others were being made.
+       The live count answers neither: a small one is what "built none" and "built many, reclaimed all" both
+       look like, and those are opposite verdicts on this row.
+       WHAT MAKES IT FALSIFIABLE: HTML §7.5.10 "Destroying documents" step 9 ("Set document's node navigable's
+       active session history entry's document state's document to null") is the one release — the fixture's
+       `document.body.removeChild(_if)` reaches it, core/frame/window_proxy.c's window_proxy_set_destroyed
+       performs it, and the Window it releases is the only counted reference this engine holds to a child
+       realm. Break any link — the release, the collector breaking the cycle its function objects and its
+       Window hold together, or navigable.c's teardown hook forgetting the member — and this row is the thing
+       that says so, by name, instead of the run reaching an OOM whose message can only guess. */
+    const char *realmback_why = NULL; int realmback_tt = 1;
+    fold_row(&realmback_tt, &realmback_why, navigable_realm_made() > 0,
+             "NOT REACHED: this run recorded no child realm at all, so the removal had nothing to give back "
+             "and this row says nothing about reclamation. The iframe statement's read THROUGH the proxy "
+             "(`_cw.document`) is what materializes the initial about:blank; without it every member above it "
+             "is answered from the navigable's own record and no realm is ever built. That is the SCHEDULE "
+             "reaching the statement, not the reclamation");
+    fold_row(&realmback_tt, &realmback_why, navigable_realm_made() > navigable_realm_peak(),
+             "child realms were built and NOT ONE was reclaimed — the high-water live count equals the total "
+             "ever made, so every realm this run created was alive at the same instant. §7.5.10 step 9's "
+             "release ran or did not (window_proxy_set_destroyed), the collector broke the cycle or did not, "
+             "and navigable.c's teardown hook forgot the member or did not: this row cannot tell you which, "
+             "and the next thing to read is `_heap.childRealms` against `childRealmsMade` over the run rather "
+             "than a single OOM's guess. What it DOES tell you is that the ceiling is real in this build — one "
+             "realm per flow that reaches through a navigable, none returned");
     /* §7.4.4 step 8 moved this Document's address to a route the run COMPUTED out of a reply, and the notice
        that carries that address off this instance said `derived`. FOUR CONDITIONS AND NOT ONE, folded so the
        row NAMES the one that failed: they fail for four different reasons, three of them in different
@@ -9141,6 +9183,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
         { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
+        /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
+           nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */
+        { "realm-reclaim", realmback_tt, "document.body.removeChild(_if)", SESS_EXPLORE, realmback_why },
         { "route-seed", routeseed_tt, "/api/routeseed", SESS_EXPLORE, routeseed_why },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE, idbopen_why },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
