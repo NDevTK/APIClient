@@ -122,8 +122,9 @@
     if (t === "double")  return typeof v === "number";
     if (t === "array<uint8>")  return v instanceof Uint8Array;
     /* AND ITS NULLABLE FORM IS A POSITIVE STATEMENT, never an omission: `null` is "this answer carries no body
-       at all" — Fetch §5.6's network error, a load that did not load — which a zero-length byte sequence is
-       not, because a 204 has a body of no bytes and a failure has no body. */
+       at all" — Fetch §2.2.6 "Responses"' network error, whose "body is null", a load that did not load —
+       which a zero-length byte sequence is not, because a 204 has a body of no bytes and a failure has no
+       body. */
     if (t === "array<uint8>?") return v === null || v instanceof Uint8Array;
     if (t === "handle<message_pipe>")  return v instanceof MessagePort;
     if (t === "handle<message_pipe>?") return v === null || v instanceof MessagePort;

@@ -1073,8 +1073,9 @@ const inSpan = (spans, off) => spans.some(([a, b]) => off >= a && off < b);
 /* A DECLARATION IS NOT ALWAYS A DECLARATOR. Everything §the PLATFORM receiver reads is a construct that names a
  * type at the point the object is CREATED or HANDED OVER — `new URL(x)`, `await fetch(u)`, an IDL-typed callback
  * parameter, the arguments a local helper is called with — and a union-typed parameter has no such construct at
- * all. Fetch §5.4's `fetch(input, init)` takes a `RequestInfo`, which is `Request or USVString`, and the page's
- * own wrapper of it then asks the question the spec's union leaves open, in the way the language provides:
+ * all. Fetch §5.6 "Fetch methods"' `fetch(input, init)` takes a `RequestInfo`, which §5.4 "Request class"
+ * typedefs as `(Request or USVString)`, and the page's own wrapper of it then asks the question the spec's
+ * union leaves open, in the way the language provides:
  * `input instanceof Request ? input.url : String(input)`. That test IS the declaration, and reading it is the
  * same kind of fact as reading a `#define` body — nothing is followed through an assignment, a return or a
  * promise; the guard and the read it guards are ONE expression.
@@ -1479,8 +1480,10 @@ function functionScopes(struct, code) {
    * `URL` this gate decides at two dozen constructors sat, undecided, because the binding handed to the deny-list
    * gate is assigned once at its declaration and once again after a redirect.
    *
-   * A `null` OR `undefined` WRITE NAMES NO INTERFACE AND CONTRADICTS NONE. Web IDL §2.7.3's nullable type is the
-   * same declaration with the absent value added, and an absent object has no members for a read to anchor to —
+   * A `null` OR `undefined` WRITE NAMES NO INTERFACE AND CONTRADICTS NONE. Web IDL §2.13.27 "Nullable types —
+   * T?"'s nullable type is "an IDL type constructed from an existing type (called the inner type), which just
+   * allows the additional value null to be a member of its set of values" — the same declaration with the
+   * absent value added, and an absent object has no members for a read to anchor to —
    * so `var x = null; try { x = new URL(u) } catch { x = null }` declares a `URL?` and is read as a URL, exactly
    * as a nullable IDL argument is read as its type. It is skipped, never counted as a disagreement.
    *

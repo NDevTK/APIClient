@@ -431,7 +431,8 @@ function scopeTables(masked, typedefs, fns) {
 const STRING_RE = /^\s*"((?:[^"\\]|\\.)*)"\s*$/;
 
 /* A STRING CONSTANT IS A DECLARATION OF A NAME, and it is the third spelling of the one a macro and a table
-   already are. §4.7's readable byte stream declares its queue-entry and pull-into-descriptor fields as
+   already are. The byte-stream controller component declares Streams §4.7.2 "Internal slots"' readable byte
+   stream queue entry and pull-into descriptor fields as
    `static const char *const Q_BUFFER = "buffer";` and writes them thirty times, and this read a #define and an
    initialised table and not that — so thirty constructs reported UNRESOLVED, which is the audit's own gap report
    naming the form it had not learned. Only `const char *` declarations are read: an initialised pointer to char
@@ -784,8 +785,10 @@ const CALL_FORMS = new Map(Object.entries({
   idl_install_replaceable:       { target: 1, name: 2, fn: 3, kind: "accessor" },
   idl_install_replaceable_value: { target: 1, name: 2, kind: "accessor" },
   JS_DefinePropertyGetSet:       { target: 1, name: 2, fn: 3, kind: "accessor" },
-  /* Web IDL §3.7.1 Interface object — "the property has attributes { [[Writable]]: true, [[Enumerable]]:
-     false, [[Configurable]]: true }", a DATA property on the global. These two are core/dom/node.c's shared
+  /* Web IDL §3.7 "Interfaces" — "a corresponding property exists on the realm's global object. The name of
+     the property is the identifier of the interface, and its value is an object called the interface object",
+     whose characteristics §3.7.1 "Interface object" describes. A DATA property on the global — Web IDL states
+     no descriptor for it, so no attribute triple is quoted here. These two are core/dom/node.c's shared
      install helpers for one, and they are HERE for the reason every other shared helper is: the helper's own
      `JS_SetPropertyStr(ctx, global, name, ctor)` takes the name from a PARAMETER, so it is the one line that
      cannot resolve by construction. Unregistered, that line was reported UNRESOLVED against every interface

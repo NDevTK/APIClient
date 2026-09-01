@@ -391,11 +391,14 @@ function _destinationOf(opts) {
 // ── WHAT A REPLY WOULD BE EVIDENCE OF, AND WHETHER THIS ZONE SPENDS A REQUEST ON IT ──
 // CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names, spelled here because this
 // is the file that DECIDES from them. The engine states the word (solver/engine.h's
-// PENDING_PROVENANCE_*, composed at the park from HTML §4.12.1's parser-inserted flag
-// and the parking flow's `path_forced`); a zone that originated an act states it for
-// itself. Neither may decide, and this file may not re-derive it — nothing in an
-// ADDRESS distinguishes a page a person's own session would have loaded from one that
-// exists because a gate was forced, which is the whole reason the field travels.
+// PENDING_PROVENANCE_*, composed at the park from HTML §4.12.1.1 "Processing model"'s
+// parser-inserted — a `script` whose parser document is non-null, NOT §4.10.18.3
+// "Association of controls and forms"' parser inserted flag, which is a different
+// thing on a different element — and the parking flow's `path_forced`); a zone that
+// originated an act states it for itself. Neither may decide, and this file may not
+// re-derive it — nothing in an ADDRESS distinguishes a page a person's own session
+// would have loaded from one that exists because a gate was forced, which is the
+// whole reason the field travels.
 var _PROVENANCE_TYPES = ["observed", "derived", "forced"];
 // AND EVERY CALLER MUST STATE ONE — a `CHECK`, by exactly the argument `_destinationOf`
 // carries one function up and for the same failure shape. The arm an unstated value
@@ -1005,7 +1008,7 @@ async function safeFetch(url, opts) {
      `check.js` wrote `RETHROW_FATAL` for and records having already paid for once.
      SO IT IS ASKED ONCE, AND AN UNANSWERABLE ANSWER IS A REFUSAL RATHER THAN A SKIP. An empty
      `resp.url` is not unanswerable and is not a hole: §5.5 "Response class" gives `url` "the
-     empty string if response's URL is null", i.e. no redirect information at all, so the URL
+     empty string if this's response's URL is null", i.e. no redirect information at all, so the URL
      the bytes came from IS the address requested — which the pre-request deny list and the
      initial private-host check have already judged. That is a positive statement, so `parsed`
      is the answer rather than a default filling a gap.

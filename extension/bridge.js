@@ -2270,7 +2270,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
      IT IS ASKED PER CALL SITE BECAUSE THE ANSWER IS NOT THE SAME FOR ALL FIVE, AND "AN ENGINE MINTED THE
      NAME" IS THE WRONG RULE. HTML §7.1.3.2 "Browsing context group switches due to opener policy" mints a
      name too, and its own note says the old browsing context "will not be used by the new Document that we
-     are about to initialise" — so the handle the navigating page still holds answers about the document it
+     are about to create" — so the handle the navigating page still holds answers about the document it
      HAD, and nothing anywhere holds a proxy for the swapped-TO one.
      BOTH ERRORS ARE SILENT AND THEY ARE NOT SYMMETRIC. Understating it drains a peer that was about to be
      read, and the crash lands in the ASKING instance, one boundary from the zone that decided it. Overstating
@@ -2841,7 +2841,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          facts are handed over and `safe-fetch.js` decides. Nothing changes today: `msg.credentialed` is still
          never written (see the finding above), so every read here is still uncredentialed. */
       /* AND THE THIRD FACT IS WHAT THE REQUEST IS EVIDENCE OF, RELAYED AND NEVER RE-DERIVED HERE. The engine
-         composed it at the park from HTML §4.12.1's parser-inserted flag and the parking flow's own
+         composed it at the park from HTML §4.12.1.1 "Processing model"'s parser-inserted (a `script` whose
+         parser document is non-null; there is no "parser-inserted flag" — that name belongs to §4.10.18.3
+         "Association of controls and forms") and the parking flow's own
          `path_forced` (solver/engine.h); nothing in an address could tell this zone the same thing, which is
          the whole reason it rides the pending line. This zone neither tests it nor defaults it: the chokepoint
          holds the firing decision, and a value it does not know is fatal there rather than permissive here. */

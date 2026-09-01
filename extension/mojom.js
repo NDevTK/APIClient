@@ -483,7 +483,7 @@
                  "invented record produces" },
           { name: "reply", type: "string", retained: false,
             why: "the reply's METADATA as JSON, so it carries its type: a bare string could not say `null` for " +
-                 "Fetch §5.6's network error without it being the four characters \"null\", and could not " +
+                 "Fetch §2.2.6 \"Responses\"' network error without it being the four characters \"null\", and could not " +
                  "carry the URL list, the status or the headers at all" },
           { name: "body", type: "array<uint8>?", retained: false,
             why: "Fetch §2.2.5's body is a BYTE SEQUENCE, and the decode this zone used to run (§5.2's text()) " +

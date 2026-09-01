@@ -157,9 +157,11 @@ const INTERFACES = {
      expects — they are installed by this component onto its own two prototypes, not inherited. */
   TextDecoderStream:    "core/encoding/text_stream.c",
   TextEncoderStream:    "core/encoding/text_stream.c",
-  /* §4.2.4's ReadableStreamPipeTo belongs to neither half of the standard — it holds a reader on one stream
-     and a writer on another — so `pipeTo` and `pipeThrough` are declared in their own component and installed
-     onto this prototype. Naming only readable_stream.c reported them absent while they were shipping. */
+  /* Streams §4.9.1 "Working with readable streams"' ReadableStreamPipeTo belongs to neither half of the
+     standard — it holds a reader on one stream and a writer on another — so `pipeTo` and `pipeThrough`, the
+     two §4.2.4 "Constructor, methods, and properties" members that call it, are declared in their own
+     component and installed onto this prototype. Naming only readable_stream.c reported them absent while
+     they were shipping. */
   ReadableStream:      ["core/streams/readable_stream.c", "core/streams/pipe.c"],
   ReadableStreamDefaultReader: "core/streams/readable_stream.c",
   WritableStream:       "core/streams/writable_stream.c",
