@@ -109,11 +109,9 @@ static const char *const IOE_CTOR_STEPS[] = { IOE_CTOR_STAGES(JS_STEP_STAGE_LABE
  *
  * THE ARGUMENT'S TYPE IS NOT DECLARED, AND THAT IS THE GAP THIS CRASHES FOR. `IntersectionObserverEntryInit`
  * has three members whose own type is a DICTIONARY — `required DOMRectInit? rootBounds`, `required DOMRectInit
- * boundingClientRect`, `required DOMRectInit intersectionRect` — and core/idl_args.c refuses one by name ("a
- * dictionary member was declared as a dictionary — the conversion cursor is per-argument, so a nested one would
- * read the outer's names"). Declaring the argument IDL_DICT with those members therefore aborts in the
- * conversion, one layer away from the thing that is missing, so the type is left undeclared and the crash is
- * raised HERE, where it can say what to build.
+ * boundingClientRect`, `required DOMRectInit intersectionRect`. The conversion that reads a nested dictionary
+ * is BUILT (core/idl_args.c's §3.2.17 walk is re-entrant over a stack of levels), so what is left is the
+ * declaration this file and core/geometry/dom_rect.c owe it — see js_ioe_ctor_step, which names all three.
  *
  * NOTHING IN THIS ENGINE REACHES IT. §3.2.6 step 1's "construct an IntersectionObserverEntry" is the internal
  * operation `intersection_observer_entry_new` above, which takes the eight values it already holds; this is the
@@ -128,35 +126,24 @@ static int js_ioe_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor IntersectionObserverEntry requires 'new'"), -1;
     DFAIL("INTERSECTION OBSERVER §2.3 The IntersectionObserverEntry interface's "
-          "`constructor(IntersectionObserverEntryInit)` takes a dictionary THREE OF WHOSE MEMBERS ARE "
-          "THEMSELVES DICTIONARIES — `required DOMRectInit? rootBounds`, `required DOMRectInit "
-          "boundingClientRect` and `required DOMRectInit intersectionRect`, each of which Web IDL §3.2.17 "
-          "Dictionary types converts by reading ITS four members with the page's own getters. "
-          "core/idl_args.c states the missing capability at its own site: `DCHECK(mt != IDL_DICT, \"a "
-          "dictionary member was declared as a dictionary — the conversion cursor is per-argument, so a "
-          "nested one would read the outer's names\")`. "
-          "WHAT MUST EXIST AFTERWARD IS A NESTED §3.2.17 THAT IS THE SAME LOOP, and this instruction used to "
-          "point at the wrong one, so read the four corrections before starting. It said the stack of cursors "
-          "behind IDL_SEQUENCE_STRING_OR_DICT (idl_conv_push / idl_conv_run) needed only a member TYPE that "
-          "pushes a frame. That stack is SEQUENCE-SHAPED and its member loop is a SECOND, WEAKER copy of "
-          "§3.2.17 than idl_dict_walk_run's: (1) idl_conv_push mints a LIST and idl_conv_run enters at "
-          "IDL_CONV_PULL driving an ITERATOR over the frame's source, neither of which a plain dictionary "
-          "member has, and its pop hands the frame below a list rather than a converted dictionary; (2) that "
-          "loop's member arms are DOMString, DOMString? and another such sequence, and it DFAILs on anything "
-          "else — so DOMRectInit's four `unrestricted double` members would abort inside it, while "
-          "idl_dict_walk_run already converts them; (3) `DOMRectInit?` is a NULLABLE dictionary member, a "
-          "type of its own whose null is the IDL null rather than an empty dictionary, and neither loop has "
-          "an arm for it; (4) idl_members_depth counts ONLY IDL_SEQUENCE_STRING_OR_DICT, so a nested plain "
-          "dictionary that it does not count leaves idl_dict_walk_start asserting zero frames are enough and "
-          "idl_conv_push CHECK-failing on the first push. So the nested conversion belongs in "
-          "idl_dict_walk_run's own member loop, re-entrant over a stack of levels, and building it on the "
-          "sequence frames would be a THIRD partial copy of the section. Geometry Interfaces §3's DOMRectInit "
-          "is a member list core/geometry/dom_rect.c already declares (DOM_RECT_INIT) and would then have to "
-          "NAME as an IdlDictDecl. Then declare this constructor's argument IDL_DICT over "
-          "IntersectionObserverEntryInit's eight members — time and intersectionRatio are doubles, "
-          "isIntersecting and isVisible booleans, target an Element interface, and the three above the nested "
-          "dictionaries, ALL EIGHT `required` — and write its one step: read them and build the entry through "
-          "intersection_observer_entry_new");
+          "`constructor(IntersectionObserverEntryInit intersectionObserverEntryInit)` is NOT DECLARED, and "
+          "what is missing is now this file's own declaration work rather than an argument-machine "
+          "capability. §3.2.17's NESTED conversion EXISTS: core/idl_args.c's walk is one re-entrant member "
+          "loop over a stack of levels, idl_type_pushes_level names IDL_DICT, IDL_DICT_NULLABLE and "
+          "IDL_SEQUENCE_STRING_OR_DICT as the types that push one, and idl_members_depth counts through that "
+          "same predicate — so a `required DOMRectInit? rootBounds` has a declared type and a counted frame. "
+          "THREE THINGS ARE LEFT AND ALL THREE ARE DECLARATIONS. (1) Geometry Interfaces §3's DOMRectInit is "
+          "a file-static IdlDictMember array in core/geometry/dom_rect.c (DOM_RECT_INIT) and a nested member "
+          "names an IdlDictDecl, so that file has to NAME it and export it. (2) This file has to declare "
+          "IntersectionObserverEntryInit's EIGHT members, ALL `required`, in Web IDL §3.2.17's lexicographic "
+          "read order — boundingClientRect and intersectionRect IDL_DICT, rootBounds IDL_DICT_NULLABLE, all "
+          "three naming that declaration; intersectionRatio and time IDL_DOUBLE (DOMHighResTimeStamp is a "
+          "`double` typedef); isIntersecting and isVisible IDL_BOOLEAN_NO_DEFAULT, because the IDL writes no "
+          "`= false` and a `required` member is never absent; target IDL_INTERFACE against Element — and "
+          "replace this member's one IDL_ANY position with IDL_DICT over that list. (3) The body then reads "
+          "the eight and builds the entry through intersection_observer_entry_new, minting the three rects "
+          "with core/geometry/dom_rect.h's dom_rect_new_values, which is where §3's `= 0` for an absent "
+          "DOMRectInit member is applied and is the only place it may be.");
     /* A RELEASE BUILD CANNOT BUILD THE CONVERSION, so the constructor refuses — which is the honest answer for
        a capability that is not supportable outside dev, and is distinguishable by a page from a missing
        interface object (the interface IS there, and every instance the engine mints answers all eight

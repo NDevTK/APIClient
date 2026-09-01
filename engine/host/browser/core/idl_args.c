@@ -715,8 +715,11 @@ const JSAtom *idl_dict_declare(JSContext *ctx, const IdlDictDecl *d)
     return idl_dict_atoms(d);
 }
 
-/* HOW DEEP THE DECLARED TYPE TREE GOES — how many sequence cursors can be in flight at once for this member
-   list. Each `sequence<(DOMString or D)>` is one frame plus whatever D's own members need. */
+/* HOW DEEP THE DECLARED TYPE TREE GOES — how many levels of §3.2.17 can be in flight at once for this member
+   list. Each member whose type PUSHES a level (idl_type_pushes_level, which is also what the member loop asks
+   before pushing) is one frame plus whatever the dictionary it names needs, and the answer is the deepest of
+   them: a nested dictionary and a `sequence<(DOMString or D)>` both cost exactly one frame at their own level,
+   because a sequence element's own dictionary is converted IN the frame the sequence already pushed. */
 static int idl_members_depth(const IdlDictMember *ms, int n)
 {
     int max = 0, k;
@@ -724,10 +727,11 @@ static int idl_members_depth(const IdlDictMember *ms, int n)
     for (k = 0; k < n; k++) {
         int d;
 
-        if (ms[k].type != IDL_SEQUENCE_STRING_OR_DICT) continue;
+        if (!idl_type_pushes_level(ms[k].type)) continue;
         DCHECK(ms[k].dict != NULL,
-               "a `sequence<(DOMString or D)>` member named no dictionary for the union's second arm — the "
-               "dictionary is half of what that type states");
+               "a member whose declared type pushes a §3.2.17 level named no dictionary for it — the dictionary "
+               "is half of what that type states, and with none there is no member list for the pushed level to "
+               "read and nothing to size its depth from");
         d = 1 + idl_members_depth(ms[k].dict->members, ms[k].dict->n);
         if (d > max) max = d;
     }
@@ -1067,8 +1071,10 @@ static const char *idl_typed_array_name(int kind)
    rather than at whichever call happens to reach that position first. The reverse is asserted too: a T
    declared at a position whose type is something else describes a member that is not this one, which is
    exactly how a setter stated from an INSTALL lands on whichever component declared last (IDL_LAST_DECL_ONLY). */
-/* WEB IDL §3.2.18 Enumeration types' `E` ON A DICTIONARY MEMBER — idl_seal_check_enums' sweep one level down,
- * over ONE declared member list, and the same two directions asked of the same one predicate.
+/* WHAT ONE DECLARED MEMBER LIST OWES ITS OWN TYPES, run once when the platform is sealed — two pairs, each two
+ * directions asked of one predicate, in the shape idl_seal_check_enums uses at an argument position:
+ *   - §3.2.18 Enumeration types' `E`, which idl_type_admits_enumeration names the types that read;
+ *   - the DICTIONARY a member's type nests, which idl_type_pushes_level names the types that read.
  *
  * THE ADDRESS IS IN THE MESSAGE AND NOT IN THIS LINE, which is the whole reason this is allowed to be a shared
  * helper: a DCHECK stamps the file and line it is WRITTEN at, so an invariant checked here would report this
@@ -1083,8 +1089,8 @@ static const char *idl_typed_array_name(int kind)
  * NAMED dictionary — an algorithm's own (idl_dict_declare) and every one a member's type nests — is in the
  * intern table, which idl_dict_intern fills recursively. A sweep over only the first would be silent about
  * exactly the dictionaries whose declaration is furthest from any argument position. */
-static void idl_seal_check_dict_enums(const IdlDictMember *ms, int n,
-                                      const char *whose_kind, const char *whose_name)
+static void idl_seal_check_dict_members(const IdlDictMember *ms, int n,
+                                        const char *whose_kind, const char *whose_name)
 {
     int k;
 
@@ -1100,6 +1106,20 @@ static void idl_seal_check_dict_enums(const IdlDictMember *ms, int n,
         DCHECKF(idl_type_admits_enumeration(ms[k].type) || !stated,
                 "member `%s` of %s`%s` states §3.2.18's values and its declared type asks for no enumeration — "
                 "no conversion reads them, so the declaration describes a member that never tests against them",
+                ms[k].name, whose_kind, whose_name);
+        /* AND THE OTHER PAIR ON THE SAME MEMBER: a type that PUSHES a §3.2.17 level and the dictionary that
+           level reads. It is the same sentence one axis over — idl_members_depth already refuses the forward
+           half at the declaration, because it cannot compute a depth without the list — and this is the
+           converse, which nothing else asks: a dictionary named at a member whose type reads none is a
+           declaration describing a member that is not this one, and the day that member's type changes the
+           silently-unread name would become a silently-read one. */
+        DCHECKF(idl_type_pushes_level(ms[k].type) || ms[k].dict == NULL,
+                "member `%s` of %s`%s` names a dictionary and its declared type pushes no §3.2.17 level for it "
+                "— no conversion reads that list, so the declaration describes a member that is not this one",
+                ms[k].name, whose_kind, whose_name);
+        DCHECKF(!idl_type_pushes_level(ms[k].type) || ms[k].dict != NULL,
+                "member `%s` of %s`%s` declares a type that pushes a §3.2.17 level and names no dictionary for "
+                "it — the pushed level has no member list to read and nothing to size its depth from",
                 ms[k].name, whose_kind, whose_name);
     }
 }
@@ -1120,7 +1140,7 @@ static void idl_seal_check_dictionaries(void)
     int i, k;
 
     for (i = 0; i < g_ndicts; i++)
-        idl_seal_check_dict_enums(g_dicts[i].d->members, g_dicts[i].d->n, "dictionary ", g_dicts[i].d->name);
+        idl_seal_check_dict_members(g_dicts[i].d->members, g_dicts[i].d->n, "dictionary ", g_dicts[i].d->name);
     for (i = 0; i < g_n; i++) {
         const IdlMember *m = idl_member(i);
         bool has_position = false;
@@ -1129,7 +1149,7 @@ static void idl_seal_check_dictionaries(void)
            answer idl_dict_order_check reaches for when it has to name one of these, and for the same reason:
            a member's own dictionary argument is an array with no name to print. */
         if (m->dict_n > 0)
-            idl_seal_check_dict_enums(m->dict, m->dict_n, "the dictionary argument of member ",
+            idl_seal_check_dict_members(m->dict, m->dict_n, "the dictionary argument of member ",
                                       m->name ? m->name : "(not installed)");
         for (k = 0; k < m->nargs; k++)
             if (idl_type_is_dictionary(m->types[k])) has_position = true;
@@ -1414,14 +1434,101 @@ static int idl_member_length_of(const IdlMember *m)
 /* WHAT ONE NESTED-CONVERSION FRAME OWNS, declared ONCE. The state's own visit walks every declared frame
    through this, and the reset below discharges the same declaration with the freeing consumer — so a value
    added to a frame is added in one place and both consumers see it. */
+/* THE ARM PHASES of a position whose §3.2.25 union is decided by `? GetMethod(V, %Symbol.iterator%)` — see
+   idl_union_seq_arm below, which is where they are explained. They are declared HERE because a level starts
+   holding one and the level machinery stands before that function. */
+enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
+
+/* ---- ONE LEVEL OF §3.2.17: STARTED, VISITED, CLEARED ------------------------------------------------------
+ *
+ * See idl_args.h for what a level IS and why the conversion is a stack of them rather than C recursion. */
+
+static void idl_level_visit(JSContext *ctx, IdlDictLevel *l, JSStepVisit *v)
+{
+    v->val(ctx, &l->src);
+    v->val(ctx, &l->out);
+    v->val(ctx, &l->mv);
+    v->val(ctx, &l->seq_list);
+    iter_cursor_visit(ctx, &l->seq, v);
+}
+
+/* Release everything one level holds and leave it empty. Safe on a level that was never used: a zeroed state's
+   JSValue is the non-refcounted integer 0, so freeing it does nothing. */
+static void idl_level_clear(JSContext *ctx, IdlDictLevel *l)
+{
+    idl_level_visit(ctx, l, JS_StepFreeVisitor());
+    memset(l, 0, sizeof *l);
+    l->src = l->out = l->mv = l->seq_list = JS_UNDEFINED;
+}
+
+/* BEGIN one level over `src`, which the CALLER has already brought past §3.2.17 step 1 — see
+   idl_dict_walk_start for why that step belongs there.
+   THE STATE IS COMPLETE BEFORE THE FIRST OPERATION THAT CAN THROW: `out` is the only allocation, and everything
+   the level owns is placed before it, so a failure to mint it tears down through the same visit that would have
+   named the rest and leaves nothing half-adopted.
+   Returns 0, or -1 with a throw live (the object could not be minted). */
+static int idl_level_start(JSContext *ctx, IdlDictLevel *l, JSValueConst src,
+                           const IdlDictMember *members, int n, const JSAtom *atoms, const char *name,
+                           JSClassID iface, bool (*narrow)(JSValueConst v))
+{
+    DCHECK(members != NULL && atoms != NULL && n > 0,
+           "a §3.2.17 dictionary conversion was started with no member list or no interned names — the atoms "
+           "must outlive the suspension between a member read's two halves, which is why they are interned at "
+           "declaration (idl_dict_declare) and never made per read");
+    l->members   = members;
+    l->atoms     = atoms;
+    l->name      = name;
+    l->n         = n;
+    l->iface     = iface;
+    l->narrow    = narrow;
+    l->mi        = 0;
+    l->mphase    = 0;
+    l->mv        = JS_UNDEFINED;
+    l->seq_list  = JS_UNDEFINED;
+    l->seq_n     = 0;
+    l->seq_phase = 0;
+    l->uni_phase = IDL_UNI_ASK;
+    iter_cursor_init(&l->seq);
+    l->src = JS_DupValue(ctx, src);
+    l->out = JS_NewObject(ctx);                                          /* step 2's idlDict */
+    if (JS_IsException(l->out)) {
+        l->out = JS_UNDEFINED;
+        JS_FreeValue(ctx, l->src);
+        l->src = JS_UNDEFINED;
+        return -1;
+    }
+    return 0;
+}
+
+/* THE SAME, FOR A DICTIONARY A MEMBER NAMED. Its member list, its interned atoms and its IDL identifier all
+   come from the ONE declaration the member points at.
+   ITS §3.2.15 CLASS IS THE MEMBER'S OWN AND NEVER THE OUTER LEVEL'S. A declaration-wide class (idl_iface_brand)
+   belongs to the DECLARATION that stated it, and a nested dictionary is reached through a member instead — so
+   inheriting the outer one would brand this dictionary's interface-typed members against the outer dictionary's
+   interface. Zero is therefore stated, and each interface-typed member of a nested dictionary names its own
+   class (IdlDictMember::iface); the conversion's own `want != 0` assert is what refuses one that did not.
+   NAMED RESIDUAL — the DECLARATION-WIDE NARROWING (idl_iface_narrow) has no per-member form, so a pushed level
+   carries none. WHAT IS NOT COVERED: a nested dictionary member whose IDL writes a union of two interface types
+   that share one class id here — Intersection Observer §2.4's `(Element or Document)? root` is the shape — which
+   at a pushed level takes §3.2.15's brand alone and not the narrowing. WHAT THE NEXT DIFF BUILDS: a `narrow`
+   field on IdlDictMember beside `iface`, read by the same two arms that read the class. ITS ABSENCE WOULD SHOW
+   as such a member accepting a value of the wider class where the union names only the narrower one. No nested
+   dictionary in the platform declares an interface-typed member today. */
+static int idl_level_start_decl(JSContext *ctx, IdlDictLevel *l, JSValueConst src, const IdlDictDecl *d)
+{
+    DCHECK(d != NULL, "a §3.2.17 level was pushed with no dictionary declaration behind it — the dictionary is "
+                      "half of what a level-pushing member type states");
+    return idl_level_start(ctx, l, src, d->members, d->n, idl_dict_atoms(d), d->name, 0, NULL);
+}
+
+/* ---- A PUSHED LEVEL, AS A FRAME ---------------------------------------------------------------------------- */
+
 static void idl_conv_frame_visit(JSContext *ctx, IdlConvFrame *f, JSStepVisit *v)
 {
     iter_cursor_visit(ctx, &f->cur, v);
     v->val(ctx, &f->src);
     v->val(ctx, &f->list);
-    v->val(ctx, &f->esrc);
-    v->val(ctx, &f->eout);
-    v->val(ctx, &f->mv);
+    idl_level_visit(ctx, &f->lvl, v);
 }
 
 /* Release everything one frame holds and leave it empty. Safe on a frame that was never used: a zeroed state's
@@ -1430,32 +1537,29 @@ static void idl_conv_frame_clear(JSContext *ctx, IdlConvFrame *f)
 {
     idl_conv_frame_visit(ctx, f, JS_StepFreeVisitor());
     memset(f, 0, sizeof *f);
-    f->src = f->list = f->esrc = f->eout = f->mv = JS_UNDEFINED;
+    f->src = f->list = JS_UNDEFINED;
+    f->lvl.src = f->lvl.out = f->lvl.mv = f->lvl.seq_list = JS_UNDEFINED;
 }
 
-/* Begin one sequence level over `src`. Returns -1 with a throw live if its list could not be allocated.
+/* PUSH one level and hand the caller its frame to fill — the CAPACITY check and the clear, which are the same
+   for both kinds, stated once. Everything that differs between a dictionary level and a sequence level is what
+   the caller writes into the frame it gets back.
    THE FRAMES ARRIVE AS A PARAMETER and are never stored on the walk — see idl_args.h: a byte-copying deep fork
    would carry a stored pointer into the ORIGINAL state block, so the host re-derives them from its own layout on
    every entry and there is nothing here to go stale. */
-static int idl_conv_push(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap,
-                         JSValueConst src, const IdlDictDecl *d)
+static IdlConvFrame *idl_conv_push(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap,
+                                   uint8_t kind)
 {
     IdlConvFrame *f;
 
-    DCHECK(d != NULL, "a `sequence<(DOMString or D)>` was converted with no dictionary named for its union's "
-                      "second arm");
     CHECK(w->conv_sp < frames_cap,
           "a nested IDL conversion went deeper than the DECLARED type tree — the depth is computed from the "
-          "declaration and the host sized its frames for it, so this means the two have drifted apart");
+          "declaration (idl_members_depth, over exactly the types idl_type_pushes_level names) and the host "
+          "sized its frames for it, so this means the two have drifted apart");
     f = &frames[w->conv_sp++];
     idl_conv_frame_clear(ctx, f);
-    iter_cursor_init(&f->cur);
-    f->d = d;
-    f->atoms = idl_dict_atoms(d);
-    f->src = JS_DupValue(ctx, src);
-    f->list = JS_NewArray(ctx);
-    if (JS_IsException(f->list)) { f->list = JS_UNDEFINED; return -1; }
-    return 0;
+    f->kind = kind;
+    return f;
 }
 
 static void idl_conv_pop(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames)
@@ -1464,156 +1568,90 @@ static void idl_conv_pop(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames)
     idl_conv_frame_clear(ctx, &frames[--w->conv_sp]);
 }
 
-/* DRIVE the stack one re-entry's worth. Returns >0 (the caller returns it — the machine is parked inside the
-   page's iterator or one of its getters), 0 with *pout holding the converted sequence (owned), or -1 with a
-   throw live. Every arm that parks does so with the cursor standing exactly where it was. */
-static int idl_conv_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap,
-                        JSValue in, JSValue *pout, JSValue **out_cb, int *out_argc)
+/* THE LEVEL IN FLIGHT AT A STACK POSITION — level zero is the walk's own and every pushed one is its frame's.
+   ONE accessor, because "which level" is asked at the member loop, at every push and at every pop, and three
+   readings of one piece of arithmetic are three chances to be off by one. */
+static IdlDictLevel *idl_level_at(IdlDictWalk *w, IdlConvFrame *frames, int sp)
 {
+    DCHECK(sp >= 0 && sp <= (int)w->conv_sp,
+           "a §3.2.17 level was asked for at a stack position that is not live");
+    DCHECK(sp == 0 || frames != NULL,
+           "a pushed §3.2.17 level was asked for through a null frame block — the frames and their count are "
+           "one statement of the host's layout");
+    return sp == 0 ? &w->lvl : &frames[sp - 1].lvl;
+}
+
+/* DRIVE THE TOP FRAME'S SEQUENCE one re-entry's worth — §3.2.21.1 Creating a sequence from an iterable's repeat
+   loop, whose step 3.1 "Let next be ? IteratorStepValue(iteratorRecord)" is the page's code and whose step 3.3
+   element conversion is too. It handles the two phases that are NOT a member loop; once an element has taken
+   §3.2.25's dictionary arm the frame holds a §3.2.17 LEVEL and the one member loop runs it, exactly as it runs
+   every other level.
+   THE WEAK SECOND COPY OF §3.2.17 THAT USED TO LIVE HERE IS GONE. It converted DOMString, DOMString? and
+   another such sequence and aborted on everything else, so a `DOMRectInit` reached through a sequence refused
+   the four `unrestricted double` members the one loop already converts. Two copies of one section is the dual
+   system this engine forbids, and the seam between them is where its bugs were.
+   Returns >0 (the caller returns it — parked inside the page's iterator or a `toString`), 0 having advanced the
+   frame, or -1 with a throw live. `in` is CONSUMED. */
+static int idl_conv_seq_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFrame *frames,
+                            JSValue in, JSValue **out_cb, int *out_argc)
+{
+    IdlConvFrame *f;
     int r;
 
-    DCHECK(w->conv_sp > 0, "the nested conversion was driven with no frame under it");
-    for (;;) {
-        IdlConvFrame *f = &frames[w->conv_sp - 1];
+    DCHECK(w->conv_sp > 0, "the sequence driver was run with no frame under it");
+    f = &frames[w->conv_sp - 1];
+    DCHECK(f->kind == IDL_FRAME_SEQUENCE,
+           "the sequence driver was handed a frame that is converting a plain dictionary — a dictionary level "
+           "has no iterator and no list, and its whole drive is the member loop");
+    if (f->phase == IDL_CONV_PULL) {
+        r = iter_cursor_run(ctx, hdr, &f->cur, f->src, in, out_cb, out_argc);
+        if (r > 0) return r;          /* parked ON THIS ELEMENT, at THIS depth */
+        if (r < 0) return -1;
+        if (f->cur.done) {
+            JSValue done = f->list;
 
-        if (f->phase == IDL_CONV_PULL) {
-            r = iter_cursor_run(ctx, hdr, &f->cur, f->src, in, out_cb, out_argc);
-            in = JS_UNDEFINED;
-            if (r > 0) return r;          /* parked ON THIS ELEMENT, at THIS depth */
-            if (r < 0) return -1;
-            if (f->cur.done) {
-                JSValue done = f->list;
+            f->list = JS_UNDEFINED;
+            idl_conv_pop(ctx, w, frames);
+            {   /* the level below is the MEMBER that named this sequence, waiting for its value */
+                IdlDictLevel *p = idl_level_at(w, frames, w->conv_sp);
 
-                f->list = JS_UNDEFINED;
-                idl_conv_pop(ctx, w, frames);
-                if (w->conv_sp == 0) { *pout = done; return 0; }
-                {   /* the frame below is the MEMBER that named this sequence, waiting for its value */
-                    IdlConvFrame *p = &frames[w->conv_sp - 1];
-
-                    DCHECK(p->phase == IDL_CONV_MEMBERS && p->mphase == 1,
-                           "a nested sequence finished under a frame that was not converting a member — a "
-                           "level is pushed from exactly one place, and this is not where it returns to");
-                    JS_FreeValue(ctx, p->mv);
-                    p->mv = done;
-                    p->mphase = 2;
-                }
-                continue;
+                DCHECK(p->mphase == 1,
+                       "a nested sequence finished under a level that was not converting a member — a level is "
+                       "pushed from exactly one place, and this is not where it returns to");
+                JS_FreeValue(ctx, p->mv);
+                p->mv = done;
+                p->mphase = 2;
             }
-            /* UNKNOWN EXTERNAL INPUT CROSSES AS ITSELF, before the union is asked anything: a concolic IS an
-               object, so resolving the arm first would read a dictionary's members off it and de-taint what
-               the solver has to keep forking on. Same boundary rule every declared type follows. */
-            if (concolic_is(f->cur.value)) {
-                JS_SetPropertyUint32(ctx, f->list, f->n++, JS_DupValue(ctx, f->cur.value));
-                continue;
-            }
-            /* §3.2.25 over `(DOMString or D)`: null and undefined take the dictionary arm (step 4) and so does
-               any Object (step 10); everything else reaches step 12's string arm. */
-            if (JS_IsObject(f->cur.value) || JS_IsNull(f->cur.value) || JS_IsUndefined(f->cur.value)) {
-                f->esrc = JS_DupValue(ctx, f->cur.value);
-                f->eout = JS_NewObject(ctx);
-                if (JS_IsException(f->eout)) { f->eout = JS_UNDEFINED; return -1; }
-                f->mi = 0;
-                f->mphase = 0;
-                f->phase = IDL_CONV_MEMBERS;
-                continue;
-            }
-            f->phase = IDL_CONV_STRING;
-            continue;
+            return 0;
         }
-
-        if (f->phase == IDL_CONV_STRING) {
-            JSValue str = JS_UNDEFINED;
-
-            r = step_tostring_run(ctx, hdr, f->cur.value, in, &str, out_cb, out_argc);
-            in = JS_UNDEFINED;
-            if (r > 0) return r;
-            if (r < 0) return -1;
-            JS_SetPropertyUint32(ctx, f->list, f->n++, str);
-            f->phase = IDL_CONV_PULL;
-            continue;
+        /* UNKNOWN EXTERNAL INPUT CROSSES AS ITSELF, before the union is asked anything: a concolic IS an
+           object, so resolving the arm first would read a dictionary's members off it and de-taint what
+           the solver has to keep forking on. Same boundary rule every declared type follows. */
+        if (concolic_is(f->cur.value)) {
+            JS_SetPropertyUint32(ctx, f->list, f->n++, JS_DupValue(ctx, f->cur.value));
+            return 0;
         }
-
-        DCHECK(f->phase == IDL_CONV_MEMBERS, "a nested conversion resumed at a phase it never parks in");
-        {
-            bool pushed = false;
-
-            while (f->mi < f->d->n) {
-                const IdlDictMember *dm = &f->d->members[f->mi];
-
-                if (f->mphase == 0) {
-                    /* §3.2.17 step 4.1.2: an undefined or null dictionary has no object to read from — every
-                       member is absent and none of the page's code runs. */
-                    if (JS_IsObject(f->esrc)) {
-                        r = step_getprop_run(ctx, hdr, f->esrc, f->atoms[f->mi], in, &f->mv,
-                                             out_cb, out_argc);
-                        in = JS_UNDEFINED;
-                        if (r > 0) return r;   /* parked ON THIS MEMBER's read; the resume comes back to it */
-                        if (r < 0) return -1;
-                    }
-                    f->mphase = 1;
-                    if (dm->required && JS_IsUndefined(f->mv)) {
-                        JS_ThrowTypeError(ctx, "required member %s of dictionary %s is undefined",
-                                          dm->name, f->d->name);
-                        return -1;
-                    }
-                }
-                if (f->mphase == 1) {
-                    if (JS_IsUndefined(f->mv)) {
-                        /* step 4.1.5's default, or a member that simply does not exist — which this engine
-                           spells as the undefined it already holds. */
-                        if (dm->dflt != IDL_DEFAULT_NONE) {
-                            f->mv = idl_default_value(ctx, dm);
-                            if (JS_IsException(f->mv)) { f->mv = JS_UNDEFINED; return -1; }
-                        }
-                    } else if (concolic_is(f->mv)) {
-                        /* crosses as itself, exactly as an argument of unknown external input does */
-                    } else if (dm->type == IDL_SEQUENCE_STRING_OR_DICT) {
-                        if (!JS_IsObject(f->mv)) {
-                            JS_ThrowTypeError(ctx, "member %s of dictionary %s is not a sequence",
-                                              dm->name, f->d->name);
-                            return -1;
-                        }
-                        if (idl_conv_push(ctx, w, frames, frames_cap, f->mv, dm->dict) < 0) return -1;
-                        pushed = true;
-                        break;
-                    } else if (dm->type == IDL_DOMSTRING || dm->type == IDL_DOMSTRING_NULLABLE) {
-                        /* `DOMString?`: null is the IDL null and never the four characters "null". */
-                        if (!(dm->type == IDL_DOMSTRING_NULLABLE && JS_IsNull(f->mv))) {
-                            JSValue str = JS_UNDEFINED;
-
-                            r = step_tostring_run(ctx, hdr, f->mv, in, &str, out_cb, out_argc);
-                            in = JS_UNDEFINED;
-                            if (r > 0) return r;
-                            if (r < 0) return -1;
-                            JS_FreeValue(ctx, f->mv);
-                            f->mv = str;
-                        }
-                    } else {
-                        DFAIL("a dictionary reached through a sequence declared a member type this conversion "
-                              "does not perform — it converts DOMString, DOMString? and another "
-                              "`sequence<(DOMString or D)>`, which is what HTML §8.6.3's dictionaries are made "
-                              "of. Build the missing conversion here; placing the value unconverted would hand "
-                              "the component the page's own object");
-                        JS_ThrowTypeError(ctx, "dictionary member %s has a type this engine cannot convert",
-                                          dm->name);
-                        return -1;
-                    }
-                    f->mphase = 2;
-                }
-                DCHECK(f->mphase == 2, "a nested dictionary member resumed at a phase it never parks in");
-                JS_SetPropertyStr(ctx, f->eout, dm->name, f->mv);
-                f->mv = JS_UNDEFINED;
-                f->mi++;
-                f->mphase = 0;
-            }
-            if (pushed) continue;
-            JS_SetPropertyUint32(ctx, f->list, f->n++, f->eout);
-            f->eout = JS_UNDEFINED;
-            JS_FreeValue(ctx, f->esrc);
-            f->esrc = JS_UNDEFINED;
-            f->phase = IDL_CONV_PULL;
+        /* §3.2.25 over `(DOMString or D)`: null and undefined take the dictionary arm (step 4) and so does
+           any Object (step 10); everything else reaches step 12's string arm. */
+        if (JS_IsObject(f->cur.value) || JS_IsNull(f->cur.value) || JS_IsUndefined(f->cur.value)) {
+            if (idl_level_start_decl(ctx, &f->lvl, f->cur.value, f->d) < 0) return -1;
+            f->phase = IDL_CONV_MEMBERS;
+            return 0;
         }
+        f->phase = IDL_CONV_STRING;
+        return 0;
     }
+    DCHECK(f->phase == IDL_CONV_STRING, "a sequence frame resumed at a phase it never parks in");
+    {
+        JSValue str = JS_UNDEFINED;
+
+        r = step_tostring_run(ctx, hdr, f->cur.value, in, &str, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        JS_SetPropertyUint32(ctx, f->list, f->n++, str);
+        f->phase = IDL_CONV_PULL;
+    }
+    return 0;
 }
 
 /* ---- `? GetMethod(V, %Symbol.iterator%)`: THE ARM, AS A REQUEST -------------------------------------------
@@ -1635,8 +1673,8 @@ static int idl_conv_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvF
  * @@iterator itself would perform the property access twice for one conversion, which a Proxy `get` trap
  * counts and an accessor can answer differently the second time. iter_cursor_init_from_method is that second
  * entry, and it is why the method is never held on this state across a park: it is consumed on the entry that
- * completes the read. */
-enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
+ * completes the read. Its phases (IDL_UNI_ASK and the two arms) are declared with the LEVEL above, because a
+ * level starts holding one and the level machinery stands before this. */
 
 /* Resolve the arm at `v`: `flat_arm` (there is no @@iterator) or `seq_arm` (there is, with this machine's
    cursor already planted on the method the page gave). §3.2.25 step 2's null arm is the CALLER's — it runs
@@ -1648,7 +1686,7 @@ enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
    `*pin` is the request answer on the way in and is CLEARED when it was consumed, because a resume that lands
    here on its way back INTO the sequence still has to hand that answer to the cursor. Returns >0 (the caller
    returns it), 0 with *pout set, or -1 with a throw live. */
-static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, uint8_t *phase, JSValueConst v,
+static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, uint8_t *phase, JSValueConst v,
                              JSValue *pin, IdlArgType *pout, IdlArgType seq_arm, IdlArgType flat_arm,
                              JSValue **out_cb, int *out_argc)
 {
@@ -1718,7 +1756,7 @@ static int idl_bytestring_check(JSContext *ctx, JSValueConst str);
 /* THE NAME A DIAGNOSTIC USES. An algorithm's dictionary has an IDL identifier; an argument's is an anonymous
    member list (the declaration passes the bare array), so it answers with what the page can see instead. It is
    never a hole a `%s` would print as "(null)". */
-static const char *idl_dict_where(const IdlDictWalk *w)
+static const char *idl_dict_where(const IdlDictLevel *w)
 {
     return w->name ? w->name : "the dictionary argument";
 }
@@ -1731,10 +1769,6 @@ int idl_dict_walk_start(JSContext *ctx, IdlDictWalk *w, JSValueConst src,
     DCHECK(!w->started, "a §3.2.17 dictionary conversion was started while one was already in flight on this "
                         "walk — a host converts one dictionary at a time and TAKES it before starting the "
                         "next, so this is a walk whose previous conversion was never collected");
-    DCHECK(members != NULL && atoms != NULL && n > 0,
-           "a §3.2.17 dictionary conversion was started with no member list or no interned names — the atoms "
-           "must outlive the suspension between a member read's two halves, which is why they are interned at "
-           "declaration (idl_dict_declare) and never made per read");
     /* §3.2.17 (ES-to-IDL list) STEP 1 IS THE CALLER'S, and it is asserted rather than performed because the two
        entries throw it in two different places: the argument path at the position it is converting, an
        algorithm wherever its own branch decided this value is a dictionary at all. Undefined and null are LEGAL
@@ -1753,44 +1787,30 @@ int idl_dict_walk_start(JSContext *ctx, IdlDictWalk *w, JSValueConst src,
            "embeds this walk is what has to be sized for it");
     DCHECK(frames != NULL || frames_cap == 0, "a nested-conversion depth was declared with no frames behind it");
     (void)frames; (void)frames_cap;   /* the frames are the RUN's, and both are read only by the asserts above */
-    /* THE STATE IS COMPLETE BEFORE THE FIRST OPERATION THAT CAN THROW. `out` is the only allocation here, and
-       everything the walk owns is placed before it — so a failure to mint it tears down through the same
-       `visit`/`clear` that would have named the rest, and leaves nothing half-adopted. */
-    w->members = members;
-    w->atoms   = atoms;
-    w->name    = name;
-    w->n       = n;
-    w->iface   = iface;
-    w->narrow  = narrow;
-    w->mi      = 0;
-    w->mphase  = 0;
-    w->mv      = JS_UNDEFINED;
-    w->seq_list = JS_UNDEFINED;
-    w->seq_n   = 0;
-    w->seq_phase = 0;
-    w->uni_phase = IDL_UNI_ASK;
+    /* LEVEL ZERO IS STARTED BY THE SAME FUNCTION EVERY PUSHED LEVEL IS. What a host states that a pushed level
+       cannot — the dictionary's identifier, and the declaration-wide §3.2.15 class and narrowing — is passed
+       here; everything else is one statement, so the bottom of the stack and the rest of it cannot drift. */
     w->conv_sp = 0;
-    iter_cursor_init(&w->seq);
-    w->src = JS_DupValue(ctx, src);
-    w->out = JS_NewObject(ctx);                                          /* step 2's idlDict */
-    if (JS_IsException(w->out)) {
-        w->out = JS_UNDEFINED;
-        JS_FreeValue(ctx, w->src);
-        w->src = JS_UNDEFINED;
+    if (idl_level_start(ctx, &w->lvl, src, members, n, atoms, name, iface, narrow) < 0)
         return -1;
-    }
     w->started = 1;
     return 0;
 }
 
-int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap,
-                      JSValue in, JSValue **out_cb, int *out_argc)
+/* DRIVE THE LEVEL ON TOP one re-entry's worth — WEB IDL §3.2.17 Dictionary types (ES-to-IDL list) step 4.1's
+   member loop, "For each dictionary member member declared on dictionary, in lexicographical order", and THE
+   ONLY COPY OF IT. Level zero and every pushed level run this same loop, which is what makes a nested
+   dictionary the same section again rather than a weaker restatement of it.
+   Returns >0 (the caller returns it — parked inside a member's [[Get]] or inside one member's own coercion),
+   0 when the level either PUSHED another (`*pushed`) or reached its own step 5, or -1 with a throw live.
+   `in` is the request answer and is CONSUMED. */
+static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlConvFrame *frames,
+                         int frames_cap, JSValue in, bool *pushed, JSValue **out_cb, int *out_argc)
 {
+    IdlDictLevel *w = idl_level_at(walk, frames, walk->conv_sp);
     int r;
 
-    DCHECK(w->started, "a §3.2.17 dictionary conversion was driven with nothing in flight — the walk is started "
-                       "once and driven until it answers 0, and a resume that lost the start would read member "
-                       "zero of a dictionary with no source and no object to place it on");
+    *pushed = false;
     while (w->mi < w->n) {
         const IdlDictMember *dm = &w->members[w->mi];
         IdlArgType mt = dm->type;
@@ -1818,8 +1838,7 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
                 return -1;
             }
         }
-        DCHECK(mt != IDL_DICT, "a dictionary member was declared as a dictionary — the conversion "
-                               "cursor is per-argument, so a nested one would read the outer's names");
+        if (w->mphase == 2) goto place;
         /* AN OVERLOAD SPLIT IS NOT A TYPE A MEMBER CAN HAVE. §3.6 resolves between two ENTRIES of an
            effective overload set at an ARGUMENT INDEX; a dictionary member has no entries and no
            index, so a member declared this way names a decision there is nothing to decide. Asserted
@@ -1883,32 +1902,71 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
             if (r > 0) return r;
             if (r < 0) return -1;
         }
-        if (mt == IDL_SEQUENCE_STRING_OR_DICT) {
-            /* §3.2.21 whose element type is §3.2.25's `(DOMString or D)` — the conversion that NESTS,
-               driven from here as a stack of cursors so a resume comes back to the element it was on
-               at the depth it was at. A value that is not an Object is a TypeError before anything is
-               read, exactly as it is for every other sequence: the check is on the TYPE and not on
-               iterability. */
-            JSValue seq = JS_UNDEFINED;
+        if (idl_type_pushes_level(mt)) {
+            /* §3.2.17 step 4.1.4.1 CONVERTS A MEMBER BY ITS OWN DECLARED TYPE — "Let idlMemberValue be the
+               result of converting jsMemberValue to an IDL value whose type is the type member is declared to
+               be of" — and three declared types name a conversion that IS this section again over a different
+               member list. Each PUSHES a level and returns to the driver, which runs the new top; that level's
+               own step 5 comes back here at `mphase` 2 with the converted value already in `mv`, so neither the
+               read nor the conversion re-runs.
+               THE PREDICATE IS THE ONE idl_members_depth COUNTED WITH, which is the whole of why the frame this
+               pushes is guaranteed to be there: a type pushed against a budget that did not count it is
+               idl_conv_push's CHECK, and the two lists that would have to agree do not exist.
+               `in` CANNOT BE LIVE HERE and is released rather than reasoned about: the only arm a live request
+               answer reaches is the one below step 4.1.2's no-object read, and that member's value is undefined,
+               which the absent-member rewrite above has already turned into IDL_ANY. */
+            IdlConvFrame *f;
 
-            if (w->conv_sp == 0) {
+            DCHECK(dm->dict != NULL,
+                   "a member whose declared type pushes a §3.2.17 level named no dictionary for it — the "
+                   "declaration is what the pushed level reads its members from");
+            if (mt == IDL_DICT_NULLABLE && JS_IsNull(w->mv)) {
+                /* §3.2.20 Nullable types — T? step 3: "Otherwise, if V is null or undefined, then return the
+                   IDL nullable type T? value null". The IDL null runs none of the page's code and is placed as
+                   itself — never a dictionary carrying every default, which is what §3.2.17's own step 1
+                   ("If jsDict is not an Object and jsDict is neither undefined nor null, then throw a
+                   TypeError") makes of a null the UN-nullable type is handed. Those are two different values
+                   and a page distinguishes them. (undefined never reaches here: for a dictionary member it IS
+                   absent, so step 4.1.5's default or step 4.1.6's TypeError answered it above.) */
+                JS_FreeValue(ctx, in);
+                in = JS_UNDEFINED;
+            } else if (mt == IDL_SEQUENCE_STRING_OR_DICT) {
+                /* §3.2.21 whose element type is §3.2.25's `(DOMString or D)`. A value that is not an Object is
+                   a TypeError before anything is read, exactly as it is for every other sequence: the check is
+                   on the TYPE and not on iterability. */
                 if (!JS_IsObject(w->mv)) {
                     JS_FreeValue(ctx, in);
                     JS_ThrowTypeError(ctx, "member `%s` of %s is not a sequence", dm->name,
-                                  idl_dict_where(w));
+                                      idl_dict_where(w));
                     return -1;
                 }
-                if (idl_conv_push(ctx, w, frames, frames_cap, w->mv, dm->dict) < 0) {
+                JS_FreeValue(ctx, in);
+                f = idl_conv_push(ctx, walk, frames, frames_cap, IDL_FRAME_SEQUENCE);
+                iter_cursor_init(&f->cur);
+                f->d = dm->dict;
+                f->src = JS_DupValue(ctx, w->mv);
+                f->list = JS_NewArray(ctx);
+                if (JS_IsException(f->list)) { f->list = JS_UNDEFINED; return -1; }
+                *pushed = true;
+                return 0;
+            } else {
+                /* §3.2.17 STEP 1, AT A MEMBER: "If jsDict is not an Object and jsDict is neither undefined nor
+                   null, then throw a TypeError". undefined never reaches here, and a `D?` member's null was
+                   answered above — so what is left is an Object, which reads its members; a null under the
+                   UN-nullable type, which reads NOTHING and reaches every default and every `required` refusal
+                   through step 4.1.2 in the same loop; and everything else, which is that step's TypeError. */
+                if (!JS_IsObject(w->mv) && !JS_IsNull(w->mv)) {
                     JS_FreeValue(ctx, in);
+                    JS_ThrowTypeError(ctx, "member `%s` of %s is neither an object nor null", dm->name,
+                                      idl_dict_where(w));
                     return -1;
                 }
+                JS_FreeValue(ctx, in);
+                f = idl_conv_push(ctx, walk, frames, frames_cap, IDL_FRAME_DICT);
+                if (idl_level_start_decl(ctx, &f->lvl, w->mv, dm->dict) < 0) return -1;
+                *pushed = true;
+                return 0;
             }
-            r = idl_conv_run(ctx, hdr, w, frames, frames_cap, in, &seq, out_cb, out_argc);
-            in = JS_UNDEFINED;
-            if (r > 0) return r;   /* parked INSIDE the page's iterator, at whatever depth */
-            if (r < 0) return -1;
-            JS_FreeValue(ctx, w->mv);
-            w->mv = seq;
         }
         else if (mt == IDL_SEQUENCE_DOMSTRING || mt == IDL_SEQUENCE_INTERFACE ||
                  mt == IDL_SEQUENCE_OBJECT || mt == IDL_SEQUENCE_DOUBLE ||
@@ -2131,6 +2189,11 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
                     return -1;
             }
         }
+        /* THE VALUE IS CONVERTED AND THE MEMBER IS OWED ONLY ITS PLACE — step 4.1.4.2's "Set idlDict[key] to
+           idlMemberValue". It is a phase of its own because a PUSHED level returns to exactly here: its step 5
+           writes `mv` and this byte, and neither the read nor the conversion may run again. */
+        w->mphase = 2;
+    place:
         JS_SetPropertyStr(ctx, w->out, dm->name, w->mv);
         w->mv = JS_UNDEFINED;
         w->mphase = 0;
@@ -2140,9 +2203,77 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
         w->mi++;
     }
     JS_FreeValue(ctx, in);
-    /* STEP 5: the whole dictionary is read. The walk keeps `out` until the host TAKES it, so a host that parks
-       between the last member and its own next stage still owns exactly one reference to it. */
+    /* STEP 5: this level's whole dictionary is read. The level keeps `out` until its pop hands it to the member
+       that pushed it — or, for level zero, until the host TAKES it, so a host that parks between the last member
+       and its own next stage still owns exactly one reference to it. */
     return 0;
+}
+
+/* WEB IDL §3.2.17 OVER A STACK OF LEVELS — the driver, and the whole of what it decides is WHICH level runs
+   next and what happens when one reaches its step 5.
+ *
+ * There are exactly two things on this stack: a LEVEL, which the one member loop runs, and a SEQUENCE FRAME
+ * BETWEEN ELEMENTS, which is §3.2.21.1's repeat loop pulling the next element and resolving §3.2.25's arm for
+ * it. A sequence frame that has entered an element's dictionary is a level like any other, which is why the
+ * member loop needs no notion of what pushed it. */
+int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap,
+                      JSValue in, JSValue **out_cb, int *out_argc)
+{
+    int r;
+
+    DCHECK(w->started, "a §3.2.17 dictionary conversion was driven with nothing in flight — the walk is started "
+                       "once and driven until it answers 0, and a resume that lost the start would read member "
+                       "zero of a dictionary with no source and no object to place it on");
+    DCHECK(frames != NULL || w->conv_sp == 0,
+           "a §3.2.17 conversion resumed with a level pushed and no frame block to find it in — the frames are "
+           "the HOST's and are re-derived from its layout on every entry, so this is a host that answered "
+           "differently across a park");
+    for (;;) {
+        IdlConvFrame *f = w->conv_sp ? &frames[w->conv_sp - 1] : NULL;
+        bool pushed;
+
+        if (f && f->kind == IDL_FRAME_SEQUENCE && f->phase != IDL_CONV_MEMBERS) {
+            r = idl_conv_seq_run(ctx, hdr, w, frames, in, out_cb, out_argc);
+            in = JS_UNDEFINED;
+            if (r > 0) return r;   /* parked INSIDE the page's iterator, at whatever depth */
+            if (r < 0) return -1;
+            continue;
+        }
+        r = idl_level_run(ctx, hdr, w, frames, frames_cap, in, &pushed, out_cb, out_argc);
+        in = JS_UNDEFINED;
+        if (r > 0) return r;       /* parked ON A MEMBER's read or its own coercion, at whatever depth */
+        if (r < 0) return -1;
+        if (pushed) continue;      /* the new top runs next; this level resumes at its member's `mphase` 2 */
+        /* THE LEVEL ON TOP REACHED ITS OWN STEP 5, and where its dictionary goes is the ONE thing the two kinds
+           of frame differ in. */
+        if (w->conv_sp == 0) return 0;
+        f = &frames[w->conv_sp - 1];
+        if (f->kind == IDL_FRAME_SEQUENCE) {
+            /* §3.2.21.1 step 3.3's element conversion is done: the element joins the list and the cursor pulls
+               the next one. The level is CLEARED rather than left standing, because the next element STARTS one
+               on the same slot and planting a cursor over a loaded one drops what it holds. */
+            JS_SetPropertyUint32(ctx, f->list, f->n++, f->lvl.out);
+            f->lvl.out = JS_UNDEFINED;
+            idl_level_clear(ctx, &f->lvl);
+            f->phase = IDL_CONV_PULL;
+            continue;
+        }
+        {   /* A DICTIONARY-VALUED MEMBER'S OWN §3.2.17 IS DONE — step 4.1.4.1's idlMemberValue, which the level
+               below places under step 4.1.4.2 without re-reading or re-converting anything. */
+            JSValue done = f->lvl.out;
+            IdlDictLevel *p;
+
+            f->lvl.out = JS_UNDEFINED;
+            idl_conv_pop(ctx, w, frames);
+            p = idl_level_at(w, frames, w->conv_sp);
+            DCHECK(p->mphase == 1,
+                   "a nested dictionary finished under a level that was not converting a member — a level is "
+                   "pushed from exactly one place, and this is not where it returns to");
+            JS_FreeValue(ctx, p->mv);
+            p->mv = done;
+            p->mphase = 2;
+        }
+    }
 }
 
 JSValue idl_dict_walk_take(JSContext *ctx, IdlDictWalk *w)
@@ -2150,17 +2281,17 @@ JSValue idl_dict_walk_take(JSContext *ctx, IdlDictWalk *w)
     JSValue out;
 
     DCHECK(w->started, "a §3.2.17 dictionary was taken from a walk that never started one");
-    DCHECK(w->mi == w->n && w->mphase == 0,
+    DCHECK(w->lvl.mi == w->lvl.n && w->lvl.mphase == 0,
            "a §3.2.17 dictionary was taken HALF-READ. Its unread members are absent on the object, which is "
            "indistinguishable from members the page did not write — so the algorithm that receives it would "
            "read the walk's progress as the page's data. Take it only on idl_dict_walk_run's 0 edge");
-    DCHECK(w->conv_sp == 0, "a §3.2.17 dictionary was taken with a nested sequence conversion still in flight");
-    out = w->out;
-    w->out = JS_UNDEFINED;
-    JS_FreeValue(ctx, w->src);
-    w->src = JS_UNDEFINED;
+    DCHECK(w->conv_sp == 0, "a §3.2.17 dictionary was taken with a nested conversion still in flight");
+    out = w->lvl.out;
+    w->lvl.out = JS_UNDEFINED;
+    JS_FreeValue(ctx, w->lvl.src);
+    w->lvl.src = JS_UNDEFINED;
     w->started = 0;
-    w->mi = 0;
+    w->lvl.mi = 0;
     return out;
 }
 
@@ -2168,11 +2299,7 @@ void idl_dict_walk_visit(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, i
 {
     int i;
 
-    v->val(ctx, &w->src);
-    v->val(ctx, &w->out);
-    v->val(ctx, &w->mv);
-    v->val(ctx, &w->seq_list);
-    iter_cursor_visit(ctx, &w->seq, v);
+    idl_level_visit(ctx, &w->lvl, v);
     DCHECK(frames != NULL || frames_cap == 0,
            "a walk's frames were visited through a null block with a non-zero capacity — the two are one "
            "statement of the host's layout and a `visit` that took only the count would drop what a live frame "
@@ -2188,20 +2315,20 @@ void idl_dict_walk_visit(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, i
    of a dictionary nobody is converting. */
 static void idl_dict_walk_reset_cursors(IdlDictWalk *w)
 {
-    iter_cursor_init(&w->seq);
-    w->seq_n = 0;
-    w->seq_phase = 0;
-    w->uni_phase = IDL_UNI_ASK;
+    iter_cursor_init(&w->lvl.seq);
+    w->lvl.seq_n = 0;
+    w->lvl.seq_phase = 0;
+    w->lvl.uni_phase = IDL_UNI_ASK;
     w->conv_sp = 0;
-    w->mi = 0;
-    w->mphase = 0;
+    w->lvl.mi = 0;
+    w->lvl.mphase = 0;
     w->started = 0;
 }
 
 void idl_dict_walk_clear(JSContext *ctx, IdlDictWalk *w, IdlConvFrame *frames, int frames_cap)
 {
     idl_dict_walk_visit(ctx, w, frames, frames_cap, JS_StepFreeVisitor());
-    w->src = w->out = w->mv = w->seq_list = JS_UNDEFINED;
+    w->lvl.src = w->lvl.out = w->lvl.mv = w->lvl.seq_list = JS_UNDEFINED;
     idl_dict_walk_reset_cursors(w);
 }
 
@@ -3119,7 +3246,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 *slot = JS_NULL;
                 goto placed;
             }
-            r = idl_union_seq_arm(ctx, &s->hdr, &s->dw, &s->dw.uni_phase, a, &cb_result, &t,
+            r = idl_union_seq_arm(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a, &cb_result, &t,
                                   IDL_SEQUENCE_DOMSTRING, IDL_DOMSTRING, out_cb, out_argc);
             if (r > 0) return r;   /* parked ON THE ARM's read; the resume finds the arm already chosen */
             if (r < 0) return JS_STEP_ABRUPT;
@@ -3129,7 +3256,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            Resolved AFTER the concolic pass-through above for the reason every union here is: unknown external
            input IS an object, and asking it for @@iterator would read a property off an attacker's value. */
         if (t == IDL_DOUBLE_OR_SEQUENCE) {
-            r = idl_union_seq_arm(ctx, &s->hdr, &s->dw, &s->dw.uni_phase, a, &cb_result, &t,
+            r = idl_union_seq_arm(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a, &cb_result, &t,
                                   IDL_SEQUENCE_DOUBLE, IDL_DOUBLE, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
@@ -3169,7 +3296,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    position PARKS here exactly as a `(T or sequence<T>)` union does. The phase byte is this
                    member's own (ovl_phase) rather than the union's, because the dictionary arm's member reads
                    run while this answer is still live and they reset the union's. */
-                r = idl_union_seq_arm(ctx, &s->hdr, &s->dw, &s->ovl_phase, a, &cb_result, &t,
+                r = idl_union_seq_arm(ctx, &s->hdr, &s->dw.lvl, &s->ovl_phase, a, &cb_result, &t,
                                       IDL_SEQUENCE_OBJECT, IDL_DICT, out_cb, out_argc);
                 if (r > 0) return r;   /* parked ON THE OVERLOAD's read; the resume finds it already chosen */
                 if (r < 0) return JS_STEP_ABRUPT;
@@ -3345,28 +3472,28 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
                 return JS_STEP_ABRUPT;
             }
-            if (s->dw.seq_phase == 0) {
-                s->dw.seq_list = JS_NewArray(ctx);
-                if (JS_IsException(s->dw.seq_list)) return JS_STEP_ABRUPT;
-                iter_cursor_init(&s->dw.seq);
-                s->dw.seq_phase = 1;
+            if (s->dw.lvl.seq_phase == 0) {
+                s->dw.lvl.seq_list = JS_NewArray(ctx);
+                if (JS_IsException(s->dw.lvl.seq_list)) return JS_STEP_ABRUPT;
+                iter_cursor_init(&s->dw.lvl.seq);
+                s->dw.lvl.seq_phase = 1;
             }
             for (;;) {
-                if (s->dw.seq_phase == 1) {
-                    r = iter_cursor_run(ctx, &s->hdr, &s->dw.seq, a, cb_result, out_cb, out_argc);
+                if (s->dw.lvl.seq_phase == 1) {
+                    r = iter_cursor_run(ctx, &s->hdr, &s->dw.lvl.seq, a, cb_result, out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                     if (r < 0) return JS_STEP_ABRUPT;
-                    if (s->dw.seq.done) break;
+                    if (s->dw.lvl.seq.done) break;
                     /* §3.2.13's `object`: an Object crosses as ITSELF and anything else is a TypeError. Like
                        the brand test below it runs none of the page's code, so the cursor's next pull follows
                        it in the same step. */
                     if (t == IDL_SEQUENCE_OBJECT) {
-                        if (!JS_IsObject(s->dw.seq.value)) {
+                        if (!JS_IsObject(s->dw.lvl.seq.value)) {
                             JS_ThrowTypeError(ctx, "an element of argument %d is not an object", s->i + 1);
                             return JS_STEP_ABRUPT;
                         }
-                        JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, JS_DupValue(ctx, s->dw.seq.value));
+                        JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, JS_DupValue(ctx, s->dw.lvl.seq.value));
                         continue;
                     }
                     /* §3.2.15's ELEMENT CONVERSION — the brand test, which runs none of the page's code, so
@@ -3376,12 +3503,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                                "an interface-sequence argument was declared with no interface to brand against "
                                "— idl_iface_brand (a class) or idl_arg_iface (a predicate and the identifier) "
                                "is the other half of that type");
-                        if (!idl_arg_implements(ctx, m, ti, s->dw.seq.value)) {
+                        if (!idl_arg_implements(ctx, m, ti, s->dw.lvl.seq.value)) {
                             JS_ThrowTypeError(ctx, "an element of argument %d does not implement %s",
                                               s->i + 1, idl_arg_iface_subject(m, ti));
                             return JS_STEP_ABRUPT;
                         }
-                        JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, JS_DupValue(ctx, s->dw.seq.value));
+                        JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, JS_DupValue(ctx, s->dw.lvl.seq.value));
                         continue;
                     }
                     /* `BlobPart` is `(BufferSource or Blob or USVString)`, and its rule is a BRAND test: a
@@ -3390,8 +3517,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                        IT IS THE BLOBPART TYPE'S AND NOT THE LOOP'S: a `sequence<DOMString>` holding a Blob has
                        one element type and it is a string, so that element ToStrings to "[object Blob]" rather
                        than crossing as an interface the declaration never named. */
-                    if (t == IDL_SEQUENCE_BLOBPART && blob_is(s->dw.seq.value)) {
-                        JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, JS_DupValue(ctx, s->dw.seq.value));
+                    if (t == IDL_SEQUENCE_BLOBPART && blob_is(s->dw.lvl.seq.value)) {
+                        JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, JS_DupValue(ctx, s->dw.lvl.seq.value));
                         continue;
                     }
                     /* THE BUFFERSOURCE ARM IS SPLIT OUT FROM THE BLOB ARM BECAUSE §3.2.25 DOES NOT HAND BACK
@@ -3400,16 +3527,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                        on this element, refusals included. A Blob is not a buffer source and must not be asked
                        either question. */
                     if (t == IDL_SEQUENCE_BLOBPART &&
-                        (JS_IsArrayBuffer(s->dw.seq.value) || JS_GetTypedArrayType(s->dw.seq.value) >= 0 ||
-                         JS_IsDataView(s->dw.seq.value))) {
-                        if (idl_buffer_source_refuse(ctx, s->dw.seq.value, "BlobPart",
+                        (JS_IsArrayBuffer(s->dw.lvl.seq.value) || JS_GetTypedArrayType(s->dw.lvl.seq.value) >= 0 ||
+                         JS_IsDataView(s->dw.lvl.seq.value))) {
+                        if (idl_buffer_source_refuse(ctx, s->dw.lvl.seq.value, "BlobPart",
                                                      /* §4.2 BufferSource carries neither §3.3 attribute */
                                                      false, false))
                             return JS_STEP_ABRUPT;
-                        JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, JS_DupValue(ctx, s->dw.seq.value));
+                        JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, JS_DupValue(ctx, s->dw.lvl.seq.value));
                         continue;
                     }
-                    s->dw.seq_phase = 2;
+                    s->dw.lvl.seq_phase = 2;
                 }
                 /* §3.2.7 `double` AS AN ELEMENT CONVERSION — ToNumber, which is the page's `valueOf`, so it
                    is a request and its own rest point exactly as the ToString arm below is. The RESTRICTED
@@ -3419,8 +3546,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 if (t == IDL_SEQUENCE_DOUBLE) {
                     double d = 0.0;
 
-                    DCHECK(s->dw.seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
-                    r = step_todouble_run(ctx, &s->hdr, s->dw.seq.value, cb_result, &d, out_cb, out_argc);
+                    DCHECK(s->dw.lvl.seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
+                    r = step_todouble_run(ctx, &s->hdr, s->dw.lvl.seq.value, cb_result, &d, out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;
                     if (r < 0) return JS_STEP_ABRUPT;
@@ -3428,14 +3555,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         JS_ThrowTypeError(ctx, "an element of argument %d is not a finite double", s->i + 1);
                         return JS_STEP_ABRUPT;
                     }
-                    JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, JS_NewFloat64(ctx, d));
-                    s->dw.seq_phase = 1;
+                    JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, JS_NewFloat64(ctx, d));
+                    s->dw.lvl.seq_phase = 1;
                     continue;
                 }
                 {
                     JSValue str = JS_UNDEFINED;
-                    DCHECK(s->dw.seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
-                    r = step_tostring_run(ctx, &s->hdr, s->dw.seq.value, cb_result, &str, out_cb, out_argc);
+                    DCHECK(s->dw.lvl.seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
+                    r = step_tostring_run(ctx, &s->hdr, s->dw.lvl.seq.value, cb_result, &str, out_cb, out_argc);
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;
                     if (r < 0) return JS_STEP_ABRUPT;
@@ -3464,16 +3591,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         JS_FreeValue(ctx, str);
                         return JS_STEP_ABRUPT;
                     }
-                    JS_SetPropertyUint32(ctx, s->dw.seq_list, s->dw.seq_n++, str);
-                    s->dw.seq_phase = 1;
+                    JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, str);
+                    s->dw.lvl.seq_phase = 1;
                 }
             }
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            *slot = s->dw.seq_list;
-            s->dw.seq_list = JS_UNDEFINED;
-            s->dw.seq_n = 0;
-            s->dw.seq_phase = 0;
+            *slot = s->dw.lvl.seq_list;
+            s->dw.lvl.seq_list = JS_UNDEFINED;
+            s->dw.lvl.seq_n = 0;
+            s->dw.lvl.seq_phase = 0;
             goto placed;
         }
 
@@ -3787,7 +3914,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            `(DOMString or sequence<DOMString>)` arguments in one member each ask their own value. §3.6 step
            12's overload arm is per position for the identical reason, and keeps its own byte because a
            dictionary it resolved to would otherwise clear the union's out from under it. */
-        s->dw.uni_phase = IDL_UNI_ASK;
+        s->dw.lvl.uni_phase = IDL_UNI_ASK;
         s->ovl_phase = IDL_UNI_ASK;
         s->i++;
     }

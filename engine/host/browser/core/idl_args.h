@@ -370,6 +370,28 @@ typedef enum {
        converted members, which it reads with an ordinary property get because nothing of the page's is on it.
        The members are declared beside the types — see idl_method_id_dict. */
     IDL_DICT,
+    /* `D?` WHERE D IS A DICTIONARY — §3.2.17 under §3.2.20 Nullable types — T?'s rule, and it is a row of its
+       own because a nullable dictionary's `null` is the IDL null where a PLAIN dictionary's is a dictionary
+       carrying every default. §3.2.20 step 3 is "Otherwise, if V is null or undefined, then return the IDL
+       nullable type T? value null" and step 4 is "Otherwise, return the result of converting V using the rules
+       for the inner IDL type T"; §3.2.17's own step 1 is "If jsDict is not an Object and jsDict is neither
+       undefined nor null, then throw a TypeError", so the un-nullable type ADMITS null and answers a
+       defaults-only dictionary for it. Those are two different values and a page distinguishes them.
+       Intersection Observer §2.3's `required DOMRectInit? rootBounds` is the member that declares one, and its
+       `required` is what makes the third state visible too: for a dictionary member `undefined` IS absent, so
+       §3.2.17 step 4.1.6 — "Otherwise, if jsMemberValue is undefined and member is required, then throw a
+       TypeError" — refuses `{}` and `{rootBounds: undefined}` alike, while `{rootBounds: null}` is the IDL null
+       and `{rootBounds: {}}` is a DOMRectInit whose four members are absent.
+       THE DICTIONARY IS NAMED BESIDE THE MEMBER (IdlDictMember::dict), exactly as IDL_DICT's nested form names
+       it and as a `sequence<(DOMString or D)>`'s union arm does — one statement of what D is, whether or not
+       the member admits null.
+       IT IS A DICTIONARY-MEMBER TYPE AND NOT YET AN ARGUMENT ONE, which is a narrowing and not an oversight:
+       no member in the platform declares `optional D? x` at a position, and the argument conversion's own
+       "an IDL argument was declared with a type this machine does not convert" is what a position declaring it
+       would reach — loud, and naming the type. What such a position would additionally need is
+       idl_type_is_dictionary's answer for it (§3.6's rule that an omitted DICTIONARY argument is not an absent
+       one), and that is a question about ARGUMENTS which this row, on a member, does not raise. */
+    IDL_DICT_NULLABLE,
     /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM, and its rule is what
        §2.7's "flatten" states: a value that is NOT an object IS the first declared member's boolean, and an
        object is read as an ordinary dictionary. Named for the rule rather than for the member, because the
@@ -545,6 +567,10 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     switch (t) {
     case IDL_ANY:
     case IDL_DICT:
+    /* `D?` asks the value the same nothing `D` does — §3.2.20's null test reads no property and §3.2.17 is a
+       bag of member READS, each a request like any other and each yielding another unknown. It is filed with
+       IDL_DICT and never with the unions above, whose ARM is a test of the value. */
+    case IDL_DICT_NULLABLE:
     /* A §3.6 LENGTH-DIFFERING SPLIT WHOSE TWO ENTRIES NEVER COEXIST AT ONE ARITY resolves from the argument
        count alone, so the conversion has already rewritten this position to the longer entry's number before
        any rule is asked — the only value the row itself describes is the dictionary at the shorter arity, and a
@@ -646,6 +672,32 @@ static inline bool idl_type_admits_enumeration(IdlArgType t)
     case IDL_ENUM:
     case IDL_ENUM_NULLABLE:
     case IDL_SEQUENCE_ENUM:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* WHICH DECLARED MEMBER TYPES PUSH A LEVEL onto §3.2.17's conversion stack — the ONE statement of it, because
+ * it is read by TWO things that must agree or the conversion crashes on a budget nobody was wrong about.
+ *
+ * The DEPTH (idl_members_depth) is what a host sizes its IdlConvFrame block from, and idl_dict_walk_start
+ * asserts the block against it; the member LOOP is what actually pushes. A type counted and not pushed wastes a
+ * frame, which nothing notices — and a type PUSHED and not COUNTED is a `CHECK` failure on the first push, of a
+ * budget the declaration computed as zero. That is exactly what a nested plain dictionary would have hit: the
+ * count was written for `sequence<(DOMString or D)>` alone and the loop grew a second pushing type, so the two
+ * lists would have drifted the moment either moved. Both readers ask THIS.
+ *
+ * Each of these names its dictionary beside the member (IdlDictMember::dict) — the union's second arm for the
+ * sequence, the member's own type for the other two — which is what makes the count a walk of the DECLARED type
+ * tree rather than of the page's data: the tree is finite and ends at its own leaves, so page data nesting
+ * deeper does not make the conversion deeper. */
+static inline bool idl_type_pushes_level(IdlArgType t)
+{
+    switch (t) {
+    case IDL_DICT:
+    case IDL_DICT_NULLABLE:
+    case IDL_SEQUENCE_STRING_OR_DICT:
         return true;
     default:
         return false;
@@ -771,23 +823,84 @@ typedef struct IdlDictDecl {
  * embeds it: the requests are issued through the HOST's JSStepHdr, and a walk holding one of its own would be a
  * second machine with a second identity for the driver to assert about. */
 
-/* ONE LEVEL of a `sequence<(DOMString or D)>`: the sequence's own iterator, and the D-dictionary the element it
- * is standing on is being converted as. A frame is pushed when a member of that dictionary is itself a sequence
- * of the same shape, so the machine parks at the element it is on AT WHATEVER DEPTH — which a C loop over any
- * of it could not, and which C recursion could not either, since a park has to be a RETURN. */
+/* ---- ONE LEVEL OF §3.2.17, AND THE STACK OF THEM ----------------------------------------------------------
+ *
+ * §3.2.17 CONVERTS A MEMBER BY ITS OWN DECLARED TYPE — step 4.1.4.1 is "Let idlMemberValue be the result of
+ * converting jsMemberValue to an IDL value whose type is the type member is declared to be of" — and that type
+ * may be ANOTHER DICTIONARY, at which point the same section runs again over a different member list while the
+ * outer one is still standing on the member that named it. So the conversion is a STACK OF LEVELS, and a level
+ * is everything the member loop reads: which list, where in it, and what is in flight on the member it is on.
+ *
+ * IT IS A LEVEL AND NOT A RECURSION because every rest point in it is the PAGE'S CODE — step 4.1.3.1's
+ * `? Get(jsDict, key)` is one accessor or Proxy trap away from a page loop, and so is each member's own
+ * coercion — and a park has to be a RETURN. C recursion would put the outer level's members in a C activation
+ * no snapshot can carry.
+ *
+ * THE LEVELS OF ONE WALK ARE ONE LOOP. This used to be two: idl_dict_walk_run's member loop and a SECOND,
+ * WEAKER one inside the sequence frames, whose arms were DOMString, DOMString? and another such sequence and
+ * which aborted on everything else — so `DOMRectInit`'s four `unrestricted double` members converted through
+ * one road and refused through the other. Two copies of one section is the dual system this engine forbids by
+ * name, and the seam between them is where its bugs were; there is one loop now and a level is what it runs on.
+ */
 typedef struct {
-    IterCursor  cur;        /* the sequence's iterator, over `src` */
-    JSValue     src;        /* the value being iterated (owned) */
-    JSValue     list;       /* the elements converted so far (owned) */
-    JSValue     esrc;       /* the element whose dictionary is being read (owned) */
-    JSValue     eout;       /* the object that element's converted members are placed on (owned) */
-    JSValue     mv;         /* one member's value between its read and its conversion (owned) */
-    const IdlDictDecl *d;   /* the element type's dictionary arm */
-    const JSAtom *atoms;    /* its member names, interned when the member was declared */
-    uint32_t    n;          /* how many elements `list` holds */
-    int         mi;         /* the member cursor */
-    uint8_t     phase;
-    uint8_t     mphase;     /* 0 = read the member, 1 = convert what was read, 2 = place it */
+    JSValue   src;      /* jsDict — step 4.1.3.1 reads from it; undefined or null is step 4.1.2's "no object" */
+    JSValue   out;      /* step 2's idlDict, as the object this engine represents one by (owned) */
+    const IdlDictMember *members;
+    const JSAtom        *atoms;   /* their names, interned when the dictionary was declared */
+    const char *name;   /* the dictionary's IDL identifier, for a diagnostic; NULL for an anonymous one */
+    int       n;
+    /* §3.2.15 Interface types' BRAND for this level's interface-typed members, and the narrowing a class id
+       cannot express — see idl_iface_brand / idl_iface_narrow. A member carrying its own (IdlDictMember::iface)
+       overrides it. Zero and NULL for a level with no interface-typed member, AND for every PUSHED level: a
+       nested dictionary is reached through a member and not through a declaration, so it has no declaration-wide
+       class to state and each of its interface-typed members names its own. The conversion asserts that rather
+       than reading past a missing one. */
+    JSClassID iface;
+    bool    (*narrow)(JSValueConst v);
+    int       mi;       /* THE RESUME POINT: the member being read */
+    /* 0 = read the member (step 4.1.3.1), 1 = convert what was read (step 4.1.4.1), 2 = place it. The third is
+       what a PUSHED level returns to: its own step 5 hands this level the converted dictionary, and the member
+       must then be placed without re-running the read or the conversion. */
+    uint8_t   mphase;
+    JSValue   mv;       /* the member's value between those phases (owned) */
+    /* §3.2.21 Sequences' cursor and the list it fills, for a member whose type is one. It is ALSO what the
+       argument machine uses for a sequence at an ARGUMENT position: Web IDL converts arguments strictly left to
+       right, so an argument's sequence and a dictionary member's are never in flight at once, and one cursor is
+       what makes that structural instead of a comment two copies could drift across. It is PER LEVEL because
+       two levels genuinely can have one in flight at the same time — an outer member's sequence is what pushed
+       the level whose own member is a second sequence. */
+    IterCursor seq;
+    JSValue    seq_list;
+    uint32_t   seq_n;
+    /* 0 = NOT STARTED, 1 = pull the next element, 2 = convert the one just pulled. "Not started" is a phase of
+       its own rather than a null list, because a zeroed state's JSValue is the INTEGER 0 and not JS_UNDEFINED —
+       JS_TAG_INT is 0 — so "have I built the list yet" read off the value is always "yes". */
+    uint8_t    seq_phase;
+    /* §3.2.25 Union types' arm for a `(DOMString or sequence<DOMString>)` member or argument, which is a resume
+       point because the decision is `? GetMethod(V, %Symbol.iterator%)` — the page's code. */
+    uint8_t    uni_phase;
+} IdlDictLevel;
+
+/* WHAT KIND OF THING A PUSHED FRAME IS CONVERTING — the two shapes a member's declared type can name that need
+   a level of their own, and the ONLY thing that differs between them is what happens when that level's step 5
+   is reached. A DICTIONARY frame's result is the member's value one level down; a SEQUENCE frame's result is
+   ONE ELEMENT, which joins the list and is followed by the cursor's next pull. */
+enum { IDL_FRAME_DICT = 0, IDL_FRAME_SEQUENCE };
+
+/* ONE PUSHED LEVEL. For IDL_FRAME_DICT that is the whole of it — `lvl` is the nested dictionary being read.
+ * For IDL_FRAME_SEQUENCE it is a `sequence<(DOMString or D)>`'s own iterator PLUS the D-dictionary the element
+ * it is standing on is being converted as, which is `lvl` again: §3.2.21.1 Creating a sequence from an iterable
+ * puts the element conversion INSIDE the repeat loop, so the element's own §3.2.17 is a level like any other
+ * and the frame parks at the element it is on AT WHATEVER DEPTH. */
+typedef struct {
+    IdlDictLevel lvl;       /* the dictionary this frame is converting — its own, or the element it stands on */
+    IterCursor  cur;        /* SEQUENCE only: the sequence's iterator, over `src` */
+    JSValue     src;        /* SEQUENCE only: the value being iterated (owned) */
+    JSValue     list;       /* SEQUENCE only: the elements converted so far (owned) */
+    const IdlDictDecl *d;   /* SEQUENCE only: the element type's dictionary arm */
+    uint32_t    n;          /* SEQUENCE only: how many elements `list` holds */
+    uint8_t     kind;       /* IDL_FRAME_DICT / IDL_FRAME_SEQUENCE */
+    uint8_t     phase;      /* SEQUENCE only */
 } IdlConvFrame;
 
 /* §3.2.17 IN FLIGHT — the whole of what a park has to carry, and nothing the host can re-derive.
@@ -804,35 +917,10 @@ typedef struct {
  * static. They are re-stated on the walk rather than re-read from a declaration because an ALGORITHM's
  * dictionary has no declaration to read from; that is the whole difference between the two entries. */
 typedef struct {
-    JSValue   src;      /* the value being converted (owned). Not an Object ⇒ every member is absent */
-    JSValue   out;      /* §3.2.17 step 2's idlDict, as the object this engine represents one by (owned) */
-    const IdlDictMember *members;
-    const JSAtom        *atoms;
-    const char *name;   /* the dictionary's IDL identifier, for a diagnostic; NULL for an anonymous one */
-    int       n;
-    /* §3.2.15 Interface types' BRAND for this dictionary's interface-typed members, and the narrowing a class id
-       cannot express — see idl_iface_brand / idl_iface_narrow. A member carrying its own (IdlDictMember::iface)
-       overrides it. Zero and NULL for a dictionary with no interface-typed member. */
-    JSClassID iface;
-    bool    (*narrow)(JSValueConst v);
-    int       mi;       /* THE RESUME POINT: the member being read */
-    uint8_t   mphase;   /* 0 = read the member, 1 = convert what was read. Both park, so a member needs two */
-    JSValue   mv;       /* the member's value between those two phases (owned) */
-    /* §3.2.21 Sequences' cursor and the list it fills, for a member whose type is one. It is ALSO what the
-       argument machine uses for a sequence at an ARGUMENT position: Web IDL converts arguments strictly left to
-       right, so an argument's sequence and a dictionary member's are never in flight at once, and one cursor is
-       what makes that structural instead of a comment two copies could drift across. */
-    IterCursor seq;
-    JSValue    seq_list;
-    uint32_t   seq_n;
-    /* 0 = NOT STARTED, 1 = pull the next element, 2 = convert the one just pulled. "Not started" is a phase of
-       its own rather than a null list, because a zeroed state's JSValue is the INTEGER 0 and not JS_UNDEFINED —
-       JS_TAG_INT is 0 — so "have I built the list yet" read off the value is always "yes". */
-    uint8_t    seq_phase;
-    /* §3.2.25 Union types' arm for a `(DOMString or sequence<DOMString>)` member or argument, which is a resume
-       point because the decision is `? GetMethod(V, %Symbol.iterator%)` — the page's code. */
-    uint8_t    uni_phase;
-    uint8_t    conv_sp;   /* how many IdlConvFrame frames are live; 0 = no nested conversion in flight */
+    /* LEVEL ZERO — the dictionary the host asked for. It is a field and not a special case: the member loop
+       runs on whichever level is on top, and this is the one at the bottom. */
+    IdlDictLevel lvl;
+    uint8_t    conv_sp;   /* how many IdlConvFrame frames are live; 0 = level zero is the one in flight */
     uint8_t    started;   /* the walk has a `src` and an `out`; 0 = nothing in flight, so a resume may start it */
 } IdlDictWalk;
 
@@ -856,8 +944,11 @@ const JSAtom *idl_dict_declare(JSContext *ctx, const IdlDictDecl *d);
  *
  * `frames`/`frames_cap` are the nested-conversion stack; a dictionary whose declared types nest needs at least
  * idl_members_depth of them and this asserts it, so a caller that passed none for a type that needs some crashes
- * at the start rather than at the depth. NULL/0 is right for a dictionary that declares no
- * `sequence<(DOMString or D)>` member, which is nearly all of them.
+ * at the start rather than at the depth. NULL/0 is right for a dictionary NONE of whose members declares a type
+ * that pushes a level — no nested dictionary (`D`, `D?`) and no `sequence<(DOMString or D)>` — which is nearly
+ * all of them. The two numbers are ONE STATEMENT: idl_members_depth counts exactly the member types the loop
+ * pushes for, both reading idl_type_pushes_level, so a type added to that predicate is counted and pushed at
+ * once rather than being pushed against a budget that never grew.
  * Returns 0, or -1 with a throw live (the object could not be minted). */
 int  idl_dict_walk_start(JSContext *ctx, IdlDictWalk *w, JSValueConst src,
                          const IdlDictMember *members, int n, const JSAtom *atoms, const char *name,
