@@ -461,6 +461,16 @@ function callSites(struct, name) {
 
 const sig = (s, from, to) => { let i = from; while (i < to && /\s/.test(s[i])) i++; return i; };
 
+/* ONE EXPRESSION OR TWO — ASKED OF THE STRUCTURE, NEVER OF THE TEXT. Once a span's whitespace is collapsed a
+   `;` is the only character left that can say it crossed a statement boundary, and three sites here asked that
+   of `code`, where a string, template or regexp literal's own characters are intact. `maskJS` blanks those
+   contents in `struct` for exactly this reason: a `;` inside a literal is a DATUM and cannot terminate
+   anything, so reading one as a boundary refuses a span that is one expression by construction. It refused
+   `first._park.join(";")` — a real destructuring source, in the corpus, over the ONE array whose absence this
+   project treats as a dropped frontier. Every caller already has the struct offsets, because the span was
+   DELIMITED on `struct` in the first place; only its TEXT comes from `code`. */
+const crossesStatement = (structSpan) => structSpan.includes(";");
+
 /* ---- what stands between a read and the `||` after it ------------------------------------------------------ */
 
 /* A `||` OR `??` FOLLOWING A READ IS NOT NECESSARILY THAT READ'S DEFAULT, AND THE TWO ARE OPPOSITE FACTS ABOUT
@@ -908,7 +918,8 @@ const cMatched = [];
  * So the WALK yields the fact — the primary expression's own normalized text — and each caller asks its own
  * question of it. `.text` is set wherever the walk completed a primary expression, decided negatives included,
  * and NOT where it stopped early (a string/template/regexp head, where nothing was normalized) or where the
- * span crossed a `;` and is therefore not one expression. */
+ * span crossed a `;` IN THE STRUCTURE and is therefore not one expression — a `;` inside a literal is a datum
+ * and terminates nothing, which is why that question is asked of `struct` and not of the text. */
 function receiverBefore(struct, code, dotAt, out) {
   let i = dotAt;
   while (i > 0 && /\s/.test(struct[i - 1])) i--;
@@ -958,14 +969,16 @@ function receiverBefore(struct, code, dotAt, out) {
   }
   const raw = code.slice(i, end).trim();
   const t = raw.replace(/\s+/g, "");
+  /* `t` has had ALL whitespace removed, so a `;` in the STRUCTURE of this span is the only thing left that can
+     say it is not one expression — see §crossesStatement for why the structure and not `t` is what is asked. */
+  const split = crossesStatement(struct.slice(i, end));
   if (out) {
     let st = i;
     while (st < end && /\s/.test(code[st])) st++;
     out.start = st;
-    /* `t` has had ALL whitespace removed, so the only way it is not one expression is a `;` inside it. */
-    if (!t.includes(";")) out.text = t;
+    if (!split) out.text = t;
   }
-  if (/^[A-Za-z_$]/.test(t)) return /^[^\s;]*$/.test(t) ? t : null;
+  if (/^[A-Za-z_$]/.test(t)) return split ? null : t;
   /* An ARRAY LITERAL head — `[...m.values()].filter(f).length` — is a computed collection and no record ever
      crossed a seam as one: a decided negative. */
   if (t[0] === "[") return "";
@@ -1994,7 +2007,8 @@ function scanJS(file, src) {
           else if (ch === "\n" && !d) { let k = e; while (k < struct.length && /\s/.test(struct[k])) k++; if (struct[k] !== "." && struct[k] !== "?") break; }
         }
         recv = code.slice(s, e).replace(/\s+/g, "");
-        if (!/^[A-Za-z_$][^\s;]*$/.test(recv)) recv = null;
+        /* The `;` is asked of the STRUCTURE this span was delimited on, never of its text — §crossesStatement. */
+        if (!/^[A-Za-z_$]/.test(recv) || crossesStatement(struct.slice(s, e))) recv = null;
       }
       if (recv === null) {
         const kw = /^(of|in)\b/.exec(struct.slice(afterOff));
@@ -2004,7 +2018,7 @@ function scanJS(file, src) {
           let e3 = e2;
           while (e3 < struct.length && e3 < (stop > 0 ? stop - 1 : struct.length) && struct[e3] !== ";") e3++;
           const t2 = code.slice(e2, e3).replace(/\s+/g, "");
-          if (/^[A-Za-z_$][^\s;]*$/.test(t2)) recv = t2;
+          if (/^[A-Za-z_$]/.test(t2) && !crossesStatement(struct.slice(e2, e3))) recv = t2;
         }
       }
       if (recv === null) {
