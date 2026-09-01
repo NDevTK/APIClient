@@ -2508,8 +2508,55 @@ function audit(argv, opts = {}) {
           if (!sx) continue;
           const wt = normTerm(sx.title);
           if (!wt) continue;
-          if ((c.quoted && normTerm(c.quoted) === wt) ||
-              c.words.slice(0, wt.split(" ").length).join(" ") === wt) {
+          /* THE LONGEST LEADING PHRASE WINS HERE TOO, WHICH IS THE ONE RULE CHECK (4) HAS THAT THIS LACKED.
+           * What stood here was `c.words.slice(0, wt.split(" ").length).join(" ") === wt` — a BARE PREFIX
+           * with no longest-match rule at all, so a SHORT title confirmed a citation whose author had
+           * written a LONGER one. Measured: HTML §7.4.1 is "Session history" and §7.4.1.1 is "Session
+           * history entries", so `§7.4.1's session history entries` was confirmed against §7.4.1 because
+           * that section's two-word title is a prefix of the three-word title the author actually stated.
+           * An OK-TITLED ENDS THE SITE, so this was not a visible wrong answer — it SUPPRESSED checks (3)
+           * and (4) on a citation neither had been allowed to read, which is the silent zero this file
+           * names everywhere else. Check (4) states the rule and the reason, and both apply unchanged: a
+           * prefix match inside a longer phrase reads a claim out of a sentence that merely contains one.
+           *
+           * AND ONLY THAT RULE IS IMPORTED — `claimIn`'s OTHER TWO FLOORS ARE DELIBERATELY NOT, WHICH IS A
+           * DECISION AND NOT AN OVERSIGHT, SO HERE IS THE REASON BEFORE SOMEONE "FINISHES" THE JOB. Reading
+           * this whole check through `claimIn` is the obvious next step; it was BUILT, MEASURED AND REFUSED,
+           * and the measurement is the argument. On the tree at the revision it was tried it turned 1746
+           * confirmations into 48 fresh MISATTRIBUTED claims, and the ones read were all CORRECT citations:
+           * `HTML §15.3.3 Flow content:` (check (2)'s OWN motivating example, three paragraphs up),
+           * `§4.10.19.6 Form submission attributes replaces`, `CSSOM §6.4 CSS Rules`, `Web IDL §3.9 legacy
+           * platform objects`, and — the case that settles it — `§7.4.1.1's session history entries`, the
+           * RIGHT half of the very pair this fix exists for. Two of `claimIn`'s rules are blind in ways that
+           * do not matter where it is used and matter enormously here: `delimited` requires the phrase to
+           * END A NAME and its terminator set holds no COLON and cannot see a POSSESSIVE before the words
+           * (`§N's Title` never matches), and the two-word floor drops one-word titles.
+           * THE REASON THAT IS FATAL HERE AND HARMLESS THERE IS THE DIRECTION EACH CHECK FAILS IN, and the
+           * two are opposite. Check (4) ACCUSES, so a phrase it fails to read is a finding not raised — it
+           * costs recall, which this file has repeatedly chosen to pay. Check (2) CONFIRMS, so a phrase it
+           * fails to read is a correct citation handed to the term check and reported as misattributed —
+           * a FALSE POSITIVE, which check (4)'s own comment calls the worst finding this tool can emit,
+           * because obeying it edits a correct citation into a wrong one. One reading cannot serve both
+           * questions: it would be decided by the stricter one and the cost would land, silently, on the
+           * looser. So the shared rule is the one that is direction-NEUTRAL — a longer title beats a
+           * shorter one whichever way the check points — and the floors stay where their direction is safe.
+           * A future attempt that wants one reader for both must first make `delimited` see a colon and a
+           * possessive; until then, widening this is a regression with a tidier shape. */
+          let confirms;
+          if (c.quoted) {
+            confirms = normTerm(c.quoted) === wt;
+          } else {
+            /* the longest leading phrase that titles ANY section of THIS standard — `wt` is one of them by
+             * construction, so this can only refuse when a strictly longer title also starts here. */
+            const ttk = titleToNo.get(k);
+            let longest = null;
+            for (let n = Math.min(maxTitleWords, c.words.length); n >= 1; n--) {
+              const p = c.words.slice(0, n).join(" ");
+              if (ttk.has(p)) { longest = p; break; }
+            }
+            confirms = longest !== null && longest === wt;
+          }
+          if (confirms) {
             verdict = { kind: "OK-TITLED" }; titledBy = wt;
             titledByQuote = !!(c.quoted && normTerm(c.quoted) === wt);
             break;
