@@ -1305,9 +1305,9 @@ static JSValue io_ctor_margin(JSContext *ctx, JSValueConst options, const char *
     uint32_t i;
     bool ok;
 
-    DCHECK(JS_IsString(v),
-           "an IntersectionObserverInit margin member reached §3.2.1 unconverted — §2.4 declares both "
-           "`DOMString` with a `= \"0px\"` default, so the conversion places a string on every path");
+    IDL_DCHECK_MEMBER(JS_IsString(v), v, name,
+                      "`DOMString` with a `= \"0px\"` default by Intersection Observer §2.4 The "
+                      "IntersectionObserverInit dictionary");
     s = JS_ToCStringLen(ctx, &len, v);
     CHECK(s != NULL, "a margin option's string could not be read");
     ok = io_parse_margin(s, len, parsed);
@@ -1371,10 +1371,13 @@ static int js_io_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         for (i = 0; i < nth; i++)
             JS_SetPropertyUint32(ctx, thresholds, i, JS_GetPropertyUint32(ctx, v, i));
     } else {
-        DCHECK(JS_IsNumber(v),
-               "IntersectionObserverInit.threshold reached §3.2.1 as neither a Number nor an Array — §2.4 "
-               "declares `(double or sequence<double>) threshold = 0` and IDL_DOUBLE_OR_SEQUENCE is what "
-               "resolves the arm, so a third shape means the type was not declared");
+        /* THE ARRAY ARM IS ALREADY EXCLUDED ABOVE, so what this asks about is the OTHER arm and the crossing:
+           IDL_DOUBLE_OR_SEQUENCE resolves §3.2.25 Union types' arm INSIDE the member loop, and the crossing
+           runs BEFORE that resolution — so an unknown `threshold` never reaches the union at all and arrives
+           here as neither of its two arms. */
+        IDL_DCHECK_MEMBER(JS_IsNumber(v), v, "threshold",
+                          "`(double or sequence<double>) threshold = 0` by Intersection Observer §2.4 The "
+                          "IntersectionObserverInit dictionary, whose arm IDL_DOUBLE_OR_SEQUENCE resolves");
         JS_SetPropertyUint32(ctx, thresholds, 0, JS_DupValue(ctx, v));
         nth = 1;
     }
@@ -1419,12 +1422,13 @@ static int js_io_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        objects. It is the CLAMPED value: step 11 exists to raise it and would have no effect at all otherwise,
        which is what makes this a reading of the text rather than a choice between two. */
     v = JS_GetPropertyStr(ctx, (JSValue)options, "delay");
-    DCHECK(JS_IsNumber(v), "IntersectionObserverInit.delay reached §3.2.1 unconverted — §2.4 declares it "
-                           "`long` with a `= 0` default");
+    IDL_DCHECK_MEMBER(JS_IsNumber(v), v, "delay",
+                      "`long` with a `= 0` default by Intersection Observer §2.4 The IntersectionObserverInit "
+                      "dictionary");
     JS_ToFloat64(ctx, &delay, v);
     JS_FreeValue(ctx, v);
-    /* THE READ IS idl_dict_bool AND NOT A BARE JS_ToBool, for the reason the `delay` DCHECK one line above
-       states in its own axis: §3.2.17's member loop crosses a concolic member as ITSELF, so what arrives here
+    /* THE READ IS idl_dict_bool AND NOT A BARE JS_ToBool, for the reason the `delay` refusal just above states
+       in its own axis: §3.2.17's member loop crosses a concolic member as ITSELF, so what arrives here
        for `{trackVisibility: <unknown>}` is unknown external input wearing an Object, and every Object is
        truthy. A local ToBoolean therefore did not read the member — it pinned it to `true`, deleted the world
        in which §3.2.8 step 1 answers false, and then clamped `delay` up to 100 in the one world left. The
@@ -1433,9 +1437,12 @@ static int js_io_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (track && delay < 100.0) delay = 100.0;                            /* step 11 */
 
     root = JS_GetPropertyStr(ctx, (JSValue)options, "root");
-    DCHECK(JS_IsNull(root) || node_of(root) != NULL,
-           "IntersectionObserverInit.root reached §3.2.1 as neither null nor a node — §2.4 declares it "
-           "`(Element or Document)? root = null` and the declared type is what refuses everything else");
+    /* THE BRAND ARM IS SKIPPED BY THE CROSSING EXACTLY AS THE NUMERIC ONE IS, so `{root: <unknown>}` reaches
+       here UNBRANDED — §3.2.15 Interface types' test never ran on it, which is why this cannot be read as the
+       declared type having refused something. */
+    IDL_DCHECK_MEMBER(JS_IsNull(root) || node_of(root) != NULL, root, "root",
+                      "`(Element or Document)? root = null` by Intersection Observer §2.4 The "
+                      "IntersectionObserverInit dictionary");
 
     proto = JS_GetClassProto(ctx, g_class);
     DCHECK(!JS_IsNull(proto), "an IntersectionObserver was constructed in a realm that never ran its install");

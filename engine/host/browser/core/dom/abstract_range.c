@@ -230,8 +230,14 @@ static JSValue js_static_range_ctor(JSContext *ctx, JSValueConst this_val, int a
     ec = idl_dict_get(ctx, init, "endContainer");
     sn = node_of(sc);
     en = node_of(ec);
-    DCHECK(sn != NULL && en != NULL, "StaticRangeInit's containers reached the body unconverted — the "
-                                     "dictionary's interface type is what makes them nodes");
+    /* TWO MEMBERS, TWO REFUSALS, because a joint one names neither: `sn == NULL` and `en == NULL` are separate
+       facts and the message that fires has to say which container it is about. Both are declared IDL_INTERFACE
+       and REQUIRED, so the only shapes that reach here are a branded node and an unknown the §3.2.17 member
+       loop crossed past the brand arm — everything else is §3.2.15's TypeError before this body is entered. */
+    IDL_DCHECK_MEMBER(sn != NULL, sc, "startContainer",
+                      "`required Node startContainer` by DOM §5.4 Interface StaticRange");
+    IDL_DCHECK_MEMBER(en != NULL, ec, "endContainer",
+                      "`required Node endContainer` by DOM §5.4 Interface StaticRange");
     /* STEP 1. A doctype or an Attr cannot be a boundary point's node. */
     if (sn->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE || sn->type == LXB_DOM_NODE_TYPE_ATTRIBUTE ||
         en->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE || en->type == LXB_DOM_NODE_TYPE_ATTRIBUTE) {

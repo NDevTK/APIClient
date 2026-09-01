@@ -7,6 +7,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_iter.h"
+#include "solver/concolic.h"   /* IDL_DCHECK_MEMBER asks whether a member CROSSED — see its comment below */
 
 /* A member's body, run once its declared arguments are real strings. Same shape as JS_CFUNC_generic_magic, so
    an existing body becomes one by taking a magic it may ignore. */
@@ -1495,6 +1496,50 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name);
 bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
                          const char *file, int line);
 #define idl_dict_bool(ctx, dict, name) idl_dict_bool_at((ctx), (dict), (name), __FILE__, __LINE__)
+
+/* THE TWO ACCOUNTS A HAND-ROLLED MEMBER READ OWES, WHICH ARE NOT ONE DEFECT AND MUST NOT SHARE A MESSAGE.
+   A body that reads a member with idl_dict_get and then asserts its SHAPE is asserting that §3.2.17
+   (ES-to-IDL list) step 4.1.4.1 converted it — "Let idlMemberValue be the result of converting jsMemberValue
+   to an IDL value whose type is the type member is declared to be of". That assertion has TWO ways to fail
+   and only ONE of them is a conversion that went wrong.
+   THE FIRST IS THE CROSSING, AND IT IS THE ENGINE WORKING AS DESIGNED. idl_dict_walk_run's member loop
+   rewrites a CONCOLIC member's declared type to IDL_ANY BEFORE any type arm is asked, unconditionally, so
+   unknown external input crosses the boundary AS ITSELF and reaches the body still wearing the Object
+   solver/concolic.c gives it. Nothing was converted, so nothing failed. A shape assert phrased "reached this
+   body unconverted" is then a CORRECT CRASH WITH A FALSE EXPLANATION — the worst shape an assert has, because
+   the crash IS right and only its account is wrong, so it does not announce itself. A reader who obeys it
+   goes looking for a conversion that failed, finds a declaration doing exactly what it was written to do, and
+   is left with two conclusions the tree cannot afford: weaken the assert, or rebuild the coercion the
+   crossing exists to prevent.
+   THE SECOND IS THE ORIGINAL INVARIANT, UNCHANGED: a value that is neither the declared type's output nor
+   unknown input means the member is not declared that type in the IdlDictMember list the operation registered.
+   NEITHER IS SOFTENED — both abort, on exactly the values the one assert aborted on before — and the split is
+   what makes the first ACTIONABLE, because the remedies are different work: the second is a declaration to
+   fix, and the first is a FORK the operation does not yet ask for. A refusal is an END STATE for the second
+   and an INTERMEDIATE one for the first: while it stands, the engine is declining to explore a world the
+   unknown admits, which is the opposite of what this file's boundary rule is for.
+   IT IS A MACRO SO THE ADDRESS IS THE CALLER'S. The emitter stamps __FILE__/__LINE__ where the assert
+   EXPANDS, so the refusal names the body that read the member rather than this header — the same reason
+   idl_dict_bool is a macro over idl_dict_bool_at, and the reason this is not a function taking a `bool`.
+   `cond` and `v` are DCHECK operands and must be side-effect-free; `v` is read twice.
+   `declared` is the member's IDL AS ITS OWN SPEC WRITES IT (`` `long` with a `= 0` default ``), because the
+   declaration is what the next reader has to check it against, and `name` is the member's identifier because
+   one name is declared by many dictionaries and only the pair with the site says which one refused. */
+#define IDL_DCHECK_MEMBER(cond, v, name, declared) do {                                                       \
+        DCHECKF((cond) || !concolic_is(v),                                                                    \
+                "the dictionary member `%s` — declared %s — reached its body as UNKNOWN EXTERNAL INPUT. That " \
+                "is Web IDL §3.2.17 Dictionary types' member loop CROSSING it as itself before any type arm "  \
+                "is asked, not a conversion that failed: nothing converted this value, deliberately, so "      \
+                "opacity would survive the boundary. The body's answer is to refuse the whole call, which "    \
+                "drops a world this run could have explored — the member is owed a FORK at its own stage "     \
+                "(a step machine stage asking step_fork_run for the arm), never a coercion here and never a "  \
+                "weakening of this assert", (name), (declared));                                              \
+        DCHECKF((cond),                                                                                       \
+                "the dictionary member `%s` reached its body as neither %s nor unknown external input — "      \
+                "§3.2.17 (ES-to-IDL list) step 4.1.4.1 converts a member BY ITS DECLARED TYPE, so a third "    \
+                "shape means the IdlDictMember list this operation registered does not declare this member "   \
+                "that type", (name), (declared));                                                             \
+    } while (0)
 
 /* §4.2.3'S TREE STEPS, DRAINED WHERE THEY CAN YIELD.
    A DOM mutation's insertion/removing steps are a walk of the whole changed subtree, and they used to run inside

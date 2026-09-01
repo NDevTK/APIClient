@@ -105,11 +105,15 @@ JSValue input_device_capabilities_of_dict(JSContext *ctx, JSValueConst init, con
         JS_FreeValue(ctx, v);
         return JS_NULL;
     }
-    DCHECK(JS_IsNull(v) || JS_GetClassID(v) == g_idc_class,
-           "an `InputDeviceCapabilities?` dictionary member reached its reader carrying something that is "
-           "neither the IDL null nor an InputDeviceCapabilities — the BRAND is the declaration's "
-           "(idl_iface_brand over IDL_INTERFACE_NULLABLE), so a wrong value is a TypeError thrown before any "
-           "body is entered and cannot arrive here");
+    /* THE BRAND REFUSES A WRONG VALUE BEFORE ANY BODY IS ENTERED AND DOES NOT SEE AN UNKNOWN ONE. §3.2.15's
+       test is IDL_INTERFACE_NULLABLE's arm, and the §3.2.17 member loop rewrites a CONCOLIC member's type to
+       IDL_ANY before that arm is asked — so `{sourceCapabilities: <unknown>}` is the one shape that reaches
+       here having passed no brand at all, and it is the shape a message about a wrong value misnames. */
+    IDL_DCHECK_MEMBER(JS_IsNull(v) || JS_GetClassID(v) == g_idc_class, v, member,
+                      "`InputDeviceCapabilities?` with a `= null` default — Input Device Capabilities "
+                      "§\"Extensions to the UIEvent interface and UIEventInit dictionary\" writes "
+                      "`InputDeviceCapabilities? sourceCapabilities = null` — branded by idl_iface_brand over "
+                      "IDL_INTERFACE_NULLABLE");
     return v;
 }
 
