@@ -308,7 +308,6 @@ function mergeASTResultsIntoVDD(tab, results) {
            "every result document, so an absent one is that relay broken and this page would merge as clean");
     if (secSinks.length) {
       if (!tab._securityFindings) tab._securityFindings = [];
-      var _mfMeta = tab || null;
       // REPLACE any prior entry for this source, don't append — the deep grind
       // streams partials each carrying the GROWING accumulated securitySinks for
       // the same sourceUrl, so appending would pile up snapshots (mergeToGlobal
@@ -316,9 +315,19 @@ function mergeASTResultsIntoVDD(tab, results) {
       // leak). Keep the latest (most complete) per source.
       for (var _sfx = tab._securityFindings.length - 1; _sfx >= 0; _sfx--)
         if (tab._securityFindings[_sfx].sourceUrl === analysis.sourceUrl) tab._securityFindings.splice(_sfx, 1);
+      /* `pageUrl: _mfMeta ? _mfMeta.url : null` STOOD HERE OVER A `var _mfMeta = tab || null` FOUR LINES UP,
+         and the ternary was dead twice over: `tab` is dereferenced on the line above it, so the guard could
+         not fire — and what it could not stop is the case it looks like it is for. `getDoc` initialises a
+         DocView's `url` to the EMPTY STRING and CONTENT_SEED fills it in, so a finding merged before that
+         seed carried `pageUrl: ""`, which is not an address and is not this record's stated absence either:
+         it is a third spelling that offscreen-brain.js's live-verify reads as an address it has (`entry &&
+         entry.pageUrl` is false for it, so it silently probes nothing) and that lib/store-record.js names as
+         the RECIPE — a finding whose document cannot be re-visited is the only copy of itself. The record
+         states one of its two declared spellings, and `null` MEANS "no document address was known when these
+         sinks were observed". */
       tab._securityFindings.push({
         sourceUrl: analysis.sourceUrl,
-        pageUrl: _mfMeta ? _mfMeta.url : null,
+        pageUrl: tab.url ? tab.url : null,
         securitySinks: secSinks,
       });
       console.debug("[AST:merge] Security findings for %s: %d sinks", analysis.sourceUrl, secSinks.length);
@@ -650,7 +659,11 @@ function mergeToGlobal(tab) {
     } else {
       globalStore.apiKeys.set(k, {
         name: v.name,
-        origin: v.origin,
+        /* NO `origin` — see lib/keys.js, which minted it: a prefix of `referer`, computed from the same URL
+           in the same breath, copied across this seam and into IndexedDB on every save, and read by no
+           surface in either realm. A store written before this carries the name and nothing asks for it
+           (lib/store-record.js's door reads records rather than minting them, so an extra name is not an
+           error there). */
         referer: v.referer,
         source: v.source,
         firstSeen: v.firstSeen,
@@ -733,7 +746,8 @@ function mergeToGlobal(tab) {
       try {
         var _u = new URL(tab._securityFindings[_spi].sourceUrl);
         newBasePaths.add(_u.origin + _u.pathname);
-      } catch (_) { /* non-URL source (e.g. "unknown_N") — no base path to match */ }
+      } catch (_) { /* a source address `new URL` cannot parse — no base path to match. It is NOT the
+                       `"unknown_N"` this comment used to name: there is no such source (see the key below). */ }
     }
     var staleKeys = [];
     for (var _key of globalStore.securityFindings.keys()) {
@@ -751,9 +765,21 @@ function mergeToGlobal(tab) {
       globalStore.securityFindings.delete(staleKeys[_ski]);
     }
 
+    /* THE KEY IS THE SOURCE ADDRESS, NOT A NAME THIS LOOP MAKES UP FOR IT. `finding.sourceUrl || ("unknown_" +
+       sf)` stood here, and bridge.js's own comment at the field it defaults says exactly what that cost when
+       it could fire: a message that had gone silent "would have produced findings filed under a made-up name
+       beside real ones, which is the FABRICATED half of the defaulted-field defect rather than the concealed
+       half". It cannot fire — `linesToAnalysis` DCHECKs `msg.sourceUrl` as a non-empty string before it builds
+       the analysis, and the finding is minted from that one field a few hundred lines up — so what the `||`
+       did was stand between a broken relay and the abort that would have named it, while an ordinal that is
+       meaningless across two merges of one tab (§AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED) went
+       into the key of the cumulative store. Asserted at the record instead, through the one shape
+       lib/store-record.js declares, which is the same statement the IndexedDB door asks of it a session later. */
     for (var sf = 0; sf < tab._securityFindings.length; sf++) {
       var finding = tab._securityFindings[sf];
-      globalStore.securityFindings.set(finding.sourceUrl || ("unknown_" + sf), finding);
+      checkStoreRecord("securityFindings", finding.sourceUrl, finding,
+                       "lib/merge.js filing this document's @S findings into the moat");
+      globalStore.securityFindings.set(finding.sourceUrl, finding);
     }
   }
   scheduleSave();

@@ -48,7 +48,14 @@ function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
         if (!tab.apiKeys.has(key)) {
           tab.apiKeys.set(key, {
             name: pattern.name,
-            origin: url ? url.origin : null,
+            /* NO `origin`. It was `url ? url.origin : null` beside the line below, carried through
+               mergeToGlobal into the cumulative store, projected by lib/serialize.js to the popup, and
+               written into IndexedDB on every save — and READ BY NOTHING, in either realm, ever. It is also
+               not a fact `referer` lacks: both are computed from the SAME `url` in the same breath, so the
+               origin is a prefix of an address that is already on the record, and reviving it means reviving
+               a second copy of one fact rather than restoring a lost one. §Architecture's mirror of the
+               defaulted-field defect: "a producer emits a field nothing reads: a measurement that has never
+               once been looked at". */
             referer: url ? url.href : null,
             source: context,
             firstSeen: Date.now(),

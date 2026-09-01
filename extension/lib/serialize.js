@@ -97,7 +97,10 @@ function serializeApiKeyEntry(v) {
        across the merge has none, and that absence is "recorded before the type travelled", which the reader
        must be able to tell from a key whose type is genuinely unknown. */
     name: v.name,
-    origin: v.origin,
+    /* NO `origin`. This projection carried it to BOTH consumers of an API-key entry — the popup over
+       chrome.runtime.sendMessage and IndexedDB over lib/persistence.js — and neither has ever read it. It is
+       the origin of the very URL `referer` states in full, computed from it in the same breath by lib/keys.js,
+       so it was one fact written twice and looked at zero times. */
     referer: v.referer,
     source: v.source,
     firstSeen: v.firstSeen,
@@ -119,7 +122,16 @@ function mergedSecurityFindings(tab) {
   if (tab._securityFindings) {
     for (var i = 0; i < tab._securityFindings.length; i++) {
       var f = tab._securityFindings[i];
-      merged.set(f.sourceUrl || ("unknown_" + i), f);
+      /* THE SECOND COPY OF `f.sourceUrl || ("unknown_" + i)`, and the one that decided what the PANEL sees.
+         lib/merge.js held the other and both are gone: bridge.js DCHECKs `msg.sourceUrl` as a non-empty
+         string before it builds the analysis a finding is minted from, so the default could not fire — and
+         had it ever fired, the two copies would have disagreed about the made-up name (the tab array's index
+         here, the merge loop's index there), so ONE finding would have arrived at the popup under two keys
+         and been listed twice. Asserted through the one shape lib/store-record.js declares, which is what the
+         IndexedDB door asks of the same record a session later. */
+      checkStoreRecord("securityFindings", f.sourceUrl, f,
+                       "lib/serialize.js projecting this document's @S findings to the popup");
+      merged.set(f.sourceUrl, f);
     }
   }
   return [...merged.values()];

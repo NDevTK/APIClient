@@ -103,9 +103,21 @@ function scheduleSave() {
 
    BUMP THIS WHENEVER ANY RECORD IN THE STORE GAINS OR LOSES A STATED NAME. The number is not a version of
    this file — it is the shape of what the store HOLDS, so it moves when lib/endpoint-record.js's
-   `ENDPOINT_ABSENT`/`_ENDPOINT_STATED` or lib/discovery-entry.js's `_DISCOVERY_STATED` move, and nowhere
-   else. `1` is the first stamped shape; a store with NO stamp is every store written before this line. */
-const _STORE_SHAPE = 1;
+   `ENDPOINT_ABSENT`/`_ENDPOINT_STATED`, lib/discovery-entry.js's `_DISCOVERY_STATED` or lib/store-record.js's
+   `STORE_RECORD_KINDS` move, and nowhere else. `1` is the first stamped shape; a store with NO stamp is every
+   store written before this line.
+
+   AND THE STAMP IS A CLAIM ABOUT THE MAPS THE DOOR CHECKED WHEN IT WAS WRITTEN, WHICH IS WHY EACH KIND STATES
+   ITS OWN. Shape `1` was written by a door that checked TWO of the seven maps: `apiKeys`, `probeResults`,
+   `scopes`, `securityFindings` and `discoveryChanges` were copied straight into the live maps with nothing
+   asked of them, so a store stamped `1` holds five maps' worth of records of whatever shape their producers
+   had at the time — the failure this comment names one paragraph up, "a migration that skipped a record would
+   leave one of an older shape under this stamp". Reading the stamp as a store-wide promise would therefore
+   assert those five against a population nobody ever checked, and the first refusal would take the whole
+   cumulative frontier: the exact defect the stamp exists to end, re-created by trusting it too widely. So
+   lib/store-record.js states a `statedFrom` per kind and the door asks `storeRecordShapeStates`. `2` is the
+   shape at which the other five began being described. */
+const _STORE_SHAPE = 2;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap
@@ -113,8 +125,16 @@ const _STORE_SHAPE = 1;
    makes the identical decision over the identical categories one store along: `shed` is work traded for
    recomputation, `stranded` is the only copy of itself and is the overage a preference about disk is not
    worth. `strandedKeys` carries the NAMES for the stranded half alone, because that is the half nothing can
-   recompute — a shed record is named by the document that mints it again. */
-const storeRestoreStats = { shape: null, kept: 0, shed: 0, stranded: 0, strandedKeys: [] };
+   recompute — a shed record is named by the document that mints it again.
+   `byKind` IS NOT A REFINEMENT OF THE TOTALS, IT IS WHAT KEEPS THEM FROM BEING AN AVERAGE. The store holds
+   seven kinds of record and a shed endpoint, a shed API key and a shed drift history are three different
+   losses; summed into one number they read as one, and CLAUDE.md §MEASURE is explicit that facts of different
+   kinds must never be averaged into one figure. The totals stay because a stranded ANYTHING is the overage,
+   whatever kind it was. */
+const storeRestoreStats = {
+  shape: null, kept: 0, shed: 0, stranded: 0, strandedKeys: [],
+  byKind: Object.fromEntries(Object.keys(STORE_RECORD_KINDS).map((k) => [k, { kept: 0, shed: 0, stranded: 0 }])),
+};
 
 /* WHICH SHAPE THE STORE WE ARE READING STATES. Three answers and they are three different facts:
      a number ≤ _STORE_SHAPE — the store says what it is, so every record in it IS that shape and a record
@@ -142,14 +162,41 @@ function _storedRecordShape(s) {
   return s.recordShape;
 }
 
-/* SHED OR STRAND ONE RECORD AN EARLIER SHAPE WROTE — the ONE accountant, shared by both record kinds,
-   because the law is one law: a record this build cannot read is either re-derivable, in which case its
-   bytes are a copy and dropping them costs a re-visit, or it is the only copy of itself, in which case
-   dropping them costs the work. Spelled per record kind it would be two laws free to disagree about which. */
-function _shedByShape(key, recipe) {
-  if (recipe !== null) { storeRestoreStats.shed++; return; }
+/* SHED OR STRAND ONE RECORD AN EARLIER SHAPE WROTE — the ONE accountant, shared by every record kind the
+   store holds, because the law is one law: a record this build cannot read is either re-derivable, in which
+   case its bytes are a copy and dropping them costs a re-visit, or it is the only copy of itself, in which
+   case dropping them costs the work. Spelled per record kind it would be seven laws free to disagree about
+   which — and WHICH of the two a given kind is stays with the kind, in lib/store-record.js's `recipe`, beside
+   the reason it is or is not re-derivable. Two of the seven are re-derivable from nothing and say so there. */
+function _shedByShape(kind, key, recipe, why) {
+  const per = storeRestoreStats.byKind[kind];
+  DCHECK(!!per, "a record was shed as the store kind `" + kind + "`, which the census does not hold a column " +
+                "for — both are built from lib/store-record.js's one table, so a miss is that table having " +
+                "been read twice from two places");
+  if (recipe !== null) { storeRestoreStats.shed++; per.shed++; return; }
   storeRestoreStats.stranded++;
-  storeRestoreStats.strandedKeys.push(key);
+  per.stranded++;
+  /* THE KIND TRAVELS WITH THE KEY, AND SO DOES THE REASON. A bare key names nothing a reader can act on once
+     seven maps can produce one — two maps legitimately key on the same service name — and a stranded record's
+     whole worth to the next reader is knowing WHAT this build could not read in it. */
+  storeRestoreStats.strandedKeys.push(kind + " " + key + " — " + why);
+}
+
+/* THE OTHER SIDE OF THE SAME DOOR, AND IT IS WHAT MAKES THE STAMP TRUE RATHER THAN HOPEFUL. `recordShape` is
+   a claim that every record under it is the shape lib/store-record.js describes, and until this the claim
+   rested entirely on the RESTORE having refused to bring anything else in — which says nothing whatever about
+   a record a producer in THIS session minted wrong and handed straight to the save. A record checked only on
+   the way in is a store that can be corrupted by its own writer and re-read as authoritative for ever after,
+   because the next restore trusts the stamp this save wrote. Same table, same predicates, same `where`
+   discipline; the abort travels out through `saveGlobalStore`'s RETHROW_FATAL rather than being swallowed. */
+function _projectChecked(kind, pairs) {
+  const out = {};
+  for (const [k, v] of pairs) {
+    checkStoreRecord(kind, k, v, "lib/persistence.js writing the cumulative store's `" + kind + "` map to " +
+                                 "IndexedDB");
+    out[k] = v;
+  }
+  return out;
 }
 
 function _serializeGlobalStore() {
@@ -159,7 +206,8 @@ function _serializeGlobalStore() {
        TYPE lib/keys.js matched, so a key that survived a save/load came back with no type at all and the
        popup labelled it with its own `|| "API Key"` default. Two hand-maintained projections of one record
        is how a field goes missing on exactly one path; there is now one. */
-    apiKeys: Object.fromEntries(
+    apiKeys: _projectChecked(
+      "apiKeys",
       [...globalStore.apiKeys].map(([k, v]) => [k, serializeApiKeyEntry(v)]),
     ),
     endpoints: Object.fromEntries(globalStore.endpoints),
@@ -198,14 +246,15 @@ function _serializeGlobalStore() {
         }),
       ]),
     ),
-    probeResults: Object.fromEntries(globalStore.probeResults),
-    scopes: Object.fromEntries(globalStore.scopes),
-    securityFindings: Object.fromEntries(globalStore.securityFindings),
-    discoveryChanges: Object.fromEntries(globalStore.discoveryChanges),
+    probeResults: _projectChecked("probeResults", globalStore.probeResults),
+    scopes: _projectChecked("scopes", globalStore.scopes),
+    securityFindings: _projectChecked("securityFindings", globalStore.securityFindings),
+    discoveryChanges: _projectChecked("discoveryChanges", globalStore.discoveryChanges),
     /* THE STORE STATES WHAT SHAPE ITS RECORDS ARE. Written LAST because it is a claim about everything above
-       it, and it is only true because every branch of `_deserializeIntoGlobalStore` either restored a record
-       at this shape or did not restore it at all — a migration that skipped a record would leave one of an
-       older shape under this stamp, which is the one way a stamp is worse than no stamp. */
+       it, and it is true from BOTH sides: `_deserializeIntoGlobalStore` either restored a record at this shape
+       or did not restore it at all (a migration that skipped a record would leave one of an older shape under
+       this stamp, which is the one way a stamp is worse than no stamp), and every line above has just asserted
+       what it is about to write, so a producer in this session cannot put one under the stamp either. */
     recordShape: _STORE_SHAPE,
     /* NO `savedAt`. It was written into IndexedDB on every save and read by NOTHING — one occurrence in the
        whole tree, this write. §Architecture's rule names the mirror of the wrong-number defect exactly: "a
@@ -218,95 +267,69 @@ function _serializeGlobalStore() {
   };
 }
 
+/* THE DOOR. ONE LOOP OVER lib/store-record.js's ONE TABLE, and that is the change rather than a tidy-up of
+   seven blocks that did the same thing seven ways. Five of those blocks did NOTHING but copy — `globalStore
+   .probeResults.set(k, v)` and four lines exactly like it — so a corrupt, half-written or stale record in any
+   of them restored in silence and was then read as a measurement, which is the mirror of the defect that took
+   this whole store: `endpoints` asserted so hard one unreadable record discarded the frontier, while these
+   five asserted nothing at all. CLAUDE.md §Offensive programming decides which way that error runs — "too FEW
+   asserts is the failure" — and it also decides that the refusal must have somewhere to go, which is what the
+   three-way split below is.
+
+   THE STORE IS WHERE A RECORD CAN ARRIVE SHORT OF A NAME WITH NO PRODUCER IN THIS SESSION HAVING GONE WRONG.
+   Everything else in the extension gets its records from a producer in this same run; these came out of
+   IndexedDB, possibly written by a build whose record shape differed, and from here they are indistinguishable
+   from freshly minted ones. Checked once on the way IN rather than at each surface, because the alternative is
+   every reader carrying a `||` for a gap only this door can produce — which is exactly how `e.method || "GET"`
+   came to stand between the cumulative moat and `netdiff --unused`. */
 function _deserializeIntoGlobalStore(s) {
   /* THE SHAPE IS READ ONCE, BEFORE ANY RECORD IS, because it decides the question every checked record below
      is asked — asserted against this build's shape where the store states one, asked where it states none. */
   const shape = _storedRecordShape(s);
   storeRestoreStats.shape = shape;
-  if (s.apiKeys) {
-    for (const [k, v] of Object.entries(s.apiKeys)) {
-      globalStore.apiKeys.set(k, {
-        ...v,
-        services: new Set(v.services || []),
-        hosts: new Set(v.hosts || []),
-        endpoints: new Set(v.endpoints || []),
-        pageUrls: new Set(v.pageUrls || []),
-      });
-    }
+  /* A MAP IN THE BLOB THAT NO KIND DESCRIBES IS THE ONE THING THIS LOOP CANNOT SILENTLY DO RIGHT. The loop
+     restores what the table names, so a map added to `_serializeGlobalStore` without a declaration would be
+     WRITTEN every save and never read back — the write-with-no-reader defect, produced by the very structure
+     that ended the read-with-no-writer one. Asked here rather than left to a reader, and `STORE_RETIRED_KEYS`
+     is what keeps the question answerable: a name a store legitimately still carries after its map was
+     deleted is a different fact from a name nobody declared. */
+  for (const name of Object.keys(s)) {
+    DCHECK(name === "recordShape" || Object.prototype.hasOwnProperty.call(STORE_RECORD_KINDS, name) ||
+           STORE_RETIRED_KEYS.indexOf(name) >= 0,
+           "the cumulative store holds a `" + name + "` this build's record table does not declare and does " +
+           "not list as retired — either `_serializeGlobalStore` writes a map lib/store-record.js has no " +
+           "shape for (in which case it is saved every session and restored never), or a map was deleted " +
+           "without its name joining STORE_RETIRED_KEYS (in which case every store written before that " +
+           "deletion aborts here)");
   }
-  /* THE STORE IS THE OTHER PLACE A RECORD CAN ARRIVE SHORT OF A NAME. Everything else in the extension gets
-     an endpoint from lib/merge.js's constructor in this same session; these came out of IndexedDB, possibly
-     written by a build whose record shape differed, and from here they are indistinguishable from freshly
-     minted ones. Checked on the way IN rather than at each surface, because the alternative is every reader
-     carrying a `||` for a gap only this door can produce — which is exactly how `e.method || "GET"` came to
-     stand between the cumulative moat and `netdiff --unused`. */
-  if (s.endpoints) {
-    for (const [k, v] of Object.entries(s.endpoints)) {
-      const where = "lib/persistence.js restoring the cumulative store, key " + JSON.stringify(k);
-      /* THE MIGRATION, AND IT RUNS FOR EXACTLY ONE POPULATION. An UNSTAMPED store is the only one whose
-         records' shapes are not stated, so it is the only one where "this record lacks a name" has a cause
-         that is not our producer broken. `endpointRecordMissingNames` derives that question from the same
-         two declarations `makeEndpointRecord` builds every record from, so it answers for a name added
-         tomorrow with nothing edited here — and it answers `[]` for a record that carries every name and
-         holds a wrong VALUE, which is the producer broken and still aborts on the line below.
-         A STAMPED STORE DOES NOT REACH THIS AT ALL: `shape` is a number, the assert stands whole, and the
-         moment this session's first save restamps the store the unstamped path is dead for it for ever. */
-      if (shape === null && endpointRecordMissingNames(v, where).length > 0) {
-        _shedByShape(k, endpointRecordRecipe(v));
-        continue;
+  for (const kind of Object.keys(STORE_RECORD_KINDS)) {
+    const stored = s[kind];
+    if (!stored) continue;
+    const target = globalStore[kind];
+    DCHECK(target instanceof Map,
+           "the cumulative store declares the record kind `" + kind + "` and globalStore has no Map of that " +
+           "name — the table names the live map as well as the stored one, so a miss is the two having been " +
+           "renamed apart and every record of that kind would restore into nothing");
+    /* THE THREE-WAY SPLIT, ASKED PER KIND. A stamped store's records ARE the shape it names for the kinds it
+       was describing when it was written, so a record short of one is OUR producer broken and the assert
+       stands whole. Where the store does not state THIS kind's shape — no stamp at all, or a stamp from
+       before this kind was described — the door ASKS, and a record it cannot read is disposed of by
+       §OOM/paging's third category rather than dropped: shed where a recipe outlives its bytes, STRANDED and
+       named where the bytes are the only copy. That population is closed (this build writes a stamp that
+       states every kind), self-identifying, terminating (the first save restamps it) and REPORTED, which is
+       what separates it from the `if (bad) continue` §Architecture forbids. */
+    const states = storeRecordShapeStates(kind, shape);
+    for (const [k, v] of Object.entries(stored)) {
+      if (!states) {
+        const why = storeRecordUnreadable(kind, k, v);
+        if (why !== null) { _shedByShape(kind, k, storeRecordRecipe(kind, k, v), why); continue; }
       }
-      checkEndpointRecord(v, where);
-      globalStore.endpoints.set(k, v);
+      checkStoreRecord(kind, k, v,
+                       "lib/persistence.js restoring the cumulative store's `" + kind + "` map");
+      target.set(k, storeRecordAdopt(kind, v));
       storeRestoreStats.kept++;
+      storeRestoreStats.byKind[kind].kept++;
     }
-  }
-  if (s.discoveryDocs) {
-    for (const [k, v] of Object.entries(s.discoveryDocs)) {
-      /* THE SAME DOOR THE ENDPOINT RECORDS ARE CHECKED AT, for the same reason: from here a store written by
-         a build whose record shape differed is indistinguishable from an entry this session's producers
-         minted, and every surface downstream reads `grouping` off it. Checked once on the way IN rather than
-         by each surface carrying a `||` for a gap only this door can produce. */
-      const dwhere = "lib/persistence.js restoring the cumulative store, service " + JSON.stringify(k);
-      /* THE SAME MIGRATION OVER THE OTHER RECORD KIND, and it is here because the defect is the door's and
-         not the endpoint record's: `grouping` was optional until the day every producer was made to state
-         it, so a store written on the earlier side of that day aborts this check exactly as one written
-         before `pathParamsForced` aborts the one above. Covering one door and not the other would leave the
-         whole cumulative store taken by the second — the restore is one operation and it fails whole. */
-      if (shape === null && discoveryEntryMissingNames(v).length > 0) {
-        _shedByShape(k, discoveryEntryRecipe(v));
-        continue;
-      }
-      checkDiscoveryGrouping(v, dwhere);
-      globalStore.discoveryDocs.set(k, {
-        ...v,
-        pageUrls: new Set(v.pageUrls || []),
-        frameOrigins: new Set(v.frameOrigins || []),
-      });
-    }
-  }
-  if (s.probeResults) {
-    for (const [k, v] of Object.entries(s.probeResults))
-      globalStore.probeResults.set(k, v);
-  }
-  if (s.scopes) {
-    for (const [k, v] of Object.entries(s.scopes))
-      globalStore.scopes.set(k, v);
-  }
-  if (s.securityFindings) {
-    for (const [k, v] of Object.entries(s.securityFindings))
-      globalStore.securityFindings.set(k, v);
-  }
-  /* NO scriptCache REHYDRATION. The replay cache it restored is deleted (see globalStore): it was a
-     document-identity seen-set whose hit skipped the engine entirely, and its TTL + 500-entry LRU trim here
-     are what a cache needs and a frontier must never have — the frontier drops nothing and is aged only by
-     value. A persisted store written before this change simply carries a key nothing reads. */
-  /* discoveryChanges IS REHYDRATED, unlike the line above, and the difference is that it HAS A WRITER. It is
-     the record of every time a service's published API surface changed between two discovery fetches
-     (lib/discovery-probe.js), which is a finding and not a cache: nothing about it decides whether work runs,
-     so restoring it restores an observation rather than a skip. */
-  if (s.discoveryChanges) {
-    for (const [k, v] of Object.entries(s.discoveryChanges))
-      globalStore.discoveryChanges.set(k, v);
   }
 }
 

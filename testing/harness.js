@@ -1239,9 +1239,14 @@ async function cmdNetDiff(args) {
              "lib/persistence.js, and that file declares the census unconditionally at load, so its absence " +
              "is that realm's script list having changed under this reader; a `null` in its place would " +
              "print a caveat of zeroes, which reads as 'the restore lost nothing' for a store nobody asked");
+      /* AND `byKind` BESIDE THE TOTALS, because the store holds SEVEN kinds of record and a shed endpoint, a
+         shed API key and a shed API-drift history are three different losses — summed into one number they
+         read as one, which is the averaging §MEASURE forbids. The totals stay because a stranded ANYTHING is
+         the overage whatever kind it was; the columns are what say which. */
       const storeRestore = {
         shape: storeRestoreStats.shape, kept: storeRestoreStats.kept, shed: storeRestoreStats.shed,
         stranded: storeRestoreStats.stranded, strandedKeys: storeRestoreStats.strandedKeys.slice(0, 20),
+        byKind: storeRestoreStats.byKind,
       };
       if (unused) {
         // LEARNED-NOT-LIVE = the unused API surface forced exec found (THE VALUE,

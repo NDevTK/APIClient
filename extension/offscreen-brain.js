@@ -354,7 +354,7 @@ const _scriptBuffers = new Map(); // documentId → { facts, seedUrl }
 
 // Global persistent store — survives tab closes and SW restarts
 const globalStore = {
-  apiKeys: new Map(), // key → { origin, referer, firstSeen, ... }
+  apiKeys: new Map(), // key → an API-key entry; its stored shape is lib/store-record.js's `_SR_APIKEY`
   endpoints: new Map(), // endpointKey → endpoint data
   discoveryDocs: new Map(), // service → { status, url, apiKey, fetchedAt, doc }  (see lib/merge.js: no `method`)
   probeResults: new Map(), // endpointKey → probe result
@@ -395,7 +395,7 @@ function getDoc(documentId) {
       title: "",                // multi-tab log label
       closed: false,            // true once the owning tab closes (logs stay visible)
       // ── learned facts (per-document view; the cumulative moat is globalStore) ──
-      apiKeys: new Map(), // key → { origin, referer, firstSeen }
+      apiKeys: new Map(), // key → an API-key entry (lib/keys.js mints it; shape: lib/store-record.js)
       endpoints: new Map(), // endpointKey → { method, service, key, headers, firstSeen }
       authContext: null, // { sapisid, sapisidhash, cookies }
       discoveryDocs: new Map(), // service → discovery JSON or status

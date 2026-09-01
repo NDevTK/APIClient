@@ -1736,12 +1736,15 @@ function renderDataPanel() {
         html += `<div class="card-meta">${pageUrls.length === 1 ? "Page" : "Pages"}: ${_urlListHtml(pageUrls)}</div>`;
       }
       /* WHEN AND WHERE, the last fields of the record. lib/keys.js stamps `firstSeen`/`lastSeen` on every
-         entry and `origin`/`referer` from the URL the key was matched in; lib/merge.js's own comment records
-         that `lastSeen` "was written here and read NOWHERE", and that was true of all four of them.
-         `referer` is that URL in full and `origin` is the SAME url's origin, so the address below subsumes it
-         — which is why there is one line here and not two, and not because `origin` is unread. The two
-         timestamps are asserted; `referer` is guarded because keys.js writes null when the scanned text had no
-         source URL, and that null is a positive statement (a body with no address of its own). */
+         entry and `referer` — the URL the key was matched in — from the text it was scanning; lib/merge.js's
+         own comment records that `lastSeen` "was written here and read NOWHERE", and that was true of all of
+         them. THE RECORD NO LONGER CARRIES AN `origin`: it was that same URL's origin, minted beside `referer`
+         from the same value, carried across the merge and into IndexedDB, and never read on either side —
+         and this comment used to say the one line below was "not because `origin` is unread", which was a
+         claim about the RENDERING that read as a claim about the FIELD. The address below is the whole of
+         what the record states about where; a reader who wants the origin has it as a prefix of that address.
+         The two timestamps are asserted; `referer` is guarded because keys.js writes null when the scanned
+         text had no source URL, and that null is a positive statement (a body with no address of its own). */
       DCHECK(typeof info.firstSeen === "number" && typeof info.lastSeen === "number",
              "an API key reached the popup without numeric firstSeen/lastSeen — lib/keys.js stamps both when " +
              "it mints the entry and refreshes lastSeen on every later sighting, so a missing one is a " +

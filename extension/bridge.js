@@ -392,10 +392,15 @@ function linesToAnalysis(lines, msg, outcome, eng) {
          "on `_run`, so a word none of them knows is a run whose completeness nothing can judge");
   /* THE DOCUMENT THIS ANALYSIS IS ABOUT. `sourceUrl: (msg && msg.sourceUrl) || ""` stood in the literal below
      and wrote an EMPTY ADDRESS onto the one field every consumer identifies the analysis by: lib/merge.js
-     resolves relative call-site addresses against it, keys each security finding on it, and files a falsy one
-     under `"unknown_" + i` — so a message that had gone silent would have produced findings filed under a
-     made-up name beside real ones, which is the FABRICATED half of the defaulted-field defect rather than the
-     concealed half. `engineRoot` has always DCHECKed this same `msg.sourceUrl` non-empty (§4.4's document
+     resolves relative call-site addresses against it and keys each security finding on it — so a message that
+     had gone silent would have produced findings filed under a made-up name beside real ones, which is the
+     FABRICATED half of the defaulted-field defect rather than the concealed half. (This paragraph used to say
+     lib/merge.js files a falsy one under `"unknown_" + i`, and that was TRUE OF THAT FILE WHEN IT WAS
+     WRITTEN: it and lib/serialize.js each carried their own `|| ("unknown_" + i)` over this field, with two
+     different ordinals, so one finding would have reached the popup under two keys. Both are gone — the key is
+     the source address and the record is asserted through lib/store-record.js's one shape — which leaves the
+     assert below as the only thing standing between a silent message and a fabricated one.)
+     `engineRoot` has always DCHECKed this same `msg.sourceUrl` non-empty (§4.4's document
      address is what the engine derives this document's principal from) and asserts `eng.msg === msg` where
      the instance is rooted; both callers of this function pass `eng.msg`. There is nothing here for a `||` to
      have been standing in for. */

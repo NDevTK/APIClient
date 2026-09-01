@@ -446,7 +446,17 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
     if (resp.status === 403) {
       const wwwAuth = resp.headers["www-authenticate"] || "";
       const scopeMatch = wwwAuth.match(/scope="([^"]*)"/);
-      if (scopeMatch) scopes = scopeMatch[1].split(/\s+/);
+      /* `null` MEANS THE HEADER NAMED NO SCOPE, AND THAT WAS TWO DIFFERENT THINGS ON THIS LINE. `scope=""` is
+         a real thing a server sends, and `"".split(/\s+/)` is `[""]` — a list of ONE scope whose name is the
+         empty string, which the callers store because it has a `.length` (lib/discovery-probe.js and
+         lib/popup-handlers.js both guard on that alone). It then reaches popup.js's scope row as a service
+         that requires a scope nobody can name, and lib/persistence.js carries it across every session.
+         Filtered, and the assignment kept for the case that survives it, so the absent value stays the one
+         `null` this function's sibling `discoverServiceInfo` already spells. */
+      if (scopeMatch) {
+        const named = scopeMatch[1].split(/\s+/).filter(Boolean);
+        if (named.length) scopes = named;
+      }
     }
 
     // ── Binary protobuf response ──
@@ -812,7 +822,12 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
         const wwwAuth = resp.headers["www-authenticate"] || "";
         const scopeMatch = wwwAuth.match(/scope="([^"]*)"/);
         if (scopeMatch) {
-          scopes = scopeMatch[1].split(/\s+/).filter(Boolean);
+          /* THE FILTER WAS ALREADY HERE AND THE ASSIGNMENT OUTRAN IT: a `scope=""` filters down to `[]`, and
+             `[]` is a SECOND spelling of the absence this function states as `null` — "no content type's
+             rejection named a scope". The record goes into `globalStore.probeResults` and across sessions,
+             where a consumer then has to guess which of the two it is looking at. */
+          const named = scopeMatch[1].split(/\s+/).filter(Boolean);
+          if (named.length) scopes = named;
         }
       }
 

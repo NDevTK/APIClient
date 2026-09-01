@@ -66,6 +66,12 @@
 <script src="lib/safe-fetch.js"></script>
 <script src="lib/schema.js"></script>
 <script src="lib/keys.js"></script>
+<!-- WHAT A RECORD IN THE CUMULATIVE STORE IS, FOR ALL SEVEN OF ITS MAPS: one table naming the fields each kind
+     states, the store shape at which it began stating them, and what re-mints the record when this build
+     cannot read its bytes. lib/persistence.js's door is ONE loop over it — five of those maps used to be
+     copied out of IndexedDB with nothing asked of them at all — so it loads before that file, and after the
+     two record files it delegates the older two kinds to. -->
+<script src="lib/store-record.js"></script>
 <script src="lib/persistence.js"></script>
 <script src="lib/grouping.js"></script>
 <!-- ACTIVE DISCOVERY: fetch an API's PUBLISHED description at the well-known addresses lib/discovery.js
