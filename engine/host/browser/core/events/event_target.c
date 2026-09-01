@@ -112,6 +112,67 @@ static void event_target_install(JSContext *ctx);
 /* §8.1.8.2's handler list is AGENT state, so its two hand-written columns are checked where it is declared. */
 static void eh_assert_types(void);
 
+/* ---- §2.7's TWO OPTIONS DICTIONARIES, DECLARED ------------------------------------------------------------
+ *
+ * DOM §2.7 Interface EventTarget writes them as an inheritance pair:
+ *
+ *     dictionary EventListenerOptions { boolean capture = false; };
+ *     dictionary AddEventListenerOptions : EventListenerOptions {
+ *       boolean passive;
+ *       boolean once = false;
+ *       AbortSignal signal;
+ *     };
+ *
+ * THE READ ORDER IS §3.2.17'S AND THE `level` COLUMN IS WHAT MAKES THE INHERITANCE PART OF THE DECLARATION.
+ * Web IDL §3.2.17 Dictionary types builds "a list consisting of D and all of D's inherited dictionaries, in
+ * order from least to most derived" and then reads "For each dictionary member member declared on dictionary,
+ * in lexicographical order" — so `capture` is EventListenerOptions' (level 0) and the other three are this
+ * dictionary's own (level 1). Declared flat, the list happened to agree because c < o < p < s; it agreed by
+ * arithmetic and said nothing, and idl_dict_order_check checks the statement rather than the coincidence.
+ *
+ * `passive` IS IDL_BOOLEAN_NO_DEFAULT, NOT IDL_ANY. The reason that stood here was that IDL_BOOLEAN turns an
+ * absent member into false while §2.7's flatten more options has to know whether the page WROTE it — true of
+ * IDL_BOOLEAN, and exactly what IDL_BOOLEAN_NO_DEFAULT exists to say, so what the reason described was a
+ * missing TYPE rather than an undeclarable member. Under it an absent `passive` stays undefined (the walk
+ * exempts only IDL_BOOLEAN from the absent-member rewrite, and this is not that type), so flatten more
+ * options step 4.2's `exists` test is intact; a value the page DID write is converted by the declaration
+ * rather than by a JS_ToBool in the body.
+ *
+ * `signal` IS IDL_INTERFACE. The reason that stood here was that a signal's only brand was its private slot
+ * record, which a body can test and a declaration comparing class ids cannot — WAS TRUE AND IS NOT:
+ * core/dom/abort.c mints every signal through JS_NewObjectProtoClass against its own class and says so at the
+ * mint, and idl_is_iface compares exactly that class id. It is the most dangerous kind of stale reason,
+ * because it said a thing was impossible and so told the reader not to look; it had already been read as
+ * current and relayed to another lane as a live defect.
+ *   NULL IS NOT WHAT KEEPS IT OUT OF THE DECLARATION EITHER, and the body used to say it was. `AbortSignal` is
+ *   NOT nullable, so `{signal: null}` is a TypeError — and the un-nullable IDL_INTERFACE is what produces one:
+ *   Web IDL §3.2.17 Dictionary types step 4.1.4 is "If jsMemberValue is not undefined, then: Let
+ *   idlMemberValue be the result of converting jsMemberValue to an IDL value whose type is the type member is
+ *   declared to be of", so a present `null` is converted by Web IDL §3.2.15 Interface types, whose two steps
+ *   are "If V implements I, then return the IDL interface type value that represents a reference to that
+ *   platform object." and "Throw a TypeError."
+ *   ABSENCE still crosses untouched (the walk rewrites an undefined member to IDL_ANY before any conversion),
+ *   which is the null the algorithm means, and UNKNOWN EXTERNAL INPUT still crosses as itself, which is why
+ *   the AEL_SIGNAL stage's three-arm fork survives this declaration rather than being collapsed by it.
+ *
+ * THE CLASS IS WRITTEN AT THE REALM INSTALL AND NOT HERE, for the reason core/events/navigate_event.c's
+ * NavigateEventInit states at the identical seam: a class id is a RUNTIME registration made in
+ * core/platform.c's row order, and this component is declared BEFORE `abort`, so at this line the id is still
+ * zero. The two rows cannot simply swap, because AbortSignal.prototype chains to the prototype this file
+ * builds and core/realm.h runs the per-realm installs in declaration order. A class id is agent-scoped rather
+ * than per realm, so reading it at the first realm's install reads the id every later realm would and writing
+ * it again writes the same value — which is why this is not the module static §per-realm-fact forbids. */
+static IdlDictMember ADD_OPTS[] = {   /* `capture` FIRST: it is what the bare boolean means, and it is level 0 */
+    { "capture", IDL_BOOLEAN,            false, NULL, 0 },
+    { "once",    IDL_BOOLEAN,            false, NULL, 1 },
+    { "passive", IDL_BOOLEAN_NO_DEFAULT, false, NULL, 1 },
+    { "signal",  IDL_INTERFACE,          false, NULL, 1 },   /* .iface filled by event_target_install */
+};
+/* The one member of ADD_OPTS whose type names a class. Named rather than spelled at the write, because the
+   list is in §3.2.17's read order and inserting a member renumbers it. */
+enum { ADD_OPTS_SIGNAL = 3 };
+static const IdlDictMember REMOVE_OPTS[] = { { "capture", IDL_BOOLEAN, false, NULL, 0 } };
+
 void event_target_init(JSContext *ctx)
 {
     JSClassDef d = { "EventTarget" };
@@ -150,19 +211,6 @@ void event_target_init(JSContext *ctx)
            threw. Declared, argument 1 refuses first and neither happens. */
         static const IdlArgType ADD_ARGS[3] = { IDL_DOMSTRING, IDL_CALLBACK_INTERFACE_NULLABLE,
                                                 IDL_DICT_OR_BOOL_FIRST };
-        static const IdlDictMember ADD_OPTS[] = {   /* `capture` FIRST: it is what the bare boolean means */
-            { "capture", IDL_BOOLEAN }, { "once", IDL_BOOLEAN },
-            /* `passive` is IDL_ANY and NOT IDL_BOOLEAN, and that is the declaration doing its job: a boolean
-               member with a `= false` default converts an ABSENT one to false, and §2.7's flatten more options
-               needs to know whether the page WROTE it — an absent `passive` is null and is then filled from the
-               default passive value, which for a wheel listener on the window is TRUE. The body does the
-               ToBoolean, which runs none of the page's code. */
-            { "passive", IDL_ANY },
-            /* `AbortSignal signal` — IDL_ANY because §3.2's brand is a private slot record and not the class
-               opaque IDL_INTERFACE tests; the body performs the interface check, and says so. */
-            { "signal", IDL_ANY },
-        };
-        static const IdlDictMember REMOVE_OPTS[] = { { "capture", IDL_BOOLEAN } };
         g_add_stepid    = idl_method_id_step(ctx, ADD_ARGS, 3, ADD_OPTS,
                                              (int)(sizeof(ADD_OPTS) / sizeof(ADD_OPTS[0])),
                                              &AEL_DECL, 0);
@@ -949,12 +997,19 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                    "or present-true, and a fourth is a state flatten more options step 4.2 has no value for");
             s->passive = arm == 2 ? -1 : (int8_t)arm;
         } else {
-            /* THE PAGE DETERMINED IT, so there is nothing to ask and nothing to park on: Web IDL §3.2.17
-               Dictionary types step 4.1.4's conversion of a `boolean` member is ToBoolean, which runs none of
-               the page's code. It is spelled here rather than routed through ael_flag_run because that helper's
-               whole body is the two-arm fork this branch has already established is not needed, and a call that
-               can only take the helper's first exit would leave a `return rc` no path reaches — an ignore in
-               release wearing a DCHECK in dev. */
+            /* THE PAGE DETERMINED IT AND THE DECLARATION HAS ALREADY CONVERTED IT. Web IDL §3.2.17 Dictionary
+               types step 4.1.4 converts a present `boolean` member with ToBoolean, which runs none of the
+               page's code, and IDL_BOOLEAN_NO_DEFAULT is where that now happens — so what arrives here is a
+               JavaScript boolean and this branch READS it rather than coercing it a second time. It is spelled
+               here rather than routed through ael_flag_run because that helper's whole body is the two-arm fork
+               this branch has already established is not needed, and a call that can only take the helper's
+               first exit would leave a `return rc` no path reaches — an ignore in release wearing a DCHECK in
+               dev. */
+            DCHECK(JS_IsBool(v),
+                   "§2.7's `passive` reached its stage as neither absent, unknown external input nor a "
+                   "converted boolean — IDL_BOOLEAN_NO_DEFAULT is the member's declared type and §3.2.17 step "
+                   "4.1.4's ToBoolean is the whole of its conversion, so a third shape here is a value that "
+                   "crossed the declaration without being converted at all");
             s->passive = JS_ToBool(ctx, v) ? 1 : 0;
             JS_FreeValue(ctx, v);
         }
@@ -962,16 +1017,23 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
     }
 
     if (hdr->stage == AEL_SIGNAL) {
-        /* `AbortSignal signal` is an INTERFACE-typed member, so a value that is not one is a TypeError before
-           the algorithm's step 1. The brand test is not the declaration's here for the reason the paragraph
-           below gives and NOT because the type is undeclarable: an AbortSignal wears core/dom/abort.c's class,
-           so IDL_INTERFACE could brand it — what IDL_INTERFACE cannot express is this member's treatment of
-           NULL, which §2.7 makes a TypeError while the declaration surface has no
-           non-nullable-with-explicit-null arm. The rule performed here is that whole rule.
-           NULL IS NOT AN ABSENT MEMBER HERE. `AbortSignal signal` is NOT nullable, so `{signal: null}` is a
-           TypeError and not "no signal" — the corpus asks for exactly that, twice, and it asks for it even
-           when the CALLBACK is null, which is why the conversion has to happen before §2.7's "if callback is
-           null, return". Only an ABSENT member (undefined) is the null the algorithm means. */
+        /* `AbortSignal signal` IS AN INTERFACE-TYPED MEMBER AND THE BRAND IS ITS DECLARATION'S — see ADD_OPTS,
+           which states it as IDL_INTERFACE and whose class core/dom/abort.c owns. The two reasons that stood
+           here for performing it by hand are both retired and both were about the DECLARATION rather than
+           about this algorithm: that a signal's brand was only its private slot record (it wears the class),
+           and that IDL_INTERFACE "cannot express this member's treatment of NULL" (the un-nullable interface
+           type is exactly the expression of it).
+           NULL IS NOT AN ABSENT MEMBER HERE, AND THE DECLARATION IS WHAT SAYS SO. `AbortSignal signal` is NOT
+           nullable, so `{signal: null}` is a TypeError and not "no signal" — Web IDL §3.2.17 Dictionary types
+           step 4.1.4 ("If jsMemberValue is not undefined, then: Let idlMemberValue be the result of converting
+           jsMemberValue to an IDL value whose type is the type member is declared to be of") sends a present
+           null through Web IDL §3.2.15 Interface types, which ends "Throw a TypeError." The corpus asks for
+           exactly that, twice, and it asks for it even when the CALLBACK is null — which is why the
+           conversion has to happen before §2.7's "if callback is null, return", and being the declaration's is
+           what puts it there rather than in a body that runs after every position. Only an ABSENT member
+           (undefined) is the null the algorithm means, and the walk crosses one untouched.
+           SO THREE SHAPES REACH THIS STAGE AND NOT FIVE: absent, unknown external input (which every declared
+           type crosses as itself, so the fork below is untouched by the brand), and a real §3.2 signal. */
         DCHECK(JS_IsUndefined(s->signal),
                "§2.7's `signal` stage was entered holding a signal it had already decided — this stage assigns "
                "the field and the assignment would drop the earlier one without releasing it, so a second entry "
@@ -979,8 +1041,6 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         v = idl_dict_get(ctx, opts, "signal");
         if (JS_IsUndefined(v)) {
             JS_FreeValue(ctx, v);
-        } else if (abort_signal_is(ctx, v)) {
-            s->signal = v;                       /* a real §3.2 signal: there is nothing to decide about it */
         } else if (concolic_is(v)) {
             /* AN UNKNOWN AT THIS POSITION HAS THREE FEASIBLE COMPLETIONS AND USED TO HAVE ONE — a TypeError,
                because a concolic is not a platform object, so `addEventListener('x', f, cfg.opts)` over a bag
@@ -998,13 +1058,15 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
             JS_FreeValue(ctx, v);
             if (rc) return rc;
             if (arm == 2) {
-                /* THE TWO THROWS IN THIS STAGE MUST NOT READ ALIKE, and they did — byte-identical messages for
-                   two states that are not even the same KIND of event. This one is the engine EXPLORING: the
-                   operand is unknown external input, and §3.2.15 Interface types' refusal is one of the three
-                   feasible worlds this member has, so the throw is the forced arm doing its job and §Offensive
-                   programming names it explicitly as not a `@WHY`. The one below is a REAL page type error on a
-                   value the run actually knows. A reader who cannot tell them apart reads a designed world as
-                   an unbuilt capability — which is what happened, from a smoke run, to an expert reader. */
+                /* THIS IS THE ONLY THROW LEFT IN THIS STAGE AND IT IS THE ENGINE EXPLORING, NOT A PAGE ERROR.
+                   The operand is unknown external input, and §3.2.15 Interface types' refusal is one of the
+                   three feasible worlds this member has, so the throw is the forced arm doing its job and
+                   §Offensive programming names it explicitly as not a `@WHY`. It used to stand beside a
+                   byte-identical message for a REAL page type error, and a reader who could not tell them
+                   apart read a designed world as an unbuilt capability — which is what happened, from a smoke
+                   run, to an expert reader. The page's own TypeError is now §3.2.15's at the member's
+                   conversion and never reaches this body, so the two cannot be confused again; what keeps this
+                   message honest is that it says which arm it is on, not that it differs from a neighbour. */
                 JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal (on the forced arm where "
                                        "this flow's unknown `options.signal` is not one — two sibling arms take "
                                        "it as a live signal and as an already-aborted one)");
@@ -1023,12 +1085,18 @@ static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
                   "the AbortSignal standing for an unknown `options.signal` could not be allocated — a dropped "
                   "one is a listener registered outside the lifetime the page gave it");
         } else {
-            /* A KNOWN value that is not a signal — the ordinary Web IDL §3.2.15 Interface types TypeError, and
-               the only one of this stage's two throws that is a fact about the PAGE. `{signal: null}` arrives
-               here too, which is §2.7's non-nullable member refusing an explicit null. */
-            JS_FreeValue(ctx, v);
-            JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal");
-            return -1;
+            /* A REAL §3.2 SIGNAL: there is nothing left to decide about it. Every other known value —
+               `{signal: 42}`, `{signal: {}}`, `{signal: null}` — was refused by §3.2.15 Interface types at the
+               member's own conversion, which is why the hand-written TypeError that stood here is gone rather
+               than kept as a second answer to the section the declaration already runs. */
+            DCHECK(abort_signal_is(ctx, v),
+                   "§2.7's declared `AbortSignal signal` reached this stage as something that is not an "
+                   "AbortSignal — §3.2.15 Interface types' brand is the member's own type and refuses "
+                   "everything else BEFORE this point, except unknown external input, which core/idl_args.h "
+                   "crosses as itself and the arm above forks. A fourth shape here means the brand ran against "
+                   "no class: ADD_OPTS' member carries it and event_target_install is what writes it, so it is "
+                   "that write, or core/platform.c's row order under it, that has come apart");
+            s->signal = v;
         }
         STEP_GOTO(hdr->stage, AEL_RUN, NULL);
     }
@@ -3101,6 +3169,20 @@ static void event_target_install(JSContext *ctx)
         g_dispatch_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_def);
         g_dispatch_pair_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_dispatch_pair_def);
     }
+    /* §2.7's `AbortSignal signal` CARRIES ITS OWN CLASS, and it is read HERE for the reason ADD_OPTS states:
+       core/platform.c declares `event_target` far above `abort`, so at the declaration this id is still zero,
+       and the two rows cannot swap because AbortSignal.prototype chains to the prototype built below. A class
+       id is agent-scoped rather than per realm, so every realm's install reads and writes the same value —
+       which is why this is not the module static §per-realm-fact forbids, and why abort_signal_class's own
+       assert is what fires if the row order ever moves the other component after this one. It precedes the
+       member installs deliberately: the conversion cannot run before its member exists on a prototype. */
+    DCHECK(!strcmp(ADD_OPTS[ADD_OPTS_SIGNAL].name, "signal") &&
+           ADD_OPTS[ADD_OPTS_SIGNAL].type == IDL_INTERFACE,
+           "AddEventListenerOptions' member list moved under the index that carries its interface class — the "
+           "list is in Web IDL §3.2.17 Dictionary types' read order, so inserting a member renumbers it and the "
+           "brand would then be attached to a member whose type never asks for one. Asked BEFORE the write, "
+           "because after it the wrong member is already branded");
+    ADD_OPTS[ADD_OPTS_SIGNAL].iface = abort_signal_class();
 
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "EventTarget.prototype could not be allocated");
