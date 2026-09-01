@@ -6480,11 +6480,29 @@ static void fork_row_impl(const char *js, int *row, const char **why,
     if (!strstr(js, q)) {
         *row = 0;
         if (!*why) {
-            snprintf(buf, bufsz,
+            /* A DIAGNOSTIC CUT IN HALF IS THE FOLDED ANSWER THIS TABLE EXISTS TO REFUSE, one level below
+               probes_report's own room CHECK — and it is a DCHECK rather than a CHECK because `snprintf`
+               bounds the write, so a release build loses a clause where the caller's buffer there would lose
+               bytes it does not own. Nothing announces a cut: the row still prints, still names the endpoint,
+               and drops whichever clause ran past the end. On THIS message the clause that runs past the end
+               is the LAST one, and the last clause is the whole of how a reader tells "this run never got
+               here" from "this world was lost" — so a silent cut deletes exactly the distinction the row
+               exists to make, which is three states behind one answer arriving through the sentence written
+               to separate them.
+               THE RETURN VALUE IS THE LENGTH THE MESSAGE WANTED, so the assert is about the DECLARATION and
+               not about the text: a `subject` too long for fr_why_[] is either a subject to shorten or a
+               buffer to raise, and the abort stands at the row that asked. */
+            int k = snprintf(buf, bufsz,
                      "NOT REACHED: there is no %s record at all, so this run did not answer the statement. "
                      "That is the SCHEDULE and says nothing about %s — read it against the other multi-world "
                      "rows and against how far this run got: all of them 0 at once is a run that stopped",
                      url, subject);
+
+            DCHECK(k > 0 && (size_t)k < bufsz,
+                   "a fork row's NOT-REACHED diagnostic did not fit its buffer and was CUT — the tail of this "
+                   "message is what says how to read the 0, so what survived is a row naming an endpoint and "
+                   "no longer naming the two states it separates; shorten the row's `subject` or raise "
+                   "fr_why_[] in FORK_ROW");
             *why = buf;
         }
         return;
@@ -6493,9 +6511,16 @@ static void fork_row_impl(const char *js, int *row, const char **why,
         if (param_value_is(js, url, pname, worlds[i])) continue;
         *row = 0;
         if (!*why) {
-            snprintf(buf, bufsz,
+            /* The same assert, for the same reason, over the message whose last clause is the SUBJECT itself:
+               a cut here leaves a row saying a world was lost and no longer saying lost from WHAT. */
+            int k = snprintf(buf, bufsz,
                      "the statement RAN and %s's `%s` never carried `%s`: THAT WORLD WAS LOST — a sibling "
                      "reached the sink and this one did not survive %s", url, pname, worlds[i], subject);
+
+            DCHECK(k > 0 && (size_t)k < bufsz,
+                   "a fork row's LOST-WORLD diagnostic did not fit its buffer and was CUT — the `subject` is "
+                   "the tail of this message, so what survived names the world that is missing and not the "
+                   "statement it is missing from; shorten the row's `subject` or raise fr_why_[] in FORK_ROW");
             *why = buf;
         }
     }
@@ -9252,9 +9277,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     const char *bsmin_why = NULL; int bsmin_tt = 1;
     fold_row(&bsmin_tt, &bsmin_why, bs_reach, bs_reach_why);
     FORK_ROW(js, &bsmin_tt, &bsmin_why, "/api/bsmin", "w",
-             "Streams §4.5.3's read(view, options) over a `min` that is unknown external input — step 4's "
-             "TypeError, steps 5.1/6.1's RangeError and the pull-into that survives both are three worlds of "
-             "ONE read, and a missing one is an arm this engine did not run",
+             /* SHORT ENOUGH THAT NEITHER OF fork_row_impl's TWO MESSAGES IS CUT — the assert there is what
+                says so, and the fuller statement of the claim is the comment above rather than a longer
+                subject, because this string is the TAIL of both messages and a tail is what a bounded
+                `snprintf` drops first. */
+             "Streams §4.5.3's read over an unknown `min`: step 4's TypeError, steps 5.1/6.1's RangeError and "
+             "the pull-into that survives both are three worlds of ONE read",
              "read", "TypeError", "RangeError");
     /* AND THE SURVIVING ARM DELIVERED A CHUNK RATHER THAN A CLOSE. `done` is the read result's own field and
        is DETERMINED — this stream is never closed and eight bytes are queued — so exactly one value is the
