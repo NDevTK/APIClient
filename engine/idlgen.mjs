@@ -858,10 +858,20 @@ for (const [iface, paths] of AUDITED) {
   const base = inheritanceOf.get(iface);
   const inherited = base ? new Set(members(base)) : new Set();
   const ownSet = new Set(spec.filter((n) => !inherited.has(n)));
-  const open = spec.filter((n) => !installed.has(n) && !condNames.has(n));
+  const noop = spec.filter((n) => stubbed.has(n));
+  /* A js_noop-STUB IS PRESENT ON THE OBJECT, SO IT IS NOT ABSENT — and it was counted in both, because
+     `stubbed` and `installed` are the two halves of ONE split (idl_installed.mjs files each record under
+     exactly one of them) and only `installed` was subtracted here. The two categories are declared distinct
+     where they are minted — "an ABSENT member is one to write, a js_noop-STUB member is one to replace" — so a
+     member in both is ONE thing to do reported as two, inflating `totalMissing`, the ledger's two distinct
+     sets, and the OWN and ABSENT columns together. Nothing in the row can be asked about it: the member's name
+     simply appears in two lists a reader takes to be alternatives. It is removed at the ROOT rather than
+     asserted about, because the categories being disjoint is what the labels below promise — subtract the
+     stubs here and the promise is true by construction rather than by a check somebody keeps passing. */
+  const stubSet = new Set(noop);
+  const open = spec.filter((n) => !installed.has(n) && !stubSet.has(n) && !condNames.has(n));
   const absent = open.filter((n) => !maybeHere.has(n));
   const unproven = open.filter((n) => maybeHere.has(n));
-  const noop = spec.filter((n) => stubbed.has(n));
   totalMissing += absent.length + noop.length;
   for (const n of absent) { distinct.add(n); distinctAbsent.add(n); pairsAbsent++; }
   for (const n of noop) { distinct.add(n); distinctNoop.add(n); pairsNoop++; }
@@ -876,8 +886,13 @@ for (const [iface, paths] of AUDITED) {
      mixins that name IT — minus everything its base already declares. */
   const ownAbsent = absent.filter((n) => ownSet.has(n)).length;
   const ownNoop = noop.filter((n) => ownSet.has(n)).length;
+  /* THE SURFACE EACH COLUMN IS A GAP IN, carried with the gap. A bare count is read against whatever set its
+     label names, so a gap column named after a member set is read AS that member set — see the ranking
+     header below, which is where that reading was available and was taken. `spec.length` is the whole
+     flattened surface ABSENT is drawn from and `ownSet.size` is the declared-here surface OWN is drawn from;
+     the two differ by exactly the inherited members. */
   gapRows.push({ iface, absent: absent.length, noop: noop.length, unproven: unproven.length,
-                 own: ownAbsent + ownNoop });
+                 own: ownAbsent + ownNoop, spec: spec.length, ownSpec: ownSet.size });
   /* THE LEDGER COUNTS MEMBERS, NOT INTERFACE-MEMBER PAIRS, AND THAT IS NOT THE SAME NUMBER — see the two
      comments above and the ranking below, which both already say that a per-interface sum measures
      INHERITANCE DEPTH. `absent.length` summed over rows charges ONE unbuilt member once per interface that
@@ -1496,10 +1511,28 @@ const tot = (r) => r.absent + r.noop + r.unproven;
    that order. Both numbers are printed, because the total is still the honest answer to "what can a page not
    reach on this interface" — it is just not the answer to "what should I build next". */
 const withGaps = gapRows.filter(tot).sort((a, b) => (b.own - a.own) || (tot(b) - tot(a)));
+/* A COLUMN LABELLED BY THE SET IT IS DRAWN FROM READS AS THAT SET'S SIZE. This line named one column "the
+   members this interface DECLARES" and the other "those plus every inherited gap": both sentences describe the
+   SETS the columns are filtered out of, and neither describes the NUMBERS printed, which are what is MISSING
+   from each set. §Testing's rule that a coverage figure states what it is a fraction OF is the same rule a
+   bare gap count needs, and for the same reason — with no denominator beside it a reader supplies whichever
+   reading makes the label true, and the label said SURFACE.
+   Measured, on a NAMESPACE row, which is the shape that offers no other clue: a namespace inherits nothing, so
+   its two columns are equal by construction, and `OWN n ABSENT n` was read as its whole member surface charged
+   as absent. That sent a lane hunting an over-charge in the resolver — the reading where the audit cannot see
+   the component's install construct and credits it nothing — when the construct resolves, both its operations
+   are attributed to the namespace object the component declares per Web IDL §3.13.1 Namespace object, and the
+   count was the honest gap all along. The denominator is what removes that reading; a sentence arguing
+   against it would not, because the sentence is what was misread. Print both, and the row answers the
+   question a reader actually has. */
 console.log(`[idl-audit] ── per interface, ranked by OWN work ── ${gapRows.length - withGaps.length} of ` +
-            `${gapRows.length} audited interfaces install every member their IDL declares. OWN counts only the ` +
-            `members this interface DECLARES; ABSENT counts those plus every inherited gap, which is what a ` +
-            `page cannot reach on it — one member built on a base clears an inherited gap on every row below it`);
+            `${gapRows.length} audited interfaces install every member their IDL declares. BOTH COLUMNS COUNT ` +
+            `MEMBERS THAT ARE MISSING, printed as missing/surface: OWN is the missing members this interface ` +
+            `DECLARES — its own IDL plus the partials and mixins naming IT, minus everything its base declares ` +
+            `— out of every member it declares; ABSENT is everything a page cannot reach on it at all, out of ` +
+            `its whole flattened surface, own plus inherited, so one member built on a base clears an ` +
+            `inherited gap on every row below it. Neither numerator counts a member this run reported ` +
+            `CONDITIONAL, UNPROVEN or js_noop-STUB above: those are not installed and are not gaps either.`);
 if (withGaps.length) {
   /* A DERIVED ROW IS MARKED, because a table that does not say so reads as if every row had been audited all
      along. These are the interfaces no row named — they were in no total until the set became derived, so
@@ -1516,8 +1549,8 @@ if (withGaps.length) {
   const derivedSet = new Set(derivedIfaces);
   const w = Math.max(...withGaps.map((r) => r.iface.length));
   for (const r of withGaps)
-    console.log(`[idl-audit]   ${r.iface.padEnd(w)}  OWN ${String(r.own).padStart(3)}` +
-                `  ABSENT ${String(r.absent).padStart(3)}` +
+    console.log(`[idl-audit]   ${r.iface.padEnd(w)}  OWN ${String(r.own).padStart(3)}/${String(r.ownSpec).padEnd(4)}` +
+                ` ABSENT ${String(r.absent).padStart(3)}/${String(r.spec).padEnd(4)}` +
                 (r.noop ? `  js_noop-STUB ${r.noop}` : "") +
                 (r.unproven ? `  UNPROVEN ${r.unproven}` : "") +
                 (derivedSet.has(r.iface)
