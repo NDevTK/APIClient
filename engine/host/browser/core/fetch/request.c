@@ -44,16 +44,8 @@
    and inventing an enum would be a second spelling to keep in step with the first. */
 typedef struct {
     char     *url;             /* the serialized parsed URL */
-    char     *method;          /* normalized: uppercase for the six the spec names */
-    char     *mode;            /* "cors" | "no-cors" | "same-origin" | "navigate" */
-    char     *credentials;     /* "omit" | "same-origin" | "include" */
-    char     *cache;
-    char     *redirect;
-    char     *referrer;
-    char     *referrer_policy;
-    char     *integrity;
-    char     *destination;
-    int       keepalive;
+    /* §2.2.5's request, as the record §5.4 steps 10-27 fill — request.h, and the ONE place those steps run. */
+    RequestRecord rec;
     BodyState body;
     JSValue   headers;         /* [SameObject] */
     /* §5.4: a Request built from a `blob:` URL CAPTURES its blob URL entry, so revoking the URL afterwards
@@ -79,10 +71,9 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, d->headers);
     JS_FreeValueRT(rt, d->blob_entry);
     JS_FreeValueRT(rt, d->signal);
-    js_free_rt(rt, d->url); js_free_rt(rt, d->method); js_free_rt(rt, d->mode);
-    js_free_rt(rt, d->credentials); js_free_rt(rt, d->cache); js_free_rt(rt, d->redirect);
-    js_free_rt(rt, d->referrer); js_free_rt(rt, d->referrer_policy); js_free_rt(rt, d->integrity);
-    js_free_rt(rt, d->destination); body_state_free(rt, &d->body);
+    js_free_rt(rt, d->url);
+    request_record_free(rt, &d->rec);
+    body_state_free(rt, &d->body);
     js_free_rt(rt, d);
 }
 
@@ -99,6 +90,47 @@ static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_f
 }
 
 static RequestData *request_of(JSValueConst v) { return JS_GetOpaque(v, g_request_class); }
+
+/* ---- Fetch §2.2.5 "Requests"' record — see request.h --------------------------------------------------- */
+
+void request_record_init(RequestRecord *rec)
+{
+    DCHECK(rec != NULL, "a §2.2.5 request record was initialized through a null pointer");
+    memset(rec, 0, sizeof *rec);
+}
+
+void request_record_free(JSRuntime *rt, RequestRecord *rec)
+{
+    if (!rec) return;
+    js_free_rt(rt, rec->method); js_free_rt(rt, rec->mode); js_free_rt(rt, rec->credentials);
+    js_free_rt(rt, rec->cache); js_free_rt(rt, rec->redirect); js_free_rt(rt, rec->referrer);
+    js_free_rt(rt, rec->referrer_policy); js_free_rt(rt, rec->integrity); js_free_rt(rt, rec->destination);
+    request_record_init(rec);
+}
+
+/* EVERY FIELD IS PLACED BEFORE THE NEXT ONE IS ATTEMPTED, so a failure leaves a record whose remaining fields
+   are still NULL and whose free is exact — the same rule the constructor's own state follows and for the same
+   reason: the failure path frees what the record holds and nothing else. */
+int request_record_copy(JSContext *ctx, RequestRecord *dst, const RequestRecord *src)
+{
+    DCHECK(dst != NULL && src != NULL, "a §2.2.5 request record was copied through a null pointer");
+    request_record_init(dst);
+    dst->keepalive = src->keepalive;
+#define REQ_REC_DUP(f) do { \
+        if (src->f) { dst->f = js_strdup(ctx, src->f); if (!dst->f) return -1; } \
+    } while (0)
+    REQ_REC_DUP(method); REQ_REC_DUP(mode); REQ_REC_DUP(credentials); REQ_REC_DUP(cache);
+    REQ_REC_DUP(redirect); REQ_REC_DUP(referrer); REQ_REC_DUP(referrer_policy); REQ_REC_DUP(integrity);
+    REQ_REC_DUP(destination);
+#undef REQ_REC_DUP
+    return 0;
+}
+
+const RequestRecord *request_record_of(JSValueConst v)
+{
+    RequestData *d = g_request_class ? JS_GetOpaque(v, g_request_class) : NULL;
+    return d ? &d->rec : NULL;
+}
 
 /* §5.4's `formData()` asks the including interface for its Content-Type, because only it knows where its
    headers live. NULL when there is none, which is a body with no form encoding and therefore a TypeError. */
@@ -187,18 +219,18 @@ static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
     if (!d)
         return JS_ThrowTypeError(ctx, "not a Request");
     switch (magic) {
-    case REQ_METHOD:          return JS_NewString(ctx, d->method);
+    case REQ_METHOD:          return JS_NewString(ctx, d->rec.method);
     case REQ_URL:             return JS_NewString(ctx, d->url);
     case REQ_HEADERS:         return JS_DupValue(ctx, d->headers);   /* [SameObject] */
-    case REQ_DESTINATION:     return JS_NewString(ctx, d->destination);
-    case REQ_REFERRER:        return JS_NewString(ctx, d->referrer);
-    case REQ_REFERRER_POLICY: return JS_NewString(ctx, d->referrer_policy);
-    case REQ_MODE:            return JS_NewString(ctx, d->mode);
-    case REQ_CREDENTIALS:     return JS_NewString(ctx, d->credentials);
-    case REQ_CACHE:           return JS_NewString(ctx, d->cache);
-    case REQ_REDIRECT:        return JS_NewString(ctx, d->redirect);
-    case REQ_INTEGRITY:       return JS_NewString(ctx, d->integrity);
-    case REQ_KEEPALIVE:       return JS_NewBool(ctx, d->keepalive != 0);
+    case REQ_DESTINATION:     return JS_NewString(ctx, d->rec.destination);
+    case REQ_REFERRER:        return JS_NewString(ctx, d->rec.referrer);
+    case REQ_REFERRER_POLICY: return JS_NewString(ctx, d->rec.referrer_policy);
+    case REQ_MODE:            return JS_NewString(ctx, d->rec.mode);
+    case REQ_CREDENTIALS:     return JS_NewString(ctx, d->rec.credentials);
+    case REQ_CACHE:           return JS_NewString(ctx, d->rec.cache);
+    case REQ_REDIRECT:        return JS_NewString(ctx, d->rec.redirect);
+    case REQ_INTEGRITY:       return JS_NewString(ctx, d->rec.integrity);
+    case REQ_KEEPALIVE:       return JS_NewBool(ctx, d->rec.keepalive != 0);
     case REQ_SIGNAL:
         /* §5.4: "this's signal is always initialized in the constructor and when cloning" — the member is a
            non-nullable `AbortSignal`, so an absence here is an engine defect and never a value to report. */
@@ -248,18 +280,10 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
        from a since-revoked URL fetches exactly as the original does. */
     c->blob_entry      = JS_DupValue(ctx, d->blob_entry);
     c->url             = js_strdup(ctx, d->url);
-    c->method          = js_strdup(ctx, d->method);
-    c->mode            = js_strdup(ctx, d->mode);
-    c->credentials     = js_strdup(ctx, d->credentials);
-    c->cache           = js_strdup(ctx, d->cache);
-    c->redirect        = js_strdup(ctx, d->redirect);
-    c->referrer        = js_strdup(ctx, d->referrer);
-    c->referrer_policy = js_strdup(ctx, d->referrer_policy);
-    c->integrity       = js_strdup(ctx, d->integrity);
-    c->destination     = js_strdup(ctx, d->destination);
-    c->keepalive       = d->keepalive;
-    if (!c->url || !c->method || !c->mode || !c->credentials || !c->cache || !c->redirect || !c->referrer ||
-        !c->referrer_policy || !c->integrity || !c->destination ||
+    /* §5.4 clone(): every field of the request comes with it, through the one copy of the record — a field
+       added to §2.2.5's record is then carried here without this site being touched, which is the whole
+       reason the record is a record. */
+    if (!c->url || request_record_copy(ctx, &c->rec, &d->rec) < 0 ||
         body_state_set(ctx, &c->body, d->body.has ? d->body.bytes : NULL, d->body.len) < 0) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
@@ -351,11 +375,26 @@ IDL_ENUM_VALUES(REQUEST_PRIORITY, "auto", "high", "low");
    and Fetch — this file's own — HAS a §3.1.2 ("`Set-Cookie` header"), so the shorter spelling is a real
    number in the wrong document. */
 IDL_ENUM_VALUES(REQUEST_TARGET_ADDRESS_SPACE, "public", "local", "loopback");
+/* §5.4's OTHER FIVE ENUMERATIONS, WHICH THIS TABLE DECLARED AS `DOMString` AND WHICH ARE NOT ONE. Fetch's IDL
+   writes `RequestMode mode; RequestCredentials credentials; RequestCache cache; RequestRedirect redirect;
+   ReferrerPolicy referrerPolicy;`, and §3.2.18 Enumeration types makes every value outside the list a
+   TypeError — so `new Request(u, {credentials: "always"})` threw in every browser and built a request here
+   whose `credentials` attribute then ANSWERED "always". That is the defect a declaration exists to make
+   impossible arriving THROUGH one: the member was declared, converted and stored, and the only thing wrong
+   with it was the type, which no member-list audit can see (idlgen diffs which members EXIST). Four of the
+   five are Fetch's own, quoted from its IDL block; ReferrerPolicy is REFERRER POLICY §3 Referrer Policies'
+   and its FIRST value is the EMPTY STRING, which is a value the enumeration defines and not an absence. */
+IDL_ENUM_VALUES(REQUEST_MODE, "navigate", "same-origin", "no-cors", "cors");
+IDL_ENUM_VALUES(REQUEST_CREDENTIALS, "omit", "same-origin", "include");
+IDL_ENUM_VALUES(REQUEST_CACHE, "default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached");
+IDL_ENUM_VALUES(REQUEST_REDIRECT, "follow", "error", "manual");
+IDL_ENUM_VALUES(REFERRER_POLICY, "", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
+                "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url");
 
 static const IdlDictMember REQUEST_INIT[] = {
     { "body",           IDL_BODYINIT_NULLABLE,  false },
-    { "cache",          IDL_DOMSTRING,          false },
-    { "credentials",    IDL_DOMSTRING,          false },
+    { "cache",          IDL_ENUM,               false, REQUEST_CACHE },
+    { "credentials",    IDL_ENUM,               false, REQUEST_CREDENTIALS },
     /* `RequestDuplex duplex` — read at step 39, and read for its PRESENCE rather than for its value. */
     { "duplex",         IDL_ENUM,               false, REQUEST_DUPLEX },
     { "headers",        IDL_ANY,                false },   /* HeadersInit: the union the fill converts */
@@ -366,7 +405,7 @@ static const IdlDictMember REQUEST_INIT[] = {
        input contributed at step 12 with a value the page never wrote. */
     { "keepalive",      IDL_BOOLEAN_NO_DEFAULT, false },
     { "method",         IDL_BYTESTRING,         false },
-    { "mode",           IDL_DOMSTRING,          false },
+    { "mode",           IDL_ENUM,               false, REQUEST_MODE },
     /* `RequestPriority priority` — §5.4 step 27. THE CONVERSION IS THE WHOLE OF WHAT IS OBSERVABLE HERE, and
        that is a fact about the platform rather than a gap: §3.2.18 makes `{priority: "urgent"}` a TypeError,
        and step 27's own effect is to set the REQUEST's priority, which §5.4 exposes through no attribute —
@@ -382,9 +421,9 @@ static const IdlDictMember REQUEST_INIT[] = {
        implementation-defined manner" — is unreachable from here: §2.2.5 makes internal priority null unless
        stated otherwise, and step 12 copies the input request's, which no path in this engine ever sets.) */
     { "priority",       IDL_ENUM,               false, REQUEST_PRIORITY },
-    { "redirect",       IDL_DOMSTRING,          false },
+    { "redirect",       IDL_ENUM,               false, REQUEST_REDIRECT },
     { "referrer",       IDL_USVSTRING,          false },
-    { "referrerPolicy", IDL_DOMSTRING,          false },
+    { "referrerPolicy", IDL_ENUM,               false, REFERRER_POLICY },
     /* `AbortSignal? signal` — a DECLARED interface type, so `new Request(u, {signal: 5})` is Web IDL's
        own TypeError thrown before this constructor's first step rather than a check the body makes. */
     { "signal",         IDL_INTERFACE_NULLABLE, false },
@@ -476,6 +515,133 @@ static char *init_str(JSContext *ctx, JSValueConst init, const char *name, const
     return r;
 }
 
+/* FETCH §5.4 new Request(input, init) STEPS 10-27, ONCE — see request.h for why this is a shared operation and
+   not a span of the constructor's first stage.
+   NONE OF IT RUNS THE PAGE'S CODE. `init` is the dictionary Web IDL §3.2.17 Dictionary types already built, so
+   every [[Get]], every coercion and every §3.2.18 refusal is behind us; that is what lets eighteen steps sit in
+   one stage of whichever machine calls this. The ORDER is still §5.4's own, because it decides WHICH TypeError
+   a page sees when two members are bad at once — step 17 refuses a "navigate" mode before step 25 looks at the
+   method — and that order is observable. */
+int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *from, RequestRecord *rec)
+{
+    bool init_not_empty = !req_init_is_empty(ctx, init);
+
+    DCHECK(rec != NULL, "§5.4's member application was handed no request record to fill");
+    DCHECK(rec->method == NULL && rec->mode == NULL,
+           "§5.4 steps 10-27 were applied twice to one request record — every field below is a fresh "
+           "allocation, so a second pass leaks the first pass's nine strings and there is no reader that "
+           "could report it: the record looks exactly as it should");
+
+    /* §5.4 STEP 10: "If init["window"] exists and is NON-NULL, then throw a TypeError." Fetch's IDL declares
+       the member `any` and writes the reason beside it as a comment — "can only be set to null" — so the type
+       converts nothing and this step is the entire refusal. Undeclared and unchecked, every value a page could
+       write was accepted: `new Request(u, {window: window})`, which is the shape the member exists to refuse,
+       built a Request in this engine and a TypeError in every browser.
+       IT SITS FIRST BECAUSE THE ORDER IS OBSERVABLE. Step 5's URL parse and its credentials check are the
+       CALLER's and run before this; step 17's "navigate" mode and step 21's cache/mode pair are below, so
+       `new Request(u, {window: 5, mode: "navigate"})` reports this one — which is what a browser does.
+       §3.2.17 puts no member on the converted dictionary when the page wrote undefined, so `init_has` IS step
+       10's "exists" and `{window: undefined}` is absent rather than present-and-not-null. `{window: null}` is
+       the one accepted spelling.
+       NAMED RESIDUAL: step 11 — "If init["window"] exists, then set traversableForUserPrompts to
+       "no-traversable"" — sets nothing. A request's TRAVERSABLE FOR USER PROMPTS is the navigable a fetch may
+       raise an authentication prompt in, and this engine models no such prompt: there is no reader, so a field
+       here would be a value nothing ever asks for. The next diff builds the request record's traversable for
+       user prompts together with the §4.4 HTTP fetch step that consults it, so the two arrive with a question
+       and an answer. ITS ABSENCE SHOWS the day a 401 with a `WWW-Authenticate` reaches a flow: `{window: null}`
+       must make that reply arrive unprompted, and here every reply does, so the member's whole effect is
+       currently indistinguishable from its absence. */
+    if (init_has(ctx, init, "window")) {                                          /* step 10 */
+        JSValue w = idl_dict_get(ctx, init, "window");
+        bool nonnull = !JS_IsNull(w);
+
+        JS_FreeValue(ctx, w);
+        if (nonnull) {
+            JS_ThrowTypeError(ctx, "the RequestInit member `window` can only be set to null");
+            return -1;
+        }
+    }
+
+    /* §5.4 step 13: "If init is not empty" resets the referrer to "client" and the referrer policy to the
+       empty string BEFORE steps 14-15 read the members — so a Request input's referrer survives only a
+       construction that supplies no member at all. This is the one place step 13 is observable here: its other
+       clauses are the reload/history-navigation flags and the origin, which this engine's request record does
+       not hold, and the "navigate" mode it rewrites is asserted unreachable below.
+       EVERY DEFAULT BELOW IS STEP 12'S CARRY-FORWARD, and the bare constant is what a STRING input starts
+       from. §5.4 spells each of these "If init[member] exists, then set request's <field> to it", over a
+       request that already holds the input's value — so a constant in the `dflt` position is a statement that
+       the page asked for it, and for a Request input that statement is false. */
+    rec->referrer        = init_str(ctx, init, "referrer",                          /* steps 13-14 */
+                                    (from && !init_not_empty) ? from->referrer : "about:client");
+    rec->referrer_policy = init_str(ctx, init, "referrerPolicy",                    /* steps 13, 15 */
+                                    (from && !init_not_empty) ? from->referrer_policy : "");
+    /* §5.4 steps 16-18: "navigate" is not a mode a page may ask for. Step 16 is "Let mode be init["mode"] if
+       it exists, and fallbackMode otherwise" — and fallbackMode is set to "cors" at step 5.5, the STRING arm,
+       and left null by the Request arm; step 18's "If mode is non-null" is what then leaves a Request input's
+       own mode standing. So "cors" here is the string input's fallback and never a Request's. */
+    DCHECK(!from || strcmp(from->mode, "navigate") != 0,
+           "a Request used as `input` carried mode \"navigate\" — step 17 throws on it and no other path in "
+           "this engine mints a Request, so step 13's \"if request's mode is navigate, set it to same-origin\" "
+           "is unreachable rather than unimplemented");
+    rec->mode = init_str(ctx, init, "mode", from ? from->mode : "cors");
+    if (!strcmp(rec->mode, "navigate")) {                                         /* step 17 */
+        JS_ThrowTypeError(ctx, "a Request cannot be constructed with mode \"navigate\"");
+        return -1;
+    }
+    rec->credentials     = init_str(ctx, init, "credentials",                      /* step 19 */
+                                    from ? from->credentials : "same-origin");
+    rec->cache           = init_str(ctx, init, "cache", from ? from->cache : "default");   /* step 20 */
+    /* §5.4 step 21: "only-if-cached" asks the cache to answer without going to the network, which only means
+       anything for a same-origin request — so any other mode is a TypeError. */
+    if (!strcmp(rec->cache, "only-if-cached") && strcmp(rec->mode, "same-origin")) {
+        JS_ThrowTypeError(ctx, "a Request with cache \"only-if-cached\" must have mode \"same-origin\"");
+        return -1;
+    }
+    rec->redirect        = init_str(ctx, init, "redirect", from ? from->redirect : "follow");   /* step 22 */
+    rec->integrity       = init_str(ctx, init, "integrity", from ? from->integrity : "");       /* step 23 */
+    /* §5.4 step 24: "If init["keepalive"] exists, then set request's keepalive to it" — so an ABSENT member
+       leaves step 12's value standing, which is the input request's or `false` for a string.
+       THE READ IS `idl_dict_bool` AND NOT A BARE `JS_ToBool`, because ToBoolean over unknown external input
+       pins it to `true` and deletes the false world; the declared member has already been converted, so the
+       reader's assert is what says that is still so if the declaration ever changes underneath it. */
+    rec->keepalive = from ? from->keepalive : 0;                                  /* step 12 */
+    if (init_has(ctx, init, "keepalive"))                                         /* step 24 */
+        rec->keepalive = idl_dict_bool(ctx, init, "keepalive");
+    /* §5.4 step 25's method: a token, not a forbidden method, then normalized. An absent member leaves step
+       12's — the input request's already-normalized method, or `GET` for a string input. */
+    {
+        JSValue mv = idl_dict_get(ctx, init, "method");
+        if (JS_IsUndefined(mv)) {
+            rec->method = js_strdup(ctx, from ? from->method : "GET");
+        } else {
+            const char *mc = JS_ToCString(ctx, mv);
+            if (!mc) { JS_FreeValue(ctx, mv); return -1; }
+            rec->method = request_method_check(ctx, mc);
+            JS_FreeCString(ctx, mc);
+            if (!rec->method) { JS_FreeValue(ctx, mv); return -1; }
+        }
+        JS_FreeValue(ctx, mv);
+    }
+    /* §2.2.5: "unless stated otherwise it is the empty string", and neither §5.4 nor §5.6 states otherwise —
+       so a script-constructed request and a `fetch()` are both the empty destination, which is the positive
+       statement "these bytes are data" that the trusted zone's CORB class is read off. */
+    rec->destination = js_strdup(ctx, from ? from->destination : "");
+    CHECK(rec->method && rec->mode && rec->credentials && rec->cache && rec->redirect && rec->referrer &&
+          rec->referrer_policy && rec->integrity && rec->destination,
+          "request: OOM applying Fetch §5.4's RequestInit members to a request record");
+    /* §5.4 step 27's "set request's priority to init["priority"]" and LOCAL NETWORK ACCESS §3.1.2 Fetch API's
+       `targetAddressSpace` switch store nothing — each is a NAMED RESIDUAL at its row in REQUEST_INIT above,
+       where the member and the reason a reader does not exist yet are stated together. */
+    return 0;
+}
+
+const IdlDictMember *request_init_members(int *n)
+{
+    DCHECK(n != NULL, "the RequestInit declaration table was asked for without a place to report its length");
+    *n = REQUEST_INIT_N;
+    return REQUEST_INIT;
+}
+
 static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -491,7 +657,6 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            URL alone — and steps 12 and 13 below are what carry it forward. */
         RequestData *from = request_of(input);
         const char *from_request = from ? from->url : NULL;
-        bool init_not_empty = !req_init_is_empty(ctx, init);
 
         if (JS_IsUndefined(hdr->this_val)) {
             JS_FreeValue(ctx, cb_result);
@@ -573,108 +738,14 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             url_record_free(&rec);
         }
 
-        /* §5.4 STEP 10: "If init["window"] exists and is NON-NULL, then throw a TypeError." Fetch's IDL
-           declares the member `any` and writes the reason beside it as a comment — "can only be set to null"
-           — so the type converts nothing and this step is the entire refusal. Undeclared and unchecked, every
-           value a page could write was accepted: `new Request(u, {window: window})`, which is the shape the
-           member exists to refuse, built a Request in this engine and a TypeError in every browser. That is a
-           WRONG ANSWER and not a missing feature — the engine accepted input the standard rejects.
-           IT SITS HERE BECAUSE THE ORDER IS OBSERVABLE. Step 5's URL parse and its credentials check are
-           above; step 17's "navigate" mode and step 21's cache/mode pair are below, so
-           `new Request("http://u:p@x/", {window: 5})` reports the credentials TypeError and
-           `new Request(u, {window: 5, mode: "navigate"})` reports this one — which is what a browser does.
-           §3.2.17 Dictionary types puts no member on the converted dictionary when the page wrote undefined,
-           so `init_has` IS step 10's "exists" and `{window: undefined}` is absent rather than present-and-not-
-           null. `{window: null}` is the one accepted spelling.
-           NAMED RESIDUAL: step 11 — "If init["window"] exists, then set traversableForUserPrompts to
-           "no-traversable"" — sets nothing. A request's TRAVERSABLE FOR USER PROMPTS is the navigable a fetch
-           may raise an authentication prompt in, and this engine models no such prompt: there is no reader,
-           so a field here would be a value nothing ever asks for. The next diff builds the request record's
-           traversable for user prompts together with the §4.4 HTTP fetch step that consults it, so the two
-           arrive with a question and an answer. ITS ABSENCE SHOWS the day a 401 with a `WWW-Authenticate`
-           reaches a flow: `{window: null}` must make that reply arrive unprompted, and here every reply does,
-           so the member's whole effect is currently indistinguishable from its absence. */
-        if (init_has(ctx, init, "window")) {                                          /* step 10 */
-            JSValue w = idl_dict_get(ctx, init, "window");
-            bool nonnull = !JS_IsNull(w);
-
-            JS_FreeValue(ctx, w);
-            if (nonnull) {
-                JS_ThrowTypeError(ctx, "the RequestInit member `window` can only be set to null");
-                return -1;
-            }
-        }
-
-        /* THE INIT MEMBERS, IN §5.4'S OWN ORDER — steps 14 through 25. They were applied in the order this
-           file grew in (method first, then mode, then the rest), and the order decides WHICH TypeError a page
-           sees when two members are bad at once: §5.4 refuses a "navigate" mode at step 17, before it looks at
-           the method at step 25. None of this runs the page's code — the dictionary conversion did that
-           already — so the whole span is one stage, and the span is what the label names.
-           EVERY DEFAULT BELOW IS NOW STEP 12'S CARRY-FORWARD, and the bare constant is what a STRING input
-           starts from. §5.4 spells each of these "If init[member] exists, then set request's <field> to it",
-           over a request that already holds the input's value — so a constant in the `dflt` position is a
-           statement that the page asked for it, and for a Request input that statement is false. */
-        /* §5.4 step 13: "If init is not empty" resets the referrer to "client" and the referrer policy to the
-           empty string BEFORE steps 14-15 read the members — so a Request input's referrer survives only a
-           construction that supplies no member at all. This is the one place step 13 is observable here: its
-           other clauses are the reload/history-navigation flags and the origin, which this engine's Request
-           record does not hold, and the "navigate" mode it rewrites is asserted unreachable below. */
-        d->referrer        = init_str(ctx, init, "referrer",                          /* steps 13-14 */
-                                      (from && !init_not_empty) ? from->referrer : "about:client");
-        d->referrer_policy = init_str(ctx, init, "referrerPolicy",                    /* steps 13, 15 */
-                                      (from && !init_not_empty) ? from->referrer_policy : "");
-        /* §5.4 steps 16-18: "navigate" is not a mode a page may ask for. Step 16 is "Let mode be init["mode"]
-           if it exists, and FALLBACKMODE otherwise" — and fallbackMode is set to "cors" at step 5.5, the
-           STRING arm, and left null by the Request arm; step 18's "If mode is non-null" is what then leaves a
-           Request input's own mode standing. So "cors" here is the string input's fallback and never a
-           Request's. */
-        DCHECK(!from || strcmp(from->mode, "navigate") != 0,
-               "a Request used as `input` carried mode \"navigate\" — step 17 throws on it and no other path "
-               "in this engine mints a Request, so step 13's \"if request's mode is navigate, set it to "
-               "same-origin\" is unreachable rather than unimplemented");
-        d->mode = init_str(ctx, init, "mode", from ? from->mode : "cors");
-        if (!strcmp(d->mode, "navigate")) {
-            JS_ThrowTypeError(ctx, "a Request cannot be constructed with mode \"navigate\"");
+        /* §5.4 STEPS 10-27, THROUGH THE ONE IMPLEMENTATION OF THEM (request.h). They stood written out here,
+           and `fetch(input, init)` — which Fetch §5.6 "Fetch methods" step 2 defines as an invocation of THIS
+           constructor — had its own partial copy that read three members and dropped thirteen. Two copies of
+           one algorithm is how a step lands in one of them: this is the copy that grew step 10, step 21 and
+           step 32.1, and the other one never did. */
+        if (request_init_apply(ctx, init, from ? &from->rec : NULL, &d->rec) < 0)
             return -1;
-        }
-        d->credentials     = init_str(ctx, init, "credentials",                       /* step 19 */
-                                      from ? from->credentials : "same-origin");
-        d->cache           = init_str(ctx, init, "cache", from ? from->cache : "default");   /* step 20 */
-        /* §5.4 step 21: "only-if-cached" asks the cache to answer without going to the network, which only
-           means anything for a same-origin request — so any other mode is a TypeError. It was missing, and
-           `new Request(u, {cache:"only-if-cached"})` (mode "cors" by step 5.5's fallback) was accepted. */
-        if (!strcmp(d->cache, "only-if-cached") && strcmp(d->mode, "same-origin")) {
-            JS_ThrowTypeError(ctx, "a Request with cache \"only-if-cached\" must have mode \"same-origin\"");
-            return -1;
-        }
-        d->redirect        = init_str(ctx, init, "redirect", from ? from->redirect : "follow");   /* step 22 */
-        d->integrity       = init_str(ctx, init, "integrity", from ? from->integrity : "");       /* step 23 */
-        /* §5.4 step 24: "If init["keepalive"] exists, then set request's keepalive to it" — so an ABSENT
-           member leaves step 12's value standing, which is the input request's or `false` for a string. */
-        d->keepalive = from ? from->keepalive : 0;                                    /* step 12 */
-        if (init_has(ctx, init, "keepalive")) {                                       /* step 24 */
-            JSValue kv = idl_dict_get(ctx, init, "keepalive");
-            d->keepalive = JS_ToBool(ctx, kv);
-            JS_FreeValue(ctx, kv);
-        }
-        /* §5.4 step 25's method: a token, not a forbidden method, then normalized. An absent member leaves
-           step 12's — the input request's already-normalized method, or `GET` for a string input. */
-        {
-            JSValue mv = idl_dict_get(ctx, init, "method");
-            if (JS_IsUndefined(mv)) {
-                d->method = js_strdup(ctx, from ? from->method : "GET");
-            } else {
-                const char *mc = JS_ToCString(ctx, mv);
-                if (!mc) { JS_FreeValue(ctx, mv); return -1; }
-                d->method = request_method_check(ctx, mc);
-                JS_FreeCString(ctx, mc);
-                if (!d->method) { JS_FreeValue(ctx, mv); return -1; }
-            }
-            JS_FreeValue(ctx, mv);
-        }
-        d->destination     = js_strdup(ctx, "");   /* §5.4: a script-constructed request has no destination */
-        CHECK(d->url && d->method && d->mode && d->credentials && d->cache && d->redirect && d->referrer &&
-              d->referrer_policy && d->integrity && d->destination, "request: OOM building a Request");
+        CHECK(d->url != NULL, "request: OOM building a Request's URL");
         /* §5.4 steps 4 / 6.3 / 26 and then "let signals be « signal » if signal is non-null; otherwise « »"
            and "set this's signal to the result of creating a dependent abort signal from signals". The two
            sources are the Request `input` (a `new Request(other)` inherits other's signal) and init["signal"],
@@ -709,7 +780,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            `headers` to the init member and then empty this's header list, leaving nothing of the copy. */
         if (from && !init_has(ctx, init, "headers")) {
             const HeaderList *src = headers_list_of(from->headers);
-            HeadersGuard guard = !strcmp(d->mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS
+            HeadersGuard guard = !strcmp(d->rec.mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS
                                                              : HEADERS_GUARD_REQUEST;
             int i;
 
@@ -730,7 +801,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     if (hdr->stage == REQ_CTOR_HEADERS) {
         /* §5.4's headers: guard "request", or "request-no-cors" when the mode says so — which is the ONLY way
            either guard becomes observable, since a page's own Headers has guard "none". */
-        HeadersGuard guard = !strcmp(d->mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS
+        HeadersGuard guard = !strcmp(d->rec.mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS
                                                          : HEADERS_GUARD_REQUEST;
         JSValue hv;
 
@@ -739,8 +810,8 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            `new Request(u, {mode:"no-cors", method:"PUT"})` built a request no browser will make, and the
            mode carried forward at step 12 gives that shape a second way in. The method here is normalized, so
            the comparison is against the uppercase spellings and nothing else. */
-        if (guard == HEADERS_GUARD_REQUEST_NO_CORS && strcmp(d->method, "GET") &&
-            strcmp(d->method, "HEAD") && strcmp(d->method, "POST")) {
+        if (guard == HEADERS_GUARD_REQUEST_NO_CORS && strcmp(d->rec.method, "GET") &&
+            strcmp(d->rec.method, "HEAD") && strcmp(d->rec.method, "POST")) {
             JS_FreeValue(ctx, cb_result);
             JS_ThrowTypeError(ctx, "a Request with mode \"no-cors\" must use a CORS-safelisted method");
             return -1;
@@ -777,7 +848,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         /* STEP 35: "If either init["body"] exists and is non-null OR INPUTBODY IS NON-NULL, and request's
            method is `GET` or `HEAD`, then throw a TypeError" — so `new Request(post, {method:"GET"})` is
            refused rather than silently issued bodiless. */
-        if ((init_body || input_body) && (!strcmp(d->method, "GET") || !strcmp(d->method, "HEAD"))) {
+        if ((init_body || input_body) && (!strcmp(d->rec.method, "GET") || !strcmp(d->rec.method, "HEAD"))) {
             JS_FreeValue(ctx, bv);
             JS_ThrowTypeError(ctx, "a Request with a GET or HEAD method cannot have a body");
             return -1;
@@ -788,7 +859,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                out of init a stage ago — not a constant. §5.2's ReadableStream arm begins "If keepalive is
                true, then throw a TypeError", so a hardcoded false made `new Request(u, {method: "POST",
                keepalive: true, body: stream})` build a request a browser refuses. */
-            if (body_extract(ctx, &d->body, bv, d->keepalive != 0, &mime) < 0) {
+            if (body_extract(ctx, &d->body, bv, d->rec.keepalive != 0, &mime) < 0) {
                 free(mime);
                 JS_FreeValue(ctx, bv);
                 return -1;
@@ -833,7 +904,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 }
                 /* STEP 39.2: "If this's request's mode is neither "same-origin" nor "cors", then throw a
                    TypeError." A streamed body cannot be sent no-cors — there is no way to preflight it. */
-                if (strcmp(d->mode, "same-origin") && strcmp(d->mode, "cors")) {
+                if (strcmp(d->rec.mode, "same-origin") && strcmp(d->rec.mode, "cors")) {
                     JS_ThrowTypeError(ctx, "a Request with a ReadableStream body must have mode "
                                            "\"same-origin\" or \"cors\"");
                     return -1;
