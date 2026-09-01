@@ -457,7 +457,20 @@ function forkReading(t) {
 }
 function probeFlips(out) {
   const rows = [];
-  for (const m of out.matchAll(/^@H (.*)$/gm)) {
+  /* THE TABLE, AND NEVER PROSE ABOUT THE TABLE. test_forced.c's `probes_report` prints TWO shapes under this
+     one marker: `@H   <row>: <why>` for each folded 0, and then `@H ` + the whole table + `=> OK|FAIL|
+     INCOMPLETE`. A `why` is a SENTENCE, so it carries whatever `k=0` pairs its author needed to make the
+     sentence say something — `(engine_orphan_census: asked=0, driven=0)`, `forked=0` — and a bare
+     `(\S+)=([01])` reads those as tables. Measured on one smoke log: NINE rows where the run printed ONE,
+     eight of them prose.
+     A WRONG COUNT IS THE SMALLEST OF THE THREE THINGS THAT COSTS. `ever` is a union over every row, so the
+     first `why` that ever spells `k=1` invents a statement the fixture does not make; and `answered`,
+     `asked` and `unanswered` are read off the LAST row, so a run killed between a why line and the table it
+     precedes reports `0/2 … asked driven` — a fabricated fraction, in the arms whose whole subject is
+     killed runs.
+     THE DISCRIMINATOR IS THE PRODUCER'S OWN TERMINATOR: the table is the line that ENDS in the verdict
+     `probes_report` writes after it, and prose never carries one. */
+  for (const m of out.matchAll(/^@H ((?:\S+=[01] )+)=> (?:OK|FAIL|INCOMPLETE)$/gm)) {
     const r = {};
     for (const [, k, v] of m[1].matchAll(/(\S+)=([01])\b/g)) r[k] = v === "1";
     if (Object.keys(r).length) rows.push(r);
@@ -497,10 +510,27 @@ function probeStanding(out) {
   return { answered: names.filter((k) => last[k]).length, asked: names.length,
            unanswered: names.filter((k) => !last[k]), ever: ever.size, samples: rows.length };
 }
+/* AND HOW MANY TIMES THE QUESTION WAS ASKED, WHICH `probeStanding` HAS ALWAYS COMPUTED AND THIS LINE HAS
+   ALWAYS DROPPED. That is the defect the paragraph above this function describes — a computed observation
+   with no reader — one field over, in the function that describes it.
+   IT IS WHAT SEPARATES A SOLVER THAT RAN AND FOUND NOTHING FROM A RUN THAT NEVER STARTED, and those are the
+   two readings of an all-zero table. solver/engine.c's `run_scheduler` calls the park hook at the TOP of its
+   loop — before `engine_sched_step` has run once — and test_forced.c's `fixture_have_answers` prints on its
+   first call and thereafter only every PROBE_SAMPLE_EVERY units of `engine_work_done`. So ONE table in the
+   whole output is the table composed BEFORE THE FIRST STEP, and every 0 in it is a statement the run never
+   reached rather than one it answered wrongly — which is the opposite reading from the one an all-zero table
+   invites, and the one nothing in this file said. Measured: a smoke that aborted on its second scheduler step
+   printed a single table reading 193 of 196 still 0, and the frontier under it (`@WFQ members: 1`,
+   `@FORKAT {}`, `_sourceReads: 0`) was read as a scheduler that starves. */
 const standingText = (s) =>
   s === null ? "no @H probe stream in this run — this stage makes no statement of that kind"
              : `${s.answered}/${s.asked} of the fixture's statements answered` +
-               (s.ever > s.answered ? ` (${s.ever} ever — ${s.ever - s.answered} went back to 0)` : "");
+               (s.ever > s.answered ? ` (${s.ever} ever — ${s.ever - s.answered} went back to 0)` : "") +
+               (s.samples === 1
+                  ? ", AT THE ONE TABLE COMPOSED BEFORE THE FIRST SCHEDULER STEP — this run printed no " +
+                    "second @H sample, so every 0 above is a statement it never REACHED and not one it " +
+                    "answered wrongly, and nothing here is a verdict on the mechanism any row names"
+                  : `, over ${s.samples} @H tables`);
 
 /* AN ABORT IS AN ABORT EVEN WHERE NO SIGNAL CAN CARRY IT, AND UNDER EMSCRIPTEN NONE CAN.
    `runOutcome`'s `.signal` arm exists precisely so that a DCHECK doing its job is never misfiled as a timing
