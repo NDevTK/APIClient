@@ -1526,6 +1526,29 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     if (!frag) base.search = "";
     out.targetUrl = base.href + deliveryPrefix + payload;
     out.targetOrigin = base.origin;       // OUR expectation, compared against the browser's MessageSender.origin — never the reverse
+    /* THE PAYLOAD IS NOT PERCENT-ENCODED HERE, AND THAT IS THE AGREEMENT RATHER THAN AN OMISSION. The engine's
+       `poc` is the candidate AS THE SEARCH BUILT IT — the bytes an attacker writes — and the browser's own
+       transform is applied on the way in by concolic_deliver (solver/concolic.c), off the set
+       concolic_declare_source registers per source, and the two components differ in exactly the byte that
+       decides an HTML breakout from a JS one. URL §1.3 Percent-encoded bytes states the fragment set as
+       consisting of the C0 control percent-encode set and U+0020 SPACE, U+0022, U+003C, U+003E, and U+0060 —
+       backtick in, apostrophe out — and states the query set the other way, as U+0020 SPACE, U+0022, U+0023,
+       U+003C and U+003E, over which: The special-query percent-encode set is a percent-encode set consisting
+       of the query percent-encode set and U+0027 (').
+       Re-applying that here would encode the bytes TWICE and every markup breakout would
+       arrive at the page as a literal %3C; pre-encoding them to match would be a second copy of the engine's
+       table on this side, which is the drift CLAUDE.md forbids. So the raw candidate is placed at the component
+       the engine's own prefix names and CHROME performs the transform — the same one transform, applied once,
+       by the two independent implementations whose agreement is the entire point of §LIVE-VERIFY. A byte
+       Chrome encodes and the engine does not is then a real engine-fidelity divergence and reports as one.
+       AND ITS COMPLETION VALUE IS THE DELIVERY'S OWN ANSWER, which poc-sandbox.html READS: this is ONE
+       ExpressionStatement, so evaluating it yields what HTML §7.2.2.1 Opening and closing windows says the
+       window open steps return — step 14, If targetNavigable is null, then return null (no navigable was
+       created, which is what a popup blocker is), against step 19's active WindowProxy. That is the only thing
+       that can tell a delivery which ran and did not fire from one that never reached a document at all, and
+       §LIVE-VERIFY reads the first as an engine bug. A delivery arm that grows a second statement stops
+       answering, and the sandbox crosses that as `unstated` rather than guessing — it must never be turned
+       into a statement sequence in silence. */
     out.pocJs = "window.open(" + JSON.stringify(out.targetUrl) + ', "_blank");';
     out.delivery = "navigate the victim to a URL whose " + (frag ? "fragment" : "query string") + " is the payload";
     return out;

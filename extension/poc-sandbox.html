@@ -61,15 +61,58 @@
     statusEl.className = ""; statusEl.textContent = "ready — click Run";
   });
 
+  // WHETHER A DOCUMENT WAS EVER HANDED THE PAYLOAD IS THIS FILE'S TO SAY, AND NOTHING DOWNSTREAM CAN SAY IT.
+  // §LIVE-VERIFY reads NO HIT as an ENGINE-FIDELITY DIVERGENCE TO FIX, which is only true of a payload that
+  // actually reached a document. This handler used to discard the delivery's own answer and post `error:null`
+  // for every run that did not THROW, so three states arrived at the popup as one and the popup printed the
+  // strongest of them: a delivery that ran and did not fire (a real divergence), a delivery that created NO
+  // NAVIGABLE AT ALL, and a delivery whose result this file cannot state, all read as "payload delivered" and
+  // then as "the engine's model diverges from Chrome here (an engine-fidelity bug to investigate)" — a
+  // confident wrong instruction about a navigation that never happened, and CLAUDE.md §@S's named tell
+  // (a rung whose ABSENCE and whose ZERO read alike) performed on the verify surface.
+  //
+  // THE ANSWER IS THE PLATFORM'S OWN AND IT IS ALREADY IN HAND. HTML §7.2.2.1 "Opening and closing windows"
+  // defines the window open steps to end either "If targetNavigable is null, then return null" (step 14 — the
+  // user agent created no navigable, which is what a popup blocker is) or "Return targetNavigable's active
+  // WindowProxy" (step 19). The delivery this layer performs is one `window.open(...)` expression statement
+  // (offscreen-brain.js `buildLiveDelivery`, the `address` arm), so the completion value of `pocJs` IS that
+  // return value — which is why it is READ here rather than re-derived from anything.
+  //
+  // AND THE THIRD TOKEN IS THE HONEST ONE. `undefined` is not a delivery outcome: it is this file's statement
+  // that the pocJs it was handed is no longer an expression whose value says what happened. It crosses as
+  // `unstated` rather than being folded into either real answer, so a delivery arm that grows a second
+  // statement shows up as a NAMED contract gap on the card instead of as an engine bug. HOW ITS ABSENCE WOULD
+  // SHOW, had this stayed unstated: every popup-blocked verify reporting the engine as wrong.
   runBtn.addEventListener("click", function () {
     if (!pocJs) return;
     statusEl.className = ""; statusEl.textContent = "running…";
-    var threw = null;
-    try { (0, eval)(pocJs); }            // user gesture present → window.open allowed
+    var threw = null, opened;
+    try { opened = (0, eval)(pocJs); }   // user gesture present → window.open allowed
     catch (err) { threw = (err && err.message) || String(err); }
-    if (threw) { statusEl.className = "err"; statusEl.textContent = "PoC threw: " + threw; }
-    else { statusEl.className = "ok"; statusEl.textContent = "PoC executed — verdict updates below when the sink fires"; }
-    try { (parentWin || parent).postMessage({ type: "POC_RAN", marker: marker, error: threw }, parentOrigin); } catch (_) {}
+    // Identity comparisons ONLY: a successful open answers a CROSS-ORIGIN WindowProxy, whose members are
+    // HTML §7.2.1's fixed cross-origin list and whose anything-else is a SecurityError — so the value is
+    // classified by what it IS and never by reading it.
+    var outcome = threw !== null    ? "threw"
+                : opened === undefined ? "unstated"
+                : opened === null      ? "no-navigable"
+                                       : "delivered";
+    if (outcome === "threw") {
+      statusEl.className = "err"; statusEl.textContent = "PoC threw before any navigation: " + threw;
+    } else if (outcome === "no-navigable") {
+      statusEl.className = "err";
+      statusEl.textContent = "no window was created — the payload was never delivered (allow popups for this extension)";
+    } else if (outcome === "unstated") {
+      statusEl.className = "err";
+      statusEl.textContent = "the delivery did not state what it produced — see the card";
+    } else {
+      statusEl.className = "ok"; statusEl.textContent = "PoC delivered — verdict updates below when the sink fires";
+    }
+    // NO `catch (_) {}` AROUND THE HANDOFF, for the reason lib/popup-security.js gives for dropping its own:
+    // this posts a plain object to the document that handed us the PoC and whose origin came off that very
+    // message, so the only way it throws is a bug in that pairing — and swallowing it left the popup showing
+    // "click Run PoC" for ever, which reads as a verify the user never started rather than as one that broke.
+    (parentWin || parent).postMessage({ type: "POC_RAN", marker: marker, error: threw, outcome: outcome },
+                                      parentOrigin);
   });
 
   // Tell the popup we're ready to receive the PoC.

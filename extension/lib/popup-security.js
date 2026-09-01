@@ -940,13 +940,61 @@ window.addEventListener("message", function (e) {
     // identification — and swallowing it left the sandbox waiting for a POC_SETUP that never came, which
     // reads to the user as a live-verify that simply never answers.
     if (d.type === "POC_READY") { e.source.postMessage({ type: "POC_SETUP", pocJs: ent.pocJs, marker: ent.marker }, "*"); }
-    else if (d.type === "POC_RAN" && ent.resultEl) {
-      ent.resultEl.textContent = d.error ? "PoC threw in the sandbox: " + d.error : "payload delivered — waiting for the sink to fire in Chrome…";
-      _pollVerify(ent.resultEl, ent.marker, ent.blockers);
-    }
+    else if (d.type === "POC_RAN" && ent.resultEl) _reportDelivery(d, ent);
     return;
   }
 });
+
+/* WHAT THE SANDBOX SAYS ITS DELIVERY PRODUCED — the gate in front of _pollVerify, and the reason the verdict
+   below it is allowed to name the engine at all.
+   THIS LINE USED TO POLL ON EVERY RUN, AND POLLING IS WHAT MAKES THE CLAIM. _pollVerify's last arm reports
+   "NOT REPRODUCED … the engine's model diverges from Chrome here (an engine-fidelity bug to investigate)" —
+   the strongest instruction this panel gives, and one that is only true of a payload a document actually
+   received. Three states reached it as one: a delivery that ran and did not fire (the real divergence), a
+   delivery that THREW before navigating anything, and a `window.open` that created NO NAVIGABLE — HTML
+   §7.2.2.1 "Opening and closing windows" step 14, "If targetNavigable is null, then return null", which is
+   what a popup blocker is. The second and third are HARNESS results with nothing in them about the engine,
+   and both printed as an engine bug. That is §@S's tell exactly: a rung whose ABSENCE and whose ZERO read
+   alike, here on the one surface CLAUDE.md defines as ENGINE AGREEMENT.
+   IT FAILS CLOSED, AND DELIBERATELY DOES NOT DCHECK THE TOKEN. `outcome` crosses from the frame that EVALS
+   the payload, so a payload can post its own POC_RAN — asserting the vocabulary here would hand an analysed
+   page an abort of the popup, which is the hazard offscreen-brain.js's `_recordProbeHit` names for the same
+   channel. So the strongest reading is reachable ONLY from an explicit positive statement and every other
+   value — absent, unknown, or forged — renders as a non-delivery with the token shown. A hostile payload can
+   therefore weaken its own report and can never manufacture a fire: the fire verdict is decided in the
+   trusted zone against browser-stated facts, never here. */
+function _reportDelivery(d, ent) {
+  var el = ent.resultEl;
+  if (d.outcome === "delivered") {
+    el.className = "verify-result";
+    el.textContent = "payload delivered — waiting for the sink to fire in Chrome…";
+    _pollVerify(el, ent.marker, ent.blockers);
+    return;
+  }
+  el.className = "verify-result verify-miss";
+  if (d.outcome === "threw") {
+    // VALIDATED, NOT DEFAULTED, and the difference is which side of the seam this is. Everything on a POC_RAN
+    // arrives from the frame that EVALS the payload, so these are checked the way offscreen-brain.js's
+    // `_recordProbeHit` checks a relayed hit — by TYPE, with the miss named — rather than asserted the way a
+    // producer's own record is. A `||` here would read to the next person as a defaulted contract field.
+    el.textContent = "NOT DELIVERED — the delivery threw in the attacker sandbox before any navigation "
+      + "happened (" + (typeof d.error === "string" && d.error ? d.error : "the sandbox stated no message")
+      + "), so no document was ever handed the payload. This is a "
+      + "result about the HARNESS: it is NOT an engine-fidelity divergence, and NOT a statement that the sink "
+      + "is safe. The finding stands — the engine fire-verified this breakout.";
+  } else if (d.outcome === "no-navigable") {
+    el.textContent = "NOT DELIVERED — window.open created no navigable, so no document was ever handed the "
+      + "payload. HTML §7.2.2.1 “Opening and closing windows” step 14 returns null exactly when the user agent "
+      + "creates none, which is what a popup blocker is: allow popups for this extension and run it again. "
+      + "This is a result about the HARNESS — NOT an engine-fidelity divergence, and NOT a statement that the "
+      + "sink is safe. The finding stands.";
+  } else {
+    el.textContent = "NOT DELIVERED — the attacker sandbox did not state what its delivery produced (outcome="
+      + JSON.stringify(d.outcome) + "). poc-sandbox.html answers delivered / no-navigable / threw for every "
+      + "run, so this is that contract broken — or a payload that posted its own POC_RAN. Either way nothing "
+      + "here is evidence about the sink, and nothing here says anything about the engine's model.";
+  }
+}
 async function _handleVerify(btn) {
   // THE PROBE IS THIS VIEW'S OWN JSON, so a parse failure here is this file disagreeing with itself — never a
   // page state. `probe = {}` on the catch built a probe with no poc and no pageUrl and sent it anyway, and
@@ -1117,5 +1165,10 @@ async function _pollVerify(resultEl, marker, blockers) {
         }).join("; and ")
       + ". The sink is REAL; it needs a policy-permitted vector. A policy-relative result, NOT an "
       + "engine-fidelity bug — and NOT a statement that the sink is safe."
-    : "NOT REPRODUCED — apiclientsink never fired, and the engine reported neither a blocking CSP nor a Trusted-Types requirement for this vector, so the engine’s model diverges from Chrome here (an engine-fidelity bug to investigate). Not a statement that the sink is safe.";
+    // THE DIVERGENCE CLAIM RESTS ON A PREMISE THIS FUNCTION DOES NOT ESTABLISH, so it is named: _reportDelivery
+    // reaches here ONLY for `outcome === "delivered"`, i.e. the window open steps answered a navigable rather
+    // than HTML §7.2.2.1 step 14's null. Without that gate this arm printed "an engine-fidelity bug to
+    // investigate" for a popup Chrome never opened — a confident wrong instruction about a navigation that did
+    // not happen. Anyone tempted to poll unconditionally again is removing the premise, not a guard.
+    : "NOT REPRODUCED — the payload WAS delivered to a real document (window.open answered a navigable) and apiclientsink never fired, and the engine reported neither a blocking CSP nor a Trusted-Types requirement for this vector, so the engine’s model diverges from Chrome here (an engine-fidelity bug to investigate). Not a statement that the sink is safe.";
 }
