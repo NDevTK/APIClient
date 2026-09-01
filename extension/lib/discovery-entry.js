@@ -79,17 +79,28 @@ function makeGroupingRecord(rule, matched, firstUrl, where) {
   return { rule: rule, matched: matched, firstUrl: firstUrl };
 }
 
+/* THE NAMES THIS BUILD'S ENTRY SHAPE DECLARES — one list, because two questions are asked of it and a list
+   transcribed into the second question is a list free to disagree with the first. `checkDiscoveryGrouping`
+   asserts them (an entry short of one is a producer that never spoke); `discoveryEntryMissingNames` asks
+   which ones an entry lacks, which is the same fact answering the ONE question the assert cannot: whether
+   the entry came out of a store an EARLIER SHAPE of this record wrote. `grouping` is exactly such a name —
+   it was optional here, read through five `|| null`s, until the day every producer was made to state it, and
+   a store written on either side of that day is a store this door meets. */
+const _DISCOVERY_STATED = ["grouping"];
+
 /* THE BOUNDARY CHECK. Called wherever an entry ARRIVES from somewhere that is not a producer in this session —
    across chrome.runtime.sendMessage into the popup, and out of the IndexedDB store a previous session wrote —
    and at every hop that COPIES the field, so a copier cannot be the place the statement goes missing. */
 function checkDiscoveryGrouping(entry, where) {
   DCHECK(!!entry && typeof entry === "object" && !Array.isArray(entry),
          "a discovery-doc entry is not a record (" + where + ") — every value in a discoveryDocs map is one");
-  DCHECK(Object.prototype.hasOwnProperty.call(entry, "grouping"),
-         "a discovery-doc entry does not state `grouping` (" + where + ") — every producer states it, as a " +
-         "{rule, matched, firstUrl} record or as `null` meaning \"no URL-structure rule is recorded as having " +
-         "named this bucket\"; an ABSENT field is a producer that never spoke, and the five `|| null`s this " +
-         "check replaced could not tell that from a producer that looked and had nothing");
+  DCHECK(discoveryEntryMissingNames(entry).length === 0,
+         "a discovery-doc entry does not state " +
+         discoveryEntryMissingNames(entry).map((k) => "`" + k + "`").join(", ") + " (" + where + ") — every " +
+         "producer states it, `grouping` as a {rule, matched, firstUrl} record or as `null` meaning \"no " +
+         "URL-structure rule is recorded as having named this bucket\"; an ABSENT field is a producer that " +
+         "never spoke, and the five `|| null`s this check replaced could not tell that from a producer that " +
+         "looked and had nothing");
   const g = entry.grouping;
   if (g === null) return;
   DCHECK(!!g && typeof g === "object" && !Array.isArray(g) &&
@@ -99,6 +110,28 @@ function checkDiscoveryGrouping(entry, where) {
          "a discovery-doc entry's `grouping` is neither a {rule, matched, firstUrl} record nor the stated " +
          "absence (" + where + ") — `null` is this record's one spelling of \"no rule is recorded\", and a " +
          "second spelling is a consumer having to guess which of them it is looking at");
+}
+
+/* THE SAME FACT, ASKED RATHER THAN ASSERTED — see `_DISCOVERY_STATED` above for why one list answers both.
+   The asserting caller is `checkDiscoveryGrouping`; the asking caller is lib/persistence.js's restore door,
+   and only for a store that states no shape at all, where "this entry lacks a name" has a second cause the
+   assert cannot distinguish: the store was written before that name was one every producer stated. An entry
+   that carries every name and holds a wrong VALUE answers `[]` here and still aborts there. */
+function discoveryEntryMissingNames(entry) {
+  const out = [];
+  for (const k of _DISCOVERY_STATED)
+    if (!Object.prototype.hasOwnProperty.call(entry, k)) out.push(k);
+  return out;
+}
+
+/* THE ADDRESS THAT FETCHES THIS ENTRY AGAIN — its RECIPE, the same third category lib/endpoint-record.js's
+   `endpointRecordRecipe` states for an endpoint. A discovery entry's bytes are a PUBLISHED DOCUMENT, so the
+   entry is re-derivable exactly where it names the address it was fetched from; lib/discovery-probe.js writes
+   `url` on every fetched entry and lib/learn.js's virtual entry has none, which is why this is a question
+   about the entry and not a property of the kind. `null` means the entry is the only copy of itself, which
+   §OOM/paging says is reported as an overage rather than traded for disk. */
+function discoveryEntryRecipe(entry) {
+  return (typeof entry.url === "string" && entry.url !== "") ? entry.url : null;
 }
 
 /* CARRY THE STATEMENT ACROSS A REPLACEMENT. Three producers REPLACE an entry rather than mutate it (the

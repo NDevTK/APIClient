@@ -477,3 +477,57 @@ function _checkPathParamPools(ep, where) {
            "place it is invisible from either page");
   }
 }
+
+/* WHICH NAMES THIS BUILD'S SHAPE DECLARES THAT A RECORD DOES NOT CARRY — the ONE question that separates a
+   record written by an EARLIER SHAPE OF THIS RECORD from a producer that has gone silent, and it is a
+   different question from `checkEndpointRecord`'s rather than a softer spelling of it.
+
+   `checkEndpointRecord` asks whether every name holds a VALUE this shape describes, and every answer of "no"
+   it can give is our own logic broken — which is why it asserts. This asks whether the record CARRIES THE
+   NAME AT ALL, and "no" to that has a second cause the assert cannot distinguish and the record cannot state:
+   the store the record came out of was written by a build whose `ENDPOINT_ABSENT` was shorter. That cause is
+   real and dated — `pathParamsForced` was added to this record on 2026-08-31, and `checkEndpointRecord`'s own
+   text for it says a store written before it "carries no such key, and it must crash rather than be read as
+   the absence". It is right that it must not be read as the absence. It must also not take the cumulative
+   moat with it, and until this question existed there was nothing between those two outcomes.
+
+   IT DERIVES FROM THE DECLARATIONS `makeEndpointRecord` ALREADY BUILDS FROM, and that is the whole of why it
+   is not a second copy of the shape (CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE-IT-CHECKS-FROM-THE-CODE-THAT-
+   OWNS-IT): the day a name joins `ENDPOINT_ABSENT` or `_ENDPOINT_STATED`, this answers for it with nothing
+   edited here. A hand-kept list of "names an old store might lack" would be the third copy of a fact whose
+   second copy is what this exists to catch.
+
+   WHAT IT IS NOT FOR. A record that carries every name and holds a wrong VALUE in one is NOT an earlier
+   shape — it is the producer broken, this answers `[]` for it, and `checkEndpointRecord` still aborts on it.
+   The only caller is lib/persistence.js's restore door, and only for a store that states no shape at all. */
+function endpointRecordMissingNames(ep, where) {
+  DCHECK(!!ep && typeof ep === "object" && !Array.isArray(ep),
+         "the endpoint shape question was asked of something that is not a record (" + where + ") — this is " +
+         "asked at the IndexedDB door of every value in a stored `endpoints` map, and a non-record there is " +
+         "the STORE corrupt rather than a record of an earlier shape, which is not a thing a name list can " +
+         "say anything about");
+  const out = [];
+  for (const k of Object.keys(ENDPOINT_ABSENT))
+    if (!Object.prototype.hasOwnProperty.call(ep, k)) out.push(k);
+  for (const k of _ENDPOINT_STATED)
+    if (!Object.prototype.hasOwnProperty.call(ep, k)) out.push(k);
+  return out;
+}
+
+/* THE ADDRESS THAT MINTS THIS RECORD AGAIN — its RECIPE, in CLAUDE.md §OOM/paging's third-category sense:
+   "a RE-DERIVABLE entry is work whose RECIPE outlives its bytes, and discarding one truncates nothing".
+
+   AN ENDPOINT RECORD'S RECIPE IS THE DOCUMENT THAT LEARNED IT. `pageUrl` is that document by this record's
+   own declaration ("the document that learned this endpoint"), and re-visiting it runs the same forced
+   execution over the same bundle, which is what mints the record — so shedding a record that has one converts
+   storage into recomputation and loses no work. §Time-travel-resume already requires that of every resumed
+   flow ("a resumed flow re-derives example VALUES from CURRENT sources"), so a re-derived record is the
+   CURRENT one rather than a reconstruction of the old.
+
+   `null` IS THE OVERAGE AND NOT A FAILURE TO ANSWER. A record whose `pageUrl` is this record's stated absence
+   ("no document address was known") names no document to go back to, so its bytes are the only copy of it and
+   nothing can recompute them. §OOM/paging says what that means: "where the tail below the line is all of
+   that, residency STOPS and REPORTS the overage". The caller reports it; this states which of the two it is. */
+function endpointRecordRecipe(ep) {
+  return (typeof ep.pageUrl === "string" && ep.pageUrl !== "") ? ep.pageUrl : null;
+}

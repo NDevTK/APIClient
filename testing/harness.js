@@ -1224,6 +1224,25 @@ async function cmdNetDiff(args) {
       }
       const _reached = Array.from(_reachedSet);
       const _moduleLink = Array.from(_moduleLinkSet);
+      /* AND WHICH RECORDS THE CUMULATIVE STORE STILL HAD WHEN THIS COMMAND LOOKED — the same caveat `runs`
+         states one axis over, and it belongs to the same sentence. `learnedCount` below is a count of
+         `globalStore.endpoints`, so an address a previous session learned and this session's restore could
+         not read is simply absent from it, and a diagnostic whose whole subject is "learned-not-live" would
+         report that absence as an address the solver never derived. lib/persistence.js's restore states the
+         three outcomes it can have: `kept`, `shed` (a record an earlier record shape wrote, whose document
+         mints it again — storage traded for one re-visit) and `stranded` (the same, with no document to go
+         back to, which is the only copy of itself and the one number here that is a LOSS). `shape` is what
+         the store said it was, and `null` there means it predates the stamp — the one population where the
+         door asks instead of asserting, so it is also the only one where the other two can be non-zero. */
+      DCHECK(typeof storeRestoreStats !== "undefined" && storeRestoreStats !== null,
+             "netdiff found no store-restore census — this evaluate runs in ast-worker.html, which loads " +
+             "lib/persistence.js, and that file declares the census unconditionally at load, so its absence " +
+             "is that realm's script list having changed under this reader; a `null` in its place would " +
+             "print a caveat of zeroes, which reads as 'the restore lost nothing' for a store nobody asked");
+      const storeRestore = {
+        shape: storeRestoreStats.shape, kept: storeRestoreStats.kept, shed: storeRestoreStats.shed,
+        stranded: storeRestoreStats.stranded, strandedKeys: storeRestoreStats.strandedKeys.slice(0, 20),
+      };
       if (unused) {
         // LEARNED-NOT-LIVE = the unused API surface forced exec found (THE VALUE,
         // the inverse of gaps): AST-learned endpoints the page never fired, with
@@ -1383,14 +1402,14 @@ async function cmdNetDiff(args) {
         const _normKey = (s) => s.replace(/%7B[^%]*?%7D/gi, "%7B%7D").replace(/\{[^}]*\}/g, "{}");
         const _unusedDistinct = new Set(unusedList.map((u) => _normKey(u.split("  [")[0]))).size;
         return { mode: "unused = learned-but-not-live (the unused API surface forced exec found — THE VALUE)",
-                 runs: runs,
+                 runs: runs, storeRestore: storeRestore,
                  learnedCount: learnedMap.size, liveDistinct: seen.size, unusedCount: unusedList.length,
                  unusedDistinct: _unusedDistinct,   // placeholder-normalized (arg0/id collapsed) — the HONEST distinct-endpoint count
                  reachedButOpaque: _reached.length, reachedSamples: _reached.slice(0, 10),
                  moduleLinkFailures: _moduleLink.length, moduleLinkSamples: _moduleLink.slice(0, 10),
                  unused: unusedList.slice(0, 100) };
       }
-      return { runs: runs,
+      return { runs: runs, storeRestore: storeRestore,
                learnedCount: learned.size, liveDistinct: seen.size, gapCount: gaps.length,
                reachedButOpaque: _reached.length, reachedSamples: _reached.slice(0, 10),
                moduleLinkFailures: _moduleLink.length, moduleLinkSamples: _moduleLink.slice(0, 10),
