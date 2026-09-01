@@ -298,9 +298,17 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     bool table_internal = false, inline_level;
     unsigned i;
 
+    /* THERE IS NO GUARD UNDER THIS ASSERT, AND THE REASON IS A PROPERTY OF THE ENTRY RATHER THAN A PREFERENCE.
+       `css_computed_value(el, "display")` cannot answer NULL: it routes `display` through `computed_display`,
+       which dereferences the specified value at its own first `strcmp` — so a NULL would fault THERE and never
+       reach this line — and every one of that function's return paths is either the specified string itself or
+       a `css_cv_strdup`, which CHECKs its allocation. A `if (d == NULL) return;` here was therefore dead in
+       both builds while reading as the thing standing between this file and a null, which is worse than
+       either: in dev the assert already aborts, and in release it silently declined to place a box for a state
+       that cannot arise. A pointer whose non-nullness the callee establishes is asserted here and guarded
+       nowhere — the guard's only effect was to make the assert look recoverable. */
     DCHECKF(d != NULL, "%s: the cascade produced no computed `display` for an element whose box is being placed",
             box_subject(el, nbuf, sizeof nbuf));
-    if (d == NULL) return;
     DCHECKF(strcmp(d, "none") != 0 && strcmp(d, "contents") != 0,
            "%s: "
            "CSS 2 §9.4.1's placement was asked for an element that GENERATES NO BOX — css-display-3 §2.5 "
