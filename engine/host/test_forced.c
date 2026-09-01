@@ -6105,38 +6105,59 @@ typedef struct {
  * fails, and it is the one thing this file may never be: it is the only instrument that says whether the
  * solver found what it should.
  *
- * THE EDGE IS A FACT ABOUT THIS RECORD AND IS READ OFF ITS OWN NESTING. `at` is the `"` that opens this
- * record's `"url"` key, and what endpoint_json_array writes after it — `"url":"…","provenance":"…","params":[…]`,
- * then `,"headers":{…}` where there is one, then `}` — closes every bracket it opens. So the FIRST closer this
- * scan meets at record depth IS the record's own brace, whatever any value inside it spells.
+ * ONE SCAN FOR BOTH ARRAYS, BECAUSE THE DOCUMENT HAS TWO AND THEY HAD THE SAME DEFECT. `s_record` located an
+ * @S entry's edge with `strstr(e + 1, ",{\"sink\":")` and fell back to `strlen` for the last entry, which is
+ * this bug spelled a second time over a different producer. A private copy of a thing with exactly one correct
+ * behaviour is one copy too many — the argument solve.c's own json_buf consolidation already made — so the
+ * surface's NAME and the bytes that follow its array are PARAMETERS, and the crash below has an object rather
+ * than a remedy with no site (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY: a shared helper reports its own line
+ * for every caller, so what the caller is asking about has to travel with the call).
+ *
+ * THE EDGE IS A FACT ABOUT THIS RECORD AND IS READ OFF ITS OWN NESTING. `in` is a position INSIDE the record
+ * and outside any string — the `"` of a key — and what the producer writes after it closes every bracket it
+ * opens (endpoint_json_array: `"url":"…","provenance":"…","params":[…]`, then `,"headers":{…}` where there is
+ * one, then `}`; solve_json_array: the sink's own fields, its `payloads`/`survivedBy`/`withdrawn` arrays and
+ * its delivery object, then `}`). So the FIRST closer this scan meets at record depth IS the record's own
+ * brace, whatever any value inside it spells.
  *
  * IT CANNOT BE FOOLED BY A VALUE, AND THAT IS A PROPERTY OF THE FORMAT RATHER THAN OF THIS FIXTURE. RFC 8259
  * §7 "Strings": "A string begins and ends with quotation marks. All Unicode characters may be placed within
  * the quotation marks, except for the characters that MUST be escaped: quotation mark, reverse solidus, and
- * the control characters (U+0000 through U+001F)." A `"` inside a value is therefore always `\"`, so the
- * string state tracked here can never fall out of step with the document's, and a `{`, `}`, `[` or `]` inside
- * a value is never counted — which is exactly what a search for the next record's opening bytes could not
- * promise, since those bytes are ordinary characters a value may spell. core/json_buf.h writes that escaping,
- * and this is the one place the argument is made: the readers below inherit it from the span rather than each
- * restating it for its own needle.
+ * the control characters (U+0000 through U+001F)." core/json_buf.c's json_buf_str writes exactly that, so a
+ * `"` inside a value is always `\"`: the string state tracked here can never fall out of step with the
+ * document's, and a `{`, `}`, `[` or `]` inside a value is never counted. That matters for an @S entry, whose
+ * `poc` is an ATTACKER PAYLOAD this engine derived and may legitimately contain every one of them.
+ * WHAT THE OLD SEARCHES WERE WRONG ABOUT WAS THE BOUND AND NOT THE MATCH, and saying otherwise would be an
+ * over-claim: by that same escaping rule `"url":"` and `,{"sink":` carry unescaped quotes and so cannot occur
+ * inside any VALUE either, which is the argument the readers below already make for their own needles. They
+ * were wrong because a record's edge is not the next record's beginning — measured, not argued: run against a
+ * two-record document, the endpoint search answers 1 for "/api/serdeep carries GET" when the only GET in the
+ * document is the NEXT record's method, and the @S search answers 1 for "this parked sink carries
+ * `\"resumed\":9`" when that 9 is result_cold_json's. The ONE thing a producer can still write that spells a
+ * locator's pattern is a HEADER NAME, which endpoint_json_array passes through json_buf_str as a KEY — so an
+ * endpoint carrying a header literally named `url` emits an unescaped `"url":"` inside its own record. That is
+ * an exposure of the LOCATOR's pattern and not of this scan, which looks for no key at all.
  *
- * WHERE THE ENDPOINTS ARRAY ENDS IS ASSERTED FROM THE TWO PRODUCERS AND NOT PATTERN-MATCHED OFF THE OUTPUT.
- * endpoint_json_array separates its records with a bare `,` and closes the array with `]`; solver/result.c's
- * result_json composes the document as `{"fetchCallSites":<that array>,"securitySinks":…`. So a record's `}`
- * is followed by `,{` or by `],"securitySinks":` and by nothing else. That is the fact a span may not reach
- * past, it is stated nowhere else in this file, and a producer that changes either half crashes HERE instead
- * of silently handing every row below a span that is not a record. */
-static const char *emitted_rec_end(const char *at) {
-    const char *p = at;
+ * WHERE AN ARRAY ENDS IS ASSERTED FROM THE TWO PRODUCERS AND NOT PATTERN-MATCHED OFF THE OUTPUT. Each array's
+ * own composer separates its records with a bare `,` and closes with `]`; solver/result.c's result_json then
+ * composes the document as `{"fetchCallSites":<eps>,"securitySinks":<sinks>,"pageErrors":…`. So a record's `}`
+ * is followed by `,{` or by `]` plus the key `after_array` names, and by nothing else. That is the fact a span
+ * may not reach past, it is stated nowhere else in this file, and a producer that changes either half crashes
+ * HERE instead of silently handing every row below a span that is not a record. */
+static const char *emitted_rec_end(const char *in, const char *surface, const char *after_array) {
+    const char *p = in;
     int depth = 0, instr = 0;
 
+    DCHECK(surface != NULL && after_array != NULL,
+           "a record edge was scanned without naming the surface it belongs to or the key that follows its "
+           "array — both are what turn the asserts below into a crash somebody can act on");
     for (; *p; p++) {
         if (instr) {
             if (*p == '\\') {
-                CHECK(p[1] != '\0',
-                      "an endpoint record's string value ends the result document on a reverse solidus — the "
-                      "escape has no escapee, so this scan cannot know whether the next byte closes the "
-                      "string, and every span it went on to hand out would be a guess");
+                CHECKF(p[1] != '\0',
+                       "a %s record's string value ends the result document on a reverse solidus — the escape "
+                       "has no escapee, so this scan cannot know whether the next byte closes the string, and "
+                       "every span it went on to hand out would be a guess", surface);
                 p++;
                 continue;
             }
@@ -6147,34 +6168,35 @@ static const char *emitted_rec_end(const char *at) {
         if (*p == '{' || *p == '[') { depth++; continue; }
         if (*p != '}' && *p != ']') continue;
         if (depth > 0) { depth--; continue; }
-        CHECK(*p == '}',
-              "an endpoint record closed with `]` at its own nesting depth — endpoint_json_array writes every "
-              "record as an OBJECT, so this scan is not standing where it believes it is and the span it would "
-              "return begins inside one record and ends inside another");
+        CHECKF(*p == '}',
+               "a %s record closed with `]` at its own nesting depth — its composer writes every record as an "
+               "OBJECT, so this scan is not standing where it believes it is and the span it would return "
+               "begins inside one record and ends inside another", surface);
         break;
     }
-    CHECK(*p == '}',
-          "an endpoint record is never closed anywhere in the result document — endpoint_json_array writes a "
-          "`}` for every record it opens, so a scan that walked to the end of the string would give this row a "
-          "span running through the array's `]` into securitySinks, pageErrors and every `_` counter, and the "
-          "row would then be answerable by bytes belonging to a different surface entirely");
+    CHECKF(*p == '}',
+           "a %s record is never closed anywhere in the result document — its composer writes a `}` for every "
+           "record it opens, so a scan that walked to the end of the string would give this row a span running "
+           "through the array's `]` and into whatever surfaces result_json composed after it, and the row "
+           "would then be answerable by bytes belonging to none of its own", surface);
     DCHECKF(p[1] == ',' || p[1] == ']',
-            "an endpoint record's closing `}` is followed by byte %d — endpoint_json_array writes a bare `,` "
-            "between records and a `]` after the last one, and nothing else, so this is not a record's edge "
-            "and the span returned from here is not this record's",
-            (int)(unsigned char)p[1]);
-    DCHECK(p[1] != ',' || p[2] == '{',
-           "an endpoint record is followed by a `,` that opens no further record — endpoint_json_array writes "
-           "that comma immediately before the next record's `{`, so a scan standing here has stopped inside "
-           "some nested object and every span below it would begin in one record and end in another");
-    DCHECK(p[1] != ']' || strncmp(p + 2, ",\"securitySinks\":", 17) == 0,
-           "THE ENDPOINTS ARRAY DOES NOT END WHERE THIS READER BELIEVES IT DOES. solver/result.c's result_json "
-           "composes the document as `{\"fetchCallSites\":<array>,\"securitySinks\":…`, so the array's `]` is "
-           "followed by that key and by nothing else. This is the assert that keeps the LAST record's span "
-           "inside the array: every other record is bounded by the one after it, and the last one is bounded "
-           "only by where the array stops — which is why a far edge SEARCHED for rather than scanned ran off "
-           "the end of the array and made a question about one endpoint answerable by an @S entry, a page "
-           "error or a run counter");
+            "a %s record's closing `}` is followed by byte %d — its composer writes a bare `,` between records "
+            "and a `]` after the last one, and nothing else, so this is not a record's edge and the span "
+            "returned from here is not this record's",
+            surface, (int)(unsigned char)p[1]);
+    DCHECKF(p[1] != ',' || p[2] == '{',
+            "a %s record is followed by a `,` that opens no further record — its composer writes that comma "
+            "immediately before the next record's `{`, so a scan standing here has stopped inside some nested "
+            "object and every span below it would begin in one record and end in another", surface);
+    DCHECKF(p[1] != ']' || strncmp(p + 2, after_array, strlen(after_array)) == 0,
+            "THE %s ARRAY DOES NOT END WHERE THIS READER BELIEVES IT DOES: its `]` is not followed by `%s`. "
+            "solver/result.c's result_json composes the document as "
+            "`{\"fetchCallSites\":<eps>,\"securitySinks\":<sinks>,\"pageErrors\":…`, so each array's close is "
+            "followed by the next surface's key and by nothing else. THIS IS THE ASSERT THAT BOUNDS THE LAST "
+            "RECORD: every other record is bounded by the one after it, and the last one is bounded only by "
+            "where the array stops — which is why a far edge SEARCHED for rather than scanned ran off the end "
+            "of the array and made a question about one record answerable by another surface's bytes",
+            surface, after_array);
     return p;
 }
 
@@ -6194,7 +6216,10 @@ static int emitted_records_by(const char *js, const char *pat, size_t k, Emitted
                "this address may be answered by — ask them apart", pat);
         out[n].at = e;
         out[n].b  = e + k;
-        end = emitted_rec_end(e);   /* THIS record's own closing brace — never the next record's first bytes */
+        /* THIS record's own closing brace — never the next record's first bytes. `e` is the `"` opening this
+           record's `"url"` key, which is inside the record and outside any string, and the endpoints array is
+           what result_json writes `,"securitySinks":` immediately after. */
+        end = emitted_rec_end(e, "endpoint", ",\"securitySinks\":");
         CHECKF(end > out[n].b,
                "the address pattern `%s` located an endpoint record whose closing brace stands at or before "
                "its own `url` — the span every reader below is asked inside would be empty or inverted, and "
@@ -6677,10 +6702,22 @@ static int param_value_only(const char *js, const char *url, const char *pname, 
 #define ATTR_SRC "{" LOCATION_HASH_SRC "}.slice()"
 
 /* ONE @S RECORD'S OWN BOUNDS, which every reader below is a question asked INSIDE. An entry runs from its
- * `{"sink":` to the next one, and that is the whole of what makes an answer a measurement rather than a match:
- * a loose `strstr` over the array reaches a field from ANY record, which is exactly how the URL row came to be
- * satisfied out of a different search's candidate list. Answers the record's start and writes its span, or NULL
- * when this (sink, source) has no entry at all. */
+ * `{"sink":` to its own closing brace, and that is the whole of what makes an answer a measurement rather than
+ * a match: a loose `strstr` over the array reaches a field from ANY record, which is exactly how the URL row
+ * came to be satisfied out of a different search's candidate list. Answers the record's start and writes its
+ * span, or NULL when this (sink, source) has no entry at all.
+ * THE EDGE IS SCANNED AND NOT SEARCHED FOR, WHICH IS THE ENDPOINT SPAN'S FIX ARRIVING AT ITS TWIN. This read
+ * `strstr(e + 1, ",{\"sink\":")` and fell back to `strlen(e)`, so THE LAST @S ENTRY'S SPAN RAN TO THE END OF
+ * THE WHOLE DOCUMENT — through `pageErrors`, `pageErrorsRetracted` and every `_`-prefixed counter — and every
+ * reader here is a substring or `,"key":` test inside that span. It was latent and not live (none of the six
+ * keys s_num and s_arraylen ask for, and none of the four needles s_field carries, is emitted by any surface
+ * result_json composes after this array), but latency here is luck rather than design: the four `s_field`
+ * needles are `"key":"value"` pairs and the next census field to collide with one would answer a security
+ * question out of a scheduler counter. Measured on a two-entry document: the old edge answers 1 for "this
+ * parked sink carries `\"resumed\":9`" when that 9 is result_cold_json's, one surface along.
+ * IT WAS NOT ALSO A MATCHING DEFECT, and claiming so would be the over-claim a grep refutes: `,{"sink":`
+ * carries unescaped quotes, and json_buf_str escapes every quote inside a value, so no `poc` this search ever
+ * derives can spell it. The edge was wrong about WHERE a record ends, not about what a value may say. */
 static const char *s_record(const char *js, const char *sink, const char *src, size_t *span) {
     char pat[192];
     const char *e, *end;
@@ -6691,8 +6728,12 @@ static const char *s_record(const char *js, const char *sink, const char *src, s
           "record key, so the row would read a field out of some other sink's entry");
     DCHECK(span != NULL, "an @S record was located with nowhere to put its bounds");
     if (!(e = strstr(js, pat))) return NULL;
-    end = strstr(e + 1, ",{\"sink\":");
-    *span = end ? (size_t)(end - e) : strlen(e);
+    /* `e + 1` is the `"` opening this entry's `"sink"` key — inside the record and outside any string, which
+       is what the scan's own contract asks for — and the @S array is what result_json writes `,"pageErrors":`
+       immediately after. The span is INCLUSIVE of the closing brace, which is the extent the readers below
+       already assumed when the edge was the next record's first byte. */
+    end = emitted_rec_end(e + 1, "@S sink", ",\"pageErrors\":");
+    *span = (size_t)(end - e) + 1;
     return e;
 }
 
