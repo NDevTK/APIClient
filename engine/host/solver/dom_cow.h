@@ -281,8 +281,15 @@ void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *n
 void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node);
 void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_dom_node_t *child);  /* build it */
 /* and drop it — `with_children` false is an emptied root and asserts it; true DEEP-destroys, which is the
-   abandoned-parse case (a machine torn down mid-placement still holds everything it has not moved yet). */
-void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children);
+   abandoned-parse case (a machine torn down mid-placement still holds everything it has not moved yet).
+   IT TAKES A REALM BECAUSE THE TREE IT FREES IS NOT THE ONLY TREE IT IS ABOUT. A node's second and third
+   trees — a `<template>`'s content and a SHADOW ROOT — are neither of them children, and the two are reached
+   differently: core/dom/node_interface.c's destroy dispatcher follows the content from a C field, and cannot
+   follow the shadow root at all, because DOM §4.9 Interface Element's `attach a shadow root` writes that edge
+   as a slot on the HOST'S WRAPPER and the dispatcher holds no realm to read it with. So the question is asked
+   HERE, where there is one, and the answer is currently an assert: see the pair of DCHECKs this entry and
+   dom_private_copy_one hold, which are one ownership contract read in two directions. */
+void dom_cow_destroy_private(JSContext *ctx, lxb_dom_node_t *root, bool with_children);
 /* MOVE a node between two trees NEITHER of which is shared — the parse boundary's own operation. HTML
    §13.2.6.4.4 sets a `<template>`'s template contents to the shadow root it attaches, and a parse that filled
    the contents instead has to hand them over: the source is that parse's own product and the destination is a

@@ -167,18 +167,23 @@ const char *fragment_parse_unforkable(const void *st)
                "declares its own tree through). What stops THIS tree is not the walk: it is the three things "
                "this file's own FRAG_FEED boundary does to a fragment that §14.4's boundary does not. "
                "A NODE'S PER-FLOW STATE LIVES ON ITS JS WRAPPER and not on the lexbor node, so a copy carries "
-               "it only where DOM §4.4 \"Cloning nodes\" states cloning steps — which that walk performs, and "
-               "which is why a copied `<script>` keeps §13.4's Inert `already started` rather than running "
-               "markup this parse marked dead. Two of the three have no such steps to perform. "
-               "declarative_shadow_parsed can leave a SHADOW HOST here, and §4.4 step 6's clone of a shadow "
-               "root is `attach a shadow root`, which refuses and therefore THROWS — a fork's copy has no way "
-               "to be abrupt, and dom_cow_destroy_private owes the same root coming back "
-               "(core/html/sanitizer.c's removal DCHECK is that half already named). media_element_parsed can "
-               "leave a MEDIA ELEMENT here whose §4.8.11 state is on its wrapper and whose resource-selection "
-               "JOB is already enqueued naming the ORIGINAL's wrapper, and §4.8.11 states no cloning steps at "
-               "all. Both crash by name in dom_private_tree_clone rather than being skipped, so BUILD THOSE "
-               "TWO — an exception a visit can carry out, and a fork's answer for a pending job that names a "
-               "node the fork has just copied. "
+               "it only where DOM §4.4 Interface Node's step 3 states cloning steps — which that walk "
+               "performs, and which is why a copied `<script>` keeps §13.4's Inert `already started` rather "
+               "than running markup this parse marked dead. Two of the three have no such steps to perform. "
+               "declarative_shadow_parsed can leave a SHADOW HOST here. THIS CLAUSE USED TO CALL THAT AN "
+               "ABRUPTNESS PROBLEM — §4.4 step 6's clone is `attach a shadow root`, which refuses and "
+               "therefore throws, and a visit cannot be abrupt — AND THAT WAS THE WRONG DIAGNOSIS: step 6 is "
+               "conditioned on the original root's `clonable`, so it is a LOSSY page-visible clone and "
+               "building the fork on it would have dropped a non-clonable root from the sibling in silence. A "
+               "fork's copy is not a clone and calls no attach, so nothing about it is abrupt; what it is "
+               "blocked on is WHO OWNS a shadow root inside a private tree, which solver/dom_cow.c now "
+               "crashes for at both ends (the copy and dom_cow_destroy_private) with core/html/sanitizer.c's "
+               "removal DCHECK as a third side of the same contract. media_element_parsed can leave a MEDIA "
+               "ELEMENT here whose §4.8.11 state is on its wrapper and whose resource-selection JOB is "
+               "already enqueued naming the ORIGINAL's wrapper, and §4.8.11 states no cloning steps at all. "
+               "Both crash by name in dom_private_tree_clone rather than being skipped, so BUILD THOSE TWO — "
+               "one owner for a private tree's shadow roots, and a fork's answer for a pending job that names "
+               "a node the fork has just copied. "
                "Then fragment_parse_visit declares `frag` with `node` as its cursor, sanitizer_walk_visit "
                "hands up its own seven cursors and its level stack's two-per-level, its `attr` cursor gets the "
                "answer a node->node map does not carry (an attribute is not a node: it is the copy of "
@@ -257,7 +262,7 @@ void fragment_parse_release(JSContext *ctx, void *st)
        destroys the emptied root and gives up its claim there; a placement or a §8.6.4 set and filter HTML filter that threw
        half-way leaves the un-placed remainder here, still holding nodes. */
     if (s->frag) {
-        dom_cow_destroy_private(s->frag, /*with_children*/ true);
+        dom_cow_destroy_private(ctx, s->frag, /*with_children*/ true);
         s->frag = NULL;
     }
 }
@@ -567,7 +572,7 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
            dom_cow.h. `frag` is the declaration, passed to each operation. */
         lxb_dom_node_t *node = s->node, *next;
         if (!node) {
-            dom_cow_destroy_private(s->frag, /*with_children*/ false);
+            dom_cow_destroy_private(ctx, s->frag, /*with_children*/ false);
             /* THE CLAIM IS SPENT HERE, the way a delta entry's is — fragment_parse_release owns whatever `frag` still
                names, so leaving the pointer behind after this free is the double free that ownership buys. */
             s->frag = NULL;

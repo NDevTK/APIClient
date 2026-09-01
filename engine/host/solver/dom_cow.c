@@ -13,10 +13,11 @@
 #include "core/dom/node_interface.h"   /* dom_document_destroy — a document's nodes go back before its arenas do */
 #include "core/dom/node.h"   /* node_template_content — §4.12.3's second tree, which a parse also builds into */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
-/* DOM §4.4 "Cloning nodes"' CLONING STEPS, which a private tree's copy owes exactly as clone-a-node does —
-   these are the same two component entries core/dom/node.c calls at its own step 3, and the two the list does
-   NOT cover are what the copy crashes on by name. */
-#include "core/dom/shadow_root.h"        /* §4.4 step 6 — the one whose clone can THROW */
+/* DOM §4.4 Interface Node's `clone a node` STEP 3 CLONING STEPS, which a private tree's copy owes exactly as
+   clone-a-node does — these are the same two component entries core/dom/node.c calls at its own step 3, and
+   the two the list does NOT cover are what the copy crashes on by name. */
+#include "core/dom/shadow_root.h"        /* the ELEMENT -> shadow root edge, a WRAPPER slot no C walk can see —
+                                            so BOTH halves of a private tree have to ask for it by name */
 #include "core/html/html_script.h"       /* §4.12.1's pair: `already started`, which §13.4's Inert mode sets */
 #include "core/html/media_element.h"     /* §4.8.11 — state on the wrapper, and no cloning steps at all */
 #include "core/html/nonce_attribute.h"   /* §2.5.6's pair, over every HTML element and not one tag */
@@ -1224,8 +1225,60 @@ bool dom_cow_note_created_document(lxb_html_document_t *dom)
     return true;
 }
 
-void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
+/* THE ONE ELEMENT OF THIS TREE WHOSE SECOND TREE THE FREE BELOW CANNOT REACH, or NULL. It is the condition of
+   the assertion under it and nothing else, so it runs in a dev build and vanishes with the assert — the same
+   shape dom_delta_removed and dom_parse_root_of already have in this file.
+   IT WALKS EXACTLY WHAT THE FREE FREES, because an assertion over a different set answers a different
+   question: child links, and a `<template>`'s CONTENT fragment, which is not a child and which
+   core/dom/node_interface.c's destroy dispatcher follows for every node it is handed. A SHADOW ROOT is the
+   third tree and that dispatcher does not follow it — DOM §4.9 Interface Element's `attach a shadow root`
+   writes the element -> shadow root edge as a slot on the HOST'S WRAPPER, so no C walk can see it and the
+   dispatcher holds no realm to read it with (core/dom/node_heap.c's teardown DCHECK says exactly that). This
+   is where there IS a realm, which is why the question is asked here and why this entry takes one. */
+static lxb_dom_element_t *dom_private_shadow_host_in(JSContext *ctx, lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *n = root, *content, *host;
+
+    for (;;) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT &&
+            shadow_root_of_element(ctx, lxb_dom_interface_element(n)) != NULL)
+            return lxb_dom_interface_element(n);
+        /* The content fragment BEFORE the element's own children, so the climb back out of it lands on those
+           children and neither list is walked twice. HTML §4.12.3 keeps them as two separate lists. */
+        content = node_template_content(n);
+        if (content != NULL && content->first_child != NULL) { n = content->first_child; continue; }
+        if (n->first_child != NULL) { n = n->first_child; continue; }
+        for (;;) {
+            if (n == root) return NULL;      /* asked FIRST: a detached root's own sibling links are nobody's */
+            if (n->next != NULL) { n = n->next; break; }
+            if (n->parent != NULL) { n = n->parent; continue; }
+            host = node_template_content_host(n);
+            DCHECK(host != NULL,
+                   "a private tree's shadow-host scan walked out of the tree it was given — the only root it "
+                   "enters other than the top is a <template>'s content, which is reached through its host");
+            n = host;
+            if (n->first_child != NULL) { n = n->first_child; break; }
+        }
+    }
+}
+
+void dom_cow_destroy_private(JSContext *ctx, lxb_dom_node_t *root, bool with_children) {
     dom_private_check(root);
+    /* THE SECOND TREE THIS FREE CANNOT REACH, asserted before anything is freed. A shadow root is not a child
+       of its host, so `lxb_dom_node_destroy_deep` walks straight past it and the host goes while the root
+       stays — reachable from a wrapper whose node is gone, with `sr->host` naming freed bytes from that
+       instant until whatever else claims it gets round to it. It is not a leak today and that is the whole
+       problem: `attach a shadow root` records the root as a CREATION on the running flow's delta, so a second
+       owner frees it later, and the private-tree convention (dom_cow.h: one owner, the private root) is
+       broken with nothing anywhere to say so. Build the single owner — see the shadow-host DCHECK in
+       dom_private_copy_one, which is this same contract read forwards, and core/html/sanitizer.c's removal
+       DCHECK, which is it read from a third side. */
+    DCHECK(dom_private_shadow_host_in(ctx, root) == NULL,
+           "a flow-private DOM tree is about to be freed with a SHADOW HOST still in it, and DOM §4.8's "
+           "shadow root is not one of the host's children — so this free walks past it and the root outlives "
+           "the host it names. Give a private tree ONE owner that covers its shadow roots (the forwards half "
+           "of this is the shadow-host DCHECK in dom_private_copy_one) instead of leaving `attach a shadow "
+           "root`'s creation entry to free it out of another flow's delta at another time");
     DCHECK(with_children || root->first_child == NULL,
            "a private tree was destroyed with children still in it — those nodes are about to be freed under "
            "whatever took a reference to them");
@@ -1269,8 +1322,8 @@ static lxb_dom_node_t *dom_private_map_get(lexbor_avl_t *avl, lexbor_avl_node_t 
 
 /* ONE NODE OF A PRIVATE TREE, COPIED — lexbor's own clone for this document, which is the code that MADE the
    node, so attributes, namespaces and every per-interface field are copied by it and not by a second answer
-   written here; then DOM §4.4 "Cloning nodes"' cloning steps, which are what carries the per-flow state that
-   lives on the node's WRAPPER rather than on the node.
+   written here; then DOM §4.4 Interface Node's step 3 cloning steps, which are what carries the per-flow state
+   that lives on the node's WRAPPER rather than on the node.
    THE TWO THIS CANNOT ANSWER ARE ASKED FIRST AND CRASH — see the banner below. */
 static lxb_dom_node_t *dom_private_copy_one(JSContext *ctx, lxb_dom_document_t *doc, const lxb_dom_node_t *src)
 {
@@ -1278,13 +1331,37 @@ static lxb_dom_node_t *dom_private_copy_one(JSContext *ctx, lxb_dom_document_t *
 
     if (src->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         DCHECK(shadow_root_of_element(ctx, lxb_dom_interface_element(src)) == NULL,
-               "a private tree a fork must copy holds a SHADOW HOST, and DOM §4.4 step 6's clone of a shadow "
-               "root is `attach a shadow root`, which REFUSES — so it can throw and a fork's copy has no way "
-               "to be abrupt. BUILD THAT: shadow_root_clone_onto is steps 6.1-6.7 and needs a caller that can "
-               "carry its exception out of a visit, and dom_cow_destroy_private owes the same root on the way "
-               "back (core/html/sanitizer.c's removal DCHECK is that half already named). A fragment parse "
-               "reaches this because declarative_shadow_parsed runs at its FRAG_FEED boundary, before the "
-               "placement and before §8.6.4's walk");
+               "a private tree a fork must copy holds a SHADOW HOST. THE REMEDY THAT STOOD HERE IS RETIRED "
+               "AND IT WAS SPEC-WRONG: it said to give DOM §4.4 Interface Node's clone-a-node step 6 a caller "
+               "that can be abrupt. Step 6 runs only \"If node is an element, node is a shadow host, and "
+               "node's shadow root's clonable is true\", and DOM §4.8 Interface ShadowRoot says of that field "
+               "\"Shadow roots have an associated clonable (a boolean). It is initially set to false\" — so a "
+               "fork built on step 6 would SILENTLY DROP every non-clonable shadow root from the sibling's "
+               "copy, which is the corruption a fork abort exists to prevent, arriving through the fix. The "
+               "throw is a SYMPTOM of calling a page-visible clone: step 6.4 is `attach a shadow root` and "
+               "the refusals are DOM §4.9 Interface Element's. A fork's copy is not a clone — it is a copy "
+               "the sibling must be unable to tell it took — so a faithful copy calls no attach and there is "
+               "nothing left for a visit to have to carry out. BUILD IT IN THIS ORDER. "
+               "(1) THE OWNER, which is the subproblem and is not the walk: a shadow root attached to a host "
+               "inside a private tree has TWO candidate owners — `attach a shadow root` records a creation on "
+               "the running flow's delta (kind 4) while every other node of that tree is owned by the private "
+               "root, which is the convention mixing dom_cow_note_created's own assert refuses one node at a "
+               "time and cannot see here, because the private root makes no claim to collide with. The delta "
+               "cannot own a COPY either: a step machine's tree is cloned BEFORE dom_cow_fork freezes the "
+               "head, so the claim would land in a base segment BOTH arms reference. One owner — the private "
+               "root owns what is under it, shadow roots included, and no creation is recorded for a node "
+               "inside a declared private tree, which needs dom_cow to be able to answer WHICH trees are "
+               "declared rather than only asserting privacy per call. "
+               "(2) THE COPY, once there is an owner: a ShadowRoot node in this same document whose host is "
+               "the copy and whose mode is the original's, §4.8's record copied FIELD FOR FIELD (`available "
+               "to element internals` COPIED and never recomputed — §4.9's attach derives it from the host's "
+               "custom element state, and a fork copies state rather than deriving it), the registry "
+               "association carried over, and the shadow children copied by this same walk with the new root "
+               "as its `croot` and the climb out through the host. THE DESTROY OWES THE SAME ROOT COMING "
+               "BACK and now crashes for it in dom_cow_destroy_private (core/html/sanitizer.c's removal "
+               "DCHECK is that half from a third side). A fragment parse reaches this because "
+               "declarative_shadow_parsed runs at its FRAG_FEED boundary, before the placement and before "
+               "§8.6.4's walk");
         DCHECK(!media_element_is(src),
                "a private tree a fork must copy holds a MEDIA ELEMENT, whose §4.8.11 state is on its wrapper "
                "and whose resource-selection job is already enqueued NAMING THE ORIGINAL's wrapper — and "
@@ -1373,7 +1450,7 @@ static lxb_dom_node_t *dom_private_walk_next(lxb_dom_node_t *n, const lxb_dom_no
  * their own: the only moment at which "which node does this cursor now name" has an answer is while this map
  * is alive.
  *
- * WHAT A COPY OWES BEYOND ITS SHAPE IS DOM §4.4 "Cloning nodes"' CLONING STEPS, and that list is the thing a
+ * WHAT A COPY OWES BEYOND ITS SHAPE IS DOM §4.4 Interface Node's STEP 3 CLONING STEPS, and that list is the thing a
  * subtree copy is silently wrong without. A node's PER-FLOW state does not live on the lexbor node at all — it
  * lives on the node's JS WRAPPER, because §3.7 makes it a per-flow fact — so a walk that copied structure and
  * stopped would hand the sibling arm a `<script>` whose `already started` is FALSE for markup this parse
@@ -1382,13 +1459,18 @@ static lxb_dom_node_t *dom_private_walk_next(lxb_dom_node_t *n, const lxb_dom_no
  * 3, called here from the one other walk that copies nodes, so there is one list and not two.
  *
  * THE TWO THE LIST DOES NOT COVER CRASH BY NAME rather than being skipped, because skipping is exactly the
- * shape that is wrong in silence. §4.4 step 6's SHADOW ROOT is a `shadow_root_attach` whose refusals are
- * reachable and which returns an EXCEPTION, and a visit has no way to be abrupt; §4.8.11's MEDIA ELEMENT keeps
- * its state on the wrapper AND has already enqueued a resource-selection job naming the ORIGINAL's wrapper, and
- * §4.8.11 states no cloning steps at all, so there is nothing to call and the sibling would silently get a
- * media element in the wrong network state. Both are cases a seam BEFORE the fork created (core/html/
- * fragment_parser.c's FRAG_FEED boundary runs declarative_shadow_parsed and media_element_parsed on the tree it
- * hands on), which is why they are asked here per node and not once at the root. */
+ * shape that is wrong in silence. §4.4 step 6's SHADOW ROOT is the one this file used to describe as an
+ * ABRUPTNESS problem, and that framing was wrong in a way worth keeping: step 6 is conditioned on the
+ * original root's `clonable`, so it is a LOSSY, page-visible clone and a fork that ran it would drop a
+ * non-clonable root from the sibling's copy in silence. A fork's copy is not a clone, so it calls no `attach
+ * a shadow root` and inherits none of its refusals; what it is actually blocked on is WHO OWNS a shadow root
+ * inside a private tree, which the DCHECK at dom_private_copy_one states and dom_cow_destroy_private states
+ * back. §4.8.11's MEDIA ELEMENT keeps its state on the wrapper AND has already enqueued a resource-selection
+ * job naming the ORIGINAL's wrapper, and §4.8.11 states no cloning steps at all, so there is nothing to call
+ * and the sibling would silently get a media element in the wrong network state. Both are cases a seam BEFORE
+ * the fork created (core/html/fragment_parser.c's FRAG_FEED boundary runs declarative_shadow_parsed and
+ * media_element_parsed on the tree it hands on), which is why they are asked here per node and not once at
+ * the root. */
 static void *dom_private_tree_clone(JSContext *ctx, void *root, void **cursors[], int ncursors)
 {
     lxb_dom_node_t *src = root, *top, *croot, *n;
@@ -1463,8 +1545,7 @@ static void *dom_private_tree_clone(JSContext *ctx, void *root, void **cursors[]
 
 static void dom_private_tree_destroy(JSContext *ctx, void *root)
 {
-    (void)ctx;
-    dom_cow_destroy_private(root, /*with_children*/ true);
+    dom_cow_destroy_private(ctx, root, /*with_children*/ true);
 }
 
 const JSStepTreeOps dom_cow_private_tree_ops = { dom_private_tree_clone, dom_private_tree_destroy };
