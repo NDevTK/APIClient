@@ -294,9 +294,8 @@ static JSValue pin_mint(JSContext *ctx, ConcolicLit kind, const char *val)
         JS_FreeValue(ctx, s);
         DCHECK(!JS_IsException(n),
                "§7.1.4 ToNumber ( arg ) threw over a String primitive — its String arm is §7.1.4.1 ToNumber "
-               "Applied to the String Type, which has no abrupt completion, "
-               "which has no abrupt completion, so an exception here is a value that is not the string this "
-               "line just minted");
+               "Applied to the String Type, which has no abrupt completion, so an exception here is a value "
+               "that is not the string this line just minted");
         return n;
     }
     case CONCOLIC_LIT_BIGINT:
